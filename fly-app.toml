@@ -1,0 +1,37 @@
+# fly.toml app configuration file generated for touchbase-app on 2025-01-17T16:36:35+01:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'touchbase-app'
+primary_region = 'ams'
+
+[build]
+  dockerfile = 'Dockerfile.app'
+
+[env]
+  NEXT_PUBLIC_API_URL = 'https://touchbase-cms.fly.dev'
+  NEXT_PUBLIC_APP_URL = 'https://touchbase-app.fly.dev'
+  NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL = '/'
+  NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL = '/'
+  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY = 'pk_test_Y29uY3JldGUtYnVubnktMzUuY2xlcmsuYWNjb3VudHMuZGV2JA'
+  NEXT_PUBLIC_CLERK_SIGN_IN_URL = '/sign-in'
+  NEXT_PUBLIC_CLERK_SIGN_UP_URL = '/sign-up'
+  NEXT_PUBLIC_DOCS_URL = 'http://localhost:3004'
+  NEXT_PUBLIC_GA_MEASUREMENT_ID = 'G-GRZHS5JQHK'
+  NEXT_PUBLIC_POSTHOG_HOST = 'https://eu.i.posthog.com'
+  NEXT_PUBLIC_POSTHOG_KEY = 'phc_2hBj9AfLdvHQSL54x4veblg0yzvidgI4MkBZrn1lwiG'
+  NEXT_PUBLIC_WEB_URL = 'http://localhost:3001'
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1

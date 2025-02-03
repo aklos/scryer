@@ -1,0 +1,5 @@
+{
+  "emmet.showExpandedAbbreviation": "never",
+  "tailwindCSS.experimental.configFile": "./packages/tailwind-config/config.ts",
+  "typescript.tsdk": "node_modules/typescript/lib"
+}

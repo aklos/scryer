@@ -1,0 +1,8 @@
+{
+  "recommendations": [
+    "bradlc.vscode-tailwindcss",
+    "unifiedjs.vscode-mdx",
+    "mikestead.dotenv",
+    "christian-kohler.npm-intellisense"
+  ]
+}

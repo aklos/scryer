@@ -1,0 +1,7 @@
+{
+  "extends": "@repo/typescript-config/react-library.json",
+  "compilerOptions": {
+    "lib": ["DOM"],
+    "declaration": true
+  }
+}

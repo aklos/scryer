@@ -1,0 +1,24 @@
+{
+  "name": "@scryer/client",
+  "version": "0.2.15",
+  "main": "dist/scryer.iife.js",
+  "module": "dist/scryer.esm.js",
+  "types": "dist/index.d.ts",
+  "author": "Alex Klos <alex@prohobo.dev>",
+  "licence": "LicenseRef-LICENSE",
+  "scripts": {
+    "build": "node build.js"
+  },
+  "dependencies": {
+    "@thumbmarkjs/thumbmarkjs": "^0.17.0",
+    "@types/node": "^18.8.0",
+    "dotenv": "^16.0.2",
+    "esbuild": "^0.15.9",
+    "react": "^19.0.0",
+    "slugify": "^1.6.6",
+    "typescript": "^4.8.4"
+  },
+  "devDependencies": {
+    "@repo/typescript-config": "workspace:*"
+  }
+}

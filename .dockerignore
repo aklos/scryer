@@ -1,0 +1,14 @@
+**/node_modules
+# Ignore build artifacts from all apps/packages
+**/.turbo
+**/.next
+**/dist
+**/build
+# Ignore IDE/editor files
+*.log
+*.swp
+.DS_Store
+*.env.local
+.env
+.env.*
+*.bak
