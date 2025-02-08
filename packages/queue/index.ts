@@ -24,8 +24,8 @@ type JobConfig = {
   };
 };
 
-export async function enqueueEvent(userId: string, data: EventData) {
-  const key = userId;
+export async function enqueueEvent(accountId: string, data: EventData) {
+  const key = accountId;
 
   if (!queues[key]) {
     createQueue(key, handleEvent);
@@ -33,6 +33,7 @@ export async function enqueueEvent(userId: string, data: EventData) {
 
   await addJob(
     {
+      accountId,
       data: Object.assign({}, data),
     },
     key
@@ -50,7 +51,7 @@ export function createQueue(key: string, handler: Function) {
 }
 
 export async function addJob(
-  payload: { data: EventData },
+  payload: { accountId: string; data: EventData },
   key: string,
   retry: boolean = false
 ) {

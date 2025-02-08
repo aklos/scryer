@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { enqueueEvent } from "@repo/queue";
 import { parseEvent } from "./parse";
-import { getUserByToken } from "@repo/database";
+import { getAccountByToken } from "@repo/database";
 
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, {
@@ -18,10 +18,17 @@ export async function OPTIONS(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   const origin = request.headers.get("origin") || "";
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  const realIp = request.headers.get("x-real-ip");
+  const ip = forwardedFor
+    ? forwardedFor.split(",")[0].trim()
+    : realIp
+    ? realIp.trim()
+    : undefined;
   const body = await request.json();
-  const user = await getUserByToken(body.token || "");
+  const account = await getAccountByToken(body.token || "");
 
-  if (!user || !user.allowed_origins.includes(origin)) {
+  if (!account || !account.allowed_origins.includes(origin)) {
     return NextResponse.json(
       { ok: false, error: "Invalid token/origin" },
       {
@@ -33,6 +40,8 @@ export async function POST(request: NextRequest) {
       }
     );
   }
+
+  delete body.token;
 
   try {
     const [data, validationError] = parseEvent(body);
@@ -51,8 +60,9 @@ export async function POST(request: NextRequest) {
     }
 
     data.origin = origin;
+    data.ip = ip;
 
-    await enqueueEvent(user.id, data);
+    await enqueueEvent(account.id, data);
   } catch (err: any) {
     return NextResponse.json(
       { ok: false, error: err.message },

@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { sendMessage } from "@repo/messaging";
-import { getUserByClerkId } from "@repo/database";
+import { getAccountByClerkId } from "@repo/database";
 
 export async function POST(request: NextRequest) {
   const secretKey = request.headers.get("x-secret-key");
@@ -12,7 +12,7 @@ export async function POST(request: NextRequest) {
   const { message, clerkId, uiElements } = await request.json();
   console.log(uiElements);
 
-  const user = await getUserByClerkId(clerkId);
+  const user = await getAccountByClerkId(clerkId);
 
   if (user && user.telegram_id) {
     sendMessage(user.telegram_id, message);

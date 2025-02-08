@@ -1,5 +1,13 @@
 # next-forge
 
+## Notes
+
+- Add attribution for IP geo lookup:
+
+```
+[Your site name or product name] uses the IP2Location LITE database for <a href="https://lite.ip2location.com">IP geolocation</a>.
+```
+
 ## Development
 
 1. Start Postgres proxy: `./database/proxy.sh`

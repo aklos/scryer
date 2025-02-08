@@ -7,9 +7,10 @@ import type {
   WebhookEvent,
 } from "@repo/auth/server";
 import { log } from "@repo/observability/log";
-import { addUser, deleteUser } from "@repo/database";
+import { addAccount, deleteAccount } from "@repo/database";
 import { headers } from "next/headers";
 import { NextResponse } from "next/server";
+import crypto from "crypto";
 
 const handleUserCreated = async (data: UserJSON) => {
   analytics.identify({
@@ -29,7 +30,9 @@ const handleUserCreated = async (data: UserJSON) => {
     distinctId: data.id,
   });
 
-  addUser(data.id);
+  const publicToken = crypto.randomBytes(16).toString("hex");
+  const secretKey = crypto.randomBytes(32).toString("hex");
+  addAccount(data.id, publicToken, secretKey);
 
   return new Response("User created", { status: 201 });
 };
@@ -69,7 +72,7 @@ const handleUserDeleted = async (data: DeletedObjectJSON) => {
       distinctId: data.id,
     });
 
-    deleteUser(data.id);
+    deleteAccount(data.id);
   }
 
   return new Response("User deleted", { status: 201 });

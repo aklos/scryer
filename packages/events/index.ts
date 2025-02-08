@@ -1,4 +1,9 @@
-import { addEvent, getOrCreateVisitor } from "@repo/database";
+import {
+  addEvent,
+  getOrCreateVisitor,
+  setVisitorHashedEmail,
+  setVisitorLeadStatus,
+} from "@repo/database";
 
 interface UTMParams {
   campaign?: string;
@@ -8,17 +13,18 @@ interface UTMParams {
   content?: string;
 }
 
-interface AdTracking {
-  gclid?: string;
-  fbclid?: string;
-  msclkid?: string;
-  twclid?: string;
-  ttclid?: string;
-  li_fat_id?: string;
+interface AdClickIds {
+  google?: string;
+  facebook?: string;
+  microsoft?: string;
+  twitter?: string;
+  tiktok?: string;
+  linkedin?: string;
 }
 
 interface ClickData {
-  fieldLabel?: string;
+  label?: string;
+  href?: string;
 }
 
 interface FormData {
@@ -26,34 +32,71 @@ interface FormData {
   email?: string;
 }
 
-export interface EcommerceData {
-  currency: string;
-  value: number;
-  items: {
-    id: string;
-    quantity: number;
-  }[];
-  shippingType?: string;
-  paymentType?: string;
+interface ProductData {
+  name?: string;
+  sku?: string;
+  brand?: string;
+  price?: string;
+  currency?: string;
+  availability?: string;
 }
 
 export type EventData = {
   event: string;
   origin: string;
+  ip?: string;
   token: string;
-  fingerprint: string;
+  fingerprint?: string;
+  newLead?: boolean;
   deviceType?: string;
   path?: string;
   pageTitle?: string;
   utmParams?: UTMParams;
-  adTracking?: AdTracking;
+  adClickIds?: AdClickIds;
   clickData?: ClickData;
   formData?: FormData;
-  ecommerceData?: EcommerceData;
+  productData?: ProductData;
 };
 
-export async function handleEvent(payload: { data: EventData }) {
+export async function handleEvent(payload: {
+  accountId: string;
+  data: EventData;
+}) {
   const data = payload.data;
-  const visitor = await getOrCreateVisitor(data.fingerprint);
+
+  if (!data.fingerprint) {
+    return;
+  }
+
+  const visitor = await getOrCreateVisitor(
+    payload.accountId,
+    data.fingerprint,
+    data.ip
+  );
+
+  if (!visitor) {
+    return;
+  }
+
+  if (data.event !== "page_visit") {
+    delete data.productData;
+  }
+
+  delete data.ip;
+  delete data.fingerprint;
+
+  if (data.formData?.email && visitor.lead_status === "non_lead") {
+    data.newLead = true;
+    await setVisitorLeadStatus(visitor.id, "lead");
+  }
+
+  if (data.formData?.email) {
+    await setVisitorHashedEmail(visitor.id, data.formData.email);
+  }
+
+  if (data.event === "conversion") {
+    await setVisitorLeadStatus(visitor.id, "converted");
+  }
+
   await addEvent(visitor.id, data);
 }

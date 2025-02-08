@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import dynamic from "next/dynamic";
 import { notFound } from "next/navigation";
 import Chat from "./chat";
+import Client from "./client";
 
 const title = "Touchbase";
 const description = "Personal AI assistant.";
@@ -22,7 +23,8 @@ const App = async () => {
 
   return (
     <>
-      <Chat />
+      <Client />
+      {/* <Chat /> */}
       {/* <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
         <div className="grid auto-rows-min gap-4 md:grid-cols-3">
           {pages.map((page) => (

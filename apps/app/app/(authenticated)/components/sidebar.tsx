@@ -49,34 +49,8 @@ type GlobalSidebarProperties = {
 };
 
 export const GlobalSidebar = ({ children }: GlobalSidebarProperties) => {
-  const [tasks, setTasks] = useState<
-    { content: string; due_at: string; status: string }[]
-  >([]);
-  const [reminders, setReminders] = useState<
-    { reason: string; specified_time: string; is_reminder: boolean }[]
-  >([]);
-  const [actionPlan, setActionPlan] = useState<string[]>([]);
   const sidebar = useSidebar();
   const user = useUser();
-
-  useEffect(() => {
-    window.addEventListener("action_plan_update", (event: Event) => {
-      setActionPlan((event as any).detail);
-      fetch("/api/data")
-        .then((res) => res.json())
-        .then((res) => {
-          setTasks(res.tasks);
-          setReminders(res.reminders);
-        });
-    });
-
-    fetch("/api/data")
-      .then((res) => res.json())
-      .then((res) => {
-        setTasks(res.tasks);
-        setReminders(res.reminders);
-      });
-  }, []);
 
   return (
     <>
@@ -97,68 +71,6 @@ export const GlobalSidebar = ({ children }: GlobalSidebarProperties) => {
               <ModeToggle />
             </SidebarMenuItem>
           </SidebarHeader>
-          {tasks.length ? (
-            <SidebarGroup>
-              <SidebarGroupLabel>Tasks & goals</SidebarGroupLabel>
-              <SidebarMenu>
-                <ul>
-                  {tasks.map((t, i) => {
-                    return (
-                      <li key={i} className="text-sm">
-                        {t.status === "todo" ? (
-                          <SquareIcon className="w-4 h-4 inline-block mr-2" />
-                        ) : t.status === "doing" ? (
-                          <SlashSquareIcon className="w-4 h-4 inline-block mr-2" />
-                        ) : (
-                          <CheckSquareIcon className="w-4 h-4 inline-block mr-2" />
-                        )}
-                        <span className="inline-block mr-2">{t.content}</span>
-                        <span>({format(new Date(t.due_at), "HH:mm")})</span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </SidebarMenu>
-            </SidebarGroup>
-          ) : null}
-          {reminders.length ? (
-            <SidebarGroup>
-              <SidebarGroupLabel>Reminders</SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  <ul>
-                    {reminders.map((t, i) => {
-                      return (
-                        <li key={i} className="text-sm">
-                          <ClockIcon className="w-4 h-4 inline-block mr-2" />
-                          <span className="inline-block mr-2">{t.reason}</span>
-                          <span>
-                            ({format(new Date(t.specified_time), "HH:mm")})
-                          </span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          ) : null}
-          {actionPlan.length ? (
-            <SidebarGroup>
-              <SidebarGroupLabel>Action plan</SidebarGroupLabel>
-              <SidebarMenu>
-                <ul className="space-y-1 list-disc list-inside">
-                  {actionPlan.map((e, i) => {
-                    return (
-                      <li key={i} className="text-sm leading-tight">
-                        {e}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </SidebarMenu>
-            </SidebarGroup>
-          ) : null}
           <SidebarGroup className="mt-auto">
             <SidebarGroupContent>
               <SidebarMenu></SidebarMenu>
@@ -168,7 +80,7 @@ export const GlobalSidebar = ({ children }: GlobalSidebarProperties) => {
         <SidebarFooter>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton asChild variant="outline">
+              {/* <SidebarMenuButton asChild variant="outline">
                 <a
                   href={`https://t.me/touch_base_bot?start=${user?.user?.id}`}
                   target="_blank"
@@ -188,7 +100,7 @@ export const GlobalSidebar = ({ children }: GlobalSidebarProperties) => {
                   </svg>
                   Chat on Telegram
                 </a>
-              </SidebarMenuButton>
+              </SidebarMenuButton> */}
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarFooter>

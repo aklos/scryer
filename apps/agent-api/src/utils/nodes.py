@@ -7,227 +7,95 @@ from langgraph.store.postgres import PostgresStore
 from langchain_core.messages import BaseMessage, AIMessage, SystemMessage, HumanMessage
 from langgraph.types import Command, interrupt
 from utils.state import State, StructuredOutput
-from utils.tools import tools, ask_human
+from utils.tools import tools 
 from utils.store import store
+from insights.cohorts import fetch_data, extract_event_features, cluster_visitors, classify_cohorts
 from utils.prompts import CHATBOT_SYSTEM_PROMPT, CHECK_IN_SYSTEM_PROMPT, ONBOARDING_SYSTEM_PROMPT
 from langgraph.graph import END
 
 model = ChatOpenAI(
-    model="gpt-4o-mini", temperature=0.7, streaming=True
+    model="gpt-4o-mini", temperature=0, streaming=True
 )
 
 model_with_tools = ChatOpenAI(
     model="gpt-4o-mini", temperature=0
 ).bind_tools(tools=tools, strict=True, parallel_tool_calls=True)
 
-model_with_tools_seq = ChatOpenAI(
-    model="gpt-4o-mini", temperature=0
-).bind_tools(tools=tools + [ask_human], strict=True, parallel_tool_calls=False)
-
-model_with_structured_output = ChatOpenAI(
-    model="gpt-4o-mini", temperature=0.7
-).with_structured_output(StructuredOutput)
-
-def get_local_time(tz_offset: int):
-    now_utc = datetime.utcnow()
-    offset_timedelta = timedelta(minutes=-tz_offset)
-    user_timezone = timezone(offset_timedelta)
-    user_time = now_utc.replace(tzinfo=timezone.utc).astimezone(user_timezone)
-    return user_time.isoformat()
-
-async def chatbot(state: State, config: RunnableConfig):
+async def call_model(state: State, config: RunnableConfig):
     messages = state['messages']
-
-    memories = store.get((state["clerk_id"],), "summary")
-    base_namespace = (state["clerk_id"],)
-    topic_namespace = (state["clerk_id"], "topic",)
-    core_memories = store.get(base_namespace, "core_memory")
-    tasks = store.get(base_namespace, "tasks")
-    topics = store.search(topic_namespace, limit=100)
-    check_ins = store.get(base_namespace, "check_ins")
-    relevant_topics = store.search(
-        topic_namespace, 
-        query=messages[-1].content, 
-        limit=1
-    )
-    relevant_topic = relevant_topics[0] if len(relevant_topics) else None
-
-    system_message = CHATBOT_SYSTEM_PROMPT.format(
-        current_time=state["timestamp"],
-        user_time=get_local_time(state["user_tz_offset"]),
-        core_memories=core_memories.value["data"] if core_memories else [],
-        known_topics=[{"id": x.key, "title": x.value.get("title")} for x in topics],
-        relevant_topic=relevant_topic.value if relevant_topic else {}, 
-        check_ins=check_ins.value["entries"] if check_ins else [],
-        tasks=tasks.value["data"] if tasks else []
-    )
-
-    response = await model_with_tools.ainvoke(
-        [
-            SystemMessage(system_message),
-            *messages
-        ]
-    )
-    return {"messages": [response]}
-
-async def respond(state: State):
-    messages = state['messages']
-
-    memories = store.get((state["clerk_id"],), "summary")
-    base_namespace = (state["clerk_id"],)
-    topic_namespace = (state["clerk_id"], "topic",)
-    core_memories = store.get(base_namespace, "core_memory")
-    tasks = store.get(base_namespace, "tasks")
-    topics = store.search(topic_namespace, limit=100)
-    check_ins = store.get(base_namespace, "check_ins")
-    relevant_topics = store.search(
-        topic_namespace, 
-        query=messages[-1].content, 
-        limit=1
-    )
-    relevant_topic = relevant_topics[0] if len(relevant_topics) else None
 
     system_message = """
-        Read the last few messages and decide if any UI elements or action plan should be displayed to the user.
-
-        Rules:
-            - Provide up to 2 prompt suggestions from the perspective of the user to quickly reply to questions.
-                - Prompts must be something *the user can say*.
-                - Max length of prompt is 36 characters.
-                - Don't give prompt suggestions unless last message is a direct question with limited number of possible answers.
-            - Provide "at a glance" action plan summary of what the user should know and prepare to do for today.
-        
-        Example 1:
-            Last AI Message: "How can I assist you today? Do you have any tasks or goals you want to discuss?"
-            UI elements:
-              - Suggestion: "What are my current tasks for today?"
-              - Suggestion: "I'd like to add a new task"
-        
-        Context: ###
-            Current system time: "{current_time}"
-            User's current time (with timezone): "{user_time}"
-            Core memories: {core_memories}
-            Known topics: {known_topics}
-            Relevant topic context: {relevant_topic}
-            Scheduled check-ins: {check_ins}
-            Tasks and goals: {tasks}
-        ###
-    """.format(
-        current_time=state["timestamp"],
-        user_time=get_local_time(state["user_tz_offset"]),
-        core_memories=core_memories.value["data"] if core_memories else [],
-        known_topics=[{"id": x.key, "title": x.value.get("title")} for x in topics],
-        relevant_topic=relevant_topic.value if relevant_topic else {}, 
-        check_ins=check_ins.value["entries"] if check_ins else [],
-        tasks=tasks.value["data"] if tasks else []
-    )
-    response = model_with_structured_output.invoke(
-        [
-            SystemMessage(system_message),
-            *messages
-        ]
-    )
-    return {"final_response": response}
-
-async def check_in(state: State):
-    messages = state['messages']
-
-    memories = store.get((state["clerk_id"],), "summary")
-    base_namespace = (state["clerk_id"],)
-    topic_namespace = (state["clerk_id"], "topic",)
-    core_memories = store.get(base_namespace, "core_memory")
-    tasks = store.get(base_namespace, "tasks")
-    topics = store.search(topic_namespace, limit=100)
-    check_ins = store.get(base_namespace, "check_ins")
-    relevant_topics = store.search(
-        topic_namespace, 
-        query=messages[-1].content, 
-        limit=1
-    )
-    relevant_topic = relevant_topics[0] if len(relevant_topics) else None
-
-    system_message = CHECK_IN_SYSTEM_PROMPT.format(
-        current_time=state["timestamp"],
-        user_time=get_local_time(state["user_tz_offset"]),
-        core_memories=core_memories.value["data"] if core_memories else [],
-        known_topics=[{"id": x.key, "title": x.value.get("title")} for x in topics],
-        relevant_topic=relevant_topic.value if relevant_topic else {}, 
-        check_ins=check_ins.value["entries"] if check_ins else [],
-        tasks=tasks.value["data"] if tasks else []
-    )
-
-    response = await model_with_structured_output.ainvoke(
-        [
-            SystemMessage(system_message),
-            *messages
-        ]
-    )
-
-    return {"final_response": response}
-
-async def wait_for_response(state: State):
-    ask_human_calls = [x for x in state["messages"][-1].tool_calls if x["name"] == "ask_human"]
-    tool_call_id = ask_human_calls[0]["id"]
-    response = interrupt(ask_human_calls[0]["args"]["question"])
-    tool_message = [{"tool_call_id": tool_call_id, "type": "tool", "content": response}]
-    return {"messages": tool_message}
-
-async def intro(state: State):
-    messages = state["messages"]
-
-    system_message = """
-        - Welcome the user to Touchbase
-        - Succinctly explain to them the following:
-            - You remember everything important!
-            - You are a taskmaster built to simplify and organize their responsibilities and goals.
-            - You can help them achieve goals by actively participating in organizing, planning, managing, and communicating.
-            - You are capable of initiating conversations with the user when appropriate, for reminders and nudges. (feature currently only available on Telegram)
-        - Finally, explain that you have a couple of questions to get started.
+        You are an ecommerce marketing analyst.
+        Your job is to identify insights from raw collected event data from the user's website.
+        Respond to the user by telling them that you are putting together a report.
     """
-    # - You have three prime directives: 
-    # 1) Be an agent the user can emotionally resonate with. 
-    # 2) Implicitly track tasks and goals. 
-    # 3) Proactive approach to communication.
 
-    response = await model.ainvoke([
-        SystemMessage(system_message),
-    ])
-    
+    response = await model.ainvoke(
+        [
+            SystemMessage(system_message),
+            *messages
+        ]
+    )
     return {"messages": [response]}
 
-async def onboarding(state: State):
-    messages = state["messages"]
+async def cohorts(state: State, config: RunnableConfig):
+    """Classify visitor events, reconstruct journeys, and pass cohort summaries to an LLM for labeling."""
 
-    memories = store.get((state["clerk_id"],), "summary")
-    base_namespace = (state["clerk_id"],)
-    topic_namespace = (state["clerk_id"], "topic",)
-    core_memories = store.get(base_namespace, "core_memory")
-    tasks = store.get(base_namespace, "tasks")
-    topics = store.search(topic_namespace, limit=100)
-    check_ins = store.get(base_namespace, "check_ins")
-    relevant_topics = store.search(
-        topic_namespace, 
-        query=messages[-1].content, 
-        limit=1
+    # Fetch, process, and classify visitor sessions (not visitors)
+    df = fetch_data()
+    features = extract_event_features(df)  # ✅ Now session-based
+    clustered_features = cluster_visitors(features)
+    xbg_model, classified_data = classify_cohorts(clustered_features)
+
+    # === Step 1: Aggregate Session Journeys per Cohort ===
+    # ✅ No longer grouping by visitor_id, we now group by `session_id`
+    classified_data["page_journey"] = classified_data.groupby("session_id")["path_<lambda>"].transform(lambda x: " → ".join(x))
+
+    cohort_summary = classified_data.groupby("gmm_label").agg({
+        "session_id": "count",  # ✅ Now counting sessions, not visitors
+        "product_price_sum": "mean",
+        "product_price_mean": "mean",
+        "new_lead_sum": "sum",
+        "session_duration": "mean",
+        "created_at_count": "mean",
+        "utm_campaign_sum": "mean",
+        "utm_source_sum": "mean",
+        "ad_click_sum": "mean",
+        "page_journey": lambda x: x.value_counts().idxmax(),  # ✅ Most common journey in cohort
+    }).reset_index()
+
+    # Rename for clarity
+    cohort_summary.rename(columns={"session_id": "num_sessions"}, inplace=True)
+
+    # Convert to structured dict for LLM
+    llm_input = cohort_summary.to_dict(orient="records")
+
+    # === Step 2: Use LLM to Label Cohorts ===
+    system_message = """
+        You are an ecommerce marketing analyst.
+        You will receive **aggregated cohort data**, summarizing session behaviors.
+
+        **Each cohort summary includes:**
+        - **Number of sessions** in the cohort.
+        - **Average purchasing behavior**: Total and mean product price.
+        - **Lead conversions**: How many sessions resulted in a lead.
+        - **Average session duration** and event count (engagement).
+        - **Marketing exposure**: UTM campaigns, ad clicks.
+        - **Most common page journey** (reconstructed from session paths).
+
+        **Your Goal:**
+        - Assign a **clear, marketing-relevant cohort label** (e.g., "High Intent Buyers", "Cart Abandoners", "Window Shoppers").
+        - Base the cohort label on their session-based behavior, page visits, and buying patterns.
+        - Focus on **session behaviors**, not individual visitors.
+    """
+
+    # Send structured cohort summary to LLM
+    response = await model.ainvoke(
+        [
+            SystemMessage(system_message),
+            HumanMessage(content=json.dumps(llm_input, indent=2))  # Send formatted JSON
+        ]
     )
-    relevant_topic = relevant_topics[0] if len(relevant_topics) else None
 
-    system_message = ONBOARDING_SYSTEM_PROMPT.format(
-        current_time=state["timestamp"],
-        user_time=get_local_time(state["user_tz_offset"]),
-        core_memories=core_memories.value["data"] if core_memories else [],
-        known_topics=[{"id": x.key, "title": x.value.get("title")} for x in topics],
-        relevant_topic=relevant_topic.value if relevant_topic else {}, 
-        check_ins=check_ins.value["entries"] if check_ins else [],
-        tasks=tasks.value["data"] if tasks else []
-    )
-
-    response = await model_with_tools_seq.ainvoke([ 
-        SystemMessage(system_message),
-        *messages,
-    ])
-    
     return {"messages": [response]}
 
-async def finished(state: State):
-    return {"messages": state["messages"]}

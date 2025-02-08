@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
   const { message } = await request.json();
 
   // Define the API endpoint of your FastAPI server
-  const apiUrl = `${process.env.AGENT_API_URL}/run-thread-stream`;
+  const apiUrl = `${process.env.AGENT_API_URL}/run-report-stream`;
 
   // Send the POST request and get the streaming response
   const response = await fetch(apiUrl, {

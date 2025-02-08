@@ -48,6 +48,8 @@ RUN adduser --system --uid 1001 nextjs
 # Copy built application from builder
 COPY --from=builder /app/apps/app/.next/standalone ./
 COPY --from=builder /app/apps/app/.next/static ./apps/app/.next/static
+COPY --from=builder /app/apps/app/geoipupdate_7.1.0_linux_amd64.deb ./geoipupdate.deb
+COPY --from=builder /app/apps/app/entrypoint.sh ./entrypoint.sh
 
 # Set correct permissions
 RUN chown -R nextjs:nodejs ./
@@ -56,5 +58,6 @@ USER nextjs
 
 EXPOSE 3000
 
-CMD ["node", "apps/app/server.js"]
+# CMD ["node", "apps/app/server.js"]
+ENTRYPOINT ["entrypoint.sh"]
 

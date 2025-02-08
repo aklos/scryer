@@ -1,4 +1,4 @@
-import { getUserByToken } from "@repo/database";
+import { getAccountByToken } from "@repo/database";
 import fs from "fs";
 import { NextRequest, NextResponse } from "next/server";
 import path from "path";
@@ -7,7 +7,7 @@ export const GET = async (request: NextRequest) => {
   const searchParams = request.nextUrl.searchParams;
   const token = searchParams.get("token") || "";
 
-  const user = await getUserByToken(token);
+  const user = await getAccountByToken(token);
 
   if (!user) {
     const errorJs = `console.error("Invalid token: Unauthorized request");`;

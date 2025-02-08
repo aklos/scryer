@@ -1,5 +1,6 @@
 import pg from "pg";
 import { keys } from "./keys";
+import { getCountryFromIP } from "@repo/geoip";
 
 const { Pool } = pg;
 
@@ -7,15 +8,19 @@ const db = new Pool({
   connectionString: keys().DATABASE_URL,
 });
 
-export async function addUser(clerkId: string) {
-  await db.query(`INSERT INTO users (clerk_id, created_at) VALUES ($1, $2)`, [
-    clerkId,
-    new Date(),
-  ]);
+export async function addAccount(
+  clerkId: string,
+  publicToken: string,
+  secretKey: string
+) {
+  await db.query(
+    `INSERT INTO accounts (clerk_id, public_token, secret_key, created_at) VALUES ($1, $2)`,
+    [clerkId, publicToken, secretKey, new Date()]
+  );
 }
 
-export async function deleteUser(clerkId: string) {
-  await db.query(`DELETE FROM users WHERE clerk_id = $1`, [clerkId]);
+export async function deleteAccount(clerkId: string) {
+  await db.query(`DELETE FROM accounts WHERE clerk_id = $1`, [clerkId]);
 }
 
 // export async function setUserTelegramId(clerkId: string, telegramId: string) {
@@ -25,17 +30,17 @@ export async function deleteUser(clerkId: string) {
 //   );
 // }
 
-export async function getUserByClerkId(clerkId: string) {
+export async function getAccountByClerkId(clerkId: string) {
   const res = await db.query(
-    `SELECT * FROM users WHERE clerk_id = $1 LIMIT 1`,
+    `SELECT * FROM accounts WHERE clerk_id = $1 LIMIT 1`,
     [clerkId]
   );
   return res.rows.length ? res.rows[0] : null;
 }
 
-export async function getUserByToken(token: string) {
+export async function getAccountByToken(token: string) {
   const res = await db.query(
-    `SELECT * FROM users WHERE public_token = $1 LIMIT 1`,
+    `SELECT * FROM accounts WHERE public_token = $1 LIMIT 1`,
     [token]
   );
   return res.rows.length ? res.rows[0] : null;
@@ -48,15 +53,40 @@ export async function getUserByToken(token: string) {
 //   );
 // }
 
-export async function getOrCreateVisitor(fingerprint: string) {
+export async function getOrCreateVisitor(
+  accountId: string,
+  fingerprint: string,
+  ip: string | undefined
+) {
+  const existingVisitor = await db.query(
+    `SELECT * FROM visitors WHERE fingerprint = $1`,
+    [fingerprint]
+  );
+
+  if (existingVisitor.rows.length > 0) {
+    return existingVisitor.rows[0];
+  }
+
+  let countryCode: string | undefined = undefined;
+
+  try {
+    const country = ip ? await getCountryFromIP(ip) : null;
+    if (country?.country?.isoCode) {
+      countryCode = country.country?.isoCode;
+    }
+  } catch (err) {
+    // pass
+    console.log(err);
+  }
+
   const result = await db.query(
     `
-    INSERT INTO visitors (fingerprint, created_at)
-    VALUES ($1, $2)
+    INSERT INTO visitors (account_id, fingerprint, country, created_at)
+    VALUES ($1, $2, $3, $4)
     ON CONFLICT (fingerprint) DO NOTHING
     RETURNING *;
     `,
-    [fingerprint, new Date()]
+    [accountId, fingerprint, countryCode, new Date()]
   );
 
   // If a new visitor was inserted, return it
@@ -64,13 +94,7 @@ export async function getOrCreateVisitor(fingerprint: string) {
     return result.rows[0];
   }
 
-  // Otherwise, fetch the existing visitor
-  const existingVisitor = await db.query(
-    `SELECT * FROM visitors WHERE fingerprint = $1`,
-    [fingerprint]
-  );
-
-  return existingVisitor.rows[0];
+  return null;
 }
 
 export async function addEvent(visitorId: string, data: any) {
@@ -80,6 +104,25 @@ export async function addEvent(visitorId: string, data: any) {
   );
 }
 
+export async function setVisitorLeadStatus(
+  visitorId: string,
+  leadStatus: "non_lead" | "lead" | "converted"
+) {
+  await db.query(`UPDATE visitors SET lead_status = $1 WHERE id = $2`, [
+    leadStatus,
+    visitorId,
+  ]);
+}
+
+export async function setVisitorHashedEmail(
+  visitorId: string,
+  hashedEmail: string
+) {
+  await db.query(`UPDATE visitors SET hashed_email = $1 WHERE id = $2`, [
+    hashedEmail,
+    visitorId,
+  ]);
+}
 // export async function getTasks(clerkId: string) {
 //   const query = await db.query(
 //     `SELECT "value" FROM store WHERE prefix = $1 AND "key" = 'tasks'`,

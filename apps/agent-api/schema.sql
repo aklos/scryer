@@ -1,6 +1,6 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
-CREATE TABLE users
+CREATE TABLE accounts
 (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     clerk_id TEXT NOT NULL UNIQUE,
@@ -11,11 +11,16 @@ CREATE TABLE users
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TYPE lead_status_enum AS ENUM ('non_lead', 'lead', 'converted');
+
 CREATE TABLE visitors
 (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id UUID REFERENCES accounts(id) ON DELETE CASCADE,
     fingerprint TEXT NOT NULL UNIQUE,
     hashed_email TEXT UNIQUE,
+    country TEXT,
+    lead_status lead_status_enum DEFAULT 'non_lead' NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -37,8 +42,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trigger_update_users
-BEFORE UPDATE ON users
+CREATE TRIGGER trigger_update_accounts
+BEFORE UPDATE ON accounts
 FOR EACH ROW EXECUTE FUNCTION update_timestamp();
 
 CREATE TRIGGER trigger_update_visitors
@@ -49,7 +54,7 @@ CREATE TRIGGER trigger_update_events
 BEFORE UPDATE ON events
 FOR EACH ROW EXECUTE FUNCTION update_timestamp();
 
-CREATE INDEX idx_users_id ON users USING btree (id);
+CREATE INDEX idx_accounts_id ON accounts USING btree (id);
 CREATE INDEX idx_visitors_id ON visitors USING btree (id);
 CREATE INDEX idx_events_visitor_id ON events (visitor_id);
 
