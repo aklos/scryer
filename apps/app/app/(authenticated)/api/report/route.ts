@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { currentUser } from "@repo/auth/server";
+import { getAccountByClerkId } from "@repo/database";
 
 export async function POST(request: NextRequest) {
   const user = await currentUser();
@@ -12,6 +13,7 @@ export async function POST(request: NextRequest) {
 
   // Define the API endpoint of your FastAPI server
   const apiUrl = `${process.env.AGENT_API_URL}/run-report-stream`;
+  // const account = await getAccountByClerkId(user.id);
 
   // Send the POST request and get the streaming response
   const response = await fetch(apiUrl, {
@@ -22,6 +24,7 @@ export async function POST(request: NextRequest) {
     },
     body: JSON.stringify({
       clerk_id: user.id,
+      site_url: "https://www.ion.be",
       message,
     }),
   });

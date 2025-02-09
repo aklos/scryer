@@ -44,9 +44,10 @@ async function* backendApi({
         if (data) {
           const parsed = JSON.parse(data);
           yield {
+            node: parsed.node,
             choices: [
               {
-                delta: { content: parsed.response },
+                delta: { content: parsed.response, node: parsed.node },
               },
               // {
               //   delta: { content: parsed.structured_response },
@@ -70,12 +71,21 @@ const Client = () => {
     const abortController = new AbortController();
     const messages = [{ content: [{ text: "Generate a report" }] }];
 
+    let lastNodeId = null;
+
     try {
       for await (const chunk of backendApi({
         messages,
         abortSignal: abortController.signal,
       })) {
-        setResponseText((prev) => prev + chunk.choices[0].delta?.content || "");
+        const newText = chunk.choices[0].delta?.content || "";
+        const nodeId = chunk.node || chunk.choices[0].delta?.node || null;
+
+        setResponseText((prev) => {
+          const needsBreak = lastNodeId && lastNodeId !== nodeId ? " \n\n" : "";
+          lastNodeId = nodeId;
+          return prev + needsBreak + newText;
+        });
       }
     } catch (error) {
       console.error("Streaming error:", error);

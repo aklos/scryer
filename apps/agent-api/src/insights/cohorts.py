@@ -102,9 +102,26 @@ def cluster_visitors(features):
     dbscan = DBSCAN(eps=10, min_samples=5).fit(X)
     features["dbscan_label"] = dbscan.labels_
 
+    best_gmm = None
+    lowest_bic = np.inf
+    best_n_components = 1
+
+    for n in range(2, min(10, len(X))):  # Try cluster sizes from 2 to max 10 (or data size)
+        gmm = GaussianMixture(n_components=n, random_state=42)
+        gmm.fit(X)
+
+        bic = gmm.bic(X)
+        if bic < lowest_bic:  # Keep track of the best cluster count
+            lowest_bic = bic
+            best_gmm = gmm
+            best_n_components = n
+
+    # **Fit GMM with the best number of clusters**
+    features["gmm_label"] = best_gmm.fit_predict(X)
+
     # GMM clustering
-    gmm = GaussianMixture(n_components=3, random_state=42)
-    features["gmm_label"] = gmm.fit_predict(X)
+    # gmm = GaussianMixture(n_components=3, random_state=42)
+    # features["gmm_label"] = gmm.fit_predict(X)
 
     return features
 

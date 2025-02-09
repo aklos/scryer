@@ -93,15 +93,8 @@ async def shutdown_event():
 
 class ThreadRequest(BaseModel):
     clerk_id: str
+    site_url: str
     message: str
-
-class CheckInRequest(BaseModel):
-    clerk_id: str
-    timestamp: str
-    tz_offset: int
-    check_in_id: str
-    reason: str
-    is_reminder: bool
 
 class SystemRequest(BaseModel):
     clerk_id: str
@@ -205,6 +198,7 @@ async def run_thread_stream(request: ThreadRequest, x_secret_key: str = Header(N
             state = State(
                 messages=[],
                 clerk_id=request.clerk_id,
+                site_url=request.site_url,
                 timestamp=(datetime.utcnow()).isoformat(),
             )
         
@@ -222,7 +216,7 @@ async def run_thread_stream(request: ThreadRequest, x_secret_key: str = Header(N
                         if tool_call.get("id"):
                             yield {"data": json.dumps({"tool_call": tool_call})}
                 if isinstance(msg, AIMessage):
-                    yield {"data": json.dumps({"response": msg.content})}
+                    yield {"data": json.dumps({"response": msg.content, "node": metadata.get("langgraph_node")})}
                 # if metadata.get("langgraph_node") == "respond":
                 #     yield {"data": json.dumps({"structured_response": msg.content})}
                 if isinstance(msg, ToolMessage):

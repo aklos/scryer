@@ -1,4 +1,5 @@
 import json
+from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 from langchain_openai import ChatOpenAI
 from langgraph.errors import GraphInterrupt
@@ -6,16 +7,21 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.store.postgres import PostgresStore
 from langchain_core.messages import BaseMessage, AIMessage, SystemMessage, HumanMessage
 from langgraph.types import Command, interrupt
-from utils.state import State, StructuredOutput
+from utils.state import State, FunnelOutput
 from utils.tools import tools 
 from utils.store import store
+from insights.site_info import extract_site_info
 from insights.cohorts import fetch_data, extract_event_features, cluster_visitors, classify_cohorts
-from utils.prompts import CHATBOT_SYSTEM_PROMPT, CHECK_IN_SYSTEM_PROMPT, ONBOARDING_SYSTEM_PROMPT
+from insights.funnels import get_top_paths, compute_dropoffs
 from langgraph.graph import END
 
 model = ChatOpenAI(
     model="gpt-4o-mini", temperature=0, streaming=True
 )
+
+model_with_funnel_output = ChatOpenAI(
+    model="gpt-4o-mini", temperature=0, streaming=True
+).with_structured_output(FunnelOutput)
 
 model_with_tools = ChatOpenAI(
     model="gpt-4o-mini", temperature=0
@@ -38,6 +44,36 @@ async def call_model(state: State, config: RunnableConfig):
     )
     return {"messages": [response]}
 
+async def site_info(state: State, config: RunnableConfig):
+    messages = state['messages']
+    [site_map, landing_page] = extract_site_info(state["site_url"])
+
+    system_message = """
+        You are an ecommerce marketing analyst.
+        You will receive a list of sitemap locations, as well as the HTML for a site landing page.
+
+        **Each sitemap entry includes:**
+        - **Location** URL of the page.
+        - **Modified** timestamp.
+
+        **Your Goal:**
+        - Identify the marketing/ecommerce goals of the website.
+            - Summary of the site.
+            - What most likely constitutes a lead?
+            - What most likely constitutes a conversion?
+        - Identify prospective lead and conversion funnels.
+    """
+
+    response = await model.ainvoke(
+        [
+            SystemMessage(system_message),
+            HumanMessage(content=json.dumps(site_map, indent=2)),
+            HumanMessage(content=landing_page),
+        ]
+    )
+
+    return {"site_summary": response}
+
 async def cohorts(state: State, config: RunnableConfig):
     """Classify visitor events, reconstruct journeys, and pass cohort summaries to an LLM for labeling."""
 
@@ -50,6 +86,7 @@ async def cohorts(state: State, config: RunnableConfig):
     # === Step 1: Aggregate Session Journeys per Cohort ===
     # ✅ No longer grouping by visitor_id, we now group by `session_id`
     classified_data["page_journey"] = classified_data.groupby("session_id")["path_<lambda>"].transform(lambda x: " → ".join(x))
+    session_paths = classified_data[["session_id", "page_journey"]].drop_duplicates()
 
     cohort_summary = classified_data.groupby("gmm_label").agg({
         "session_id": "count",  # ✅ Now counting sessions, not visitors
@@ -87,7 +124,10 @@ async def cohorts(state: State, config: RunnableConfig):
         - Assign a **clear, marketing-relevant cohort label** (e.g., "High Intent Buyers", "Cart Abandoners", "Window Shoppers").
         - Base the cohort label on their session-based behavior, page visits, and buying patterns.
         - Focus on **session behaviors**, not individual visitors.
-    """
+
+        **Site Summary:**
+        {site_summary}
+    """.format(site_summary=state["site_summary"])
 
     # Send structured cohort summary to LLM
     response = await model.ainvoke(
@@ -97,5 +137,47 @@ async def cohorts(state: State, config: RunnableConfig):
         ]
     )
 
-    return {"messages": [response]}
+    return {"messages": [response], "session_paths": session_paths.to_dict(orient="records")}
 
+async def funnels(state: State, config: RunnableConfig):
+    """Analyze visitor paths, validate conversion funnels with LLM, and detect bottlenecks."""
+    top_paths = get_top_paths(state["session_paths"])
+    funnel_analysis = compute_dropoffs(top_paths.to_dict(orient="records"), state["session_paths"])
+    funnel_analysis = [{"id": str(uuid4()), **x} for x in funnel_analysis]
+
+    system_message = """
+        You are an ecommerce marketing analyst.
+        You will receive a list of potential funnel journeys.
+
+        **Each entry includes:**
+        - Funnel: The sequence of pages visited.
+        - Total Visitors: Number of visitors that followed this exact path.
+        - Step Dropoffs: Analysis of dropoffs between pages.
+
+        **Your Goals:**
+        - Identify whether these are potential **lead generation** or **conversion** funnels.
+        - Explain what each funnel is likely to be for.
+
+        **Site Summary:**
+        {site_summary}
+    """.format(site_summary=state["site_summary"])
+
+    response = await model_with_funnel_output.ainvoke(
+        [
+            SystemMessage(system_message),
+            HumanMessage(content=json.dumps(funnel_analysis, indent=2))
+        ]
+    )
+
+    funnel_data = response.dict()
+    # lead_funnels = funnel_data.get("lead_funnels", [])
+    # conversion_funnels = funnel_data.get("conversion_funnels", [])
+
+    # lead_funnel_analysis = compute_dropoffs(lead_funnels, state["session_paths"])
+    # conversion_funnel_analysis = compute_dropoffs(conversion_funnels, state["session_paths"])
+
+    return {
+        # "lead_funnels": lead_funnel_analysis,
+        # "conversion_funnels": conversion_funnel_analysis,
+        "messages": [AIMessage(content=json.dumps(response.dict(), indent=2))]
+    }
