@@ -95,7 +95,7 @@ const Client = () => {
   return (
     <div>
       <Button onClick={handleClick}>Generate report</Button>
-      <pre className="p-4 mt-2 border rounded text-xs whitespace-break-spaces">
+      <pre className="p-4 mt-2 border rounded text-sm whitespace-break-spaces">
         {responseText || "Waiting for response..."}
       </pre>
     </div>

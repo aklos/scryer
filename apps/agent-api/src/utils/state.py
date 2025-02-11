@@ -4,22 +4,26 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 from langgraph.graph.message import add_messages
 
+
 class FunnelType(str, Enum):
     LEAD_FUNNEL = "lead_funnel"
     CONVERSION_FUNNEL = "conversion_funnel"
     NOT_APPLICABLE = "not_applicable"
 
+
 class Funnel(BaseModel):
     id: str
     type: FunnelType
-    page_journey: List[str]
+    critical_path: List[str]
     label: str
     rationale: str
 
 
 class FunnelOutput(BaseModel):
     """Respond to the user with this."""
+
     funnels: List[Funnel] = Field(description="Explanations of each funnel")
+
 
 class State(TypedDict):
     clerk_id: str
