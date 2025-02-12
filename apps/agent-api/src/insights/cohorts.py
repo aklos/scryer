@@ -8,7 +8,7 @@ from sklearn.feature_extraction.text import (
     TfidfVectorizer,
 )  # Needed for path processing
 from xgboost import XGBClassifier
-from utils.store import pool  # PG ConnectionPool
+from utils.sql import engine
 
 
 def fetch_data():
@@ -19,9 +19,7 @@ def fetch_data():
     LEFT JOIN events e ON v.id = e.visitor_id
     ORDER BY v.id, e.created_at
     """
-    with pool.getconn() as conn:
-        df = pd.read_sql(query, conn)
-        pool.putconn(conn)
+    df = pd.read_sql(query, engine)
     return df
 
 

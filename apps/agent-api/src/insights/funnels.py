@@ -1,17 +1,6 @@
 import pandas as pd
-from typing import List
-from utils.store import pool  # PG ConnectionPool
-
-
-def get_top_paths(session_paths: List[dict]):
-    session_paths = pd.DataFrame(session_paths)  # Convert back to DataFrame
-
-    # Aggregate visitor paths
-    path_counts = session_paths["page_journey"].value_counts().reset_index()
-    path_counts.columns = ["visitor_path", "count"]
-
-    # Keep top 10 most frequent visitor paths
-    return path_counts.head(10)
+from utils.sql import engine
+from sqlalchemy import text
 
 
 def get_journeys():
@@ -81,62 +70,124 @@ def get_journeys():
     )
     SELECT journey, journey_count
     FROM journey_counts
-    WHERE ARRAY_TO_STRING(journey, ' -> ') LIKE '%form_submission:%';
+    WHERE ARRAY_TO_STRING(journey, ' -> ') LIKE '%%form_submission:%%';
     """
-    with pool.getconn() as conn:
-        df = pd.read_sql(query, conn)
-        pool.putconn(conn)
+    df = pd.read_sql(query, engine)
     return df
 
 
-def compute_dropoffs(funnels, session_paths: List[dict]):
-    """Calculate drop-off rates for each funnel step."""
-    session_df = pd.DataFrame(session_paths)
-    dropoff_analysis = []
-
-    for funnel in funnels:
-        path = funnel["visitor_path"]
-        if isinstance(path, str):
-            path = [p.strip() for p in path.split("→")]
-        total_visitors = funnel["count"]
-
-        if len(path) < 2:
+def compute_dropoffs(data: dict):
+    for funnel in data.get("funnels", []):
+        critical_path = funnel.get("critical_path", [])
+        if len(critical_path) < 2:
             continue
 
-        step_dropoffs = []
-        for i in range(len(path) - 1):
-            from_page = path[i]
-            to_page = path[i + 1]
-
-            # Count sessions that reached 'from_page' but not 'to_page'
-            step_visitors = session_df[
-                session_df["page_journey"].str.contains(from_page, na=False)
-            ]
-            next_step_visitors = session_df[
-                session_df["page_journey"].str.contains(to_page, na=False)
-            ]
-
-            visitors_lost = len(step_visitors) - len(next_step_visitors)
-            dropoff_rate = visitors_lost / max(
-                len(step_visitors), 1
-            )  # Avoid division by zero
-
-            step_dropoffs.append(
-                {
-                    "from_page": from_page,
-                    "to_page": to_page,
-                    "dropoff_rate": round(
-                        dropoff_rate * 100, 2
-                    ),  # Convert to percentage
-                }
-            )
-
-        dropoff_analysis.append(
-            {
-                "funnel": path,
-                "total_visitors": total_visitors,
-                "step_dropoffs": step_dropoffs,
-            }
+        funnel_steps_sql = (
+            "ARRAY["
+            + ", ".join(f"'{step.replace('\'', '\'\'')}'" for step in critical_path)
+            + "]"
         )
 
-    return dropoff_analysis
+        query = f"""
+        WITH ranked_events AS (
+            SELECT 
+                e.visitor_id,
+                e.created_at,
+                e.data->>'event' AS event,
+                e.data->>'path' AS path,
+                e.data->'formData' AS formData,
+                ROW_NUMBER() OVER (
+                    PARTITION BY e.visitor_id, e.data->>'event', e.data->>'path', DATE_TRUNC('second', e.created_at)
+                    ORDER BY e.created_at
+                ) AS rn
+            FROM events e
+            WHERE e.data->>'event' IN ('page_visit', 'form_submission')
+        ),
+        session_markers AS (
+            SELECT 
+                re.visitor_id,
+                re.created_at,
+                re.event,
+                re.path,
+                re.formData,
+                LAG(re.created_at) OVER (PARTITION BY re.visitor_id ORDER BY re.created_at) AS prev_created_at
+            FROM ranked_events re
+            WHERE rn = 1
+        ),
+        sessions AS (
+            SELECT 
+                visitor_id,
+                created_at,
+                event,
+                path,
+                formData,
+                CASE 
+                    WHEN prev_created_at IS NULL OR created_at - prev_created_at > INTERVAL '30 minutes'
+                    THEN 1 ELSE 0
+                END AS new_session
+            FROM session_markers
+        ),
+        session_ids AS (
+            SELECT 
+                visitor_id,
+                created_at,
+                event,
+                path,
+                formData,
+                SUM(new_session) OVER (PARTITION BY visitor_id ORDER BY created_at) AS session_id
+            FROM sessions
+        ),
+        session_steps AS (
+            SELECT 
+                session_id,
+                visitor_id,
+                ARRAY_AGG(
+                    CASE 
+                        WHEN event = 'form_submission'
+                            THEN 'form_submission:' || COALESCE(formData->>'formName', '[unknown_form]')
+                        ELSE event || ':' || path
+                    END
+                    ORDER BY created_at
+                ) AS journey
+            FROM session_ids
+            GROUP BY visitor_id, session_id
+        ),
+        funnel_steps AS (
+            SELECT t.step, t.step_idx,
+                CASE WHEN t.step LIKE '%%*%%' THEN TRUE ELSE FALSE END AS is_wildcard,
+                CASE WHEN t.step LIKE '%%*%%' THEN REPLACE(t.step, '*', '') ELSE t.step END AS match_value
+            FROM UNNEST({funnel_steps_sql}) WITH ORDINALITY AS t(step, step_idx)
+        ),
+        aggregated AS (
+            SELECT 
+                fs.step_idx,
+                fs.step AS from_step,
+                COUNT(DISTINCT s.session_id) AS reached_from_step
+            FROM funnel_steps fs
+            LEFT JOIN session_steps s ON (
+                (fs.is_wildcard AND s.journey::text ILIKE '%%' || fs.match_value || '%%')
+                OR (NOT fs.is_wildcard AND s.journey @> ARRAY[fs.step])
+            )
+            GROUP BY fs.step_idx, fs.step
+        )
+        SELECT from_step, to_step, reached_from_step, reached_to_step, dropoff_rate
+        FROM (
+            SELECT 
+                a.from_step,
+                LEAD(a.from_step) OVER (ORDER BY a.step_idx) AS to_step,
+                a.reached_from_step,
+                COALESCE(LEAD(a.reached_from_step) OVER (ORDER BY a.step_idx), 0) AS reached_to_step,
+                ROUND(
+                    (a.reached_from_step - COALESCE(LEAD(a.reached_from_step) OVER (ORDER BY a.step_idx), 0))
+                    * 100.0 / a.reached_from_step, 2
+                ) AS dropoff_rate,
+                a.step_idx
+            FROM aggregated a
+        ) final
+        WHERE to_step IS NOT NULL
+        ORDER BY step_idx;
+        """
+
+        df = pd.read_sql(query, engine)
+        funnel["dropoff_analysis"] = df.to_dict(orient="records")
+    return data

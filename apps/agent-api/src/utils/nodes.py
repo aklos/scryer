@@ -17,7 +17,9 @@ from insights.cohorts import (
     cluster_visitors,
     classify_cohorts,
 )
-from insights.funnels import get_journeys, get_top_paths, compute_dropoffs
+from insights.funnels import get_journeys, compute_dropoffs
+from insights.attributions import get_attributions
+from insights.engagement import get_engagement
 from langgraph.graph import END
 
 model = ChatOpenAI(model="gpt-4o-mini", temperature=0, streaming=True)
@@ -48,6 +50,7 @@ async def call_model(state: State, config: RunnableConfig):
 async def site_info(state: State, config: RunnableConfig):
     messages = state["messages"]
     [site_map, landing_page] = extract_site_info(state["site_url"])
+    site_map = get_engagement(site_map)
 
     system_message = """
         You are an ecommerce marketing analyst.
@@ -56,6 +59,7 @@ async def site_info(state: State, config: RunnableConfig):
         **Each sitemap entry includes:**
         - **Location** URL of the page.
         - **Modified** timestamp.
+        - **Hits** count of visits.
 
         **Your Goal:**
         - Identify the marketing/ecommerce goals of the website.
@@ -63,6 +67,7 @@ async def site_info(state: State, config: RunnableConfig):
             - What most likely constitutes a lead?
             - What most likely constitutes a conversion?
         - Identify prospective lead and conversion funnels.
+        - Identify engagement trends (including negative trends).
     """
 
     response = await model.ainvoke(
@@ -172,6 +177,7 @@ async def funnels(state: State):
         1. A funnel must contain at least **one form submission**.
         2. Funnels should **ignore minor variations** (e.g., users visiting `/about` before `/contact`).
         3. If multiple journeys follow the **same structure**, generalize them by using `*` as a wildcard.
+            - Form submissions must never be wildcarded, because they are almost always key funnel steps.
 
         ### **How to Generalize Journeys**
         - **If users visit similar pages under the same section**, replace specific pages with `*`.
@@ -192,12 +198,24 @@ async def funnels(state: State):
         ]
     )
 
-    funnel_data = response.dict()
+    funnel_data = compute_dropoffs(response.dict())
 
     return {
         # "lead_funnels": lead_funnel_analysis,
         # "conversion_funnels": conversion_funnel_analysis,
-        "messages": [AIMessage(content=json.dumps(response.dict(), indent=2))]
+        "messages": [AIMessage(content=json.dumps(funnel_data, indent=2))]
+    }
+
+
+async def attributions(state: State):
+    """Attributions"""
+    data = get_attributions()
+    return {
+        # "lead_funnels": lead_funnel_analysis,
+        # "conversion_funnels": conversion_funnel_analysis,
+        "messages": [
+            AIMessage(content=json.dumps(data.to_dict(orient="records"), indent=2))
+        ]
     }
 
 
