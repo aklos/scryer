@@ -13,7 +13,7 @@
     "@thumbmarkjs/thumbmarkjs": "^0.17.0",
     "@types/node": "^18.8.0",
     "dotenv": "^16.0.2",
-    "esbuild": "^0.15.9",
+    "esbuild": "^0.25.2",
     "react": "^19.0.0",
     "slugify": "^1.6.6",
     "typescript": "^4.8.4"
