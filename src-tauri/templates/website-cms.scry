@@ -1,0 +1,368 @@
+{
+  "nodes": [
+    {
+      "id": "node-1",
+      "type": "c4",
+      "position": { "x": 100, "y": 0 },
+      "data": {
+        "name": "Content Author",
+        "description": "Writes and publishes articles, manages media assets",
+        "kind": "person"
+      }
+    },
+    {
+      "id": "node-2",
+      "type": "c4",
+      "position": { "x": 500, "y": 0 },
+      "data": {
+        "name": "Site Visitor",
+        "description": "Reads articles and browses the published website",
+        "kind": "person"
+      }
+    },
+    {
+      "id": "node-3",
+      "type": "c4",
+      "position": { "x": 300, "y": 220 },
+      "data": {
+        "name": "CMS Platform",
+        "description": "Manages content creation, publishing, and delivery to visitors",
+        "kind": "system"
+      }
+    },
+    {
+      "id": "node-4",
+      "type": "c4",
+      "position": { "x": 0, "y": 440 },
+      "data": {
+        "name": "Cloudflare",
+        "description": "Caches and delivers static assets and pages globally",
+        "kind": "system",
+        "external": true
+      }
+    },
+    {
+      "id": "node-5",
+      "type": "c4",
+      "position": { "x": 300, "y": 440 },
+      "data": {
+        "name": "Resend",
+        "description": "Sends notification emails to subscribers on publish",
+        "kind": "system",
+        "external": true
+      }
+    },
+    {
+      "id": "node-6",
+      "type": "c4",
+      "position": { "x": 600, "y": 440 },
+      "data": {
+        "name": "Typesense",
+        "description": "Full-text search index for published content",
+        "kind": "system",
+        "external": true
+      }
+    },
+    {
+      "id": "node-10",
+      "type": "c4",
+      "position": { "x": 0, "y": 0 },
+      "data": {
+        "name": "Admin Dashboard",
+        "description": "Editorial interface for writing, editing, and publishing content",
+        "kind": "container",
+        "technology": "React"
+      },
+      "parentId": "node-3"
+    },
+    {
+      "id": "node-11",
+      "type": "c4",
+      "position": { "x": 300, "y": 0 },
+      "data": {
+        "name": "Content API",
+        "description": "CRUD operations for articles, pages, and media",
+        "kind": "container",
+        "technology": "Express"
+      },
+      "parentId": "node-3"
+    },
+    {
+      "id": "node-12",
+      "type": "c4",
+      "position": { "x": 600, "y": 0 },
+      "data": {
+        "name": "Public Website",
+        "description": "Server-renders and serves published content to visitors",
+        "kind": "container",
+        "technology": "Next.js"
+      },
+      "parentId": "node-3"
+    },
+    {
+      "id": "node-13",
+      "type": "c4",
+      "position": { "x": 150, "y": 220 },
+      "data": {
+        "name": "Content Database",
+        "description": "Stores articles, pages, metadata, and user accounts",
+        "kind": "container",
+        "technology": "PostgreSQL",
+        "shape": "cylinder"
+      },
+      "parentId": "node-3"
+    },
+    {
+      "id": "node-14",
+      "type": "c4",
+      "position": { "x": 450, "y": 220 },
+      "data": {
+        "name": "Media Storage",
+        "description": "Stores uploaded images, videos, and documents",
+        "kind": "container",
+        "technology": "S3",
+        "shape": "cylinder"
+      },
+      "parentId": "node-3"
+    },
+    {
+      "id": "node-20",
+      "type": "c4",
+      "position": { "x": 0, "y": 0 },
+      "data": {
+        "name": "Article Router",
+        "description": "Handles HTTP endpoints for article CRUD and publishing workflow",
+        "kind": "component",
+        "technology": "Express Router"
+      },
+      "parentId": "node-11"
+    },
+    {
+      "id": "node-21",
+      "type": "c4",
+      "position": { "x": 300, "y": 0 },
+      "data": {
+        "name": "Auth Middleware",
+        "description": "Validates JWT tokens and enforces role-based access control",
+        "kind": "component",
+        "technology": "Passport.js"
+      },
+      "parentId": "node-11"
+    },
+    {
+      "id": "node-22",
+      "type": "c4",
+      "position": { "x": 0, "y": 220 },
+      "data": {
+        "name": "Database Client",
+        "description": "Type-safe ORM for querying and mutating content data",
+        "kind": "component",
+        "technology": "Prisma"
+      },
+      "parentId": "node-11"
+    },
+    {
+      "id": "node-23",
+      "type": "c4",
+      "position": { "x": 300, "y": 220 },
+      "data": {
+        "name": "Media Processor",
+        "description": "Resizes images, generates thumbnails, uploads to object storage",
+        "kind": "component",
+        "technology": "Sharp"
+      },
+      "parentId": "node-11"
+    },
+    {
+      "id": "node-30",
+      "type": "code",
+      "position": { "x": 0, "y": 0 },
+      "data": {
+        "name": "listArticles",
+        "description": "GET /articles — paginated list with filtering by status, author, and tag",
+        "kind": "step"
+      },
+      "parentId": "node-20"
+    },
+    {
+      "id": "node-31",
+      "type": "code",
+      "position": { "x": 250, "y": 0 },
+      "data": {
+        "name": "getArticle",
+        "description": "GET /articles/:slug — fetch a single article with resolved media URLs",
+        "kind": "step"
+      },
+      "parentId": "node-20"
+    },
+    {
+      "id": "node-32",
+      "type": "code",
+      "position": { "x": 0, "y": 150 },
+      "data": {
+        "name": "createArticle",
+        "description": "POST /articles — validate input, create draft, process inline images",
+        "kind": "step"
+      },
+      "parentId": "node-20"
+    },
+    {
+      "id": "node-33",
+      "type": "code",
+      "position": { "x": 250, "y": 150 },
+      "data": {
+        "name": "publishArticle",
+        "description": "POST /articles/:id/publish — set publish timestamp, index in Typesense, notify subscribers via Resend",
+        "kind": "step"
+      },
+      "parentId": "node-20"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-node-1-node-3",
+      "source": "node-1",
+      "target": "node-3",
+      "data": { "label": "manages content via" }
+    },
+    {
+      "id": "edge-node-2-node-3",
+      "source": "node-2",
+      "target": "node-3",
+      "data": { "label": "reads articles on" }
+    },
+    {
+      "id": "edge-node-3-node-4",
+      "source": "node-3",
+      "target": "node-4",
+      "data": { "label": "delivers assets via", "technology": "HTTPS" }
+    },
+    {
+      "id": "edge-node-3-node-5",
+      "source": "node-3",
+      "target": "node-5",
+      "data": { "label": "sends notifications via", "technology": "SMTP" }
+    },
+    {
+      "id": "edge-node-3-node-6",
+      "source": "node-3",
+      "target": "node-6",
+      "data": { "label": "indexes content in", "technology": "REST" }
+    },
+    {
+      "id": "edge-node-1-node-10",
+      "source": "node-1",
+      "target": "node-10",
+      "data": { "label": "writes content in" }
+    },
+    {
+      "id": "edge-node-2-node-12",
+      "source": "node-2",
+      "target": "node-12",
+      "data": { "label": "browses" }
+    },
+    {
+      "id": "edge-node-10-node-11",
+      "source": "node-10",
+      "target": "node-11",
+      "data": { "label": "makes API calls to", "technology": "REST" }
+    },
+    {
+      "id": "edge-node-12-node-11",
+      "source": "node-12",
+      "target": "node-11",
+      "data": { "label": "fetches content from", "technology": "REST" }
+    },
+    {
+      "id": "edge-node-11-node-13",
+      "source": "node-11",
+      "target": "node-13",
+      "data": { "label": "reads/writes", "technology": "Prisma" }
+    },
+    {
+      "id": "edge-node-11-node-14",
+      "source": "node-11",
+      "target": "node-14",
+      "data": { "label": "stores uploads in", "technology": "S3 API" }
+    },
+    {
+      "id": "edge-node-12-node-4",
+      "source": "node-12",
+      "target": "node-4",
+      "data": { "label": "serves pages via", "technology": "HTTPS" }
+    },
+    {
+      "id": "edge-node-11-node-5",
+      "source": "node-11",
+      "target": "node-5",
+      "data": { "label": "sends emails via", "technology": "REST" }
+    },
+    {
+      "id": "edge-node-11-node-6",
+      "source": "node-11",
+      "target": "node-6",
+      "data": { "label": "indexes content in", "technology": "REST" }
+    },
+    {
+      "id": "edge-node-20-node-21",
+      "source": "node-20",
+      "target": "node-21",
+      "data": { "label": "validates requests with" }
+    },
+    {
+      "id": "edge-node-20-node-22",
+      "source": "node-20",
+      "target": "node-22",
+      "data": { "label": "queries articles via" }
+    },
+    {
+      "id": "edge-node-20-node-23",
+      "source": "node-20",
+      "target": "node-23",
+      "data": { "label": "processes uploads with" }
+    },
+    {
+      "id": "edge-node-22-node-13",
+      "source": "node-22",
+      "target": "node-13",
+      "data": { "label": "reads/writes", "technology": "Prisma" }
+    },
+    {
+      "id": "edge-node-23-node-14",
+      "source": "node-23",
+      "target": "node-14",
+      "data": { "label": "uploads to", "technology": "S3 API" }
+    },
+    {
+      "id": "edge-node-30-node-22",
+      "source": "node-30",
+      "target": "node-22",
+      "data": { "label": "queries articles from" }
+    },
+    {
+      "id": "edge-node-31-node-22",
+      "source": "node-31",
+      "target": "node-22",
+      "data": { "label": "fetches article from" }
+    },
+    {
+      "id": "edge-node-32-node-22",
+      "source": "node-32",
+      "target": "node-22",
+      "data": { "label": "inserts draft via" }
+    },
+    {
+      "id": "edge-node-32-node-23",
+      "source": "node-32",
+      "target": "node-23",
+      "data": { "label": "processes inline images with" }
+    },
+    {
+      "id": "edge-node-33-node-22",
+      "source": "node-33",
+      "target": "node-22",
+      "data": { "label": "updates publish status via" }
+    }
+  ],
+  "startingLevel": "system"
+}

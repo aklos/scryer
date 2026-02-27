@@ -1,0 +1,20 @@
+[package]
+name = "scryer-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "MCP server for Scryer architecture models"
+authors = ["Alexander Klos"]
+
+[[bin]]
+name = "scryer-mcp"
+path = "src/main.rs"
+
+[dependencies]
+scryer-core = { path = "../scryer-core" }
+rmcp = { version = "0.15", features = ["server", "transport-io"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+base64 = "0.22.1"
+toml_edit = "0.22"

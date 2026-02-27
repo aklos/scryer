@@ -1,0 +1,138 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+@import "@fontsource-variable/space-grotesk";
+
+:root {
+  --grid-color: #d4d4d8;
+  --xy-background-color: #f8f8fa;
+  --selection-color: #18181b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --xy-background-color: #18181b;
+    --selection-color: #d4d4d8;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --grid-color: #2a2a2e;
+  }
+}
+
+@keyframes dash-flow {
+  to {
+    stroke-dashoffset: -9;
+  }
+}
+
+/* Edges render above nodes so shape decorations don't overlap arrows */
+.react-flow__edges {
+  z-index: 1 !important;
+}
+
+/* At code level, mention edges render behind nodes */
+.code-level .react-flow__edges {
+  z-index: 0 !important;
+}
+
+.code-level .react-flow__node {
+  z-index: 1 !important;
+}
+
+.react-flow__handle {
+  width: 8px;
+  height: 8px;
+  opacity: 0;
+}
+
+/* Larger invisible hit area for easier targeting */
+.react-flow__handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+}
+
+/* Show handles when hovering over any node */
+.react-flow__node:hover .react-flow__handle {
+  opacity: 1;
+}
+
+/* Only show handles when actively dragging a connection */
+.connecting .react-flow__handle {
+  opacity: 1;
+}
+
+/* edge midpoint dot: hidden by default, shown when hovering the edge */
+.edge-handle-dot {
+  opacity: 0;
+}
+
+.react-flow__edge:hover .edge-handle-dot {
+  opacity: 0.7;
+}
+
+/* Hide the bounding box around selected nodes (selection logic still works) */
+.react-flow__nodesselection {
+  display: none !important;
+}
+
+/* Normalize ReactFlow controls to match other canvas panels */
+.react-flow__controls {
+  border-radius: 0.5rem;
+  border: 1px solid rgb(228 228 231 / 0.8);
+  background: rgb(255 255 255 / 0.8);
+  backdrop-filter: blur(4px);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  overflow: hidden;
+  margin: 0.75rem !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .react-flow__controls {
+    border-color: rgb(63 63 70 / 0.8);
+    background: rgb(24 24 27 / 0.8);
+  }
+}
+
+.react-flow__controls-button {
+  border: none !important;
+  background: transparent !important;
+  color: #a1a1aa !important;
+  fill: #a1a1aa !important;
+  transition: background 0.15s, color 0.15s;
+}
+
+.react-flow__controls-button:hover {
+  background: rgb(228 228 231 / 0.5) !important;
+  color: #52525b !important;
+  fill: #52525b !important;
+}
+
+.react-flow__controls-button svg {
+  fill: currentColor !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .react-flow__controls-button {
+    color: #71717a !important;
+    fill: #71717a !important;
+  }
+  .react-flow__controls-button:hover {
+    background: rgb(63 63 70 / 0.5) !important;
+    color: #a1a1aa !important;
+    fill: #a1a1aa !important;
+  }
+}
+
+/* Thin scrollbars */
+* {
+  scrollbar-width: thin;
+}
+

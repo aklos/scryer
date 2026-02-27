@@ -1,0 +1,410 @@
+{
+  "nodes": [
+    {
+      "id": "node-1",
+      "type": "c4",
+      "position": { "x": 350, "y": 0 },
+      "data": {
+        "name": "End User",
+        "description": "Subscribes to the platform and uses it day-to-day",
+        "kind": "person"
+      }
+    },
+    {
+      "id": "node-2",
+      "type": "c4",
+      "position": { "x": 250, "y": 220 },
+      "data": {
+        "name": "SaaS Platform",
+        "description": "The core product — handles tenants, billing, and the main application",
+        "kind": "system"
+      }
+    },
+    {
+      "id": "node-3",
+      "type": "c4",
+      "position": { "x": 0, "y": 0 },
+      "data": {
+        "name": "Admin",
+        "description": "Manages tenant accounts, monitors platform health",
+        "kind": "person"
+      }
+    },
+    {
+      "id": "node-4",
+      "type": "c4",
+      "position": { "x": 600, "y": 220 },
+      "data": {
+        "name": "Auth0",
+        "description": "Handles SSO, social login, and identity verification",
+        "kind": "system",
+        "external": true
+      }
+    },
+    {
+      "id": "node-5",
+      "type": "c4",
+      "position": { "x": 0, "y": 440 },
+      "data": {
+        "name": "Stripe",
+        "description": "Processes subscription payments, invoicing, and metered billing",
+        "kind": "system",
+        "external": true
+      }
+    },
+    {
+      "id": "node-6",
+      "type": "c4",
+      "position": { "x": 500, "y": 440 },
+      "data": {
+        "name": "Postmark",
+        "description": "Sends transactional emails and notifications",
+        "kind": "system",
+        "external": true
+      }
+    },
+    {
+      "id": "node-10",
+      "type": "c4",
+      "position": { "x": 0, "y": 0 },
+      "data": {
+        "name": "Web App",
+        "description": "Server-rendered application for end users and tenant admins",
+        "kind": "container",
+        "technology": "SvelteKit"
+      },
+      "parentId": "node-2"
+    },
+    {
+      "id": "node-11",
+      "type": "c4",
+      "position": { "x": 300, "y": 0 },
+      "data": {
+        "name": "API Server",
+        "description": "Handles all business logic, tenant isolation, and billing orchestration",
+        "kind": "container",
+        "technology": "Go"
+      },
+      "parentId": "node-2"
+    },
+    {
+      "id": "node-12",
+      "type": "c4",
+      "position": { "x": 0, "y": 220 },
+      "data": {
+        "name": "Application Database",
+        "description": "Multi-tenant data store with row-level security",
+        "kind": "container",
+        "technology": "PostgreSQL",
+        "shape": "cylinder"
+      },
+      "parentId": "node-2"
+    },
+    {
+      "id": "node-13",
+      "type": "c4",
+      "position": { "x": 300, "y": 220 },
+      "data": {
+        "name": "Job Queue",
+        "description": "Processes background tasks like email sends and report generation",
+        "kind": "container",
+        "technology": "Redis",
+        "shape": "pipe"
+      },
+      "parentId": "node-2"
+    },
+    {
+      "id": "node-14",
+      "type": "c4",
+      "position": { "x": 600, "y": 0 },
+      "data": {
+        "name": "Admin Dashboard",
+        "description": "Internal tool for platform ops and tenant management",
+        "kind": "container",
+        "technology": "React"
+      },
+      "parentId": "node-2"
+    },
+    {
+      "id": "node-20",
+      "type": "c4",
+      "position": { "x": 0, "y": 0 },
+      "data": {
+        "name": "Tenant Handler",
+        "description": "REST endpoints for tenant CRUD, plan changes, and suspension",
+        "kind": "component",
+        "technology": "Chi"
+      },
+      "parentId": "node-11"
+    },
+    {
+      "id": "node-21",
+      "type": "c4",
+      "position": { "x": 300, "y": 0 },
+      "data": {
+        "name": "Auth Middleware",
+        "description": "Validates Auth0 JWTs and resolves tenant context from claims",
+        "kind": "component",
+        "technology": "golang-jwt"
+      },
+      "parentId": "node-11"
+    },
+    {
+      "id": "node-22",
+      "type": "c4",
+      "position": { "x": 0, "y": 220 },
+      "data": {
+        "name": "Data Access Layer",
+        "description": "Type-safe SQL queries with connection pooling and tenant scoping",
+        "kind": "component",
+        "technology": "pgx"
+      },
+      "parentId": "node-11"
+    },
+    {
+      "id": "node-23",
+      "type": "c4",
+      "position": { "x": 300, "y": 220 },
+      "data": {
+        "name": "Billing Service",
+        "description": "Manages Stripe subscriptions, webhook handling, and usage metering",
+        "kind": "component",
+        "technology": "stripe-go"
+      },
+      "parentId": "node-11"
+    },
+    {
+      "id": "node-24",
+      "type": "c4",
+      "position": { "x": 600, "y": 220 },
+      "data": {
+        "name": "Event Publisher",
+        "description": "Enqueues background jobs for async processing",
+        "kind": "component",
+        "technology": "Asynq"
+      },
+      "parentId": "node-11"
+    },
+    {
+      "id": "node-30",
+      "type": "code",
+      "position": { "x": 0, "y": 0 },
+      "data": {
+        "name": "CreateTenant",
+        "description": "POST /tenants — provisions isolated schema, sets up Stripe customer, sends welcome email",
+        "kind": "step"
+      },
+      "parentId": "node-20"
+    },
+    {
+      "id": "node-31",
+      "type": "code",
+      "position": { "x": 250, "y": 0 },
+      "data": {
+        "name": "GetTenant",
+        "description": "GET /tenants/:id — returns tenant config, usage stats, and current plan",
+        "kind": "step"
+      },
+      "parentId": "node-20"
+    },
+    {
+      "id": "node-32",
+      "type": "code",
+      "position": { "x": 0, "y": 150 },
+      "data": {
+        "name": "UpdatePlan",
+        "description": "PUT /tenants/:id/plan — upgrades or downgrades subscription via Stripe",
+        "kind": "step"
+      },
+      "parentId": "node-20"
+    },
+    {
+      "id": "node-33",
+      "type": "code",
+      "position": { "x": 250, "y": 150 },
+      "data": {
+        "name": "SuspendTenant",
+        "description": "POST /tenants/:id/suspend — disables tenant access and pauses Stripe billing",
+        "kind": "step"
+      },
+      "parentId": "node-20"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-node-1-node-2",
+      "source": "node-1",
+      "target": "node-2",
+      "data": { "label": "uses" }
+    },
+    {
+      "id": "edge-node-3-node-2",
+      "source": "node-3",
+      "target": "node-2",
+      "data": { "label": "manages tenants via" }
+    },
+    {
+      "id": "edge-node-2-node-4",
+      "source": "node-2",
+      "target": "node-4",
+      "data": { "label": "authenticates via", "technology": "OAuth 2.0" }
+    },
+    {
+      "id": "edge-node-2-node-5",
+      "source": "node-2",
+      "target": "node-5",
+      "data": { "label": "processes payments via", "technology": "REST" }
+    },
+    {
+      "id": "edge-node-2-node-6",
+      "source": "node-2",
+      "target": "node-6",
+      "data": { "label": "sends emails via", "technology": "SMTP" }
+    },
+    {
+      "id": "edge-node-1-node-10",
+      "source": "node-1",
+      "target": "node-10",
+      "data": { "label": "uses" }
+    },
+    {
+      "id": "edge-node-3-node-14",
+      "source": "node-3",
+      "target": "node-14",
+      "data": { "label": "manages platform via" }
+    },
+    {
+      "id": "edge-node-10-node-11",
+      "source": "node-10",
+      "target": "node-11",
+      "data": { "label": "makes API calls to", "technology": "REST" }
+    },
+    {
+      "id": "edge-node-14-node-11",
+      "source": "node-14",
+      "target": "node-11",
+      "data": { "label": "manages platform via", "technology": "REST" }
+    },
+    {
+      "id": "edge-node-11-node-12",
+      "source": "node-11",
+      "target": "node-12",
+      "data": { "label": "reads/writes", "technology": "pgx" }
+    },
+    {
+      "id": "edge-node-11-node-13",
+      "source": "node-11",
+      "target": "node-13",
+      "data": { "label": "enqueues jobs to", "technology": "Asynq" }
+    },
+    {
+      "id": "edge-node-11-node-4",
+      "source": "node-11",
+      "target": "node-4",
+      "data": { "label": "validates tokens with", "technology": "JWKS" }
+    },
+    {
+      "id": "edge-node-11-node-5",
+      "source": "node-11",
+      "target": "node-5",
+      "data": { "label": "processes payments via", "technology": "REST" }
+    },
+    {
+      "id": "edge-node-13-node-6",
+      "source": "node-13",
+      "target": "node-6",
+      "data": { "label": "sends emails via", "technology": "SMTP" }
+    },
+    {
+      "id": "edge-node-20-node-21",
+      "source": "node-20",
+      "target": "node-21",
+      "data": { "label": "validates requests with" }
+    },
+    {
+      "id": "edge-node-20-node-22",
+      "source": "node-20",
+      "target": "node-22",
+      "data": { "label": "queries tenants via" }
+    },
+    {
+      "id": "edge-node-20-node-23",
+      "source": "node-20",
+      "target": "node-23",
+      "data": { "label": "manages subscriptions via" }
+    },
+    {
+      "id": "edge-node-20-node-24",
+      "source": "node-20",
+      "target": "node-24",
+      "data": { "label": "emits tenant events to" }
+    },
+    {
+      "id": "edge-node-22-node-12",
+      "source": "node-22",
+      "target": "node-12",
+      "data": { "label": "queries", "technology": "pgx" }
+    },
+    {
+      "id": "edge-node-24-node-13",
+      "source": "node-24",
+      "target": "node-13",
+      "data": { "label": "enqueues to", "technology": "Asynq" }
+    },
+    {
+      "id": "edge-node-21-node-4",
+      "source": "node-21",
+      "target": "node-4",
+      "data": { "label": "fetches JWKS from", "technology": "HTTPS" }
+    },
+    {
+      "id": "edge-node-23-node-5",
+      "source": "node-23",
+      "target": "node-5",
+      "data": { "label": "manages subscriptions via", "technology": "REST" }
+    },
+    {
+      "id": "edge-node-30-node-22",
+      "source": "node-30",
+      "target": "node-22",
+      "data": { "label": "provisions schema via" }
+    },
+    {
+      "id": "edge-node-30-node-23",
+      "source": "node-30",
+      "target": "node-23",
+      "data": { "label": "creates Stripe customer via" }
+    },
+    {
+      "id": "edge-node-30-node-24",
+      "source": "node-30",
+      "target": "node-24",
+      "data": { "label": "enqueues welcome email via" }
+    },
+    {
+      "id": "edge-node-31-node-22",
+      "source": "node-31",
+      "target": "node-22",
+      "data": { "label": "queries tenant from" }
+    },
+    {
+      "id": "edge-node-32-node-23",
+      "source": "node-32",
+      "target": "node-23",
+      "data": { "label": "changes subscription via" }
+    },
+    {
+      "id": "edge-node-33-node-22",
+      "source": "node-33",
+      "target": "node-22",
+      "data": { "label": "disables tenant via" }
+    },
+    {
+      "id": "edge-node-33-node-23",
+      "source": "node-33",
+      "target": "node-23",
+      "data": { "label": "pauses billing via" }
+    }
+  ],
+  "startingLevel": "system"
+}

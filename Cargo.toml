@@ -1,0 +1,3 @@
+[workspace]
+members = ["src-tauri", "crates/scryer-core", "crates/scryer-mcp", "crates/scryer-suggest", "crates/xtask"]
+resolver = "2"

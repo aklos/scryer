@@ -1,0 +1,281 @@
+{
+  "nodes": [
+    {
+      "id": "node-1",
+      "type": "c4",
+      "position": { "x": 350, "y": 0 },
+      "data": {
+        "name": "Player",
+        "description": "Provides input and receives rendered frames",
+        "kind": "person"
+      }
+    },
+    {
+      "id": "node-2",
+      "type": "c4",
+      "position": { "x": 250, "y": 220 },
+      "data": {
+        "name": "Multiplayer Game",
+        "description": "Client-server game with ECS architecture, real-time physics and rendering",
+        "kind": "system"
+      }
+    },
+    {
+      "id": "node-3",
+      "type": "c4",
+      "position": { "x": 600, "y": 220 },
+      "data": {
+        "name": "Player Database",
+        "description": "Stores player profiles, inventories, and progression",
+        "kind": "system",
+        "external": true,
+        "shape": "cylinder"
+      }
+    },
+    {
+      "id": "node-10",
+      "type": "c4",
+      "position": { "x": 0, "y": 0 },
+      "data": {
+        "name": "Game Client",
+        "description": "Runs the game loop, renders graphics, and processes player input",
+        "kind": "container",
+        "technology": "Bevy"
+      },
+      "parentId": "node-2"
+    },
+    {
+      "id": "node-11",
+      "type": "c4",
+      "position": { "x": 400, "y": 0 },
+      "data": {
+        "name": "Game Server",
+        "description": "Authoritative simulation, manages game state and matchmaking",
+        "kind": "container",
+        "technology": "Axum"
+      },
+      "parentId": "node-2"
+    },
+    {
+      "id": "node-20",
+      "type": "c4",
+      "position": { "x": 0, "y": 0 },
+      "data": {
+        "name": "ECS World",
+        "description": "Entity-Component-System runtime — stores all entities and their components",
+        "kind": "component",
+        "technology": "Bevy ECS"
+      },
+      "parentId": "node-10"
+    },
+    {
+      "id": "node-21",
+      "type": "c4",
+      "position": { "x": 300, "y": 0 },
+      "data": {
+        "name": "Renderer",
+        "description": "Queries transform and mesh components, draws frames to screen",
+        "kind": "component",
+        "technology": "wgpu"
+      },
+      "parentId": "node-10"
+    },
+    {
+      "id": "node-22",
+      "type": "c4",
+      "position": { "x": 600, "y": 0 },
+      "data": {
+        "name": "Input Handler",
+        "description": "Maps raw device input to game actions, updates input components",
+        "kind": "component",
+        "technology": "bevy_input"
+      },
+      "parentId": "node-10"
+    },
+    {
+      "id": "node-23",
+      "type": "c4",
+      "position": { "x": 0, "y": 220 },
+      "data": {
+        "name": "Physics Plugin",
+        "description": "Steps the physics simulation each tick using transform and rigidbody components",
+        "kind": "component",
+        "technology": "bevy_rapier3d"
+      },
+      "parentId": "node-10"
+    },
+    {
+      "id": "node-24",
+      "type": "c4",
+      "position": { "x": 300, "y": 220 },
+      "data": {
+        "name": "Asset Loader",
+        "description": "Loads and caches textures, models, audio, and shaders from disk",
+        "kind": "component",
+        "technology": "bevy_asset"
+      },
+      "parentId": "node-10"
+    },
+    {
+      "id": "node-25",
+      "type": "c4",
+      "position": { "x": 600, "y": 220 },
+      "data": {
+        "name": "Network Replication",
+        "description": "Syncs entity state with the authoritative server",
+        "kind": "component",
+        "technology": "lightyear"
+      },
+      "parentId": "node-10"
+    },
+    {
+      "id": "node-30",
+      "type": "code",
+      "position": { "x": 0, "y": 0 },
+      "data": {
+        "name": "setup_colliders",
+        "description": "Attaches Collider and RigidBody components to spawned entities based on mesh bounds",
+        "kind": "step"
+      },
+      "parentId": "node-23"
+    },
+    {
+      "id": "node-31",
+      "type": "code",
+      "position": { "x": 250, "y": 0 },
+      "data": {
+        "name": "apply_forces",
+        "description": "Reads player input and gravity, applies impulses and external forces to RigidBody velocity",
+        "kind": "step"
+      },
+      "parentId": "node-23"
+    },
+    {
+      "id": "node-32",
+      "type": "code",
+      "position": { "x": 0, "y": 150 },
+      "data": {
+        "name": "step_simulation",
+        "description": "Advances the Rapier physics world by one fixed timestep, resolves contacts and joints",
+        "kind": "step"
+      },
+      "parentId": "node-23"
+    },
+    {
+      "id": "node-33",
+      "type": "code",
+      "position": { "x": 250, "y": 150 },
+      "data": {
+        "name": "handle_collisions",
+        "description": "Reads CollisionEvent pairs, triggers damage, knockback, and sound effects",
+        "kind": "step"
+      },
+      "parentId": "node-23"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-node-1-node-2",
+      "source": "node-1",
+      "target": "node-2",
+      "data": { "label": "plays" }
+    },
+    {
+      "id": "edge-node-2-node-3",
+      "source": "node-2",
+      "target": "node-3",
+      "data": { "label": "persists player data to", "technology": "SQL" }
+    },
+    {
+      "id": "edge-node-1-node-10",
+      "source": "node-1",
+      "target": "node-10",
+      "data": { "label": "provides input to" }
+    },
+    {
+      "id": "edge-node-10-node-11",
+      "source": "node-10",
+      "target": "node-11",
+      "data": { "label": "syncs game state with", "technology": "UDP" }
+    },
+    {
+      "id": "edge-node-11-node-3",
+      "source": "node-11",
+      "target": "node-3",
+      "data": { "label": "persists player data to", "technology": "SQL" }
+    },
+    {
+      "id": "edge-node-22-node-20",
+      "source": "node-22",
+      "target": "node-20",
+      "data": { "label": "writes input components to" }
+    },
+    {
+      "id": "edge-node-20-node-23",
+      "source": "node-20",
+      "target": "node-23",
+      "data": { "label": "provides rigidbody data to" }
+    },
+    {
+      "id": "edge-node-23-node-20",
+      "source": "node-23",
+      "target": "node-20",
+      "data": { "label": "writes updated transforms to" }
+    },
+    {
+      "id": "edge-node-20-node-21",
+      "source": "node-20",
+      "target": "node-21",
+      "data": { "label": "provides renderable entities to" }
+    },
+    {
+      "id": "edge-node-24-node-21",
+      "source": "node-24",
+      "target": "node-21",
+      "data": { "label": "supplies loaded assets to" }
+    },
+    {
+      "id": "edge-node-25-node-20",
+      "source": "node-25",
+      "target": "node-20",
+      "data": { "label": "applies server state to" }
+    },
+    {
+      "id": "edge-node-25-node-11",
+      "source": "node-25",
+      "target": "node-11",
+      "data": { "label": "syncs state with", "technology": "UDP" }
+    },
+    {
+      "id": "edge-node-30-node-20",
+      "source": "node-30",
+      "target": "node-20",
+      "data": { "label": "reads spawned entities from" }
+    },
+    {
+      "id": "edge-node-31-node-20",
+      "source": "node-31",
+      "target": "node-20",
+      "data": { "label": "reads input components from" }
+    },
+    {
+      "id": "edge-node-33-node-20",
+      "source": "node-33",
+      "target": "node-20",
+      "data": { "label": "writes damage components to" }
+    },
+    {
+      "id": "edge-node-31-node-32",
+      "source": "node-31",
+      "target": "node-32",
+      "data": { "label": "forces applied before" }
+    },
+    {
+      "id": "edge-node-32-node-33",
+      "source": "node-32",
+      "target": "node-33",
+      "data": { "label": "collisions detected after" }
+    }
+  ],
+  "startingLevel": "system"
+}
