@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
+import { version as appVersion } from "../package.json";
 import {
   ReactFlow,
   Background,
@@ -358,7 +359,7 @@ export function C4Canvas({
               {!aiConfigured ? "Configure AI" : aiEnabled ? "Review" : "AI off"}
             </button>
           )}
-          <span className="text-[10px] text-zinc-300 dark:text-zinc-600">scryer <span className="opacity-60">{__APP_VERSION__}</span></span>
+          <span className="text-[10px] text-zinc-300 dark:text-zinc-600">scryer <span className="opacity-60">{appVersion}</span></span>
         </Panel>
         {(currentModel !== null || nodes.length > 0) && (
           <Controls>

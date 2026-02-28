@@ -317,12 +317,6 @@ pub fn run() {
             // Keep watcher alive for the app's lifetime
             app.manage(Mutex::new(watcher));
 
-            // Enable devtools in debug builds
-            #[cfg(debug_assertions)]
-            if let Some(webview) = app.get_webview_window("main") {
-                webview.open_devtools();
-            }
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
