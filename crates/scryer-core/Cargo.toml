@@ -1,6 +1,6 @@
 [package]
 name = "scryer-core"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Core data model and file I/O for Scryer"
 authors = ["Alexander Klos"]

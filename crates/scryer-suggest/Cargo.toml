@@ -1,6 +1,6 @@
 [package]
 name = "scryer-suggest"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "AI advisor for Scryer architecture models"
 authors = ["Alexander Klos"]
