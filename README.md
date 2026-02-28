@@ -5,7 +5,7 @@
   <h1>scryer</h1>
 
   <p>
-    <b>Visual planning tool for working with AI agents.</b>
+    <b>Visual modeling surface for working with AI agents. Edit C4 architecture diagrams in a drag-and-drop editor — AI agents read and modify the same model through MCP.</b>
     <br />
     <br />
     <a href="#features">Features</a>
