@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { C4Node, C4Edge, C4Kind, Contract } from "./types";
 
 // Track user collapse intent across remounts so panels stay collapsed after navigation
-let _guideCollapsed = false;
+let _guideCollapsed = true;
 let _flowGuideCollapsed = false;
+
+/** Expand the guide panel (e.g. when creating a new blank model in the UI). */
+export function expandGuidePanel() { _guideCollapsed = false; }
 
 interface GuidePanelProps {
   nodes: C4Node[];

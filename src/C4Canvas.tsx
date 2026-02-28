@@ -61,6 +61,7 @@ interface C4CanvasProps {
   setGroups: React.Dispatch<React.SetStateAction<Group[]>>;
   onAddNode: (kindOverride?: C4Kind, screenPos?: { x: number; y: number }) => void;
   currentParentKind: C4Kind | undefined;
+  layoutPending?: boolean;
 }
 
 export function C4Canvas({
@@ -95,6 +96,7 @@ export function C4Canvas({
   setGroups,
   onAddNode,
   currentParentKind,
+  layoutPending,
 }: C4CanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const selectionStartPos = useRef<{ x: number; y: number } | null>(null);
@@ -246,8 +248,37 @@ export function C4Canvas({
     wrapperRef.current?.classList.remove("connecting");
   }, []);
 
+  // Show overlay while layout is pending — hold for min 500ms, then fade out over 200ms
+  const [overlayMounted, setOverlayMounted] = useState(!!layoutPending);
+  const [overlayOpaque, setOverlayOpaque] = useState(!!layoutPending);
+  const overlayShownAt = useRef(0);
+  useEffect(() => {
+    if (layoutPending) {
+      setOverlayMounted(true);
+      setOverlayOpaque(true);
+      overlayShownAt.current = Date.now();
+    } else if (overlayMounted) {
+      const elapsed = Date.now() - overlayShownAt.current;
+      const holdRemaining = Math.max(0, 500 - elapsed);
+      // After hold period, start fade
+      const fadeTimer = setTimeout(() => {
+        setOverlayOpaque(false);
+        // After fade animation, unmount
+        setTimeout(() => setOverlayMounted(false), 200);
+      }, holdRemaining);
+      return () => clearTimeout(fadeTimer);
+    }
+  }, [layoutPending]);
+
   return (
     <div className={`flex-1 relative${parentKind === "component" ? " code-level" : ""}`} ref={wrapperRef} onContextMenu={handleContextMenu}>
+      {overlayMounted && (
+        <div
+          className={`absolute inset-0 z-50 flex items-center justify-center bg-zinc-50 dark:bg-zinc-950 transition-opacity duration-200 ${overlayOpaque ? "opacity-100" : "opacity-0"}`}
+        >
+          <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
+        </div>
+      )}
       <ReactFlow
         key={expandedPath.join("/")}
         nodes={visibleNodesWithHints}

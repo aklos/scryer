@@ -23,7 +23,7 @@ const appWindow = getCurrentWindow();
 
 function LogoIcon({ className }: { className?: string }) {
   return (
-    <img src="/logo.png" alt="scryer" className={`${className ?? ""} grayscale opacity-70`} />
+    <img src="/logo.png" alt="scryer" className={`${className ?? ""} saturate-[0.7] opacity-90`} />
   );
 }
 

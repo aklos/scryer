@@ -1,74 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { autoLayout } from "../layout";
 import type { C4ModelData, C4Node, C4Edge, StartingLevel, SourceLocation, Group, Contract, Flow } from "../types";
 import { useToast } from "../Toast";
-
-/**
- * Detect whether node positions look like the MCP server's grid layout.
- * MCP places nodes on a 250x220 grid offset by (100,100).
- * If 3+ nodes match this pattern, positions are MCP-generated.
- */
-function needsAutoLayout(nodes: C4Node[]): boolean {
-  if (nodes.length < 2) return false;
-  const TOLERANCE = 5;
-  let gridCount = 0;
-  for (const n of nodes) {
-    const xMod = Math.abs(((n.position.x - 100) % 250 + 250) % 250);
-    const yMod = Math.abs(((n.position.y - 100) % 220 + 220) % 220);
-    if (xMod <= TOLERANCE && yMod <= TOLERANCE) {
-      gridCount++;
-      if (gridCount >= 3) return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Run ELK layout on each group of sibling nodes (same parentId) independently.
- * Returns a new nodes array with updated positions.
- */
-async function layoutByParent(nodes: C4Node[], edges: C4Edge[], modelGroups?: Group[]): Promise<C4Node[]> {
-  // Group nodes by parentId (undefined → "root")
-  const siblingBuckets = new Map<string, C4Node[]>();
-  for (const n of nodes) {
-    const key = n.parentId ?? "__root__";
-    const arr = siblingBuckets.get(key);
-    if (arr) arr.push(n);
-    else siblingBuckets.set(key, [n]);
-  }
-
-  // Layout each sibling group independently
-  const posMap = new Map<string, { x: number; y: number }>();
-  const promises: Promise<void>[] = [];
-
-  for (const [, siblings] of siblingBuckets) {
-    if (siblings.length < 2) continue;
-    const siblingIds = new Set(siblings.map((n) => n.id));
-    const siblingEdges = edges.filter(
-      (e) => siblingIds.has(e.source) && siblingIds.has(e.target),
-    );
-    // Filter visual groups to those relevant at this sibling level
-    const levelGroups = modelGroups
-      ?.map((g) => ({ ...g, memberIds: g.memberIds.filter((id) => siblingIds.has(id)) }))
-      .filter((g) => g.memberIds.length >= 2);
-    promises.push(
-      autoLayout(siblings, siblingEdges, levelGroups).then((laid) => {
-        for (const n of laid) {
-          posMap.set(n.id, n.position);
-        }
-      }),
-    );
-  }
-
-  await Promise.all(promises);
-
-  return nodes.map((n) => {
-    const pos = posMap.get(n.id);
-    return pos ? { ...n, position: pos } : n;
-  });
-}
 
 /** Migrate old guidelines/string contract fields to string[] contract fields. */
 function migrateContract(raw: unknown): Contract {
@@ -88,19 +22,22 @@ function migrateContract(raw: unknown): Contract {
 export function parseModelData(raw: string): C4ModelData {
   const data = JSON.parse(raw);
   // Ensure operation/process/model nodes have the correct ReactFlow type + migrate fields
-  const nodes: C4Node[] = (data.nodes ?? []).map((n: C4Node) => {
-    const kind = n.data.kind as string;
+  const nodes: C4Node[] = (data.nodes ?? []).map((n: Record<string, unknown>) => {
+    const nodeData = n.data as Record<string, unknown>;
+    const kind = nodeData.kind as string;
     const expectedType = kind === "operation" ? "operation" : kind === "process" ? "process" : kind === "model" ? "model" : "c4";
-    const nd = n.data as Record<string, unknown>;
     // Migrate guidelines→contract and array→string
-    const rawContract = nd.contract ?? nd.guidelines;
+    const rawContract = nodeData.contract ?? nodeData.guidelines;
     const contract = rawContract ? migrateContract(rawContract) : undefined;
     // Migrate references→sources
-    const sources = nd.sources ?? nd.references;
+    const sources = nodeData.sources ?? nodeData.references;
     // Person and external system nodes never have status
-    const stripStatus = kind === "person" || (kind === "system" && nd.external);
-    const patched = { ...n, type: expectedType, data: { ...n.data, contract, sources, guidelines: undefined, references: undefined, ...(stripStatus ? { status: undefined } : {}) } };
-    return patched;
+    const stripStatus = kind === "person" || (kind === "system" && nodeData.external);
+    // Detect nodes with no position (null/undefined from Rust Option<Position>)
+    const hasPosition = n.position != null && typeof n.position === "object";
+    const position = hasPosition ? n.position as { x: number; y: number } : { x: 0, y: 0 };
+    const patched = { ...n, type: expectedType, position, data: { ...nodeData, contract, sources, guidelines: undefined, references: undefined, ...(stripStatus ? { status: undefined } : {}), ...(!hasPosition ? { _needsLayout: true } : {}) } };
+    return patched as unknown as C4Node;
   });
 
   return {
@@ -163,6 +100,9 @@ export function useModelStorage(
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(null);
   const skipSave = useRef(false);
   const reloadTimer = useRef<ReturnType<typeof setTimeout>>(null);
+  const lastWriteAt = useRef(0); // timestamp of our last write to disk
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
 
   // Load model list, templates on mount
   useEffect(() => {
@@ -173,7 +113,10 @@ export function useModelStorage(
   // Stable fingerprint of saveable node data — ignores selection/measured/transient changes.
   // Only changes when actual model data (positions, data fields, parentId) changes.
   const nodeFingerprint = useMemo(() => {
-    return nodes.map((n) => `${n.id}:${n.parentId ?? ""}:${n.position.x},${n.position.y}:${n.type}:${JSON.stringify(n.data)}`).join("|");
+    return nodes.map((n) => {
+      const { _needsLayout, ...data } = n.data;
+      return `${n.id}:${n.parentId ?? ""}:${n.position.x},${n.position.y}:${n.type}:${JSON.stringify(data)}`;
+    }).join("|");
   }, [nodes]);
 
   // Auto-save with debounce
@@ -185,7 +128,14 @@ export function useModelStorage(
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       saveTimer.current = null;
-      const data: C4ModelData = { nodes, edges, startingLevel, sourceMap, projectPath, refPositions, groups, contract, flows };
+      // Strip transient _needsLayout flag before persisting
+      const cleanNodes = nodes.map((n) => {
+        if (!n.data._needsLayout) return n;
+        const { _needsLayout, ...data } = n.data;
+        return { ...n, data };
+      });
+      const data: C4ModelData = { nodes: cleanNodes as C4Node[], edges, startingLevel, sourceMap, projectPath, refPositions, groups, contract, flows };
+      lastWriteAt.current = Date.now();
       invoke("write_model", { name: currentModel, data: JSON.stringify(data) }).catch(() => toast("Failed to save model"));
     }, 500);
     return () => {
@@ -229,9 +179,6 @@ export function useModelStorage(
     try {
       const raw = await invoke<string>("read_model", { name });
       const data = parseModelData(raw);
-      if (needsAutoLayout(data.nodes)) {
-        data.nodes = await layoutByParent(data.nodes, data.edges, data.groups);
-      }
       applyModelData(data);
       setCurrentModel(name);
       setExpandedPath([]);
@@ -247,15 +194,95 @@ export function useModelStorage(
     try {
       const raw = await invoke<string>("read_model", { name });
       const data = parseModelData(raw);
-      if (needsAutoLayout(data.nodes)) {
-        data.nodes = await layoutByParent(data.nodes, data.edges, data.groups);
+
+      // Diff old vs new nodes to find where changes occurred
+      const oldNodes = nodesRef.current;
+      const oldMap = new Map(oldNodes.map((n) => [n.id, n]));
+      const newMap = new Map(data.nodes.map((n) => [n.id, n]));
+
+      // Collect parentIds of changed/added/deleted nodes
+      const changedParents = new Map<string, number>();
+      const bumpParent = (parentId: string | undefined) => {
+        const key = parentId ?? "";
+        changedParents.set(key, (changedParents.get(key) ?? 0) + 1);
+      };
+
+      for (const n of data.nodes) {
+        const old = oldMap.get(n.id);
+        if (!old) {
+          // New node
+          bumpParent(n.parentId);
+        } else if ((() => {
+          // Strip transient fields before comparing
+          const { _needsLayout: _a, ...oldData } = old.data;
+          const { _needsLayout: _b, ...newData } = n.data;
+          return JSON.stringify(oldData) !== JSON.stringify(newData) || old.parentId !== n.parentId;
+        })()) {
+          // Changed node
+          bumpParent(n.parentId);
+        }
       }
+      for (const n of oldNodes) {
+        if (!newMap.has(n.id)) {
+          // Deleted node
+          bumpParent(n.parentId);
+        }
+      }
+
       applyModelData(data, true);
       setRefPositions(data.refPositions ?? {});
+
+      // Auto-navigate to the changed level.
+      // Skip when the model was empty — AI typically defines systems + containers
+      // together on first set_model, so stay at system context level.
+      // When changes span multiple depths (e.g. components + operations), go to
+      // the shallowest — showing the broader context is more useful than drilling
+      // into one component's code level.
+      const wasEmpty = oldNodes.length === 0;
+      if (changedParents.size > 0 && !wasEmpty) {
+        const nodeById = new Map(data.nodes.map((n) => [n.id, n]));
+        let bestParentId = "";
+        let bestDepth = Infinity;
+        let bestCount = 0;
+
+        for (const [parentId, count] of changedParents) {
+          if (!parentId) {
+            // Changes at root level (top-level nodes) — skip, no navigation needed
+            continue;
+          }
+          let depth = 0;
+          let cur = parentId;
+          while (cur) {
+            depth++;
+            const parent = nodeById.get(cur);
+            if (!parent?.parentId) break;
+            cur = parent.parentId;
+          }
+          if (depth < bestDepth || (depth === bestDepth && count > bestCount)) {
+            bestParentId = parentId;
+            bestDepth = depth;
+            bestCount = count;
+          }
+        }
+
+        if (bestParentId) {
+          // Build expandedPath by walking up from the target parent
+          const path: string[] = [];
+          let cur: string | undefined = bestParentId;
+          while (cur) {
+            path.unshift(cur);
+            const parent = nodeById.get(cur);
+            cur = parent?.parentId;
+          }
+          setExpandedPath(path);
+          setActiveFlowId(null);
+          scheduleFitView();
+        }
+      }
     } catch {
       // Silently ignore — model may have been deleted externally
     }
-  }, [applyModelData, setRefPositions]);
+  }, [applyModelData, setRefPositions, setExpandedPath, setActiveFlowId, scheduleFitView]);
 
   const deleteModel = useCallback(async (name: string) => {
     await invoke("delete_model", { name }).catch(() => toast("Failed to delete model"));

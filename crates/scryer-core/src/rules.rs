@@ -88,22 +88,47 @@ containers — don't model the project as a single application if it deploys as 
 components unless the user explicitly asks for deeper detail.\n\
    **Model for production, not for demos.** Look for cross-cutting concerns: authentication, input validation, \
 data migrations, background jobs, observability. Model them explicitly — do not leave them implied.\n\
+   **Set status on every node.** When modeling an existing codebase, set `status: \"implemented\"` on all nodes \
+that already exist in the code. Set `status: \"proposed\"` on new nodes being added as part of a feature or change. \
+Nodes without status appear grey and unactionable in the UI — always be explicit.\n\
+   **When you do add components** to a container (because the user asked for component-level detail or you're \
+adding a feature), model ALL components in that container — not just the new ones. Use `set_node` to populate \
+the full component set. Partial component views are misleading.\n\
 4. **Edges must exist at every abstraction level.** The UI shows one level at a time. Always include:\n\
    - System-level edges: Person→System, System→System\n\
    - Container-level edges: Person→Container, Container→Container, Container→ExternalSystem\n\
    - Component-level edges (when components exist): Component→Component, Component→ExternalSystem\n\
    When adding components to containers, ALWAYS also add component-level edges that reflect the container-level \
-relationships.\n\
-5. **After creating the model structure, define core flows** using `set_flows`. Every model should have at \
-least 2-3 flows covering the primary user journeys.\n\
-6. **When adding components, ALWAYS also add operation nodes** inside each component. Name each operation after \
-a concrete responsibility (e.g. \"handleLogin\", \"validateToken\"). Use `update_source_map` to link operations \
-to source files.\n\
-7. Use `get_task` to get the next implementation task. Build it, mark nodes as implemented via \
-`update_nodes`, then call `get_task` again. **Repeat this loop until `get_task` returns \"All tasks complete.\"** \
-Do not read the full model and plan your own work order — `get_task` handles dependency ordering, contract \
-inheritance, and progress tracking. Parent containers and systems are marked implemented via completion hints \
-from `get_task` once all their children are done.\n\
+relationships. If container A→B and A→ExternalDB exist, then when you detail A with components via `set_node`, \
+include edges in the subtree data from the relevant components to B, ExternalDB, etc. The `set_node` tool \
+accepts edges to any node in the model, not just nodes within the subtree. If you forget, the tool will \
+warn you — fix missing edges immediately with `add_edges`.\n\
+5. **Do NOT create flows during initial modeling.** Flows are added later by the user or on explicit request. \
+Focus on the structural model (persons, systems, containers, components, operations).\n\
+6. **When adding components, populate them with all three code-level node kinds:**\n\
+   - **model** nodes for data structures. **Always include the `properties` array** — each property has a `label` \
+(valid identifier) and `description`. Do NOT just describe fields in the description text. Example: a `todo` model \
+with `properties: [{label: \"id\", description: \"unique identifier\"}, {label: \"title\", description: \"todo text\"}, \
+{label: \"completed\", description: \"whether the todo is done\"}]`. Models are the nouns of the system.\n\
+   - **operation** nodes for individual functions, methods, or handlers — anything that maps to one function in code \
+(e.g. `handleCreate`, `validateInput`, `insertRecord`, `hashPassword`). Most code-level nodes are operations. If you \
+can point to a single function/method, it's an operation.\n\
+   - **process** nodes for multi-step behavioral flows that orchestrate multiple operations — sagas, pipelines, or \
+workflows (e.g. `orderFulfillment` — validate payment, reserve inventory, send confirmation). If it maps to a single \
+function, it's an operation, not a process.\n\
+   Use **@[Name]** mentions in descriptions to cross-reference sibling nodes: \"Validates the @[todo] model before \
+persisting\", \"Calls @[insertRecord] then returns the created @[todo]\". The square bracket syntax is required — \
+`@[todo]` renders as a clickable pill, `@todo` does not. This creates a navigable web of relationships at code level. \
+Use `update_source_map` to link operations to source files.\n\
+7. **Default workflow: model first, then wait.** After modeling proposed changes, stop and let the user review \
+the diagram before implementing. Don't automatically call `get_task` and start writing code — the point of \
+scryer is visual verification before implementation. If the user asks you to implement, build, or code in the \
+same request, go ahead.\n\
+8. **Implementation loop.** Use `get_task` to get the next implementation task. Build it, mark nodes as \
+implemented via `update_nodes`, then call `get_task` again. **Repeat this loop until `get_task` returns \
+\"All tasks complete.\"** Do not read the full model and plan your own work order — `get_task` handles dependency \
+ordering, contract inheritance, and progress tracking. Parent containers and systems are marked implemented via \
+completion hints from `get_task` once all their children are done.\n\
 \n\
 ## Authority Hierarchy\n\
 The model is a specification, not just documentation. Higher-level nodes have authority over lower-level ones.\n\

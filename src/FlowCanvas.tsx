@@ -140,9 +140,61 @@ function computeStepLabels(steps: FlowStep[], transitions: FlowTransition[], pos
   return labels;
 }
 
-function buildPositionMap(steps: FlowStep[]): Map<string, { x: number; y: number }> {
+/** Compute default positions for steps without saved positions using topological order
+ *  and serpentine row wrapping so transitions flow naturally left→right then right→left. */
+function defaultStepPositions(steps: FlowStep[], transitions: FlowTransition[]): Map<string, { x: number; y: number }> {
+  const COLS = 4;
+  const GAP_X = STEP_W + 80;
+  const GAP_Y = 160;
+
+  // Topological sort following transitions
+  const inDegree = new Map<string, number>();
+  const adj = new Map<string, string[]>();
+  for (const s of steps) { inDegree.set(s.id, 0); adj.set(s.id, []); }
+  for (const t of transitions) {
+    if (adj.has(t.source) && inDegree.has(t.target)) {
+      adj.get(t.source)!.push(t.target);
+      inDegree.set(t.target, (inDegree.get(t.target) ?? 0) + 1);
+    }
+  }
+  const queue = steps.filter((s) => (inDegree.get(s.id) ?? 0) === 0).map((s) => s.id);
+  const sorted: string[] = [];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    sorted.push(id);
+    for (const next of adj.get(id) ?? []) {
+      const d = (inDegree.get(next) ?? 1) - 1;
+      inDegree.set(next, d);
+      if (d === 0) queue.push(next);
+    }
+  }
+  // Append any remaining steps (cycles or disconnected)
+  for (const s of steps) {
+    if (!sorted.includes(s.id)) sorted.push(s.id);
+  }
+
+  const positions = new Map<string, { x: number; y: number }>();
+  for (let i = 0; i < sorted.length; i++) {
+    const row = Math.floor(i / COLS);
+    const colIndex = i % COLS;
+    // Serpentine: even rows go left→right, odd rows go right→left
+    const col = row % 2 === 0 ? colIndex : (COLS - 1 - colIndex);
+    positions.set(sorted[i], { x: col * GAP_X, y: row * GAP_Y });
+  }
+  return positions;
+}
+
+function buildPositionMap(steps: FlowStep[], transitions?: FlowTransition[]): Map<string, { x: number; y: number }> {
+  // If all steps have positions, use them directly
+  if (steps.every((s) => s.position)) {
+    return new Map(steps.map((s) => [s.id, s.position!]));
+  }
+  // Compute DAG-aware defaults for steps without positions
+  const defaults = defaultStepPositions(steps, transitions ?? []);
   const map = new Map<string, { x: number; y: number }>();
-  steps.forEach((s, i) => map.set(s.id, s.position ?? { x: (i % 4) * (STEP_W + 40), y: Math.floor(i / 4) * 100 }));
+  for (const s of steps) {
+    map.set(s.id, s.position ?? defaults.get(s.id) ?? { x: 0, y: 0 });
+  }
   return map;
 }
 
@@ -170,21 +222,22 @@ function stepMentionNames(labels: Map<string, string>, excludeId: string, nodeMe
 }
 
 function stepsToNodes(steps: FlowStep[], transitions: FlowTransition[], selectedStepId: string | null, allNodes: C4Node[]): Node[] {
-  const labels = computeStepLabels(steps, transitions, buildPositionMap(steps));
+  const posMap = buildPositionMap(steps, transitions);
+  const labels = computeStepLabels(steps, transitions, posMap);
   const processMap = new Map<string, LinkedProcess>(
     allNodes
       .filter((n) => (n.data as C4NodeData).kind === "process")
       .map((n) => [n.id, { id: n.id, name: (n.data as C4NodeData).name, status: (n.data as C4NodeData).status }]),
   );
   const { mentionItems, nodeMap } = buildNodeMentions(allNodes);
-  return steps.map((step, i) => {
+  return steps.map((step) => {
     const linkedProcesses = (step.processIds ?? [])
       .map((pid) => processMap.get(pid))
       .filter((p): p is LinkedProcess => !!p);
     return {
       id: step.id,
       type: "flowStep",
-      position: step.position ?? { x: (i % 4) * (STEP_W + 40), y: Math.floor(i / 4) * 100 },
+      position: step.position ?? posMap.get(step.id) ?? { x: 0, y: 0 },
       data: { description: step.description, stepLabel: labels.get(step.id), linkedProcesses, _mentionNames: stepMentionNames(labels, step.id, mentionItems), _nodeMap: nodeMap },
       selected: step.id === selectedStepId,
     };

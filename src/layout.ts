@@ -320,17 +320,83 @@ function uncrossEdges(
 
 
 /**
+ * Simple grid layout for code-level nodes (operations, processes, models).
+ * Packs nodes into a compact multi-column grid — no stress layout needed
+ * since code-level nodes typically have no edges. Reference nodes are
+ * returned unchanged (their positions come from refPositions).
+ */
+export function gridLayout(nodes: C4Node[]): C4Node[] {
+  const GAP_X = 40;
+  const GAP_Y = 32;
+
+  // Separate reference nodes — don't include them in the grid
+  const gridNodes = nodes.filter((n) => !n.data._reference);
+  const refNodes = nodes.filter((n) => n.data._reference);
+
+  const COLS = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(gridNodes.length))));
+
+  // Compute max width per column and max height per row for alignment
+  const colWidths: number[] = new Array(COLS).fill(0);
+  const rowHeights: number[] = new Array(Math.ceil(gridNodes.length / COLS)).fill(0);
+  for (let i = 0; i < gridNodes.length; i++) {
+    const col = i % COLS;
+    const row = Math.floor(i / COLS);
+    const w = gridNodes[i].measured?.width ?? NODE_W;
+    const h = gridNodes[i].measured?.height ?? NODE_H;
+    colWidths[col] = Math.max(colWidths[col], w);
+    rowHeights[row] = Math.max(rowHeights[row], h);
+  }
+
+  // Compute cumulative x/y offsets
+  const colX = [0];
+  for (let c = 1; c < COLS; c++) colX.push(colX[c - 1] + colWidths[c - 1] + GAP_X);
+  const rowY = [0];
+  for (let r = 1; r < rowHeights.length; r++) rowY.push(rowY[r - 1] + rowHeights[r - 1] + GAP_Y);
+
+  const positioned = gridNodes.map((n, i) => ({
+    ...n,
+    position: {
+      x: colX[i % COLS],
+      y: rowY[Math.floor(i / COLS)],
+    },
+  }));
+
+  // Place reference nodes in a row below the grid
+  if (refNodes.length > 0) {
+    const gridBottom = rowY.length > 0
+      ? rowY[rowY.length - 1] + (rowHeights[rowHeights.length - 1] || NODE_H)
+      : 0;
+    const refY = gridBottom + GAP_Y * 3;
+    let refX = 0;
+    const positionedRefs = refNodes.map((n) => {
+      const pos = { x: refX, y: refY };
+      refX += (n.measured?.width ?? NODE_W) + GAP_X;
+      return { ...n, position: pos };
+    });
+    return [...positioned, ...positionedRefs];
+  }
+
+  return positioned;
+}
+
+/**
  * Run ELK stress layout + compass snapping + crossing reduction.
  *
  * When `groups` are provided, group members become children of a synthetic
  * compound node in the ELK graph so they are laid out together. After layout,
  * child positions are converted from parent-relative to absolute.
+ *
+ * When `codeLevel` is true, uses a compact grid instead — code-level nodes
+ * (operations, processes, models) don't have architectural edges and should
+ * be packed tight.
  */
 export async function autoLayout(
   nodes: C4Node[],
   edges: C4Edge[],
   groups?: Group[],
+  codeLevel?: boolean,
 ): Promise<C4Node[]> {
+  if (codeLevel) return gridLayout(nodes);
   const nodeIds = new Set(nodes.map((n) => n.id));
 
   const filteredEdges = edges.filter(

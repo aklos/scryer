@@ -121,8 +121,8 @@ pub struct C4Node {
     pub id: String,
     #[serde(rename = "type", default = "default_node_type")]
     pub node_type: String,
-    #[serde(default)]
-    pub position: Position,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<Position>,
     pub data: C4NodeData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,

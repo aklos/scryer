@@ -1018,12 +1018,12 @@ function getModelTabs(
 
 function TabBar({ tabs, activeTab, onTabClick }: { tabs: PanelTab[]; activeTab: string; onTabClick: (id: string) => void }) {
   return (
-    <div className="flex shrink-0 gap-1 px-3 py-1.5 border-b border-zinc-200 dark:border-zinc-700">
+    <div className="flex shrink-0 gap-0.5 px-2 py-1.5 border-b border-zinc-200 dark:border-zinc-700">
       {tabs.map((tab) => (
         <button
           key={tab.id}
           type="button"
-          className={`px-2 py-0.5 text-[10px] uppercase tracking-wider font-semibold cursor-pointer transition-colors rounded ${
+          className={`px-1.5 py-0.5 text-[10px] uppercase tracking-wide font-semibold cursor-pointer transition-colors rounded ${
             activeTab === tab.id
               ? "text-zinc-700 bg-zinc-200 dark:text-zinc-200 dark:bg-zinc-700"
               : "text-zinc-500 hover:text-zinc-600 hover:bg-zinc-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-800"
@@ -1130,7 +1130,7 @@ export function PropertiesPanel({ node, edge, onUpdateEdge, codeLevel, hints, on
   if (hasTabs && tabs) {
     const activeTabObj = tabs.find((t) => t.id === activeTab) ?? tabs[0];
     return (
-      <div className={`${panelBase} w-60 flex flex-col`}>
+      <div className={`${panelBase} w-60 flex flex-col overflow-hidden`}>
         <TabBar
           tabs={tabs}
           activeTab={activeTabObj.id}

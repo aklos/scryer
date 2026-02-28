@@ -5,7 +5,7 @@ use rmcp::{
 };
 use scryer_core::{
     C4Edge, C4EdgeData, C4Kind, C4ModelData, C4Node, C4NodeData, C4Shape, Flow, Group, GroupKind,
-    Contract, ModelProperty, Position, SourceLocation, Status,
+    Contract, ModelProperty, SourceLocation, Status,
 };
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -98,10 +98,6 @@ struct AddNodeItem {
     kind: String,
     /// ID of the parent node. Required for container (parent=system), component (parent=container), operation (parent=component). Omit for person/system.
     parent_id: Option<String>,
-    /// X position on canvas. Default: auto-grid based on sibling count.
-    x: Option<f64>,
-    /// Y position on canvas. Default: auto-grid based on sibling count.
-    y: Option<f64>,
     /// Technology label (containers and components only), e.g. "REST API", "PostgreSQL"
     technology: Option<String>,
     /// Whether this is an external system (systems only)
@@ -146,10 +142,6 @@ struct UpdateNodeItem {
     shape: Option<String>,
     /// New source file locations as JSON array of {"pattern": "glob", "comment": "description"} objects
     sources: Option<Vec<scryer_core::Reference>>,
-    /// New X position
-    x: Option<f64>,
-    /// New Y position
-    y: Option<f64>,
     /// New status: "implemented", "proposed", "changed", or "deprecated"
     status: Option<String>,
     /// Updated implementation contract
@@ -176,7 +168,7 @@ struct SetNodeRequest {
     model: String,
     /// ID of the existing node to populate. All existing descendants are replaced.
     node_id: String,
-    /// JSON object with "nodes" (array of descendant nodes to place inside node_id) and "edges" (array of edges). Every node must have a parentId chain leading to node_id. Node "type" defaults to "c4" and "position" defaults to auto-grid if omitted or (0,0). See set_model for the node/edge JSON format.
+    /// JSON object with "nodes" (array of descendant nodes to place inside node_id) and "edges" (array of edges). Every node must have a parentId chain leading to node_id. Node "type" defaults to "c4" and "position" is auto-laid out if omitted. See set_model for the node/edge JSON format.
     data: String,
 }
 
@@ -450,7 +442,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Create or overwrite a model with complete data in one call. Use for initial model creation or full rewrites. Pass the full model JSON with all nodes and edges. Node 'type' defaults to 'c4' and 'position' defaults to {x:0,y:0} if omitted — nodes at (0,0) are auto-laid out.\n\nJSON format:\n- Containers MUST have `parentId` set to a system node's ID. Components MUST have `parentId` set to a container's ID. Without `parentId`, nodes render as flat siblings instead of nested.\n- Include `sources`, `technology`, `shape`, and `status` directly in each node's data — do NOT add them in a separate pass.\n- `position` and `type` can be omitted (default to auto-grid and \"c4\").\n- Edge IDs follow the pattern `edge-{source}-{target}`.\n- Edge labels MUST be short (max 30 characters). One verb phrase per edge.\n\nExample:\n{\"nodes\": [\n  {\"id\": \"node-1\", \"data\": {\"name\": \"User\", \"description\": \"End user\", \"kind\": \"person\", \"status\": \"proposed\"}},\n  {\"id\": \"node-2\", \"data\": {\"name\": \"My System\", \"description\": \"Main system\", \"kind\": \"system\", \"status\": \"proposed\"}},\n  {\"id\": \"node-3\", \"parentId\": \"node-2\", \"data\": {\"name\": \"Web App\", \"description\": \"Frontend SPA\", \"kind\": \"container\", \"technology\": \"React\", \"status\": \"proposed\"}},\n  {\"id\": \"node-4\", \"parentId\": \"node-2\", \"data\": {\"name\": \"Database\", \"description\": \"Primary data store\", \"kind\": \"container\", \"technology\": \"PostgreSQL\", \"shape\": \"cylinder\", \"status\": \"proposed\"}}\n], \"edges\": [\n  {\"id\": \"edge-node-1-node-2\", \"source\": \"node-1\", \"target\": \"node-2\", \"data\": {\"label\": \"uses\"}},\n  {\"id\": \"edge-node-3-node-4\", \"source\": \"node-3\", \"target\": \"node-4\", \"data\": {\"label\": \"reads from\", \"method\": \"SQL\"}}\n]}"
+        description = "Create or overwrite a model with complete data in one call. Use for initial model creation or full rewrites. Pass the full model JSON with all nodes and edges. Node positions are handled automatically by the UI — do not include position data.\n\nJSON format:\n- Containers MUST have `parentId` set to a system node's ID. Components MUST have `parentId` set to a container's ID. Without `parentId`, nodes render as flat siblings instead of nested.\n- Include `sources`, `technology`, `shape`, and `status` directly in each node's data — do NOT add them in a separate pass.\n- `position` and `type` can be omitted (default to auto-layout and \"c4\").\n- Edge IDs follow the pattern `edge-{source}-{target}`.\n- Edge labels MUST be short (max 30 characters). One verb phrase per edge.\n\nExample:\n{\"nodes\": [\n  {\"id\": \"node-1\", \"data\": {\"name\": \"User\", \"description\": \"End user\", \"kind\": \"person\", \"status\": \"proposed\"}},\n  {\"id\": \"node-2\", \"data\": {\"name\": \"My System\", \"description\": \"Main system\", \"kind\": \"system\", \"status\": \"proposed\"}},\n  {\"id\": \"node-3\", \"parentId\": \"node-2\", \"data\": {\"name\": \"Web App\", \"description\": \"Frontend SPA\", \"kind\": \"container\", \"technology\": \"React\", \"status\": \"proposed\"}},\n  {\"id\": \"node-4\", \"parentId\": \"node-2\", \"data\": {\"name\": \"Database\", \"description\": \"Primary data store\", \"kind\": \"container\", \"technology\": \"PostgreSQL\", \"shape\": \"cylinder\", \"status\": \"proposed\"}}\n], \"edges\": [\n  {\"id\": \"edge-node-1-node-2\", \"source\": \"node-1\", \"target\": \"node-2\", \"data\": {\"label\": \"uses\"}},\n  {\"id\": \"edge-node-3-node-4\", \"source\": \"node-3\", \"target\": \"node-4\", \"data\": {\"label\": \"reads from\", \"method\": \"SQL\"}}\n]}"
     )]
     fn set_model(
         &self,
@@ -513,17 +505,9 @@ impl ScryerServer {
             }
         }
 
-        // Auto-layout nodes that have no position (defaulted to 0,0)
-        for i in 0..model.nodes.len() {
-            if model.nodes[i].position.x == 0.0 && model.nodes[i].position.y == 0.0 {
-                let parent = model.nodes[i].parent_id.clone();
-                let siblings = model.nodes[..i]
-                    .iter()
-                    .filter(|n| n.parent_id == parent)
-                    .count();
-                model.nodes[i].position.x = (siblings % 4) as f64 * 250.0 + 100.0;
-                model.nodes[i].position.y = (siblings / 4) as f64 * 220.0 + 100.0;
-            }
+        // Strip all positions — layout is a UI concern
+        for node in &mut model.nodes {
+            node.position = None;
         }
 
         let node_count = model.nodes.len();
@@ -586,13 +570,6 @@ impl ScryerServer {
             }
 
             let id = scryer_core::next_node_id(&model);
-            let siblings = model
-                .nodes
-                .iter()
-                .filter(|n| n.parent_id.as_deref() == item.parent_id.as_deref())
-                .count();
-            let x = item.x.unwrap_or((siblings % 4) as f64 * 250.0 + 100.0);
-            let y = item.y.unwrap_or((siblings / 4) as f64 * 220.0 + 100.0);
             let shape = item.shape.as_deref().and_then(parse_shape);
             let status = if kind == C4Kind::Person {
                 None
@@ -609,7 +586,7 @@ impl ScryerServer {
             model.nodes.push(C4Node {
                 id: id.clone(),
                 node_type: node_type.to_string(),
-                position: Position { x, y },
+                position: None,
                 data: C4NodeData {
                     name: item.name.clone(),
                     description: item.description.clone(),
@@ -815,20 +792,12 @@ impl ScryerServer {
             }
         }
 
-        // Auto-layout nodes at (0,0) and add to model
+        // Strip all positions — layout is a UI concern
         let node_count = subtree.nodes.len();
         let edge_count = subtree.edges.len();
         let mut new_nodes = subtree.nodes;
-        for i in 0..new_nodes.len() {
-            if new_nodes[i].position.x == 0.0 && new_nodes[i].position.y == 0.0 {
-                let parent = new_nodes[i].parent_id.clone();
-                let siblings = new_nodes[..i]
-                    .iter()
-                    .filter(|n| n.parent_id == parent)
-                    .count();
-                new_nodes[i].position.x = (siblings % 4) as f64 * 250.0 + 100.0;
-                new_nodes[i].position.y = (siblings / 4) as f64 * 220.0 + 100.0;
-            }
+        for node in &mut new_nodes {
+            node.position = None;
         }
         model.nodes.extend(new_nodes);
 
@@ -850,13 +819,58 @@ impl ScryerServer {
         }
         model.edges.extend(subtree.edges);
 
+        // Check for missing edges when detailing a system or container (not components —
+        // operation/process/model nodes are code-level and don't need architectural edges).
+        let parent_kind = model.nodes.iter().find(|n| n.id == req.node_id).map(|n| &n.data.kind);
+        let check_edges = matches!(parent_kind, Some(C4Kind::System) | Some(C4Kind::Container));
+        let new_subtree_ids: HashSet<&str> = incoming_ids.iter().map(|s| s.as_str()).collect();
+        let mut missing_externals: Vec<String> = Vec::new();
+        if check_edges {
+            for edge in &model.edges {
+                // Find edges where the parent node itself is source or target
+                let external_id = if edge.source == req.node_id && !new_subtree_ids.contains(edge.target.as_str()) && edge.target != req.node_id {
+                    Some(&edge.target)
+                } else if edge.target == req.node_id && !new_subtree_ids.contains(edge.source.as_str()) && edge.source != req.node_id {
+                    Some(&edge.source)
+                } else {
+                    None
+                };
+                if let Some(ext_id) = external_id {
+                    let has_subtree_edge = model.edges.iter().any(|e| {
+                        let src_in = new_subtree_ids.contains(e.source.as_str());
+                        let tgt_in = new_subtree_ids.contains(e.target.as_str());
+                        (src_in && e.target == *ext_id) || (tgt_in && e.source == *ext_id)
+                    });
+                    if !has_subtree_edge {
+                        if let Some(ext_node) = model.nodes.iter().find(|n| n.id == *ext_id) {
+                            let name = format!("{} ({})", ext_node.data.name, kind_str(&ext_node.data.kind));
+                            if !missing_externals.contains(&name) {
+                                missing_externals.push(name);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         match scryer_core::write_model(&req.model, &model) {
             Ok(()) => {
                 let _ = scryer_core::save_baseline(&req.model, &model);
-                Ok(CallToolResult::success(vec![Content::text(format!(
+                let mut msg = format!(
                     "Set {} descendant node(s) and {} edge(s) under '{}'",
                     node_count, edge_count, req.node_id
-                ))]))
+                );
+                if !missing_externals.is_empty() {
+                    msg.push_str(&format!(
+                        "\n\n⚠️ MISSING EDGES: The parent node '{}' has edges to external nodes, \
+                        but none of the new children have edges connecting to: {}. \
+                        C4 requires edges at every abstraction level — use add_edges to connect \
+                        the appropriate children to these nodes.",
+                        req.node_id,
+                        missing_externals.join(", ")
+                    ));
+                }
+                Ok(CallToolResult::success(vec![Content::text(msg)]))
             }
             Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
         }
@@ -925,12 +939,6 @@ impl ScryerServer {
             }
             if let Some(sources) = item.sources {
                 node.data.sources = sources;
-            }
-            if let Some(x) = item.x {
-                node.position.x = x;
-            }
-            if let Some(y) = item.y {
-                node.position.y = y;
             }
             if let Some(s) = item.status {
                 if node.data.kind != C4Kind::Person {
@@ -1919,7 +1927,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Create or replace one or more flows. Pass a single flow object or an array of flows — use an array to create multiple flows in one call. If a flow with the given ID exists, it is replaced; otherwise it is appended.\n\nFlows describe behavioral sequences — user journeys, data syncs, deploy pipelines, cron jobs. Each has steps (what happens) and transitions (ordering/branching between steps).\n\nStep granularity: each step = one meaningful system interaction, NOT a UI gesture. Good: 'System validates credentials'. Bad: 'User clicks button'.\n\nStep schema: {id, description, processIds?}. Use `description` for step text — `label` is auto-computed from DAG structure. Step IDs: 'step-N'. Flow IDs: 'scenario-N'.\n\nTransitions support forks: a step can have multiple outgoing transitions with different labels.\n\nSteps can reference process nodes via `processIds` array to connect flow behavior to C4 architecture. Not every step needs a link. The UI shows linked process names on step nodes."
+        description = "Create or replace one or more flows. Pass a single flow object or an array of flows — use an array to create multiple flows in one call. If a flow with the given ID exists, it is replaced; otherwise it is appended.\n\nFlows describe behavioral sequences — user journeys, data syncs, deploy pipelines, cron jobs. Each has steps (what happens) and transitions (ordering/branching between steps).\n\nStep granularity: each step = one meaningful system interaction, NOT a UI gesture. Good: 'System validates credentials'. Bad: 'User clicks button'.\n\nStep schema: {id, description, processIds?}. Use `description` for step text — `label` is auto-computed from DAG structure. Step IDs: 'step-N'. Flow IDs: 'scenario-N'.\n\nTransitions support forks: a step can have multiple outgoing transitions with different labels.\n\nSteps can reference process nodes via `processIds` array to connect flow behavior to C4 architecture. **Only process-kind nodes are valid** — operation and model nodes will be rejected. Not every step needs a link. The UI shows linked process names on step nodes."
     )]
     fn set_flows(
         &self,
@@ -1994,9 +2002,18 @@ impl ScryerServer {
             for step in &flow.steps {
                 for pid in &step.process_ids {
                     if !process_ids.contains(pid.as_str()) {
+                        // Give a helpful error: tell the AI what the node actually is
+                        let actual = model.nodes.iter().find(|n| n.id == *pid);
+                        let hint = match actual {
+                            Some(n) => format!(
+                                " (found '{}' but it is a {:?}, not a process — processIds only accepts process-kind nodes)",
+                                n.data.name, n.data.kind
+                            ),
+                            None => String::new(),
+                        };
                         return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "Step '{}' references process '{}' which does not exist in the model",
-                            step.id, pid
+                            "Step '{}' references process '{}' which is not a process node{}",
+                            step.id, pid, hint
                         ))]));
                     }
                 }
@@ -2960,8 +2977,8 @@ const INSTRUCTIONS: &str = r#"scryer is a C4 architecture diagramming tool. You 
 - **System**: A software system. Top-level node (no parent). Can be marked `external: true`.
 - **Container**: An application, data store, or service inside a system. Parent must be a system node.
 - **Component**: A logical component inside a container. Parent must be a container node.
-- **Operation**: A behavioral unit (function, class, service, handler) inside a component. Parent must be a component node. **Name must be a valid identifier** (camelCase or snake_case).
-- **Process**: A behavioral flow inside a component. Parent must be a component node. Use `type: "process"` in node data.
+- **Operation**: A single function, method, or handler inside a component — code you can point to in one file. Examples: `handleCreate`, `validateInput`, `hashPassword`. Use operation for anything that maps to one function/method. Parent must be a component node. **Name must be a valid identifier** (camelCase or snake_case).
+- **Process**: A multi-step behavioral flow that orchestrates multiple operations — like a saga, pipeline, or workflow. Processes describe *sequences*, not individual functions. If it maps to a single function, it's an operation, not a process. Parent must be a component node. Use `type: "process"` in node data.
 - **Model**: A data model inside a component. Parent must be a component node. Has optional `properties` (array of `{label, description}`). Use `type: "model"` in node data. **Name and property labels must be valid identifiers.**
 
 ## Node Types

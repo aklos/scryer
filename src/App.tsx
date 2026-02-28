@@ -18,7 +18,8 @@ import { FlowCanvas } from "./FlowCanvas";
 import type { FlowCanvasHandle } from "./FlowCanvas";
 import { C4Canvas } from "./C4Canvas";
 import { FlowEditPopup } from "./FlowEditPopup";
-import { autoLayout } from "./layout";
+import { expandGuidePanel } from "./GuidePanels";
+import { autoLayout, gridLayout } from "./layout";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ToastProvider } from "./Toast";
 import type { C4Kind, C4NodeData, C4Node, C4Edge, SourceLocation, Group, Contract, Flow, StartingLevel } from "./types";
@@ -245,6 +246,7 @@ function Flow() {
   const newModelWithClear = useCallback(() => {
     history.clear();
     storage.newModel();
+    expandGuidePanel();
     const starter = buildStarterModel();
     setNodes(starter.nodes);
     setEdges(starter.edges);
@@ -569,7 +571,7 @@ function Flow() {
       .map((g) => ({ ...g, memberIds: g.memberIds.filter((id) => layoutIds.has(id)) }))
       .filter((g) => g.memberIds.length >= 2);
 
-    const laid = await autoLayout(layoutNodes, layoutEdges, activeGroups);
+    const laid = await autoLayout(layoutNodes, layoutEdges, activeGroups, currentParentKind === "component");
     const posMap = new Map(laid.map((n) => [n.id, n.position]));
 
     const refIds = new Set(visibleNodes.filter((n) => n.data._reference).map((n) => n.id));
@@ -589,8 +591,100 @@ function Flow() {
     setRefPositions((prev) => ({ ...prev, ...refUpdates }));
 
     setTimeout(() => fitView({ padding: 0.15, duration: 300 }), 50);
-  }, [visibleNodes, edges, groups, fitView, levelPrefix]);
+  }, [visibleNodes, edges, groups, fitView, levelPrefix, currentParentKind]);
 
+  // Deferred auto-layout: when visible nodes with _needsLayout get measured, run the same layout as the button
+  const [layoutPending, setLayoutPending] = useState(() => nodes.some((n) => n.data._needsLayout));
+  useEffect(() => {
+    const hasNeedsLayout = visibleNodes.some((n) => n.data._needsLayout && n.type !== "groupBox");
+
+    // Code-level grid layout is synchronous — run immediately when any node needs layout,
+    // no pending/measurement gating needed since grid doesn't depend on measured dimensions.
+    if (currentParentKind === "component" && hasNeedsLayout) {
+      const visibleIds = new Set(visibleNodes.map((n) => n.id));
+      const layoutNodes = visibleNodes
+        .filter((n) => n.type !== "groupBox")
+        .map((n) => ({ ...n, parentId: undefined, extent: undefined }));
+      const laid = gridLayout(layoutNodes);
+      const posMap = new Map(laid.map((n) => [n.id, n.position]));
+      const refIds = new Set(visibleNodes.filter((n) => n.data._reference).map((n) => n.id));
+      setNodes((nds) =>
+        nds.map((n) => {
+          const clearFlag = n.data._needsLayout && visibleIds.has(n.id);
+          const pos = posMap.get(n.id);
+          if (!clearFlag && !pos) return n;
+          const { _needsLayout, ...rest } = n.data;
+          const data = (clearFlag ? rest : n.data) as C4NodeData;
+          return pos ? { ...n, position: pos, data } : { ...n, data };
+        }),
+      );
+      // Persist reference node positions
+      const refUpdates: Record<string, { x: number; y: number }> = {};
+      for (const id of refIds) {
+        const pos = posMap.get(id);
+        if (pos) refUpdates[`${levelPrefix}/${id}`] = pos;
+      }
+      if (Object.keys(refUpdates).length > 0) {
+        setRefPositions((prev) => ({ ...prev, ...refUpdates }));
+      }
+      scheduleFitView();
+      return;
+    }
+
+    // Architecture-level layout (ELK stress) — needs measurement, uses pending/layoutPending gate
+    if (!layoutPending) {
+      if (hasNeedsLayout) setLayoutPending(true);
+      return;
+    }
+    const pending = visibleNodes.filter((n) => n.data._needsLayout && n.type !== "groupBox");
+    if (pending.length < 2) {
+      setLayoutPending(false);
+      return;
+    }
+    if (!pending.every((n) => n.measured)) return;
+
+    // Clear flags only for nodes at the current level (not deeper levels that haven't been laid out yet)
+    const visibleIds = new Set(visibleNodes.map((n) => n.id));
+    setNodes((nds) => nds.map((n) => {
+      if (!n.data._needsLayout || !visibleIds.has(n.id)) return n;
+      const { _needsLayout, ...data } = n.data;
+      return { ...n, data: data as C4NodeData };
+    }));
+
+    const layoutNodes = visibleNodes
+      .filter((n) => n.type !== "groupBox")
+      .map((n) => ({ ...n, parentId: undefined, extent: undefined }));
+    const layoutIds = new Set(layoutNodes.map((n) => n.id));
+    const layoutEdges = edges.filter((e) => layoutIds.has(e.source) && layoutIds.has(e.target));
+    const activeGroups = groups
+      .map((g) => ({ ...g, memberIds: g.memberIds.filter((id) => layoutIds.has(id)) }))
+      .filter((g) => g.memberIds.length >= 2);
+
+    autoLayout(layoutNodes, layoutEdges, activeGroups, false).then((laid) => {
+      const posMap = new Map(laid.map((n) => [n.id, n.position]));
+      const refIds = new Set(visibleNodes.filter((n) => n.data._reference).map((n) => n.id));
+      setNodes((nds) =>
+        nds.map((n) => {
+          const pos = posMap.get(n.id);
+          if (refIds.has(n.id)) return n;
+          return pos ? { ...n, position: pos } : n;
+        }),
+      );
+
+      const refUpdates: Record<string, { x: number; y: number }> = {};
+      for (const id of refIds) {
+        const pos = posMap.get(id);
+        if (pos) refUpdates[`${levelPrefix}/${id}`] = pos;
+      }
+      if (Object.keys(refUpdates).length > 0) {
+        setRefPositions((prev) => ({ ...prev, ...refUpdates }));
+      }
+      setLayoutPending(false);
+      scheduleFitView();
+    }).catch(() => {
+      setLayoutPending(false);
+    });
+  }, [layoutPending, visibleNodes, edges, groups, setNodes, setRefPositions, levelPrefix, scheduleFitView, currentParentKind]);
 
   // --- Render ---
 
@@ -709,6 +803,7 @@ function Flow() {
               setGroups={setGroups}
               onAddNode={onAddNode}
               currentParentKind={currentParentKind}
+              layoutPending={layoutPending || visibleNodes.some((n) => n.data._needsLayout && n.type !== "groupBox")}
             />
           )}
           {/* Flow edit popup */}
