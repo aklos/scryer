@@ -64,6 +64,134 @@ fn validate_no_children_of_external(nodes: &[C4Node]) -> Result<(), String> {
     Ok(())
 }
 
+/// Find nodes that will appear disconnected (no edges) at their viewing level.
+///
+/// The UI shows one abstraction level at a time:
+/// - System level: persons + systems, edges between them
+/// - Container level (inside a system): its containers + persons + external systems
+/// - Component level (inside a container): its components + external refs
+///
+/// A node is "disconnected" if it's visible at some level but has zero edges
+/// connecting it to other nodes at that same level. This catches both:
+/// - Nodes with no edges at all (e.g. external system added but never connected)
+/// - Nodes with edges only at a different level (e.g. external system → container
+///   but no external system → system edge, so it floats at system level)
+fn check_disconnected_nodes(model: &C4ModelData) -> Vec<String> {
+    let mut warnings: Vec<String> = Vec::new();
+
+    // System level: persons and systems should have edges to other persons/systems
+    let system_level_ids: HashSet<&str> = model
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.data.kind, C4Kind::Person | C4Kind::System))
+        .map(|n| n.id.as_str())
+        .collect();
+
+    let mut system_level_connected: HashSet<&str> = HashSet::new();
+    for edge in &model.edges {
+        let src_at = system_level_ids.contains(edge.source.as_str());
+        let tgt_at = system_level_ids.contains(edge.target.as_str());
+        if src_at && tgt_at {
+            system_level_connected.insert(edge.source.as_str());
+            system_level_connected.insert(edge.target.as_str());
+        }
+    }
+
+    for node in &model.nodes {
+        if !system_level_ids.contains(node.id.as_str()) {
+            continue;
+        }
+        if system_level_connected.contains(node.id.as_str()) {
+            continue;
+        }
+        // Check if this node has any edges at all (to children at lower levels)
+        let has_any_edge = model
+            .edges
+            .iter()
+            .any(|e| e.source == node.id || e.target == node.id);
+        if has_any_edge {
+            // Has edges, but none at system level → disconnected at its viewing level
+            warnings.push(format!(
+                "'{}' ({}) has edges to child-level nodes but no edges at the system level — \
+                it will appear disconnected in the system view",
+                node.data.name,
+                kind_str(&node.data.kind)
+            ));
+        } else if system_level_ids.len() > 1 {
+            // No edges at all
+            warnings.push(format!(
+                "'{}' ({}) has no edges — it will appear disconnected",
+                node.data.name,
+                kind_str(&node.data.kind)
+            ));
+        }
+    }
+
+    // Container level: for each system, its containers should have edges to
+    // other containers/persons/external systems at that level
+    let systems: Vec<&C4Node> = model
+        .nodes
+        .iter()
+        .filter(|n| n.data.kind == C4Kind::System && !n.data.external.unwrap_or(false))
+        .collect();
+
+    for system in &systems {
+        let container_ids: HashSet<&str> = model
+            .nodes
+            .iter()
+            .filter(|n| n.data.kind == C4Kind::Container && n.parent_id.as_deref() == Some(&system.id))
+            .map(|n| n.id.as_str())
+            .collect();
+
+        if container_ids.is_empty() {
+            continue;
+        }
+
+        // At container level, visible nodes are: containers of this system + persons + external systems
+        let visible_at_container_level: HashSet<&str> = container_ids
+            .iter()
+            .copied()
+            .chain(system_level_ids.iter().filter(|id| {
+                let node = model.nodes.iter().find(|n| n.id == **id).unwrap();
+                node.data.kind == C4Kind::Person
+                    || (node.data.kind == C4Kind::System && node.id != system.id)
+            }).copied())
+            .collect();
+
+        let mut connected: HashSet<&str> = HashSet::new();
+        for edge in &model.edges {
+            let src_vis = visible_at_container_level.contains(edge.source.as_str());
+            let tgt_vis = visible_at_container_level.contains(edge.target.as_str());
+            if src_vis && tgt_vis {
+                // Only mark containers as connected (persons/external systems are context nodes)
+                if container_ids.contains(edge.source.as_str()) {
+                    connected.insert(edge.source.as_str());
+                }
+                if container_ids.contains(edge.target.as_str()) {
+                    connected.insert(edge.target.as_str());
+                }
+            }
+        }
+
+        for cid in &container_ids {
+            if connected.contains(cid) {
+                continue;
+            }
+            let cnode = model.nodes.iter().find(|n| n.id == *cid).unwrap();
+            let has_any_edge = model.edges.iter().any(|e| e.source == *cid || e.target == *cid);
+            if has_any_edge {
+                warnings.push(format!(
+                    "'{}' (container in '{}') has edges to child-level nodes but no edges at \
+                    the container level — it will appear disconnected in the container view",
+                    cnode.data.name, system.data.name
+                ));
+            }
+        }
+    }
+
+    warnings
+}
+
 /// Recursively collect all steps (flattened) from a step tree.
 fn collect_all_steps(steps: &[scryer_core::FlowStep]) -> Vec<&scryer_core::FlowStep> {
     let mut result = Vec::new();
@@ -539,13 +667,23 @@ impl ScryerServer {
 
         let node_count = model.nodes.len();
         let edge_count = model.edges.len();
+        let cross_level_warnings = check_disconnected_nodes(&model);
         match scryer_core::write_model(&req.name, &model) {
             Ok(()) => {
                 let _ = scryer_core::save_baseline(&req.name, &model);
-                Ok(CallToolResult::success(vec![Content::text(format!(
+                let mut msg = format!(
                     "Set model '{}' ({} nodes, {} edges)",
                     req.name, node_count, edge_count
-                ))]))
+                );
+                if !cross_level_warnings.is_empty() {
+                    msg.push_str(&format!(
+                        "\n\n⚠️ DISCONNECTED NODES: The UI shows one abstraction level at a time. \
+                        These nodes will appear disconnected at their viewing level. \
+                        Use add_edges to fix:\n- {}",
+                        cross_level_warnings.join("\n- ")
+                    ));
+                }
+                Ok(CallToolResult::success(vec![Content::text(msg)]))
             }
             Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
         }
@@ -1112,13 +1250,20 @@ impl ScryerServer {
             added.push(id);
         }
 
+        let cross_level_warnings = check_disconnected_nodes(&model);
         match scryer_core::write_model(&req.model, &model) {
             Ok(()) => {
                 let _ = scryer_core::save_baseline(&req.model, &model);
-                Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Added {} edge(s)",
-                    added.len()
-                ))]))
+                let mut msg = format!("Added {} edge(s)", added.len());
+                if !cross_level_warnings.is_empty() {
+                    msg.push_str(&format!(
+                        "\n\n⚠️ DISCONNECTED NODES: The UI shows one abstraction level at a time. \
+                        These nodes will appear disconnected at their viewing level. \
+                        Use add_edges to fix:\n- {}",
+                        cross_level_warnings.join("\n- ")
+                    ));
+                }
+                Ok(CallToolResult::success(vec![Content::text(msg)]))
             }
             Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
         }
