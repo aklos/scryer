@@ -5,7 +5,7 @@
   <h1>scryer</h1>
 
   <p>
-    <b>Visual modeling surface for working with AI agents. Edit C4 architecture diagrams in a drag-and-drop editor — AI agents read and modify the same model through MCP.</b>
+    <b>Visual architecture models that AI agents build from. Edit C4 diagrams in a drag-and-drop editor — AI agents read, modify, and implement the same model through MCP.</b>
     <br />
     <br />
     <a href="#features">Features</a>
@@ -25,7 +25,9 @@
 <video src="https://github.com/user-attachments/assets/b91dd28a-a36a-4f78-a1b7-7c3f87e5a7b0" width="100%" autoplay loop muted></video>
 </p>
 
-AI agents write code, but natural language is a lossy way to tell them what to build. Scryer gives you a shared visual model — you edit it in a drag-and-drop editor, the agent reads and modifies it through MCP. As software engineering moves up in abstraction, a visual model helps you reason about structure instead of staring at code. Opinionated [C4](https://c4model.com/) hierarchy (system, container, component, operation), typed relationships, behavioral flows, contracts.
+AI agents write code, but natural language is a lossy way to tell them what to build. Scryer gives you a shared visual model — you edit it in a drag-and-drop editor, the agent reads and modifies it through MCP. Once the model looks right, the agent generates code from it — `get_task` feeds work one unit at a time with dependency ordering, inherited contracts, and progress tracking.
+
+Opinionated [C4](https://c4model.com/) hierarchy (system, container, component, operation), typed relationships, behavioral flows, contracts.
 
 ## Features
 
