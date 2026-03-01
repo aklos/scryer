@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.prohobo.scryer",
   "build": {
-    "beforeDevCommand": "cargo run -p xtask -- build-sidecar && pnpm dev",
+    "beforeDevCommand": "cargo run -p xtask -- build-sidecar --debug && pnpm dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "cargo run -p xtask -- build-sidecar && pnpm build",
     "frontendDist": "../dist"

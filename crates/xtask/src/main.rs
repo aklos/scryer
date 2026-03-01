@@ -5,27 +5,34 @@ use std::process::Command;
 fn main() {
     let args: Vec<String> = env::args().collect();
     let task = args.get(1).map(|s| s.as_str()).unwrap_or("");
+    let debug = args.iter().any(|a| a == "--debug");
 
     match task {
-        "build-sidecar" => build_sidecar(),
+        "build-sidecar" => build_sidecar(!debug),
         _ => {
-            eprintln!("Usage: cargo run -p xtask -- build-sidecar");
+            eprintln!("Usage: cargo run -p xtask -- build-sidecar [--debug]");
             std::process::exit(1);
         }
     }
 }
 
-fn build_sidecar() {
+fn build_sidecar(release: bool) {
     let triple = get_target_triple();
     let root = workspace_root();
     let out_dir = root.join("src-tauri").join("binaries");
 
     std::fs::create_dir_all(&out_dir).expect("failed to create binaries dir");
 
-    println!("Building scryer-mcp for {triple}...");
+    let profile = if release { "release" } else { "debug" };
+    println!("Building scryer-mcp ({profile}) for {triple}...");
+
+    let mut args = vec!["build", "-p", "scryer-mcp"];
+    if release {
+        args.push("--release");
+    }
 
     let status = Command::new("cargo")
-        .args(["build", "--release", "-p", "scryer-mcp"])
+        .args(&args)
         .status()
         .expect("failed to run cargo build");
 
@@ -42,7 +49,7 @@ fn build_sidecar() {
         ("scryer-mcp".to_string(), format!("scryer-mcp-{triple}"))
     };
 
-    let src = root.join("target").join("release").join(&src_name);
+    let src = root.join("target").join(profile).join(&src_name);
     let dst = out_dir.join(&dst_name);
 
     std::fs::copy(&src, &dst).unwrap_or_else(|e| {
