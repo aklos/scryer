@@ -3,7 +3,6 @@
     {
       "id": "node-1",
       "type": "c4",
-      "position": { "x": 350, "y": 0 },
       "data": {
         "name": "End User",
         "description": "Subscribes to the platform and uses it day-to-day",
@@ -11,19 +10,8 @@
       }
     },
     {
-      "id": "node-2",
-      "type": "c4",
-      "position": { "x": 250, "y": 220 },
-      "data": {
-        "name": "SaaS Platform",
-        "description": "The core product — handles tenants, billing, and the main application",
-        "kind": "system"
-      }
-    },
-    {
       "id": "node-3",
       "type": "c4",
-      "position": { "x": 0, "y": 0 },
       "data": {
         "name": "Admin",
         "description": "Manages tenant accounts, monitors platform health",
@@ -31,9 +19,18 @@
       }
     },
     {
+      "id": "node-2",
+      "type": "c4",
+      "data": {
+        "name": "SaaS Platform",
+        "description": "The core product — handles tenants, billing, and the main application",
+        "kind": "system",
+        "status": "proposed"
+      }
+    },
+    {
       "id": "node-4",
       "type": "c4",
-      "position": { "x": 600, "y": 220 },
       "data": {
         "name": "Auth0",
         "description": "Handles SSO, social login, and identity verification",
@@ -44,7 +41,6 @@
     {
       "id": "node-5",
       "type": "c4",
-      "position": { "x": 0, "y": 440 },
       "data": {
         "name": "Stripe",
         "description": "Processes subscription payments, invoicing, and metered billing",
@@ -55,7 +51,6 @@
     {
       "id": "node-6",
       "type": "c4",
-      "position": { "x": 500, "y": 440 },
       "data": {
         "name": "Postmark",
         "description": "Sends transactional emails and notifications",
@@ -63,171 +58,274 @@
         "external": true
       }
     },
+
     {
       "id": "node-10",
       "type": "c4",
-      "position": { "x": 0, "y": 0 },
       "data": {
         "name": "Web App",
         "description": "Server-rendered application for end users and tenant admins",
         "kind": "container",
-        "technology": "SvelteKit"
+        "technology": "SvelteKit",
+        "status": "proposed"
       },
       "parentId": "node-2"
     },
     {
       "id": "node-11",
       "type": "c4",
-      "position": { "x": 300, "y": 0 },
       "data": {
         "name": "API Server",
         "description": "Handles all business logic, tenant isolation, and billing orchestration",
         "kind": "container",
-        "technology": "Go"
+        "technology": "Go",
+        "status": "proposed",
+        "decisions": "Go chosen for low latency and predictable memory usage under multi-tenant load. Chi router for lightweight HTTP handling. pgx for direct PostgreSQL access without ORM overhead."
       },
       "parentId": "node-2"
     },
     {
       "id": "node-12",
       "type": "c4",
-      "position": { "x": 0, "y": 220 },
       "data": {
         "name": "Application Database",
         "description": "Multi-tenant data store with row-level security",
         "kind": "container",
         "technology": "PostgreSQL",
-        "shape": "cylinder"
+        "shape": "cylinder",
+        "status": "proposed"
       },
       "parentId": "node-2"
     },
     {
       "id": "node-13",
       "type": "c4",
-      "position": { "x": 300, "y": 220 },
       "data": {
         "name": "Job Queue",
         "description": "Processes background tasks like email sends and report generation",
         "kind": "container",
         "technology": "Redis",
-        "shape": "pipe"
+        "shape": "pipe",
+        "status": "proposed"
       },
       "parentId": "node-2"
     },
     {
       "id": "node-14",
       "type": "c4",
-      "position": { "x": 600, "y": 0 },
       "data": {
         "name": "Admin Dashboard",
         "description": "Internal tool for platform ops and tenant management",
         "kind": "container",
-        "technology": "React"
+        "technology": "React",
+        "status": "proposed"
       },
       "parentId": "node-2"
     },
+
     {
       "id": "node-20",
       "type": "c4",
-      "position": { "x": 0, "y": 0 },
       "data": {
         "name": "Tenant Handler",
-        "description": "REST endpoints for tenant CRUD, plan changes, and suspension",
+        "description": "REST endpoints for tenant CRUD, plan changes, and suspension via @[tenantOnboarding]",
         "kind": "component",
-        "technology": "Chi"
+        "technology": "Chi",
+        "status": "proposed",
+        "sources": [
+          { "pattern": "internal/handler/tenant*.go", "comment": "HTTP handlers for tenant endpoints" }
+        ],
+        "contract": {
+          "expect": [
+            "All tenant mutations are scoped by the authenticated tenant ID",
+            "Plan changes are validated against Stripe before persisting"
+          ],
+          "ask": [],
+          "never": [
+            "Allow cross-tenant data access"
+          ]
+        }
       },
       "parentId": "node-11"
     },
     {
       "id": "node-21",
       "type": "c4",
-      "position": { "x": 300, "y": 0 },
       "data": {
         "name": "Auth Middleware",
         "description": "Validates Auth0 JWTs and resolves tenant context from claims",
         "kind": "component",
-        "technology": "golang-jwt"
+        "technology": "golang-jwt",
+        "status": "proposed",
+        "sources": [
+          { "pattern": "internal/middleware/auth.go", "comment": "JWT validation and tenant context extraction" }
+        ]
       },
       "parentId": "node-11"
     },
     {
       "id": "node-22",
       "type": "c4",
-      "position": { "x": 0, "y": 220 },
       "data": {
         "name": "Data Access Layer",
         "description": "Type-safe SQL queries with connection pooling and tenant scoping",
         "kind": "component",
-        "technology": "pgx"
+        "technology": "pgx",
+        "status": "proposed",
+        "sources": [
+          { "pattern": "internal/db/**/*.go", "comment": "Query builders and connection pool management" }
+        ],
+        "contract": {
+          "expect": [
+            "Every query includes a tenant_id WHERE clause via row-level security",
+            "Connection pool is bounded to prevent database exhaustion"
+          ],
+          "ask": [],
+          "never": [
+            "Execute raw SQL without parameterized queries"
+          ]
+        }
       },
       "parentId": "node-11"
     },
     {
       "id": "node-23",
       "type": "c4",
-      "position": { "x": 300, "y": 220 },
       "data": {
         "name": "Billing Service",
         "description": "Manages Stripe subscriptions, webhook handling, and usage metering",
         "kind": "component",
-        "technology": "stripe-go"
+        "technology": "stripe-go",
+        "status": "proposed",
+        "sources": [
+          { "pattern": "internal/billing/**/*.go", "comment": "Stripe integration and subscription lifecycle" }
+        ]
       },
       "parentId": "node-11"
     },
     {
       "id": "node-24",
       "type": "c4",
-      "position": { "x": 600, "y": 220 },
       "data": {
         "name": "Event Publisher",
-        "description": "Enqueues background jobs for async processing",
+        "description": "Enqueues background jobs for async processing via @[Job Queue]",
         "kind": "component",
-        "technology": "Asynq"
+        "technology": "Asynq",
+        "status": "proposed"
       },
       "parentId": "node-11"
     },
     {
-      "id": "node-30",
-      "type": "code",
-      "position": { "x": 0, "y": 0 },
+      "id": "node-26",
+      "type": "model",
       "data": {
-        "name": "CreateTenant",
-        "description": "POST /tenants — provisions isolated schema, sets up Stripe customer, sends welcome email",
-        "kind": "step"
+        "name": "tenant",
+        "description": "Core multi-tenant entity representing a customer organization",
+        "kind": "model",
+        "status": "proposed",
+        "properties": [
+          { "label": "id", "description": "UUID primary key" },
+          { "label": "name", "description": "Organization display name" },
+          { "label": "slug", "description": "URL-safe unique identifier used in subdomains" },
+          { "label": "planId", "description": "Reference to the active Stripe subscription plan" },
+          { "label": "status", "description": "Active, suspended, or pending_deletion" },
+          { "label": "stripeCustomerId", "description": "Stripe customer ID for billing operations" },
+          { "label": "createdAt", "description": "Timestamp of initial provisioning" },
+          { "label": "usageQuota", "description": "Monthly usage limit based on plan tier" }
+        ]
+      },
+      "parentId": "node-11"
+    },
+    {
+      "id": "node-27",
+      "type": "process",
+      "data": {
+        "name": "tenantOnboarding",
+        "description": "Provisions a new @[tenant]: creates database schema, sets up Stripe customer, sends welcome email via @[Postmark]",
+        "kind": "process",
+        "status": "proposed",
+        "contract": {
+          "expect": [
+            "Database schema is created before Stripe customer to ensure rollback is possible",
+            "Welcome email is sent only after all provisioning steps succeed"
+          ],
+          "ask": [],
+          "never": [
+            "Leave a partially provisioned tenant in active status"
+          ]
+        },
+        "accepts": [
+          "New tenant can log in within 30 seconds of signup",
+          "Failed provisioning rolls back all steps and notifies admin"
+        ]
+      },
+      "parentId": "node-20"
+    },
+
+    {
+      "id": "node-30",
+      "type": "operation",
+      "data": {
+        "name": "createTenant",
+        "description": "POST /tenants — triggers @[tenantOnboarding] to provision isolated schema and Stripe customer",
+        "kind": "operation",
+        "status": "proposed"
       },
       "parentId": "node-20"
     },
     {
       "id": "node-31",
-      "type": "code",
-      "position": { "x": 250, "y": 0 },
+      "type": "operation",
       "data": {
-        "name": "GetTenant",
-        "description": "GET /tenants/:id — returns tenant config, usage stats, and current plan",
-        "kind": "step"
+        "name": "getTenant",
+        "description": "GET /tenants/:id — returns @[tenant] config, usage stats, and current plan",
+        "kind": "operation",
+        "status": "proposed"
       },
       "parentId": "node-20"
     },
     {
       "id": "node-32",
-      "type": "code",
-      "position": { "x": 0, "y": 150 },
+      "type": "operation",
       "data": {
-        "name": "UpdatePlan",
-        "description": "PUT /tenants/:id/plan — upgrades or downgrades subscription via Stripe",
-        "kind": "step"
+        "name": "updatePlan",
+        "description": "PUT /tenants/:id/plan — upgrades or downgrades @[tenant] subscription via @[Billing Service]",
+        "kind": "operation",
+        "status": "proposed"
       },
       "parentId": "node-20"
     },
     {
       "id": "node-33",
-      "type": "code",
-      "position": { "x": 250, "y": 150 },
+      "type": "operation",
       "data": {
-        "name": "SuspendTenant",
-        "description": "POST /tenants/:id/suspend — disables tenant access and pauses Stripe billing",
-        "kind": "step"
+        "name": "suspendTenant",
+        "description": "POST /tenants/:id/suspend — disables @[tenant] access and pauses Stripe billing",
+        "kind": "operation",
+        "status": "proposed"
       },
       "parentId": "node-20"
+    },
+    {
+      "id": "node-34",
+      "type": "operation",
+      "data": {
+        "name": "handleStripeWebhook",
+        "description": "POST /webhooks/stripe — processes payment events, updates @[tenant] status on payment failure",
+        "kind": "operation",
+        "status": "proposed",
+        "contract": {
+          "expect": [
+            "Verifies Stripe webhook signature before processing",
+            "Idempotent — safe to receive the same event multiple times"
+          ],
+          "ask": [],
+          "never": [
+            "Trust webhook payload without signature verification"
+          ]
+        }
+      },
+      "parentId": "node-23"
     }
   ],
   "edges": [
@@ -247,20 +345,21 @@
       "id": "edge-node-2-node-4",
       "source": "node-2",
       "target": "node-4",
-      "data": { "label": "authenticates via", "technology": "OAuth 2.0" }
+      "data": { "label": "authenticates via", "method": "OAuth 2.0" }
     },
     {
       "id": "edge-node-2-node-5",
       "source": "node-2",
       "target": "node-5",
-      "data": { "label": "processes payments via", "technology": "REST" }
+      "data": { "label": "processes payments via", "method": "REST" }
     },
     {
       "id": "edge-node-2-node-6",
       "source": "node-2",
       "target": "node-6",
-      "data": { "label": "sends emails via", "technology": "SMTP" }
+      "data": { "label": "sends emails via", "method": "SMTP" }
     },
+
     {
       "id": "edge-node-1-node-10",
       "source": "node-1",
@@ -277,44 +376,45 @@
       "id": "edge-node-10-node-11",
       "source": "node-10",
       "target": "node-11",
-      "data": { "label": "makes API calls to", "technology": "REST" }
+      "data": { "label": "makes API calls to", "method": "REST/JSON" }
     },
     {
       "id": "edge-node-14-node-11",
       "source": "node-14",
       "target": "node-11",
-      "data": { "label": "manages platform via", "technology": "REST" }
+      "data": { "label": "manages platform via", "method": "REST/JSON" }
     },
     {
       "id": "edge-node-11-node-12",
       "source": "node-11",
       "target": "node-12",
-      "data": { "label": "reads/writes", "technology": "pgx" }
+      "data": { "label": "reads/writes", "method": "pgx" }
     },
     {
       "id": "edge-node-11-node-13",
       "source": "node-11",
       "target": "node-13",
-      "data": { "label": "enqueues jobs to", "technology": "Asynq" }
+      "data": { "label": "enqueues jobs to", "method": "Asynq" }
     },
     {
       "id": "edge-node-11-node-4",
       "source": "node-11",
       "target": "node-4",
-      "data": { "label": "validates tokens with", "technology": "JWKS" }
+      "data": { "label": "validates tokens with", "method": "JWKS" }
     },
     {
       "id": "edge-node-11-node-5",
       "source": "node-11",
       "target": "node-5",
-      "data": { "label": "processes payments via", "technology": "REST" }
+      "data": { "label": "processes payments via", "method": "REST" }
     },
     {
       "id": "edge-node-13-node-6",
       "source": "node-13",
       "target": "node-6",
-      "data": { "label": "sends emails via", "technology": "SMTP" }
+      "data": { "label": "sends emails via", "method": "SMTP" }
     },
+
     {
       "id": "edge-node-20-node-21",
       "source": "node-20",
@@ -343,25 +443,44 @@
       "id": "edge-node-22-node-12",
       "source": "node-22",
       "target": "node-12",
-      "data": { "label": "queries", "technology": "pgx" }
+      "data": { "label": "queries", "method": "pgx" }
     },
     {
       "id": "edge-node-24-node-13",
       "source": "node-24",
       "target": "node-13",
-      "data": { "label": "enqueues to", "technology": "Asynq" }
+      "data": { "label": "enqueues to", "method": "Asynq" }
     },
     {
       "id": "edge-node-21-node-4",
       "source": "node-21",
       "target": "node-4",
-      "data": { "label": "fetches JWKS from", "technology": "HTTPS" }
+      "data": { "label": "fetches JWKS from", "method": "HTTPS" }
     },
     {
       "id": "edge-node-23-node-5",
       "source": "node-23",
       "target": "node-5",
-      "data": { "label": "manages subscriptions via", "technology": "REST" }
+      "data": { "label": "manages subscriptions via", "method": "REST" }
+    },
+
+    {
+      "id": "edge-node-27-node-22",
+      "source": "node-27",
+      "target": "node-22",
+      "data": { "label": "provisions schema via" }
+    },
+    {
+      "id": "edge-node-27-node-23",
+      "source": "node-27",
+      "target": "node-23",
+      "data": { "label": "creates Stripe customer via" }
+    },
+    {
+      "id": "edge-node-27-node-24",
+      "source": "node-27",
+      "target": "node-24",
+      "data": { "label": "enqueues welcome email via" }
     },
     {
       "id": "edge-node-30-node-22",
@@ -373,13 +492,7 @@
       "id": "edge-node-30-node-23",
       "source": "node-30",
       "target": "node-23",
-      "data": { "label": "creates Stripe customer via" }
-    },
-    {
-      "id": "edge-node-30-node-24",
-      "source": "node-30",
-      "target": "node-24",
-      "data": { "label": "enqueues welcome email via" }
+      "data": { "label": "creates customer via" }
     },
     {
       "id": "edge-node-31-node-22",
@@ -404,7 +517,153 @@
       "source": "node-33",
       "target": "node-23",
       "data": { "label": "pauses billing via" }
+    },
+    {
+      "id": "edge-node-34-node-22",
+      "source": "node-34",
+      "target": "node-22",
+      "data": { "label": "updates tenant status via" }
+    },
+    {
+      "id": "edge-node-34-node-5",
+      "source": "node-34",
+      "target": "node-5",
+      "data": { "label": "verifies signature with", "method": "REST" }
     }
   ],
+  "groups": [
+    {
+      "id": "group-1",
+      "kind": "deployment",
+      "name": "Fly.io App",
+      "description": "API server and web app deploy as a single Fly.io machine",
+      "memberIds": ["node-10", "node-11"]
+    },
+    {
+      "id": "group-2",
+      "kind": "package",
+      "name": "Tenant Module",
+      "description": "All tenant lifecycle code — handlers, data access, and onboarding",
+      "memberIds": ["node-20", "node-22"]
+    }
+  ],
+  "flows": [
+    {
+      "id": "scenario-1",
+      "name": "Tenant Onboarding",
+      "description": "New customer signs up and gets a fully provisioned tenant",
+      "steps": [
+        {
+          "id": "step-1",
+          "description": "@[End User] signs up via @[Auth0] and is redirected to @[Web App]"
+        },
+        {
+          "id": "step-2",
+          "description": "@[Web App] sends a create tenant request to @[API Server]"
+        },
+        {
+          "id": "step-3",
+          "description": "@[Tenant Handler] triggers @[tenantOnboarding] to provision the new @[tenant]",
+          "processIds": ["node-27"]
+        },
+        {
+          "id": "step-4",
+          "description": "@[Data Access Layer] creates an isolated schema in @[Application Database]"
+        },
+        {
+          "id": "step-5",
+          "description": "@[Billing Service] creates a Stripe customer and attaches the selected plan in @[Stripe]"
+        },
+        {
+          "id": "step-6",
+          "description": "@[Event Publisher] enqueues a welcome email job in @[Job Queue]",
+          "branches": [
+            {
+              "condition": "if: provisioning succeeds",
+              "steps": [
+                {
+                  "id": "step-6a",
+                  "description": "@[Job Queue] sends welcome email via @[Postmark]"
+                },
+                {
+                  "id": "step-6b",
+                  "description": "@[End User] receives confirmation and can start using the platform"
+                }
+              ]
+            },
+            {
+              "condition": "if: provisioning fails",
+              "steps": [
+                {
+                  "id": "step-6c",
+                  "description": "@[tenantOnboarding] rolls back database schema and Stripe customer"
+                },
+                {
+                  "id": "step-6d",
+                  "description": "@[Event Publisher] enqueues an admin alert in @[Job Queue]"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "scenario-2",
+      "name": "Payment Failure",
+      "description": "Stripe reports a failed payment and the tenant is suspended",
+      "steps": [
+        {
+          "id": "step-1",
+          "description": "@[Stripe] sends a payment_failed webhook to @[API Server]"
+        },
+        {
+          "id": "step-2",
+          "description": "@[handleStripeWebhook] verifies the webhook signature and parses the event"
+        },
+        {
+          "id": "step-3",
+          "description": "@[Billing Service] looks up the @[tenant] by stripeCustomerId",
+          "branches": [
+            {
+              "condition": "if: retry count exceeded",
+              "steps": [
+                {
+                  "id": "step-3a",
+                  "description": "@[Data Access Layer] sets @[tenant] status to suspended in @[Application Database]"
+                },
+                {
+                  "id": "step-3b",
+                  "description": "@[Event Publisher] enqueues a suspension notification email"
+                }
+              ]
+            },
+            {
+              "condition": "else:",
+              "steps": [
+                {
+                  "id": "step-3c",
+                  "description": "@[Event Publisher] enqueues a payment reminder email via @[Postmark]"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "contract": {
+    "expect": [
+      "All data access is scoped to the authenticated tenant via row-level security",
+      "Webhook handlers are idempotent — safe to process duplicate events"
+    ],
+    "ask": [
+      "What is the maximum number of concurrent tenants per database instance?"
+    ],
+    "never": [
+      "Allow cross-tenant data leakage through shared queries or caching",
+      "Store Stripe API keys in the application database"
+    ]
+  },
   "startingLevel": "system"
 }

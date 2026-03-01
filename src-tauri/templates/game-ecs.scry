@@ -3,7 +3,6 @@
     {
       "id": "node-1",
       "type": "c4",
-      "position": { "x": 350, "y": 0 },
       "data": {
         "name": "Player",
         "description": "Provides input and receives rendered frames",
@@ -13,17 +12,16 @@
     {
       "id": "node-2",
       "type": "c4",
-      "position": { "x": 250, "y": 220 },
       "data": {
         "name": "Multiplayer Game",
         "description": "Client-server game with ECS architecture, real-time physics and rendering",
-        "kind": "system"
+        "kind": "system",
+        "status": "proposed"
       }
     },
     {
       "id": "node-3",
       "type": "c4",
-      "position": { "x": 600, "y": 220 },
       "data": {
         "name": "Player Database",
         "description": "Stores player profiles, inventories, and progression",
@@ -32,143 +30,248 @@
         "shape": "cylinder"
       }
     },
+
     {
       "id": "node-10",
       "type": "c4",
-      "position": { "x": 0, "y": 0 },
       "data": {
         "name": "Game Client",
         "description": "Runs the game loop, renders graphics, and processes player input",
         "kind": "container",
-        "technology": "Bevy"
+        "technology": "Bevy",
+        "status": "proposed",
+        "decisions": "Bevy chosen for its pure-ECS architecture, parallel system scheduling, and Rust memory safety. wgpu provides cross-platform GPU access. bevy_rapier3d for physics to avoid custom collision detection."
       },
       "parentId": "node-2"
     },
     {
       "id": "node-11",
       "type": "c4",
-      "position": { "x": 400, "y": 0 },
       "data": {
         "name": "Game Server",
         "description": "Authoritative simulation, manages game state and matchmaking",
         "kind": "container",
-        "technology": "Axum"
+        "technology": "Axum",
+        "status": "proposed"
       },
       "parentId": "node-2"
     },
+
     {
       "id": "node-20",
       "type": "c4",
-      "position": { "x": 0, "y": 0 },
       "data": {
         "name": "ECS World",
-        "description": "Entity-Component-System runtime — stores all entities and their components",
+        "description": "Entity-Component-System runtime — stores all entities and their components like @[transform] and @[rigidBody]",
         "kind": "component",
-        "technology": "Bevy ECS"
+        "technology": "Bevy ECS",
+        "status": "proposed",
+        "contract": {
+          "expect": [
+            "Systems run in parallel when they don't share mutable access to the same component types",
+            "Entity spawning and despawning is deferred to end of stage"
+          ],
+          "ask": [],
+          "never": [
+            "Access components outside of system parameters — use Commands for deferred mutations"
+          ]
+        }
       },
       "parentId": "node-10"
     },
     {
       "id": "node-21",
       "type": "c4",
-      "position": { "x": 300, "y": 0 },
       "data": {
         "name": "Renderer",
-        "description": "Queries transform and mesh components, draws frames to screen",
+        "description": "Queries @[transform] and mesh components from @[ECS World], draws frames to screen",
         "kind": "component",
-        "technology": "wgpu"
+        "technology": "wgpu",
+        "status": "proposed"
       },
       "parentId": "node-10"
     },
     {
       "id": "node-22",
       "type": "c4",
-      "position": { "x": 600, "y": 0 },
       "data": {
         "name": "Input Handler",
-        "description": "Maps raw device input to game actions, updates input components",
+        "description": "Maps raw device input to game actions, writes input components to @[ECS World]",
         "kind": "component",
-        "technology": "bevy_input"
+        "technology": "bevy_input",
+        "status": "proposed"
       },
       "parentId": "node-10"
     },
     {
       "id": "node-23",
       "type": "c4",
-      "position": { "x": 0, "y": 220 },
       "data": {
         "name": "Physics Plugin",
-        "description": "Steps the physics simulation each tick using transform and rigidbody components",
+        "description": "Steps the physics simulation each tick using @[transform] and @[rigidBody] components",
         "kind": "component",
-        "technology": "bevy_rapier3d"
+        "technology": "bevy_rapier3d",
+        "status": "proposed",
+        "sources": [
+          { "pattern": "src/plugins/physics/**/*.rs", "comment": "Physics setup, force application, and collision handling systems" }
+        ],
+        "contract": {
+          "expect": [
+            "Physics runs at a fixed timestep independent of frame rate",
+            "All force application happens before the simulation step"
+          ],
+          "ask": [],
+          "never": [
+            "Mutate transforms directly — always go through the physics engine"
+          ]
+        }
       },
       "parentId": "node-10"
     },
     {
       "id": "node-24",
       "type": "c4",
-      "position": { "x": 300, "y": 220 },
       "data": {
         "name": "Asset Loader",
-        "description": "Loads and caches textures, models, audio, and shaders from disk",
+        "description": "Loads and caches textures, models, audio, and shaders from disk for @[Renderer]",
         "kind": "component",
-        "technology": "bevy_asset"
+        "technology": "bevy_asset",
+        "status": "proposed"
       },
       "parentId": "node-10"
     },
     {
       "id": "node-25",
       "type": "c4",
-      "position": { "x": 600, "y": 220 },
       "data": {
         "name": "Network Replication",
-        "description": "Syncs entity state with the authoritative server",
+        "description": "Syncs entity state between @[ECS World] and @[Game Server]",
         "kind": "component",
-        "technology": "lightyear"
+        "technology": "lightyear",
+        "status": "proposed",
+        "contract": {
+          "expect": [
+            "Client-side prediction for player-owned entities",
+            "Server reconciliation on state mismatch"
+          ],
+          "ask": [
+            "What is the acceptable latency budget for state sync?"
+          ],
+          "never": [
+            "Trust client state for non-owned entities"
+          ]
+        }
       },
       "parentId": "node-10"
     },
     {
-      "id": "node-30",
-      "type": "code",
-      "position": { "x": 0, "y": 0 },
+      "id": "node-40",
+      "type": "model",
       "data": {
-        "name": "setup_colliders",
-        "description": "Attaches Collider and RigidBody components to spawned entities based on mesh bounds",
-        "kind": "step"
+        "name": "transform",
+        "description": "Spatial data for an entity in 3D world space",
+        "kind": "model",
+        "status": "proposed",
+        "properties": [
+          { "label": "translation", "description": "Vec3 position in world coordinates" },
+          { "label": "rotation", "description": "Quaternion orientation" },
+          { "label": "scale", "description": "Vec3 scale factor per axis" }
+        ]
+      },
+      "parentId": "node-20"
+    },
+    {
+      "id": "node-41",
+      "type": "model",
+      "data": {
+        "name": "rigidBody",
+        "description": "Physics simulation data attached to a physical entity",
+        "kind": "model",
+        "status": "proposed",
+        "properties": [
+          { "label": "bodyType", "description": "Dynamic, static, or kinematic" },
+          { "label": "velocity", "description": "Vec3 linear velocity" },
+          { "label": "angularVelocity", "description": "Vec3 rotational velocity" },
+          { "label": "mass", "description": "Mass in kilograms, affects force response" },
+          { "label": "gravityScale", "description": "Multiplier for global gravity (0 = floating)" }
+        ]
+      },
+      "parentId": "node-20"
+    },
+    {
+      "id": "node-42",
+      "type": "model",
+      "data": {
+        "name": "playerInput",
+        "description": "Current frame's input state for a player-controlled entity",
+        "kind": "model",
+        "status": "proposed",
+        "properties": [
+          { "label": "moveDirection", "description": "Vec2 normalized movement input from WASD/stick" },
+          { "label": "lookDelta", "description": "Vec2 mouse/stick camera rotation delta" },
+          { "label": "jump", "description": "Whether jump was pressed this frame" },
+          { "label": "fire", "description": "Whether primary action was triggered" }
+        ]
+      },
+      "parentId": "node-22"
+    },
+    {
+      "id": "node-43",
+      "type": "process",
+      "data": {
+        "name": "physicsTick",
+        "description": "Per-frame physics pipeline: read @[playerInput], apply forces to @[rigidBody], step Rapier simulation, handle collisions, write updated @[transform]",
+        "kind": "process",
+        "status": "proposed",
+        "accepts": [
+          "Physics state is deterministic given the same inputs",
+          "Collision events are emitted for gameplay systems to react to"
+        ]
+      },
+      "parentId": "node-23"
+    },
+
+    {
+      "id": "node-30",
+      "type": "operation",
+      "data": {
+        "name": "setupColliders",
+        "description": "Attaches Collider and @[rigidBody] components to spawned entities based on mesh bounds",
+        "kind": "operation",
+        "status": "proposed"
       },
       "parentId": "node-23"
     },
     {
       "id": "node-31",
-      "type": "code",
-      "position": { "x": 250, "y": 0 },
+      "type": "operation",
       "data": {
-        "name": "apply_forces",
-        "description": "Reads player input and gravity, applies impulses and external forces to RigidBody velocity",
-        "kind": "step"
+        "name": "applyForces",
+        "description": "Reads @[playerInput] and gravity, applies impulses and external forces to @[rigidBody] velocity",
+        "kind": "operation",
+        "status": "proposed"
       },
       "parentId": "node-23"
     },
     {
       "id": "node-32",
-      "type": "code",
-      "position": { "x": 0, "y": 150 },
+      "type": "operation",
       "data": {
-        "name": "step_simulation",
+        "name": "stepSimulation",
         "description": "Advances the Rapier physics world by one fixed timestep, resolves contacts and joints",
-        "kind": "step"
+        "kind": "operation",
+        "status": "proposed"
       },
       "parentId": "node-23"
     },
     {
       "id": "node-33",
-      "type": "code",
-      "position": { "x": 250, "y": 150 },
+      "type": "operation",
       "data": {
-        "name": "handle_collisions",
+        "name": "handleCollisions",
         "description": "Reads CollisionEvent pairs, triggers damage, knockback, and sound effects",
-        "kind": "step"
+        "kind": "operation",
+        "status": "proposed"
       },
       "parentId": "node-23"
     }
@@ -184,8 +287,9 @@
       "id": "edge-node-2-node-3",
       "source": "node-2",
       "target": "node-3",
-      "data": { "label": "persists player data to", "technology": "SQL" }
+      "data": { "label": "persists player data to", "method": "SQL" }
     },
+
     {
       "id": "edge-node-1-node-10",
       "source": "node-1",
@@ -196,14 +300,15 @@
       "id": "edge-node-10-node-11",
       "source": "node-10",
       "target": "node-11",
-      "data": { "label": "syncs game state with", "technology": "UDP" }
+      "data": { "label": "syncs game state with", "method": "UDP" }
     },
     {
       "id": "edge-node-11-node-3",
       "source": "node-11",
       "target": "node-3",
-      "data": { "label": "persists player data to", "technology": "SQL" }
+      "data": { "label": "persists player data to", "method": "SQL" }
     },
+
     {
       "id": "edge-node-22-node-20",
       "source": "node-22",
@@ -226,7 +331,7 @@
       "id": "edge-node-20-node-21",
       "source": "node-20",
       "target": "node-21",
-      "data": { "label": "provides renderable entities to" }
+      "data": { "label": "provides renderable entities" }
     },
     {
       "id": "edge-node-24-node-21",
@@ -244,8 +349,9 @@
       "id": "edge-node-25-node-11",
       "source": "node-25",
       "target": "node-11",
-      "data": { "label": "syncs state with", "technology": "UDP" }
+      "data": { "label": "syncs state with", "method": "UDP" }
     },
+
     {
       "id": "edge-node-30-node-20",
       "source": "node-30",
@@ -277,5 +383,98 @@
       "data": { "label": "collisions detected after" }
     }
   ],
+  "groups": [
+    {
+      "id": "group-1",
+      "kind": "package",
+      "name": "Physics Systems",
+      "description": "All ECS systems related to physics simulation and collision handling",
+      "memberIds": ["node-23", "node-20"]
+    }
+  ],
+  "flows": [
+    {
+      "id": "scenario-1",
+      "name": "Game Frame Loop",
+      "description": "Single frame of the client game loop from input to render",
+      "steps": [
+        {
+          "id": "step-1",
+          "description": "@[Input Handler] reads raw device events and writes @[playerInput] components to @[ECS World]"
+        },
+        {
+          "id": "step-2",
+          "description": "@[Network Replication] receives authoritative state from @[Game Server] and reconciles with local prediction"
+        },
+        {
+          "id": "step-3",
+          "description": "@[Physics Plugin] runs the @[physicsTick] pipeline",
+          "processIds": ["node-43"]
+        },
+        {
+          "id": "step-4",
+          "description": "@[applyForces] reads @[playerInput] and gravity, writes impulses to @[rigidBody]"
+        },
+        {
+          "id": "step-5",
+          "description": "@[stepSimulation] advances the Rapier world one fixed timestep"
+        },
+        {
+          "id": "step-6",
+          "description": "@[handleCollisions] processes collision events",
+          "branches": [
+            {
+              "condition": "if: player-enemy collision",
+              "steps": [
+                {
+                  "id": "step-6a",
+                  "description": "@[handleCollisions] applies damage and knockback forces to @[rigidBody]"
+                }
+              ]
+            },
+            {
+              "condition": "if: projectile collision",
+              "steps": [
+                {
+                  "id": "step-6b",
+                  "description": "@[handleCollisions] despawns projectile and spawns impact effect"
+                }
+              ]
+            },
+            {
+              "condition": "else:",
+              "steps": [
+                {
+                  "id": "step-6c",
+                  "description": "@[handleCollisions] plays contact sound effect based on material type"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "step-7",
+          "description": "@[Renderer] queries @[transform] and mesh data from @[ECS World] and draws the frame"
+        },
+        {
+          "id": "step-8",
+          "description": "@[Network Replication] sends local player state to @[Game Server] for authoritative validation"
+        }
+      ]
+    }
+  ],
+  "contract": {
+    "expect": [
+      "Game server is authoritative — clients predict but defer to server state on conflict",
+      "Physics runs at a fixed 60Hz timestep decoupled from render frame rate"
+    ],
+    "ask": [
+      "What is the target player count per server instance?"
+    ],
+    "never": [
+      "Trust client-reported positions for non-owned entities",
+      "Run gameplay logic in the render loop"
+    ]
+  },
   "startingLevel": "system"
 }
