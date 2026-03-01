@@ -292,31 +292,27 @@ export function GuidePanel({ nodes, edges, visibleNodes, currentParentId, parent
 
 interface FlowGuidePanelProps {
   stepCount: number;
-  transitionCount: number;
   stepsWithDescription: number;
 }
 
-function computeFlowChecklist(stepCount: number, transitionCount: number, stepsWithDescription: number): CheckItem[] {
+function computeFlowChecklist(stepCount: number, stepsWithDescription: number): CheckItem[] {
   const items: CheckItem[] = [];
   items.push({ label: "At least 2 steps", done: stepCount >= 2 });
-  if (stepCount >= 2) {
-    items.push({ label: "Steps connected", done: transitionCount >= 1 });
-  }
   if (stepCount >= 1) {
     items.push({ label: "Description on every step", done: stepsWithDescription === stepCount });
   }
   return items;
 }
 
-export function FlowGuidePanel({ stepCount, transitionCount, stepsWithDescription }: FlowGuidePanelProps) {
+export function FlowGuidePanel({ stepCount, stepsWithDescription }: FlowGuidePanelProps) {
   const [collapsed, setCollapsed] = useState(_flowGuideCollapsed);
   const toggleCollapsed = useCallback(() => {
     setCollapsed((c) => { _flowGuideCollapsed = !c; return !c; });
   }, []);
 
   const checklist = useMemo(
-    () => computeFlowChecklist(stepCount, transitionCount, stepsWithDescription),
-    [stepCount, transitionCount, stepsWithDescription],
+    () => computeFlowChecklist(stepCount, stepsWithDescription),
+    [stepCount, stepsWithDescription],
   );
 
   const done = checklist.filter((item) => item.done).length;

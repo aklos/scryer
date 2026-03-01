@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { C4ModelData, C4Node, C4Edge, StartingLevel, SourceLocation, Group, Contract, Flow } from "../types";
+import type { C4ModelData, C4Node, C4Edge, StartingLevel, SourceLocation, Group, Contract, Flow, FlowStep, FlowTransition } from "../types";
 import { useToast } from "../Toast";
 
 /** Migrate old guidelines/string contract fields to string[] contract fields. */
@@ -16,6 +16,48 @@ function migrateContract(raw: unknown): Contract {
     ask: migrate(obj.ask),
     never: migrate(obj.never),
   };
+}
+
+/** Migrate old flat steps+transitions into topologically ordered steps (no branches). */
+function migrateFlowTransitions(steps: FlowStep[], transitions: FlowTransition[]): FlowStep[] {
+  if (!transitions || transitions.length === 0) return steps;
+
+  // Build adjacency from transitions
+  const stepIds = new Set(steps.map((s) => s.id));
+  const adj = new Map<string, string[]>();
+  const inDegree = new Map<string, number>();
+  for (const s of steps) { adj.set(s.id, []); inDegree.set(s.id, 0); }
+  for (const t of transitions) {
+    if (stepIds.has(t.source) && stepIds.has(t.target)) {
+      adj.get(t.source)!.push(t.target);
+      inDegree.set(t.target, (inDegree.get(t.target) ?? 0) + 1);
+    }
+  }
+
+  // Topological sort (Kahn's algorithm)
+  const queue = steps.filter((s) => (inDegree.get(s.id) ?? 0) === 0).map((s) => s.id);
+  const sorted: string[] = [];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    sorted.push(id);
+    for (const next of adj.get(id) ?? []) {
+      const d = (inDegree.get(next) ?? 1) - 1;
+      inDegree.set(next, d);
+      if (d === 0) queue.push(next);
+    }
+  }
+  // Append any disconnected/cyclic steps
+  for (const s of steps) {
+    if (!sorted.includes(s.id)) sorted.push(s.id);
+  }
+
+  const stepMap = new Map(steps.map((s) => [s.id, s]));
+  // Return steps in topological order, stripping position (no longer used)
+  return sorted.map((id) => {
+    const s = stepMap.get(id)!;
+    const { position: _pos, ...rest } = s as FlowStep & { position?: unknown };
+    return rest;
+  });
 }
 
 /** Parse raw JSON into a typed C4ModelData. */
@@ -49,7 +91,15 @@ export function parseModelData(raw: string): C4ModelData {
     refPositions: data.refPositions ?? {},
     groups: (data.groups ?? []).map((g: Record<string, unknown>) => ({ ...g, kind: g.kind ?? "deployment" })),
     contract: migrateContract(data.contract ?? data.guidelines),
-    flows: data.flows ?? data.scenarios ?? [],
+    flows: (data.flows ?? data.scenarios ?? []).map((f: Record<string, unknown>) => {
+      const steps = (f.steps ?? []) as FlowStep[];
+      const transitions = (f.transitions ?? []) as FlowTransition[];
+      return {
+        ...f,
+        steps: migrateFlowTransitions(steps, transitions),
+        transitions: undefined,
+      } as unknown as Flow;
+    }),
   };
 }
 

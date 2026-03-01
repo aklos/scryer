@@ -14,8 +14,7 @@ import { Sidebar } from "./Sidebar";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { SettingsPanel } from "./SettingsPanel";
 import { CommandPalette } from "./CommandPalette";
-import { FlowCanvas } from "./FlowCanvas";
-import type { FlowCanvasHandle } from "./FlowCanvas";
+import { FlowScriptView } from "./FlowScriptView";
 import { C4Canvas } from "./C4Canvas";
 import { FlowEditPopup } from "./FlowEditPopup";
 import { expandGuidePanel } from "./GuidePanels";
@@ -91,11 +90,8 @@ function buildStarterModel(): { nodes: C4Node[]; edges: C4Edge[]; flows: Flow[];
       id: crypto.randomUUID(),
       name: "Core workflow",
       steps: [
-        { id: step1, description: "@[User] sends payload with @[record] data", position: { x: 0, y: 0 } },
-        { id: step2, description: "@[System] validates payload and creates @[record] in @[Database]", position: { x: 280, y: 0 }, processIds: [processId] },
-      ],
-      transitions: [
-        { source: step1, target: step2 },
+        { id: step1, description: "@[User] sends payload with @[record] data" },
+        { id: step2, description: "@[System] validates payload and creates @[record] in @[Database]", processIds: [processId] },
       ],
     },
   ];
@@ -133,11 +129,6 @@ function Flow() {
   const [flows, setFlows] = useState<Flow[]>([]);
   const [activeFlowId, setActiveFlowId] = useState<string | null>(null);
   const [editingFlow, setEditingFlow] = useState(false);
-  const [selectedFlowStepId, setSelectedFlowStepId] = useState<string | null>(null);
-  const flowRef = useRef<FlowCanvasHandle>(null);
-  const onFlowSelectionInfo = useCallback((_info: { hasNodeSelection: boolean; selectedTransitionIndex: number }) => {
-    // Selection info is now consumed by FlowCanvas's own toolbar
-  }, []);
 
   // Viewport is uncontrolled — use ReactFlow instance methods to read/set
 
@@ -421,8 +412,7 @@ function Flow() {
         setExpandedPath(expandedPath.slice(0, idx + 1));
       }
       setActiveFlowId(null);
-      setSelectedFlowStepId(null);
-      scheduleFitView();
+           scheduleFitView();
     },
     [expandedPath, scheduleFitView],
   );
@@ -432,8 +422,7 @@ function Flow() {
       const node = nodes.find((n) => n.id === id);
       if (!node) return;
       setActiveFlowId(null);
-      setSelectedFlowStepId(null);
-      const path: string[] = [];
+           const path: string[] = [];
       let cur = node.parentId;
       while (cur) {
         path.unshift(cur);
@@ -770,8 +759,8 @@ function Flow() {
           }}
           flows={flows}
           activeFlowId={activeFlowId}
-          onSelectFlow={(id) => { setActiveFlowId(id); setSelectedFlowStepId(null); setEditingFlow(false); }}
-          onEditFlow={(id) => { setActiveFlowId(id); setSelectedFlowStepId(null); setEditingFlow(true); }}
+          onSelectFlow={(id) => { setActiveFlowId(id); setEditingFlow(false); }}
+          onEditFlow={(id) => { setActiveFlowId(id); setEditingFlow(true); }}
           onNewFlow={() => {
             const maxNum = flows
               .map((s) => s.id.replace("scenario-", ""))
@@ -779,22 +768,17 @@ function Flow() {
               .filter((n) => !isNaN(n))
               .reduce((m, n) => Math.max(m, n), 0);
             const newId = `scenario-${maxNum + 1}`;
-            const newFlow: Flow = { id: newId, name: "New flow", steps: [], transitions: [] };
+            const newFlow: Flow = { id: newId, name: "New flow", steps: [] };
             setFlows((prev) => [...prev, newFlow]);
             setActiveFlowId(newId);
-            setSelectedFlowStepId(null);
-          }}
+                     }}
         />
         <div className="flex-1 flex flex-col">
           {activeFlow ? (
-            <FlowCanvas
-              ref={flowRef}
+            <FlowScriptView
               flow={activeFlow}
               onUpdate={(updated: Flow) => setFlows((prev) => prev.map((s) => s.id === updated.id ? updated : s))}
-              selectedStepId={selectedFlowStepId}
-              onSelectStep={setSelectedFlowStepId}
               allNodes={nodes}
-              onSelectionInfo={onFlowSelectionInfo}
             />
           ) : (
             <C4Canvas
@@ -844,8 +828,7 @@ function Flow() {
                 onDelete={() => {
                   setFlows((prev) => prev.filter((s) => s.id !== activeFlowId));
                   setActiveFlowId(null);
-                  setSelectedFlowStepId(null);
-                  setEditingFlow(false);
+                                   setEditingFlow(false);
                 }}
                 onClose={() => setEditingFlow(false)}
               />

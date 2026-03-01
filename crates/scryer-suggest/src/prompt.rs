@@ -111,28 +111,29 @@ fn serialize_flow(out: &mut String, flow: &Flow) {
     out.push_str("  flow \"");
     out.push_str(&flow.name);
     out.push_str("\":\n");
-    for step in &flow.steps {
-        out.push_str("    [");
+    serialize_steps(out, &flow.steps, 4);
+}
+
+fn serialize_steps(out: &mut String, steps: &[scryer_core::FlowStep], indent: usize) {
+    let pad: String = " ".repeat(indent);
+    for step in steps {
+        out.push_str(&pad);
+        out.push('[');
         out.push_str(&step.id);
         out.push_str("] ");
         out.push_str(step.description.as_deref().unwrap_or("(empty)"));
-        if !step.process_ids.is_empty() {
-            out.push_str(" -> processes: ");
-            out.push_str(&step.process_ids.join(", "));
-        }
         out.push('\n');
-    }
-    for t in &flow.transitions {
-        out.push_str("    ");
-        out.push_str(&t.source);
-        out.push_str(" --> ");
-        out.push_str(&t.target);
-        if let Some(label) = &t.label {
-            out.push_str(" \"");
-            out.push_str(label);
-            out.push('"');
+        for branch in &step.branches {
+            out.push_str(&pad);
+            out.push_str("  branch");
+            if !branch.condition.is_empty() {
+                out.push_str(" \"");
+                out.push_str(&branch.condition);
+                out.push('"');
+            }
+            out.push_str(":\n");
+            serialize_steps(out, &branch.steps, indent + 4);
         }
-        out.push('\n');
     }
 }
 

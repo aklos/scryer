@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 
 export interface MentionItem {
   name: string;
+  /** If set, this value is inserted into text instead of name. Used for step IDs. */
+  insertValue?: string;
   kind: "person" | "system" | "container" | "component" | "operation" | "process" | "model" | "step";
   status?: "implemented" | "proposed" | "changed" | "deprecated";
   ref?: boolean;
@@ -17,9 +19,10 @@ interface MentionTextareaProps {
   autoSize?: boolean;
   className?: string;
   maxLength?: number;
+  autoFocus?: boolean;
 }
 
-export function MentionTextarea({ value, onChange, mentionNames, placeholder, rows = 3, autoSize, className, maxLength }: MentionTextareaProps) {
+export function MentionTextarea({ value, onChange, mentionNames, placeholder, rows = 3, autoSize, className, maxLength, autoFocus }: MentionTextareaProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [localValue, setLocalValue] = useState(value);
   const [triggerPos, setTriggerPos] = useState<number | null>(null);
@@ -41,6 +44,15 @@ export function MentionTextarea({ value, onChange, mentionNames, placeholder, ro
 
   // Auto-size on mount and when local value changes
   useEffect(() => { resizeTextarea(); }, [localValue, resizeTextarea]);
+
+  // Auto-focus with cursor at end
+  useEffect(() => {
+    if (!autoFocus) return;
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.focus();
+    ta.selectionStart = ta.selectionEnd = ta.value.length;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filtered = triggerPos !== null
     ? [...mentionNames].sort((a, b) => {
@@ -96,13 +108,13 @@ export function MentionTextarea({ value, onChange, mentionNames, placeholder, ro
     }
   };
 
-  const insertMention = (name: string) => {
+  const insertMention = (name: string, insertValue?: string) => {
     if (triggerPos === null) return;
     const ta = textareaRef.current;
     const cursor = ta?.selectionStart ?? localValue.length;
     const before = localValue.slice(0, triggerPos);
     const after = localValue.slice(cursor);
-    const inserted = `@[${name}]`;
+    const inserted = `@[${insertValue ?? name}]`;
     const newVal = before + inserted + after;
     setLocalValue(newVal);
     onChange(newVal);
@@ -120,7 +132,7 @@ export function MentionTextarea({ value, onChange, mentionNames, placeholder, ro
 
   const dropdown = triggerPos !== null && filtered.length > 0 && dropdownPos && createPortal(
     <div
-      className="fixed max-h-32 overflow-y-auto rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg"
+      className="fixed max-h-32 overflow-y-auto overflow-x-hidden rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg"
       style={{ top: dropdownPos.top, left: dropdownPos.left, width: dropdownPos.width, zIndex: 9999 }}
     >
       {filtered.map((item) => (
@@ -129,7 +141,7 @@ export function MentionTextarea({ value, onChange, mentionNames, placeholder, ro
           type="button"
           className="w-full flex items-center gap-1.5 text-left px-2.5 py-1.5 text-xs text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"
           onMouseDown={(e) => e.preventDefault()}
-          onClick={() => insertMention(item.name)}
+          onClick={() => insertMention(item.name, item.insertValue)}
         >
           {item.ref && <span className="text-[10px] text-zinc-400 dark:text-zinc-500">&rarr;</span>}
           <span className={item.kind === "operation" ? "font-mono" : ""}>{item.name}</span>

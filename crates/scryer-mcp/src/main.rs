@@ -64,6 +64,33 @@ fn validate_no_children_of_external(nodes: &[C4Node]) -> Result<(), String> {
     Ok(())
 }
 
+/// Recursively collect all steps (flattened) from a step tree.
+fn collect_all_steps(steps: &[scryer_core::FlowStep]) -> Vec<&scryer_core::FlowStep> {
+    let mut result = Vec::new();
+    for step in steps {
+        result.push(step);
+        for branch in &step.branches {
+            result.extend(collect_all_steps(&branch.steps));
+        }
+    }
+    result
+}
+
+
+/// Recursively migrate label → description on steps that have label but no description.
+fn migrate_flow_labels(steps: &mut [scryer_core::FlowStep]) {
+    for step in steps.iter_mut() {
+        if step.description.is_none() {
+            if let Some(lbl) = step.label.take() {
+                step.description = Some(lbl);
+            }
+        }
+        for branch in &mut step.branches {
+            migrate_flow_labels(&mut branch.steps);
+        }
+    }
+}
+
 // --- Request types ---
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -260,7 +287,7 @@ struct GetTaskRequest {
 struct SetFlowRequest {
     /// Name of the model
     model: String,
-    /// One or more flows as a JSON string. Pass a single flow object or an array of flows. Each must have id, name, steps[], and transitions[]. Step IDs must be unique within each flow. Transition source/target must reference existing step IDs.
+    /// One or more flows as a JSON string. Pass a single flow object or an array of flows. Each must have id, name, steps[]. Step IDs must be unique within each flow. Steps can have branches[] for decision points. Transition source/target must reference existing step IDs.
     data: String,
 }
 
@@ -319,7 +346,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Get the full JSON content of a model. Returns {nodes: [{id, parentId?, data: {name, description, kind, technology?, external?, shape?, status?, sources?, contract?, accepts?}}], edges: [{id, source, target, data: {label, method?}}], flows: [{id, name, description?, steps, transitions}], sourceMap: {nodeId: [{file, line?, endLine?}]}, contract?, startingLevel?}. Positions and node type are omitted (UI-only). For scoped reads, prefer get_node. For implementation, use get_task instead — it handles dependency ordering and returns one work unit at a time."
+        description = "Get the full JSON content of a model. Returns {nodes: [{id, parentId?, data: {name, description, kind, technology?, external?, shape?, status?, sources?, contract?, accepts?}}], edges: [{id, source, target, data: {label, method?}}], flows: [{id, name, description?, steps: [{id, description?, branches?: [{condition, steps}]}]}], sourceMap: {nodeId: [{file, line?, endLine?}]}, contract?, startingLevel?}. Positions and node type are omitted (UI-only). Step descriptions can use @[Name] mentions to reference architecture nodes. For scoped reads, prefer get_node. For implementation, use get_task instead — it handles dependency ordering and returns one work unit at a time."
     )]
     fn get_model(
         &self,
@@ -1927,7 +1954,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Create or replace one or more flows. Pass a single flow object or an array of flows — use an array to create multiple flows in one call. If a flow with the given ID exists, it is replaced; otherwise it is appended.\n\nFlows describe behavioral sequences — user journeys, data syncs, deploy pipelines, cron jobs. Each has steps (what happens) and transitions (ordering/branching between steps).\n\nStep granularity: each step = one meaningful system interaction, NOT a UI gesture. Good: 'System validates credentials'. Bad: 'User clicks button'.\n\nStep schema: {id, description, processIds?}. Use `description` for step text — `label` is auto-computed from DAG structure. Step IDs: 'step-N'. Flow IDs: 'scenario-N'.\n\nTransitions support forks: a step can have multiple outgoing transitions with different labels.\n\nSteps can reference process nodes via `processIds` array to connect flow behavior to C4 architecture. **Only process-kind nodes are valid** — operation and model nodes will be rejected. Not every step needs a link. The UI shows linked process names on step nodes."
+        description = "Create or replace one or more flows. Pass a single flow object or an array of flows — use an array to create multiple flows in one call. If a flow with the given ID exists, it is replaced; otherwise it is appended.\n\nFlows describe behavioral sequences — user journeys, data syncs, deploy pipelines, cron jobs. Each flow has an ordered list of steps.\n\nStep granularity: each step = one meaningful system interaction, NOT a UI gesture. Good: 'System validates credentials'. Bad: 'User clicks button'.\n\nStep schema: {id, description, branches?}. Use `description` for step text — numbering is auto-computed. Step IDs: 'step-N'. Flow IDs: 'scenario-N'.\n\nBranching: steps can have a `branches` array of {condition, steps[]} objects to model decision points. Each branch has a condition label (e.g. \"if: valid\", \"else:\") and its own ordered list of sub-steps. Branches can nest recursively.\n\nTo reference architecture nodes in step descriptions, use @[Name] mentions (e.g. \"@[AuthService] validates the JWT token\"). Use process names for linking flow behavior to C4 architecture.\n\nOld format (flat transitions array) is still accepted for backward compatibility but transitions are ignored — use step ordering and branches instead."
     )]
     fn set_flows(
         &self,
@@ -1963,72 +1990,23 @@ impl ScryerServer {
             )]));
         }
 
-        let process_ids: HashSet<&str> = model
-            .nodes
-            .iter()
-            .filter(|n| n.data.kind == C4Kind::Process)
-            .map(|n| n.id.as_str())
-            .collect();
-
         for flow in &flows {
-            // Validate step ID uniqueness
+            // Validate step ID uniqueness (recursive)
+            let all_ids = scryer_core::collect_step_ids(&flow.steps);
             let mut step_ids = HashSet::new();
-            for step in &flow.steps {
-                if !step_ids.insert(&step.id) {
+            for id in &all_ids {
+                if !step_ids.insert(*id) {
                     return Ok(CallToolResult::error(vec![Content::text(format!(
                         "Duplicate step ID '{}' in flow '{}'",
-                        step.id, flow.name
+                        id, flow.name
                     ))]));
-                }
-            }
-
-            // Validate transition source/target reference existing steps
-            for t in &flow.transitions {
-                if !step_ids.contains(&t.source) {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Transition source '{}' not found in flow '{}' steps",
-                        t.source, flow.name
-                    ))]));
-                }
-                if !step_ids.contains(&t.target) {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Transition target '{}' not found in flow '{}' steps",
-                        t.target, flow.name
-                    ))]));
-                }
-            }
-
-            // Validate processIds reference existing process nodes
-            for step in &flow.steps {
-                for pid in &step.process_ids {
-                    if !process_ids.contains(pid.as_str()) {
-                        // Give a helpful error: tell the AI what the node actually is
-                        let actual = model.nodes.iter().find(|n| n.id == *pid);
-                        let hint = match actual {
-                            Some(n) => format!(
-                                " (found '{}' but it is a {:?}, not a process — processIds only accepts process-kind nodes)",
-                                n.data.name, n.data.kind
-                            ),
-                            None => String::new(),
-                        };
-                        return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "Step '{}' references process '{}' which is not a process node{}",
-                            step.id, pid, hint
-                        ))]));
-                    }
                 }
             }
 
             // Migrate: if a step has label but no description, move label → description
             // (AI agents often use "label" for step text, but the UI renders "description")
             let mut flow = flow.clone();
-            for step in &mut flow.steps {
-                if step.description.is_none() {
-                    if let Some(lbl) = step.label.take() {
-                        step.description = Some(lbl);
-                    }
-                }
-            }
+            migrate_flow_labels(&mut flow.steps);
 
             // Replace or append
             if let Some(existing) = model.flows.iter_mut().find(|s| s.id == flow.id) {
@@ -2536,44 +2514,11 @@ fn format_done_message(model: &C4ModelData) -> String {
         return "All tasks complete. Nothing to build.".to_string();
     }
 
-    let mut output = String::from("All tasks complete.\n\nPlease validate that the model's flows still accurately describe the system behavior. Update steps and process links as needed using `set_flows`.\n");
-
-    let process_ids: HashSet<&str> = model.nodes.iter()
-        .filter(|n| n.data.kind == C4Kind::Process)
-        .map(|n| n.id.as_str())
-        .collect();
+    let mut output = String::from("All tasks complete.\n\nPlease validate that the model's flows still accurately describe the system behavior. Update step descriptions as needed using `set_flows`. Use @[Name] mentions in step descriptions to reference processes and other architecture nodes.\n");
 
     for flow in &model.flows {
-        output.push_str(&format!("\n**{}** — {} steps\n", flow.name, flow.steps.len()));
-
-        // Flag steps without process links
-        let unlinked: Vec<&str> = flow.steps.iter()
-            .filter(|s| s.process_ids.is_empty())
-            .filter_map(|s| s.description.as_deref())
-            .collect();
-        if !unlinked.is_empty() {
-            output.push_str("  Steps without process links:\n");
-            for desc in &unlinked {
-                output.push_str(&format!("  - {}\n", desc));
-            }
-        }
-
-        // Flag broken process links
-        let broken: Vec<(&str, &str)> = flow.steps.iter()
-            .flat_map(|s| s.process_ids.iter().filter_map(|pid| {
-                if !process_ids.contains(pid.as_str()) {
-                    Some((s.description.as_deref().unwrap_or("(no description)"), pid.as_str()))
-                } else {
-                    None
-                }
-            }))
-            .collect();
-        if !broken.is_empty() {
-            output.push_str("  Broken process links:\n");
-            for (desc, pid) in &broken {
-                output.push_str(&format!("  - \"{}\" references missing process {}\n", desc, pid));
-            }
-        }
+        let all_steps = collect_all_steps(&flow.steps);
+        output.push_str(&format!("\n**{}** — {} steps\n", flow.name, all_steps.len()));
     }
 
     output
@@ -2896,11 +2841,10 @@ fn compute_diff(baseline: &C4ModelData, current: &C4ModelData) -> String {
         let mut lines = vec![format!("Flows added ({}):", flows_added.len())];
         for s in &flows_added {
             lines.push(format!(
-                "  - {} \"{}\" ({} steps, {} transitions)",
+                "  - {} \"{}\" ({} steps)",
                 s.id,
                 s.name,
-                s.steps.len(),
-                s.transitions.len()
+                scryer_core::collect_step_ids(&s.steps).len(),
             ));
         }
         sections.push(lines.join("\n"));
@@ -2927,18 +2871,13 @@ fn compute_diff(baseline: &C4ModelData, current: &C4ModelData) -> String {
                 if base.name != curr.name {
                     changes.push(format!("name \"{}\" -> \"{}\"", base.name, curr.name));
                 }
-                if base.steps.len() != curr.steps.len() {
+                let base_count = scryer_core::collect_step_ids(&base.steps).len();
+                let curr_count = scryer_core::collect_step_ids(&curr.steps).len();
+                if base_count != curr_count {
                     changes.push(format!(
                         "steps {} -> {}",
-                        base.steps.len(),
-                        curr.steps.len()
-                    ));
-                }
-                if base.transitions.len() != curr.transitions.len() {
-                    changes.push(format!(
-                        "transitions {} -> {}",
-                        base.transitions.len(),
-                        curr.transitions.len()
+                        base_count,
+                        curr_count
                     ));
                 }
                 if base.description != curr.description {

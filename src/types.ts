@@ -70,11 +70,16 @@ export interface Group {
   memberIds: string[];
 }
 
+export interface FlowBranch {
+  condition: string;
+  steps: FlowStep[];
+}
+
 export interface FlowStep {
   id: string;
   description?: string;
-  position?: { x: number; y: number };
   processIds?: string[];
+  branches?: FlowBranch[];
 }
 
 export interface FlowTransition {
@@ -88,7 +93,7 @@ export interface Flow {
   name: string;
   description?: string;
   steps: FlowStep[];
-  transitions: FlowTransition[];
+  transitions?: FlowTransition[];
 }
 
 export interface C4ModelData {

@@ -207,17 +207,30 @@ fn default_group_kind() -> GroupKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct FlowBranch {
+    #[serde(default)]
+    pub condition: String,
+    #[serde(default)]
+    pub steps: Vec<FlowStep>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct FlowStep {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Backward compat: kept for deserialization of old files, not serialized.
+    #[serde(default, skip_serializing)]
     pub position: Option<Position>,
     /// IDs of processes this step exercises. Set by the AI agent to link flow steps to architecture.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub process_ids: Vec<String>,
+    /// If present, this step is a decision point with branching paths.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub branches: Vec<FlowBranch>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -238,7 +251,8 @@ pub struct Flow {
     pub description: Option<String>,
     #[serde(default)]
     pub steps: Vec<FlowStep>,
-    #[serde(default)]
+    /// Backward compat: kept for deserialization of old files, not serialized.
+    #[serde(default, skip_serializing)]
     pub transitions: Vec<FlowTransition>,
 }
 
@@ -420,13 +434,25 @@ pub fn next_flow_id(model: &C4ModelData) -> String {
     format!("scenario-{}", max + 1)
 }
 
+/// Collect all step IDs recursively (including branch sub-steps).
+pub fn collect_step_ids(steps: &[FlowStep]) -> Vec<&str> {
+    let mut ids = Vec::new();
+    for step in steps {
+        ids.push(step.id.as_str());
+        for branch in &step.branches {
+            ids.extend(collect_step_ids(&branch.steps));
+        }
+    }
+    ids
+}
+
 /// Generate the next step ID by scanning all steps across all flows.
 pub fn next_step_id(model: &C4ModelData) -> String {
     let max = model
         .flows
         .iter()
-        .flat_map(|s| &s.steps)
-        .filter_map(|st| st.id.strip_prefix("step-").and_then(|n| n.parse::<u64>().ok()))
+        .flat_map(|f| collect_step_ids(&f.steps))
+        .filter_map(|id| id.strip_prefix("step-").and_then(|n| n.parse::<u64>().ok()))
         .max()
         .unwrap_or(0);
     format!("step-{}", max + 1)
