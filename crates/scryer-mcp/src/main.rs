@@ -69,17 +69,85 @@ fn validate_no_children_of_external(nodes: &[C4Node]) -> Result<(), String> {
 /// The UI shows one abstraction level at a time:
 /// - System level: persons + systems, edges between them
 /// - Container level (inside a system): its containers + persons + external systems
-/// - Component level (inside a container): its components + external refs
+/// - Component level (inside a container): its components + reference nodes from edges
 ///
 /// A node is "disconnected" if it's visible at some level but has zero edges
-/// connecting it to other nodes at that same level. This catches both:
-/// - Nodes with no edges at all (e.g. external system added but never connected)
-/// - Nodes with edges only at a different level (e.g. external system → container
-///   but no external system → system edge, so it floats at system level)
+/// connecting it to other nodes at that same level.
+///
+/// At container and component levels, "reference nodes" (persons, external systems,
+/// nodes from other subtrees) are shown as context when the parent has edges to them.
+/// If those edges exist at the parent level but not at the child level, the reference
+/// node floats disconnected in the child view.
 fn check_disconnected_nodes(model: &C4ModelData) -> Vec<String> {
     let mut warnings: Vec<String> = Vec::new();
 
-    // System level: persons and systems should have edges to other persons/systems
+    // Helper: check a set of visible nodes for disconnected ones.
+    // `owned_ids` are the "real" children at this level.
+    // `ref_ids` are context nodes pulled in from parent-level edges.
+    // `view_name` is for the warning message (e.g. "system view", "container view of 'X'").
+    // `parent_name` is the parent node name for ref node warnings (if applicable).
+    let check_level = |
+        owned_ids: &HashSet<&str>,
+        ref_ids: &HashSet<&str>,
+        view_name: &str,
+        parent_name: Option<&str>,
+        warnings: &mut Vec<String>,
+    | {
+        let visible: HashSet<&str> = owned_ids.union(ref_ids).copied().collect();
+
+        // Find which visible nodes have at least one edge to another visible node
+        let mut connected: HashSet<&str> = HashSet::new();
+        for edge in &model.edges {
+            let src = edge.source.as_str();
+            let tgt = edge.target.as_str();
+            if visible.contains(src) && visible.contains(tgt) {
+                connected.insert(src);
+                connected.insert(tgt);
+            }
+        }
+
+        // Check owned nodes
+        for oid in owned_ids {
+            if connected.contains(oid) {
+                continue;
+            }
+            let node = model.nodes.iter().find(|n| n.id == *oid).unwrap();
+            let has_any_edge = model.edges.iter().any(|e| e.source == *oid || e.target == *oid);
+            if has_any_edge {
+                warnings.push(format!(
+                    "'{}' ({}) has edges but none at this level — \
+                    it will appear disconnected in the {}",
+                    node.data.name, kind_str(&node.data.kind), view_name
+                ));
+            } else if owned_ids.len() > 1 {
+                warnings.push(format!(
+                    "'{}' ({}) has no edges — it will appear disconnected",
+                    node.data.name, kind_str(&node.data.kind)
+                ));
+            }
+        }
+
+        // Check reference nodes — they're visible because the parent has edges to them,
+        // but if no child-level edges exist they'll float disconnected
+        for rid in ref_ids {
+            if connected.contains(rid) {
+                continue;
+            }
+            let node = model.nodes.iter().find(|n| n.id == *rid).unwrap();
+            if let Some(pname) = parent_name {
+                warnings.push(format!(
+                    "'{}' ({}) has edges to '{}' but not to any of its children — \
+                    it will appear disconnected in the {}. \
+                    Add edges from the relevant children to '{}'",
+                    node.data.name, kind_str(&node.data.kind),
+                    pname, view_name, node.data.name
+                ));
+            }
+        }
+    };
+
+    // === System level ===
+    // All persons + systems are visible; no reference nodes at this level.
     let system_level_ids: HashSet<&str> = model
         .nodes
         .iter()
@@ -87,48 +155,11 @@ fn check_disconnected_nodes(model: &C4ModelData) -> Vec<String> {
         .map(|n| n.id.as_str())
         .collect();
 
-    let mut system_level_connected: HashSet<&str> = HashSet::new();
-    for edge in &model.edges {
-        let src_at = system_level_ids.contains(edge.source.as_str());
-        let tgt_at = system_level_ids.contains(edge.target.as_str());
-        if src_at && tgt_at {
-            system_level_connected.insert(edge.source.as_str());
-            system_level_connected.insert(edge.target.as_str());
-        }
-    }
+    let empty: HashSet<&str> = HashSet::new();
+    check_level(&system_level_ids, &empty, "system view", None, &mut warnings);
 
-    for node in &model.nodes {
-        if !system_level_ids.contains(node.id.as_str()) {
-            continue;
-        }
-        if system_level_connected.contains(node.id.as_str()) {
-            continue;
-        }
-        // Check if this node has any edges at all (to children at lower levels)
-        let has_any_edge = model
-            .edges
-            .iter()
-            .any(|e| e.source == node.id || e.target == node.id);
-        if has_any_edge {
-            // Has edges, but none at system level → disconnected at its viewing level
-            warnings.push(format!(
-                "'{}' ({}) has edges to child-level nodes but no edges at the system level — \
-                it will appear disconnected in the system view",
-                node.data.name,
-                kind_str(&node.data.kind)
-            ));
-        } else if system_level_ids.len() > 1 {
-            // No edges at all
-            warnings.push(format!(
-                "'{}' ({}) has no edges — it will appear disconnected",
-                node.data.name,
-                kind_str(&node.data.kind)
-            ));
-        }
-    }
-
-    // Container level: for each system, its containers should have edges to
-    // other containers/persons/external systems at that level
+    // === Container level ===
+    // For each non-external system: its containers are owned, persons + other systems are refs.
     let systems: Vec<&C4Node> = model
         .nodes
         .iter()
@@ -147,46 +178,73 @@ fn check_disconnected_nodes(model: &C4ModelData) -> Vec<String> {
             continue;
         }
 
-        // At container level, visible nodes are: containers of this system + persons + external systems
-        let visible_at_container_level: HashSet<&str> = container_ids
+        // Reference nodes at container level: persons + external systems that have
+        // edges involving this system or its containers
+        let ref_ids: HashSet<&str> = system_level_ids
             .iter()
-            .copied()
-            .chain(system_level_ids.iter().filter(|id| {
+            .filter(|id| {
                 let node = model.nodes.iter().find(|n| n.id == **id).unwrap();
-                node.data.kind == C4Kind::Person
-                    || (node.data.kind == C4Kind::System && node.id != system.id)
-            }).copied())
+                (node.data.kind == C4Kind::Person
+                    || (node.data.kind == C4Kind::System && node.id != system.id))
+                    && model.edges.iter().any(|e| {
+                        // Has an edge to/from this system or any of its containers
+                        let touches_system = e.source == system.id || e.target == system.id;
+                        let touches_container = container_ids.contains(e.source.as_str())
+                            || container_ids.contains(e.target.as_str());
+                        let touches_ref = e.source == **id || e.target == **id;
+                        touches_ref && (touches_system || touches_container)
+                    })
+            })
+            .copied()
             .collect();
 
-        let mut connected: HashSet<&str> = HashSet::new();
-        for edge in &model.edges {
-            let src_vis = visible_at_container_level.contains(edge.source.as_str());
-            let tgt_vis = visible_at_container_level.contains(edge.target.as_str());
-            if src_vis && tgt_vis {
-                // Only mark containers as connected (persons/external systems are context nodes)
-                if container_ids.contains(edge.source.as_str()) {
-                    connected.insert(edge.source.as_str());
-                }
-                if container_ids.contains(edge.target.as_str()) {
-                    connected.insert(edge.target.as_str());
-                }
-            }
+        let view_name = format!("container view of '{}'", system.data.name);
+        check_level(&container_ids, &ref_ids, &view_name, Some(&system.data.name), &mut warnings);
+    }
+
+    // === Component level ===
+    // For each container: its components are owned, reference nodes come from
+    // edges on the parent container (other containers, external systems, persons).
+    let containers: Vec<&C4Node> = model
+        .nodes
+        .iter()
+        .filter(|n| n.data.kind == C4Kind::Container)
+        .collect();
+
+    for container in &containers {
+        let component_ids: HashSet<&str> = model
+            .nodes
+            .iter()
+            .filter(|n| n.data.kind == C4Kind::Component && n.parent_id.as_deref() == Some(&container.id))
+            .map(|n| n.id.as_str())
+            .collect();
+
+        if component_ids.is_empty() {
+            continue;
         }
 
-        for cid in &container_ids {
-            if connected.contains(cid) {
-                continue;
-            }
-            let cnode = model.nodes.iter().find(|n| n.id == *cid).unwrap();
-            let has_any_edge = model.edges.iter().any(|e| e.source == *cid || e.target == *cid);
-            if has_any_edge {
-                warnings.push(format!(
-                    "'{}' (container in '{}') has edges to child-level nodes but no edges at \
-                    the container level — it will appear disconnected in the container view",
-                    cnode.data.name, system.data.name
-                ));
-            }
-        }
+        // Reference nodes: any node the container has edges to (that isn't a child component)
+        let ref_ids: HashSet<&str> = model
+            .edges
+            .iter()
+            .filter_map(|e| {
+                if e.source == container.id && !component_ids.contains(e.target.as_str()) {
+                    Some(e.target.as_str())
+                } else if e.target == container.id && !component_ids.contains(e.source.as_str()) {
+                    Some(e.source.as_str())
+                } else {
+                    None
+                }
+            })
+            .filter(|id| {
+                // Only include nodes that actually exist and aren't the container's parent system
+                model.nodes.iter().any(|n| n.id == *id)
+                    && Some(*id) != container.parent_id.as_deref()
+            })
+            .collect();
+
+        let view_name = format!("component view of '{}'", container.data.name);
+        check_level(&component_ids, &ref_ids, &view_name, Some(&container.data.name), &mut warnings);
     }
 
     warnings
@@ -253,7 +311,7 @@ struct AddNodeItem {
     kind: String,
     /// ID of the parent node. Required for container (parent=system), component (parent=container), operation (parent=component). Omit for person/system.
     parent_id: Option<String>,
-    /// Technology label (containers and components only), e.g. "REST API", "PostgreSQL"
+    /// Technology label (containers and components only, max 28 characters), e.g. "REST API", "PostgreSQL"
     technology: Option<String>,
     /// Whether this is an external system (systems only)
     external: Option<bool>,
@@ -289,7 +347,7 @@ struct UpdateNodeItem {
     name: Option<String>,
     /// New description (max 200 characters)
     description: Option<String>,
-    /// New technology label
+    /// New technology label (max 28 characters)
     technology: Option<String>,
     /// New external flag
     external: Option<bool>,

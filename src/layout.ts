@@ -38,9 +38,16 @@ function spreadAroundHubs(
   const nh = (n: C4Node) => n.measured?.height ?? NODE_H;
   const nodeMap = new Map(nodes.map((n) => [n.id, n]));
 
+  // Hub threshold: only nodes with above-median degree, minimum 3.
+  // Low-degree nodes (like a person with 2 edges) should float freely.
+  const degrees = nodes.map((n) => adj.get(n.id)?.length ?? 0).filter((d) => d > 0);
+  degrees.sort((a, b) => a - b);
+  const median = degrees.length > 0 ? degrees[Math.floor(degrees.length / 2)] : 0;
+  const hubThreshold = Math.max(3, median);
+
   // Sort hubs by degree (highest first)
   const hubs = nodes
-    .filter((n) => (adj.get(n.id)?.length ?? 0) >= 2)
+    .filter((n) => (adj.get(n.id)?.length ?? 0) >= hubThreshold)
     .sort((a, b) => (adj.get(b.id)?.length ?? 0) - (adj.get(a.id)?.length ?? 0));
 
   // Track repositioned nodes — don't move them again
@@ -65,6 +72,7 @@ function spreadAroundHubs(
       if (groupedNodes?.has(nid)) return false;
       return true;
     });
+
     if (freeNeighbors.length === 0) continue;
 
     // More neighbors → more spacing needed so labels don't overlap.
@@ -229,7 +237,9 @@ function straightenFloaterEdges(
     const p = posMap.get(n.id)!;
     const ncx = p.x + nw(n) / 2, ncy = p.y + nh(n) / 2;
     const dx = ncx - hcx, dy = ncy - hcy;
-    if (compassDeviation(dx, dy) < 0.1) {
+    // Only lock single-edge nodes as spokes. Nodes with 2+ edges need
+    // freedom to reposition (they become floaters instead).
+    if (degree(n.id) <= 1 && compassDeviation(dx, dy) < 0.1) {
       const angle = Math.atan2(dy, dx);
       const dist = Math.sqrt(dx * dx + dy * dy);
       spokeInfo.set(n.id, { hubId, angle, dist });
@@ -246,6 +256,7 @@ function straightenFloaterEdges(
     if ((adj.get(n.id)?.size ?? 0) === 0) continue;
     floaters.push(n.id);
   }
+  console.log(`[straightenFloaterEdges] spokes: [${[...spokeInfo.keys()].map(id => nodeMap.get(id)?.data?.name ?? id).join(', ')}], hubs: [${[...hubIds].map(id => nodeMap.get(id)?.data?.name ?? id).join(', ')}], floaters: [${floaters.map(id => nodeMap.get(id)?.data?.name ?? id).join(', ')}]`);
 
   if (floaters.length === 0) return nodes;
 
@@ -257,11 +268,13 @@ function straightenFloaterEdges(
   };
 
   // Score: compass deviation for all edges of a node + proximity penalty
+  // + edge-through-node penalty
   const MIN_GAP = 250;
   const edgeAlignmentScore = (nodeId: string) => {
     const c = center(nodeId);
     let score = 0;
-    for (const nid of adj.get(nodeId) ?? []) {
+    const neighbors = adj.get(nodeId) ?? [];
+    for (const nid of neighbors) {
       const nc = center(nid);
       score += compassDeviation(nc.x - c.x, nc.y - c.y);
     }
@@ -272,6 +285,34 @@ function straightenFloaterEdges(
       const dx = nc.x - c.x, dy = nc.y - c.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist < MIN_GAP) score += (MIN_GAP - dist) / MIN_GAP * 5;
+    }
+    // Penalize edges that pass through other nodes
+    for (const nid of neighbors) {
+      const nc = center(nid);
+      for (const n of nodes) {
+        if (n.id === nodeId || n.id === nid) continue;
+        const p = posMap.get(n.id)!;
+        const margin = 20;
+        if (segmentIntersectsRect(c.x, c.y, nc.x, nc.y,
+            p.x - margin, p.y - margin,
+            nw(n) + margin * 2, nh(n) + margin * 2)) {
+          score += 10;
+        }
+      }
+    }
+    // Penalize edge crossings (this node's edges crossing other edges)
+    for (const nid of neighbors) {
+      const nc = center(nid);
+      for (const e of edges) {
+        if (e.source === nodeId || e.target === nodeId) continue;
+        if (e.source === nid || e.target === nid) continue;
+        const ec1 = center(e.source);
+        const ec2 = center(e.target);
+        if (segmentsIntersect(c.x, c.y, nc.x, nc.y,
+            ec1.x, ec1.y, ec2.x, ec2.y)) {
+          score += 20;
+        }
+      }
     }
     return score;
   };
@@ -286,12 +327,20 @@ function straightenFloaterEdges(
     let bestScore = edgeAlignmentScore(fid);
     let bestPos = { ...posMap.get(fid)! };
 
-    for (const nid of neighbors) {
-      const nc = center(nid);
+    // Candidate origins: each neighbor + centroid of all neighbors
+    const origins: { x: number; y: number }[] = [];
+    for (const nid of neighbors) origins.push(center(nid));
+    if (origins.length >= 2) {
+      const cx = origins.reduce((s, o) => s + o.x, 0) / origins.length;
+      const cy = origins.reduce((s, o) => s + o.y, 0) / origins.length;
+      origins.push({ x: cx, y: cy });
+    }
+
+    for (const origin of origins) {
       for (const angle of COMPASS_8) {
-        for (const dist of [350, 500, 650]) {
-          const tx = nc.x + Math.cos(angle) * dist - w / 2;
-          const ty = nc.y + Math.sin(angle) * dist - h / 2;
+        for (const dist of [300, 400, 550, 700]) {
+          const tx = origin.x + Math.cos(angle) * dist - w / 2;
+          const ty = origin.y + Math.sin(angle) * dist - h / 2;
           posMap.set(fid, { x: tx, y: ty });
           const score = edgeAlignmentScore(fid);
           if (score < bestScore) {
@@ -607,6 +656,141 @@ export function gridLayout(nodes: C4Node[]): C4Node[] {
 }
 
 /**
+ * Final deconfliction: find nodes whose edges cross other edges,
+ * and reposition them to reduce crossings.
+ */
+function deconflictEdges(
+  nodes: C4Node[],
+  edges: C4Edge[],
+  groupedNodes?: Map<string, string>,
+): C4Node[] {
+  const nw = (n: C4Node) => n.measured?.width ?? NODE_W;
+  const nh = (n: C4Node) => n.measured?.height ?? NODE_H;
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+  const posMap = new Map(nodes.map((n) => [n.id, { ...n.position }]));
+  const nodeIds = new Set(nodes.map((n) => n.id));
+
+  const adj = new Map<string, Set<string>>();
+  for (const e of edges) {
+    if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
+    if (!adj.has(e.source)) adj.set(e.source, new Set());
+    if (!adj.has(e.target)) adj.set(e.target, new Set());
+    adj.get(e.source)!.add(e.target);
+    adj.get(e.target)!.add(e.source);
+  }
+  const degree = (id: string) => adj.get(id)?.size ?? 0;
+
+  const center = (id: string) => {
+    const n = nodeMap.get(id)!;
+    const p = posMap.get(id)!;
+    return { x: p.x + nw(n) / 2, y: p.y + nh(n) / 2 };
+  };
+
+  // Count edge crossings involving a specific node's edges
+  const nodeCrossings = (nodeId: string) => {
+    let count = 0;
+    for (const e of edges) {
+      if (e.source !== nodeId && e.target !== nodeId) continue;
+      const a = center(e.source);
+      const b = center(e.target);
+      for (const other of edges) {
+        if (other === e) continue;
+        // Skip edges that share a node
+        if (e.source === other.source || e.source === other.target ||
+            e.target === other.source || e.target === other.target) continue;
+        const c = center(other.source);
+        const d = center(other.target);
+        if (segmentsIntersect(a.x, a.y, b.x, b.y, c.x, c.y, d.x, d.y)) count++;
+      }
+    }
+    return count;
+  };
+
+  // Find nodes involved in crossings, prefer moving lower-degree nodes
+  const crossingNodes: { id: string; crossings: number }[] = [];
+  for (const n of nodes) {
+    if (groupedNodes?.has(n.id)) continue;
+    const c = nodeCrossings(n.id);
+    if (c > 0) crossingNodes.push({ id: n.id, crossings: c });
+  }
+  if (crossingNodes.length === 0) return nodes;
+
+  // Sort: try moving lower-degree nodes first (they're more flexible)
+  crossingNodes.sort((a, b) => degree(a.id) - degree(b.id));
+
+  for (const { id: moveId } of crossingNodes) {
+    // Re-check — earlier moves may have resolved this node's crossings
+    if (nodeCrossings(moveId) === 0) continue;
+
+    const mn = nodeMap.get(moveId)!;
+    const w = nw(mn), h = nh(mn);
+    const neighbors = adj.get(moveId);
+    if (!neighbors) continue;
+
+    // Score: edge crossings (heavy) + edge-through-node + compass + proximity
+    const score = () => {
+      const mc = center(moveId);
+      let s = nodeCrossings(moveId) * 20;
+      for (const nid of neighbors) {
+        const nc = center(nid);
+        s += compassDeviation(nc.x - mc.x, nc.y - mc.y) * 0.5;
+        // Edge-through-node
+        for (const n of nodes) {
+          if (n.id === moveId || n.id === nid) continue;
+          const p = posMap.get(n.id)!;
+          if (segmentIntersectsRect(mc.x, mc.y, nc.x, nc.y,
+              p.x - 20, p.y - 20,
+              nw(n) + 40, nh(n) + 40)) {
+            s += 15;
+          }
+        }
+      }
+      for (const n of nodes) {
+        if (n.id === moveId) continue;
+        const nc = center(n.id);
+        const dx = nc.x - mc.x, dy = nc.y - mc.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 250) s += (250 - dist) / 250 * 3;
+      }
+      return s;
+    };
+
+    let bestScore = score();
+    let bestPos = { ...posMap.get(moveId)! };
+
+    // Candidate origins: each neighbor + centroid of all neighbors
+    const origins: { x: number; y: number }[] = [];
+    for (const nid of neighbors) origins.push(center(nid));
+    if (origins.length >= 2) {
+      const cx = origins.reduce((s, o) => s + o.x, 0) / origins.length;
+      const cy = origins.reduce((s, o) => s + o.y, 0) / origins.length;
+      origins.push({ x: cx, y: cy });
+    }
+
+    for (const origin of origins) {
+      for (const angle of COMPASS_8) {
+        for (const dist of [300, 400, 550, 700]) {
+          const tx = origin.x + Math.cos(angle) * dist - w / 2;
+          const ty = origin.y + Math.sin(angle) * dist - h / 2;
+          posMap.set(moveId, { x: tx, y: ty });
+          const s = score();
+          if (s < bestScore) {
+            bestScore = s;
+            bestPos = { x: tx, y: ty };
+          }
+        }
+      }
+    }
+    posMap.set(moveId, bestPos);
+  }
+
+  return nodes.map((n) => {
+    const pos = posMap.get(n.id);
+    return pos ? { ...n, position: pos } : n;
+  });
+}
+
+/**
  * Run ELK stress layout + compass snapping + crossing reduction.
  *
  * When `groups` are provided, group members become children of a synthetic
@@ -793,9 +977,10 @@ export async function autoLayout(
   const snapped = spreadAroundHubs(positioned, filteredEdges, groupMap);
   const straightened = straightenFloaterEdges(snapped, filteredEdges, groupMap);
   const uncrossed = uncrossEdges(straightened, filteredEdges, groupMap);
+  const deconflicted = deconflictEdges(uncrossed, filteredEdges, groupMap);
 
   // Snap final positions to 20px grid
-  return uncrossed.map((n) => ({
+  return deconflicted.map((n) => ({
     ...n,
     position: { x: Math.round(n.position.x / 20) * 20, y: Math.round(n.position.y / 20) * 20 },
   }));

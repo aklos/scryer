@@ -8,7 +8,7 @@ provider/dependency (e.g. \"Web App\" → \"API Server\" → \"Database\").\n\
 3. Descriptions match abstraction level. System = high-level purpose (\"Handles user authentication\"). \
 Container = what it deploys as (\"Spring Boot REST API\"). Component = specific responsibility \
 (\"Password hashing service\").\n\
-4. Technology labels must be accurate. Don't label a database container with \"React\" or a \
+4. Technology labels must be accurate and concise (max 28 characters). Don't label a database container with \"React\" or a \
 frontend with \"PostgreSQL\". Technology describes the implementation, not what it talks to.\n\
 5. External systems are opaque. They should not have child nodes. They represent third-party \
 systems the team doesn't control.\n\
@@ -84,8 +84,16 @@ Dockerfiles, fly.toml, serverless.yml.\n\
 panel, and webhook API routes is three logical containers in one deployment group — not one container.\n\
    Common miss: serverless functions, background workers, and sidecar services in subdirectories are separate \
 containers — don't model the project as a single application if it deploys as multiple units.\n\
-3. Start with two levels only: persons and systems (top-level), then containers inside systems. Do NOT add \
-components unless the user explicitly asks for deeper detail.\n\
+3. **Model one level at a time.** Each call creates one view that gets validated for edge completeness.\n\
+   - **First call (`set_model`):** persons, the system, external systems, and system-level edges only. \
+No containers yet. This establishes the system landscape. Fix any warnings before proceeding.\n\
+   - **Second call (`set_node` on the system):** add all containers plus container-level edges \
+(Person→Container, Container→Container, Container→ExternalSystem). Fix any warnings.\n\
+   - **Later (`set_node` per container):** add components only when the user asks for deeper detail, \
+plus component-level edges. Fix warnings.\n\
+   Do NOT dump all levels into a single `set_model` call — the tool validates edges per view level, and \
+creating everything at once makes it easy to miss gaps that leave nodes disconnected.\n\
+   Do NOT add components unless the user explicitly asks for deeper detail.\n\
    **Model for production, not for demos.** Look for cross-cutting concerns: authentication, input validation, \
 data migrations, background jobs, observability. Model them explicitly — do not leave them implied.\n\
    **Set status on every node.** When modeling an existing codebase, set `status: \"implemented\"` on all nodes \
