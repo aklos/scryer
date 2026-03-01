@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { NodeProps, Node } from "@xyflow/react";
 import { useReactFlow } from "@xyflow/react";
 import type { Status, Hint } from "../types";
 import { CenterHandle } from "./NodeHandles";
 import { HintBadge } from "./HintBadge";
 import { STATUS_COLORS } from "../statusColors";
-import { DescriptionText } from "../DescriptionText";
+import { DescriptionText, type MentionNodeInfo } from "../DescriptionText";
 import { MentionTextarea, type MentionItem } from "../MentionTextarea";
 import { Workflow, Pencil } from "lucide-react";
 
@@ -24,6 +24,11 @@ export function ProcessNode({ id, data, selected }: NodeProps<ProcessNodeType>) 
   const statusColor = data.status ? STATUS_COLORS[data.status] : null;
   const [editing, setEditing] = useState(false);
   const mentionNames = (data._mentionNames as MentionItem[] | undefined) ?? [];
+  const nodeMap = useMemo(() => {
+    const map = new Map<string, MentionNodeInfo>();
+    for (const m of mentionNames) map.set(m.name, { kind: m.kind, status: m.status });
+    return map;
+  }, [mentionNames]);
 
   useEffect(() => { if (!selected) setEditing(false); }, [selected]);
 
@@ -88,7 +93,7 @@ export function ProcessNode({ id, data, selected }: NodeProps<ProcessNodeType>) 
         </div>
       ) : data.description ? (
         <div className="px-3 py-2 text-[11px] leading-snug text-zinc-500 dark:text-zinc-400 text-left">
-          <DescriptionText text={data.description} onMentionClick={(name) => window.dispatchEvent(new CustomEvent("mention-click", { detail: { name } }))} />
+          <DescriptionText text={data.description} nodeMap={nodeMap} onMentionClick={(name) => window.dispatchEvent(new CustomEvent("mention-click", { detail: { name } }))} />
         </div>
       ) : null}
     </div>

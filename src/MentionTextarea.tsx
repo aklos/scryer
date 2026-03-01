@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 export interface MentionItem {
   name: string;
   kind: "person" | "system" | "container" | "component" | "operation" | "process" | "model" | "step";
+  status?: "implemented" | "proposed" | "changed" | "deprecated";
   ref?: boolean;
 }
 
@@ -15,9 +16,10 @@ interface MentionTextareaProps {
   rows?: number;
   autoSize?: boolean;
   className?: string;
+  maxLength?: number;
 }
 
-export function MentionTextarea({ value, onChange, mentionNames, placeholder, rows = 3, autoSize, className }: MentionTextareaProps) {
+export function MentionTextarea({ value, onChange, mentionNames, placeholder, rows = 3, autoSize, className, maxLength }: MentionTextareaProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [localValue, setLocalValue] = useState(value);
   const [triggerPos, setTriggerPos] = useState<number | null>(null);
@@ -41,7 +43,17 @@ export function MentionTextarea({ value, onChange, mentionNames, placeholder, ro
   useEffect(() => { resizeTextarea(); }, [localValue, resizeTextarea]);
 
   const filtered = triggerPos !== null
-    ? mentionNames.filter((item) => item.name.toLowerCase().includes(query.toLowerCase())).slice(0, 6)
+    ? [...mentionNames].sort((a, b) => {
+        const q = query.toLowerCase();
+        const aMatch = a.name.toLowerCase().includes(q);
+        const bMatch = b.name.toLowerCase().includes(q);
+        if (aMatch !== bMatch) return aMatch ? -1 : 1;
+        // Within matches, prefer starts-with
+        const aStarts = a.name.toLowerCase().startsWith(q);
+        const bStarts = b.name.toLowerCase().startsWith(q);
+        if (aStarts !== bStarts) return aStarts ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      })
     : [];
 
   const updateDropdownPos = useCallback(() => {
@@ -136,6 +148,7 @@ export function MentionTextarea({ value, onChange, mentionNames, placeholder, ro
         value={localValue}
         placeholder={placeholder}
         rows={rows}
+        maxLength={maxLength}
         onChange={handleChange}
         onKeyDown={(e) => {
           if (e.key === "Escape" && triggerPos !== null) {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Minus, Square, X, Settings, Keyboard, FolderX, SaveAll } from "lucide-react";
 import type { C4Kind } from "./types";
+import type { RackDependency } from "./CodeLevelRack";
 
 interface TopBarProps {
   currentModel: string | null;
@@ -17,6 +18,8 @@ interface TopBarProps {
   navigateToBreadcrumb: (targetId: string | null) => void;
   activeFlowId: string | null;
   activeFlowName: string | null;
+  dependencies?: RackDependency[];
+  onNavigateToNode?: (id: string) => void;
 }
 
 const appWindow = getCurrentWindow();
@@ -82,6 +85,7 @@ export function TopBar({
   currentModel, onOpenPalette, onNavigateToRoot, onOpenSettings, onCloseModel, onSaveAs, hasModel,
   breadcrumbs, currentParentKind, navigateToBreadcrumb,
   activeFlowId, activeFlowName,
+  dependencies = [], onNavigateToNode,
 }: TopBarProps) {
   const isFlow = !!activeFlowId;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -157,7 +161,7 @@ export function TopBar({
                 : currentParentKind === "system" ? "bg-cyan-100 text-cyan-600 dark:bg-cyan-900/30 dark:text-cyan-400"
                 : "bg-slate-100 text-slate-500 dark:bg-slate-800/50 dark:text-slate-400"
             }`}>
-              {currentParentKind === "component" ? "Operations"
+              {currentParentKind === "component" ? "Code"
                 : currentParentKind === "container" ? "Components"
                 : currentParentKind === "system" ? "Containers"
                 : "System context"}
@@ -166,6 +170,43 @@ export function TopBar({
               <span className="text-zinc-400 dark:text-zinc-500">
                 {breadcrumbs[breadcrumbs.length - 1].name}
               </span>
+            )}
+            {dependencies.length > 0 && (
+              <>
+                <div className="w-px h-3 bg-zinc-300 dark:bg-zinc-600 mx-1" />
+                {dependencies.filter((d) => d.direction === "out").length > 0 && (
+                  <>
+                    <span className="text-[10px] text-zinc-400 dark:text-zinc-500 shrink-0">depends on</span>
+                    {dependencies.filter((d) => d.direction === "out").map((d) => (
+                      <button
+                        key={d.id}
+                        type="button"
+                        className="rounded px-1.5 py-0.5 text-[10px] text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 cursor-pointer transition-colors truncate max-w-[140px]"
+                        onClick={() => onNavigateToNode?.(d.id)}
+                        title={`${d.label || "depends on"} ${d.name}`}
+                      >
+                        {d.name}
+                      </button>
+                    ))}
+                  </>
+                )}
+                {dependencies.filter((d) => d.direction === "in").length > 0 && (
+                  <>
+                    <span className="text-[10px] text-zinc-400 dark:text-zinc-500 shrink-0">used by</span>
+                    {dependencies.filter((d) => d.direction === "in").map((d) => (
+                      <button
+                        key={d.id}
+                        type="button"
+                        className="rounded px-1.5 py-0.5 text-[10px] text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 cursor-pointer transition-colors truncate max-w-[140px]"
+                        onClick={() => onNavigateToNode?.(d.id)}
+                        title={`${d.label || "used by"} ${d.name}`}
+                      >
+                        {d.name}
+                      </button>
+                    ))}
+                  </>
+                )}
+              </>
             )}
           </div>
         )}

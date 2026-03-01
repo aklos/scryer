@@ -18,6 +18,7 @@ import type {
 import { MarkerType } from "@xyflow/react";
 import { nodeTypes } from "./nodes";
 import { edgeTypes } from "./edges";
+import { CodeLevelRack } from "./CodeLevelRack";
 import { GuidePanel, ContractPanel } from "./GuidePanels";
 import { Bot, Loader2, Trash2, Plus } from "lucide-react";
 import { Button } from "./ui";
@@ -62,6 +63,7 @@ interface C4CanvasProps {
   onAddNode: (kindOverride?: C4Kind, screenPos?: { x: number; y: number }) => void;
   currentParentKind: C4Kind | undefined;
   layoutPending?: boolean;
+  setNodes: React.Dispatch<React.SetStateAction<C4Node[]>>;
 }
 
 export function C4Canvas({
@@ -97,6 +99,7 @@ export function C4Canvas({
   onAddNode,
   currentParentKind,
   layoutPending,
+  setNodes,
 }: C4CanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const selectionStartPos = useRef<{ x: number; y: number } | null>(null);
@@ -270,8 +273,64 @@ export function C4Canvas({
     }
   }, [layoutPending]);
 
+  const isCodeLevel = parentKind === "component";
+
+  const handleRackSelect = useCallback((id: string) => {
+    setNodes((nds) => nds.map((n) => ({ ...n, selected: n.id === id })) as C4Node[]);
+  }, [setNodes]);
+
+  const handleRackAdd = useCallback((kind?: C4Kind) => {
+    if (kind === "process") {
+      window.dispatchEvent(new CustomEvent("add-process", { detail: { componentId: currentParentId } }));
+    } else if (kind === "model") {
+      window.dispatchEvent(new CustomEvent("add-model", { detail: { componentId: currentParentId } }));
+    } else {
+      onAddNode(kind);
+    }
+  }, [currentParentId, onAddNode]);
+
+  if (isCodeLevel) {
+    return (
+      <div className="flex-1 relative flex flex-col bg-zinc-50 dark:bg-zinc-950">
+        <CodeLevelRack
+          nodes={visibleNodesWithHints}
+          onSelectNode={handleRackSelect}
+          selectedNodeId={selectedNode?.id ?? null}
+          currentParentId={currentParentId!}
+          onAddNode={handleRackAdd}
+          onDeleteNode={deleteNode}
+        />
+        {/* Bottom-right AI + version */}
+        <div className="absolute bottom-2 right-2 z-10 flex items-center gap-2">
+          {nodes.length > 0 && (
+            <button
+              type="button"
+              className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] cursor-pointer transition-colors ${
+                aiConfigured && aiEnabled
+                  ? "text-violet-500 hover:bg-zinc-100 dark:text-violet-400 dark:hover:bg-zinc-800"
+                  : aiConfigured
+                    ? "text-zinc-400 hover:bg-zinc-100 dark:text-zinc-500 dark:hover:bg-zinc-800"
+                    : "text-violet-500 hover:bg-violet-50 dark:text-violet-400 dark:hover:bg-violet-950/30"
+              }`}
+              onClick={() => aiConfigured && aiEnabled ? (hintLoading || fetchHints()) : setSettingsOpen(true)}
+              onContextMenu={(e) => { e.preventDefault(); setSettingsOpen(true); }}
+              title={aiConfigured ? "Click to review, right-click for settings" : "Configure AI"}
+            >
+              {hintLoading && aiConfigured && aiEnabled
+                ? <Loader2 className="h-3 w-3 animate-spin" />
+                : <Bot className="h-3 w-3" />
+              }
+              {!aiConfigured ? "Configure AI" : aiEnabled ? "Review" : "AI off"}
+            </button>
+          )}
+          <span className="text-[10px] text-zinc-300 dark:text-zinc-600">scryer <span className="opacity-60">{appVersion}</span></span>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className={`flex-1 relative${parentKind === "component" ? " code-level" : ""}`} ref={wrapperRef} onContextMenu={handleContextMenu}>
+    <div className="flex-1 relative" ref={wrapperRef} onContextMenu={handleContextMenu}>
       {overlayMounted && (
         <div
           className={`absolute inset-0 z-50 flex items-center justify-center bg-zinc-50 dark:bg-zinc-950 transition-opacity duration-200 ${overlayOpaque ? "opacity-100" : "opacity-0"}`}
@@ -346,28 +405,9 @@ export function C4Canvas({
                   {currentParentKind === "system" ? "container" : currentParentKind === "container" ? "component" : "operation"}
                 </Button>
               )}
-              {currentParentKind === "component" && currentParentId && (
-                <>
-                  <Button
-                    variant="ghost"
-                    onClick={() => window.dispatchEvent(new CustomEvent("add-process", { detail: { componentId: currentParentId } }))}
-                  >
-                    <Plus className="h-3 w-3" />
-                    process
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    onClick={() => window.dispatchEvent(new CustomEvent("add-model", { detail: { componentId: currentParentId } }))}
-                  >
-                    <Plus className="h-3 w-3" />
-                    model
-                  </Button>
-                </>
-              )}
             </div>
           </Panel>
         )}
-        {/* breadcrumbs moved outside ReactFlow to avoid z-index overlap with left panels */}
         <Panel position="bottom-right" className="flex items-center gap-2 !m-2">
           {nodes.length > 0 && (
             <button
@@ -483,16 +523,6 @@ export function C4Canvas({
               <button type="button" className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-700 cursor-pointer transition-colors" onClick={() => addFromContext()}>
                 <Plus className="h-3 w-3" /> Add {currentParentKind === "system" ? "container" : currentParentKind === "container" ? "component" : "operation"}
               </button>
-              {currentParentKind === "component" && (
-                <>
-                  <button type="button" className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-700 cursor-pointer transition-colors" onClick={() => addFromContext("process")}>
-                    <Plus className="h-3 w-3" /> Add process
-                  </button>
-                  <button type="button" className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-700 cursor-pointer transition-colors" onClick={() => addFromContext("model")}>
-                    <Plus className="h-3 w-3" /> Add model
-                  </button>
-                </>
-              )}
             </>
           )}
         </div>

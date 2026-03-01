@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import type { C4Kind, C4Node, C4NodeData, C4Edge, Group, Hint } from "../types";
+import type { C4Kind, C4Node, C4NodeData, C4Edge, Group, Hint, Status } from "../types";
 import { assignAllHandles } from "../edgeRouting";
 
 const NODE_W = 180;
@@ -96,28 +96,27 @@ export function useVisibleNodes({
     const parentNode = nodes.find((n) => n.id === currentParentId);
     const isCodeLevel = parentNode && (parentNode.data as C4NodeData).kind === "component";
     let effectiveChildNodes = childNodes;
-    const extraNodes: C4Node[] = [];
     if (isCodeLevel) {
       // Compute mention names for process description autocomplete
       const opNames = nodes
         .filter((n) => n.parentId === currentParentId && (n.data as C4NodeData).kind === "operation")
-        .map((n) => ({ name: (n.data as C4NodeData).name, kind: "operation" as const }));
+        .map((n) => ({ name: (n.data as C4NodeData).name, kind: "operation" as const, status: (n.data as C4NodeData).status }));
       const procNames = nodes
         .filter((n) => n.parentId === currentParentId && (n.data as C4NodeData).kind === "process")
-        .map((n) => ({ name: (n.data as C4NodeData).name, kind: "process" as const }));
+        .map((n) => ({ name: (n.data as C4NodeData).name, kind: "process" as const, status: (n.data as C4NodeData).status }));
       const componentModelNames = nodes
         .filter((n) => n.parentId === currentParentId && (n.data as C4NodeData).kind === "model")
-        .map((n) => ({ name: (n.data as C4NodeData).name, kind: "model" as const }));
+        .map((n) => ({ name: (n.data as C4NodeData).name, kind: "model" as const, status: (n.data as C4NodeData).status }));
       const compEdges = edges.filter((e) => e.source === currentParentId || e.target === currentParentId);
       const refIds = new Set(compEdges.map((e) => (e.source === currentParentId ? e.target : e.source)));
-      const refMemberNames: { name: string; kind: "operation" | "process" | "model"; ref?: boolean }[] = [];
+      const refMemberNames: { name: string; kind: "operation" | "process" | "model"; status?: Status; ref?: boolean }[] = [];
       for (const refId of refIds) {
         const refNode = nodes.find((n) => n.id === refId);
         if (!refNode || (refNode.data as C4NodeData).kind !== "component") continue;
         for (const kind of ["operation", "process", "model"] as const) {
           nodes
             .filter((n) => n.parentId === refId && (n.data as C4NodeData).kind === kind)
-            .forEach((n) => refMemberNames.push({ name: (n.data as C4NodeData).name, kind, ref: true }));
+            .forEach((n) => refMemberNames.push({ name: (n.data as C4NodeData).name, kind, status: (n.data as C4NodeData).status, ref: true }));
         }
       }
       const codeLevelMentionNames = [...opNames, ...procNames, ...componentModelNames, ...refMemberNames];
@@ -130,7 +129,12 @@ export function useVisibleNodes({
         }
         return n;
       });
+
+      // Code level uses rack view — no reference nodes or mention edges needed
+      return injectMembers(effectiveChildNodes);
     }
+
+    const extraNodes: C4Node[] = [];
 
     // Find edges involving the current parent at the parent's own level
     const parentEdges = edges.filter(
@@ -288,56 +292,11 @@ export function useVisibleNodes({
   }, [visibleNodes, activeHints, groupHighlightInfo]);
 
   // Only show edges between visible nodes, assigning handles via graph-aware routing
-  // At code level (inside a component), show synthetic mention edges
+  // At code level (inside a component), no edges are needed — the rack view handles display
   const visibleEdges = useMemo(() => {
     const parentNode = currentParentId ? nodes.find((n) => n.id === currentParentId) : null;
     const isCodeLevel = parentNode && (parentNode.data as C4NodeData).kind === "component";
-    if (isCodeLevel) {
-      // Build name→id map for visible nodes (including members of ref components)
-      const nameToId = new Map<string, string>();
-      for (const n of visibleNodes) {
-        const nd = n.data as C4NodeData;
-        nameToId.set(nd.name, n.id);
-        // Map member names of reference components to the ref node itself
-        if (n.data._reference && nd.kind === "component") {
-          for (const list of [nd._operations, nd._processes, nd._models] as ({ id: string; name: string }[] | undefined)[]) {
-            if (list) for (const m of list) nameToId.set(m.name, n.id);
-          }
-        }
-      }
-      // Parse @[name] mentions and create synthetic edges
-      const mentionEdges: C4Edge[] = [];
-      const seen = new Set<string>();
-      for (const n of visibleNodes) {
-        const desc = (n.data as C4NodeData).description ?? "";
-        const re = /@\[([^\]]+)\]/g;
-        let match;
-        while ((match = re.exec(desc)) !== null) {
-          const targetId = nameToId.get(match[1]);
-          if (targetId && targetId !== n.id) {
-            const key = `${n.id}-${targetId}`;
-            if (!seen.has(key)) {
-              seen.add(key);
-              mentionEdges.push({
-                id: `mention-${key}`,
-                source: n.id,
-                target: targetId,
-                zIndex: -1,
-                data: { label: "", _mention: true },
-              } as C4Edge);
-            }
-          }
-        }
-      }
-      const codeSel = new Set(visibleNodes.filter((n) => n.selected && !n.data._reference).map((n) => n.id));
-      if (codeSel.size > 0) {
-        return mentionEdges.map((e) => {
-          const connected = codeSel.has(e.source) || codeSel.has(e.target);
-          return { ...e, data: { ...e.data, ...(connected ? { _highlighted: true } : { _dimmed: true }) } } as C4Edge;
-        });
-      }
-      return mentionEdges;
-    }
+    if (isCodeLevel) return [];
 
     const ids = new Set(visibleNodes.map((n) => n.id));
     const refIds = new Set(visibleNodes.filter((n) => n.data._reference).map((n) => n.id));

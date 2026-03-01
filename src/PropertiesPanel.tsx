@@ -1,11 +1,19 @@
 import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
 import { useReactFlow } from "@xyflow/react";
+import { useNodeDataOverride } from "./NodeDataContext";
 import { invoke } from "@tauri-apps/api/core";
 import type { C4Node, C4NodeData, C4Edge, Hint, Status, SourceLocation, ModelProperty, Group, Contract, Flow, Attachment } from "./types";
 import { ShapeIcon, resolveShape, defaultShapeForKind, ALL_SHAPES, SHAPE_LABELS } from "./shapes";
 import { STATUS_COLORS } from "./statusColors";
 import { Button, Input, Textarea, Section, Divider, KVRow, Toggle, PillToggle, Field } from "./ui";
 import { MentionTextarea, type MentionItem } from "./MentionTextarea";
+
+/** Use context override (code-level rack) or fall back to ReactFlow's updateNodeData */
+function useUpdateNodeData(): (id: string, data: Record<string, unknown>) => void {
+  const override = useNodeDataOverride();
+  const rf = useReactFlow();
+  return override ?? rf.updateNodeData;
+}
 
 /** Sanitize to camelCase / snake_case: only [a-zA-Z0-9_], first char must be lowercase letter */
 function sanitizeIdentifier(raw: string): string {
@@ -217,7 +225,7 @@ function resizeImage(file: File): Promise<{ base64: string; mimeType: string }> 
 }
 
 function AttachmentsSection({ nodeId, attachments }: { nodeId: string; attachments: Attachment[] }) {
-  const { updateNodeData } = useReactFlow();
+  const updateNodeData = useUpdateNodeData();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -292,7 +300,7 @@ function AttachmentsSection({ nodeId, attachments }: { nodeId: string; attachmen
 /* ── Node tab content ─────────────────────────────────────────────── */
 
 function NodePropertiesContent({ node, hints, onFixHint, onDismissHint, sourceLocations, projectPath, mentionNames }: { node: C4Node; hints: Hint[]; onFixHint: (hint: Hint) => void; onDismissHint: (hint: Hint) => void; sourceLocations?: SourceLocation[]; projectPath?: string; mentionNames?: MentionItem[] }) {
-  const { updateNodeData } = useReactFlow();
+  const updateNodeData = useUpdateNodeData();
   const { data } = node;
   const isCodeLevel = data.kind === "operation";
   const showTechnology = data.kind === "container" || data.kind === "component";
@@ -328,17 +336,18 @@ function NodePropertiesContent({ node, hints, onFixHint, onDismissHint, sourceLo
       {/* ── Description — prominent, right after identity ── */}
       <Field
         label="Description"
-        trailing={!isCodeLevel ? (
+        trailing={
           <span className={`text-[10px] tabular-nums ${data.description.length > 180 ? "text-amber-500" : "text-zinc-400/50 dark:text-zinc-500/50"}`}>
             {data.description.length}/200
           </span>
-        ) : undefined}
+        }
       >
         {isCodeLevel && mentionNames ? (
           <MentionTextarea
             value={data.description}
             onChange={(val) => updateNodeData(node.id, { description: val })}
             mentionNames={mentionNames}
+            maxLength={200}
             rows={5}
             className="w-full rounded-md border border-zinc-200 dark:border-transparent bg-zinc-100/60 dark:bg-zinc-800/60 focus:bg-zinc-100 dark:focus:bg-zinc-700/60 px-2.5 py-2 text-xs text-zinc-700 dark:text-zinc-200 leading-relaxed outline-none resize-none transition-colors placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
             placeholder="Describe this operation... Use @[Name] to reference sibling operations, processes, or models."
@@ -758,7 +767,7 @@ function BulletList({ items, onChange, placeholder }: { items: string[]; onChang
 /* ── Node contract content (contract + accepts) ────────────────── */
 
 function NodeContractContent({ node }: { node: C4Node }) {
-  const { updateNodeData } = useReactFlow();
+  const updateNodeData = useUpdateNodeData();
   const data = node.data as C4NodeData;
   const contract = data.contract ?? { expect: [], ask: [], never: [] };
   const accepts = data.accepts ?? [];
@@ -807,7 +816,7 @@ function NodeContractContent({ node }: { node: C4Node }) {
 /* ── Process tab content ──────────────────────────────────────────── */
 
 function ProcessPropertiesContent({ node, mentionNames }: { node: C4Node; mentionNames: MentionItem[] }) {
-  const { updateNodeData } = useReactFlow();
+  const updateNodeData = useUpdateNodeData();
   const data = node.data as C4NodeData;
 
   return (
@@ -820,12 +829,20 @@ function ProcessPropertiesContent({ node, mentionNames }: { node: C4Node; mentio
         onChange={(e) => updateNodeData(node.id, { name: e.target.value })}
       />
       <Divider />
-      <Field label="Description">
+      <Field
+        label="Description"
+        trailing={
+          <span className={`text-[10px] tabular-nums ${data.description.length > 360 ? "text-amber-500" : "text-zinc-400/50 dark:text-zinc-500/50"}`}>
+            {data.description.length}/400
+          </span>
+        }
+      >
         <MentionTextarea
           value={data.description}
           onChange={(val) => updateNodeData(node.id, { description: val })}
           mentionNames={mentionNames}
-          rows={5}
+          maxLength={400}
+          rows={8}
           className="w-full rounded-md border border-zinc-200 dark:border-transparent bg-zinc-100/60 dark:bg-zinc-800/60 focus:bg-zinc-100 dark:focus:bg-zinc-700/60 px-2.5 py-2 text-xs text-zinc-700 dark:text-zinc-200 leading-relaxed outline-none resize-none transition-colors placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
           placeholder="What does this process do? Use @[Name] to reference operations or other processes."
         />
@@ -850,7 +867,7 @@ function ProcessPropertiesContent({ node, mentionNames }: { node: C4Node; mentio
 /* ── Model tab content ────────────────────────────────────────────── */
 
 function ModelPropertiesContent({ node }: { node: C4Node }) {
-  const { updateNodeData } = useReactFlow();
+  const updateNodeData = useUpdateNodeData();
   const data = node.data as C4NodeData;
   const properties = data.properties ?? [];
 
@@ -877,9 +894,17 @@ function ModelPropertiesContent({ node }: { node: C4Node }) {
         onChange={(e) => updateNodeData(node.id, { name: sanitizeIdentifier(e.target.value) })}
       />
       <Divider />
-      <Field label="Description">
+      <Field
+        label="Description"
+        trailing={
+          <span className={`text-[10px] tabular-nums ${data.description.length > 180 ? "text-amber-500" : "text-zinc-400/50 dark:text-zinc-500/50"}`}>
+            {data.description.length}/200
+          </span>
+        }
+      >
         <Textarea
           rows={5}
+          maxLength={200}
           value={data.description}
           placeholder="What does this model represent?"
           onChange={(e) => updateNodeData(node.id, { description: e.target.value })}

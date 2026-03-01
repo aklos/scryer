@@ -19,7 +19,7 @@ import type { FlowCanvasHandle } from "./FlowCanvas";
 import { C4Canvas } from "./C4Canvas";
 import { FlowEditPopup } from "./FlowEditPopup";
 import { expandGuidePanel } from "./GuidePanels";
-import { autoLayout, gridLayout } from "./layout";
+import { autoLayout } from "./layout";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ToastProvider } from "./Toast";
 import type { C4Kind, C4NodeData, C4Node, C4Edge, SourceLocation, Group, Contract, Flow, StartingLevel } from "./types";
@@ -30,6 +30,8 @@ import { useAdvisor } from "./hooks/useAdvisor";
 import { useCanvasEvents } from "./hooks/useCanvasEvents";
 import { useVisibleNodes } from "./hooks/useVisibleNodes";
 import { useNodesChange } from "./hooks/useNodesChange";
+import { NodeDataProvider } from "./NodeDataContext";
+import type { RackDependency } from "./CodeLevelRack";
 
 /** Build breadcrumb path from expandedPath node IDs */
 function buildBreadcrumbs(nodes: C4Node[], expandedPath: string[]): { id: string; name: string; kind: C4Kind }[] {
@@ -308,10 +310,48 @@ function Flow() {
 
   const currentParentKindForGroup = currentParentId ? (nodes.find((n) => n.id === currentParentId)?.data as C4NodeData | undefined)?.kind : undefined;
   const canGroup = !!currentParentId && currentParentKindForGroup !== "component";
+  const isCodeLevel = currentParentKindForGroup === "component";
+
+  // Compute dependencies for the TopBar when drilled into any node
+  const parentDependencies = useMemo((): RackDependency[] => {
+    if (!currentParentId) return [];
+    const parentEdges = edges.filter(
+      (e) => e.source === currentParentId || e.target === currentParentId,
+    );
+    const seen = new Set<string>();
+    const deps: RackDependency[] = [];
+    for (const edge of parentEdges) {
+      const isSource = edge.source === currentParentId;
+      const otherId = isSource ? edge.target : edge.source;
+      if (seen.has(otherId)) continue;
+      seen.add(otherId);
+      const other = nodes.find((n) => n.id === otherId);
+      if (!other) continue;
+      const od = other.data as C4NodeData;
+      deps.push({
+        id: otherId,
+        name: od.name,
+        kind: od.kind,
+        direction: isSource ? "out" : "in",
+        label: (edge.data as { label?: string })?.label ?? "",
+      });
+    }
+    return deps;
+  }, [currentParentId, edges, nodes]);
+
+  // At code level, ReactFlow isn't rendered so updateNodeData must go through setNodes directly
+  const codeLevelUpdateNodeData = useCallback((id: string, data: Record<string, unknown>) => {
+    setNodes((nds) => nds.map((n) =>
+      n.id === id ? { ...n, data: { ...n.data, ...data } } : n,
+    ) as C4Node[]);
+  }, []);
 
   const processMentionNames = useMemo((): { name: string; kind: "operation" | "process" | "model"; ref?: boolean }[] => {
-    if (!isCodeLevelSelected || !selectedNode || !currentParentId) return [];
-    const compId = currentParentId;
+    if (!isCodeLevelSelected || !selectedNode) return [];
+    // Visible nodes have parentId stripped — look up the original to find the real parent component.
+    const original = nodes.find((n) => n.id === selectedNode.id);
+    const compId = original?.parentId;
+    if (!compId) return [];
     const sid = selectedNode.id;
     const members = nodes
       .filter((n) => n.parentId === compId && (n.data as C4NodeData).kind === "operation" && n.id !== sid)
@@ -322,20 +362,21 @@ function Flow() {
     const siblingModels = nodes
       .filter((n) => n.parentId === compId && (n.data as C4NodeData).kind === "model" && n.id !== sid)
       .map((n) => ({ name: (n.data as C4NodeData).name, kind: "model" as const }));
+    // Include members from components this one depends on
     const compEdges = edges.filter((e) => e.source === compId || e.target === compId);
-    const refIds = new Set(compEdges.map((e) => (e.source === compId ? e.target : e.source)));
     const refMembers: { name: string; kind: "operation" | "process" | "model"; ref?: boolean }[] = [];
-    for (const refId of refIds) {
-      const refNode = nodes.find((n) => n.id === refId);
-      if (!refNode || (refNode.data as C4NodeData).kind !== "component") continue;
+    for (const edge of compEdges) {
+      const otherId = edge.source === compId ? edge.target : edge.source;
+      const other = nodes.find((n) => n.id === otherId);
+      if (!other || (other.data as C4NodeData).kind !== "component") continue;
       for (const kind of ["operation", "process", "model"] as const) {
         nodes
-          .filter((n) => n.parentId === refId && (n.data as C4NodeData).kind === kind)
+          .filter((n) => n.parentId === otherId && (n.data as C4NodeData).kind === kind)
           .forEach((n) => refMembers.push({ name: (n.data as C4NodeData).name, kind, ref: true }));
       }
     }
     return [...members, ...siblingProcs, ...siblingModels, ...refMembers];
-  }, [isCodeLevelSelected, selectedNode, currentParentId, nodes, edges]);
+  }, [isCodeLevelSelected, selectedNode, nodes, edges]);
 
   const onEdgesChange: OnEdgesChange = useCallback(
     (changes) => setEdges((eds) => applyEdgeChanges(changes, eds) as C4Edge[]),
@@ -554,6 +595,9 @@ function Flow() {
   );
 
   const onAutoLayout = useCallback(async () => {
+    // Code level uses rack view — no spatial layout needed
+    if (currentParentKind === "component") return;
+
     const layoutNodes = visibleNodes
       .filter((n) => n.type !== "groupBox")
       .map((n) => ({
@@ -571,7 +615,7 @@ function Flow() {
       .map((g) => ({ ...g, memberIds: g.memberIds.filter((id) => layoutIds.has(id)) }))
       .filter((g) => g.memberIds.length >= 2);
 
-    const laid = await autoLayout(layoutNodes, layoutEdges, activeGroups, currentParentKind === "component");
+    const laid = await autoLayout(layoutNodes, layoutEdges, activeGroups);
     const posMap = new Map(laid.map((n) => [n.id, n.position]));
 
     const refIds = new Set(visibleNodes.filter((n) => n.data._reference).map((n) => n.id));
@@ -598,36 +642,16 @@ function Flow() {
   useEffect(() => {
     const hasNeedsLayout = visibleNodes.some((n) => n.data._needsLayout && n.type !== "groupBox");
 
-    // Code-level grid layout is synchronous — run immediately when any node needs layout,
-    // no pending/measurement gating needed since grid doesn't depend on measured dimensions.
+    // Code level uses rack view — just clear _needsLayout flags, no positioning needed
     if (currentParentKind === "component" && hasNeedsLayout) {
       const visibleIds = new Set(visibleNodes.map((n) => n.id));
-      const layoutNodes = visibleNodes
-        .filter((n) => n.type !== "groupBox")
-        .map((n) => ({ ...n, parentId: undefined, extent: undefined }));
-      const laid = gridLayout(layoutNodes);
-      const posMap = new Map(laid.map((n) => [n.id, n.position]));
-      const refIds = new Set(visibleNodes.filter((n) => n.data._reference).map((n) => n.id));
       setNodes((nds) =>
         nds.map((n) => {
-          const clearFlag = n.data._needsLayout && visibleIds.has(n.id);
-          const pos = posMap.get(n.id);
-          if (!clearFlag && !pos) return n;
+          if (!n.data._needsLayout || !visibleIds.has(n.id)) return n;
           const { _needsLayout, ...rest } = n.data;
-          const data = (clearFlag ? rest : n.data) as C4NodeData;
-          return pos ? { ...n, position: pos, data } : { ...n, data };
+          return { ...n, data: rest as C4NodeData };
         }),
       );
-      // Persist reference node positions
-      const refUpdates: Record<string, { x: number; y: number }> = {};
-      for (const id of refIds) {
-        const pos = posMap.get(id);
-        if (pos) refUpdates[`${levelPrefix}/${id}`] = pos;
-      }
-      if (Object.keys(refUpdates).length > 0) {
-        setRefPositions((prev) => ({ ...prev, ...refUpdates }));
-      }
-      scheduleFitView();
       return;
     }
 
@@ -710,6 +734,8 @@ function Flow() {
         navigateToBreadcrumb={navigateToBreadcrumb}
         activeFlowId={activeFlowId}
         activeFlowName={activeFlow?.name ?? null}
+        dependencies={parentDependencies}
+        onNavigateToNode={navigateToNode}
       />
       <div className="flex flex-1 min-h-0">
         <Sidebar
@@ -804,6 +830,7 @@ function Flow() {
               onAddNode={onAddNode}
               currentParentKind={currentParentKind}
               layoutPending={layoutPending || visibleNodes.some((n) => n.data._needsLayout && n.type !== "groupBox")}
+              setNodes={setNodes}
             />
           )}
           {/* Flow edit popup */}
@@ -845,6 +872,7 @@ function Flow() {
           )}
         </div>
         {/* Properties panel */}
+        <NodeDataProvider value={isCodeLevel ? codeLevelUpdateNodeData : null}>
         <PropertiesPanel
           node={selectedNode}
           edge={selectedEdge}
@@ -903,6 +931,7 @@ function Flow() {
           }}
           activeFlow={activeFlow}
         />
+        </NodeDataProvider>
       </div>
     </div>
   );

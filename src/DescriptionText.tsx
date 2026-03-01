@@ -28,12 +28,9 @@ function parseRefs(text: string, onMentionClick?: (name: string) => void, nodeMa
         key={key++}
         className={`inline-flex items-baseline rounded px-1 py-px font-medium font-mono text-[0.9em] ${
           sc
-            ? "bg-zinc-200/80 dark:bg-zinc-700"
-            : "bg-zinc-200/80 dark:bg-zinc-700"
-        } text-zinc-700 dark:text-zinc-200${
-          onMentionClick ? " cursor-pointer hover:bg-zinc-300/80 dark:hover:bg-zinc-600" : ""
+            ? `${sc.pillClass}${onMentionClick ? ` cursor-pointer ${sc.pillHoverClass}` : ""}`
+            : `bg-zinc-200/80 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-200${onMentionClick ? " cursor-pointer hover:bg-zinc-300/80 dark:hover:bg-zinc-600" : ""}`
         }`}
-        style={sc ? { borderLeft: `2px solid ${sc.hex}`, paddingLeft: 5 } : undefined}
         onClick={onMentionClick ? (e) => { e.stopPropagation(); onMentionClick(name); } : undefined}
       >
         {name}

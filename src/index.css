@@ -32,15 +32,6 @@
   z-index: 1 !important;
 }
 
-/* At code level, mention edges render behind nodes */
-.code-level .react-flow__edges {
-  z-index: 0 !important;
-}
-
-.code-level .react-flow__node {
-  z-index: 1 !important;
-}
-
 .react-flow__handle {
   width: 8px;
   height: 8px;
