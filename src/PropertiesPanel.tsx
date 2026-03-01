@@ -397,6 +397,7 @@ function NodePropertiesContent({ node, hints, onFixHint, onDismissHint, sourceLo
                 list={listId}
                 value={data.technology ?? ""}
                 placeholder="e.g. REST API"
+                maxLength={28}
                 onChange={(e) => updateNodeData(node.id, { technology: e.target.value || undefined })}
               />
               <datalist id={listId}>

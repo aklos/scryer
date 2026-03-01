@@ -626,6 +626,14 @@ impl ScryerServer {
                     node.data.name
                 ))]));
             }
+            if let Some(tech) = &node.data.technology {
+                if tech.len() > 28 {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Technology '{}' on '{}' exceeds 28 character limit",
+                        tech, node.data.name
+                    ))]));
+                }
+            }
             if matches!(node.data.kind, C4Kind::Operation | C4Kind::Model) {
                 if let Err(e) = validate_identifier(
                     &node.data.name,
@@ -717,6 +725,14 @@ impl ScryerServer {
                     "Description for '{}' must be 200 characters or less",
                     item.name
                 ))]));
+            }
+            if let Some(tech) = &item.technology {
+                if tech.len() > 28 {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Technology '{}' on '{}' exceeds 28 character limit",
+                        tech, item.name
+                    ))]));
+                }
             }
 
             if matches!(kind, C4Kind::Operation | C4Kind::Model) {
@@ -841,6 +857,14 @@ impl ScryerServer {
                     "Description for '{}' must be 200 characters or less",
                     node.data.name
                 ))]));
+            }
+            if let Some(tech) = &node.data.technology {
+                if tech.len() > 28 {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Technology '{}' on '{}' exceeds 28 character limit",
+                        tech, node.data.name
+                    ))]));
+                }
             }
             if matches!(node.data.kind, C4Kind::Operation | C4Kind::Model) {
                 if let Err(e) = validate_identifier(
@@ -1094,6 +1118,12 @@ impl ScryerServer {
                 node.data.description = desc;
             }
             if let Some(tech) = item.technology {
+                if tech.len() > 28 {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Technology '{}' on '{}' exceeds 28 character limit",
+                        tech, item.node_id
+                    ))]));
+                }
                 node.data.technology = Some(tech);
             }
             if let Some(ext) = item.external {

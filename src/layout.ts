@@ -124,12 +124,239 @@ function spreadAroundHubs(
       if (bestSlot >= 0) taken.add(bestSlot);
 
       const nn = nodeMap.get(item.id)!;
-      posMap.set(item.id, {
-        x: cx + Math.cos(finalAngle) * item.dist - nw(nn) / 2,
-        y: cy + Math.sin(finalAngle) * item.dist - nh(nn) / 2,
-      });
+      let nx = cx + Math.cos(finalAngle) * item.dist - nw(nn) / 2;
+      let ny = cy + Math.sin(finalAngle) * item.dist - nh(nn) / 2;
+      // For cardinal directions, align to hub's grid line so snap doesn't misalign
+      const cosA = Math.cos(finalAngle), sinA = Math.sin(finalAngle);
+      if (Math.abs(cosA) < 0.01) nx = hubPos.x + nw(node) / 2 - nw(nn) / 2;
+      if (Math.abs(sinA) < 0.01) ny = hubPos.y + nh(node) / 2 - nh(nn) / 2;
+      posMap.set(item.id, { x: nx, y: ny });
       placed.add(item.id);
     }
+  }
+
+  return nodes.map((n) => {
+    const pos = posMap.get(n.id);
+    return pos ? { ...n, position: pos } : n;
+  });
+}
+
+/** Cohen-Sutherland: does segment (x1,y1)→(x2,y2) intersect rect (rx,ry,rw,rh)? */
+function segmentIntersectsRect(
+  x1: number, y1: number, x2: number, y2: number,
+  rx: number, ry: number, rw: number, rh: number,
+): boolean {
+  const xmin = rx, xmax = rx + rw, ymin = ry, ymax = ry + rh;
+  const code = (x: number, y: number) => {
+    let c = 0;
+    if (x < xmin) c |= 1; else if (x > xmax) c |= 2;
+    if (y < ymin) c |= 4; else if (y > ymax) c |= 8;
+    return c;
+  };
+  let c1 = code(x1, y1), c2 = code(x2, y2);
+  let sx = x1, sy = y1, ex = x2, ey = y2;
+  for (let i = 0; i < 20; i++) {
+    if ((c1 | c2) === 0) return true;
+    if ((c1 & c2) !== 0) return false;
+    const c = c1 !== 0 ? c1 : c2;
+    let x = 0, y = 0;
+    if (c & 8) { x = sx + (ex - sx) * (ymax - sy) / (ey - sy); y = ymax; }
+    else if (c & 4) { x = sx + (ex - sx) * (ymin - sy) / (ey - sy); y = ymin; }
+    else if (c & 2) { y = sy + (ey - sy) * (xmax - sx) / (ex - sx); x = xmax; }
+    else if (c & 1) { y = sy + (ey - sy) * (xmin - sx) / (ex - sx); x = xmin; }
+    if (c === c1) { sx = x; sy = y; c1 = code(sx, sy); }
+    else { ex = x; ey = y; c2 = code(ex, ey); }
+  }
+  return false;
+}
+
+/** How far (radians) an angle is from its nearest compass direction. */
+function compassDeviation(dx: number, dy: number): number {
+  const a = ((Math.atan2(dy, dx) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+  let best = Infinity;
+  for (const c of COMPASS_8) {
+    let d = Math.abs(c - a);
+    if (d > Math.PI) d = 2 * Math.PI - d;
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+/**
+ * After spreadAroundHubs: find floaters (nodes not placed as hubs or spokes),
+ * then reposition them and slide connected spokes along their radials until
+ * as many floater edges as possible align to compass directions.
+ */
+function straightenFloaterEdges(
+  nodes: C4Node[],
+  edges: C4Edge[],
+  groupedNodes?: Map<string, string>,
+): C4Node[] {
+  const nw = (n: C4Node) => n.measured?.width ?? NODE_W;
+  const nh = (n: C4Node) => n.measured?.height ?? NODE_H;
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  const posMap = new Map(nodes.map((n) => [n.id, { ...n.position }]));
+
+  // Build adjacency
+  const adj = new Map<string, Set<string>>();
+  for (const e of edges) {
+    if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
+    if (!adj.has(e.source)) adj.set(e.source, new Set());
+    if (!adj.has(e.target)) adj.set(e.target, new Set());
+    adj.get(e.source)!.add(e.target);
+    adj.get(e.target)!.add(e.source);
+  }
+  const degree = (id: string) => adj.get(id)?.size ?? 0;
+
+  // Identify spokes: angle to highest-degree neighbor is compass-aligned.
+  // Record their hub and locked angle.
+  const spokeInfo = new Map<string, { hubId: string; angle: number; dist: number }>();
+  for (const n of nodes) {
+    if (groupedNodes?.has(n.id)) continue;
+    const neighbors = adj.get(n.id);
+    if (!neighbors) continue;
+    let hubId = "";
+    let hubDeg = 0;
+    for (const nid of neighbors) {
+      const d = degree(nid);
+      if (d > hubDeg && d > degree(n.id)) { hubDeg = d; hubId = nid; }
+    }
+    if (!hubId) continue;
+    const hub = nodeMap.get(hubId)!;
+    const hp = posMap.get(hubId)!;
+    const hcx = hp.x + nw(hub) / 2, hcy = hp.y + nh(hub) / 2;
+    const p = posMap.get(n.id)!;
+    const ncx = p.x + nw(n) / 2, ncy = p.y + nh(n) / 2;
+    const dx = ncx - hcx, dy = ncy - hcy;
+    if (compassDeviation(dx, dy) < 0.1) {
+      const angle = Math.atan2(dy, dx);
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      spokeInfo.set(n.id, { hubId, angle, dist });
+    }
+  }
+
+  const hubIds = new Set([...spokeInfo.values()].map((s) => s.hubId));
+
+  // Floaters: not a spoke, not a hub, has neighbors
+  const floaters: string[] = [];
+  for (const n of nodes) {
+    if (spokeInfo.has(n.id) || hubIds.has(n.id)) continue;
+    if (groupedNodes?.has(n.id)) continue;
+    if ((adj.get(n.id)?.size ?? 0) === 0) continue;
+    floaters.push(n.id);
+  }
+
+  if (floaters.length === 0) return nodes;
+
+  // Helper: center of a node given current posMap
+  const center = (id: string) => {
+    const n = nodeMap.get(id)!;
+    const p = posMap.get(id)!;
+    return { x: p.x + nw(n) / 2, y: p.y + nh(n) / 2 };
+  };
+
+  // Score: compass deviation for all edges of a node + proximity penalty
+  const MIN_GAP = 250;
+  const edgeAlignmentScore = (nodeId: string) => {
+    const c = center(nodeId);
+    let score = 0;
+    for (const nid of adj.get(nodeId) ?? []) {
+      const nc = center(nid);
+      score += compassDeviation(nc.x - c.x, nc.y - c.y);
+    }
+    // Penalize being too close to any other node
+    for (const n of nodes) {
+      if (n.id === nodeId) continue;
+      const nc = center(n.id);
+      const dx = nc.x - c.x, dy = nc.y - c.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < MIN_GAP) score += (MIN_GAP - dist) / MIN_GAP * 5;
+    }
+    return score;
+  };
+
+  // Phase 1: Position each floater to minimize compass deviation of its edges.
+  for (const fid of floaters) {
+    const fn = nodeMap.get(fid)!;
+    const w = nw(fn), h = nh(fn);
+    const neighbors = adj.get(fid);
+    if (!neighbors) continue;
+
+    let bestScore = edgeAlignmentScore(fid);
+    let bestPos = { ...posMap.get(fid)! };
+
+    for (const nid of neighbors) {
+      const nc = center(nid);
+      for (const angle of COMPASS_8) {
+        for (const dist of [350, 500, 650]) {
+          const tx = nc.x + Math.cos(angle) * dist - w / 2;
+          const ty = nc.y + Math.sin(angle) * dist - h / 2;
+          posMap.set(fid, { x: tx, y: ty });
+          const score = edgeAlignmentScore(fid);
+          if (score < bestScore) {
+            bestScore = score;
+            bestPos = { x: tx, y: ty };
+          }
+        }
+      }
+    }
+    posMap.set(fid, bestPos);
+  }
+
+  // Phase 2: Slide spokes connected to floaters along their locked radial.
+  // Narrow range (0.9–1.5x) to preserve hub-spoke spacing.
+  for (const [spokeId, info] of spokeInfo) {
+    const neighbors = adj.get(spokeId);
+    if (!neighbors) continue;
+    let connectsFloater = false;
+    for (const fid of floaters) {
+      if (neighbors.has(fid)) { connectsFloater = true; break; }
+    }
+    if (!connectsFloater) continue;
+
+    const sn = nodeMap.get(spokeId)!;
+    const hub = nodeMap.get(info.hubId)!;
+    const hp = posMap.get(info.hubId)!;
+    const hcx = hp.x + nw(hub) / 2, hcy = hp.y + nh(hub) / 2;
+
+    const scoreSpoke = () => {
+      let s = edgeAlignmentScore(spokeId);
+      for (const fid of floaters) {
+        if (neighbors.has(fid)) s += edgeAlignmentScore(fid);
+      }
+      // Penalize when any edge passes through or near this spoke
+      const sp = posMap.get(spokeId)!;
+      const sw = nw(sn), sh = nh(sn);
+      const margin = 120;
+      for (const e of edges) {
+        if (e.source === spokeId || e.target === spokeId) continue;
+        const sc = center(e.source);
+        const tc = center(e.target);
+        if (segmentIntersectsRect(sc.x, sc.y, tc.x, tc.y,
+            sp.x - margin, sp.y - margin,
+            sw + margin * 2, sh + margin * 2)) {
+          s += 10;
+        }
+      }
+      return s;
+    };
+
+    let bestScore = scoreSpoke();
+    let bestPos = { ...posMap.get(spokeId)! };
+
+    for (let scale = 0.9; scale <= 1.8; scale += 0.05) {
+      const d = info.dist * scale;
+      const nx = hcx + Math.cos(info.angle) * d - nw(sn) / 2;
+      const ny = hcy + Math.sin(info.angle) * d - nh(sn) / 2;
+      posMap.set(spokeId, { x: nx, y: ny });
+      const score = scoreSpoke();
+      if (score < bestScore) {
+        bestScore = score;
+        bestPos = { x: nx, y: ny };
+      }
+    }
+    posMap.set(spokeId, bestPos);
   }
 
   return nodes.map((n) => {
@@ -564,7 +791,8 @@ export async function autoLayout(
 
   const groupMap = nodeToGroup.size > 0 ? nodeToGroup : undefined;
   const snapped = spreadAroundHubs(positioned, filteredEdges, groupMap);
-  const uncrossed = uncrossEdges(snapped, filteredEdges, groupMap);
+  const straightened = straightenFloaterEdges(snapped, filteredEdges, groupMap);
+  const uncrossed = uncrossEdges(straightened, filteredEdges, groupMap);
 
   // Snap final positions to 20px grid
   return uncrossed.map((n) => ({
