@@ -22,7 +22,7 @@
 <br/>
 
 <p align="center">
-<video src="https://github.com/user-attachments/assets/85862055-d280-4b42-823c-d8e0aa9ab8c5" width="100%" autoplay loop muted></video>
+<video src="https://github.com/user-attachments/assets/495f8711-c722-4804-9e00-b5a00825f76a" width="100%" autoplay loop muted></video>
 </p>
 
 AI agents write code, but natural language is a lossy way to tell them what to build. Scryer gives you a shared visual model — you edit it in a drag-and-drop editor, the agent reads and modifies it through MCP. As software engineering moves up in abstraction, a visual model helps you reason about structure instead of staring at code. Opinionated [C4](https://c4model.com/) hierarchy (system, container, component, operation), typed relationships, behavioral flows, contracts.
