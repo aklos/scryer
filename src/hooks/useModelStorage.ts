@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { C4ModelData, C4Node, C4Edge, StartingLevel, SourceLocation, Group, Contract, Flow, FlowStep, FlowTransition } from "../types";
+import type { C4ModelData, C4Node, C4NodeData, C4Edge, StartingLevel, SourceLocation, Group, Contract, Flow, FlowStep, FlowTransition } from "../types";
 import { useToast } from "../Toast";
 
 /** Migrate old guidelines/string contract fields to string[] contract fields. */
@@ -150,9 +150,11 @@ export function useModelStorage(
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(null);
   const skipSave = useRef(false);
   const reloadTimer = useRef<ReturnType<typeof setTimeout>>(null);
-  const lastWriteAt = useRef(0); // timestamp of our last write to disk
+  const lastKnownDisk = useRef<string>(""); // last JSON string we wrote or loaded from disk
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
+  const edgesRef = useRef(edges);
+  edgesRef.current = edges;
 
   // Load model list, templates on mount
   useEffect(() => {
@@ -185,8 +187,9 @@ export function useModelStorage(
         return { ...n, data };
       });
       const data: C4ModelData = { nodes: cleanNodes as C4Node[], edges, startingLevel, sourceMap, projectPath, refPositions, groups, contract, flows };
-      lastWriteAt.current = Date.now();
-      invoke("write_model", { name: currentModel, data: JSON.stringify(data) }).catch(() => toast("Failed to save model"));
+      const json = JSON.stringify(data);
+      lastKnownDisk.current = json;
+      invoke("write_model", { name: currentModel, data: json }).catch(() => toast("Failed to save model"));
     }, 500);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -228,6 +231,7 @@ export function useModelStorage(
   const loadModel = useCallback(async (name: string) => {
     try {
       const raw = await invoke<string>("read_model", { name });
+      lastKnownDisk.current = raw;
       const data = parseModelData(raw);
       applyModelData(data);
       setCurrentModel(name);
@@ -243,6 +247,8 @@ export function useModelStorage(
   const reloadModel = useCallback(async (name: string) => {
     try {
       const raw = await invoke<string>("read_model", { name });
+      if (raw === lastKnownDisk.current) return; // our own write — skip
+      lastKnownDisk.current = raw;
       const data = parseModelData(raw);
 
       // Diff old vs new nodes to find where changes occurred
@@ -276,6 +282,37 @@ export function useModelStorage(
         if (!newMap.has(n.id)) {
           // Deleted node
           bumpParent(n.parentId);
+        }
+      }
+
+      // Detect edge changes — topology changes should trigger re-layout
+      const oldEdges = edgesRef.current;
+      const edgesChanged = oldEdges.length !== data.edges.length ||
+        data.edges.some((e, i) => e.id !== oldEdges[i]?.id || e.source !== oldEdges[i]?.source || e.target !== oldEdges[i]?.target);
+
+      if (edgesChanged) {
+        // Find which parent scopes have changed edges
+        const affectedParents = new Set<string | undefined>();
+        for (const e of data.edges) {
+          if (oldEdges.every((oe) => oe.id !== e.id)) {
+            // New edge — flag parents of both endpoints
+            affectedParents.add(newMap.get(e.source)?.parentId);
+            affectedParents.add(newMap.get(e.target)?.parentId);
+          }
+        }
+        for (const oe of oldEdges) {
+          if (data.edges.every((e) => e.id !== oe.id)) {
+            // Deleted edge — flag parents of old endpoints
+            affectedParents.add(newMap.get(oe.source)?.parentId ?? oldMap.get(oe.source)?.parentId);
+            affectedParents.add(newMap.get(oe.target)?.parentId ?? oldMap.get(oe.target)?.parentId);
+          }
+        }
+        // Strip positions only on nodes at affected levels
+        for (const n of data.nodes) {
+          if (affectedParents.has(n.parentId)) {
+            n.position = { x: 0, y: 0 };
+            (n.data as C4NodeData)._needsLayout = true;
+          }
         }
       }
 
@@ -316,6 +353,11 @@ export function useModelStorage(
         }
 
         if (bestParentId) {
+          // Don't navigate into code level (inside a component)
+          const bestNode = nodeById.get(bestParentId);
+          if (bestNode && (bestNode.data as C4NodeData).kind === "component" && bestNode.parentId) {
+            bestParentId = bestNode.parentId;
+          }
           // Build expandedPath by walking up from the target parent
           const path: string[] = [];
           let cur: string | undefined = bestParentId;
@@ -329,6 +371,7 @@ export function useModelStorage(
           scheduleFitView();
         }
       }
+
     } catch {
       // Silently ignore — model may have been deleted externally
     }
@@ -402,15 +445,10 @@ export function useModelStorage(
   }, [loadModel]);
 
   // File watcher: reload when external tools modify model files.
-  // If a save is pending (saveTimer active), the file change is from the UI — skip reload.
+  // The string comparison in reloadModel handles self-write detection.
   useEffect(() => {
     const unlisten = listen<string>("model-changed", (event) => {
       const name = event.payload;
-      // If the UI has a pending save, this event is likely from our own write — skip reload
-      if (saveTimer.current) {
-        return;
-      }
-      skipSave.current = true;
       if (reloadTimer.current) clearTimeout(reloadTimer.current);
       reloadTimer.current = setTimeout(() => {
         if (name === currentModel) {

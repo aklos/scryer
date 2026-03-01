@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Minus, Square, X, Settings, Keyboard, FolderX, SaveAll } from "lucide-react";
+import { Minus, Square, X, Settings, Keyboard, FolderX, SaveAll, Menu } from "lucide-react";
 import type { C4Kind } from "./types";
 import type { RackDependency } from "./CodeLevelRack";
 
@@ -24,11 +24,7 @@ interface TopBarProps {
 
 const appWindow = getCurrentWindow();
 
-function LogoIcon({ className }: { className?: string }) {
-  return (
-    <img src="/logo.png" alt="scryer" className={`${className ?? ""} saturate-[0.7] opacity-90`} />
-  );
-}
+
 
 function AppMenu({ onClose, onOpenSettings, onOpenPalette, onCloseModel, onSaveAs, hasModel }: { onClose: () => void; onOpenSettings: () => void; onOpenPalette: () => void; onCloseModel: () => void; onSaveAs: () => void; hasModel: boolean }) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -104,7 +100,7 @@ export function TopBar({
           onClick={toggleMenu}
           title="Menu"
         >
-          <LogoIcon className="h-4 w-4" />
+          <Menu className="h-4 w-4" />
         </button>
         {menuOpen && (
           <AppMenu

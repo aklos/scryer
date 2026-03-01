@@ -397,12 +397,17 @@ pub fn ai_configured(settings: &AiSettings) -> bool {
 
 /// Delete a model by name.
 pub fn delete_model(name: &str) -> Result<(), String> {
-    let path = models_dir().join(format!("{}.scry", name));
+    let dir = models_dir();
+    let path = dir.join(format!("{}.scry", name));
     if path.exists() {
-        fs::remove_file(&path).map_err(|e| e.to_string())
-    } else {
-        Ok(())
+        fs::remove_file(&path).map_err(|e| e.to_string())?;
     }
+    // Clean up baseline snapshot if present
+    let baseline = dir.join(format!("{}.baseline.scry", name));
+    if baseline.exists() {
+        let _ = fs::remove_file(&baseline);
+    }
+    Ok(())
 }
 
 /// Generate the next node ID by scanning existing nodes.

@@ -650,7 +650,7 @@ function Flow() {
       return;
     }
     const pending = visibleNodes.filter((n) => n.data._needsLayout && n.type !== "groupBox");
-    if (pending.length < 2) {
+    if (pending.length === 0) {
       setLayoutPending(false);
       return;
     }

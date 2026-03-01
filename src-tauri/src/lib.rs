@@ -1,15 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use notify::{recommended_watcher, EventKind, RecursiveMode, Watcher};
 use tauri::{Emitter, Manager, path::BaseDirectory};
-
-/// Tracks model names recently written by the UI with timestamps, so the file
-/// watcher can suppress ALL events from a single UI write (atomic writes on
-/// Linux fire multiple inotify events: one for the temp file, one for the rename).
-struct SelfWrites(Arc<Mutex<HashMap<String, Instant>>>);
 
 /// Managed state wrapping the AI settings.
 struct SettingsState(Arc<Mutex<scryer_core::AiSettings>>);
@@ -58,14 +52,12 @@ fn read_model(name: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn write_model(name: String, data: String, state: tauri::State<'_, SelfWrites>) -> Result<(), String> {
-    state.0.lock().unwrap().insert(name.clone(), Instant::now());
+fn write_model(name: String, data: String) -> Result<(), String> {
     scryer_core::write_model_raw(&name, &data)
 }
 
 #[tauri::command]
-fn delete_model(name: String, state: tauri::State<'_, SelfWrites>) -> Result<(), String> {
-    state.0.lock().unwrap().insert(name.clone(), Instant::now());
+fn delete_model(name: String) -> Result<(), String> {
     scryer_core::delete_model(&name)
 }
 
@@ -245,17 +237,14 @@ fn open_in_editor(file: String, line: Option<u32>, project_path: Option<String>)
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let self_writes = Arc::new(Mutex::new(HashMap::<String, Instant>::new()));
     let settings = scryer_core::read_settings();
     let settings_state = Arc::new(Mutex::new(settings));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(SelfWrites(self_writes.clone()))
         .manage(SettingsState(settings_state))
         .setup(move |app| {
             let handle = app.handle().clone();
-            let writes = self_writes.clone();
             let dir = scryer_core::models_dir();
             let _ = std::fs::create_dir_all(&dir);
 
@@ -292,15 +281,9 @@ pub fn run() {
                     if name.ends_with(".baseline") {
                         continue;
                     }
-                    {
-                        let mut guard = writes.lock().unwrap();
-                        if let Some(written_at) = guard.get(name) {
-                            if written_at.elapsed().as_millis() < 1000 {
-                                continue; // written by UI recently, skip
-                            }
-                            // Stale entry — clean it up
-                            guard.remove(name);
-                        }
+                    if matches!(event.kind, EventKind::Remove(_)) {
+                        known_models.remove(name);
+                        continue;
                     }
                     if known_models.insert(name.to_string()) {
                         let _ = handle.emit("model-created", name.to_string());

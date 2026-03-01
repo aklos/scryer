@@ -564,5 +564,11 @@ export async function autoLayout(
 
   const groupMap = nodeToGroup.size > 0 ? nodeToGroup : undefined;
   const snapped = spreadAroundHubs(positioned, filteredEdges, groupMap);
-  return uncrossEdges(snapped, filteredEdges, groupMap);
+  const uncrossed = uncrossEdges(snapped, filteredEdges, groupMap);
+
+  // Snap final positions to 20px grid
+  return uncrossed.map((n) => ({
+    ...n,
+    position: { x: Math.round(n.position.x / 20) * 20, y: Math.round(n.position.y / 20) * 20 },
+  }));
 }

@@ -455,7 +455,6 @@ export function C4Canvas({
               <img src="/logo.png" alt="scryer" className="w-16 h-16" />
               <div className="flex flex-col">
                 <h1 className="text-5xl font-bold tracking-tight text-zinc-800 dark:text-zinc-100" style={{ fontFamily: "'Space Grotesk Variable', sans-serif" }}>scryer</h1>
-                <p className="text-sm text-zinc-400 dark:text-zinc-500">visual planning surface</p>
               </div>
             </div>
             <div className="flex flex-col gap-2 text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed">
