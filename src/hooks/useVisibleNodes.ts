@@ -55,7 +55,7 @@ export function useVisibleNodes({
         id: group.id,
         type: "groupBox",
         position: { x: minX, y: minY },
-        style: { width: w, height: h },
+        style: { width: w, height: h, pointerEvents: "none" as const },
         zIndex: -1,
         draggable: false,
         selectable: true,

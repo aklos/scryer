@@ -261,7 +261,7 @@ function Flow() {
 
   useCanvasEvents({
     expandNode,
-    setNodes, setEdges, screenToFlowPosition, nodes,
+    setNodes, setEdges, screenToFlowPosition, nodes, setSelectedGroupId,
   });
 
   // --- Remaining inline logic ---
