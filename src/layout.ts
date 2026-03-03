@@ -9,6 +9,7 @@ const elk = new ELK();
 // The 8 compass directions: E, SE, S, SW, W, NW, N, NE
 const COMPASS_8 = Array.from({ length: 8 }, (_, i) => (i * Math.PI) / 4);
 
+
 /**
  * Post-process: snap neighbors of hub nodes to the 8 compass directions.
  *
@@ -75,26 +76,30 @@ function spreadAroundHubs(
 
     if (freeNeighbors.length === 0) continue;
 
-    // More neighbors → more spacing needed so labels don't overlap.
-    // Use freeNeighbors count (not total degree) — when groups filter out
-    // cross-group neighbors, spacing should reflect only the nodes being spread.
-    const minDist = 200 + freeNeighbors.length * 40;
+    // Fixed ring distances — don't use ELK-derived distances which are too variable.
+    // Inner ring at 8 compass directions, outer ring offset by exactly half a
+    // compass step (22.5°) so outer nodes sit visually between inner nodes.
+    const INNER_DIST = 420;
+    const OUTER_DIST = 700;
+    const HALF_STEP = Math.PI / 8; // 22.5° — exactly halfway between compass dirs
 
-    // Compute current angle + distance for each free neighbor
-    const items: { id: string; angle: number; dist: number }[] = [];
+    type Slot = { angle: number; dist: number };
+    const allSlots: Slot[] = [
+      ...COMPASS_8.map((a) => ({ angle: a, dist: INNER_DIST })),
+      ...COMPASS_8.map((a) => ({ angle: a + HALF_STEP, dist: OUTER_DIST })),
+    ];
+
+    // Compute current angle for each free neighbor (for slot assignment)
+    const items: { id: string; angle: number }[] = [];
     for (const nid of freeNeighbors) {
       const nn = nodeMap.get(nid)!;
       const nPos = posMap.get(nid)!;
       const dx = (nPos.x + nw(nn) / 2) - cx;
       const dy = (nPos.y + nh(nn) / 2) - cy;
-      items.push({
-        id: nid,
-        angle: Math.atan2(dy, dx),
-        dist: Math.max(Math.sqrt(dx * dx + dy * dy), minDist),
-      });
+      items.push({ id: nid, angle: Math.atan2(dy, dx) });
     }
 
-    // Figure out which compass slots are blocked by already-placed neighbors
+    // Figure out which slots are blocked by already-placed neighbors
     const taken = new Set<number>();
     for (const nid of neighbors) {
       if (!placed.has(nid)) continue;
@@ -105,35 +110,41 @@ function spreadAroundHubs(
       const a = ((Math.atan2(dy, dx) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
       let bestSlot = 0;
       let bestDist = Infinity;
-      for (let s = 0; s < COMPASS_8.length; s++) {
-        let d = Math.abs(COMPASS_8[s] - a);
+      for (let s = 0; s < allSlots.length; s++) {
+        let d = Math.abs(allSlots[s].angle - a);
         if (d > Math.PI) d = 2 * Math.PI - d;
         if (d < bestDist) { bestDist = d; bestSlot = s; }
       }
       taken.add(bestSlot);
     }
 
-    // Greedy: sort by angle, assign nearest free compass slot
+    // Greedy: sort by angle, assign nearest free slot.
+    // Inner slots (indices 0–7) are preferred over outer (8–15) by adding a
+    // small penalty for outer slots, so we only use outer when inner is taken.
     items.sort((a, b) => a.angle - b.angle);
 
     for (const item of items) {
       const a = ((item.angle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
 
       let bestSlot = -1;
-      let bestDist = Infinity;
-      for (let s = 0; s < COMPASS_8.length; s++) {
+      let bestScore = Infinity;
+      for (let s = 0; s < allSlots.length; s++) {
         if (taken.has(s)) continue;
-        let d = Math.abs(COMPASS_8[s] - a);
+        let d = Math.abs(allSlots[s].angle - a);
         if (d > Math.PI) d = 2 * Math.PI - d;
-        if (d < bestDist) { bestDist = d; bestSlot = s; }
+        // Penalize outer ring so inner is always preferred when available
+        const score = d + (s >= 8 ? 1.0 : 0);
+        if (score < bestScore) { bestScore = score; bestSlot = s; }
       }
 
-      const finalAngle = bestSlot >= 0 ? COMPASS_8[bestSlot] : item.angle;
+      const slot = bestSlot >= 0 ? allSlots[bestSlot] : null;
+      const finalAngle = slot ? slot.angle : item.angle;
+      const dist = slot ? slot.dist : INNER_DIST;
       if (bestSlot >= 0) taken.add(bestSlot);
 
       const nn = nodeMap.get(item.id)!;
-      let nx = cx + Math.cos(finalAngle) * item.dist - nw(nn) / 2;
-      let ny = cy + Math.sin(finalAngle) * item.dist - nh(nn) / 2;
+      let nx = cx + Math.cos(finalAngle) * dist - nw(nn) / 2;
+      let ny = cy + Math.sin(finalAngle) * dist - nh(nn) / 2;
       // For cardinal directions, align to hub's grid line so snap doesn't misalign
       const cosA = Math.cos(finalAngle), sinA = Math.sin(finalAngle);
       if (Math.abs(cosA) < 0.01) nx = hubPos.x + nw(node) / 2 - nw(nn) / 2;
