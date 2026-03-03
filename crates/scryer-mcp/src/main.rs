@@ -731,6 +731,12 @@ impl ScryerServer {
             node.position = None;
         }
 
+        // Deduplicate edges by ID (keep first occurrence)
+        {
+            let mut seen = HashSet::new();
+            model.edges.retain(|e| seen.insert(e.id.clone()));
+        }
+
         let node_count = model.nodes.len();
         let edge_count = model.edges.len();
         let cross_level_warnings = check_disconnected_nodes(&model);
@@ -1064,7 +1070,16 @@ impl ScryerServer {
                 ))]));
             }
         }
-        model.edges.extend(subtree.edges);
+        // Skip subtree edges whose ID already exists in the model (warn the agent)
+        let existing_edge_ids: HashSet<_> = model.edges.iter().map(|e| e.id.clone()).collect();
+        let mut skipped_edges = Vec::new();
+        for edge in subtree.edges {
+            if existing_edge_ids.contains(&edge.id) {
+                skipped_edges.push(edge.id);
+            } else {
+                model.edges.push(edge);
+            }
+        }
 
         // Check for missing edges when detailing a system or container (not components —
         // operation/process/model nodes are code-level and don't need architectural edges).
@@ -1107,6 +1122,13 @@ impl ScryerServer {
                     "Set {} descendant node(s) and {} edge(s) under '{}'",
                     node_count, edge_count, req.node_id
                 );
+                if !skipped_edges.is_empty() {
+                    msg.push_str(&format!(
+                        "\n\n⚠️ SKIPPED {} DUPLICATE EDGE(S): {} — these edge IDs already exist in the model.",
+                        skipped_edges.len(),
+                        skipped_edges.join(", ")
+                    ));
+                }
                 if !missing_externals.is_empty() {
                     msg.push_str(&format!(
                         "\n\n⚠️ MISSING EDGES: The parent node '{}' has edges to external nodes, \

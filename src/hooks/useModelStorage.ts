@@ -82,9 +82,17 @@ export function parseModelData(raw: string): C4ModelData {
     return patched as unknown as C4Node;
   });
 
+  // Deduplicate edges by ID (keep first occurrence)
+  const seenEdgeIds = new Set<string>();
+  const edges: C4Edge[] = (data.edges ?? []).filter((e: C4Edge) => {
+    if (seenEdgeIds.has(e.id)) return false;
+    seenEdgeIds.add(e.id);
+    return true;
+  });
+
   return {
     nodes,
-    edges: data.edges ?? [],
+    edges,
     startingLevel: data.startingLevel ?? "system",
     sourceMap: data.sourceMap ?? {},
     projectPath: data.projectPath,
