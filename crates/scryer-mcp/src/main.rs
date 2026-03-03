@@ -3184,7 +3184,10 @@ When building code from a model, use `get_task` in a loop. Each call returns one
 2. Build what the task describes. A scaffold task may cover multiple nodes at once — that's fine.
 3. Mark the node(s) as implemented via `update_nodes`. Only mark nodes listed in the task.
 4. **Call `get_task` again immediately.** Do not stop after one task — there are always more until it returns "All tasks complete."
-The task system tracks what's done and what's next. Do not read the full model via `get_model` to derive your own implementation order."#;
+The task system tracks what's done and what's next. Do not read the full model via `get_model` to derive your own implementation order.
+
+## Subagents
+Do NOT delegate scryer write operations (`set_model`, `set_node`, `add_nodes`, `update_nodes`, `delete_nodes`, `add_edges`, `update_edges`, `delete_edges`, `set_flows`, `delete_flow`, `update_source_map`) to subagents. Subagents may use read tools (`list_models`, `get_model`, `get_node`, `get_rules`, `get_changes`, `get_task`) for research, but all model mutations must happen in the main conversation context."#;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
