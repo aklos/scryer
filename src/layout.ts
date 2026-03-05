@@ -875,15 +875,29 @@ export async function autoLayout(
         height: n.measured?.height ?? NODE_H,
       };
     });
+    // Count intra-group edges to decide layout strategy
+    const memberSet = new Set(g.memberIds);
+    let intraEdgeCount = 0;
+    for (const e of filteredEdges) {
+      if (memberSet.has(e.source) && memberSet.has(e.target)) intraEdgeCount++;
+    }
+
+    // If few intra-group edges, stress collapses to a line — use rectpacking
+    // for a compact grid instead. With enough edges, stress produces good results.
+    const useGrid = intraEdgeCount < memberSet.size;
     topChildren.push({
       id: `__group__${g.id}`,
       width: 0,
       height: 0,
       children,
-      layoutOptions: {
+      layoutOptions: useGrid ? {
+        "elk.algorithm": "rectpacking",
+        "elk.spacing.nodeNode": "80",
+        "elk.padding": `[top=${GROUP_PADDING},left=${GROUP_PADDING},bottom=${GROUP_PADDING},right=${GROUP_PADDING}]`,
+      } : {
         "elk.algorithm": "stress",
-        "elk.stress.desiredEdgeLength": "300",
-        "elk.spacing.nodeNode": "150",
+        "elk.stress.desiredEdgeLength": "400",
+        "elk.spacing.nodeNode": "200",
         "elk.padding": `[top=${GROUP_PADDING},left=${GROUP_PADDING},bottom=${GROUP_PADDING},right=${GROUP_PADDING}]`,
       },
     });
@@ -932,10 +946,9 @@ export async function autoLayout(
     }
   }
 
-  // When compound nodes are present, their computed size can be large (500+ px).
-  // Scale top-level spacing so ELK doesn't pack them on top of each other.
-  let topEdgeLength = 350;
-  let topNodeSpacing = 200;
+  // Base spacing — compound node adjustment below may increase these.
+  let topEdgeLength = 450;
+  let topNodeSpacing = 250;
   if (activeGroups.length > 0) {
     // Estimate the largest compound node dimension
     let maxCompoundDim = 0;
@@ -947,8 +960,8 @@ export async function autoLayout(
         maxCompoundDim = Math.max(maxCompoundDim, totalChildArea);
       }
     }
-    topEdgeLength = Math.max(topEdgeLength, maxCompoundDim + 150);
-    topNodeSpacing = Math.max(topNodeSpacing, maxCompoundDim * 0.5);
+    topEdgeLength = Math.max(topEdgeLength, maxCompoundDim + 250);
+    topNodeSpacing = Math.max(topNodeSpacing, maxCompoundDim * 0.6);
   }
 
   const graph = {
