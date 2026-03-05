@@ -1,4 +1,4 @@
-import type { C4Shape } from "../types";
+import type { C4Kind, C4Shape } from "../types";
 import {
   baseRectPath,
   rectanglePath,
@@ -20,6 +20,7 @@ interface Props {
   strokeWidth?: number;
   strokeDasharray?: string;
   opacity?: number;
+  kind?: C4Kind;
 }
 
 export function ShapeBackground({
@@ -29,6 +30,7 @@ export function ShapeBackground({
   strokeWidth = 0,
   strokeDasharray,
   opacity,
+  kind,
 }: Props) {
   return (
     <svg
@@ -38,6 +40,14 @@ export function ShapeBackground({
       viewBox={`0 0 ${W} ${H}`}
       style={opacity != null && opacity < 1 ? { opacity, isolation: "isolate" } : undefined}
     >
+      {kind === "component" && shape === "rectangle" && (
+        <path
+          d={`M0,0 V-14 H44 L52,0`}
+          className={`${fillClass} ${strokeClass ?? ""}`}
+          strokeWidth={strokeWidth}
+          strokeDasharray={strokeDasharray}
+        />
+      )}
       <ShapePaths
         shape={shape}
         fillClass={fillClass}
@@ -46,6 +56,23 @@ export function ShapeBackground({
         strokeDasharray={strokeDasharray}
         skipBaseFill={opacity != null && opacity < 1}
       />
+      {kind === "system" && shape === "rectangle" && (
+        <rect
+          x={6} y={6}
+          width={W - 12} height={H - 12}
+          fill="none"
+          className={strokeClass}
+          strokeWidth={1}
+        />
+      )}
+      {kind === "container" && shape === "rectangle" && (
+        <path
+          d={`M0,0 V-10 H${W} V0`}
+          className={`${fillClass} ${strokeClass ?? ""}`}
+          strokeWidth={strokeWidth}
+          strokeDasharray={strokeDasharray}
+        />
+      )}
     </svg>
   );
 }

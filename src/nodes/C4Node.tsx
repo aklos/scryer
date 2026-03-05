@@ -3,7 +3,6 @@ import type { NodeProps } from "@xyflow/react";
 import type {
   C4Node as C4NodeType,
   C4NodeData,
-  C4Kind,
   Hint,
   Attachment,
 } from "../types";
@@ -11,7 +10,6 @@ import { NodeHandles, CenterHandle } from "./NodeHandles";
 import { ShapeBackground, resolveShape, getContentInsets } from "../shapes";
 import { HintBadge } from "./HintBadge";
 import { STATUS_COLORS } from "../statusColors";
-import { KIND_ICON } from "../kindIcons";
 import { DescriptionText } from "../DescriptionText";
 import { Code, Workflow, Table } from "lucide-react";
 
@@ -20,21 +18,6 @@ function isExpandable(kind: C4NodeData["kind"]): boolean {
   return kind === "system" || kind === "container" || kind === "component";
 }
 
-/** Compact kind badge for the top-left corner of a node */
-function KindTab({ kind, dimmed }: { kind: C4Kind; dimmed?: boolean }) {
-  const ki = KIND_ICON[kind];
-  return (
-    <div
-      className={`absolute top-1.5 left-1.5 z-10 flex items-center gap-0.5 px-1 rounded border text-[8px] leading-none font-medium
-        bg-white/70 dark:bg-zinc-800/70 border-zinc-200/60 dark:border-zinc-700/60
-        ${ki.color} ${dimmed ? "opacity-50" : ""}`}
-      style={{ height: 16 }}
-    >
-      <ki.Icon size={10} />
-      <span>{ki.label}</span>
-    </div>
-  );
-}
 
 const MAX_VISIBLE_CHIPS = 8;
 
@@ -238,9 +221,9 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
               }
               strokeWidth={selected ? 2 : 1}
               strokeDasharray={data.external ? "6 3" : undefined}
+              kind={data.external ? undefined : data.kind}
             />
           )}
-          {!isRefPerson && <KindTab kind={data.kind} dimmed />}
           {data._codeLevel ? <CenterHandle /> : <NodeHandles />}
 
           <div
@@ -448,6 +431,7 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
           }
           strokeWidth={selected ? 2.5 : groupHighlight || statusColor ? 2 : 1}
           strokeDasharray={isExternal ? "6 3" : undefined}
+          kind={isExternal ? undefined : data.kind}
         />
         {/* Deprecated status: line through center */}
         {data.status === "deprecated" && !isExternal && (
@@ -469,13 +453,12 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
           </svg>
         )}
         <NodeHandles />
-        <KindTab kind={data.kind} />
 
         {/* Drill-in — visible when selected */}
         {expandable && selected && (
           <div className="absolute top-1.5 right-1.5 flex items-center z-10">
             <button
-              className="nodrag text-[10px] tracking-wider text-zinc-400 dark:text-zinc-500 cursor-pointer"
+              className="nodrag flex items-center justify-center w-5 h-5 rounded bg-zinc-100 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 text-xs cursor-pointer hover:bg-zinc-200 dark:hover:bg-zinc-600 transition-colors"
               onClick={() =>
                 window.dispatchEvent(
                   new CustomEvent("node-expand", { detail: { nodeId: id } }),
