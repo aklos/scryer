@@ -1,4 +1,5 @@
 pub mod rules;
+pub mod scan;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

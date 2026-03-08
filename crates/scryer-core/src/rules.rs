@@ -21,20 +21,18 @@ A Person→System edge (system level) and a Person→Container edge (container l
 the system-level edge is correct at that zoom level, and the container-level edge adds detail. \
 Similarly, a Container→System deployment edge is not redundant with a System→System edge. \
 Do not flag cross-level edges as duplicates or suggest removing them.\n\
-9. Split multi-role deployments into separate containers. When a single deployable unit serves \
-multiple distinct roles, model each role as its own container and use a deployment group to show \
-they ship together. Signals to look for: multiple distinct UIs (public site vs admin panel), \
-API routes that serve external callers (webhooks, callbacks) separately from the frontend, \
-different auth models for different parts of the app, framework namespacing (Next.js route groups, \
-Rails engines, Django apps). Example: a Next.js app with Payload CMS should be at least two containers \
-(\"Website\" + \"CMS Admin\"), possibly three if the API routes handle external webhooks independently \
-(\"Website\" + \"API\" + \"CMS Admin\"), all in one deployment group. The container diagram captures \
-logical separation, not deployment topology.\n\
-10. Containers are independently addressable, not framework internals. A container must be something \
-a user, external system, or other container can address directly (a URL, a queue, a database connection). \
-Auto-generated framework layers (e.g. Payload CMS REST API, Django admin ORM, Rails ActiveRecord) are \
-implementation details of the container that uses them — not separate containers. If you can only reach \
-it through another container's process, it's a component of that container, not its own container.\n\
+9. Split for coherent inner graphs. The test for whether something should be one container or two: \
+would the component-level view make sense? If combining two concerns would produce an inner graph \
+with unrelated components mixed together, split them into separate containers. Each container should \
+tell one coherent story at component level. Example: a Next.js app with Payload CMS should be separate \
+containers (\"Website\" + \"CMS Admin\") because their components are entirely unrelated — page routes \
+vs admin panels vs content schemas. Use a deployment group if they ship together. The container diagram \
+captures logical separation; groups handle deployment topology.\n\
+10. Auto-generated framework layers are not containers. If something only exists as an implementation \
+detail of another container (e.g. Payload CMS REST API, Django admin ORM, Rails ActiveRecord) and \
+cannot be addressed independently, it's a component, not a container. But if it has its own distinct \
+set of concerns that would clutter the parent's component view, it may warrant its own container — \
+apply rule 9.\n\
 11. Components map to code structures. A component should correspond to a concrete code unit: \
 a class in OOP languages (C#, C++, Java), a module or package in Go/Rust/Python, or a folder/file \
 boundary in JavaScript/TypeScript. If a component is too abstract to point at a specific place in \
@@ -71,19 +69,12 @@ a refactoring detail an agent should resolve silently.\n\
 \n\
 ## Workflow\n\
 1. `list_models` to see existing diagrams.\n\
-2. **Before calling `set_model`, explore the codebase to discover all deployable units.** Don't model from \
-memory or assumption — search the repo systematically:\n\
-   - Read project README, CLAUDE.md, and root package.json/Cargo.toml for an overview.\n\
-   - Search for infrastructure-as-code: SAM/CDK/Terraform templates, docker-compose, k8s manifests, \
-Dockerfiles, fly.toml, serverless.yml.\n\
-   - Look for separate deployment directories: `lambda/`, `functions/`, `workers/`, `services/`, `cmd/`, \
-`jobs/`. Each is likely a separate container in C4.\n\
-   - Find all entry points: `handler.ts`, `main.rs`, `index.ts`, `main.go`, etc. across the entire repo.\n\
-   - Check for background processors, scheduled jobs, CLI tools, or webhook handlers that deploy independently.\n\
-   - Within each deployable unit, identify distinct roles. A single app that serves a public website, an admin \
-panel, and webhook API routes is three logical containers in one deployment group — not one container.\n\
-   Common miss: serverless functions, background workers, and sidecar services in subdirectories are separate \
-containers — don't model the project as a single application if it deploys as multiple units.\n\
+2. **Call `get_structure` with the project path** to get an annotated directory tree. This shows manifests \
+(`[manifest]`), infrastructure configs (`[infrastructure]`), and environment templates (`[environment]`) at their \
+location in the tree. Read the manifests it surfaces to identify runtime dependencies (external services, \
+databases, frameworks). Each directory with its own manifest + infrastructure config is likely a separate \
+deployable unit → a container in C4. Do NOT manually explore the codebase — `get_structure` provides the \
+complete picture.\n\
 3. **Model one level at a time.** Each call creates one view that gets validated for edge completeness.\n\
    - **First call (`set_model`):** persons, the system, external systems, and system-level edges only. \
 No containers yet. This establishes the system landscape. Fix any warnings before proceeding.\n\

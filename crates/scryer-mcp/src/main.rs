@@ -522,6 +522,12 @@ struct DeleteGroupRequest {
     group_id: String,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct GetStructureRequest {
+    /// Absolute path to the project directory to scan
+    path: String,
+}
+
 // --- Server ---
 
 #[derive(Clone)]
@@ -1493,6 +1499,20 @@ impl ScryerServer {
         Ok(CallToolResult::success(vec![Content::text(
             scryer_core::rules::RULES,
         )]))
+    }
+
+    #[tool(
+        description = "Get the structure of a project directory. Returns an annotated directory tree showing manifests (package.json, Cargo.toml, etc.), infrastructure configs (Dockerfile, fly.toml, SAM templates, CI/CD), and environment templates. Use this before modeling to understand a codebase's structure without manual exploration. The tree uses [manifest], [infrastructure], [environment] annotations and '... (N more)' for collapsed subtrees. Respects .gitignore and skips build output/dependency directories."
+    )]
+    fn get_structure(
+        &self,
+        Parameters(req): Parameters<GetStructureRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let path = std::path::Path::new(&req.path);
+        match scryer_core::scan::project_structure(path) {
+            Ok(tree) => Ok(CallToolResult::success(vec![Content::text(tree)])),
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
+        }
     }
 
     #[tool(description = "Delete one or more edges from the model")]
