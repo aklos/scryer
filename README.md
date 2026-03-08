@@ -105,7 +105,7 @@ command = "/path/to/scryer-mcp"
 
 ## Tech
 
-Scryer is a [Tauri](https://tauri.app/) desktop app. The UI is written in [React](https://react.dev/) with [TypeScript](https://www.typescriptlang.org/) and the backend is written in [Rust](https://www.rust-lang.org/). Canvas rendering uses [ReactFlow](https://reactflow.dev/) with [ELK](https://www.eclipse.org/elk/) for auto-layout.
+Scryer is a [Tauri](https://tauri.app/) desktop app. The UI is written in [React](https://react.dev/) with [TypeScript](https://www.typescriptlang.org/) and the backend is written in [Rust](https://www.rust-lang.org/). Canvas rendering uses [ReactFlow](https://reactflow.dev/) with [d3-force](https://d3js.org/d3-force) for auto-layout.
 
 ## Building from source
 

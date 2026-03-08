@@ -477,7 +477,7 @@ function Flow() {
     const nodeType = kind === "operation" ? "operation" : kind === "process" ? "process" : kind === "model" ? "model" : "c4";
     const defaultName = kind === "operation" ? "newOperation"
       : kind === "process" ? "New process"
-      : kind === "model" ? "newModel"
+      : kind === "model" ? "NewModel"
       : kind === "person" ? "New person"
       : "New node";
     const newNode: C4Node = {
@@ -604,7 +604,7 @@ function Flow() {
       .map((g) => ({ ...g, memberIds: g.memberIds.filter((id) => layoutIds.has(id)) }))
       .filter((g) => g.memberIds.length >= 2);
 
-    const laid = await autoLayout(layoutNodes, layoutEdges, activeGroups);
+    const laid = await autoLayout(layoutNodes, layoutEdges, activeGroups, false, true);
     const posMap = new Map(laid.map((n) => [n.id, n.position]));
 
     const refIds = new Set(visibleNodes.filter((n) => n.data._reference).map((n) => n.id));

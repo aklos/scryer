@@ -1,610 +1,19 @@
-import ELK from "elkjs/lib/elk.bundled.js";
+import {
+  forceSimulation,
+  forceLink,
+  forceManyBody,
+  forceX,
+  forceY,
+  type SimulationNodeDatum,
+  type SimulationLinkDatum,
+} from "d3-force";
 import type { C4Node, C4Edge, Group } from "./types";
 
 const NODE_W = 180;
 const NODE_H = 160;
+const GRID_SNAP = 20;
 
-const elk = new ELK();
-
-// The 8 compass directions: E, SE, S, SW, W, NW, N, NE
-const COMPASS_8 = Array.from({ length: 8 }, (_, i) => (i * Math.PI) / 4);
-
-
-/**
- * Post-process: snap neighbors of hub nodes to the 8 compass directions.
- *
- * Processes hubs in order of decreasing degree. Once a node has been
- * repositioned by one hub, it's locked — later hubs skip it.
- *
- * When `groupedNodes` is provided, a grouped node will only be repositioned
- * by a hub in the same group — this prevents scattering group members.
- */
-function spreadAroundHubs(
-  nodes: C4Node[],
-  edges: C4Edge[],
-  groupedNodes?: Map<string, string>,
-): C4Node[] {
-  const adj = new Map<string, string[]>();
-  const nodeIds = new Set(nodes.map((n) => n.id));
-  for (const e of edges) {
-    if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
-    if (!adj.has(e.source)) adj.set(e.source, []);
-    if (!adj.has(e.target)) adj.set(e.target, []);
-    adj.get(e.source)!.push(e.target);
-    adj.get(e.target)!.push(e.source);
-  }
-
-  const posMap = new Map(nodes.map((n) => [n.id, { ...n.position }]));
-  const nw = (n: C4Node) => n.measured?.width ?? NODE_W;
-  const nh = (n: C4Node) => n.measured?.height ?? NODE_H;
-  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
-
-  // Hub threshold: only nodes with above-median degree, minimum 3.
-  // Low-degree nodes (like a person with 2 edges) should float freely.
-  const degrees = nodes.map((n) => adj.get(n.id)?.length ?? 0).filter((d) => d > 0);
-  degrees.sort((a, b) => a - b);
-  const median = degrees.length > 0 ? degrees[Math.floor(degrees.length / 2)] : 0;
-  const hubThreshold = Math.max(3, median);
-
-  // Sort hubs by degree (highest first)
-  const hubs = nodes
-    .filter((n) => (adj.get(n.id)?.length ?? 0) >= hubThreshold)
-    .sort((a, b) => (adj.get(b.id)?.length ?? 0) - (adj.get(a.id)?.length ?? 0));
-
-  // Track repositioned nodes — don't move them again
-  const placed = new Set<string>();
-
-  for (const node of hubs) {
-    if (placed.has(node.id)) continue;
-
-    // Skip grouped hubs entirely — ELK's compound layout already positioned
-    // group members well. Compass-snapping would override those positions.
-    if (groupedNodes?.has(node.id)) continue;
-
-    const neighbors = adj.get(node.id)!;
-    const hubPos = posMap.get(node.id)!;
-    const cx = hubPos.x + nw(node) / 2;
-    const cy = hubPos.y + nh(node) / 2;
-
-    // Only process neighbors that haven't been placed yet.
-    // Skip grouped neighbors — don't pull them out of their cluster.
-    const freeNeighbors = neighbors.filter((nid) => {
-      if (placed.has(nid)) return false;
-      if (groupedNodes?.has(nid)) return false;
-      return true;
-    });
-
-    if (freeNeighbors.length === 0) continue;
-
-    // Fixed ring distances — don't use ELK-derived distances which are too variable.
-    // Inner ring at 8 compass directions, outer ring offset by exactly half a
-    // compass step (22.5°) so outer nodes sit visually between inner nodes.
-    const INNER_DIST = 420;
-    const OUTER_DIST = 700;
-    const HALF_STEP = Math.PI / 8; // 22.5° — exactly halfway between compass dirs
-
-    type Slot = { angle: number; dist: number };
-    const allSlots: Slot[] = [
-      ...COMPASS_8.map((a) => ({ angle: a, dist: INNER_DIST })),
-      ...COMPASS_8.map((a) => ({ angle: a + HALF_STEP, dist: OUTER_DIST })),
-    ];
-
-    // Compute current angle for each free neighbor (for slot assignment)
-    const items: { id: string; angle: number }[] = [];
-    for (const nid of freeNeighbors) {
-      const nn = nodeMap.get(nid)!;
-      const nPos = posMap.get(nid)!;
-      const dx = (nPos.x + nw(nn) / 2) - cx;
-      const dy = (nPos.y + nh(nn) / 2) - cy;
-      items.push({ id: nid, angle: Math.atan2(dy, dx) });
-    }
-
-    // Figure out which slots are blocked by already-placed neighbors
-    const taken = new Set<number>();
-    for (const nid of neighbors) {
-      if (!placed.has(nid)) continue;
-      const nn = nodeMap.get(nid)!;
-      const nPos = posMap.get(nid)!;
-      const dx = (nPos.x + nw(nn) / 2) - cx;
-      const dy = (nPos.y + nh(nn) / 2) - cy;
-      const a = ((Math.atan2(dy, dx) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-      let bestSlot = 0;
-      let bestDist = Infinity;
-      for (let s = 0; s < allSlots.length; s++) {
-        let d = Math.abs(allSlots[s].angle - a);
-        if (d > Math.PI) d = 2 * Math.PI - d;
-        if (d < bestDist) { bestDist = d; bestSlot = s; }
-      }
-      taken.add(bestSlot);
-    }
-
-    // Greedy: sort by angle, assign nearest free slot.
-    // Inner slots (indices 0–7) are preferred over outer (8–15) by adding a
-    // small penalty for outer slots, so we only use outer when inner is taken.
-    items.sort((a, b) => a.angle - b.angle);
-
-    for (const item of items) {
-      const a = ((item.angle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-
-      let bestSlot = -1;
-      let bestScore = Infinity;
-      for (let s = 0; s < allSlots.length; s++) {
-        if (taken.has(s)) continue;
-        let d = Math.abs(allSlots[s].angle - a);
-        if (d > Math.PI) d = 2 * Math.PI - d;
-        // Penalize outer ring so inner is always preferred when available
-        const score = d + (s >= 8 ? 1.0 : 0);
-        if (score < bestScore) { bestScore = score; bestSlot = s; }
-      }
-
-      const slot = bestSlot >= 0 ? allSlots[bestSlot] : null;
-      const finalAngle = slot ? slot.angle : item.angle;
-      const dist = slot ? slot.dist : INNER_DIST;
-      if (bestSlot >= 0) taken.add(bestSlot);
-
-      const nn = nodeMap.get(item.id)!;
-      let nx = cx + Math.cos(finalAngle) * dist - nw(nn) / 2;
-      let ny = cy + Math.sin(finalAngle) * dist - nh(nn) / 2;
-      // For cardinal directions, align to hub's grid line so snap doesn't misalign
-      const cosA = Math.cos(finalAngle), sinA = Math.sin(finalAngle);
-      if (Math.abs(cosA) < 0.01) nx = hubPos.x + nw(node) / 2 - nw(nn) / 2;
-      if (Math.abs(sinA) < 0.01) ny = hubPos.y + nh(node) / 2 - nh(nn) / 2;
-      posMap.set(item.id, { x: nx, y: ny });
-      placed.add(item.id);
-    }
-  }
-
-  return nodes.map((n) => {
-    const pos = posMap.get(n.id);
-    return pos ? { ...n, position: pos } : n;
-  });
-}
-
-/** Cohen-Sutherland: does segment (x1,y1)→(x2,y2) intersect rect (rx,ry,rw,rh)? */
-function segmentIntersectsRect(
-  x1: number, y1: number, x2: number, y2: number,
-  rx: number, ry: number, rw: number, rh: number,
-): boolean {
-  const xmin = rx, xmax = rx + rw, ymin = ry, ymax = ry + rh;
-  const code = (x: number, y: number) => {
-    let c = 0;
-    if (x < xmin) c |= 1; else if (x > xmax) c |= 2;
-    if (y < ymin) c |= 4; else if (y > ymax) c |= 8;
-    return c;
-  };
-  let c1 = code(x1, y1), c2 = code(x2, y2);
-  let sx = x1, sy = y1, ex = x2, ey = y2;
-  for (let i = 0; i < 20; i++) {
-    if ((c1 | c2) === 0) return true;
-    if ((c1 & c2) !== 0) return false;
-    const c = c1 !== 0 ? c1 : c2;
-    let x = 0, y = 0;
-    if (c & 8) { x = sx + (ex - sx) * (ymax - sy) / (ey - sy); y = ymax; }
-    else if (c & 4) { x = sx + (ex - sx) * (ymin - sy) / (ey - sy); y = ymin; }
-    else if (c & 2) { y = sy + (ey - sy) * (xmax - sx) / (ex - sx); x = xmax; }
-    else if (c & 1) { y = sy + (ey - sy) * (xmin - sx) / (ex - sx); x = xmin; }
-    if (c === c1) { sx = x; sy = y; c1 = code(sx, sy); }
-    else { ex = x; ey = y; c2 = code(ex, ey); }
-  }
-  return false;
-}
-
-/** How far (radians) an angle is from its nearest compass direction. */
-function compassDeviation(dx: number, dy: number): number {
-  const a = ((Math.atan2(dy, dx) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-  let best = Infinity;
-  for (const c of COMPASS_8) {
-    let d = Math.abs(c - a);
-    if (d > Math.PI) d = 2 * Math.PI - d;
-    if (d < best) best = d;
-  }
-  return best;
-}
-
-/**
- * After spreadAroundHubs: find floaters (nodes not placed as hubs or spokes),
- * then reposition them and slide connected spokes along their radials until
- * as many floater edges as possible align to compass directions.
- */
-function straightenFloaterEdges(
-  nodes: C4Node[],
-  edges: C4Edge[],
-  groupedNodes?: Map<string, string>,
-): C4Node[] {
-  const nw = (n: C4Node) => n.measured?.width ?? NODE_W;
-  const nh = (n: C4Node) => n.measured?.height ?? NODE_H;
-  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
-  const nodeIds = new Set(nodes.map((n) => n.id));
-  const posMap = new Map(nodes.map((n) => [n.id, { ...n.position }]));
-
-  // Build adjacency
-  const adj = new Map<string, Set<string>>();
-  for (const e of edges) {
-    if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
-    if (!adj.has(e.source)) adj.set(e.source, new Set());
-    if (!adj.has(e.target)) adj.set(e.target, new Set());
-    adj.get(e.source)!.add(e.target);
-    adj.get(e.target)!.add(e.source);
-  }
-  const degree = (id: string) => adj.get(id)?.size ?? 0;
-
-  // Identify spokes: angle to highest-degree neighbor is compass-aligned.
-  // Record their hub and locked angle.
-  const spokeInfo = new Map<string, { hubId: string; angle: number; dist: number }>();
-  for (const n of nodes) {
-    if (groupedNodes?.has(n.id)) continue;
-    const neighbors = adj.get(n.id);
-    if (!neighbors) continue;
-    let hubId = "";
-    let hubDeg = 0;
-    for (const nid of neighbors) {
-      const d = degree(nid);
-      if (d > hubDeg && d > degree(n.id)) { hubDeg = d; hubId = nid; }
-    }
-    if (!hubId) continue;
-    const hub = nodeMap.get(hubId)!;
-    const hp = posMap.get(hubId)!;
-    const hcx = hp.x + nw(hub) / 2, hcy = hp.y + nh(hub) / 2;
-    const p = posMap.get(n.id)!;
-    const ncx = p.x + nw(n) / 2, ncy = p.y + nh(n) / 2;
-    const dx = ncx - hcx, dy = ncy - hcy;
-    // Only lock single-edge nodes as spokes. Nodes with 2+ edges need
-    // freedom to reposition (they become floaters instead).
-    if (degree(n.id) <= 1 && compassDeviation(dx, dy) < 0.1) {
-      const angle = Math.atan2(dy, dx);
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      spokeInfo.set(n.id, { hubId, angle, dist });
-    }
-  }
-
-  const hubIds = new Set([...spokeInfo.values()].map((s) => s.hubId));
-
-  // Floaters: not a spoke, not a hub, has neighbors
-  const floaters: string[] = [];
-  for (const n of nodes) {
-    if (spokeInfo.has(n.id) || hubIds.has(n.id)) continue;
-    if (groupedNodes?.has(n.id)) continue;
-    if ((adj.get(n.id)?.size ?? 0) === 0) continue;
-    floaters.push(n.id);
-  }
-  console.log(`[straightenFloaterEdges] spokes: [${[...spokeInfo.keys()].map(id => nodeMap.get(id)?.data?.name ?? id).join(', ')}], hubs: [${[...hubIds].map(id => nodeMap.get(id)?.data?.name ?? id).join(', ')}], floaters: [${floaters.map(id => nodeMap.get(id)?.data?.name ?? id).join(', ')}]`);
-
-  if (floaters.length === 0) return nodes;
-
-  // Helper: center of a node given current posMap
-  const center = (id: string) => {
-    const n = nodeMap.get(id)!;
-    const p = posMap.get(id)!;
-    return { x: p.x + nw(n) / 2, y: p.y + nh(n) / 2 };
-  };
-
-  // Score: compass deviation for all edges of a node + proximity penalty
-  // + edge-through-node penalty
-  const MIN_GAP = 250;
-  const edgeAlignmentScore = (nodeId: string) => {
-    const c = center(nodeId);
-    let score = 0;
-    const neighbors = adj.get(nodeId) ?? [];
-    for (const nid of neighbors) {
-      const nc = center(nid);
-      score += compassDeviation(nc.x - c.x, nc.y - c.y);
-    }
-    // Penalize being too close to any other node
-    for (const n of nodes) {
-      if (n.id === nodeId) continue;
-      const nc = center(n.id);
-      const dx = nc.x - c.x, dy = nc.y - c.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < MIN_GAP) score += (MIN_GAP - dist) / MIN_GAP * 5;
-    }
-    // Penalize edges that pass through other nodes
-    for (const nid of neighbors) {
-      const nc = center(nid);
-      for (const n of nodes) {
-        if (n.id === nodeId || n.id === nid) continue;
-        const p = posMap.get(n.id)!;
-        const margin = 20;
-        if (segmentIntersectsRect(c.x, c.y, nc.x, nc.y,
-            p.x - margin, p.y - margin,
-            nw(n) + margin * 2, nh(n) + margin * 2)) {
-          score += 10;
-        }
-      }
-    }
-    // Penalize edge crossings (this node's edges crossing other edges)
-    for (const nid of neighbors) {
-      const nc = center(nid);
-      for (const e of edges) {
-        if (e.source === nodeId || e.target === nodeId) continue;
-        if (e.source === nid || e.target === nid) continue;
-        const ec1 = center(e.source);
-        const ec2 = center(e.target);
-        if (segmentsIntersect(c.x, c.y, nc.x, nc.y,
-            ec1.x, ec1.y, ec2.x, ec2.y)) {
-          score += 20;
-        }
-      }
-    }
-    return score;
-  };
-
-  // Phase 1: Position each floater to minimize compass deviation of its edges.
-  for (const fid of floaters) {
-    const fn = nodeMap.get(fid)!;
-    const w = nw(fn), h = nh(fn);
-    const neighbors = adj.get(fid);
-    if (!neighbors) continue;
-
-    let bestScore = edgeAlignmentScore(fid);
-    let bestPos = { ...posMap.get(fid)! };
-
-    // Candidate origins: each neighbor + centroid of all neighbors
-    const origins: { x: number; y: number }[] = [];
-    for (const nid of neighbors) origins.push(center(nid));
-    if (origins.length >= 2) {
-      const cx = origins.reduce((s, o) => s + o.x, 0) / origins.length;
-      const cy = origins.reduce((s, o) => s + o.y, 0) / origins.length;
-      origins.push({ x: cx, y: cy });
-    }
-
-    for (const origin of origins) {
-      for (const angle of COMPASS_8) {
-        for (const dist of [300, 400, 550, 700]) {
-          const tx = origin.x + Math.cos(angle) * dist - w / 2;
-          const ty = origin.y + Math.sin(angle) * dist - h / 2;
-          posMap.set(fid, { x: tx, y: ty });
-          const score = edgeAlignmentScore(fid);
-          if (score < bestScore) {
-            bestScore = score;
-            bestPos = { x: tx, y: ty };
-          }
-        }
-      }
-    }
-    posMap.set(fid, bestPos);
-  }
-
-  // Phase 2: Slide spokes connected to floaters along their locked radial.
-  // Narrow range (0.9–1.5x) to preserve hub-spoke spacing.
-  for (const [spokeId, info] of spokeInfo) {
-    const neighbors = adj.get(spokeId);
-    if (!neighbors) continue;
-    let connectsFloater = false;
-    for (const fid of floaters) {
-      if (neighbors.has(fid)) { connectsFloater = true; break; }
-    }
-    if (!connectsFloater) continue;
-
-    const sn = nodeMap.get(spokeId)!;
-    const hub = nodeMap.get(info.hubId)!;
-    const hp = posMap.get(info.hubId)!;
-    const hcx = hp.x + nw(hub) / 2, hcy = hp.y + nh(hub) / 2;
-
-    const scoreSpoke = () => {
-      let s = edgeAlignmentScore(spokeId);
-      for (const fid of floaters) {
-        if (neighbors.has(fid)) s += edgeAlignmentScore(fid);
-      }
-      // Penalize when any edge passes through or near this spoke
-      const sp = posMap.get(spokeId)!;
-      const sw = nw(sn), sh = nh(sn);
-      const margin = 120;
-      for (const e of edges) {
-        if (e.source === spokeId || e.target === spokeId) continue;
-        const sc = center(e.source);
-        const tc = center(e.target);
-        if (segmentIntersectsRect(sc.x, sc.y, tc.x, tc.y,
-            sp.x - margin, sp.y - margin,
-            sw + margin * 2, sh + margin * 2)) {
-          s += 10;
-        }
-      }
-      return s;
-    };
-
-    let bestScore = scoreSpoke();
-    let bestPos = { ...posMap.get(spokeId)! };
-
-    for (let scale = 0.9; scale <= 1.8; scale += 0.05) {
-      const d = info.dist * scale;
-      const nx = hcx + Math.cos(info.angle) * d - nw(sn) / 2;
-      const ny = hcy + Math.sin(info.angle) * d - nh(sn) / 2;
-      posMap.set(spokeId, { x: nx, y: ny });
-      const score = scoreSpoke();
-      if (score < bestScore) {
-        bestScore = score;
-        bestPos = { x: nx, y: ny };
-      }
-    }
-    posMap.set(spokeId, bestPos);
-  }
-
-  return nodes.map((n) => {
-    const pos = posMap.get(n.id);
-    return pos ? { ...n, position: pos } : n;
-  });
-}
-
-/** Check if two line segments (p1→p2) and (p3→p4) intersect. */
-function segmentsIntersect(
-  p1x: number, p1y: number, p2x: number, p2y: number,
-  p3x: number, p3y: number, p4x: number, p4y: number,
-): boolean {
-  const d1x = p2x - p1x, d1y = p2y - p1y;
-  const d2x = p4x - p3x, d2y = p4y - p3y;
-  const cross = d1x * d2y - d1y * d2x;
-  if (Math.abs(cross) < 1e-10) return false; // parallel
-  const t = ((p3x - p1x) * d2y - (p3y - p1y) * d2x) / cross;
-  const u = ((p3x - p1x) * d1y - (p3y - p1y) * d1x) / cross;
-  return t > 0.01 && t < 0.99 && u > 0.01 && u < 0.99;
-}
-
-/** Count how many edge pairs cross given current positions. */
-function countCrossings(
-  edges: C4Edge[],
-  centers: Map<string, { x: number; y: number }>,
-): number {
-  let count = 0;
-  for (let i = 0; i < edges.length; i++) {
-    const a = centers.get(edges[i].source);
-    const b = centers.get(edges[i].target);
-    if (!a || !b) continue;
-    for (let j = i + 1; j < edges.length; j++) {
-      // Skip edges that share a node — they meet at a point, not a crossing
-      if (edges[i].source === edges[j].source || edges[i].source === edges[j].target ||
-          edges[i].target === edges[j].source || edges[i].target === edges[j].target) continue;
-      const c = centers.get(edges[j].source);
-      const d = centers.get(edges[j].target);
-      if (!c || !d) continue;
-      if (segmentsIntersect(a.x, a.y, b.x, b.y, c.x, c.y, d.x, d.y)) count++;
-    }
-  }
-  return count;
-}
-
-/** Generate all permutations of an array (for small arrays only). */
-function permutations<T>(arr: T[]): T[][] {
-  if (arr.length <= 1) return [arr];
-  const result: T[][] = [];
-  for (let i = 0; i < arr.length; i++) {
-    const rest = [...arr.slice(0, i), ...arr.slice(i + 1)];
-    for (const perm of permutations(rest)) {
-      result.push([arr[i], ...perm]);
-    }
-  }
-  return result;
-}
-
-/**
- * Find crossing edges, collect the involved nodes into clusters,
- * then brute-force all permutations of each cluster's positions
- * to find the arrangement with fewest crossings.
- *
- * Clusters are capped at 6 nodes (720 permutations) — larger ones
- * are left as-is since brute force gets expensive.
- */
-function uncrossEdges(
-  nodes: C4Node[],
-  edges: C4Edge[],
-  groupedNodes?: Map<string, string>,
-): C4Node[] {
-  const nw = (n: C4Node) => n.measured?.width ?? NODE_W;
-  const nh = (n: C4Node) => n.measured?.height ?? NODE_H;
-  const posMap = new Map(nodes.map((n) => [n.id, { ...n.position }]));
-
-  const centers = new Map<string, { x: number; y: number }>();
-  const updateCenters = () => {
-    for (const n of nodes) {
-      const p = posMap.get(n.id)!;
-      centers.set(n.id, { x: p.x + nw(n) / 2, y: p.y + nh(n) / 2 });
-    }
-  };
-  updateCenters();
-
-  if (countCrossings(edges, centers) === 0) {
-    return nodes;
-  }
-
-  // Collect nodes involved in any crossing into connected clusters
-  // Two nodes are in the same cluster if they're endpoints of crossing edges
-  // that share a node (transitively connected through crossings)
-  const crossingNodes = new Set<string>();
-  const links = new Map<string, Set<string>>(); // adjacency between crossing-involved nodes
-
-  for (let i = 0; i < edges.length; i++) {
-    const a = centers.get(edges[i].source);
-    const b = centers.get(edges[i].target);
-    if (!a || !b) continue;
-    for (let j = i + 1; j < edges.length; j++) {
-      if (edges[i].source === edges[j].source || edges[i].source === edges[j].target ||
-          edges[i].target === edges[j].source || edges[i].target === edges[j].target) continue;
-      const c = centers.get(edges[j].source);
-      const d = centers.get(edges[j].target);
-      if (!c || !d) continue;
-      if (!segmentsIntersect(a.x, a.y, b.x, b.y, c.x, c.y, d.x, d.y)) continue;
-
-      // All 4 endpoints are part of this crossing cluster
-      const ids = [edges[i].source, edges[i].target, edges[j].source, edges[j].target];
-      for (const id of ids) {
-        crossingNodes.add(id);
-        if (!links.has(id)) links.set(id, new Set());
-      }
-      // Link nodes together — but only if they share the same group
-      // (or are both ungrouped). This prevents position swaps that would
-      // scatter group members across the canvas.
-      for (const id1 of ids) {
-        for (const id2 of ids) {
-          if (id1 === id2) continue;
-          if (groupedNodes) {
-            const g1 = groupedNodes.get(id1);
-            const g2 = groupedNodes.get(id2);
-            if (g1 !== g2) continue; // different groups or one grouped/one not
-          }
-          links.get(id1)!.add(id2);
-        }
-      }
-    }
-  }
-
-  if (crossingNodes.size === 0) return nodes;
-
-  // BFS to find connected clusters
-  const visited = new Set<string>();
-  const clusters: string[][] = [];
-  for (const start of crossingNodes) {
-    if (visited.has(start)) continue;
-    const cluster: string[] = [];
-    const queue = [start];
-    visited.add(start);
-    while (queue.length > 0) {
-      const id = queue.shift()!;
-      cluster.push(id);
-      for (const neighbor of links.get(id) ?? []) {
-        if (!visited.has(neighbor)) {
-          visited.add(neighbor);
-          queue.push(neighbor);
-        }
-      }
-    }
-    clusters.push(cluster);
-  }
-
-  // For each small-enough cluster, try all permutations of positions
-  for (const cluster of clusters) {
-    if (cluster.length < 2 || cluster.length > 6) continue;
-
-    const positions = cluster.map((id) => ({ ...posMap.get(id)! }));
-    const perms = permutations(cluster);
-
-    let bestCrossings = countCrossings(edges, centers);
-    let bestPerm = cluster; // identity
-
-    for (const perm of perms) {
-      // Assign positions[i] to perm[i]
-      for (let k = 0; k < perm.length; k++) {
-        posMap.set(perm[k], positions[k]);
-      }
-      updateCenters();
-      const c = countCrossings(edges, centers);
-      if (c < bestCrossings) {
-        bestCrossings = c;
-        bestPerm = [...perm];
-      }
-    }
-
-    // Apply best permutation
-    for (let k = 0; k < bestPerm.length; k++) {
-      posMap.set(bestPerm[k], positions[k]);
-    }
-    updateCenters();
-  }
-
-  return nodes.map((n) => {
-    const pos = posMap.get(n.id);
-    return pos ? { ...n, position: pos } : n;
-  });
-}
-
+// ── Grid layout (code-level nodes) ──────────────────────────────────
 
 /**
  * Simple grid layout for code-level nodes (operations, processes, models).
@@ -666,173 +75,494 @@ export function gridLayout(nodes: C4Node[]): C4Node[] {
   return positioned;
 }
 
-/**
- * Final deconfliction: find nodes whose edges cross other edges,
- * and reposition them to reduce crossings.
- */
-function deconflictEdges(
-  nodes: C4Node[],
-  edges: C4Edge[],
-  groupedNodes?: Map<string, string>,
-): C4Node[] {
-  const nw = (n: C4Node) => n.measured?.width ?? NODE_W;
-  const nh = (n: C4Node) => n.measured?.height ?? NODE_H;
-  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
-  const posMap = new Map(nodes.map((n) => [n.id, { ...n.position }]));
-  const nodeIds = new Set(nodes.map((n) => n.id));
+// ── Force-directed layout ───────────────────────────────────────────
 
-  const adj = new Map<string, Set<string>>();
-  for (const e of edges) {
-    if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
-    if (!adj.has(e.source)) adj.set(e.source, new Set());
-    if (!adj.has(e.target)) adj.set(e.target, new Set());
-    adj.get(e.source)!.add(e.target);
-    adj.get(e.target)!.add(e.source);
-  }
-  const degree = (id: string) => adj.get(id)?.size ?? 0;
+interface SimNode extends SimulationNodeDatum {
+  id: string;
+  width: number;
+  height: number;
+  radius: number;
+  pinned: boolean;
+  groupId?: string;
+  originX?: number;
+  originY?: number;
+}
 
-  const center = (id: string) => {
-    const n = nodeMap.get(id)!;
-    const p = posMap.get(id)!;
-    return { x: p.x + nw(n) / 2, y: p.y + nh(n) / 2 };
-  };
+interface SimLink extends SimulationLinkDatum<SimNode> {
+  source: SimNode | string;
+  target: SimNode | string;
+}
 
-  // Count edge crossings involving a specific node's edges
-  const nodeCrossings = (nodeId: string) => {
-    let count = 0;
-    for (const e of edges) {
-      if (e.source !== nodeId && e.target !== nodeId) continue;
-      const a = center(e.source);
-      const b = center(e.target);
-      for (const other of edges) {
-        if (other === e) continue;
-        // Skip edges that share a node
-        if (e.source === other.source || e.source === other.target ||
-            e.target === other.source || e.target === other.target) continue;
-        const c = center(other.source);
-        const d = center(other.target);
-        if (segmentsIntersect(a.x, a.y, b.x, b.y, c.x, c.y, d.x, d.y)) count++;
-      }
-    }
-    return count;
-  };
-
-  // Find nodes involved in crossings, prefer moving lower-degree nodes
-  const crossingNodes: { id: string; crossings: number }[] = [];
-  for (const n of nodes) {
-    if (groupedNodes?.has(n.id)) continue;
-    const c = nodeCrossings(n.id);
-    if (c > 0) crossingNodes.push({ id: n.id, crossings: c });
-  }
-  if (crossingNodes.length === 0) return nodes;
-
-  // Sort: try moving lower-degree nodes first (they're more flexible)
-  crossingNodes.sort((a, b) => degree(a.id) - degree(b.id));
-
-  for (const { id: moveId } of crossingNodes) {
-    // Re-check — earlier moves may have resolved this node's crossings
-    if (nodeCrossings(moveId) === 0) continue;
-
-    const mn = nodeMap.get(moveId)!;
-    const w = nw(mn), h = nh(mn);
-    const neighbors = adj.get(moveId);
-    if (!neighbors) continue;
-
-    // Score: edge crossings (heavy) + edge-through-node + compass + proximity
-    const score = () => {
-      const mc = center(moveId);
-      let s = nodeCrossings(moveId) * 20;
-      for (const nid of neighbors) {
-        const nc = center(nid);
-        s += compassDeviation(nc.x - mc.x, nc.y - mc.y) * 0.5;
-        // Edge-through-node
-        for (const n of nodes) {
-          if (n.id === moveId || n.id === nid) continue;
-          const p = posMap.get(n.id)!;
-          if (segmentIntersectsRect(mc.x, mc.y, nc.x, nc.y,
-              p.x - 20, p.y - 20,
-              nw(n) + 40, nh(n) + 40)) {
-            s += 15;
-          }
-        }
-      }
-      for (const n of nodes) {
-        if (n.id === moveId) continue;
-        const nc = center(n.id);
-        const dx = nc.x - mc.x, dy = nc.y - mc.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < 250) s += (250 - dist) / 250 * 3;
-      }
-      return s;
-    };
-
-    let bestScore = score();
-    let bestPos = { ...posMap.get(moveId)! };
-
-    // Candidate origins: each neighbor + centroid of all neighbors
-    const origins: { x: number; y: number }[] = [];
-    for (const nid of neighbors) origins.push(center(nid));
-    if (origins.length >= 2) {
-      const cx = origins.reduce((s, o) => s + o.x, 0) / origins.length;
-      const cy = origins.reduce((s, o) => s + o.y, 0) / origins.length;
-      origins.push({ x: cx, y: cy });
-    }
-
-    for (const origin of origins) {
-      for (const angle of COMPASS_8) {
-        for (const dist of [300, 400, 550, 700]) {
-          const tx = origin.x + Math.cos(angle) * dist - w / 2;
-          const ty = origin.y + Math.sin(angle) * dist - h / 2;
-          posMap.set(moveId, { x: tx, y: ty });
-          const s = score();
-          if (s < bestScore) {
-            bestScore = s;
-            bestPos = { x: tx, y: ty };
-          }
-        }
-      }
-    }
-    posMap.set(moveId, bestPos);
-  }
-
-  return nodes.map((n) => {
-    const pos = posMap.get(n.id);
-    return pos ? { ...n, position: pos } : n;
-  });
+/** Check if two line segments (p1→p2) and (p3→p4) intersect. */
+function segmentsIntersect(
+  p1x: number, p1y: number, p2x: number, p2y: number,
+  p3x: number, p3y: number, p4x: number, p4y: number,
+): boolean {
+  const d1x = p2x - p1x, d1y = p2y - p1y;
+  const d2x = p4x - p3x, d2y = p4y - p3y;
+  const cross = d1x * d2y - d1y * d2x;
+  if (Math.abs(cross) < 1e-10) return false;
+  const t = ((p3x - p1x) * d2y - (p3y - p1y) * d2x) / cross;
+  const u = ((p3x - p1x) * d1y - (p3y - p1y) * d1x) / cross;
+  return t > 0.01 && t < 0.99 && u > 0.01 && u < 0.99;
 }
 
 /**
- * Run ELK stress layout + compass snapping + crossing reduction.
+ * Post-process: quantize simulation output onto a coarse grid.
  *
- * When `groups` are provided, group members become children of a synthetic
- * compound node in the ELK graph so they are laid out together. After layout,
- * child positions are converted from parent-relative to absolute.
+ * The simulation finds good relative topology but produces organic positions.
+ * This pass snaps each node to the nearest cell in a coarse grid, resolving
+ * collisions by bumping nodes to adjacent free cells. Pinned nodes are
+ * skipped. The grid cell size adapts to node dimensions.
  *
- * When `codeLevel` is true, uses a compact grid instead — code-level nodes
- * (operations, processes, models) don't have architectural edges and should
- * be packed tight.
+ * Then, for each edge, if two connected nodes are "almost" aligned on one
+ * axis (within one grid step), they're snapped to share that coordinate —
+ * producing clean vertical/horizontal edges.
+ */
+function quantizeToGrid(simNodes: SimNode[], simLinks: SimLink[]): void {
+  const freeNodes = simNodes.filter((n) => !n.pinned);
+  if (freeNodes.length === 0) return;
+
+  // Grid cell size: based on the largest node + padding
+  const maxW = Math.max(...simNodes.map((n) => n.width));
+  const maxH = Math.max(...simNodes.map((n) => n.height));
+  const cellW = maxW + 100;
+  const cellH = maxH + 80;
+
+  // Snap each free node to nearest grid cell
+  // Track occupied cells to avoid collisions
+  const occupied = new Map<string, SimNode>();
+  const cellKey = (col: number, row: number) => `${col},${row}`;
+
+  // First, mark pinned nodes' grid cells as occupied
+  for (const n of simNodes) {
+    if (!n.pinned) continue;
+    const col = Math.round(n.x! / cellW);
+    const row = Math.round(n.y! / cellH);
+    occupied.set(cellKey(col, row), n);
+  }
+
+  // Sort free nodes by degree (highest first) so hubs get their preferred spot
+  const degreeMap = new Map<string, number>();
+  for (const n of simNodes) degreeMap.set(n.id, 0);
+  for (const link of simLinks) {
+    const s = (link.source as SimNode).id;
+    const t = (link.target as SimNode).id;
+    degreeMap.set(s, (degreeMap.get(s) ?? 0) + 1);
+    degreeMap.set(t, (degreeMap.get(t) ?? 0) + 1);
+  }
+  freeNodes.sort((a, b) => (degreeMap.get(b.id) ?? 0) - (degreeMap.get(a.id) ?? 0));
+
+  for (const n of freeNodes) {
+    const idealCol = Math.round(n.x! / cellW);
+    const idealRow = Math.round(n.y! / cellH);
+
+    // Spiral search for nearest free cell
+    let placed = false;
+    for (let radius = 0; radius <= 10 && !placed; radius++) {
+      for (let dc = -radius; dc <= radius && !placed; dc++) {
+        for (let dr = -radius; dr <= radius && !placed; dr++) {
+          if (Math.abs(dc) !== radius && Math.abs(dr) !== radius) continue; // only perimeter
+          const col = idealCol + dc;
+          const row = idealRow + dr;
+          const key = cellKey(col, row);
+          if (!occupied.has(key)) {
+            n.x = col * cellW;
+            n.y = row * cellH;
+            occupied.set(key, n);
+            placed = true;
+          }
+        }
+      }
+    }
+  }
+
+  // Axis-align pass: for each edge, if endpoints are within 1 grid step
+  // on one axis, snap them to share that coordinate
+  for (const link of simLinks) {
+    const a = link.source as SimNode;
+    const b = link.target as SimNode;
+    if (a.pinned && b.pinned) continue;
+
+    const dx = Math.abs(a.x! - b.x!);
+    const dy = Math.abs(a.y! - b.y!);
+
+    // Nearly vertically aligned — snap x
+    if (dx <= cellW * 0.6 && dy > cellH * 0.5) {
+      const midX = a.pinned ? a.x! : b.pinned ? b.x! : (a.x! + b.x!) / 2;
+      if (!a.pinned) a.x = midX;
+      if (!b.pinned) b.x = midX;
+    }
+    // Nearly horizontally aligned — snap y
+    if (dy <= cellH * 0.6 && dx > cellW * 0.5) {
+      const midY = a.pinned ? a.y! : b.pinned ? b.y! : (a.y! + b.y!) / 2;
+      if (!a.pinned) a.y = midY;
+      if (!b.pinned) b.y = midY;
+    }
+  }
+}
+
+/**
+ * Custom force: resolve edge crossings by moving the most mobile node.
+ *
+ * For each crossing, pick the lowest-degree non-pinned endpoint and push
+ * it away from the crossing point. The push direction is away from the
+ * other edge's midpoint — this encourages the node to route around the
+ * obstruction rather than just jittering perpendicular to its own edge.
+ */
+function forceCrossingPenalty(links: SimLink[], strength = 0.5) {
+  let nodes: SimNode[] = [];
+  let degreeMap: Map<string, number>;
+
+  function force(alpha: number) {
+    const s = strength * alpha;
+
+    for (let i = 0; i < links.length; i++) {
+      const a = links[i].source as SimNode;
+      const b = links[i].target as SimNode;
+      if (a.x == null || b.x == null) continue;
+
+      for (let j = i + 1; j < links.length; j++) {
+        const c = links[j].source as SimNode;
+        const d = links[j].target as SimNode;
+        if (c.x == null || d.x == null) continue;
+
+        // Skip edges sharing a node
+        if (a.id === c.id || a.id === d.id || b.id === c.id || b.id === d.id) continue;
+
+        if (!segmentsIntersect(a.x!, a.y!, b.x!, b.y!, c.x!, c.y!, d.x!, d.y!)) continue;
+
+        // Found a crossing — find the most mobile endpoint (lowest degree, not pinned)
+        const candidates = [a, b, c, d].filter((n) => !n.pinned);
+        if (candidates.length === 0) continue;
+        candidates.sort((x, y) => (degreeMap.get(x.id) ?? 0) - (degreeMap.get(y.id) ?? 0));
+
+        // Move the most mobile node away from the other edge's midpoint
+        const mover = candidates[0];
+        // Determine which edge the mover belongs to, and use the other edge's midpoint
+        const isOnEdge1 = mover.id === a.id || mover.id === b.id;
+        const otherMidX = isOnEdge1 ? (c.x! + d.x!) / 2 : (a.x! + b.x!) / 2;
+        const otherMidY = isOnEdge1 ? (c.y! + d.y!) / 2 : (a.y! + b.y!) / 2;
+
+        // Push away from the other edge's midpoint
+        const dx = mover.x! - otherMidX;
+        const dy = mover.y! - otherMidY;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+        const pushStrength = s * 80;
+        mover.vx! += (dx / dist) * pushStrength;
+        mover.vy! += (dy / dist) * pushStrength;
+
+        // Also give a smaller push to the second-most-mobile node on the other edge
+        if (candidates.length >= 2) {
+          const second = candidates.find((n) =>
+            isOnEdge1 ? (n.id === c.id || n.id === d.id) : (n.id === a.id || n.id === b.id),
+          );
+          if (second) {
+            const dx2 = second.x! - (isOnEdge1 ? (a.x! + b.x!) / 2 : (c.x! + d.x!) / 2);
+            const dy2 = second.y! - (isOnEdge1 ? (a.y! + b.y!) / 2 : (c.y! + d.y!) / 2);
+            const dist2 = Math.sqrt(dx2 * dx2 + dy2 * dy2) || 1;
+            second.vx! += (dx2 / dist2) * pushStrength * 0.4;
+            second.vy! += (dy2 / dist2) * pushStrength * 0.4;
+          }
+        }
+      }
+    }
+  }
+
+  force.initialize = (n: SimNode[]) => {
+    nodes = n;
+    // Pre-compute degree map
+    degreeMap = new Map(nodes.map((n) => [n.id, 0]));
+    for (const link of links) {
+      const sId = typeof link.source === "string" ? link.source : (link.source as SimNode).id;
+      const tId = typeof link.target === "string" ? link.target : (link.target as SimNode).id;
+      degreeMap.set(sId, (degreeMap.get(sId) ?? 0) + 1);
+      degreeMap.set(tId, (degreeMap.get(tId) ?? 0) + 1);
+    }
+  };
+  return force;
+}
+
+/**
+ * Custom force: keep grouped nodes clustered using a bounding-box approach.
+ *
+ * Instead of pulling all members toward centroid (which squishes them),
+ * this computes the group's bounding box and only pulls in members that
+ * are too far from the group center — beyond a "slack" radius derived
+ * from the group's ideal spread. Members within the slack zone are left
+ * alone, so collision and charge forces handle their internal spacing.
+ */
+function forceGroupCohesion(strength = 0.3) {
+  let nodes: SimNode[] = [];
+
+  function force(alpha: number) {
+    const s = strength * alpha;
+
+    // Collect groups
+    const groups = new Map<string, SimNode[]>();
+    for (const n of nodes) {
+      if (!n.groupId) continue;
+      if (!groups.has(n.groupId)) groups.set(n.groupId, []);
+      groups.get(n.groupId)!.push(n);
+    }
+
+    for (const members of groups.values()) {
+      if (members.length < 2) continue;
+
+      // Compute centroid
+      let cx = 0, cy = 0;
+      for (const m of members) { cx += m.x!; cy += m.y!; }
+      cx /= members.length;
+      cy /= members.length;
+
+      // Ideal spread: enough room for members side by side with padding.
+      // Members within this radius from centroid are left alone.
+      const avgSize = members.reduce((s, m) => s + Math.max(m.width, m.height), 0) / members.length;
+      const slack = avgSize * Math.sqrt(members.length) * 0.8;
+
+      for (const m of members) {
+        if (m.pinned) continue;
+        const dx = m.x! - cx;
+        const dy = m.y! - cy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        // Only pull if the member is beyond the slack zone
+        if (dist > slack) {
+          const excess = dist - slack;
+          const nx = dx / dist;
+          const ny = dy / dist;
+          m.vx! -= nx * excess * s;
+          m.vy! -= ny * excess * s;
+        }
+      }
+    }
+  }
+
+  force.initialize = (n: SimNode[]) => { nodes = n; };
+  return force;
+}
+
+/**
+ * Custom force: push non-group nodes out of group bounding boxes.
+ * Computes each group's bounding rect (with padding) and applies a
+ * repulsive force to any non-member node inside it.
+ */
+function forceGroupExclusion(padding = 60, strength = 0.8) {
+  let nodes: SimNode[] = [];
+
+  function force(alpha: number) {
+    const s = strength * alpha;
+
+    // Collect groups and compute bounding boxes
+    const groups = new Map<string, SimNode[]>();
+    for (const n of nodes) {
+      if (!n.groupId) continue;
+      if (!groups.has(n.groupId)) groups.set(n.groupId, []);
+      groups.get(n.groupId)!.push(n);
+    }
+
+    const boxes: { groupId: string; minX: number; minY: number; maxX: number; maxY: number }[] = [];
+    for (const [groupId, members] of groups) {
+      if (members.length < 2) continue;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const m of members) {
+        minX = Math.min(minX, m.x! - m.width / 2);
+        minY = Math.min(minY, m.y! - m.height / 2);
+        maxX = Math.max(maxX, m.x! + m.width / 2);
+        maxY = Math.max(maxY, m.y! + m.height / 2);
+      }
+      boxes.push({
+        groupId,
+        minX: minX - padding,
+        minY: minY - padding,
+        maxX: maxX + padding,
+        maxY: maxY + padding,
+      });
+    }
+
+    // Push non-members out of group boxes
+    for (const n of nodes) {
+      if (n.pinned) continue;
+      for (const box of boxes) {
+        if (n.groupId === box.groupId) continue; // member of this group — skip
+
+        // Check if node center is inside the box
+        if (n.x! < box.minX || n.x! > box.maxX || n.y! < box.minY || n.y! > box.maxY) continue;
+
+        // Push toward nearest edge of the box
+        const distLeft = n.x! - box.minX;
+        const distRight = box.maxX - n.x!;
+        const distTop = n.y! - box.minY;
+        const distBottom = box.maxY - n.y!;
+        const minDist = Math.min(distLeft, distRight, distTop, distBottom);
+
+        const push = (minDist + 50) * s;
+        if (minDist === distLeft) n.vx! -= push;
+        else if (minDist === distRight) n.vx! += push;
+        else if (minDist === distTop) n.vy! -= push;
+        else n.vy! += push;
+      }
+    }
+  }
+
+  force.initialize = (n: SimNode[]) => { nodes = n; };
+  return force;
+}
+
+/**
+ * Custom force: prevent edges from passing through nodes.
+ * For each edge, check if it passes through any non-endpoint node's
+ * bounding box, and push that node out of the way.
+ */
+function forceEdgeNodeRepulsion(links: SimLink[], strength = 0.2) {
+  let nodes: SimNode[] = [];
+
+  function force(alpha: number) {
+    const s = strength * alpha;
+
+    for (const link of links) {
+      const src = link.source as SimNode;
+      const tgt = link.target as SimNode;
+      if (!src.x || !tgt.x) continue;
+
+      for (const n of nodes) {
+        if (n.id === src.id || n.id === tgt.id || n.pinned) continue;
+
+        // Check if edge passes through node's bounding box (with margin)
+        const margin = 30;
+        const rx = n.x! - n.width / 2 - margin;
+        const ry = n.y! - n.height / 2 - margin;
+        const rw = n.width + margin * 2;
+        const rh = n.height + margin * 2;
+
+        if (!segmentIntersectsRect(src.x!, src.y!, tgt.x!, tgt.y!, rx, ry, rw, rh)) continue;
+
+        // Push node perpendicular to the edge
+        const edgeDx = tgt.x! - src.x!;
+        const edgeDy = tgt.y! - src.y!;
+        const len = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy) || 1;
+        const px = -edgeDy / len;
+        const py = edgeDx / len;
+
+        // Pick direction that moves node away from edge midpoint
+        const mx = (src.x! + tgt.x!) / 2;
+        const my = (src.y! + tgt.y!) / 2;
+        const dot = (n.x! - mx) * px + (n.y! - my) * py;
+        const sign = dot >= 0 ? 1 : -1;
+
+        n.vx! += px * s * sign * 60;
+        n.vy! += py * s * sign * 60;
+      }
+    }
+  }
+
+  force.initialize = (n: SimNode[]) => { nodes = n; };
+  return force;
+}
+
+/** Cohen-Sutherland: does segment (x1,y1)→(x2,y2) intersect rect? */
+function segmentIntersectsRect(
+  x1: number, y1: number, x2: number, y2: number,
+  rx: number, ry: number, rw: number, rh: number,
+): boolean {
+  const xmin = rx, xmax = rx + rw, ymin = ry, ymax = ry + rh;
+  const code = (x: number, y: number) => {
+    let c = 0;
+    if (x < xmin) c |= 1; else if (x > xmax) c |= 2;
+    if (y < ymin) c |= 4; else if (y > ymax) c |= 8;
+    return c;
+  };
+  let c1 = code(x1, y1), c2 = code(x2, y2);
+  let sx = x1, sy = y1, ex = x2, ey = y2;
+  for (let i = 0; i < 20; i++) {
+    if ((c1 | c2) === 0) return true;
+    if ((c1 & c2) !== 0) return false;
+    const c = c1 !== 0 ? c1 : c2;
+    let x = 0, y = 0;
+    if (c & 8) { x = sx + (ex - sx) * (ymax - sy) / (ey - sy); y = ymax; }
+    else if (c & 4) { x = sx + (ex - sx) * (ymin - sy) / (ey - sy); y = ymin; }
+    else if (c & 2) { y = sy + (ey - sy) * (xmax - sx) / (ex - sx); x = xmax; }
+    else if (c & 1) { y = sy + (ey - sy) * (xmin - sx) / (ex - sx); x = xmin; }
+    if (c === c1) { sx = x; sy = y; c1 = code(sx, sy); }
+    else { ex = x; ey = y; c2 = code(ex, ey); }
+  }
+  return false;
+}
+
+/**
+ * Rectangular collision force. d3's forceCollide uses circles — this
+ * version uses actual node width/height with padding.
+ */
+function forceRectCollide(padding = 40) {
+  let nodes: SimNode[] = [];
+
+  function force() {
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        const dx = b.x! - a.x!;
+        const dy = b.y! - a.y!;
+        const overlapX = (a.width + b.width) / 2 + padding - Math.abs(dx);
+        const overlapY = (a.height + b.height) / 2 + padding - Math.abs(dy);
+
+        if (overlapX > 0 && overlapY > 0) {
+          // Resolve along the axis with smaller overlap
+          if (overlapX < overlapY) {
+            const shift = overlapX / 2;
+            const sx = dx > 0 ? shift : -shift;
+            if (!a.pinned) a.x! -= sx;
+            if (!b.pinned) b.x! += sx;
+            // If one is pinned, the other takes the full shift
+            if (a.pinned) b.x! += sx;
+            if (b.pinned) a.x! -= sx;
+          } else {
+            const shift = overlapY / 2;
+            const sy = dy > 0 ? shift : -shift;
+            if (!a.pinned) a.y! -= sy;
+            if (!b.pinned) b.y! += sy;
+            if (a.pinned) b.y! += sy;
+            if (b.pinned) a.y! -= sy;
+          }
+        }
+      }
+    }
+  }
+
+  force.initialize = (n: SimNode[]) => { nodes = n; };
+  return force;
+}
+
+/**
+ * Run force-directed layout on architecture-level nodes.
+ *
+ * Supports incremental layout: nodes with existing positions are pinned
+ * unless `fullRelayout` is true. Only `_needsLayout` nodes (or all nodes
+ * during full relayout) participate freely in the simulation.
+ *
+ * When `groups` are provided, a cohesion force keeps group members clustered.
  */
 export async function autoLayout(
   nodes: C4Node[],
   edges: C4Edge[],
   groups?: Group[],
   codeLevel?: boolean,
+  fullRelayout?: boolean,
 ): Promise<C4Node[]> {
   if (codeLevel) return gridLayout(nodes);
-  const nodeIds = new Set(nodes.map((n) => n.id));
+  if (nodes.length === 0) return nodes;
 
+  const nodeIds = new Set(nodes.map((n) => n.id));
   const filteredEdges = edges.filter(
     (e) => nodeIds.has(e.source) && nodeIds.has(e.target),
   );
 
-  // Build membership map: nodeId → groupId (only for groups with ≥2 visible members)
+  // Build group membership map
   const nodeToGroup = new Map<string, string>();
-  const activeGroups: Group[] = [];
   if (groups) {
     for (const g of groups) {
       const visibleMembers = g.memberIds.filter((id) => nodeIds.has(id));
       if (visibleMembers.length >= 2) {
-        activeGroups.push({ ...g, memberIds: visibleMembers });
         for (const id of visibleMembers) {
           nodeToGroup.set(id, g.id);
         }
@@ -840,172 +570,146 @@ export async function autoLayout(
     }
   }
 
-  const GROUP_PADDING = 40;
+  // Create simulation nodes
+  // d3-force uses center-based coordinates; we convert from/to top-left
+  const simNodes: SimNode[] = nodes.map((n) => {
+    const w = n.measured?.width ?? NODE_W;
+    const h = n.measured?.height ?? NODE_H;
+    const pinned = !fullRelayout && !n.data._needsLayout;
 
-  type ElkChild = {
-    id: string;
-    width: number;
-    height: number;
-    children?: ElkChild[];
-    layoutOptions?: Record<string, string>;
-  };
-
-  // Build top-level children: ungrouped nodes + synthetic group parents
-  const topChildren: ElkChild[] = [];
-
-  // Add ungrouped nodes
-  for (const n of nodes) {
-    if (!nodeToGroup.has(n.id)) {
-      topChildren.push({
-        id: n.id,
-        width: n.measured?.width ?? NODE_W,
-        height: n.measured?.height ?? NODE_H,
-      });
-    }
-  }
-
-  // Add synthetic group parent nodes with members as children
-  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
-  for (const g of activeGroups) {
-    const children: ElkChild[] = g.memberIds.map((id) => {
-      const n = nodeMap.get(id)!;
-      return {
-        id: n.id,
-        width: n.measured?.width ?? NODE_W,
-        height: n.measured?.height ?? NODE_H,
-      };
-    });
-    // Count intra-group edges to decide layout strategy
-    const memberSet = new Set(g.memberIds);
-    let intraEdgeCount = 0;
-    for (const e of filteredEdges) {
-      if (memberSet.has(e.source) && memberSet.has(e.target)) intraEdgeCount++;
-    }
-
-    // If few intra-group edges, stress collapses to a line — use rectpacking
-    // for a compact grid instead. With enough edges, stress produces good results.
-    const useGrid = intraEdgeCount < memberSet.size;
-    topChildren.push({
-      id: `__group__${g.id}`,
-      width: 0,
-      height: 0,
-      children,
-      layoutOptions: useGrid ? {
-        "elk.algorithm": "rectpacking",
-        "elk.spacing.nodeNode": "80",
-        "elk.padding": `[top=${GROUP_PADDING},left=${GROUP_PADDING},bottom=${GROUP_PADDING},right=${GROUP_PADDING}]`,
-      } : {
-        "elk.algorithm": "stress",
-        "elk.stress.desiredEdgeLength": "400",
-        "elk.spacing.nodeNode": "200",
-        "elk.padding": `[top=${GROUP_PADDING},left=${GROUP_PADDING},bottom=${GROUP_PADDING},right=${GROUP_PADDING}]`,
-      },
-    });
-  }
-
-  // Partition edges: intra-group edges go inside the compound node,
-  // cross-group edges are "lifted" to reference synthetic parent nodes so
-  // ELK's stress algorithm sees same-level connections.
-  type ElkEdge = { id: string; sources: string[]; targets: string[] };
-  const topEdges: ElkEdge[] = [];
-  const groupEdges = new Map<string, ElkEdge[]>();
-  for (const g of activeGroups) groupEdges.set(g.id, []);
-
-  // Helper: lift a node ID to its synthetic group parent if grouped
-  const liftToGroup = (id: string): string => {
-    const g = nodeToGroup.get(id);
-    return g ? `__group__${g}` : id;
-  };
-
-  // Deduplicate lifted top-level edges (multiple internal edges can lift to same pair)
-  const seenTopEdges = new Set<string>();
-
-  for (const e of filteredEdges) {
-    const sg = nodeToGroup.get(e.source);
-    const tg = nodeToGroup.get(e.target);
-    if (sg && tg && sg === tg) {
-      // Both endpoints in the same group — edge goes inside compound node
-      groupEdges.get(sg)!.push({ id: e.id, sources: [e.source], targets: [e.target] });
-    } else {
-      // Cross-group or ungrouped — lift to top-level synthetic parents
-      const liftedSource = liftToGroup(e.source);
-      const liftedTarget = liftToGroup(e.target);
-      if (liftedSource === liftedTarget) continue; // skip self-loops after lifting
-      const key = `${liftedSource}->${liftedTarget}`;
-      if (seenTopEdges.has(key)) continue;
-      seenTopEdges.add(key);
-      topEdges.push({ id: e.id, sources: [liftedSource], targets: [liftedTarget] });
-    }
-  }
-
-  // Attach intra-group edges to compound nodes
-  for (const child of topChildren) {
-    const groupId = child.id.startsWith("__group__") ? child.id.slice("__group__".length) : null;
-    if (groupId && groupEdges.has(groupId)) {
-      (child as ElkChild & { edges?: ElkEdge[] }).edges = groupEdges.get(groupId);
-    }
-  }
-
-  // Base spacing — compound node adjustment below may increase these.
-  let topEdgeLength = 450;
-  let topNodeSpacing = 250;
-  if (activeGroups.length > 0) {
-    // Estimate the largest compound node dimension
-    let maxCompoundDim = 0;
-    for (const child of topChildren) {
-      if (child.children && child.children.length > 0) {
-        const totalChildArea = child.children.reduce(
-          (sum, c) => sum + Math.max(c.width, c.height), 0,
-        );
-        maxCompoundDim = Math.max(maxCompoundDim, totalChildArea);
-      }
-    }
-    topEdgeLength = Math.max(topEdgeLength, maxCompoundDim + 250);
-    topNodeSpacing = Math.max(topNodeSpacing, maxCompoundDim * 0.6);
-  }
-
-  const graph = {
-    id: "root",
-    layoutOptions: {
-      "elk.algorithm": "stress",
-      "elk.stress.desiredEdgeLength": String(topEdgeLength),
-      "elk.spacing.nodeNode": String(topNodeSpacing),
-    },
-    children: topChildren,
-    edges: topEdges,
-  };
-
-  const laid = await elk.layout(graph);
-
-  // Extract positions — compound children need parent offset added
-  const posMap = new Map<string, { x: number; y: number }>();
-  for (const child of laid.children ?? []) {
-    if (child.id.startsWith("__group__")) {
-      // Synthetic group parent — extract child positions with offset
-      const px = child.x ?? 0;
-      const py = child.y ?? 0;
-      for (const gc of child.children ?? []) {
-        posMap.set(gc.id, { x: px + (gc.x ?? 0), y: py + (gc.y ?? 0) });
-      }
-    } else {
-      posMap.set(child.id, { x: child.x ?? 0, y: child.y ?? 0 });
-    }
-  }
-
-  const positioned = nodes.map((node) => {
-    const pos = posMap.get(node.id);
-    return pos ? { ...node, position: pos } : node;
+    const cx = n.position.x + w / 2;
+    const cy = n.position.y + h / 2;
+    return {
+      id: n.id,
+      x: cx,
+      y: cy,
+      width: w,
+      height: h,
+      radius: Math.sqrt(w * w + h * h) / 2,
+      pinned,
+      groupId: nodeToGroup.get(n.id),
+      originX: cx,
+      originY: cy,
+      // Pin nodes by fixing their position
+      ...(pinned ? { fx: cx, fy: cy } : {}),
+    };
   });
 
-  const groupMap = nodeToGroup.size > 0 ? nodeToGroup : undefined;
-  const snapped = spreadAroundHubs(positioned, filteredEdges, groupMap);
-  const straightened = straightenFloaterEdges(snapped, filteredEdges, groupMap);
-  const uncrossed = uncrossEdges(straightened, filteredEdges, groupMap);
-  const deconflicted = deconflictEdges(uncrossed, filteredEdges, groupMap);
+  const simNodeMap = new Map(simNodes.map((n) => [n.id, n]));
 
-  // Snap final positions to 20px grid
-  return deconflicted.map((n) => ({
-    ...n,
-    position: { x: Math.round(n.position.x / 20) * 20, y: Math.round(n.position.y / 20) * 20 },
-  }));
+  // Create simulation links
+  const simLinks: SimLink[] = filteredEdges
+    .map((e) => ({
+      source: e.source,
+      target: e.target,
+    }))
+    // Deduplicate (same pair in both directions)
+    .filter((link, i, arr) => {
+      for (let j = 0; j < i; j++) {
+        if (
+          (arr[j].source === link.source && arr[j].target === link.target) ||
+          (arr[j].source === link.target && arr[j].target === link.source)
+        ) return false;
+      }
+      return true;
+    });
+
+  // If all nodes are pinned, nothing to do
+  const freeNodes = simNodes.filter((n) => !n.pinned);
+  if (freeNodes.length === 0) return nodes;
+
+  // Place unpositioned free nodes near their connected pinned neighbors
+  // so they don't start at 0,0 and fly in from nowhere
+  for (const free of freeNodes) {
+    if (free.x !== 0 || free.y !== 0) continue; // already has a position hint
+
+    const connectedPinned: SimNode[] = [];
+    for (const link of simLinks) {
+      const srcId = typeof link.source === "string" ? link.source : link.source.id;
+      const tgtId = typeof link.target === "string" ? link.target : link.target.id;
+      if (srcId === free.id) {
+        const other = simNodeMap.get(tgtId);
+        if (other?.pinned) connectedPinned.push(other);
+      } else if (tgtId === free.id) {
+        const other = simNodeMap.get(srcId);
+        if (other?.pinned) connectedPinned.push(other);
+      }
+    }
+
+    if (connectedPinned.length > 0) {
+      // Place near centroid of connected pinned nodes with some jitter
+      let cx = 0, cy = 0;
+      for (const n of connectedPinned) { cx += n.x!; cy += n.y!; }
+      cx /= connectedPinned.length;
+      cy /= connectedPinned.length;
+      free.x = cx + (Math.random() - 0.5) * 200;
+      free.y = cy + (Math.random() - 0.5) * 200;
+    } else {
+      // No pinned neighbors — place near centroid of all nodes
+      let cx = 0, cy = 0, count = 0;
+      for (const n of simNodes) {
+        if (n === free) continue;
+        cx += n.x!; cy += n.y!; count++;
+      }
+      if (count > 0) {
+        free.x = cx / count + (Math.random() - 0.5) * 300;
+        free.y = cy / count + (Math.random() - 0.5) * 300;
+      } else {
+        free.x = (Math.random() - 0.5) * 400;
+        free.y = (Math.random() - 0.5) * 400;
+      }
+    }
+  }
+
+  // Desired edge length scales with node count and edge density to prevent cramming
+  const edgeDensity = filteredEdges.length / Math.max(1, nodes.length);
+  const desiredDistance = Math.max(400, 280 + nodes.length * 20 + edgeDensity * 30);
+
+  // Build simulation
+  const simulation = forceSimulation<SimNode>(simNodes)
+    .force("link", forceLink<SimNode, SimLink>(simLinks)
+      .id((d) => d.id)
+      .distance(desiredDistance)
+      .strength(0.3),
+    )
+    .force("charge", forceManyBody<SimNode>()
+      .strength(-2000 - nodes.length * 50)
+      .distanceMax(desiredDistance * 3),
+    )
+    .force("collide", forceRectCollide(60))
+    .force("crossings", forceCrossingPenalty(simLinks, 0.5))
+    .force("edgeNode", forceEdgeNodeRepulsion(simLinks, 0.2))
+    .force("originX", forceX<SimNode>().x((d) => d.originX ?? 0).strength(fullRelayout ? 0.06 : 0.02))
+    .force("originY", forceY<SimNode>().y((d) => d.originY ?? 0).strength(fullRelayout ? 0.06 : 0.02))
+    .alphaDecay(0.008)
+    .velocityDecay(0.35)
+    .stop();
+
+  // Add group forces if there are groups
+  if (nodeToGroup.size > 0) {
+    simulation.force("groupCohesion", forceGroupCohesion(0.3));
+    simulation.force("groupExclusion", forceGroupExclusion(60, 0.8));
+  }
+
+  // Run simulation — more iterations for complex graphs with crossings to resolve
+  const iterations = 500;
+  for (let i = 0; i < iterations; i++) {
+    simulation.tick();
+  }
+
+  // Post-process: snap to coarse grid while preserving topology
+  quantizeToGrid(simNodes, simLinks);
+
+  // Convert center-based coordinates back to top-left and snap to fine grid
+  return nodes.map((n) => {
+    const sim = simNodeMap.get(n.id);
+    if (!sim || sim.pinned) return n;
+    return {
+      ...n,
+      position: {
+        x: Math.round((sim.x! - sim.width / 2) / GRID_SNAP) * GRID_SNAP,
+        y: Math.round((sim.y! - sim.height / 2) / GRID_SNAP) * GRID_SNAP,
+      },
+    };
+  });
 }
