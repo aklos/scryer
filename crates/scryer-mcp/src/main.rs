@@ -20,10 +20,31 @@ fn is_valid_identifier(name: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Check that a name is a valid type name: starts with any letter, then [a-zA-Z0-9_]
+fn is_valid_type_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 fn validate_identifier(name: &str, node_label: &str) -> Result<(), String> {
     if !is_valid_identifier(name) {
         Err(format!(
             "Name '{}' for {} must be a valid identifier (camelCase or snake_case: start with lowercase letter, then [a-zA-Z0-9_])",
+            name, node_label
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_type_name(name: &str, node_label: &str) -> Result<(), String> {
+    if !is_valid_type_name(name) {
+        Err(format!(
+            "Name '{}' for {} must be a valid type name (start with a letter, then [a-zA-Z0-9_])",
             name, node_label
         ))
     } else {
@@ -692,8 +713,16 @@ impl ScryerServer {
                     ))]));
                 }
             }
-            if matches!(node.data.kind, C4Kind::Operation | C4Kind::Model) {
+            if node.data.kind == C4Kind::Operation {
                 if let Err(e) = validate_identifier(
+                    &node.data.name,
+                    &format!("{:?} '{}'", node.data.kind, node.id),
+                ) {
+                    return Ok(CallToolResult::error(vec![Content::text(e)]));
+                }
+            }
+            if node.data.kind == C4Kind::Model {
+                if let Err(e) = validate_type_name(
                     &node.data.name,
                     &format!("{:?} '{}'", node.data.kind, node.id),
                 ) {
@@ -799,8 +828,13 @@ impl ScryerServer {
                 }
             }
 
-            if matches!(kind, C4Kind::Operation | C4Kind::Model) {
+            if kind == C4Kind::Operation {
                 if let Err(e) = validate_identifier(&item.name, &format!("{:?}", kind)) {
+                    return Ok(CallToolResult::error(vec![Content::text(e)]));
+                }
+            }
+            if kind == C4Kind::Model {
+                if let Err(e) = validate_type_name(&item.name, &format!("{:?}", kind)) {
                     return Ok(CallToolResult::error(vec![Content::text(e)]));
                 }
             }
@@ -847,6 +881,7 @@ impl ScryerServer {
                     decisions: item.decisions.clone(),
                     properties: item.properties.clone().unwrap_or_default(),
                     attachments: Vec::new(),
+                    links: Vec::new(),
                 },
                 parent_id: item.parent_id.clone(),
             });
@@ -930,8 +965,16 @@ impl ScryerServer {
                     ))]));
                 }
             }
-            if matches!(node.data.kind, C4Kind::Operation | C4Kind::Model) {
+            if node.data.kind == C4Kind::Operation {
                 if let Err(e) = validate_identifier(
+                    &node.data.name,
+                    &format!("{:?} '{}'", node.data.kind, node.id),
+                ) {
+                    return Ok(CallToolResult::error(vec![Content::text(e)]));
+                }
+            }
+            if node.data.kind == C4Kind::Model {
+                if let Err(e) = validate_type_name(
                     &node.data.name,
                     &format!("{:?} '{}'", node.data.kind, node.id),
                 ) {
@@ -1173,8 +1216,16 @@ impl ScryerServer {
             };
 
             if let Some(name) = item.name {
-                if matches!(node.data.kind, C4Kind::Operation | C4Kind::Model) {
+                if node.data.kind == C4Kind::Operation {
                     if let Err(e) = validate_identifier(
+                        &name,
+                        &format!("{:?} '{}'", node.data.kind, item.node_id),
+                    ) {
+                        return Ok(CallToolResult::error(vec![Content::text(e)]));
+                    }
+                }
+                if node.data.kind == C4Kind::Model {
+                    if let Err(e) = validate_type_name(
                         &name,
                         &format!("{:?} '{}'", node.data.kind, item.node_id),
                     ) {
@@ -3173,13 +3224,13 @@ const INSTRUCTIONS: &str = r#"scryer is a C4 architecture diagramming tool. You 
 - **Component**: A logical component inside a container. Parent must be a container node.
 - **Operation**: A single function, method, or handler inside a component — code you can point to in one file. Examples: `handleCreate`, `validateInput`, `hashPassword`. Use operation for anything that maps to one function/method. Parent must be a component node. **Name must be a valid identifier** (camelCase or snake_case).
 - **Process**: A multi-step behavioral flow that orchestrates multiple operations — like a saga, pipeline, or workflow. Processes describe *sequences*, not individual functions. If it maps to a single function, it's an operation, not a process. Parent must be a component node. Use `type: "process"` in node data.
-- **Model**: A data model inside a component. Parent must be a component node. Has optional `properties` (array of `{label, description}`). Use `type: "model"` in node data. **Name and property labels must be valid identifiers.**
+- **Model**: A data model inside a component. Parent must be a component node. Has optional `properties` (array of `{label, description}`). Use `type: "model"` in node data. **Name must be a valid type name** (PascalCase or camelCase). **Property labels must be valid identifiers.**
 
 ## Node Types
 All nodes use type `"c4"`, except: operation uses `"operation"`, process uses `"process"`, model uses `"model"`.
 
 ## Naming Rules
-Operation, process, and model names must be valid identifiers: start with a lowercase letter, then `[a-zA-Z0-9_]`. Use camelCase or snake_case. Model property labels follow the same rule.
+Operation and process names must be valid identifiers: start with a lowercase letter, then `[a-zA-Z0-9_]`. Use camelCase or snake_case. Model names may start with an uppercase letter (PascalCase like `UserProfile`) or lowercase. Model property labels must be valid identifiers (camelCase or snake_case).
 
 ## Source Map
 The model has an optional `sourceMap` field: a mapping from node ID to an array of source locations (`{file, line?, endLine?}`). Use `update_source_map` to attach file/line references to operation nodes. This is separate from `sources` (glob patterns on higher-level nodes).

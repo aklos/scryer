@@ -34,6 +34,7 @@ export type C4NodeData = {
   decisions?: string;
   properties?: ModelProperty[];
   attachments?: Attachment[];
+  links?: string[];
   _reference?: boolean;
   _relationships?: { direction: "in" | "out"; label: string; method?: string }[];
   _operations?: { id: string; name: string }[];

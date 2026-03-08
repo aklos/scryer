@@ -19,10 +19,18 @@ function useUpdateNodeData(): (id: string, data: Record<string, unknown>) => voi
 function sanitizeIdentifier(raw: string): string {
   const stripped = raw.replace(/[^a-zA-Z0-9_]/g, "");
   if (stripped.length === 0) return "";
-  // Force first character to lowercase; drop if not a letter
   const first = stripped[0];
   if (/[a-zA-Z]/.test(first)) return first.toLowerCase() + stripped.slice(1);
-  return stripped.slice(1); // strip leading digits/underscores
+  return stripped.slice(1);
+}
+
+/** Like sanitizeIdentifier but allows PascalCase (uppercase first letter) */
+function sanitizeTypeName(raw: string): string {
+  const stripped = raw.replace(/[^a-zA-Z0-9_]/g, "");
+  if (stripped.length === 0) return "";
+  const first = stripped[0];
+  if (/[a-zA-Z]/.test(first)) return first + stripped.slice(1);
+  return stripped.slice(1);
 }
 
 /* ── Tab type ─────────────────────────────────────────────────────── */
@@ -190,6 +198,55 @@ function EdgePanel({ edge, onUpdate, codeLevel }: { edge: C4Edge; onUpdate: (dat
   );
 }
 
+/* ── Links section ────────────────────────────────────────────────── */
+
+function LinksSection({ nodeId, links }: { nodeId: string; links: string[] }) {
+  const updateNodeData = useUpdateNodeData();
+
+  const updateLink = useCallback((index: number, value: string) => {
+    updateNodeData(nodeId, { links: links.map((u, i) => i === index ? value : u) });
+  }, [nodeId, links, updateNodeData]);
+
+  const removeLink = useCallback((index: number) => {
+    updateNodeData(nodeId, { links: links.filter((_, i) => i !== index) });
+  }, [nodeId, links, updateNodeData]);
+
+  const addLink = useCallback(() => {
+    updateNodeData(nodeId, { links: [...links, ""] });
+  }, [nodeId, links, updateNodeData]);
+
+  return (
+    <Section title="Links" count={links.length || undefined}>
+      {links.length > 0 && (
+        <div className="flex flex-col gap-1">
+          {links.map((url, i) => (
+            <div key={i} className="group flex items-center gap-1.5">
+              <Input
+                variant="inline"
+                className="!text-left !w-full !bg-transparent text-xs"
+                value={url}
+                placeholder="https://..."
+                onChange={(e) => updateLink(i, e.target.value)}
+              />
+              <button
+                type="button"
+                className="shrink-0 text-xs text-zinc-300 hover:text-red-400 dark:text-zinc-600 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover:opacity-100"
+                title="Remove link"
+                onClick={() => removeLink(i)}
+              >
+                &times;
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <Button variant="link" onClick={addLink}>
+        + add link
+      </Button>
+    </Section>
+  );
+}
+
 /* ── Attachments section ──────────────────────────────────────────── */
 
 const MAX_IMAGE_DIM = 1280;
@@ -323,17 +380,35 @@ function NodePropertiesContent({ node, hints, onFixHint, onDismissHint, sourceLo
       {data.kind === "system" && (
         <>
           <Divider />
-          <Section title="Identity">
-            <KVRow label="External">
-              <Toggle value={!!data.external} onChange={(v) => updateNodeData(node.id, { external: v || undefined, ...(v ? { status: undefined } : {}) })} />
-            </KVRow>
-          </Section>
+          <KVRow label="External">
+            <Toggle value={!!data.external} onChange={(v) => updateNodeData(node.id, { external: v || undefined, ...(v ? { status: undefined } : {}) })} />
+          </KVRow>
+        </>
+      )}
+
+      {/* ── Technology ── */}
+      {showTechnology && (
+        <>
+          <Divider />
+          <KVRow label="Technology">
+            <Input
+              variant="inline"
+              list={listId}
+              value={data.technology ?? ""}
+              placeholder="e.g. REST API"
+              maxLength={28}
+              onChange={(e) => updateNodeData(node.id, { technology: e.target.value || undefined })}
+            />
+            <datalist id={listId}>
+              {suggestions.map((s) => <option key={s} value={s} />)}
+            </datalist>
+          </KVRow>
         </>
       )}
 
       <Divider />
 
-      {/* ── Description — prominent, right after identity ── */}
+      {/* ── Description ── */}
       <Field
         label="Description"
         trailing={
@@ -378,40 +453,20 @@ function NodePropertiesContent({ node, hints, onFixHint, onDismissHint, sourceLo
         </>
       )}
 
-      {/* ── Attachments (containers & components only) ── */}
+      {/* ── Links & Attachments (containers & components only) ── */}
       {(data.kind === "container" || data.kind === "component") && (
         <>
           <Divider />
-          <AttachmentsSection nodeId={node.id} attachments={data.attachments ?? []} />
-        </>
-      )}
-
-      {/* ── Details — technology ── */}
-      {showTechnology && (
-        <>
+          <LinksSection nodeId={node.id} links={data.links ?? []} />
           <Divider />
-          <Section title="Details">
-            <KVRow label="Technology">
-              <Input
-                variant="inline"
-                list={listId}
-                value={data.technology ?? ""}
-                placeholder="e.g. REST API"
-                maxLength={28}
-                onChange={(e) => updateNodeData(node.id, { technology: e.target.value || undefined })}
-              />
-              <datalist id={listId}>
-                {suggestions.map((s) => <option key={s} value={s} />)}
-              </datalist>
-            </KVRow>
-          </Section>
+          <AttachmentsSection nodeId={node.id} attachments={data.attachments ?? []} />
         </>
       )}
 
       <Divider />
 
       {/* ── Implementation — status, source locations ── */}
-      <Section title="Status">
+      <Field label="Status">
         {data.kind !== "person" && !data.external && (
           <PillToggle<Status | undefined>
             options={[
@@ -426,7 +481,7 @@ function NodePropertiesContent({ node, hints, onFixHint, onDismissHint, sourceLo
         )}
 
         {isCodeLevel && sourceLocations && sourceLocations.length > 0 && (
-          <div className="flex flex-col gap-0.5">
+          <div className="flex flex-col gap-0.5 mt-1.5">
             {sourceLocations.map((loc, i) => (
               <button
                 key={i}
@@ -445,13 +500,13 @@ function NodePropertiesContent({ node, hints, onFixHint, onDismissHint, sourceLo
         {(data.kind === "person" || data.external) && !(isCodeLevel && sourceLocations && sourceLocations.length > 0) && (
           <span className="text-xs text-zinc-300 dark:text-zinc-600 italic">No implementation tracking</span>
         )}
-      </Section>
+      </Field>
 
       {/* ── Appearance — shape, collapsed by default ── */}
       {showShape && (
         <>
           <Divider />
-          <Section title="Appearance">
+          <Field label="Shape">
             <div className="grid grid-cols-3 gap-1">
               {ALL_SHAPES.filter((s) => s !== "person").map((s) => {
                 const effective = resolveShape(data.kind, data.shape);
@@ -470,7 +525,7 @@ function NodePropertiesContent({ node, hints, onFixHint, onDismissHint, sourceLo
                 );
               })}
             </div>
-          </Section>
+          </Field>
         </>
       )}
 
@@ -849,7 +904,7 @@ function ProcessPropertiesContent({ node, mentionNames }: { node: C4Node; mentio
         />
       </Field>
       <Divider />
-      <Section title="Status">
+      <Field label="Status">
         <PillToggle<Status | undefined>
           options={[
             { value: undefined, label: "None" },
@@ -860,7 +915,7 @@ function ProcessPropertiesContent({ node, mentionNames }: { node: C4Node; mentio
           value={data.status}
           onChange={(s) => updateNodeData(node.id, { status: s })}
         />
-      </Section>
+      </Field>
     </>
   );
 }
@@ -891,8 +946,8 @@ function ModelPropertiesContent({ node }: { node: C4Node }) {
         variant="title"
         className="font-mono"
         value={data.name}
-        placeholder="e.g. userProfile"
-        onChange={(e) => updateNodeData(node.id, { name: sanitizeIdentifier(e.target.value) })}
+        placeholder="e.g. UserProfile"
+        onChange={(e) => updateNodeData(node.id, { name: sanitizeTypeName(e.target.value) })}
       />
       <Divider />
       <Field
@@ -922,7 +977,7 @@ function ModelPropertiesContent({ node }: { node: C4Node }) {
                     variant="inline"
                     className="!text-left !w-full !bg-transparent font-semibold font-mono text-xs"
                     value={prop.label}
-                    placeholder="Property name"
+                    placeholder="propertyName"
                     onChange={(e) => updateProperty(i, { label: sanitizeIdentifier(e.target.value) })}
                   />
                   <Input
@@ -950,7 +1005,7 @@ function ModelPropertiesContent({ node }: { node: C4Node }) {
         </Button>
       </Section>
       <Divider />
-      <Section title="Status">
+      <Field label="Status">
         <PillToggle<Status | undefined>
           options={[
             { value: undefined, label: "None" },
@@ -961,7 +1016,7 @@ function ModelPropertiesContent({ node }: { node: C4Node }) {
           value={data.status}
           onChange={(s) => updateNodeData(node.id, { status: s })}
         />
-      </Section>
+      </Field>
     </>
   );
 }

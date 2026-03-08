@@ -144,7 +144,7 @@ export function useCanvasEvents({
         type: "model",
         position,
         data: {
-          name: "newModel",
+          name: "NewModel",
           description: "",
           kind: "model" as C4Kind,
           status: "proposed",

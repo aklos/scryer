@@ -112,6 +112,8 @@ pub struct C4NodeData {
     pub properties: Vec<ModelProperty>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<Attachment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<String>,
 }
 
 /// A node in the model. Matches ReactFlow's Node structure.
