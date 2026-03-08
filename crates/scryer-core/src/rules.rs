@@ -79,7 +79,10 @@ complete picture.\n\
    - **First call (`set_model`):** persons, the system, external systems, and system-level edges only. \
 No containers yet. This establishes the system landscape. Fix any warnings before proceeding.\n\
    - **Second call (`set_node` on the system):** add all containers plus container-level edges \
-(Person→Container, Container→Container, Container→ExternalSystem). Fix any warnings.\n\
+(Person→Container, Container→Container, Container→ExternalSystem). Fix any warnings. \
+**Then group containers that deploy together** using `set_groups` — e.g. if Website, CMS Admin, and API \
+are all part of one Next.js app, group them. If two S3 buckets are provisioned together, group them. \
+Containers split for inner-graph clarity (rule 9) should almost always be grouped.\n\
    - **Later (`set_node` per container):** add components only when the user asks for deeper detail, \
 plus component-level edges. Fix warnings.\n\
    Do NOT dump all levels into a single `set_model` call — the tool validates edges per view level, and \

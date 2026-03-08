@@ -119,6 +119,89 @@ function segmentsIntersect(
  * axis (within one grid step), they're snapped to share that coordinate —
  * producing clean vertical/horizontal edges.
  */
+/**
+ * Check if placing a grouped node at (col, row) would put it adjacent to
+ * a node from a different group. Returns true if there's a conflict.
+ */
+function findNearbyGroupConflict(
+  col: number, row: number, groupId: string,
+  occupied: Map<string, SimNode>,
+  cellKey: (c: number, r: number) => string,
+): boolean {
+  // Check the cell itself and immediate neighbors for other-group nodes
+  for (let dc = -1; dc <= 1; dc++) {
+    for (let dr = -1; dr <= 1; dr++) {
+      const neighbor = occupied.get(cellKey(col + dc, row + dr));
+      if (neighbor && neighbor.groupId && neighbor.groupId !== groupId) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Post-quantize pass: if two group bounding boxes overlap, shift the
+ * smaller group away from the larger one along the axis of least overlap.
+ */
+function separateGroups(simNodes: SimNode[], cellW: number, cellH: number): void {
+  // Collect groups
+  const groups = new Map<string, SimNode[]>();
+  for (const n of simNodes) {
+    if (!n.groupId) continue;
+    if (!groups.has(n.groupId)) groups.set(n.groupId, []);
+    groups.get(n.groupId)!.push(n);
+  }
+
+  const groupIds = [...groups.keys()];
+  const PAD = 40; // padding around group boxes
+
+  for (let i = 0; i < groupIds.length; i++) {
+    for (let j = i + 1; j < groupIds.length; j++) {
+      const membersA = groups.get(groupIds[i])!;
+      const membersB = groups.get(groupIds[j])!;
+
+      // Compute bounding boxes
+      const boxA = groupBBox(membersA, PAD);
+      const boxB = groupBBox(membersB, PAD);
+
+      // Check overlap
+      const overlapX = Math.min(boxA.maxX, boxB.maxX) - Math.max(boxA.minX, boxB.minX);
+      const overlapY = Math.min(boxA.maxY, boxB.maxY) - Math.max(boxA.minY, boxB.minY);
+
+      if (overlapX <= 0 || overlapY <= 0) continue; // no overlap
+
+      // Shift the smaller group along the axis of least overlap
+      const mover = membersA.length <= membersB.length ? membersA : membersB;
+      const moverBox = mover === membersA ? boxA : boxB;
+      const anchorBox = mover === membersA ? boxB : boxA;
+
+      if (overlapX < overlapY) {
+        // Shift horizontally
+        const shift = overlapX + cellW * 0.5;
+        const dir = (moverBox.minX + moverBox.maxX) > (anchorBox.minX + anchorBox.maxX) ? 1 : -1;
+        for (const n of mover) n.x! += shift * dir;
+      } else {
+        // Shift vertically
+        const shift = overlapY + cellH * 0.5;
+        const dir = (moverBox.minY + moverBox.maxY) > (anchorBox.minY + anchorBox.maxY) ? 1 : -1;
+        for (const n of mover) n.y! += shift * dir;
+      }
+    }
+  }
+}
+
+function groupBBox(members: SimNode[], pad: number) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const m of members) {
+    minX = Math.min(minX, m.x! - m.width / 2);
+    minY = Math.min(minY, m.y! - m.height / 2);
+    maxX = Math.max(maxX, m.x! + m.width / 2);
+    maxY = Math.max(maxY, m.y! + m.height / 2);
+  }
+  return { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad };
+}
+
 function quantizeToGrid(simNodes: SimNode[], simLinks: SimLink[]): void {
   const freeNodes = simNodes.filter((n) => !n.pinned);
   if (freeNodes.length === 0) return;
@@ -168,16 +251,45 @@ function quantizeToGrid(simNodes: SimNode[], simLinks: SimLink[]): void {
           const col = idealCol + dc;
           const row = idealRow + dr;
           const key = cellKey(col, row);
-          if (!occupied.has(key)) {
-            n.x = col * cellW;
-            n.y = row * cellH;
-            occupied.set(key, n);
-            placed = true;
+          if (occupied.has(key)) continue;
+
+          // If this node is in a group, avoid cells occupied by other groups
+          if (n.groupId) {
+            const occupant = findNearbyGroupConflict(col, row, n.groupId, occupied, cellKey);
+            if (occupant) continue;
+          }
+
+          n.x = col * cellW;
+          n.y = row * cellH;
+          occupied.set(key, n);
+          placed = true;
+        }
+      }
+    }
+
+    // Fallback: if group-aware placement failed, place without group check
+    if (!placed) {
+      for (let radius = 0; radius <= 10 && !placed; radius++) {
+        for (let dc = -radius; dc <= radius && !placed; dc++) {
+          for (let dr = -radius; dr <= radius && !placed; dr++) {
+            if (Math.abs(dc) !== radius && Math.abs(dr) !== radius) continue;
+            const col = idealCol + dc;
+            const row = idealRow + dr;
+            const key = cellKey(col, row);
+            if (!occupied.has(key)) {
+              n.x = col * cellW;
+              n.y = row * cellH;
+              occupied.set(key, n);
+              placed = true;
+            }
           }
         }
       }
     }
   }
+
+  // Post-pass: separate overlapping group bounding boxes
+  separateGroups(simNodes, cellW, cellH);
 
   // Axis-align pass: for each edge, if endpoints are within 1 grid step
   // on one axis, snap them to share that coordinate

@@ -158,13 +158,31 @@ export function useVisibleNodes({
     // Build reference nodes from the external nodes
     const childIds = new Set(effectiveChildNodes.map((n: C4Node) => n.id));
 
-    // Compute child bounding box for auto-positioning reference nodes
+    // Compute child bounding box for auto-positioning reference nodes.
+    // Include group box extents so refs don't overlap group borders.
     const allLevelNodes = [...effectiveChildNodes, ...extraNodes];
     const childXs = allLevelNodes.map((n: C4Node) => n.position.x);
     const childYs = allLevelNodes.map((n: C4Node) => n.position.y);
-    const bounds = allLevelNodes.length > 0
+    let bounds = allLevelNodes.length > 0
       ? { minX: Math.min(...childXs), maxX: Math.max(...childXs), minY: Math.min(...childYs), maxY: Math.max(...childYs) }
       : { minX: 100, maxX: 100, minY: 100, maxY: 100 };
+    // Expand bounds to include group boxes (which extend beyond member positions)
+    for (const group of groups) {
+      const members = allLevelNodes.filter((n: C4Node) => group.memberIds.includes(n.id));
+      if (members.length === 0) continue;
+      const gxs = members.map((n: C4Node) => n.position.x);
+      const gys = members.map((n: C4Node) => n.position.y);
+      const gMinX = Math.min(...gxs) - 30; // PAD_X from group box rendering
+      const gMinY = Math.min(...gys) - 42; // PAD_TOP
+      const gMaxX = Math.max(...gxs) + NODE_W + 30;
+      const gMaxY = Math.max(...gys) + NODE_H + 20; // PAD_BOTTOM
+      bounds = {
+        minX: Math.min(bounds.minX, gMinX),
+        minY: Math.min(bounds.minY, gMinY),
+        maxX: Math.max(bounds.maxX, gMaxX),
+        maxY: Math.max(bounds.maxY, gMaxY),
+      };
+    }
 
     // Separate refs by primary direction for placement
     const inRefs: string[] = [];
