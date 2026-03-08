@@ -126,8 +126,10 @@ function quantizeToGrid(simNodes: SimNode[], simLinks: SimLink[]): void {
   // Grid cell size: based on the largest node + padding
   const maxW = Math.max(...simNodes.map((n) => n.width));
   const maxH = Math.max(...simNodes.map((n) => n.height));
-  const cellW = maxW + 100;
-  const cellH = maxH + 80;
+  // Padding accounts for edge labels between nodes and diagonal clearance.
+  // Edge labels need ~150px clear space to not overlap node boundaries.
+  const cellW = maxW + 160;
+  const cellH = maxH + 120;
 
   // Snap each free node to nearest grid cell
   // Track occupied cells to avoid collisions
@@ -199,6 +201,95 @@ function quantizeToGrid(simNodes: SimNode[], simLinks: SimLink[]): void {
       if (!a.pinned) a.y = midY;
       if (!b.pinned) b.y = midY;
     }
+  }
+
+  // Edge-through-node resolution: if any edge passes through a non-endpoint
+  // node's bounding box, shift that node to the nearest free cell that clears it.
+  // Rebuild occupied map after axis-align may have shifted positions.
+  occupied.clear();
+  for (const n of simNodes) {
+    const col = Math.round(n.x! / cellW);
+    const row = Math.round(n.y! / cellH);
+    occupied.set(cellKey(col, row), n);
+  }
+
+  const margin = 20;
+  for (let pass = 0; pass < 3; pass++) {
+    let moved = false;
+    for (const n of freeNodes) {
+      // Check if any edge passes through this node
+      let blocked = false;
+      for (const link of simLinks) {
+        const src = link.source as SimNode;
+        const tgt = link.target as SimNode;
+        if (src.id === n.id || tgt.id === n.id) continue;
+        if (segmentIntersectsRect(
+          src.x!, src.y!, tgt.x!, tgt.y!,
+          n.x! - n.width / 2 - margin, n.y! - n.height / 2 - margin,
+          n.width + margin * 2, n.height + margin * 2,
+        )) {
+          blocked = true;
+          break;
+        }
+      }
+      if (!blocked) continue;
+
+      // Find nearest free cell that doesn't intersect any edge
+      const curCol = Math.round(n.x! / cellW);
+      const curRow = Math.round(n.y! / cellH);
+      // Remove from current cell
+      occupied.delete(cellKey(curCol, curRow));
+
+      let bestCol = curCol, bestRow = curRow, bestDist = Infinity;
+      for (let radius = 1; radius <= 6; radius++) {
+        for (let dc = -radius; dc <= radius; dc++) {
+          for (let dr = -radius; dr <= radius; dr++) {
+            if (Math.abs(dc) !== radius && Math.abs(dr) !== radius) continue;
+            const col = curCol + dc;
+            const row = curRow + dr;
+            if (occupied.has(cellKey(col, row))) continue;
+
+            // Check this candidate doesn't sit on any edge
+            const cx = col * cellW;
+            const cy = row * cellH;
+            let clear = true;
+            for (const link of simLinks) {
+              const src = link.source as SimNode;
+              const tgt = link.target as SimNode;
+              if (src.id === n.id || tgt.id === n.id) continue;
+              if (segmentIntersectsRect(
+                src.x!, src.y!, tgt.x!, tgt.y!,
+                cx - n.width / 2 - margin, cy - n.height / 2 - margin,
+                n.width + margin * 2, n.height + margin * 2,
+              )) {
+                clear = false;
+                break;
+              }
+            }
+            if (!clear) continue;
+
+            const dist = dc * dc + dr * dr;
+            if (dist < bestDist) {
+              bestDist = dist;
+              bestCol = col;
+              bestRow = row;
+            }
+          }
+        }
+        if (bestDist < Infinity) break; // found one at this radius
+      }
+
+      if (bestDist < Infinity) {
+        n.x = bestCol * cellW;
+        n.y = bestRow * cellH;
+        occupied.set(cellKey(bestCol, bestRow), n);
+        moved = true;
+      } else {
+        // Couldn't find a clear cell, put back
+        occupied.set(cellKey(curCol, curRow), n);
+      }
+    }
+    if (!moved) break;
   }
 }
 
@@ -661,9 +752,9 @@ export async function autoLayout(
     }
   }
 
-  // Desired edge length scales with node count and edge density to prevent cramming
+  // Desired edge length scales with node count and edge density
   const edgeDensity = filteredEdges.length / Math.max(1, nodes.length);
-  const desiredDistance = Math.max(400, 280 + nodes.length * 20 + edgeDensity * 30);
+  const desiredDistance = Math.max(300, 220 + nodes.length * 12 + edgeDensity * 20);
 
   // Build simulation
   const simulation = forceSimulation<SimNode>(simNodes)
@@ -673,7 +764,7 @@ export async function autoLayout(
       .strength(0.3),
     )
     .force("charge", forceManyBody<SimNode>()
-      .strength(-2000 - nodes.length * 50)
+      .strength(-1200 - nodes.length * 30)
       .distanceMax(desiredDistance * 3),
     )
     .force("collide", forceRectCollide(60))
