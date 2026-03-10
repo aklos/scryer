@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { C4ModelData, C4Node, C4NodeData, C4Edge, StartingLevel, SourceLocation, Group, Contract, Flow, FlowStep, FlowTransition } from "../types";
@@ -160,6 +160,18 @@ export function useModelStorage(
   nodesRef.current = nodes;
   const edgesRef = useRef(edges);
   edgesRef.current = edges;
+
+  // "Follow AI" — auto-navigate to where the AI made changes
+  const [followAI, setFollowAIState] = useState(() => {
+    const stored = localStorage.getItem("scryer:followAI");
+    return stored === null ? true : stored === "true";
+  });
+  const followAIRef = useRef(followAI);
+  followAIRef.current = followAI;
+  const setFollowAI = useCallback((value: boolean) => {
+    setFollowAIState(value);
+    localStorage.setItem("scryer:followAI", String(value));
+  }, []);
 
   // Load model list, templates on mount
   useEffect(() => {
@@ -332,55 +344,63 @@ export function useModelStorage(
       const wasEmpty = oldNodes.length === 0;
       if (changedParents.size > 0 && !wasEmpty) {
         const nodeById = new Map(data.nodes.map((n) => [n.id, n]));
-        let bestParentId = "";
-        let bestDepth = Infinity;
-        let bestCount = 0;
 
-        for (const [parentId, count] of changedParents) {
-          if (!parentId) {
-            // Changes at root level (top-level nodes) — skip, no navigation needed
-            continue;
-          }
-          let depth = 0;
-          let cur = parentId;
-          while (cur) {
-            depth++;
-            const parent = nodeById.get(cur);
-            if (!parent?.parentId) break;
-            cur = parent.parentId;
-          }
-          if (depth < bestDepth || (depth === bestDepth && count > bestCount)) {
-            bestParentId = parentId;
-            bestDepth = depth;
-            bestCount = count;
-          }
-        }
+        if (followAIRef.current) {
+          // Auto-navigate to the changed level
+          let bestParentId = "";
+          let bestDepth = Infinity;
+          let bestCount = 0;
 
-        if (bestParentId) {
-          // Don't navigate into code level (inside a component)
-          const bestNode = nodeById.get(bestParentId);
-          if (bestNode && (bestNode.data as C4NodeData).kind === "component" && bestNode.parentId) {
-            bestParentId = bestNode.parentId;
+          for (const [parentId, count] of changedParents) {
+            if (!parentId) {
+              // Changes at root level (top-level nodes) — skip, no navigation needed
+              continue;
+            }
+            let depth = 0;
+            let cur = parentId;
+            while (cur) {
+              depth++;
+              const parent = nodeById.get(cur);
+              if (!parent?.parentId) break;
+              cur = parent.parentId;
+            }
+            if (depth < bestDepth || (depth === bestDepth && count > bestCount)) {
+              bestParentId = parentId;
+              bestDepth = depth;
+              bestCount = count;
+            }
           }
-          // Build expandedPath by walking up from the target parent
-          const path: string[] = [];
-          let cur: string | undefined = bestParentId;
-          while (cur) {
-            path.unshift(cur);
-            const parent = nodeById.get(cur);
-            cur = parent?.parentId;
+
+          if (bestParentId) {
+            // Don't navigate into code level (inside a component)
+            const bestNode = nodeById.get(bestParentId);
+            if (bestNode && (bestNode.data as C4NodeData).kind === "component" && bestNode.parentId) {
+              bestParentId = bestNode.parentId;
+            }
+            // Build expandedPath by walking up from the target parent
+            const path: string[] = [];
+            let cur: string | undefined = bestParentId;
+            while (cur) {
+              path.unshift(cur);
+              const parent = nodeById.get(cur);
+              cur = parent?.parentId;
+            }
+            setExpandedPath(path);
+            setActiveFlowId(null);
+            scheduleFitView();
           }
-          // Preserve the user's current path if it's still valid (all nodes exist).
-          // Only auto-navigate if the current path became invalid (e.g. a node was deleted).
+        } else {
+          // Follow AI disabled — only reset if current path has deleted nodes
           setExpandedPath((currentPath) => {
-            const isCurrentPathValid =
-              currentPath.length > 0 &&
-              currentPath.every((id) => nodeById.has(id));
-            if (isCurrentPathValid) return currentPath;
-            return path;
+            if (currentPath.length === 0) return currentPath;
+            // Trim path to the last valid ancestor
+            const trimmed = [];
+            for (const id of currentPath) {
+              if (!nodeById.has(id)) break;
+              trimmed.push(id);
+            }
+            return trimmed.length === currentPath.length ? currentPath : trimmed;
           });
-          setActiveFlowId(null);
-          scheduleFitView();
         }
       }
 
@@ -488,5 +508,7 @@ export function useModelStorage(
     loadTemplate,
     saveModelAs,
     refreshList,
+    followAI,
+    setFollowAI,
   };
 }

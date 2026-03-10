@@ -722,6 +722,8 @@ function Flow() {
           const name = raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-");
           if (name) storage.saveModelAs(name);
         }}
+        followAI={storage.followAI}
+        onToggleFollowAI={() => storage.setFollowAI(!storage.followAI)}
         hasModel={currentModel !== null || nodes.length > 0}
         breadcrumbs={breadcrumbs}
         currentParentKind={currentParentKind}

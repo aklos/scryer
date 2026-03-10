@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Minus, Square, X, Settings, Keyboard, FolderX, SaveAll, Menu, Palette } from "lucide-react";
+import { Minus, Square, X, Settings, Keyboard, FolderX, SaveAll, Menu, Palette, Navigation } from "lucide-react";
 import type { C4Kind } from "./types";
 import type { RackDependency } from "./CodeLevelRack";
 
@@ -12,6 +12,8 @@ interface TopBarProps {
   onOpenTheme: () => void;
   onCloseModel: () => void;
   onSaveAs: () => void;
+  followAI: boolean;
+  onToggleFollowAI: () => void;
   hasModel: boolean;
 
   breadcrumbs: { id: string; name: string; kind: C4Kind }[];
@@ -27,7 +29,7 @@ const appWindow = getCurrentWindow();
 
 
 
-function AppMenu({ onClose, onOpenSettings, onOpenTheme, onOpenPalette, onCloseModel, onSaveAs, hasModel }: { onClose: () => void; onOpenSettings: () => void; onOpenTheme: () => void; onOpenPalette: () => void; onCloseModel: () => void; onSaveAs: () => void; hasModel: boolean }) {
+function AppMenu({ onClose, onOpenSettings, onOpenTheme, onOpenPalette, onCloseModel, onSaveAs, hasModel, followAI, onToggleFollowAI }: { onClose: () => void; onOpenSettings: () => void; onOpenTheme: () => void; onOpenPalette: () => void; onCloseModel: () => void; onSaveAs: () => void; hasModel: boolean; followAI: boolean; onToggleFollowAI: () => void }) {
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -48,10 +50,11 @@ function AppMenu({ onClose, onOpenSettings, onOpenTheme, onOpenPalette, onCloseM
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
 
-  const items: { label: string; icon: typeof Settings; shortcut?: string; onClick: () => void; disabled?: boolean }[] = [
+  const items: { label: string; icon: typeof Settings; shortcut?: string; onClick: () => void; disabled?: boolean; active?: boolean }[] = [
     { label: "Open model", icon: Keyboard, shortcut: "Ctrl+K", onClick: () => { onOpenPalette(); onClose(); } },
     { label: "Save as…", icon: SaveAll, onClick: () => { onSaveAs(); onClose(); }, disabled: !hasModel },
     { label: "Close model", icon: FolderX, onClick: () => { onCloseModel(); onClose(); }, disabled: !hasModel },
+    { label: "Follow AI", icon: Navigation, onClick: () => { onToggleFollowAI(); onClose(); }, active: followAI },
     { label: "Theme", icon: Palette, onClick: () => { onOpenTheme(); onClose(); } },
     { label: "AI settings", icon: Settings, onClick: () => { onOpenSettings(); onClose(); } },
   ];
@@ -68,8 +71,13 @@ function AppMenu({ onClose, onOpenSettings, onOpenTheme, onOpenPalette, onCloseM
           className={`flex items-center gap-2 w-full px-3 py-1.5 text-xs transition-colors ${item.disabled ? "text-zinc-300 dark:text-zinc-600 cursor-default" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-700 cursor-pointer"}`}
           onClick={item.disabled ? undefined : item.onClick}
         >
-          <item.icon className="h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" />
+          <item.icon className={`h-3.5 w-3.5 ${item.active ? "text-blue-500 dark:text-blue-400" : "text-zinc-400 dark:text-zinc-500"}`} />
           <span className="flex-1 text-left">{item.label}</span>
+          {item.active !== undefined && (
+            <span className={`text-[10px] ${item.active ? "text-blue-500 dark:text-blue-400" : "text-zinc-400 dark:text-zinc-500"}`}>
+              {item.active ? "on" : "off"}
+            </span>
+          )}
           {item.shortcut && (
             <span className="text-[10px] text-zinc-400 dark:text-zinc-500">{item.shortcut}</span>
           )}
@@ -80,7 +88,7 @@ function AppMenu({ onClose, onOpenSettings, onOpenTheme, onOpenPalette, onCloseM
 }
 
 export function TopBar({
-  currentModel, onOpenPalette, onNavigateToRoot, onOpenSettings, onOpenTheme, onCloseModel, onSaveAs, hasModel,
+  currentModel, onOpenPalette, onNavigateToRoot, onOpenSettings, onOpenTheme, onCloseModel, onSaveAs, followAI, onToggleFollowAI, hasModel,
   breadcrumbs, currentParentKind, navigateToBreadcrumb,
   activeFlowId, activeFlowName,
   dependencies = [], onNavigateToNode,
@@ -113,6 +121,8 @@ export function TopBar({
             onCloseModel={onCloseModel}
             onSaveAs={onSaveAs}
             hasModel={hasModel}
+            followAI={followAI}
+            onToggleFollowAI={onToggleFollowAI}
           />
         )}
       </div>
