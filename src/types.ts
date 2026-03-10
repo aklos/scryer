@@ -6,10 +6,22 @@ export type C4Shape = "rectangle" | "person" | "cylinder" | "pipe" | "trapezoid"
 
 export type Status = "implemented" | "proposed" | "changed" | "deprecated";
 
+export type ContractItem = { text: string; passed?: boolean } | string;
+
 export interface Contract {
-  expect: string[];
-  ask: string[];
-  never: string[];
+  expect: ContractItem[];
+  ask: ContractItem[];
+  never: ContractItem[];
+}
+
+/** Extract text from a ContractItem (handles both plain string and object format) */
+export function contractText(item: ContractItem): string {
+  return typeof item === "string" ? item : item.text;
+}
+
+/** Extract passed state from a ContractItem */
+export function contractPassed(item: ContractItem): boolean | undefined {
+  return typeof item === "string" ? undefined : item.passed;
 }
 
 export interface Attachment {
@@ -30,7 +42,6 @@ export type C4NodeData = {
   sources?: { pattern: string; comment: string }[];
   status?: Status;
   contract?: Contract;
-  accepts?: string[];
   decisions?: string;
   properties?: ModelProperty[];
   attachments?: Attachment[];
@@ -105,7 +116,6 @@ export interface C4ModelData {
   projectPath?: string;
   refPositions?: Record<string, { x: number; y: number }>;
   groups?: Group[];
-  contract?: Contract;
   flows?: Flow[];
 }
 

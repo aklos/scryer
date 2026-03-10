@@ -56,14 +56,53 @@ pub struct Reference {
     pub comment: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum ContractItem {
+    /// New format: { text, passed? }
+    Full {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        passed: Option<bool>,
+    },
+    /// Legacy format: plain string
+    Plain(String),
+}
+
+impl std::fmt::Display for ContractItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let prefix = match self.passed() {
+            Some(true) => "[x] ",
+            Some(false) => "[ ] ",
+            None => "",
+        };
+        write!(f, "{}{}", prefix, self.text())
+    }
+}
+
+impl ContractItem {
+    pub fn text(&self) -> &str {
+        match self {
+            ContractItem::Full { text, .. } => text,
+            ContractItem::Plain(s) => s,
+        }
+    }
+    pub fn passed(&self) -> Option<bool> {
+        match self {
+            ContractItem::Full { passed, .. } => *passed,
+            ContractItem::Plain(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, schemars::JsonSchema)]
 pub struct Contract {
     #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "always")]
-    pub expect: Vec<String>,
+    pub expect: Vec<ContractItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ask: Vec<String>,
+    pub ask: Vec<ContractItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub never: Vec<String>,
+    pub never: Vec<ContractItem>,
 }
 
 impl Contract {
@@ -103,8 +142,6 @@ pub struct C4NodeData {
     pub status: Option<Status>,
     #[serde(default, skip_serializing_if = "Contract::is_empty")]
     pub contract: Contract,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub accepts: Vec<String>,
     /// Short rationale for why this node exists or is structured this way
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decisions: Option<String>,
@@ -274,8 +311,6 @@ pub struct C4ModelData {
     pub ref_positions: HashMap<String, Position>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<Group>,
-    #[serde(default, skip_serializing_if = "Contract::is_empty")]
-    pub contract: Contract,
     #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "scenarios")]
     pub flows: Vec<Flow>,
 }

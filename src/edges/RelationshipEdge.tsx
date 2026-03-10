@@ -1,9 +1,10 @@
+import { useContext } from "react";
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, Position, useStore, type EdgeProps, type ReactFlowState } from "@xyflow/react";
 import type { C4Edge, C4NodeData, Status } from "../types";
-import { STATUS_COLORS } from "../statusColors";
+import { statusHex } from "../statusColors";
+import { getThemedHex, ThemeContext } from "../theme";
 
 const CORNER_HANDLES = new Set(["top-left", "top-right", "bottom-left", "bottom-right"]);
-const STROKE_COLOR = "#94a3b8"; // slate-400
 const CURVE_OFFSET = 24;
 const ENDPOINT_OFFSET = 5;
 
@@ -29,6 +30,8 @@ export function RelationshipEdge({
   data,
   selected,
 }: EdgeProps<C4Edge>) {
+  useContext(ThemeContext);
+
   // Check if a reverse edge exists between the same pair of nodes
   const isBiDirectional = useStore((s: ReactFlowState) =>
     s.edges.some((e) => e.source === target && e.target === source),
@@ -72,10 +75,10 @@ export function RelationshipEdge({
   const isMention = data?._mention;
   const label = data?.label;
   const method = data?.method;
-  const statusColor = inferredStatus ? STATUS_COLORS[inferredStatus] : null;
-  const baseColor = statusColor?.hex ?? STROKE_COLOR;
+  const baseColor = inferredStatus ? statusHex(inferredStatus) : getThemedHex("slate", "400");
   const selColor = getComputedStyle(document.documentElement).getPropertyValue("--selection-color").trim() || "#18181b";
-  const edgeColor = selected ? selColor : isMention ? "#a1a1aa" : baseColor;
+  const mentionColor = getThemedHex("zinc", "400");
+  const edgeColor = selected ? selColor : isMention ? mentionColor : baseColor;
 
   let edgePath: string;
   let labelX: number;

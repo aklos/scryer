@@ -2,23 +2,18 @@
 @import "@xyflow/react/dist/style.css";
 @import "@fontsource-variable/space-grotesk";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --grid-color: #d4d4d8;
   --xy-background-color: #f8f8fa;
   --selection-color: #18181b;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --xy-background-color: #18181b;
-    --selection-color: #d4d4d8;
-  }
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --grid-color: #2a2a2e;
-  }
+.dark {
+  --xy-background-color: #18181b;
+  --selection-color: #d4d4d8;
+  --grid-color: #2a2a2e;
 }
 
 @keyframes dash-flow {
@@ -77,53 +72,48 @@
 /* Normalize ReactFlow controls to match other canvas panels */
 .react-flow__controls {
   border-radius: 0.5rem;
-  border: 1px solid rgb(228 228 231 / 0.8);
-  background: rgb(255 255 255 / 0.8);
+  border: 1px solid color-mix(in srgb, var(--color-zinc-200) 80%, transparent);
+  background: color-mix(in srgb, white 80%, transparent);
   backdrop-filter: blur(4px);
   box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   overflow: hidden;
   margin: 0.75rem !important;
 }
 
-@media (prefers-color-scheme: dark) {
-  .react-flow__controls {
-    border-color: rgb(63 63 70 / 0.8);
-    background: rgb(24 24 27 / 0.8);
-  }
+.dark .react-flow__controls {
+  border-color: color-mix(in srgb, var(--color-zinc-700) 80%, transparent);
+  background: color-mix(in srgb, var(--color-zinc-900) 80%, transparent);
 }
 
 .react-flow__controls-button {
   border: none !important;
   background: transparent !important;
-  color: #a1a1aa !important;
-  fill: #a1a1aa !important;
+  color: var(--color-zinc-400) !important;
+  fill: var(--color-zinc-400) !important;
   transition: background 0.15s, color 0.15s;
 }
 
 .react-flow__controls-button:hover {
-  background: rgb(228 228 231 / 0.5) !important;
-  color: #52525b !important;
-  fill: #52525b !important;
+  background: color-mix(in srgb, var(--color-zinc-200) 50%, transparent) !important;
+  color: var(--color-zinc-600) !important;
+  fill: var(--color-zinc-600) !important;
 }
 
 .react-flow__controls-button svg {
   fill: currentColor !important;
 }
 
-@media (prefers-color-scheme: dark) {
-  .react-flow__controls-button {
-    color: #71717a !important;
-    fill: #71717a !important;
-  }
-  .react-flow__controls-button:hover {
-    background: rgb(63 63 70 / 0.5) !important;
-    color: #a1a1aa !important;
-    fill: #a1a1aa !important;
-  }
+.dark .react-flow__controls-button {
+  color: var(--color-zinc-500) !important;
+  fill: var(--color-zinc-500) !important;
+}
+.dark .react-flow__controls-button:hover {
+  background: color-mix(in srgb, var(--color-zinc-700) 50%, transparent) !important;
+  color: var(--color-zinc-400) !important;
+  fill: var(--color-zinc-400) !important;
 }
 
 /* Thin scrollbars */
 * {
   scrollbar-width: thin;
 }
-

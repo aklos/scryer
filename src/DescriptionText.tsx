@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
-import type { Status } from "./types";
+import type { C4Kind, Status } from "./types";
 import { STATUS_COLORS } from "./statusColors";
+import { KIND_ICON } from "./kindIcons";
 
 export interface MentionNodeInfo {
   kind: string;
@@ -24,18 +25,21 @@ function parseRefs(text: string, onMentionClick?: (name: string) => void, onMent
     const displayName = resolveMap?.get(rawName) ?? rawName;
     const info = nodeMap?.get(rawName);
     const sc = info?.status ? STATUS_COLORS[info.status] : null;
+    const kindEntry = info?.kind ? KIND_ICON[info.kind as C4Kind] : null;
+    const KindIcon = kindEntry?.Icon;
     parts.push(
       <span
         key={key++}
-        className={`inline-flex items-baseline rounded px-1 py-px font-medium font-mono text-[0.9em] ${
+        className={`inline-flex items-baseline gap-0.5 rounded px-1 font-medium font-mono text-[0.85em] leading-none align-baseline ${
           sc
             ? `${sc.pillClass}${onMentionClick ? ` cursor-pointer ${sc.pillHoverClass}` : ""}`
-            : `bg-zinc-200/80 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-200${onMentionClick ? " cursor-pointer hover:bg-zinc-300/80 dark:hover:bg-zinc-600" : ""}`
+            : `bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300${onMentionClick ? " cursor-pointer hover:bg-zinc-200 dark:hover:bg-zinc-700" : ""}`
         }`}
         onClick={onMentionClick ? (e) => { e.stopPropagation(); onMentionClick(rawName); } : undefined}
         onMouseEnter={onMentionHover ? () => onMentionHover(rawName) : undefined}
         onMouseLeave={onMentionHover ? () => onMentionHover(null) : undefined}
       >
+        {KindIcon && <KindIcon size="0.9em" className={`shrink-0 relative top-[0.1em] ${kindEntry.color}`} />}
         {displayName.length > 30 ? displayName.slice(0, 30) + "…" : displayName}
       </span>,
     );

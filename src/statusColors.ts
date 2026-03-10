@@ -1,8 +1,11 @@
 import type { Status } from "./types";
+import { getThemedHex } from "./theme";
+import type { PaletteRole, Shade } from "./theme";
 
 export const STATUS_COLORS: Record<Status, {
   strokeClass: string;
   dimStrokeClass: string;
+  /** Use statusHex() instead for runtime-resolved themed color. */
   hex: string;
   label: string;
   dotClass: string;
@@ -46,3 +49,17 @@ export const STATUS_COLORS: Record<Status, {
     pillHoverClass: "hover:bg-red-200 dark:hover:bg-red-800/50",
   },
 };
+
+/** Map status → Tailwind color family used in the theme. */
+const STATUS_FAMILY: Record<Status, PaletteRole> = {
+  implemented: "emerald",
+  proposed: "blue",
+  changed: "amber",
+  deprecated: "red",
+};
+
+/** Get the themed hex color for a status, resolving the current theme palette.
+ *  Use this instead of STATUS_COLORS[s].hex for inline styles. */
+export function statusHex(status: Status, shade: Shade = "500"): string {
+  return getThemedHex(STATUS_FAMILY[status], shade);
+}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Minus, Square, X, Settings, Keyboard, FolderX, SaveAll, Menu } from "lucide-react";
+import { Minus, Square, X, Settings, Keyboard, FolderX, SaveAll, Menu, Palette } from "lucide-react";
 import type { C4Kind } from "./types";
 import type { RackDependency } from "./CodeLevelRack";
 
@@ -9,6 +9,7 @@ interface TopBarProps {
   onOpenPalette: () => void;
   onNavigateToRoot: () => void;
   onOpenSettings: () => void;
+  onOpenTheme: () => void;
   onCloseModel: () => void;
   onSaveAs: () => void;
   hasModel: boolean;
@@ -26,7 +27,7 @@ const appWindow = getCurrentWindow();
 
 
 
-function AppMenu({ onClose, onOpenSettings, onOpenPalette, onCloseModel, onSaveAs, hasModel }: { onClose: () => void; onOpenSettings: () => void; onOpenPalette: () => void; onCloseModel: () => void; onSaveAs: () => void; hasModel: boolean }) {
+function AppMenu({ onClose, onOpenSettings, onOpenTheme, onOpenPalette, onCloseModel, onSaveAs, hasModel }: { onClose: () => void; onOpenSettings: () => void; onOpenTheme: () => void; onOpenPalette: () => void; onCloseModel: () => void; onSaveAs: () => void; hasModel: boolean }) {
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -51,6 +52,7 @@ function AppMenu({ onClose, onOpenSettings, onOpenPalette, onCloseModel, onSaveA
     { label: "Open model", icon: Keyboard, shortcut: "Ctrl+K", onClick: () => { onOpenPalette(); onClose(); } },
     { label: "Save as…", icon: SaveAll, onClick: () => { onSaveAs(); onClose(); }, disabled: !hasModel },
     { label: "Close model", icon: FolderX, onClick: () => { onCloseModel(); onClose(); }, disabled: !hasModel },
+    { label: "Theme", icon: Palette, onClick: () => { onOpenTheme(); onClose(); } },
     { label: "AI settings", icon: Settings, onClick: () => { onOpenSettings(); onClose(); } },
   ];
 
@@ -78,7 +80,7 @@ function AppMenu({ onClose, onOpenSettings, onOpenPalette, onCloseModel, onSaveA
 }
 
 export function TopBar({
-  currentModel, onOpenPalette, onNavigateToRoot, onOpenSettings, onCloseModel, onSaveAs, hasModel,
+  currentModel, onOpenPalette, onNavigateToRoot, onOpenSettings, onOpenTheme, onCloseModel, onSaveAs, hasModel,
   breadcrumbs, currentParentKind, navigateToBreadcrumb,
   activeFlowId, activeFlowName,
   dependencies = [], onNavigateToNode,
@@ -106,6 +108,7 @@ export function TopBar({
           <AppMenu
             onClose={() => setMenuOpen(false)}
             onOpenSettings={onOpenSettings}
+            onOpenTheme={onOpenTheme}
             onOpenPalette={onOpenPalette}
             onCloseModel={onCloseModel}
             onSaveAs={onSaveAs}

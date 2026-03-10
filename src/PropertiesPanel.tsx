@@ -2,9 +2,11 @@ import { useState, useEffect, useRef, useCallback, type ReactNode } from "react"
 import { useReactFlow } from "@xyflow/react";
 import { useNodeDataOverride } from "./NodeDataContext";
 import { invoke } from "@tauri-apps/api/core";
-import type { C4Node, C4NodeData, C4Edge, Hint, Status, SourceLocation, ModelProperty, Group, Contract, Flow, Attachment } from "./types";
+import type { C4Node, C4NodeData, C4Edge, Hint, Status, SourceLocation, ModelProperty, Group, Contract, ContractItem, Flow, Attachment } from "./types";
+import { contractText, contractPassed } from "./types";
 import { ShapeIcon, resolveShape, defaultShapeForKind, ALL_SHAPES, SHAPE_LABELS } from "./shapes";
-import { STATUS_COLORS } from "./statusColors";
+import { statusHex } from "./statusColors";
+import { getThemedHex } from "./theme";
 import { Button, Input, Textarea, Section, Divider, KVRow, Toggle, PillToggle, Field } from "./ui";
 import { MentionTextarea, type MentionItem } from "./MentionTextarea";
 
@@ -35,7 +37,7 @@ function sanitizeTypeName(raw: string): string {
 
 /* ── Tab type ─────────────────────────────────────────────────────── */
 
-type PanelTab = { id: string; label: string; content: ReactNode };
+type PanelTab = { id: string; label: string; content: ReactNode; badge?: ReactNode };
 
 /* ── Constants ────────────────────────────────────────────────────── */
 
@@ -586,12 +588,11 @@ function NodeChildrenContent({ node, onUpdateOperationData }: { node: C4Node; on
         {procs && procs.length > 0 && (
           <div className="flex flex-col gap-1">
             {procs.map((p) => {
-              const sc = p.status ? STATUS_COLORS[p.status as keyof typeof STATUS_COLORS] : null;
               return (
               <div key={p.id} className="flex items-center gap-1.5 group rounded-md px-1.5 py-1 -mx-1.5 hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60 transition-colors">
                 <span
                   className="shrink-0 w-1.5 h-1.5 rounded-full"
-                  style={{ backgroundColor: sc ? sc.hex : "#a1a1aa" }}
+                  style={{ backgroundColor: p.status ? statusHex(p.status as import("./types").Status) : getThemedHex("zinc", "400") }}
                 />
                 <Input
                   variant="inline"
@@ -627,12 +628,11 @@ function NodeChildrenContent({ node, onUpdateOperationData }: { node: C4Node; on
         {mdls && mdls.length > 0 && (
           <div className="flex flex-col gap-1">
             {mdls.map((m) => {
-              const sc = m.status ? STATUS_COLORS[m.status as keyof typeof STATUS_COLORS] : null;
               return (
               <div key={m.id} className="flex items-center gap-1.5 group rounded-md px-1.5 py-1 -mx-1.5 hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60 transition-colors">
                 <span
                   className="shrink-0 w-1.5 h-1.5 rounded-full"
-                  style={{ backgroundColor: sc ? sc.hex : "#a1a1aa" }}
+                  style={{ backgroundColor: m.status ? statusHex(m.status as import("./types").Status) : getThemedHex("zinc", "400") }}
                 />
                 <Input
                   variant="inline"
@@ -668,10 +668,9 @@ function NodeChildrenContent({ node, onUpdateOperationData }: { node: C4Node; on
         {fns && fns.length > 0 && (
           <div className="flex flex-col gap-1">
             {fns.map((fn) => {
-              const sc = fn.status ? STATUS_COLORS[fn.status as keyof typeof STATUS_COLORS] : null;
               return (
                 <div key={fn.id} className="flex items-center gap-1.5 group rounded-md px-1.5 py-1 -mx-1.5 hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60 transition-colors">
-                  <span className="shrink-0 w-1.5 h-1.5 rounded-full" style={{ backgroundColor: sc ? sc.hex : "#a1a1aa" }} />
+                  <span className="shrink-0 w-1.5 h-1.5 rounded-full" style={{ backgroundColor: fn.status ? statusHex(fn.status as import("./types").Status) : getThemedHex("zinc", "400") }} />
                   <Input
                     variant="inline"
                     className="!w-auto !text-left font-mono text-zinc-600 dark:text-zinc-300 focus:border-zinc-300 dark:focus:border-zinc-600"
@@ -702,28 +701,57 @@ function NodeChildrenContent({ node, onUpdateOperationData }: { node: C4Node; on
   );
 }
 
-/* ── String list editor (reusable) ────────────────────────────────── */
 
-function BulletItem({ value, focused, placeholder, onCommit, onFocus, onBlur, onEnter, onDeleteEmpty, onRemove }: {
-  value: string; focused: boolean; placeholder?: string;
+/* ── Node contract content ──────────────────────────────────────── */
+
+function ContractItemToggle({ passed, onClick }: { passed?: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className={`shrink-0 w-3.5 h-3.5 rounded-full border cursor-pointer transition-colors mt-[3px] ${
+        passed === true
+          ? "bg-emerald-500 border-emerald-500"
+          : passed === false
+            ? "bg-red-500 border-red-500"
+            : "border-zinc-300 dark:border-zinc-600 hover:border-zinc-400 dark:hover:border-zinc-500"
+      }`}
+      onClick={onClick}
+      title={passed === true ? "Passing" : passed === false ? "Failing" : "Unchecked — click to mark"}
+    >
+      {passed === true && (
+        <svg viewBox="0 0 14 14" className="w-full h-full text-white">
+          <path d="M3.5 7.5 L6 10 L10.5 4.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )}
+      {passed === false && (
+        <svg viewBox="0 0 14 14" className="w-full h-full text-white">
+          <path d="M4 4 L10 10 M10 4 L4 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+function ContractBulletItem({ item, focused, placeholder, onCommit, onFocus, onBlur, onEnter, onDeleteEmpty, onRemove, onToggle }: {
+  item: ContractItem; focused: boolean; placeholder?: string;
   onCommit: (value: string) => void; onFocus: () => void; onBlur: () => void;
   onEnter: () => void; onDeleteEmpty: () => void; onRemove: () => void;
+  onToggle: () => void;
 }) {
   const spanRef = useRef<HTMLSpanElement>(null);
+  const text = contractText(item);
+  const passed = contractPassed(item);
 
-  // Sync DOM text from props only when not focused (avoids cursor reset)
   useEffect(() => {
-    if (!focused && spanRef.current && spanRef.current.textContent !== value) {
-      spanRef.current.textContent = value;
+    if (spanRef.current && spanRef.current.textContent !== text && document.activeElement !== spanRef.current) {
+      spanRef.current.textContent = text;
     }
-  }, [value, focused]);
+  }, [text]);
 
-  // Auto-focus when focused prop becomes true (e.g. after ghost promotion or Enter)
   useEffect(() => {
     if (focused && spanRef.current && document.activeElement !== spanRef.current) {
       const el = spanRef.current;
       el.focus();
-      // Place cursor at end
       const range = document.createRange();
       range.selectNodeContents(el);
       range.collapse(false);
@@ -734,13 +762,13 @@ function BulletItem({ value, focused, placeholder, onCommit, onFocus, onBlur, on
   }, [focused]);
 
   return (
-    <div className={`flex items-baseline gap-1.5 group min-h-[22px] -mx-1.5 px-1.5 mb-1 last:mb-0 rounded ${focused ? "bg-zinc-100 dark:bg-zinc-800/80" : ""}`}>
-      <span className="text-zinc-300 dark:text-zinc-600 text-xs select-none shrink-0">&bull;</span>
+    <div className={`flex items-start gap-1.5 group min-h-[22px] -mx-1.5 px-1.5 mb-1 last:mb-0 rounded ${focused ? "bg-zinc-100 dark:bg-zinc-800/80" : ""}`}>
+      <ContractItemToggle passed={passed} onClick={onToggle} />
       <span
         ref={spanRef}
         contentEditable
         suppressContentEditableWarning
-        className="flex-1 text-xs text-zinc-700 dark:text-zinc-200 caret-current outline-none leading-relaxed empty:before:content-[attr(data-placeholder)] empty:before:text-zinc-400 dark:empty:before:text-zinc-500"
+        className="flex-1 min-w-0 text-xs text-zinc-700 dark:text-zinc-200 caret-current outline-none leading-relaxed break-words empty:before:content-[attr(data-placeholder)] empty:before:text-zinc-400 dark:empty:before:text-zinc-500"
         data-placeholder={placeholder}
         onFocus={onFocus}
         onBlur={(e) => {
@@ -760,7 +788,7 @@ function BulletItem({ value, focused, placeholder, onCommit, onFocus, onBlur, on
       />
       <button
         type="button"
-        className="shrink-0 text-[10px] text-zinc-300 hover:text-red-400 dark:text-zinc-600 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover:opacity-100"
+        className="shrink-0 text-[10px] text-zinc-300 hover:text-red-400 dark:text-zinc-600 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover:opacity-100 mt-[3px]"
         onClick={onRemove}
       >
         &times;
@@ -769,38 +797,55 @@ function BulletItem({ value, focused, placeholder, onCommit, onFocus, onBlur, on
   );
 }
 
-function BulletList({ items, onChange, placeholder }: { items: string[]; onChange: (items: string[]) => void; placeholder?: string }) {
+function ContractList({ items, onChange, placeholder }: { items: ContractItem[]; onChange: (items: ContractItem[]) => void; placeholder?: string }) {
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+
+  const togglePassed = (i: number) => {
+    const item = items[i];
+    const text = contractText(item);
+    const current = contractPassed(item);
+    // Cycle: undefined → true → false → undefined
+    const next = current === undefined ? true : current === true ? false : undefined;
+    onChange(items.map((x, j) => j === i ? { text, passed: next } : x));
+  };
+
   return (
     <div className="flex flex-col">
       {items.map((item, i) => (
-        <BulletItem
+        <ContractBulletItem
           key={i}
-          value={item}
+          item={item}
           focused={focusedIndex === i}
           placeholder={placeholder}
-          onCommit={(v) => { if (v !== item) onChange(items.map((x, j) => j === i ? v : x)); }}
+          onCommit={(v) => {
+            const text = contractText(item);
+            if (v !== text) {
+              const passed = contractPassed(item);
+              onChange(items.map((x, j) => j === i ? { text: v, passed } : x));
+            }
+          }}
           onFocus={() => setFocusedIndex(i)}
           onBlur={() => setFocusedIndex(null)}
-          onEnter={() => onChange([...items.slice(0, i + 1), "", ...items.slice(i + 1)])}
+          onEnter={() => onChange([...items.slice(0, i + 1), { text: "" }, ...items.slice(i + 1)])}
           onDeleteEmpty={() => onChange(items.filter((_, j) => j !== i))}
           onRemove={() => onChange(items.filter((_, j) => j !== i))}
+          onToggle={() => togglePassed(i)}
         />
       ))}
-      {/* Ghost bullet — becomes a real item when typed into */}
-      <div className="flex items-baseline gap-1.5 min-h-[22px] -mx-1.5 px-1.5 rounded opacity-40 hover:opacity-70 focus-within:opacity-100 transition-opacity">
-        <span className="text-zinc-300 dark:text-zinc-600 text-xs select-none shrink-0">&bull;</span>
+      {/* Ghost item */}
+      <div className="flex items-start gap-1.5 min-h-[22px] -mx-1.5 px-1.5 rounded opacity-40 hover:opacity-70 focus-within:opacity-100 transition-opacity">
+        <span className="shrink-0 w-3.5 h-3.5 rounded-full border border-zinc-300 dark:border-zinc-600 mt-[3px]" />
         <span
           contentEditable
           suppressContentEditableWarning
-          className="flex-1 text-xs text-zinc-700 dark:text-zinc-200 caret-current outline-none leading-relaxed empty:before:content-[attr(data-placeholder)] empty:before:text-zinc-400 dark:empty:before:text-zinc-500"
+          className="flex-1 min-w-0 text-xs text-zinc-700 dark:text-zinc-200 caret-current outline-none leading-relaxed break-words empty:before:content-[attr(data-placeholder)] empty:before:text-zinc-400 dark:empty:before:text-zinc-500"
           data-placeholder={placeholder ?? "Add..."}
           onInput={(e) => {
             const text = (e.target as HTMLSpanElement).textContent ?? "";
             if (text) {
-              onChange([...items, text]);
+              onChange([...items, { text }]);
               (e.target as HTMLSpanElement).textContent = "";
-              setFocusedIndex(items.length); // focus the newly created real item
+              setFocusedIndex(items.length);
             }
           }}
           onKeyDown={(e) => {
@@ -808,7 +853,7 @@ function BulletList({ items, onChange, placeholder }: { items: string[]; onChang
               e.preventDefault();
               const text = (e.target as HTMLSpanElement).textContent ?? "";
               if (text) {
-                onChange([...items, text]);
+                onChange([...items, { text }]);
                 (e.target as HTMLSpanElement).textContent = "";
                 setFocusedIndex(items.length);
               }
@@ -820,22 +865,40 @@ function BulletList({ items, onChange, placeholder }: { items: string[]; onChang
   );
 }
 
-/* ── Node contract content (contract + accepts) ────────────────── */
+function ContractTabBadge({ contract }: { contract?: Contract }) {
+  if (!contract) return null;
+  const all = [...(contract.expect ?? []), ...(contract.ask ?? []), ...(contract.never ?? [])];
+  if (all.length === 0) return null;
+  let passed = 0, failed = 0;
+  for (const item of all) {
+    const p = contractPassed(item);
+    if (p === true) passed++;
+    else if (p === false) failed++;
+  }
+  const total = all.length;
+  const color = failed > 0
+    ? "bg-red-500"
+    : passed === total
+      ? "bg-emerald-500"
+      : "bg-zinc-300 dark:bg-zinc-600";
+  return (
+    <span className={`ml-1 inline-block w-1.5 h-1.5 rounded-full ${color}`} />
+  );
+}
 
 function NodeContractContent({ node }: { node: C4Node }) {
   const updateNodeData = useUpdateNodeData();
   const data = node.data as C4NodeData;
   const contract = data.contract ?? { expect: [], ask: [], never: [] };
-  const accepts = data.accepts ?? [];
 
-  const updateField = (field: keyof Contract, items: string[]) => {
+  const updateField = (field: keyof Contract, items: ContractItem[]) => {
     updateNodeData(node.id, { contract: { ...contract, [field]: items } });
   };
 
   return (
     <>
       <Section title="Expected">
-        <BulletList
+        <ContractList
           items={contract.expect}
           onChange={(items) => updateField("expect", items)}
           placeholder="Expected to..."
@@ -843,7 +906,7 @@ function NodeContractContent({ node }: { node: C4Node }) {
       </Section>
       <Divider />
       <Section title="Ask first">
-        <BulletList
+        <ContractList
           items={contract.ask}
           onChange={(items) => updateField("ask", items)}
           placeholder="Confirm before..."
@@ -851,17 +914,10 @@ function NodeContractContent({ node }: { node: C4Node }) {
       </Section>
       <Divider />
       <Section title="Never">
-        <BulletList
+        <ContractList
           items={contract.never}
           onChange={(items) => updateField("never", items)}
           placeholder="Must never..."
-        />
-      </Section>
-      <Divider />
-      <Section title="Acceptance criteria">
-        <BulletList
-          items={accepts}
-          onChange={(items) => updateNodeData(node.id, { accepts: items })}
         />
       </Section>
     </>
@@ -1059,10 +1115,11 @@ function getNodeTabs(
     });
   }
 
-  if (node.data.kind === "system" || node.data.kind === "container" || node.data.kind === "component") {
+  if (node.data.kind !== "person" && !node.data.external) {
     tabs.push({
       id: "contract",
       label: "Contract",
+      badge: <ContractTabBadge contract={(node.data as C4NodeData).contract as Contract | undefined} />,
       content: <NodeContractContent node={node} />,
     });
   }
@@ -1080,6 +1137,12 @@ function getProcessTabs(
       label: "Properties",
       content: <ProcessPropertiesContent node={node} mentionNames={mentionNames} />,
     },
+    {
+      id: "contract",
+      label: "Contract",
+      badge: <ContractTabBadge contract={(node.data as C4NodeData).contract as Contract | undefined} />,
+      content: <NodeContractContent node={node} />,
+    },
   ];
 }
 
@@ -1091,6 +1154,12 @@ function getModelTabs(
       id: "properties",
       label: "Properties",
       content: <ModelPropertiesContent node={node} />,
+    },
+    {
+      id: "contract",
+      label: "Contract",
+      badge: <ContractTabBadge contract={(node.data as C4NodeData).contract as Contract | undefined} />,
+      content: <NodeContractContent node={node} />,
     },
   ];
 }
@@ -1112,6 +1181,7 @@ function TabBar({ tabs, activeTab, onTabClick }: { tabs: PanelTab[]; activeTab: 
           onClick={() => onTabClick(tab.id)}
         >
           {tab.label}
+          {tab.badge}
         </button>
       ))}
     </div>

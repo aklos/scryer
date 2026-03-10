@@ -26,10 +26,8 @@ function buildNodeMentions(
   for (const n of allNodes) {
     const d = n.data as C4NodeData;
     const k = d.kind;
-    if (k === "process") {
-      nodeMap.set(d.name, { kind: k, status: d.status });
-      mentionItems.push({ name: d.name, kind: k });
-    }
+    nodeMap.set(d.name, { kind: k, status: d.status });
+    mentionItems.push({ name: d.name, kind: k });
   }
   // Add flow steps — insert step ID in text, show "Step N" in dropdown
   const addSteps = (steps: FlowStep[]) => {
@@ -133,8 +131,6 @@ function StepCard({
   editingStepId,
   setEditingStepId,
   stepIdToLabel,
-  highlightedStepId,
-  setHighlightedStepId,
   dragSourceRef,
   dragOverId,
   onDragStart,
@@ -161,8 +157,6 @@ function StepCard({
   editingStepId: string | null;
   setEditingStepId: (id: string | null) => void;
   stepIdToLabel: Map<string, string>;
-  highlightedStepId: string | null;
-  setHighlightedStepId: (id: string | null) => void;
   dragSourceRef: React.RefObject<string | null>;
   dragOverId: string | null;
   onDragStart: (e: React.DragEvent, stepId: string) => void;
@@ -170,7 +164,6 @@ function StepCard({
   onDragEnd: () => void;
 }) {
   const editing = editingStepId === step.id;
-  const highlighted = highlightedStepId === step.id;
 
   return (
     <div
@@ -198,32 +191,28 @@ function StepCard({
       }}
     >
       <div
-        className={`w-[480px] text-left rounded-lg border px-3 py-2.5 transition-colors group ${
-          highlighted
-            ? "border-zinc-400 dark:border-zinc-300 ring-1 ring-zinc-400/30 dark:ring-zinc-300/20"
-            : "border-zinc-200 bg-white hover:border-zinc-300 dark:border-zinc-700/80 dark:bg-zinc-900 dark:hover:border-zinc-500"
-        }`}
+        className="w-[560px] text-left rounded-lg border px-4 py-3 transition-colors group border-zinc-200 bg-white hover:border-zinc-300 dark:border-zinc-700/80 dark:bg-zinc-900 dark:hover:border-zinc-500"
       >
         <div className="flex items-start gap-2">
           {/* Drag handle */}
           <span
-            className="shrink-0 flex items-center cursor-grab active:cursor-grabbing text-zinc-300 hover:text-zinc-400 dark:text-zinc-600 dark:hover:text-zinc-500 mt-0.5 -ml-1"
+            className="shrink-0 flex items-center h-6 cursor-grab active:cursor-grabbing text-zinc-300 hover:text-zinc-400 dark:text-zinc-600 dark:hover:text-zinc-500 -ml-1"
             onMouseDown={() => {
               dragSourceRef.current = step.id;
             }}
           >
-            <GripVertical size={12} />
+            <GripVertical size={14} />
           </span>
 
           {/* Step number */}
-          <span className="shrink-0 flex items-center justify-center min-w-5 h-5 rounded-full bg-zinc-100 dark:bg-zinc-800 px-1.5 text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 mt-px">
+          <span className="shrink-0 flex items-center justify-center min-w-6 h-6 rounded-full bg-zinc-200 dark:bg-zinc-700 px-1.5 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
             {stepLabel}
           </span>
 
           {/* Description */}
           <div className="flex-1 min-w-0">
             {editing ? (
-              <div className="mt-0.5">
+              <div>
                 <MentionTextarea
                   value={step.description ?? ""}
                   mentionNames={mentionItems}
@@ -232,18 +221,18 @@ function StepCard({
                   autoSize
                   autoFocus
                   maxLength={400}
-                  className="w-full bg-transparent px-0 py-0 outline-none text-[11px] leading-relaxed text-zinc-700 dark:text-zinc-200 resize-none overflow-hidden placeholder:text-zinc-400 dark:placeholder:text-zinc-500 placeholder:italic"
+                  className="w-full bg-transparent px-0 py-0 outline-none text-sm leading-6 text-zinc-700 dark:text-zinc-200 resize-none overflow-hidden placeholder:text-zinc-400 dark:placeholder:text-zinc-500 placeholder:italic"
                   onChange={(val) => {
                     onUpdateStep(step.id, { description: val || undefined });
                   }}
                 />
-                <div className="text-right text-[9px] text-zinc-400 dark:text-zinc-600 mt-0.5">
+                <div className="text-right text-[10px] text-zinc-400 dark:text-zinc-600 mt-0.5">
                   {(step.description ?? "").length}/400
                 </div>
               </div>
             ) : (
               <div
-                className={`mt-0.5 text-[11px] leading-relaxed break-words cursor-text min-h-[20px] ${
+                className={`text-sm leading-6 break-words cursor-text ${
                   step.description
                     ? "text-zinc-500 dark:text-zinc-400"
                     : "text-zinc-400 dark:text-zinc-500 italic"
@@ -255,8 +244,6 @@ function StepCard({
                     text={step.description}
                     nodeMap={nodeMap}
                     resolveMap={stepIdToLabel}
-                    onMentionClick={(name) => setHighlightedStepId(name)}
-                    onMentionHover={(name) => setHighlightedStepId(name)}
                   />
                 ) : (
                   "Empty step"
@@ -301,7 +288,7 @@ function StepCard({
               {/* Branch label */}
               <div className="flex items-center gap-1 mb-1 group/branch">
                 <input
-                  className="text-[10px] font-mono font-medium text-zinc-400 dark:text-zinc-500 bg-transparent outline-none w-20 placeholder:text-zinc-300 dark:placeholder:text-zinc-600"
+                  className="text-xs font-mono font-medium text-zinc-400 dark:text-zinc-500 bg-transparent outline-none w-20 placeholder:text-zinc-300 dark:placeholder:text-zinc-600"
                   value={branch.condition}
                   placeholder={
                     bi === 0
@@ -345,8 +332,6 @@ function StepCard({
                     editingStepId={editingStepId}
                     setEditingStepId={setEditingStepId}
                     stepIdToLabel={stepIdToLabel}
-                    highlightedStepId={highlightedStepId}
-                    setHighlightedStepId={setHighlightedStepId}
                     dragSourceRef={dragSourceRef}
                     dragOverId={dragOverId}
                     onDragStart={onDragStart}
@@ -359,7 +344,7 @@ function StepCard({
               {/* Add step to branch */}
               <button
                 type="button"
-                className="flex items-center gap-1 text-[10px] text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer py-1 mt-0.5"
+                className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer py-1 mt-0.5"
                 onClick={() => onAddStepToBranch(step.id, bi)}
               >
                 <Plus size={10} /> step
@@ -368,7 +353,7 @@ function StepCard({
           ))}
           <button
             type="button"
-            className="flex items-center gap-1 text-[10px] text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer py-0.5 ml-1"
+            className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer py-0.5 ml-1"
             onClick={() => onAddBranchArm(step.id)}
           >
             <GitBranch size={10} /> branch
@@ -533,10 +518,6 @@ export function FlowScriptView({
 
   // Editing state — only one step at a time
   const [editingStepId, setEditingStepId] = useState<string | null>(null);
-  // Highlight state for mention hover/click
-  const [highlightedStepId, setHighlightedStepId] = useState<string | null>(
-    null,
-  );
 
   // Drag reorder
   const [dragOverId, setDragOverId] = useState<string | null>(null);
@@ -589,8 +570,6 @@ export function FlowScriptView({
       editingStepId,
       setEditingStepId,
       stepIdToLabel,
-      highlightedStepId,
-      setHighlightedStepId,
       dragSourceRef,
       dragOverId,
       onDragStart,
@@ -611,7 +590,6 @@ export function FlowScriptView({
       flow,
       editingStepId,
       stepIdToLabel,
-      highlightedStepId,
       dragOverId,
       onDragStart,
       onDragOver,
@@ -630,15 +608,15 @@ export function FlowScriptView({
       >
         <div className="max-w-2xl mx-auto py-8 px-6 space-y-2">
           {flow.steps.length === 0 && (
-            <div className="flex flex-col items-center py-16 text-zinc-400 dark:text-zinc-500 text-xs gap-4">
+            <div className="flex flex-col items-center py-16 text-zinc-400 dark:text-zinc-500 text-sm gap-4">
               <div className="text-center space-y-1.5">
-                <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Describe a sequence</p>
-                <p className="text-[11px] max-w-xs leading-relaxed">
+                <p className="text-base font-medium text-zinc-500 dark:text-zinc-400">Describe a sequence</p>
+                <p className="text-sm max-w-xs leading-relaxed">
                   Flows model user journeys, data pipelines, or any multi-step process.
                   Each step is one meaningful system interaction.
                 </p>
               </div>
-              <div className="text-[10px] max-w-xs space-y-1 text-zinc-400 dark:text-zinc-600">
+              <div className="text-xs max-w-xs space-y-1 text-zinc-400 dark:text-zinc-600">
                 <p>Use <span className="font-mono bg-zinc-200/60 dark:bg-zinc-800 px-1 rounded">@</span> to reference processes or other steps</p>
                 <p>Add branches for conditional paths (if/else)</p>
                 <p>Drag the <span className="inline-flex align-text-bottom"><GripVertical size={10} /></span> handle to reorder</p>
@@ -665,7 +643,7 @@ export function FlowScriptView({
           {flow.steps.length > 0 && (
             <button
               type="button"
-              className="flex items-center gap-1.5 text-[11px] text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer py-1"
+              className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer py-1"
               onClick={onAddStepBottom}
             >
               <Plus size={12} /> Add step

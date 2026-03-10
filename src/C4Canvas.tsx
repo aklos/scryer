@@ -19,10 +19,10 @@ import { MarkerType } from "@xyflow/react";
 import { nodeTypes } from "./nodes";
 import { edgeTypes } from "./edges";
 import { CodeLevelRack } from "./CodeLevelRack";
-import { GuidePanel, ContractPanel } from "./GuidePanels";
+import { GuidePanel } from "./GuidePanels";
 import { Bot, Loader2, Trash2, Plus } from "lucide-react";
 import { Button } from "./ui";
-import type { C4Node, C4Edge, C4Kind, Group, Contract } from "./types";
+import type { C4Node, C4Edge, C4Kind, Group } from "./types";
 
 const defaultEdgeOptions: DefaultEdgeOptions = {
   markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
@@ -42,8 +42,6 @@ interface C4CanvasProps {
   currentModel: string | null;
   currentParentId: string | undefined;
   nodes: C4Node[];
-  contract: Contract;
-  setContract: React.Dispatch<React.SetStateAction<Contract>>;
   onAutoLayout: () => void | Promise<void>;
   onNewBlankModel: () => void;
   templateList: string[];
@@ -78,8 +76,6 @@ export function C4Canvas({
   currentModel,
   currentParentId,
   nodes,
-  contract,
-  setContract,
   onAutoLayout,
   onNewBlankModel,
   templateList,
@@ -493,12 +489,6 @@ export function C4Canvas({
           currentParentId={currentParentId}
           parentKind={parentKind}
           parentName={parentName}
-        />
-        <ContractPanel
-          contract={contract}
-          onChange={setContract}
-          hasNodes={nodes.length > 0}
-          isRootLevel={!currentParentId}
         />
       </div>
       {/* Right-click context menu */}

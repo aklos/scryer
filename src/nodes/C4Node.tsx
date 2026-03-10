@@ -1,15 +1,19 @@
-import { useRef, useState, type DragEvent } from "react";
+import { useContext, useRef, useState, type DragEvent } from "react";
 import type { NodeProps } from "@xyflow/react";
 import type {
   C4Node as C4NodeType,
   C4NodeData,
   Hint,
   Attachment,
+  Status,
+  Contract,
 } from "../types";
 import { NodeHandles, CenterHandle } from "./NodeHandles";
 import { ShapeBackground, resolveShape, getContentInsets } from "../shapes";
 import { HintBadge } from "./HintBadge";
-import { STATUS_COLORS } from "../statusColors";
+import { ContractBadge } from "./ContractBadge";
+import { STATUS_COLORS, statusHex } from "../statusColors";
+import { getThemedHex, ThemeContext } from "../theme";
 import { DescriptionText } from "../DescriptionText";
 import { Code, Workflow, Table } from "lucide-react";
 
@@ -69,8 +73,8 @@ function MemberChipList({
                 : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
             } ${!sc ? (dimmed ? "border-zinc-200/60 dark:border-zinc-700/40" : "border-zinc-200 dark:border-zinc-700") : ""}`}
             style={
-              sc
-                ? { borderColor: dimmed ? sc.hex + "40" : sc.hex + "99" }
+              sc && item.status
+                ? { borderColor: dimmed ? statusHex(item.status as Status) + "40" : statusHex(item.status as Status) + "99" }
                 : undefined
             }
             onDragStart={(e: DragEvent) => {
@@ -80,7 +84,7 @@ function MemberChipList({
               const ghost = document.createElement("div");
               ghost.textContent = name;
               ghost.style.cssText =
-                "position:fixed;top:-100px;padding:2px 8px;border-radius:4px;font-size:10px;background:#27272a;color:#d4d4d8;border:1px solid #3f3f46;white-space:nowrap;font-family:monospace;";
+                `position:fixed;top:-100px;padding:2px 8px;border-radius:4px;font-size:10px;background:${getThemedHex("zinc", "900")};color:${getThemedHex("zinc", "300")};border:1px solid ${getThemedHex("zinc", "700")};white-space:nowrap;font-family:monospace;`;
               document.body.appendChild(ghost);
               e.dataTransfer.setDragImage(ghost, 0, 0);
               requestAnimationFrame(() => ghost.remove());
@@ -138,6 +142,7 @@ function AttachmentStrip({ attachments }: { attachments: Attachment[] }) {
 }
 
 export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
+  useContext(ThemeContext); // re-render on theme change for inline hex styles
   const shape = resolveShape(data.kind, data.shape);
   const insets = getContentInsets(shape);
   const members = data._operations as
@@ -200,7 +205,7 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
   // Reference node: dimmed, non-editable, shows relationships instead of description
   if (data._reference) {
     const isRefPerson = data.kind === "person";
-    const refSilhouetteFill = selected ? "#a1a1aa" : "#52525b";
+    const refSilhouetteFill = "var(--scryer-person-fill)";
     return (
       <div
         className={`relative w-[180px]${dragOver ? " ring-2 ring-zinc-400 ring-dashed rounded" : ""}`}
@@ -213,15 +218,16 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
           {!isRefPerson && (
             <ShapeBackground
               shape={shape}
-              fillClass="fill-zinc-200 dark:fill-zinc-900"
+              fillClass="fill-[var(--scryer-ref-bg)]"
               strokeClass={
                 selected
-                  ? "stroke-zinc-400 dark:stroke-zinc-500"
+                  ? "stroke-zinc-900 dark:stroke-zinc-300"
                   : "stroke-zinc-300 dark:stroke-zinc-700"
               }
-              strokeWidth={selected ? 2 : 1}
+              strokeWidth={selected ? 2.5 : 1}
               strokeDasharray={data.external ? "6 3" : undefined}
-              kind={data.external ? undefined : data.kind}
+              kind={data.kind}
+              external={!!data.external}
             />
           )}
           {data._codeLevel ? <CenterHandle /> : <NodeHandles />}
@@ -248,20 +254,24 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
                     id={`person-fade-ref-${id}`}
                     gradientUnits="userSpaceOnUse"
                     x1="0"
-                    y1="-20"
+                    y1="40"
                     x2="0"
                     y2="72"
                   >
-                    <stop
-                      offset="0%"
-                      stopColor={refSilhouetteFill}
-                      stopOpacity="1"
-                    />
-                    <stop
-                      offset="100%"
-                      stopColor={refSilhouetteFill}
-                      stopOpacity="0"
-                    />
+                    <stop offset="0%" stopColor={refSilhouetteFill} stopOpacity="1" />
+                    <stop offset="100%" stopColor={refSilhouetteFill} stopOpacity="0" />
+                  </linearGradient>
+                  <linearGradient
+                    id={`person-stroke-fade-ref-${id}`}
+                    gradientUnits="userSpaceOnUse"
+                    x1="0"
+                    y1="0"
+                    x2="0"
+                    y2="72"
+                  >
+                    <stop offset="0%" stopColor={selected ? "var(--scryer-select-stroke)" : "var(--scryer-outline-stroke)"} stopOpacity={selected ? 1 : 0.8} />
+                    <stop offset="70%" stopColor={selected ? "var(--scryer-select-stroke)" : "var(--scryer-outline-stroke)"} stopOpacity={selected ? 0.8 : 0.3} />
+                    <stop offset="100%" stopColor={selected ? "var(--scryer-select-stroke)" : "var(--scryer-outline-stroke)"} stopOpacity="0" />
                   </linearGradient>
                 </defs>
                 <path
@@ -273,6 +283,16 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
                   ].join(" ")}
                   fill={`url(#person-fade-ref-${id})`}
                   opacity="0.7"
+                />
+                <path
+                  d={[
+                    "M 33,72 C 33,42 48,28 76,24",
+                    "A 22,26 0 1,1 104,24",
+                    "C 132,28 147,42 147,72",
+                  ].join(" ")}
+                  fill="none"
+                  stroke={`url(#person-stroke-fade-ref-${id})`}
+                  strokeWidth={selected ? 2.5 : 1}
                 />
               </svg>
             )}
@@ -328,12 +348,7 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
 
   // Person nodes: silhouette above, no background rect, normal text layout
   if (data.kind === "person") {
-    const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const silhouetteFill = selected
-      ? isDark
-        ? "#a1a1aa"
-        : "#27272a"
-      : "#52525b";
+    const silhouetteFill = "var(--scryer-person-fill)";
     const longDesc = (data.description?.length ?? 0) > 80;
     return (
       <div className="relative w-[180px] h-[160px]">
@@ -357,26 +372,44 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
                 id={`person-fade-${id}`}
                 gradientUnits="userSpaceOnUse"
                 x1="0"
-                y1="-20"
+                y1="40"
                 x2="0"
                 y2="72"
               >
                 <stop offset="0%" stopColor={silhouetteFill} stopOpacity="1" />
-                <stop
-                  offset="100%"
-                  stopColor={silhouetteFill}
-                  stopOpacity="0"
-                />
+                <stop offset="100%" stopColor={silhouetteFill} stopOpacity="0" />
+              </linearGradient>
+              <linearGradient
+                id={`person-stroke-fade-${id}`}
+                gradientUnits="userSpaceOnUse"
+                x1="0"
+                y1="0"
+                x2="0"
+                y2="72"
+              >
+                <stop offset="0%" stopColor={selected ? "var(--scryer-select-stroke)" : "var(--scryer-outline-stroke)"} stopOpacity={selected ? 1 : 0.8} />
+                <stop offset="70%" stopColor={selected ? "var(--scryer-select-stroke)" : "var(--scryer-outline-stroke)"} stopOpacity={selected ? 0.8 : 0.3} />
+                <stop offset="100%" stopColor={selected ? "var(--scryer-select-stroke)" : "var(--scryer-outline-stroke)"} stopOpacity="0" />
               </linearGradient>
             </defs>
             <path
               d={[
-                "M 33,72 C 33,42 48,28 76,24", // left shoulder up
-                "A 22,26 0 1,1 104,24", // head oval
-                "C 132,28 147,42 147,72", // right shoulder down
+                "M 33,72 C 33,42 48,28 76,24",
+                "A 22,26 0 1,1 104,24",
+                "C 132,28 147,42 147,72",
                 "Z",
               ].join(" ")}
               fill={`url(#person-fade-${id})`}
+            />
+            <path
+              d={[
+                "M 33,72 C 33,42 48,28 76,24",
+                "A 22,26 0 1,1 104,24",
+                "C 132,28 147,42 147,72",
+              ].join(" ")}
+              fill="none"
+              stroke={`url(#person-stroke-fade-${id})`}
+              strokeWidth={selected ? 2.5 : 1}
             />
           </svg>
           <div className="w-full text-center text-sm font-semibold leading-tight break-all">
@@ -411,12 +444,13 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
     >
       <div className="relative h-[160px]">
         <HintBadge nodeId={id} hints={nodeHints} />
+        <ContractBadge contract={data.contract as Contract | undefined} />
         <ShapeBackground
           shape={shape}
           fillClass={
             isExternal
-              ? "fill-zinc-100 dark:fill-zinc-700"
-              : "fill-white dark:fill-zinc-800"
+              ? "fill-[var(--scryer-ext-bg)]"
+              : "fill-[var(--scryer-node-bg)]"
           }
           strokeClass={
             selected
@@ -431,7 +465,8 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
           }
           strokeWidth={selected ? 2.5 : groupHighlight || statusColor ? 2 : 1}
           strokeDasharray={isExternal ? "6 3" : undefined}
-          kind={isExternal ? undefined : data.kind}
+          kind={data.kind}
+          external={!!isExternal}
         />
         {/* Deprecated status: line through center */}
         {data.status === "deprecated" && !isExternal && (
@@ -446,7 +481,7 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
               y1="80"
               x2="160"
               y2="80"
-              stroke="#f87171"
+              stroke={getThemedHex("red", "400")}
               strokeWidth="1.5"
               opacity="0.5"
             />

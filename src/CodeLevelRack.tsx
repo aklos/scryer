@@ -88,7 +88,7 @@ function RackCard({
     >
       <div className="flex items-center gap-1.5">
         <StatusDot status={data.status} />
-        <span className="font-mono text-xs font-medium text-zinc-800 dark:text-zinc-100 truncate">
+        <span className="font-mono text-sm font-semibold text-zinc-800 dark:text-zinc-100 truncate">
           {data.name}
         </span>
         <button
@@ -104,7 +104,7 @@ function RackCard({
         </button>
       </div>
       {data.description && (
-        <div className="mt-1 text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+        <div className="mt-1 text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">
           <DescriptionText text={data.description} nodeMap={nodeMap} />
         </div>
       )}

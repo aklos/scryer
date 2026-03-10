@@ -98,7 +98,6 @@ export function parseModelData(raw: string): C4ModelData {
     projectPath: data.projectPath,
     refPositions: data.refPositions ?? {},
     groups: (data.groups ?? []).map((g: Record<string, unknown>) => ({ ...g, kind: g.kind ?? "deployment" })),
-    contract: migrateContract(data.contract ?? data.guidelines),
     flows: (data.flows ?? data.scenarios ?? []).map((f: Record<string, unknown>) => {
       const steps = (f.steps ?? []) as FlowStep[];
       const transitions = (f.transitions ?? []) as FlowTransition[];
@@ -119,7 +118,6 @@ export interface ModelStorageSetters {
   setProjectPath: React.Dispatch<React.SetStateAction<string | undefined>>;
   setRefPositions: React.Dispatch<React.SetStateAction<Record<string, { x: number; y: number }>>>;
   setGroups: React.Dispatch<React.SetStateAction<Group[]>>;
-  setContract: React.Dispatch<React.SetStateAction<Contract>>;
   setFlows: React.Dispatch<React.SetStateAction<Flow[]>>;
   setCurrentModel: React.Dispatch<React.SetStateAction<string | null>>;
   setExpandedPath: React.Dispatch<React.SetStateAction<string[]>>;
@@ -137,7 +135,6 @@ export interface ModelStorageState {
   projectPath: string | undefined;
   refPositions: Record<string, { x: number; y: number }>;
   groups: Group[];
-  contract: Contract;
   flows: Flow[];
 }
 
@@ -146,10 +143,10 @@ export function useModelStorage(
   setters: ModelStorageSetters,
   scheduleFitView: () => void,
 ) {
-  const { nodes, edges, currentModel, startingLevel, sourceMap, projectPath, refPositions, groups, contract, flows } = state;
+  const { nodes, edges, currentModel, startingLevel, sourceMap, projectPath, refPositions, groups, flows } = state;
   const {
     setNodes, setEdges, setStartingLevel, setSourceMap, setProjectPath,
-    setRefPositions, setGroups, setContract,
+    setRefPositions, setGroups,
     setFlows, setCurrentModel, setExpandedPath, setActiveFlowId,
     setModelList, setTemplateList,
   } = setters;
@@ -194,7 +191,7 @@ export function useModelStorage(
         const { _needsLayout, ...data } = n.data;
         return { ...n, data };
       });
-      const data: C4ModelData = { nodes: cleanNodes as C4Node[], edges, startingLevel, sourceMap, projectPath, refPositions, groups, contract, flows };
+      const data: C4ModelData = { nodes: cleanNodes as C4Node[], edges, startingLevel, sourceMap, projectPath, refPositions, groups, flows };
       const json = JSON.stringify(data);
       lastKnownDisk.current = json;
       invoke("write_model", { name: currentModel, data: json }).catch(() => toast("Failed to save model"));
@@ -202,7 +199,7 @@ export function useModelStorage(
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [nodeFingerprint, edges, currentModel, startingLevel, sourceMap, refPositions, groups, contract, flows]);
+  }, [nodeFingerprint, edges, currentModel, startingLevel, sourceMap, refPositions, groups, flows]);
 
   const refreshList = useCallback(async () => {
     const list = await invoke<string[]>("list_models").catch(() => { toast("Failed to refresh model list"); return []; });
@@ -232,9 +229,8 @@ export function useModelStorage(
     setSourceMap(data.sourceMap ?? {});
     setProjectPath(data.projectPath);
     setGroups(data.groups ?? []);
-    setContract(data.contract ?? { expect: [], ask: [], never: [] });
     setFlows(data.flows ?? []);
-  }, [setNodes, setEdges, setStartingLevel, setSourceMap, setProjectPath, setGroups, setContract, setFlows]);
+  }, [setNodes, setEdges, setStartingLevel, setSourceMap, setProjectPath, setGroups, setFlows]);
 
   const loadModel = useCallback(async (name: string) => {
     try {
@@ -398,12 +394,11 @@ export function useModelStorage(
       setSourceMap({});
       setProjectPath(undefined);
       setGroups([]);
-      setContract({ expect: [], ask: [], never: [] });
       setFlows([]);
       setActiveFlowId(null);
     }
     await refreshList();
-  }, [currentModel, refreshList, setNodes, setEdges, setCurrentModel, setExpandedPath, setRefPositions, setSourceMap, setProjectPath, setGroups, setContract, setFlows, setActiveFlowId]);
+  }, [currentModel, refreshList, setNodes, setEdges, setCurrentModel, setExpandedPath, setRefPositions, setSourceMap, setProjectPath, setGroups, setFlows, setActiveFlowId]);
 
   const newModel = useCallback(() => {
     skipSave.current = true;
@@ -417,10 +412,9 @@ export function useModelStorage(
     setSourceMap({});
     setProjectPath(undefined);
     setGroups([]);
-    setContract({ expect: [], ask: [], never: [] });
     setFlows([]);
     setActiveFlowId(null);
-  }, [setNodes, setEdges, setCurrentModel, setStartingLevel, setExpandedPath, setRefPositions, setSourceMap, setProjectPath, setGroups, setContract, setFlows, setActiveFlowId]);
+  }, [setNodes, setEdges, setCurrentModel, setStartingLevel, setExpandedPath, setRefPositions, setSourceMap, setProjectPath, setGroups, setFlows, setActiveFlowId]);
 
   const loadTemplate = useCallback(async (templateName: string) => {
     try {
@@ -438,11 +432,11 @@ export function useModelStorage(
   }, [applyModelData, setCurrentModel, setExpandedPath, setRefPositions, setActiveFlowId, scheduleFitView, toast]);
 
   const saveModelAs = useCallback(async (name: string) => {
-    const data: C4ModelData = { nodes, edges, startingLevel, sourceMap, refPositions, groups, contract, flows };
+    const data: C4ModelData = { nodes, edges, startingLevel, sourceMap, refPositions, groups, flows };
     await invoke("write_model", { name, data: JSON.stringify(data) }).catch(() => toast("Failed to save model"));
     setCurrentModel(name);
     await refreshList();
-  }, [nodes, edges, startingLevel, sourceMap, refPositions, groups, contract, flows, refreshList, setCurrentModel]);
+  }, [nodes, edges, startingLevel, sourceMap, refPositions, groups, flows, refreshList, setCurrentModel]);
 
   // Auto-open models created externally (e.g. by MCP agent)
   useEffect(() => {

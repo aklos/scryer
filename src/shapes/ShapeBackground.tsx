@@ -21,6 +21,7 @@ interface Props {
   strokeDasharray?: string;
   opacity?: number;
   kind?: C4Kind;
+  external?: boolean;
 }
 
 export function ShapeBackground({
@@ -31,6 +32,7 @@ export function ShapeBackground({
   strokeDasharray,
   opacity,
   kind,
+  external,
 }: Props) {
   return (
     <svg
@@ -42,7 +44,7 @@ export function ShapeBackground({
     >
       {kind === "component" && shape === "rectangle" && (
         <path
-          d={`M0,0 V-14 H44 L52,0`}
+          d={`M0,0 V-11 Q0,-15 4,-15 H46 Q50,-15 52,-11 L54,0`}
           className={`${fillClass} ${strokeClass ?? ""}`}
           strokeWidth={strokeWidth}
           strokeDasharray={strokeDasharray}
@@ -53,16 +55,18 @@ export function ShapeBackground({
         fillClass={fillClass}
         strokeClass={strokeClass}
         strokeWidth={strokeWidth}
-        strokeDasharray={strokeDasharray}
+        strokeDasharray={external ? undefined : strokeDasharray}
         skipBaseFill={opacity != null && opacity < 1}
       />
       {kind === "system" && shape === "rectangle" && (
         <rect
-          x={6} y={6}
-          width={W - 12} height={H - 12}
+          x={-6} y={-6}
+          width={W + 12} height={H + 12}
+          rx={6}
           fill="none"
           className={strokeClass}
           strokeWidth={1}
+          strokeDasharray={external ? "6 3" : undefined}
         />
       )}
       {kind === "container" && shape === "rectangle" && (

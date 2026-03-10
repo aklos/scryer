@@ -344,8 +344,6 @@ struct AddNodeItem {
     status: Option<String>,
     /// Implementation contract: expect/ask/never rules
     contract: Option<scryer_core::Contract>,
-    /// Acceptance criteria (done conditions)
-    accepts: Option<Vec<String>>,
     /// Short rationale for why this node exists or is structured this way. Inherited by descendants via get_task.
     decisions: Option<String>,
     /// Properties (model-kind nodes only): label/description pairs
@@ -380,8 +378,6 @@ struct UpdateNodeItem {
     status: Option<String>,
     /// Updated implementation contract
     contract: Option<scryer_core::Contract>,
-    /// Updated acceptance criteria
-    accepts: Option<Vec<String>>,
     /// Updated decisions (rationale for why this node exists or is structured this way)
     decisions: Option<String>,
     /// Updated properties (model-kind nodes only)
@@ -559,7 +555,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Get the full JSON content of a model. Returns {nodes: [{id, parentId?, data: {name, description, kind, technology?, external?, shape?, status?, sources?, contract?, accepts?}}], edges: [{id, source, target, data: {label, method?}}], flows: [{id, name, description?, steps: [{id, description?, branches?: [{condition, steps}]}]}], sourceMap: {nodeId: [{file, line?, endLine?}]}, contract?, startingLevel?}. Positions and node type are omitted (UI-only). Step descriptions can use @[Name] mentions to reference architecture nodes. For scoped reads, prefer get_node. For implementation, use get_task instead — it handles dependency ordering and returns one work unit at a time."
+        description = "Get the full JSON content of a model. Returns {nodes: [{id, parentId?, data: {name, description, kind, technology?, external?, shape?, status?, sources?, contract?}}], edges: [{id, source, target, data: {label, method?}}], flows: [{id, name, description?, steps: [{id, description?, branches?: [{condition, steps}]}]}], sourceMap: {nodeId: [{file, line?, endLine?}]}, contract?, startingLevel?}. Positions and node type are omitted (UI-only). Step descriptions can use @[Name] mentions to reference architecture nodes. For scoped reads, prefer get_node. For implementation, use get_task instead — it handles dependency ordering and returns one work unit at a time."
     )]
     fn get_model(
         &self,
@@ -883,7 +879,6 @@ impl ScryerServer {
                     sources: item.sources.clone().unwrap_or_default(),
                     status,
                     contract: item.contract.clone().unwrap_or_default(),
-                    accepts: item.accepts.clone().unwrap_or_default(),
                     decisions: item.decisions.clone(),
                     properties: item.properties.clone().unwrap_or_default(),
                     attachments: Vec::new(),
@@ -1279,9 +1274,6 @@ impl ScryerServer {
             }
             if let Some(g) = item.contract {
                 node.data.contract = g;
-            }
-            if let Some(a) = item.accepts {
-                node.data.accepts = a;
             }
             if let Some(d) = item.decisions {
                 node.data.decisions = if d.is_empty() { None } else { Some(d) };
@@ -1694,9 +1686,9 @@ impl ScryerServer {
             chain
         };
 
-        // Helper: merge contract (additive — node extends model, no override)
+        // Helper: merge contract (additive — ancestors + node)
         let merge_contract = |chain: &[&C4Node], node: &C4Node| -> Contract {
-            let mut merged = model.contract.clone();
+            let mut merged = Contract::default();
             for ancestor in chain {
                 merged.expect.extend(ancestor.data.contract.expect.iter().cloned());
                 merged.ask.extend(ancestor.data.contract.ask.iter().cloned());
@@ -1955,7 +1947,7 @@ impl ScryerServer {
                     let contract = merge_contract(&ancestors, mc);
                     let decisions = collect_decisions(&ancestors, mc);
                     output.push_str(&format_contract_and_decisions(
-                        &mc.data.name, &contract, &decisions, &mc.data.accepts,
+                        &mc.data.name, &contract, &decisions,
                     ));
                 }
 
@@ -2089,14 +2081,6 @@ impl ScryerServer {
                 output.push_str(&format!("Technology: {}\n", tech));
             }
             output.push_str(&format!("Status: {}\n", status_str(&node.data.status)));
-
-            // Acceptance criteria
-            if !node.data.accepts.is_empty() {
-                output.push_str("\nAcceptance criteria:\n");
-                for ac in &node.data.accepts {
-                    output.push_str(&format!("  - {}\n", ac));
-                }
-            }
 
             // Contract
             if !contract.is_empty() {
@@ -2779,15 +2763,8 @@ fn format_contract_and_decisions(
     name: &str,
     contract: &scryer_core::Contract,
     decisions: &[String],
-    accepts: &[String],
 ) -> String {
     let mut out = String::new();
-    if !accepts.is_empty() {
-        out.push_str(&format!("\n{} — Acceptance criteria:\n", name));
-        for ac in accepts {
-            out.push_str(&format!("  - {}\n", ac));
-        }
-    }
     if !contract.is_empty() {
         out.push_str(&format!("\n{} — Contract:\n", name));
         if !contract.expect.is_empty() {
@@ -3033,9 +3010,6 @@ fn compute_diff(baseline: &C4ModelData, current: &C4ModelData) -> String {
             if base.data.contract != curr.data.contract {
                 changes.push("contract changed".to_string());
             }
-            if base.data.accepts != curr.data.accepts {
-                changes.push("accepts changed".to_string());
-            }
             if base.data.decisions != curr.data.decisions {
                 changes.push("decisions changed".to_string());
             }
@@ -3134,23 +3108,6 @@ fn compute_diff(baseline: &C4ModelData, current: &C4ModelData) -> String {
         ));
     }
 
-    // --- Model-level contract ---
-    if baseline.contract != current.contract {
-        let mut gl_changes: Vec<String> = Vec::new();
-        if baseline.contract.expect != current.contract.expect {
-            gl_changes.push("expect updated".to_string());
-        }
-        if baseline.contract.ask != current.contract.ask {
-            gl_changes.push("ask updated".to_string());
-        }
-        if baseline.contract.never != current.contract.never {
-            gl_changes.push("never updated".to_string());
-        }
-        sections.push(format!(
-            "Model contract changed: {}",
-            gl_changes.join(", ")
-        ));
-    }
 
     // --- Flows ---
     let base_flows: HashMap<&str, &Flow> =

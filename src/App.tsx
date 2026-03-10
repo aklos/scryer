@@ -13,6 +13,8 @@ import { TopBar } from "./TopBar";
 import { Sidebar } from "./Sidebar";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { SettingsPanel } from "./SettingsPanel";
+import { ThemePanel } from "./ThemePanel";
+import { loadTheme, ThemeContext } from "./theme";
 import { CommandPalette } from "./CommandPalette";
 import { FlowScriptView } from "./FlowScriptView";
 import { C4Canvas } from "./C4Canvas";
@@ -21,7 +23,7 @@ import { expandGuidePanel } from "./GuidePanels";
 import { autoLayout } from "./layout";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ToastProvider } from "./Toast";
-import type { C4Kind, C4NodeData, C4Node, C4Edge, SourceLocation, Group, Contract, Flow, StartingLevel } from "./types";
+import type { C4Kind, C4NodeData, C4Node, C4Edge, SourceLocation, Group, Flow, StartingLevel } from "./types";
 import { useModelStorage } from "./hooks/useModelStorage";
 import type { ModelStorageState } from "./hooks/useModelStorage";
 import { useHistory } from "./hooks/useHistory";
@@ -58,10 +60,10 @@ function buildStarterModel(): { nodes: C4Node[]; edges: C4Edge[]; flows: Flow[];
   const nodes: C4Node[] = [
     // System context
     { id: personId, type: "c4", position: { x: 0, y: 0 }, data: { name: "User", description: "", kind: "person" } },
-    { id: systemId, type: "c4", position: { x: 350, y: 0 }, data: { name: "System", description: "", kind: "system", status: c } },
+    { id: systemId, type: "c4", position: { x: 360, y: 0 }, data: { name: "System", description: "", kind: "system", status: c } },
     // Containers
     { id: appId, type: "c4", position: { x: 0, y: 0 }, parentId: systemId, data: { name: "App", description: "", kind: "container", status: c, technology: "Node.js" } },
-    { id: dbId, type: "c4", position: { x: 350, y: 0 }, parentId: systemId, data: { name: "Database", description: "", kind: "container", status: c, shape: "cylinder", technology: "MongoDB" } },
+    { id: dbId, type: "c4", position: { x: 360, y: 0 }, parentId: systemId, data: { name: "Database", description: "", kind: "container", status: c, shape: "cylinder", technology: "MongoDB" } },
     // Components
     { id: serviceId, type: "c4", position: { x: 0, y: 0 }, parentId: appId, data: { name: "Service", description: "", kind: "component", status: c } },
     { id: repoId, type: "c4", position: { x: 380, y: 0 }, parentId: appId, data: { name: "Repository", description: "", kind: "component", status: c } },
@@ -120,7 +122,6 @@ function Flow() {
   const [projectPath, setProjectPath] = useState<string | undefined>();
   const [templateList, setTemplateList] = useState<string[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
-  const [contract, setContract] = useState<Contract>({ expect: [], ask: [], never: [] });
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [multiSelected, setMultiSelected] = useState<string[]>([]);
   const [totalSelected, setTotalSelected] = useState(0);
@@ -134,6 +135,10 @@ function Flow() {
 
   // Command palette
   const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // Theme
+  const [themeOpen, setThemeOpen] = useState(false);
+  const [themeTick, setThemeTick] = useState(0); // force re-render on theme change
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
@@ -170,10 +175,10 @@ function Flow() {
   const advisor = useAdvisor({ nodes, edges, startingLevel, sourceMap });
 
   const storage = useModelStorage(
-    { nodes, edges, currentModel, startingLevel, sourceMap, projectPath, refPositions, groups, contract, flows },
+    { nodes, edges, currentModel, startingLevel, sourceMap, projectPath, refPositions, groups, flows },
     {
       setNodes, setEdges, setStartingLevel, setSourceMap, setProjectPath,
-      setRefPositions, setGroups, setContract,
+      setRefPositions, setGroups,
       setFlows, setCurrentModel, setExpandedPath, setActiveFlowId,
       setModelList, setTemplateList,
     },
@@ -182,11 +187,11 @@ function Flow() {
 
   // --- History (undo/redo) ---
   const history = useHistory();
-  const storageState: ModelStorageState = { nodes, edges, currentModel, startingLevel, sourceMap, projectPath, refPositions, groups, contract, flows };
+  const storageState: ModelStorageState = { nodes, edges, currentModel, startingLevel, sourceMap, projectPath, refPositions, groups, flows };
 
   useEffect(() => {
     history.capture(storageState);
-  }, [nodes, edges, startingLevel, sourceMap, refPositions, groups, contract, flows]);
+  }, [nodes, edges, startingLevel, sourceMap, refPositions, groups, flows]);
 
   const applySnapshot = useCallback((snapshot: ModelStorageState) => {
     history.skipNextCapture();
@@ -197,7 +202,6 @@ function Flow() {
     setProjectPath(snapshot.projectPath);
     setRefPositions(snapshot.refPositions);
     setGroups(snapshot.groups);
-    setContract(snapshot.contract);
     setFlows(snapshot.flows);
   }, []);
 
@@ -478,8 +482,7 @@ function Flow() {
     const defaultName = kind === "operation" ? "newOperation"
       : kind === "process" ? "New process"
       : kind === "model" ? "NewModel"
-      : kind === "person" ? "New person"
-      : "New node";
+      : `New ${kind}`;
     const newNode: C4Node = {
       id: crypto.randomUUID(),
       type: nodeType,
@@ -704,12 +707,14 @@ function Flow() {
   const activeFlow = activeFlowId ? flows.find((s) => s.id === activeFlowId) ?? null : null;
 
   return (
+    <ThemeContext.Provider value={themeTick}>
     <div className="flex flex-col h-screen w-screen">
       <TopBar
         currentModel={currentModel}
         onOpenPalette={() => setPaletteOpen(true)}
         onNavigateToRoot={() => navigateToBreadcrumb(null)}
         onOpenSettings={() => advisor.setSettingsOpen(true)}
+        onOpenTheme={() => setThemeOpen(true)}
         onCloseModel={storage.newModel}
         onSaveAs={() => {
           const raw = window.prompt("Save model as:", currentModel ?? "");
@@ -793,8 +798,6 @@ function Flow() {
               onSelectionChange={onSelectionChange}
               currentParentId={currentParentId}
               nodes={nodes}
-              contract={contract}
-              setContract={setContract}
               onAutoLayout={onAutoLayout}
               onNewBlankModel={onNewBlankModel}
               templateList={templateList}
@@ -851,6 +854,14 @@ function Flow() {
             <SettingsPanel
               onClose={() => advisor.setSettingsOpen(false)}
               onSaved={(configured: boolean) => advisor.setAiConfigured(configured)}
+            />
+          )}
+          {/* Theme panel */}
+          {themeOpen && (
+            <ThemePanel
+              theme={loadTheme()}
+              onChange={() => setThemeTick((t) => t + 1)}
+              onClose={() => setThemeOpen(false)}
             />
           )}
         </div>
@@ -917,6 +928,7 @@ function Flow() {
         </NodeDataProvider>
       </div>
     </div>
+    </ThemeContext.Provider>
   );
 }
 
