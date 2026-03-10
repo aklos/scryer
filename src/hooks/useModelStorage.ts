@@ -370,7 +370,15 @@ export function useModelStorage(
             const parent = nodeById.get(cur);
             cur = parent?.parentId;
           }
-          setExpandedPath(path);
+          // Preserve the user's current path if it's still valid (all nodes exist).
+          // Only auto-navigate if the current path became invalid (e.g. a node was deleted).
+          setExpandedPath((currentPath) => {
+            const isCurrentPathValid =
+              currentPath.length > 0 &&
+              currentPath.every((id) => nodeById.has(id));
+            if (isCurrentPathValid) return currentPath;
+            return path;
+          });
           setActiveFlowId(null);
           scheduleFitView();
         }
@@ -438,13 +446,20 @@ export function useModelStorage(
     await refreshList();
   }, [nodes, edges, startingLevel, sourceMap, refPositions, groups, flows, refreshList, setCurrentModel]);
 
-  // Auto-open models created externally (e.g. by MCP agent)
+  // Auto-open models created externally (e.g. by MCP agent).
+  // On Windows, atomic rename (write_model_raw) fires Remove + Create instead of
+  // Modify, so model-created can fire for the already-open model. In that case,
+  // use reloadModel to preserve navigation state instead of loadModel which resets it.
   useEffect(() => {
     const unlisten = listen<string>("model-created", (event) => {
-      loadModel(event.payload);
+      if (event.payload === currentModel) {
+        reloadModel(event.payload);
+      } else {
+        loadModel(event.payload);
+      }
     });
     return () => { unlisten.then((fn) => fn()); };
-  }, [loadModel]);
+  }, [currentModel, loadModel, reloadModel]);
 
   // File watcher: reload when external tools modify model files.
   // The string comparison in reloadModel handles self-write detection.
