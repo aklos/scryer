@@ -80,7 +80,18 @@ impl std::fmt::Display for ContractItem {
             Some(false) => "[ ] ",
             None => "",
         };
-        write!(f, "{}{}", prefix, self.text())
+        write!(f, "{}{}", prefix, self.text())?;
+        if let ContractItem::Full { url: Some(url), .. } = self {
+            if self.text().is_empty() {
+                write!(f, "{}", url)?;
+            } else {
+                write!(f, " ({})", url)?;
+            }
+        }
+        if let ContractItem::Full { image: Some(img), .. } = self {
+            write!(f, " [image: {}]", img.filename)?;
+        }
+        Ok(())
     }
 }
 

@@ -2122,6 +2122,39 @@ impl ScryerServer {
             for (_, name) in &propagate_nodes {
                 output.push_str(&format!("\n- {}", name));
             }
+
+            // Check for member nodes (operations/processes/models) that aren't implemented yet
+            let mut pending_members: Vec<(&C4Node, &str)> = Vec::new();
+            for node in &model.nodes {
+                if node.data.kind != C4Kind::Component {
+                    continue;
+                }
+                if !matches!(node.data.status, Some(Status::Implemented)) {
+                    continue;
+                }
+                for member in model.nodes.iter().filter(|n| {
+                    n.parent_id.as_deref() == Some(&node.id)
+                        && matches!(n.data.kind, C4Kind::Operation | C4Kind::Process | C4Kind::Model)
+                        && n.data.status.is_some()
+                        && !matches!(n.data.status, Some(Status::Implemented))
+                }) {
+                    pending_members.push((member, &node.data.name));
+                }
+            }
+            if !pending_members.is_empty() {
+                output.push_str("\n\nThese member nodes still need status confirmation — mark as `implemented` if done, or flag any that need changes:\n");
+                for (member, parent_name) in &pending_members {
+                    output.push_str(&format!(
+                        "  - {} [{}] ({}, {}) in {}\n",
+                        member.data.name,
+                        member.id,
+                        kind_str(&member.data.kind),
+                        status_str(&member.data.status),
+                        parent_name
+                    ));
+                }
+            }
+
             if !model.flows.is_empty() {
                 output.push_str("\n\nThen call `get_task` again to validate flows.");
             }
@@ -2224,15 +2257,15 @@ impl ScryerServer {
 
                 // Include group contract if present
                 if !group.contract.is_empty() {
-                    output.push_str(&format!("\n{} — Group Contract:\n", group.name));
+                    output.push_str(&format!("\n{} — Group Contract (MUST follow):\n", group.name));
                     if !group.contract.expect.is_empty() {
-                        output.push_str("  EXPECTED:\n");
+                        output.push_str("  MUST:\n");
                         for item in &group.contract.expect {
                             output.push_str(&format!("    - {}\n", item));
                         }
                     }
                     if !group.contract.ask.is_empty() {
-                        output.push_str("  ASK FIRST:\n");
+                        output.push_str("  ASK USER FIRST:\n");
                         for item in &group.contract.ask {
                             output.push_str(&format!("    - {}\n", item));
                         }
@@ -2386,17 +2419,17 @@ impl ScryerServer {
             }
             output.push_str(&format!("Status: {}\n", status_str(&node.data.status)));
 
-            // Contract
+            // Contract — framed as binding requirements so agents don't skip them
             if !contract.is_empty() {
-                output.push_str("\nContract:\n");
+                output.push_str("\nContract (you MUST follow these requirements):\n");
                 if !contract.expect.is_empty() {
-                    output.push_str("  EXPECTED:\n");
+                    output.push_str("  MUST:\n");
                     for item in &contract.expect {
                         output.push_str(&format!("    - {}\n", item));
                     }
                 }
                 if !contract.ask.is_empty() {
-                    output.push_str("  ASK FIRST:\n");
+                    output.push_str("  ASK USER FIRST:\n");
                     for item in &contract.ask {
                         output.push_str(&format!("    - {}\n", item));
                     }
@@ -2555,6 +2588,34 @@ impl ScryerServer {
             req.name,
             ids.iter().map(|id| format!("{{node_id: \"{}\", status: \"implemented\"}}", id)).collect::<Vec<_>>().join(", ")
         ));
+
+        // Member status confirmation: collect operations/processes/models with non-implemented status
+        let mut pending_members: Vec<(&C4Node, &str)> = Vec::new(); // (node, parent_name)
+        for node in &work_unit {
+            if node.data.kind == C4Kind::Component {
+                for member in model.nodes.iter().filter(|n| {
+                    n.parent_id.as_deref() == Some(&node.id)
+                        && matches!(n.data.kind, C4Kind::Operation | C4Kind::Process | C4Kind::Model)
+                        && n.data.status.is_some()
+                        && !matches!(n.data.status, Some(Status::Implemented))
+                }) {
+                    pending_members.push((member, &node.data.name));
+                }
+            }
+        }
+        if !pending_members.is_empty() {
+            output.push_str("\nAlso confirm the status of these member nodes — mark each as `implemented` if done, or flag any that need changes:\n");
+            for (member, parent_name) in &pending_members {
+                output.push_str(&format!(
+                    "  - {} [{}] ({}, {}) in {}\n",
+                    member.data.name,
+                    member.id,
+                    kind_str(&member.data.kind),
+                    status_str(&member.data.status),
+                    parent_name
+                ));
+            }
+        }
 
         // Next up
         let next_name = find_next_name(&blocked_nodes, &ready_nodes, &work_unit);
@@ -3030,6 +3091,11 @@ The spec above is your source of truth — it tells you WHAT to build. \
 Trust your training knowledge for well-known frameworks and tools. \
 Do not research standard framework setup — you already know how.
 
+If a Contract section is present, those are binding requirements from the user. \
+MUST items are non-negotiable. ASK USER FIRST items require confirmation before deciding. \
+NEVER items are hard constraints. If a contract item includes a URL, read it for context. \
+Do not mark the task as implemented until all MUST items are satisfied.
+
 If something is unclear or the spec doesn't cover a decision you need to make, \
 ask the user — don't spiral into web searches.
 
@@ -3045,15 +3111,15 @@ fn format_contract_and_notes(
 ) -> String {
     let mut out = String::new();
     if !contract.is_empty() {
-        out.push_str(&format!("\n{} — Contract:\n", name));
+        out.push_str(&format!("\n{} — Contract (MUST follow):\n", name));
         if !contract.expect.is_empty() {
-            out.push_str("  EXPECTED:\n");
+            out.push_str("  MUST:\n");
             for item in &contract.expect {
                 out.push_str(&format!("    - {}\n", item));
             }
         }
         if !contract.ask.is_empty() {
-            out.push_str("  ASK FIRST:\n");
+            out.push_str("  ASK USER FIRST:\n");
             for item in &contract.ask {
                 out.push_str(&format!("    - {}\n", item));
             }
@@ -3092,11 +3158,45 @@ fn find_next_name<'a>(
 }
 
 fn format_done_message(model: &C4ModelData) -> String {
-    if model.flows.is_empty() {
-        return "All tasks complete. Nothing to build.".to_string();
+    let mut output = String::from("All tasks complete.");
+
+    // Check for member nodes (operations/processes/models) that aren't implemented yet
+    let mut pending_members: Vec<(&C4Node, &str)> = Vec::new();
+    for node in &model.nodes {
+        if node.data.kind != C4Kind::Component {
+            continue;
+        }
+        for member in model.nodes.iter().filter(|n| {
+            n.parent_id.as_deref() == Some(&node.id)
+                && matches!(n.data.kind, C4Kind::Operation | C4Kind::Process | C4Kind::Model)
+                && n.data.status.is_some()
+                && !matches!(n.data.status, Some(Status::Implemented))
+        }) {
+            pending_members.push((member, &node.data.name));
+        }
+    }
+    if !pending_members.is_empty() {
+        output.push_str("\n\nThese member nodes still need status confirmation — mark as `implemented` if done, or flag any that need changes:\n");
+        for (member, parent_name) in &pending_members {
+            output.push_str(&format!(
+                "  - {} [{}] ({}, {}) in {}\n",
+                member.data.name,
+                member.id,
+                kind_str(&member.data.kind),
+                status_str(&member.data.status),
+                parent_name
+            ));
+        }
     }
 
-    let mut output = String::from("All tasks complete.\n\nPlease validate that the model's flows still accurately describe the system behavior. Update step descriptions as needed using `set_flows`. Use @[Name] mentions in step descriptions to reference processes and other architecture nodes.\n");
+    if model.flows.is_empty() {
+        if pending_members.is_empty() {
+            output.push_str(" Nothing to build.");
+        }
+        return output;
+    }
+
+    output.push_str("\n\nPlease validate that the model's flows still accurately describe the system behavior. Update step descriptions as needed using `set_flows`. Use @[Name] mentions in step descriptions to reference processes and other architecture nodes.\n");
 
     for flow in &model.flows {
         let all_steps = collect_all_steps(&flow.steps);
