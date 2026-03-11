@@ -80,7 +80,7 @@
         "kind": "container",
         "technology": "Go",
         "status": "proposed",
-        "decisions": "Go chosen for low latency and predictable memory usage under multi-tenant load. Chi router for lightweight HTTP handling. pgx for direct PostgreSQL access without ORM overhead."
+        "notes": "Go chosen for low latency and predictable memory usage under multi-tenant load. Chi router for lightweight HTTP handling. pgx for direct PostgreSQL access without ORM overhead."
       },
       "parentId": "node-2"
     },

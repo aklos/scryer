@@ -59,11 +59,15 @@ pub struct Reference {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum ContractItem {
-    /// New format: { text, passed? }
+    /// New format: { text, passed?, url?, image? }
     Full {
         text: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         passed: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        image: Option<ContractImage>,
     },
     /// Legacy format: plain string
     Plain(String),
@@ -111,10 +115,9 @@ impl Contract {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct Attachment {
-    pub id: String,
+pub struct ContractImage {
     pub filename: String,
     pub mime_type: String,
     pub data: String, // base64-encoded
@@ -142,16 +145,12 @@ pub struct C4NodeData {
     pub status: Option<Status>,
     #[serde(default, skip_serializing_if = "Contract::is_empty")]
     pub contract: Contract,
-    /// Short rationale for why this node exists or is structured this way
+    /// Freeform notes: conventions, context, rationale
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decisions: Option<String>,
+    pub notes: Option<String>,
     /// Properties for Model-kind nodes (label/description pairs)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<ModelProperty>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<Attachment>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub links: Vec<String>,
 }
 
 /// A node in the model. Matches ReactFlow's Node structure.
@@ -239,6 +238,8 @@ pub struct Group {
     pub description: Option<String>,
     #[serde(default)]
     pub member_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Contract::is_empty")]
+    pub contract: Contract,
 }
 
 fn default_group_kind() -> GroupKind {

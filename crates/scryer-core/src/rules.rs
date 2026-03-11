@@ -1,8 +1,10 @@
 /// C4 modeling rules — single source of truth for AI review prompts and MCP instructions.
 pub const RULES: &str = "\
-1. One edge per relationship. Edges represent dependencies or interactions between nodes, \
-not individual API calls or data flows. Do NOT add \"return\" or \"response\" edges — a single \
-edge with an arrow captures the dependency direction.\n\
+1. One edge per relationship. Edges represent relationships, not individual data flows. \
+Do NOT split a single interaction into separate \"send\" and \"receive\" edges — one edge captures \
+the full interaction. Two edges between the same pair of nodes are only valid when they represent \
+genuinely independent relationships (different purpose, different data, could exist without each other). \
+If in doubt, use one edge.\n\
 2. Arrow direction = dependency. The arrow points from the initiator/requester toward the \
 provider/dependency (e.g. \"Web App\" → \"API Server\" → \"Database\").\n\
 3. Descriptions match abstraction level. System = high-level purpose (\"Handles user authentication\"). \
@@ -33,10 +35,12 @@ detail of another container (e.g. Payload CMS REST API, Django admin ORM, Rails 
 cannot be addressed independently, it's a component, not a container. But if it has its own distinct \
 set of concerns that would clutter the parent's component view, it may warrant its own container — \
 apply rule 9.\n\
-11. Components map to code structures. A component should correspond to a concrete code unit: \
-a class in OOP languages (C#, C++, Java), a module or package in Go/Rust/Python, or a folder/file \
-boundary in JavaScript/TypeScript. If a component is too abstract to point at a specific place in \
-the codebase, it is probably a container or a vague grouping that should be rethought.\n\
+11. Components map to code structures. A component should correspond to a concrete code unit \
+in your codebase: a class in OOP languages (C#, C++, Java), a module or package in Go/Rust/Python, \
+or a folder/file boundary in JavaScript/TypeScript. Third-party libraries your code imports are not \
+components — they are implementation details of the component that uses them. Mention them in the \
+technology field or description instead. If a component is too abstract to point at a specific place \
+in your codebase, it is probably a container or a vague grouping that should be rethought.\n\
 12. Message queues and topics are explicit. A queue, topic, or event bus (e.g. RabbitMQ, Kafka, \
 SQS) should be its own container node — not hidden inside an edge label. If service A publishes \
 to a queue and service B consumes from it, model as A → Queue → B, not A → B with a \"via queue\" \
@@ -61,7 +65,15 @@ repo is a container. An S3 bucket you provision is a container (shape: cylinder)
 a separate system if it's a genuinely independent product with its own team, repo, and lifecycle. External \
 systems (external: true) are third-party services you don't control (e.g. Stripe, AWS Rekognition, \
 Twilio). \"Separate deployment unit\" does NOT mean \"separate system.\"\n\
-17. The C4 hierarchy is an authority hierarchy. System-level decisions (which systems exist, their \
+17. Mentions imply edges. If a node's description references another node with @[Name], there must \
+be an edge connecting them (directly, or between their parent containers at the appropriate level). \
+A mention without a corresponding edge means the graph is incomplete — the description claims a \
+relationship that the diagram doesn't show. Add the missing edge or remove the mention.\n\
+18. No cross-container component edges. Components are internal to their container. An edge from a \
+component in container A to a component in container B is invalid — it reaches inside B's boundary. \
+Instead, edge from A's component to container B itself. The container is the public interface; its \
+components are implementation details.\n\
+19. The C4 hierarchy is an authority hierarchy. System-level decisions (which systems exist, their \
 boundaries and responsibilities) constrain what containers can exist inside them. Container decisions \
 constrain components. Component decisions constrain operations. If implementing at a lower level reveals \
 that a higher-level boundary is wrong, that is an architectural decision requiring human review — not \
@@ -112,8 +124,9 @@ Focus on the structural model (persons, systems, containers, components, operati
 (valid identifier) and `description`. Do NOT just describe fields in the description text. Example: a `todo` model \
 with `properties: [{label: \"id\", description: \"unique identifier\"}, {label: \"title\", description: \"todo text\"}, \
 {label: \"completed\", description: \"whether the todo is done\"}]`. Models are the nouns of the system.\n\
-   - **operation** nodes for individual functions, methods, or handlers — anything that maps to one function in code \
-(e.g. `handleCreate`, `validateInput`, `insertRecord`, `hashPassword`). Most code-level nodes are operations. If you \
+   - **operation** nodes for individual functions, methods, or handlers — anything that maps to one function in code. \
+**Name using the target language's convention** — e.g. `handle_create`, `validate_input` for Python/Rust/Go, or \
+`handleCreate`, `validateInput` for JS/TS/Java. Most code-level nodes are operations. If you \
 can point to a single function/method, it's an operation.\n\
    - **process** nodes for multi-step behavioral flows that orchestrate multiple operations — sagas, pipelines, or \
 workflows (e.g. `orderFulfillment` — validate payment, reserve inventory, send confirmation). If it maps to a single \

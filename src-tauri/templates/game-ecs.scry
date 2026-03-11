@@ -40,7 +40,7 @@
         "kind": "container",
         "technology": "Bevy",
         "status": "proposed",
-        "decisions": "Bevy chosen for its pure-ECS architecture, parallel system scheduling, and Rust memory safety. wgpu provides cross-platform GPU access. bevy_rapier3d for physics to avoid custom collision detection."
+        "notes": "Bevy chosen for its pure-ECS architecture, parallel system scheduling, and Rust memory safety. wgpu provides cross-platform GPU access. bevy_rapier3d for physics to avoid custom collision detection."
       },
       "parentId": "node-2"
     },

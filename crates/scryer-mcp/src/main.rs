@@ -244,7 +244,9 @@ fn check_disconnected_nodes(model: &C4ModelData) -> Vec<String> {
             continue;
         }
 
-        // Reference nodes: any node the container has edges to (that isn't a child component)
+        // Reference nodes: any node the container has edges to (that isn't a child component).
+        // Skip components from other containers — they should not appear as refs at this level.
+        // The correct ref is their parent container, not the individual component.
         let ref_ids: HashSet<&str> = model
             .edges
             .iter()
@@ -258,14 +260,181 @@ fn check_disconnected_nodes(model: &C4ModelData) -> Vec<String> {
                 }
             })
             .filter(|id| {
-                // Only include nodes that actually exist and aren't the container's parent system
-                model.nodes.iter().any(|n| n.id == *id)
-                    && Some(*id) != container.parent_id.as_deref()
+                let node = model.nodes.iter().find(|n| n.id == *id);
+                match node {
+                    Some(n) => {
+                        // Skip the container's own parent system
+                        if Some(*id) == container.parent_id.as_deref() { return false; }
+                        // Skip components from other containers — cross-container refs
+                        if n.data.kind == C4Kind::Component { return false; }
+                        true
+                    }
+                    None => false,
+                }
             })
             .collect();
 
         let view_name = format!("component view of '{}'", container.data.name);
         check_level(&component_ids, &ref_ids, &view_name, Some(&container.data.name), &mut warnings);
+    }
+
+    warnings
+}
+
+/// Find bidirectional edge pairs (A→B and B→A) that likely violate C4 rule 1.
+fn check_bidirectional_edges(model: &C4ModelData) -> Vec<String> {
+    use std::collections::HashSet;
+    let mut warnings = Vec::new();
+    let mut seen = HashSet::new();
+    for edge in &model.edges {
+        let pair = if edge.source < edge.target {
+            (edge.source.clone(), edge.target.clone())
+        } else {
+            (edge.target.clone(), edge.source.clone())
+        };
+        if !seen.insert(pair.clone()) {
+            // Find both edge labels for the warning
+            let labels: Vec<&str> = model.edges.iter()
+                .filter(|e| {
+                    (e.source == pair.0 && e.target == pair.1)
+                    || (e.source == pair.1 && e.target == pair.0)
+                })
+                .filter_map(|e| e.data.as_ref().map(|d| d.label.as_str()))
+                .collect();
+            let src_name = model.nodes.iter().find(|n| n.id == pair.0).map(|n| n.data.name.as_str()).unwrap_or(&pair.0);
+            let tgt_name = model.nodes.iter().find(|n| n.id == pair.1).map(|n| n.data.name.as_str()).unwrap_or(&pair.1);
+            warnings.push(format!(
+                "'{}' ↔ '{}' has edges in both directions ({}). \
+                C4 rule 1: one edge per relationship. Are these genuinely independent relationships, \
+                or should they be a single edge?",
+                src_name, tgt_name, labels.join(", ")
+            ));
+        }
+    }
+    warnings
+}
+
+/// Check that @[Name] mentions in descriptions have corresponding edges.
+/// If node A mentions @[B] but there's no edge between A (or A's ancestors) and B (or B's ancestors)
+/// at any shared level, that's a missing relationship.
+fn check_mention_edges(model: &C4ModelData) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    // Build name→id lookup
+    let name_to_id: HashMap<&str, &str> = model
+        .nodes
+        .iter()
+        .map(|n| (n.data.name.as_str(), n.id.as_str()))
+        .collect();
+
+    // Build id→parent_id lookup
+    let parent_of: HashMap<&str, &str> = model
+        .nodes
+        .iter()
+        .filter_map(|n| n.parent_id.as_deref().map(|p| (n.id.as_str(), p)))
+        .collect();
+
+    // Build set of connected pairs (both directions) including ancestor chains.
+    // Edge between X and Y means all ancestors of X are connected to all ancestors of Y.
+    let mut connected: HashSet<(String, String)> = HashSet::new();
+    for edge in &model.edges {
+        let mut src_chain = vec![edge.source.clone()];
+        {
+            let mut cur = edge.source.as_str();
+            while let Some(&p) = parent_of.get(cur) {
+                src_chain.push(p.to_string());
+                cur = p;
+            }
+        }
+        let mut tgt_chain = vec![edge.target.clone()];
+        {
+            let mut cur = edge.target.as_str();
+            while let Some(&p) = parent_of.get(cur) {
+                tgt_chain.push(p.to_string());
+                cur = p;
+            }
+        }
+        for s in &src_chain {
+            for t in &tgt_chain {
+                connected.insert((s.clone(), t.clone()));
+                connected.insert((t.clone(), s.clone()));
+            }
+        }
+    }
+
+    for node in &model.nodes {
+        if node.data.description.is_empty() {
+            continue;
+        }
+        // Extract @[Name] mentions without regex
+        let desc = &node.data.description;
+        let mut search_from = 0;
+        while let Some(start) = desc[search_from..].find("@[") {
+            let abs_start = search_from + start + 2;
+            let Some(end) = desc[abs_start..].find(']') else { break };
+            let mentioned_name = &desc[abs_start..abs_start + end];
+            search_from = abs_start + end + 1;
+            if let Some(&mentioned_id) = name_to_id.get(mentioned_name) {
+                // Skip self-mentions and mentions of own children/parent
+                if mentioned_id == node.id {
+                    continue;
+                }
+                if parent_of.get(mentioned_id) == Some(&node.id.as_str()) {
+                    continue;
+                }
+                if node.parent_id.as_deref() == Some(mentioned_id) {
+                    continue;
+                }
+                // Skip siblings under the same parent (e.g. operations mentioning sibling operations)
+                let mentioned_parent = parent_of.get(mentioned_id).copied();
+                if node.parent_id.as_deref().is_some() && node.parent_id.as_deref() == mentioned_parent {
+                    continue;
+                }
+                // Check: is there any edge connecting these nodes (or their ancestors)?
+                if !connected.contains(&(node.id.clone(), mentioned_id.to_string())) {
+                    warnings.push(format!(
+                        "'{}' mentions @[{}] in its description but has no edge connecting them. \
+                        Add an edge or remove the mention.",
+                        node.data.name, mentioned_name
+                    ));
+                }
+            }
+        }
+    }
+
+    warnings
+}
+
+/// Check for edges between components in different containers.
+/// Components are internal to their container — cross-container component edges are invalid.
+fn check_cross_container_edges(model: &C4ModelData) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    // Build id→node lookup
+    let node_map: HashMap<&str, &C4Node> = model.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+
+    for edge in &model.edges {
+        let src = node_map.get(edge.source.as_str());
+        let tgt = node_map.get(edge.target.as_str());
+        let (Some(src_node), Some(tgt_node)) = (src, tgt) else { continue };
+
+        // Only check component↔component edges
+        if !matches!(src_node.data.kind, C4Kind::Component) || !matches!(tgt_node.data.kind, C4Kind::Component) {
+            continue;
+        }
+
+        // Both are components — check if they share the same parent container
+        let src_parent = src_node.parent_id.as_deref();
+        let tgt_parent = tgt_node.parent_id.as_deref();
+        if src_parent != tgt_parent {
+            let src_container = src_parent.and_then(|p| node_map.get(p)).map(|n| n.data.name.as_str()).unwrap_or("?");
+            let tgt_container = tgt_parent.and_then(|p| node_map.get(p)).map(|n| n.data.name.as_str()).unwrap_or("?");
+            warnings.push(format!(
+                "'{}' (in {}) → '{}' (in {}): components in different containers cannot have direct edges. \
+                Edge should target the container '{}' instead of its internal component.",
+                src_node.data.name, src_container, tgt_node.data.name, tgt_container, tgt_container
+            ));
+        }
     }
 
     warnings
@@ -303,12 +472,14 @@ fn migrate_flow_labels(steps: &mut [scryer_core::FlowStep]) {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct GetModelRequest {
     /// Name of the model to retrieve
+    #[serde(alias = "model")]
     name: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct GetNodeRequest {
     /// Name of the model
+    #[serde(alias = "model")]
     name: String,
     /// ID of the node to inspect (e.g. "node-3"). Returns this node, all its descendants, edges between them, and edges connecting them to external nodes (with external node names for context).
     node_id: String,
@@ -317,6 +488,7 @@ struct GetNodeRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct SetModelRequest {
     /// Name of the model to create or overwrite
+    #[serde(alias = "model")]
     name: String,
     /// The complete model as a JSON string. Must be a valid C4ModelData object with nodes, edges, and optional startingLevel. See get_model output for the exact schema.
     data: String,
@@ -344,8 +516,8 @@ struct AddNodeItem {
     status: Option<String>,
     /// Implementation contract: expect/ask/never rules
     contract: Option<scryer_core::Contract>,
-    /// Short rationale for why this node exists or is structured this way. Inherited by descendants via get_task.
-    decisions: Option<String>,
+    /// Freeform notes: conventions, context, rationale. Inherited by descendants via get_task.
+    notes: Option<String>,
     /// Properties (model-kind nodes only): label/description pairs
     properties: Option<Vec<ModelProperty>>,
 }
@@ -378,8 +550,8 @@ struct UpdateNodeItem {
     status: Option<String>,
     /// Updated implementation contract
     contract: Option<scryer_core::Contract>,
-    /// Updated decisions (rationale for why this node exists or is structured this way)
-    decisions: Option<String>,
+    /// Updated notes (conventions, context, rationale)
+    notes: Option<String>,
     /// Updated properties (model-kind nodes only)
     properties: Option<Vec<ModelProperty>>,
 }
@@ -475,12 +647,14 @@ struct UpdateSourceMapRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct GetChangesRequest {
     /// Name of the model to check for changes
+    #[serde(alias = "model")]
     name: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct GetTaskRequest {
     /// Name of the model to derive tasks from
+    #[serde(alias = "model")]
     name: String,
     /// Optional node ID to scope tasks to a subtree. If omitted, derives tasks for the entire model.
     node_id: Option<String>,
@@ -506,7 +680,7 @@ struct DeleteFlowRequest {
 struct SetGroupsRequest {
     /// Name of the model
     model: String,
-    /// JSON string: a single group object or array of groups. Each group has: id, kind ("deployment" or "package"), name, memberIds (array of node IDs). Optional: description.
+    /// JSON string: a single group object or array of groups. Each group has: id, kind ("deployment" or "package"), name, memberIds (array of node IDs). Optional: description, contract (same format as node contracts: {expect, ask, never}).
     data: String,
 }
 
@@ -771,6 +945,9 @@ impl ScryerServer {
         let node_count = model.nodes.len();
         let edge_count = model.edges.len();
         let cross_level_warnings = check_disconnected_nodes(&model);
+        let bidir_warnings = check_bidirectional_edges(&model);
+        let mention_warnings = check_mention_edges(&model);
+        let cross_container_warnings = check_cross_container_edges(&model);
         match scryer_core::write_model(&req.name, &model) {
             Ok(()) => {
                 let _ = scryer_core::save_baseline(&req.name, &model);
@@ -784,6 +961,29 @@ impl ScryerServer {
                         These nodes will appear disconnected at their viewing level. \
                         Use add_edges to fix:\n- {}",
                         cross_level_warnings.join("\n- ")
+                    ));
+                }
+                if !bidir_warnings.is_empty() {
+                    msg.push_str(&format!(
+                        "\n\n⚠️ BIDIRECTIONAL EDGES: \
+                        Review these and merge into a single edge if they represent the same interaction. \
+                        Use delete_edges to remove the redundant edge:\n- {}",
+                        bidir_warnings.join("\n- ")
+                    ));
+                }
+                if !mention_warnings.is_empty() {
+                    msg.push_str(&format!(
+                        "\n\n⚠️ MENTIONS WITHOUT EDGES: Descriptions reference nodes with @[Name] \
+                        but no edge exists between them. Add the missing edges:\n- {}",
+                        mention_warnings.join("\n- ")
+                    ));
+                }
+                if !cross_container_warnings.is_empty() {
+                    msg.push_str(&format!(
+                        "\n\n⚠️ CROSS-CONTAINER COMPONENT EDGES: Components are internal to their container. \
+                        These edges reach inside another container's boundary. \
+                        Re-target them to the container node instead:\n- {}",
+                        cross_container_warnings.join("\n- ")
                     ));
                 }
                 Ok(CallToolResult::success(vec![Content::text(msg)]))
@@ -879,10 +1079,8 @@ impl ScryerServer {
                     sources: item.sources.clone().unwrap_or_default(),
                     status,
                     contract: item.contract.clone().unwrap_or_default(),
-                    decisions: item.decisions.clone(),
+                    notes: item.notes.clone(),
                     properties: item.properties.clone().unwrap_or_default(),
-                    attachments: Vec::new(),
-                    links: Vec::new(),
                 },
                 parent_id: item.parent_id.clone(),
             });
@@ -1183,6 +1381,23 @@ impl ScryerServer {
                         missing_externals.join(", ")
                     ));
                 }
+                let mention_warnings = check_mention_edges(&model);
+        let cross_container_warnings = check_cross_container_edges(&model);
+                if !mention_warnings.is_empty() {
+                    msg.push_str(&format!(
+                        "\n\n⚠️ MENTIONS WITHOUT EDGES: Descriptions reference nodes with @[Name] \
+                        but no edge exists between them. Add the missing edges:\n- {}",
+                        mention_warnings.join("\n- ")
+                    ));
+                }
+                if !cross_container_warnings.is_empty() {
+                    msg.push_str(&format!(
+                        "\n\n⚠️ CROSS-CONTAINER COMPONENT EDGES: Components are internal to their container. \
+                        These edges reach inside another container's boundary. \
+                        Re-target them to the container node instead:\n- {}",
+                        cross_container_warnings.join("\n- ")
+                    ));
+                }
                 Ok(CallToolResult::success(vec![Content::text(msg)]))
             }
             Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
@@ -1275,8 +1490,8 @@ impl ScryerServer {
             if let Some(g) = item.contract {
                 node.data.contract = g;
             }
-            if let Some(d) = item.decisions {
-                node.data.decisions = if d.is_empty() { None } else { Some(d) };
+            if let Some(d) = item.notes {
+                node.data.notes = if d.is_empty() { None } else { Some(d) };
             }
             if let Some(p) = item.properties {
                 if let Err(e) = validate_property_labels(&p, &format!("node '{}'", item.node_id)) {
@@ -1410,6 +1625,9 @@ impl ScryerServer {
         }
 
         let cross_level_warnings = check_disconnected_nodes(&model);
+        let bidir_warnings = check_bidirectional_edges(&model);
+        let mention_warnings = check_mention_edges(&model);
+        let cross_container_warnings = check_cross_container_edges(&model);
         match scryer_core::write_model(&req.model, &model) {
             Ok(()) => {
                 let _ = scryer_core::save_baseline(&req.model, &model);
@@ -1420,6 +1638,29 @@ impl ScryerServer {
                         These nodes will appear disconnected at their viewing level. \
                         Use add_edges to fix:\n- {}",
                         cross_level_warnings.join("\n- ")
+                    ));
+                }
+                if !bidir_warnings.is_empty() {
+                    msg.push_str(&format!(
+                        "\n\n⚠️ BIDIRECTIONAL EDGES: \
+                        Review these and merge into a single edge if they represent the same interaction. \
+                        Use delete_edges to remove the redundant edge:\n- {}",
+                        bidir_warnings.join("\n- ")
+                    ));
+                }
+                if !mention_warnings.is_empty() {
+                    msg.push_str(&format!(
+                        "\n\n⚠️ MENTIONS WITHOUT EDGES: Descriptions reference nodes with @[Name] \
+                        but no edge exists between them. Add the missing edges:\n- {}",
+                        mention_warnings.join("\n- ")
+                    ));
+                }
+                if !cross_container_warnings.is_empty() {
+                    msg.push_str(&format!(
+                        "\n\n⚠️ CROSS-CONTAINER COMPONENT EDGES: Components are internal to their container. \
+                        These edges reach inside another container's boundary. \
+                        Re-target them to the container node instead:\n- {}",
+                        cross_container_warnings.join("\n- ")
                     ));
                 }
                 Ok(CallToolResult::success(vec![Content::text(msg)]))
@@ -1491,6 +1732,46 @@ impl ScryerServer {
         Ok(CallToolResult::success(vec![Content::text(
             scryer_core::rules::RULES,
         )]))
+    }
+
+    #[tool(
+        description = "Validate a model against C4 rules. Returns all warnings: disconnected nodes, bidirectional edges, mentions without edges, cross-container component edges. Run this after making changes to catch modeling errors."
+    )]
+    fn validate_model(
+        &self,
+        Parameters(req): Parameters<GetModelRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        match scryer_core::read_model(&req.name) {
+            Ok(model) => {
+                let disconnected = check_disconnected_nodes(&model);
+                let bidir = check_bidirectional_edges(&model);
+                let mentions = check_mention_edges(&model);
+                let cross_container = check_cross_container_edges(&model);
+
+                let all_warnings: Vec<(&str, Vec<String>)> = vec![
+                    ("DISCONNECTED NODES", disconnected),
+                    ("BIDIRECTIONAL EDGES", bidir),
+                    ("MENTIONS WITHOUT EDGES", mentions),
+                    ("CROSS-CONTAINER COMPONENT EDGES", cross_container),
+                ];
+
+                let total: usize = all_warnings.iter().map(|(_, w)| w.len()).sum();
+                if total == 0 {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        format!("Model '{}' passed all checks.", req.name)
+                    )]));
+                }
+
+                let mut msg = format!("Model '{}' — {} warning(s):", req.name, total);
+                for (label, warnings) in all_warnings {
+                    if !warnings.is_empty() {
+                        msg.push_str(&format!("\n\n⚠️ {}:\n- {}", label, warnings.join("\n- ")));
+                    }
+                }
+                Ok(CallToolResult::success(vec![Content::text(msg)]))
+            }
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
+        }
     }
 
     #[tool(
@@ -1700,15 +1981,15 @@ impl ScryerServer {
             merged
         };
 
-        // Helper: collect decisions from ancestors + node
-        let collect_decisions = |chain: &[&C4Node], node: &C4Node| -> Vec<String> {
+        // Helper: collect notes from ancestors + node
+        let collect_notes = |chain: &[&C4Node], node: &C4Node| -> Vec<String> {
             let mut collected = Vec::new();
             for ancestor in chain {
-                if let Some(d) = &ancestor.data.decisions {
+                if let Some(d) = &ancestor.data.notes {
                     collected.push(format!("{}: {}", ancestor.data.name, d));
                 }
             }
-            if let Some(d) = &node.data.decisions {
+            if let Some(d) = &node.data.notes {
                 collected.push(d.clone());
             }
             collected
@@ -1941,13 +2222,36 @@ impl ScryerServer {
                     }
                 }
 
-                // Include contract/decisions from the containers
+                // Include group contract if present
+                if !group.contract.is_empty() {
+                    output.push_str(&format!("\n{} — Group Contract:\n", group.name));
+                    if !group.contract.expect.is_empty() {
+                        output.push_str("  EXPECTED:\n");
+                        for item in &group.contract.expect {
+                            output.push_str(&format!("    - {}\n", item));
+                        }
+                    }
+                    if !group.contract.ask.is_empty() {
+                        output.push_str("  ASK FIRST:\n");
+                        for item in &group.contract.ask {
+                            output.push_str(&format!("    - {}\n", item));
+                        }
+                    }
+                    if !group.contract.never.is_empty() {
+                        output.push_str("  NEVER:\n");
+                        for item in &group.contract.never {
+                            output.push_str(&format!("    - {}\n", item));
+                        }
+                    }
+                }
+
+                // Include contract/notes from the containers
                 for mc in &member_containers {
                     let ancestors = get_ancestor_chain(&mc.id);
                     let contract = merge_contract(&ancestors, mc);
-                    let decisions = collect_decisions(&ancestors, mc);
-                    output.push_str(&format_contract_and_decisions(
-                        &mc.data.name, &contract, &decisions,
+                    let notes = collect_notes(&ancestors, mc);
+                    output.push_str(&format_contract_and_notes(
+                        &mc.data.name, &contract, &notes,
                     ));
                 }
 
@@ -2066,7 +2370,7 @@ impl ScryerServer {
         for node in &work_unit {
             let ancestors = get_ancestor_chain(&node.id);
             let contract = merge_contract(&ancestors, node);
-            let decisions = collect_decisions(&ancestors, node);
+            let notes = collect_notes(&ancestors, node);
 
             if work_unit.len() > 1 {
                 output.push_str(&format!("### {} [{}]\n", node.data.name, node.id));
@@ -2105,10 +2409,10 @@ impl ScryerServer {
                 }
             }
 
-            // Decisions
-            if !decisions.is_empty() {
-                output.push_str("\nDecisions:\n");
-                for d in &decisions {
+            // Notes
+            if !notes.is_empty() {
+                output.push_str("\nNotes:\n");
+                for d in &notes {
                     output.push_str(&format!("  - {}\n", d));
                 }
             }
@@ -2562,56 +2866,31 @@ fn strip_ui_fields(val: &mut serde_json::Value) {
     }
 }
 
-/// Externalize attachment base64 data to temp files so AI context isn't bloated.
-/// Walks the JSON looking for node objects with "attachments" arrays, writes each
-/// attachment's data to a temp file, and replaces "data" with "path".
+/// Externalize contract image base64 data to temp files so AI context isn't bloated.
+/// Walks JSON looking for contract items with "image" objects, writes the data to
+/// a temp file, and replaces "data" with "path".
 fn externalize_attachments(val: &mut serde_json::Value, model_name: &str) {
     match val {
         serde_json::Value::Object(map) => {
-            // Check if this object has both "id" (node) and "attachments" (array)
-            let node_id = map
-                .get("id")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            if let Some(ref nid) = node_id {
-                if let Some(serde_json::Value::Object(data_map)) = map.get_mut("data") {
-                    if let Some(serde_json::Value::Array(atts)) = data_map.get_mut("attachments") {
-                        for att in atts.iter_mut() {
-                            if let serde_json::Value::Object(att_map) = att {
-                                let att_id = att_map
-                                    .get("id")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("unknown")
-                                    .to_string();
-                                let mime = att_map
-                                    .get("mimeType")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("image/png")
-                                    .to_string();
-                                let ext = match mime.as_str() {
-                                    "image/jpeg" => "jpg",
-                                    "image/gif" => "gif",
-                                    "image/webp" => "webp",
-                                    "image/svg+xml" => "svg",
-                                    _ => "png",
-                                };
-                                if let Some(serde_json::Value::String(b64)) = att_map.remove("data")
-                                {
-                                    let filename =
-                                        format!("scryer-{}-{}-{}.{}", model_name, nid, att_id, ext);
-                                    let path = std::env::temp_dir().join(&filename);
-                                    if let Ok(bytes) = base64_decode(&b64) {
-                                        let _ = std::fs::write(&path, bytes);
-                                    }
-                                    att_map.insert(
-                                        "path".to_string(),
-                                        serde_json::Value::String(
-                                            path.to_string_lossy().to_string(),
-                                        ),
-                                    );
-                                }
-                            }
+            // Contract item with image: { text, image: { filename, mimeType, data } }
+            if map.contains_key("text") {
+                if let Some(serde_json::Value::Object(img)) = map.get_mut("image") {
+                    let mime = img.get("mimeType").and_then(|v| v.as_str()).unwrap_or("image/png").to_string();
+                    let filename = img.get("filename").and_then(|v| v.as_str()).unwrap_or("image").to_string();
+                    let ext = match mime.as_str() {
+                        "image/jpeg" => "jpg",
+                        "image/gif" => "gif",
+                        "image/webp" => "webp",
+                        "image/svg+xml" => "svg",
+                        _ => "png",
+                    };
+                    if let Some(serde_json::Value::String(b64)) = img.remove("data") {
+                        let out_name = format!("scryer-{}-{}.{}", model_name, filename, ext);
+                        let path = std::env::temp_dir().join(&out_name);
+                        if let Ok(bytes) = base64_decode(&b64) {
+                            let _ = std::fs::write(&path, bytes);
                         }
+                        img.insert("path".to_string(), serde_json::Value::String(path.to_string_lossy().to_string()));
                     }
                 }
             }
@@ -2759,10 +3038,10 @@ ask the user — don't spiral into web searches.
 2. Call get_task immediately to get the next task. Do NOT stop — there are more tasks.
 3. Repeat until get_task returns \"All tasks complete.\"";
 
-fn format_contract_and_decisions(
+fn format_contract_and_notes(
     name: &str,
     contract: &scryer_core::Contract,
-    decisions: &[String],
+    notes: &[String],
 ) -> String {
     let mut out = String::new();
     if !contract.is_empty() {
@@ -2786,9 +3065,9 @@ fn format_contract_and_decisions(
             }
         }
     }
-    if !decisions.is_empty() {
-        out.push_str(&format!("\n{} — Decisions:\n", name));
-        for d in decisions {
+    if !notes.is_empty() {
+        out.push_str(&format!("\n{} — Notes:\n", name));
+        for d in notes {
             out.push_str(&format!("  - {}\n", d));
         }
     }
@@ -3010,8 +3289,8 @@ fn compute_diff(baseline: &C4ModelData, current: &C4ModelData) -> String {
             if base.data.contract != curr.data.contract {
                 changes.push("contract changed".to_string());
             }
-            if base.data.decisions != curr.data.decisions {
-                changes.push("decisions changed".to_string());
+            if base.data.notes != curr.data.notes {
+                changes.push("notes changed".to_string());
             }
             if base.data.properties != curr.data.properties {
                 changes.push(format!(
@@ -3199,7 +3478,7 @@ const INSTRUCTIONS: &str = r#"scryer is a C4 architecture diagramming tool. You 
 - **System**: A software system. Top-level node (no parent). Can be marked `external: true`.
 - **Container**: An application, data store, or service inside a system. Parent must be a system node.
 - **Component**: A logical component inside a container. Parent must be a container node.
-- **Operation**: A single function, method, or handler inside a component — code you can point to in one file. Examples: `handleCreate`, `validateInput`, `hashPassword`. Use operation for anything that maps to one function/method. Parent must be a component node. **Name must be a valid identifier** (camelCase or snake_case).
+- **Operation**: A single function, method, or handler inside a component — code you can point to in one file. Use operation for anything that maps to one function/method. Parent must be a component node. **Name must be a valid identifier** (camelCase or snake_case — match the target language's convention).
 - **Process**: A multi-step behavioral flow that orchestrates multiple operations — like a saga, pipeline, or workflow. Processes describe *sequences*, not individual functions. If it maps to a single function, it's an operation, not a process. Parent must be a component node. Use `type: "process"` in node data.
 - **Model**: A data model inside a component. Parent must be a component node. Has optional `properties` (array of `{label, description}`). Use `type: "model"` in node data. **Name must be a valid type name** (PascalCase or camelCase). **Property labels must be valid identifiers.**
 
@@ -3207,7 +3486,7 @@ const INSTRUCTIONS: &str = r#"scryer is a C4 architecture diagramming tool. You 
 All nodes use type `"c4"`, except: operation uses `"operation"`, process uses `"process"`, model uses `"model"`.
 
 ## Naming Rules
-Operation and process names must be valid identifiers: start with a lowercase letter, then `[a-zA-Z0-9_]`. Use camelCase or snake_case. Model names may start with an uppercase letter (PascalCase like `UserProfile`) or lowercase. Model property labels must be valid identifiers (camelCase or snake_case).
+Operation and process names must be valid identifiers: start with a lowercase letter, then `[a-zA-Z0-9_]`. **Match the target language's naming convention** — use snake_case for Python/Rust/Ruby/Go, camelCase for JavaScript/TypeScript/Java/C#. Model names may start with an uppercase letter (PascalCase like `UserProfile`) or lowercase. Model property labels must be valid identifiers matching the target language convention.
 
 ## Source Map
 The model has an optional `sourceMap` field: a mapping from node ID to an array of source locations (`{file, line?, endLine?}`). Use `update_source_map` to attach file/line references to operation nodes. This is separate from `sources` (glob patterns on higher-level nodes).

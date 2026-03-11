@@ -80,7 +80,7 @@
         "kind": "container",
         "technology": "Express",
         "status": "proposed",
-        "decisions": "Express chosen over Fastify for ecosystem maturity and middleware availability. Prisma as ORM for type-safe queries."
+        "notes": "Express chosen over Fastify for ecosystem maturity and middleware availability. Prisma as ORM for type-safe queries."
       },
       "parentId": "node-3"
     },
