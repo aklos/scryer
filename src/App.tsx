@@ -265,7 +265,7 @@ function Flow() {
 
   useCanvasEvents({
     expandNode,
-    setNodes, setEdges, screenToFlowPosition, nodes, setSelectedGroupId,
+    setNodes, setEdges, screenToFlowPosition, nodes, setSelectedGroupId, fitView,
   });
 
   // --- Remaining inline logic ---
@@ -542,10 +542,19 @@ function Flow() {
     ({ nodes: delNodes, edges: delEdges }: { nodes: C4Node[]; edges: C4Edge[] }) => {
       const groupIds = new Set<string>();
       const realNodeIds: string[] = [];
+      const refNodeIdsToSever = new Set<string>();
 
       for (const n of delNodes) {
         if (n.type === "groupBox") groupIds.add(n.id);
+        else if (n.data._reference) refNodeIdsToSever.add(n.id);
         else realNodeIds.push(n.id);
+      }
+
+      // Reference node deletion: sever all edges touching the reference node
+      if (refNodeIdsToSever.size > 0) {
+        setEdges((eds) => eds.filter((e) =>
+          !refNodeIdsToSever.has(e.source) && !refNodeIdsToSever.has(e.target)
+        ));
       }
 
       if (realNodeIds.length > 0) {

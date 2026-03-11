@@ -8,6 +8,7 @@ interface UseCanvasEventsParams {
   screenToFlowPosition: (position: { x: number; y: number }) => { x: number; y: number };
   nodes: C4Node[];
   setSelectedGroupId: React.Dispatch<React.SetStateAction<string | null>>;
+  fitView: (opts?: { nodes?: { id: string }[]; padding?: number; duration?: number }) => void;
 }
 
 export function useCanvasEvents({
@@ -17,6 +18,7 @@ export function useCanvasEvents({
   screenToFlowPosition,
   nodes,
   setSelectedGroupId,
+  fitView,
 }: UseCanvasEventsParams) {
   // node-expand
   useEffect(() => {
@@ -116,20 +118,25 @@ export function useCanvasEvents({
     return () => window.removeEventListener("add-process", handler);
   }, [screenToFlowPosition, setNodes]);
 
-  // mention-click — select node by name (code level)
+  // mention-click — select node by name (code level) and center view on it
   useEffect(() => {
     const handler = (e: Event) => {
       const { name } = (e as CustomEvent).detail;
+      let targetId: string | null = null;
       setNodes((nds) =>
-        nds.map((n) => ({
-          ...n,
-          selected: (n.data as C4NodeData).name === name,
-        })),
+        nds.map((n) => {
+          const match = (n.data as C4NodeData).name === name;
+          if (match) targetId = n.id;
+          return { ...n, selected: match };
+        }),
       );
+      if (targetId) {
+        setTimeout(() => fitView({ nodes: [{ id: targetId! }], padding: 0.5, duration: 300 }), 50);
+      }
     };
     window.addEventListener("mention-click", handler);
     return () => window.removeEventListener("mention-click", handler);
-  }, [setNodes]);
+  }, [setNodes, fitView]);
 
   // add-model (creates a real model node)
   useEffect(() => {

@@ -66,26 +66,42 @@ export function useVisibleNodes({
           description: "",
           kind: "system" as C4Kind,
           groupKind: group.kind,
+          contract: group.contract,
           _memberIds: group.memberIds,
         },
       } as C4Node);
     }
 
-    // Inject _operations, _processes, and _models into component nodes so they show inline
+    // Build a set of node IDs that have at least one child
+    const parentIdsWithChildren = new Set<string>();
+    for (const n of nodes) {
+      if (n.parentId) parentIdsWithChildren.add(n.parentId);
+    }
+
+    // Inject _operations, _processes, _models into component nodes, and _hasChildren for expandable nodes
     const injectMembers = (nodeList: C4Node[]): C4Node[] =>
       nodeList.map((n) => {
-        if ((n.data as C4NodeData).kind !== "component") return n;
-        const allMembers = nodes
-          .filter((c) => c.parentId === n.id && (c.data as C4NodeData).kind === "operation")
-          .map((c) => ({ id: c.id, name: (c.data as C4NodeData).name, status: (c.data as C4NodeData).status }));
-        const procChips = nodes
-          .filter((c) => c.parentId === n.id && (c.data as C4NodeData).kind === "process")
-          .map((c) => ({ id: c.id, name: (c.data as C4NodeData).name, status: (c.data as C4NodeData).status }));
-        const modelChips = nodes
-          .filter((c) => c.parentId === n.id && (c.data as C4NodeData).kind === "model")
-          .map((c) => ({ id: c.id, name: (c.data as C4NodeData).name, status: (c.data as C4NodeData).status }));
-        if (allMembers.length === 0 && procChips.length === 0 && modelChips.length === 0) return n;
-        return { ...n, data: { ...n.data, _operations: allMembers, _processes: procChips, _models: modelChips } };
+        const kind = (n.data as C4NodeData).kind;
+        const hasChildren = parentIdsWithChildren.has(n.id);
+        if (kind === "component") {
+          const allMembers = nodes
+            .filter((c) => c.parentId === n.id && (c.data as C4NodeData).kind === "operation")
+            .map((c) => ({ id: c.id, name: (c.data as C4NodeData).name, status: (c.data as C4NodeData).status }));
+          const procChips = nodes
+            .filter((c) => c.parentId === n.id && (c.data as C4NodeData).kind === "process")
+            .map((c) => ({ id: c.id, name: (c.data as C4NodeData).name, status: (c.data as C4NodeData).status }));
+          const modelChips = nodes
+            .filter((c) => c.parentId === n.id && (c.data as C4NodeData).kind === "model")
+            .map((c) => ({ id: c.id, name: (c.data as C4NodeData).name, status: (c.data as C4NodeData).status }));
+          if (allMembers.length === 0 && procChips.length === 0 && modelChips.length === 0) {
+            return hasChildren ? { ...n, data: { ...n.data, _hasChildren: true } } : n;
+          }
+          return { ...n, data: { ...n.data, _operations: allMembers, _processes: procChips, _models: modelChips, ...(hasChildren ? { _hasChildren: true } : {}) } };
+        }
+        if (hasChildren && (kind === "system" || kind === "container")) {
+          return { ...n, data: { ...n.data, _hasChildren: true } };
+        }
+        return n;
       });
 
     const withGroups = injectMembers([...groupBoxes, ...childNodes]);
@@ -191,6 +207,9 @@ export function useVisibleNodes({
       if (childIds.has(refId)) continue;
       const refNode = nodes.find((n) => n.id === refId);
       if (!refNode) continue;
+      // Skip components from other containers — they shouldn't leak as refs
+      const refKind = (refNode.data as C4NodeData).kind;
+      if ((refKind === "component" || refKind === "operation" || refKind === "process" || refKind === "model") && refNode.parentId !== currentParentId) continue;
       if (isCodeLevel) {
         if ((refNode.data as C4NodeData).kind !== "component") continue;
         const hasOutgoing = rels.some((r) => r.direction === "out");

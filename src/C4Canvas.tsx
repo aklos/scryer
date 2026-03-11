@@ -99,7 +99,7 @@ export function C4Canvas({
 }: C4CanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const selectionStartPos = useRef<{ x: number; y: number } | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; screenX: number; screenY: number } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; screenX: number; screenY: number; nodeId?: string; edgeId?: string } | null>(null);
 
   // Close context menu on click anywhere or escape
   useEffect(() => {
@@ -111,14 +111,57 @@ export function C4Canvas({
     return () => { window.removeEventListener("pointerdown", close); window.removeEventListener("keydown", onKey); };
   }, [contextMenu]);
 
+  // Delete key on selected reference nodes → sever edges
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      // Don't intercept if focus is in an input/textarea
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const selectedRefs = visibleNodesWithHints.filter((n) => n.selected && n.data._reference);
+      if (selectedRefs.length === 0) return;
+      const refIds = new Set(selectedRefs.map((n) => n.id));
+      setEdges((eds) => eds.filter((e) => !refIds.has(e.source) && !refIds.has(e.target)));
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [visibleNodesWithHints, setEdges]);
+
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
-    // Only trigger on the canvas pane itself, not on nodes, edges, or overlays
-    if (!target.closest(".react-flow__pane")) return;
     e.preventDefault();
     if (currentModel === null && nodes.length === 0) return;
+
+    // Check if right-click is on a node
+    const nodeEl = target.closest(".react-flow__node");
+    if (nodeEl) {
+      const nodeId = nodeEl.getAttribute("data-id");
+      if (nodeId) {
+        onNodesChange(visibleNodesWithHints.map((n) => ({
+          type: "select" as const,
+          id: n.id,
+          selected: n.id === nodeId,
+        })));
+        setContextMenu({ x: e.clientX, y: e.clientY, screenX: e.clientX, screenY: e.clientY, nodeId });
+        return;
+      }
+    }
+
+    // Check if right-click is on an edge
+    const edgeEl = target.closest(".react-flow__edge");
+    if (edgeEl) {
+      const edgeId = edgeEl.getAttribute("data-id");
+      if (edgeId) {
+        setEdges((eds) => eds.map((ed) => ({ ...ed, selected: ed.id === edgeId })) as C4Edge[]);
+        setContextMenu({ x: e.clientX, y: e.clientY, screenX: e.clientX, screenY: e.clientY, edgeId });
+        return;
+      }
+    }
+
+    // Canvas pane right-click — show "add" menu
+    if (!target.closest(".react-flow__pane")) return;
     setContextMenu({ x: e.clientX, y: e.clientY, screenX: e.clientX, screenY: e.clientY });
-  }, [currentModel, nodes.length]);
+  }, [currentModel, nodes.length, onNodesChange, visibleNodesWithHints]);
 
   const addFromContext = useCallback((kind?: C4Kind) => {
     if (!contextMenu) return;
@@ -350,7 +393,7 @@ export function C4Canvas({
         edgesReconnectable={false}
         snapToGrid
         snapGrid={snapGrid}
-        deleteKeyCode="Delete"
+        deleteKeyCode={["Delete", "Backspace"]}
         onDelete={onBulkDelete}
         multiSelectionKeyCode="Shift"
         onSelectionChange={wrappedOnSelectionChange}
@@ -372,6 +415,7 @@ export function C4Canvas({
                     onClick={() => {
                       if (selectedNode) {
                         if (selectedNode.type === "groupBox") setGroups((prev) => prev.filter((g) => g.id !== selectedNode.id));
+                        else if (selectedNode.data._reference) setEdges((eds) => eds.filter((e) => e.source !== selectedNode.id && e.target !== selectedNode.id));
                         else deleteNode(selectedNode.id);
                       } else if (selectedEdge) {
                         setEdges((eds) => eds.filter((e) => e.id !== selectedEdge.id));
@@ -498,7 +542,23 @@ export function C4Canvas({
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          {!currentParentId ? (
+          {contextMenu.nodeId ? (
+            <button type="button" className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30 cursor-pointer transition-colors" onClick={() => {
+              const node = visibleNodesWithHints.find((n) => n.id === contextMenu.nodeId);
+              if (node) onBulkDelete({ nodes: [node], edges: [] });
+              setContextMenu(null);
+            }}>
+              <Trash2 className="h-3 w-3" /> Delete
+            </button>
+          ) : contextMenu.edgeId ? (
+            <button type="button" className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30 cursor-pointer transition-colors" onClick={() => {
+              const edge = visibleEdges.find((e) => e.id === contextMenu.edgeId);
+              if (edge) onBulkDelete({ nodes: [], edges: [edge] });
+              setContextMenu(null);
+            }}>
+              <Trash2 className="h-3 w-3" /> Delete
+            </button>
+          ) : !currentParentId ? (
             <>
               <button type="button" className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-700 cursor-pointer transition-colors" onClick={() => addFromContext("system")}>
                 <Plus className="h-3 w-3" /> Add system
