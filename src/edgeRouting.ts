@@ -95,6 +95,13 @@ export function assignAllHandles(
     usage.set(k, (usage.get(k) ?? 0) + 1);
   };
 
+  // Detect bidirectional pairs: if A→B and B→A both exist, the reverse edge
+  // must use the swapped handles of its counterpart so RelationshipEdge's
+  // perpendicular offset renders correctly.
+  const edgeKey = (src: string, tgt: string) => `${src}::${tgt}`;
+  const edgeSet = new Set(edges.map((e) => edgeKey(e.source, e.target)));
+  const biPairProcessed = new Map<string, { sourceHandle: HandleId; targetHandle: HandleId }>();
+
   // Sort edges by distance so closer edges claim optimal handles first.
   // Farther edges then spread to adjacent handles via congestion penalty.
   const sorted = [...edges].map((e) => {
@@ -114,6 +121,20 @@ export function assignAllHandles(
     const src = nodeMap.get(e.source);
     const tgt = nodeMap.get(e.target);
     if (!src || !tgt) continue;
+
+    // If this is the reverse edge of an already-processed bidirectional pair,
+    // force it to use the swapped handles so both edges share the same endpoints.
+    const reverseKey = edgeKey(e.target, e.source);
+    const isBiDirectional = edgeSet.has(reverseKey);
+    const reverseHandles = biPairProcessed.get(reverseKey);
+    if (isBiDirectional && reverseHandles) {
+      const swappedSrc = reverseHandles.targetHandle;
+      const swappedTgt = reverseHandles.sourceHandle;
+      result.set(e.id, { sourceHandle: swappedSrc, targetHandle: swappedTgt });
+      addUsage(e.source, swappedSrc);
+      addUsage(e.target, swappedTgt);
+      continue;
+    }
 
     const srcHandles = getHandlePositions(src);
     const tgtHandles = getHandlePositions(tgt);
@@ -153,6 +174,11 @@ export function assignAllHandles(
     result.set(e.id, { sourceHandle: bestSrc, targetHandle: bestTgt });
     addUsage(e.source, bestSrc);
     addUsage(e.target, bestTgt);
+
+    // Record for bidirectional pair detection
+    if (isBiDirectional) {
+      biPairProcessed.set(edgeKey(e.source, e.target), { sourceHandle: bestSrc, targetHandle: bestTgt });
+    }
   }
   return result;
 }

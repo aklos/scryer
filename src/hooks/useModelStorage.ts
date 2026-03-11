@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { C4ModelData, C4Node, C4NodeData, C4Edge, StartingLevel, SourceLocation, Group, Contract, Flow, FlowStep, FlowTransition } from "../types";
+import type { C4ModelData, C4Node, C4NodeData, C4Edge, StartingLevel, SourceLocation, Group, Contract, ContractItem, Flow, FlowStep, FlowTransition } from "../types";
 import { useToast } from "../Toast";
 
-/** Migrate old guidelines/string contract fields to string[] contract fields. */
+/** Migrate old guidelines/string contract fields to ContractItem[] contract fields. */
 function migrateContract(raw: unknown): Contract {
   const empty: Contract = { expect: [], ask: [], never: [] };
   if (!raw || typeof raw !== "object") return empty;
   const obj = raw as Record<string, unknown>;
-  const migrate = (v: unknown): string[] =>
-    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : typeof v === "string" && v.length > 0 ? v.split("\n").map(s => s.trim()).filter(Boolean) : [];
+  const migrate = (v: unknown): ContractItem[] => {
+    if (Array.isArray(v)) return v.filter((x): x is ContractItem => typeof x === "string" || (typeof x === "object" && x !== null && "text" in x));
+    if (typeof v === "string" && v.length > 0) return v.split("\n").map(s => s.trim()).filter(Boolean);
+    return [];
+  };
   return {
     expect: migrate(obj.expect ?? obj.always),
     ask: migrate(obj.ask),
@@ -221,12 +224,22 @@ export function useModelStorage(
   const applyModelData = useCallback((data: C4ModelData, preserveSelection = false) => {
     skipSave.current = true;
     if (preserveSelection) {
-      // Merge incoming node data while keeping current selection and measured state
+      // Merge incoming node data while keeping current selection, measured, and
+      // laid-out positions for unchanged nodes. MCP writes strip positions, so
+      // parseModelData sets _needsLayout on nodes without positions. For nodes
+      // that already exist in memory with a laid-out position, preserve it —
+      // otherwise auto-layout work gets lost on every AI write.
       setNodes((prev) => {
         const prevMap = new Map(prev.map((n) => [n.id, n]));
         return data.nodes.map((n) => {
           const existing = prevMap.get(n.id);
           if (existing) {
+            // Incoming node has _needsLayout (no position from disk) but we
+            // already have a position in memory — keep it, clear the flag.
+            if (n.data._needsLayout && !existing.data._needsLayout) {
+              const { _needsLayout, ...data } = n.data;
+              return { ...n, position: existing.position, selected: existing.selected, measured: existing.measured, data: data as C4NodeData };
+            }
             return { ...n, selected: existing.selected, measured: existing.measured };
           }
           return n;
@@ -474,7 +487,7 @@ export function useModelStorage(
     const unlisten = listen<string>("model-created", (event) => {
       if (event.payload === currentModel) {
         reloadModel(event.payload);
-      } else {
+      } else if (followAIRef.current) {
         loadModel(event.payload);
       }
     });

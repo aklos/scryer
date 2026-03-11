@@ -48,15 +48,14 @@ function StatusDot({ status }: { status?: Status }) {
 function PropertyList({ properties }: { properties: ModelProperty[] }) {
   if (properties.length === 0) return null;
   return (
-    <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1.5">
+    <div className="mt-2 space-y-0.5">
       {properties.map((p) => (
-        <span
-          key={p.label}
-          className="text-[10px] font-mono text-zinc-500 dark:text-zinc-400"
-          title={p.description || undefined}
-        >
-          .{p.label}
-        </span>
+        <div key={p.label} className="flex items-baseline gap-2 text-[11px] leading-snug">
+          <span className="font-mono font-medium text-zinc-700 dark:text-zinc-300 shrink-0">.{p.label}</span>
+          {p.description && (
+            <span className="text-zinc-400 dark:text-zinc-500 truncate">{p.description}</span>
+          )}
+        </div>
       ))}
     </div>
   );

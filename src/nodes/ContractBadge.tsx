@@ -30,21 +30,24 @@ function SectionPill({ icon: Icon, stats }: {
   const label = checked > 0 ? `${stats.passed}/${stats.total}` : `${stats.total}`;
   return (
     <span className={`inline-flex items-center gap-0.5 ${color}`}>
-      <Icon size={9} strokeWidth={2.5} />
-      <span className="text-[8px] font-semibold leading-none tabular-nums">{label}</span>
+      <Icon size={12} strokeWidth={2.5} />
+      <span className="text-[10px] font-semibold leading-none tabular-nums">{label}</span>
     </span>
   );
 }
 
-export function ContractBadge({ contract }: { contract?: Contract }) {
+export function ContractBadge({ contract, inline }: { contract?: Contract; inline?: boolean }) {
   if (!contract) return null;
-  const expectStats = sectionStats(contract.expect);
-  const askStats = sectionStats(contract.ask);
-  const neverStats = sectionStats(contract.never);
+  const expectStats = sectionStats(contract.expect ?? []);
+  const askStats = sectionStats(contract.ask ?? []);
+  const neverStats = sectionStats(contract.never ?? []);
   if (expectStats.total === 0 && askStats.total === 0 && neverStats.total === 0) return null;
 
   return (
-    <div className="absolute top-1.5 left-1.5 z-20 flex items-center gap-1.5 px-1 py-0.5">
+    <div className={inline
+      ? "flex items-center gap-1.5 px-1 py-0.5"
+      : "absolute top-1.5 left-1.5 z-20 flex items-center gap-1.5 px-1 py-0.5 rounded bg-[var(--scryer-node-bg)]"
+    }>
       <SectionPill icon={Shield} stats={expectStats} />
       <SectionPill icon={MessageCircle} stats={askStats} />
       <SectionPill icon={Ban} stats={neverStats} />

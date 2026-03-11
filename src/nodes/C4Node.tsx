@@ -4,7 +4,6 @@ import type {
   C4Node as C4NodeType,
   C4NodeData,
   Hint,
-  Attachment,
   Status,
   Contract,
 } from "../types";
@@ -15,7 +14,7 @@ import { ContractBadge } from "./ContractBadge";
 import { STATUS_COLORS, statusHex } from "../statusColors";
 import { getThemedHex, ThemeContext } from "../theme";
 import { DescriptionText } from "../DescriptionText";
-import { Code, Workflow, Table } from "lucide-react";
+import { Code, Workflow, Table, Layers } from "lucide-react";
 
 /** Whether this kind can be drilled into */
 function isExpandable(kind: C4NodeData["kind"]): boolean {
@@ -113,33 +112,6 @@ function MemberChipList({
   );
 }
 
-/** Compact thumbnail strip for node attachments */
-function AttachmentStrip({ attachments }: { attachments: Attachment[] }) {
-  if (attachments.length === 0) return null;
-  return (
-    <div className="w-full px-2 py-1">
-      <div className="flex gap-1 overflow-hidden">
-        {attachments.slice(0, 3).map((att) => (
-          <img
-            key={att.id}
-            src={`data:${att.mimeType};base64,${att.data}`}
-            alt={att.filename}
-            className="rounded border border-zinc-200 dark:border-zinc-700 object-cover"
-            style={{ width: 52, height: 36 }}
-          />
-        ))}
-        {attachments.length > 3 && (
-          <div
-            className="flex items-center justify-center rounded border border-zinc-200 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 text-[9px] text-zinc-400 dark:text-zinc-500"
-            style={{ width: 52, height: 36 }}
-          >
-            +{attachments.length - 3}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
   useContext(ThemeContext); // re-render on theme change for inline hex styles
@@ -158,7 +130,6 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
     (members && members.length > 0) ||
     (processes && processes.length > 0) ||
     (models && models.length > 0);
-  const attachments = data.attachments ?? [];
   const isComponent = data.kind === "component";
 
   const dragCounter = useRef(0);
@@ -235,7 +206,7 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
           <div
             className={`absolute flex flex-col justify-center items-center text-zinc-500 dark:text-zinc-400 ${isRefPerson ? "overflow-visible" : "overflow-hidden"}`}
             style={{
-              top: insets.top,
+              top: isRefPerson && (data.description?.length ?? 0) > 80 ? -20 : insets.top,
               bottom: insets.bottom,
               left: insets.left,
               right: insets.right,
@@ -244,10 +215,10 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
             {isRefPerson && (
               <svg
                 className="pointer-events-none overflow-visible shrink-0"
-                width="180"
-                height="72"
+                width="200"
+                height="80"
                 viewBox="0 0 180 72"
-                style={{ marginBottom: -20 }}
+                style={{ marginBottom: -34 }}
               >
                 <defs>
                   <linearGradient
@@ -340,6 +311,7 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
 
   const isExternal = data.external;
   const expandable = isExpandable(data.kind) && !isExternal;
+  const hasChildren = !!(data as Record<string, unknown>)._hasChildren;
   const nodeHints = (data._hints as Hint[] | undefined) ?? [];
   const statusColor =
     data.status && data.kind !== "person" && !isExternal
@@ -505,6 +477,13 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
           </div>
         )}
 
+        {/* Has-children indicator */}
+        {expandable && hasChildren && (
+          <div className="absolute bottom-2 right-2.5 z-10 text-zinc-300 dark:text-zinc-600 pointer-events-none">
+            <Layers size={12} strokeWidth={1.5} />
+          </div>
+        )}
+
         {/* Content area */}
         <div
           className="absolute flex flex-col justify-center items-center text-zinc-800 dark:text-zinc-100 overflow-hidden"
@@ -550,9 +529,6 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
             operations={members}
           />
         </div>
-      )}
-      {(data.kind === "container" || data.kind === "component") && (
-        <AttachmentStrip attachments={attachments} />
       )}
     </div>
   );

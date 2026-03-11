@@ -44,7 +44,7 @@ export function ShapeBackground({
     >
       {kind === "component" && shape === "rectangle" && (
         <path
-          d={`M0,0 V-11 Q0,-15 4,-15 H46 Q50,-15 52,-11 L54,0`}
+          d={`M0,0 V-9 Q0,-12 3,-12 H39 Q42,-12 44,-9 L45,0`}
           className={`${fillClass} ${strokeClass ?? ""}`}
           strokeWidth={strokeWidth}
           strokeDasharray={strokeDasharray}

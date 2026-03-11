@@ -6,7 +6,13 @@ export type C4Shape = "rectangle" | "person" | "cylinder" | "pipe" | "trapezoid"
 
 export type Status = "implemented" | "proposed" | "changed" | "deprecated";
 
-export type ContractItem = { text: string; passed?: boolean } | string;
+export interface ContractImage {
+  filename: string;
+  mimeType: string;
+  data: string; // base64
+}
+
+export type ContractItem = { text: string; passed?: boolean; url?: string; image?: ContractImage } | string;
 
 export interface Contract {
   expect: ContractItem[];
@@ -24,11 +30,9 @@ export function contractPassed(item: ContractItem): boolean | undefined {
   return typeof item === "string" ? undefined : item.passed;
 }
 
-export interface Attachment {
-  id: string;
-  filename: string;
-  mimeType: string;
-  data: string; // base64
+/** Extract url from a ContractItem */
+export function contractUrl(item: ContractItem): string | undefined {
+  return typeof item === "string" ? undefined : item.url;
 }
 
 export type C4NodeData = {
@@ -42,10 +46,8 @@ export type C4NodeData = {
   sources?: { pattern: string; comment: string }[];
   status?: Status;
   contract?: Contract;
-  decisions?: string;
+  notes?: string;
   properties?: ModelProperty[];
-  attachments?: Attachment[];
-  links?: string[];
   _reference?: boolean;
   _relationships?: { direction: "in" | "out"; label: string; method?: string }[];
   _operations?: { id: string; name: string }[];
@@ -80,6 +82,7 @@ export interface Group {
   name: string;
   description?: string;
   memberIds: string[];
+  contract?: Contract;
 }
 
 export interface FlowBranch {

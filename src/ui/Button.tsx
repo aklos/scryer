@@ -30,11 +30,11 @@ const variantClasses: Record<ButtonVariant, Record<ButtonColor, string>> = {
   },
   link: {
     default:
-      "text-xs text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300",
+      "w-fit self-center text-xs text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300",
     accent:
-      "text-xs text-indigo-400 hover:text-indigo-600 dark:text-indigo-500 dark:hover:text-indigo-300",
+      "w-fit self-center text-xs text-indigo-400 hover:text-indigo-600 dark:text-indigo-500 dark:hover:text-indigo-300",
     danger:
-      "text-xs text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-300",
+      "w-fit self-center text-xs text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-300",
   },
 };
 

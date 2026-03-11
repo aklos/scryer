@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
 import { useReactFlow } from "@xyflow/react";
 import { useNodeDataOverride } from "./NodeDataContext";
 import { invoke } from "@tauri-apps/api/core";
-import type { C4Node, C4NodeData, C4Edge, Hint, Status, SourceLocation, ModelProperty, Group, Contract, ContractItem, Flow, Attachment } from "./types";
-import { contractText, contractPassed } from "./types";
+import type { C4Node, C4NodeData, C4Edge, Hint, Status, SourceLocation, ModelProperty, Group, Contract, ContractItem, ContractImage, Flow } from "./types";
+import { contractText, contractPassed, contractUrl } from "./types";
 import { ShapeIcon, resolveShape, defaultShapeForKind, ALL_SHAPES, SHAPE_LABELS } from "./shapes";
 import { statusHex } from "./statusColors";
 import { getThemedHex } from "./theme";
@@ -48,7 +48,7 @@ const TECHNOLOGY_SUGGESTIONS: Record<string, string[]> = {
 
 /* ── Sub-panels (edge, group — no tabs) ──────────────────────────── */
 
-function GroupPanel({ node, groups, onUpdateGroups, allNodes }: { node: C4Node; groups: Group[]; onUpdateGroups: (fn: (prev: Group[]) => Group[]) => void; allNodes: C4Node[] }) {
+function GroupPropertiesContent({ node, groups, onUpdateGroups, allNodes }: { node: C4Node; groups: Group[]; onUpdateGroups: (fn: (prev: Group[]) => Group[]) => void; allNodes: C4Node[] }) {
   const group = groups.find((g) => g.id === node.id);
   if (!group) return null;
 
@@ -57,7 +57,6 @@ function GroupPanel({ node, groups, onUpdateGroups, allNodes }: { node: C4Node; 
       const updated = prev.map((g) =>
         g.id === group.id ? { ...g, memberIds: g.memberIds.filter((id) => id !== memberId) } : g,
       );
-      // Auto-delete empty groups
       return updated.filter((g) => g.memberIds.length > 0);
     });
   };
@@ -100,6 +99,33 @@ function GroupPanel({ node, groups, onUpdateGroups, allNodes }: { node: C4Node; 
             );
           })}
         </div>
+      </Section>
+    </>
+  );
+}
+
+function GroupContractContent({ node, groups, onUpdateGroups }: { node: C4Node; groups: Group[]; onUpdateGroups: (fn: (prev: Group[]) => Group[]) => void }) {
+  const group = groups.find((g) => g.id === node.id);
+  if (!group) return null;
+  const raw = group.contract;
+  const contract = { expect: raw?.expect ?? [], ask: raw?.ask ?? [], never: raw?.never ?? [] };
+
+  const updateField = (field: keyof Contract, items: ContractItem[]) => {
+    onUpdateGroups((prev) => prev.map((g) => g.id === group.id ? { ...g, contract: { ...contract, [field]: items } } : g));
+  };
+
+  return (
+    <>
+      <Section title="Expected">
+        <ContractList items={contract.expect} onChange={(items) => updateField("expect", items)} placeholder="Expected to..." />
+      </Section>
+      <Divider />
+      <Section title="Ask first">
+        <ContractList items={contract.ask} onChange={(items) => updateField("ask", items)} placeholder="Confirm before..." />
+      </Section>
+      <Divider />
+      <Section title="Never">
+        <ContractList items={contract.never} onChange={(items) => updateField("never", items)} placeholder="Must never..." />
       </Section>
     </>
   );
@@ -200,70 +226,21 @@ function EdgePanel({ edge, onUpdate, codeLevel }: { edge: C4Edge; onUpdate: (dat
   );
 }
 
-/* ── Links section ────────────────────────────────────────────────── */
 
-function LinksSection({ nodeId, links }: { nodeId: string; links: string[] }) {
-  const updateNodeData = useUpdateNodeData();
-
-  const updateLink = useCallback((index: number, value: string) => {
-    updateNodeData(nodeId, { links: links.map((u, i) => i === index ? value : u) });
-  }, [nodeId, links, updateNodeData]);
-
-  const removeLink = useCallback((index: number) => {
-    updateNodeData(nodeId, { links: links.filter((_, i) => i !== index) });
-  }, [nodeId, links, updateNodeData]);
-
-  const addLink = useCallback(() => {
-    updateNodeData(nodeId, { links: [...links, ""] });
-  }, [nodeId, links, updateNodeData]);
-
-  return (
-    <Section title="Links" count={links.length || undefined}>
-      {links.length > 0 && (
-        <div className="flex flex-col gap-1">
-          {links.map((url, i) => (
-            <div key={i} className="group flex items-center gap-1.5">
-              <Input
-                variant="inline"
-                className="!text-left !w-full !bg-transparent text-xs"
-                value={url}
-                placeholder="https://..."
-                onChange={(e) => updateLink(i, e.target.value)}
-              />
-              <button
-                type="button"
-                className="shrink-0 text-xs text-zinc-300 hover:text-red-400 dark:text-zinc-600 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover:opacity-100"
-                title="Remove link"
-                onClick={() => removeLink(i)}
-              >
-                &times;
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      <Button variant="link" onClick={addLink}>
-        + add link
-      </Button>
-    </Section>
-  );
-}
-
-/* ── Attachments section ──────────────────────────────────────────── */
+/* ── Image resize helper ──────────────────────────────────────────── */
 
 const MAX_IMAGE_DIM = 1280;
 
-function resizeImage(file: File): Promise<{ base64: string; mimeType: string }> {
+function resizeImage(file: File): Promise<ContractImage> {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
       let { width, height } = img;
       if (width <= MAX_IMAGE_DIM && height <= MAX_IMAGE_DIM) {
-        // Small enough — read as-is
         const reader = new FileReader();
         reader.onload = () => {
           const b64 = (reader.result as string).split(",")[1];
-          if (b64) resolve({ base64: b64, mimeType: file.type || "image/png" });
+          if (b64) resolve({ filename: file.name, mimeType: file.type || "image/png", data: b64 });
         };
         reader.readAsDataURL(file);
         return;
@@ -277,83 +254,10 @@ function resizeImage(file: File): Promise<{ base64: string; mimeType: string }> 
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(img, 0, 0, width, height);
       const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
-      resolve({ base64: dataUrl.split(",")[1]!, mimeType: "image/jpeg" });
+      resolve({ filename: file.name, mimeType: "image/jpeg", data: dataUrl.split(",")[1]! });
     };
     img.src = URL.createObjectURL(file);
   });
-}
-
-function AttachmentsSection({ nodeId, attachments }: { nodeId: string; attachments: Attachment[] }) {
-  const updateNodeData = useUpdateNodeData();
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-
-  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    resizeImage(file).then(({ base64, mimeType }) => {
-      const attachment: Attachment = {
-        id: crypto.randomUUID(),
-        filename: file.name,
-        mimeType,
-        data: base64,
-      };
-      updateNodeData(nodeId, { attachments: [...attachments, attachment] });
-    });
-    // Reset so the same file can be re-selected
-    e.target.value = "";
-  }, [nodeId, attachments, updateNodeData]);
-
-  const removeAttachment = useCallback((id: string) => {
-    updateNodeData(nodeId, { attachments: attachments.filter((a) => a.id !== id) });
-    if (expandedId === id) setExpandedId(null);
-  }, [nodeId, attachments, updateNodeData, expandedId]);
-
-  return (
-    <Section title="Attachments" count={attachments.length || undefined}>
-      {attachments.length > 0 && (
-        <div className="flex flex-col gap-2">
-          {attachments.map((att) => (
-            <div key={att.id} className="group">
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  className="flex-1 min-w-0 cursor-pointer"
-                  onClick={() => setExpandedId(expandedId === att.id ? null : att.id)}
-                >
-                  <img
-                    src={`data:${att.mimeType};base64,${att.data}`}
-                    alt={att.filename}
-                    className="w-full rounded border border-zinc-200 dark:border-zinc-700 object-cover"
-                    style={{ maxHeight: expandedId === att.id ? "none" : "80px" }}
-                  />
-                </button>
-                <button
-                  type="button"
-                  className="shrink-0 text-xs text-zinc-300 hover:text-red-400 dark:text-zinc-600 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover:opacity-100"
-                  title="Remove attachment"
-                  onClick={() => removeAttachment(att.id)}
-                >
-                  &times;
-                </button>
-              </div>
-              <span className="text-[10px] text-zinc-500 dark:text-zinc-500 truncate block mt-0.5">{att.filename}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={handleFileSelect}
-      />
-      <Button variant="link" onClick={() => fileInputRef.current?.click()}>
-        + add image
-      </Button>
-    </Section>
-  );
 }
 
 /* ── Node tab content ─────────────────────────────────────────────── */
@@ -440,16 +344,16 @@ function NodePropertiesContent({ node, hints, onFixHint, onDismissHint, sourceLo
         )}
       </Field>
 
-      {/* ── Decisions — rationale for why this node exists ── */}
+      {/* ── Notes — conventions, context, rationale ── */}
       {!isCodeLevel && (
         <>
           <Divider />
-          <Field label="Decision record">
+          <Field label="Notes">
             <Textarea
               rows={4}
-              value={data.decisions ?? ""}
-              placeholder="Why this node exists or is structured this way..."
-              onChange={(e) => updateNodeData(node.id, { decisions: e.target.value || undefined })}
+              value={data.notes ?? ""}
+              placeholder="Internal reference notes..."
+              onChange={(e) => updateNodeData(node.id, { notes: e.target.value || undefined })}
             />
           </Field>
         </>
@@ -458,10 +362,6 @@ function NodePropertiesContent({ node, hints, onFixHint, onDismissHint, sourceLo
       {/* ── Links & Attachments (containers & components only) ── */}
       {(data.kind === "container" || data.kind === "component") && (
         <>
-          <Divider />
-          <LinksSection nodeId={node.id} links={data.links ?? []} />
-          <Divider />
-          <AttachmentsSection nodeId={node.id} attachments={data.attachments ?? []} />
         </>
       )}
 
@@ -732,15 +632,33 @@ function ContractItemToggle({ passed, onClick }: { passed?: boolean; onClick: ()
   );
 }
 
-function ContractBulletItem({ item, focused, placeholder, onCommit, onFocus, onBlur, onEnter, onDeleteEmpty, onRemove, onToggle }: {
+function contractImage(item: ContractItem): ContractImage | undefined {
+  return typeof item === "string" ? undefined : item.image;
+}
+
+function ContractBulletItem({ item, focused, placeholder, onCommit, onFocus, onBlur, onEnter, onDeleteEmpty, onRemove, onToggle, onUrlChange, onImageChange }: {
   item: ContractItem; focused: boolean; placeholder?: string;
   onCommit: (value: string) => void; onFocus: () => void; onBlur: () => void;
   onEnter: () => void; onDeleteEmpty: () => void; onRemove: () => void;
-  onToggle: () => void;
+  onToggle: () => void; onUrlChange: (url: string | undefined) => void;
+  onImageChange: (image: ContractImage | undefined) => void;
 }) {
   const spanRef = useRef<HTMLSpanElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (e: MouseEvent) => { if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [menuOpen]);
   const text = contractText(item);
   const passed = contractPassed(item);
+  const url = contractUrl(item);
+  const image = contractImage(item);
+  const [editingUrl, setEditingUrl] = useState(false);
+  const [imageExpanded, setImageExpanded] = useState(false);
 
   useEffect(() => {
     if (spanRef.current && spanRef.current.textContent !== text && document.activeElement !== spanRef.current) {
@@ -761,38 +679,111 @@ function ContractBulletItem({ item, focused, placeholder, onCommit, onFocus, onB
     }
   }, [focused]);
 
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    resizeImage(file).then((img) => onImageChange(img));
+    e.target.value = "";
+  };
+
   return (
-    <div className={`flex items-start gap-1.5 group min-h-[22px] -mx-1.5 px-1.5 mb-1 last:mb-0 rounded ${focused ? "bg-zinc-100 dark:bg-zinc-800/80" : ""}`}>
-      <ContractItemToggle passed={passed} onClick={onToggle} />
-      <span
-        ref={spanRef}
-        contentEditable
-        suppressContentEditableWarning
-        className="flex-1 min-w-0 text-xs text-zinc-700 dark:text-zinc-200 caret-current outline-none leading-relaxed break-words empty:before:content-[attr(data-placeholder)] empty:before:text-zinc-400 dark:empty:before:text-zinc-500"
-        data-placeholder={placeholder}
-        onFocus={onFocus}
-        onBlur={(e) => {
-          onCommit((e.target as HTMLSpanElement).textContent ?? "");
-          onBlur();
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
+    <div className={`group relative rounded-md px-1.5 py-1 border border-transparent ${focused ? "bg-zinc-100 dark:bg-zinc-800/80" : "hover:bg-zinc-50 dark:hover:bg-zinc-800/40"}`} onMouseLeave={() => setMenuOpen(false)}>
+      <div className="flex items-start gap-2">
+        <ContractItemToggle passed={passed} onClick={onToggle} />
+        <span
+          ref={spanRef}
+          contentEditable
+          suppressContentEditableWarning
+          className="flex-1 min-w-0 text-xs text-zinc-700 dark:text-zinc-200 caret-current outline-none leading-relaxed break-words empty:before:content-[attr(data-placeholder)] empty:before:text-zinc-400 dark:empty:before:text-zinc-500"
+          data-placeholder={placeholder}
+          onFocus={onFocus}
+          onBlur={(e) => {
             onCommit((e.target as HTMLSpanElement).textContent ?? "");
-            onEnter();
-          } else if (e.key === "Backspace" && (e.target as HTMLSpanElement).textContent === "") {
-            e.preventDefault();
-            onDeleteEmpty();
-          }
-        }}
-      />
-      <button
-        type="button"
-        className="shrink-0 text-[10px] text-zinc-300 hover:text-red-400 dark:text-zinc-600 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover:opacity-100 mt-[3px]"
-        onClick={onRemove}
-      >
-        &times;
-      </button>
+            onBlur();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              onCommit((e.target as HTMLSpanElement).textContent ?? "");
+              onEnter();
+            } else if (e.key === "Backspace" && (e.target as HTMLSpanElement).textContent === "") {
+              e.preventDefault();
+              onDeleteEmpty();
+            }
+          }}
+        />
+      </div>
+      {/* URL display / edit */}
+      {editingUrl && (
+        <div className="flex items-center gap-1.5 mt-0.5 ml-5.5">
+          <Input
+            variant="inline"
+            className="!text-left !w-full text-xs"
+            value={url ?? ""}
+            placeholder="https://..."
+            onChange={(e) => onUrlChange(e.target.value || undefined)}
+            onKeyDown={(e) => { if (e.key === "Enter") setEditingUrl(false); }}
+            onBlur={() => setEditingUrl(false)}
+            autoFocus
+          />
+        </div>
+      )}
+      {url && !editingUrl && (
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-0.5 ml-5.5 text-[11px] text-blue-400 hover:text-blue-300 hover:underline truncate block"
+          title={url}
+        >
+          {url}
+        </a>
+      )}
+      {/* Image display */}
+      {image && (
+        <div className="mt-0.5 ml-5.5">
+          <button
+            type="button"
+            className="cursor-pointer"
+            onClick={() => setImageExpanded(!imageExpanded)}
+          >
+            <img
+              src={`data:${image.mimeType};base64,${image.data}`}
+              alt={image.filename}
+              className="rounded border border-zinc-200 dark:border-zinc-700 object-cover w-full"
+              style={{ maxHeight: imageExpanded ? "none" : "80px" }}
+            />
+          </button>
+          <span className="text-[10px] text-zinc-500 truncate block mt-0.5">{image.filename}</span>
+        </div>
+      )}
+      {/* Hidden file input */}
+      <input ref={fileInputRef} type="file" accept="image/*,.pdf,.doc,.docx" className="hidden" onChange={handleFileSelect} />
+      {/* Overflow menu — hover to reveal trigger, click to open */}
+      <div ref={menuRef} className="absolute top-1 right-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button type="button" className="cursor-pointer text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 px-1" onClick={() => setMenuOpen(!menuOpen)}>
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="3" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="8" cy="13" r="1.5"/></svg>
+        </button>
+        {menuOpen && (
+          <div className="absolute right-0 top-full z-50 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-md shadow-lg py-1 min-w-[120px] text-[11px]">
+            <button type="button" className="w-full text-left px-2.5 py-1 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 cursor-pointer" onClick={() => { setMenuOpen(false); setEditingUrl(!editingUrl); }}>
+              {url ? "Edit link" : "Add link"}
+            </button>
+            {url && (
+              <button type="button" className="w-full text-left px-2.5 py-1 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 cursor-pointer" onClick={() => { setMenuOpen(false); onUrlChange(undefined); setEditingUrl(false); }}>
+                Remove link
+              </button>
+            )}
+            <button type="button" className="w-full text-left px-2.5 py-1 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 cursor-pointer" onClick={() => { setMenuOpen(false); image ? onImageChange(undefined) : fileInputRef.current?.click(); }}>
+              {image ? "Remove image" : "Add image"}
+            </button>
+            <div className="border-t border-zinc-200 dark:border-zinc-700 my-1" />
+            <button type="button" className="w-full text-left px-2.5 py-1 text-red-500 hover:bg-zinc-100 dark:hover:bg-zinc-700 cursor-pointer" onClick={() => { setMenuOpen(false); onRemove(); }}>
+              Remove
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -800,13 +791,18 @@ function ContractBulletItem({ item, focused, placeholder, onCommit, onFocus, onB
 function ContractList({ items, onChange, placeholder }: { items: ContractItem[]; onChange: (items: ContractItem[]) => void; placeholder?: string }) {
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
 
-  const togglePassed = (i: number) => {
+  /** Build a full ContractItem preserving all fields, with overrides */
+  const patchItem = (i: number, patch: Partial<{ text: string; passed: boolean | undefined; url: string | undefined; image: ContractImage | undefined }>) => {
     const item = items[i];
-    const text = contractText(item);
-    const current = contractPassed(item);
-    // Cycle: undefined → true → false → undefined
+    const base = typeof item === "string" ? { text: item } : { ...item };
+    const merged = { ...base, ...patch };
+    onChange(items.map((x, j) => j === i ? merged : x));
+  };
+
+  const togglePassed = (i: number) => {
+    const current = contractPassed(items[i]);
     const next = current === undefined ? true : current === true ? false : undefined;
-    onChange(items.map((x, j) => j === i ? { text, passed: next } : x));
+    patchItem(i, { passed: next });
   };
 
   return (
@@ -818,11 +814,7 @@ function ContractList({ items, onChange, placeholder }: { items: ContractItem[];
           focused={focusedIndex === i}
           placeholder={placeholder}
           onCommit={(v) => {
-            const text = contractText(item);
-            if (v !== text) {
-              const passed = contractPassed(item);
-              onChange(items.map((x, j) => j === i ? { text: v, passed } : x));
-            }
+            if (v !== contractText(item)) patchItem(i, { text: v });
           }}
           onFocus={() => setFocusedIndex(i)}
           onBlur={() => setFocusedIndex(null)}
@@ -830,10 +822,12 @@ function ContractList({ items, onChange, placeholder }: { items: ContractItem[];
           onDeleteEmpty={() => onChange(items.filter((_, j) => j !== i))}
           onRemove={() => onChange(items.filter((_, j) => j !== i))}
           onToggle={() => togglePassed(i)}
+          onUrlChange={(url) => patchItem(i, { url })}
+          onImageChange={(image) => patchItem(i, { image })}
         />
       ))}
       {/* Ghost item */}
-      <div className="flex items-start gap-1.5 min-h-[22px] -mx-1.5 px-1.5 rounded opacity-40 hover:opacity-70 focus-within:opacity-100 transition-opacity">
+      <div className="flex items-start gap-1.5 min-h-[22px] px-1.5 py-1 rounded opacity-40 hover:opacity-70 focus-within:opacity-100 transition-opacity">
         <span className="shrink-0 w-3.5 h-3.5 rounded-full border border-zinc-300 dark:border-zinc-600 mt-[3px]" />
         <span
           contentEditable
@@ -889,7 +883,8 @@ function ContractTabBadge({ contract }: { contract?: Contract }) {
 function NodeContractContent({ node }: { node: C4Node }) {
   const updateNodeData = useUpdateNodeData();
   const data = node.data as C4NodeData;
-  const contract = data.contract ?? { expect: [], ask: [], never: [] };
+  const raw = data.contract;
+  const contract = { expect: raw?.expect ?? [], ask: raw?.ask ?? [], never: raw?.never ?? [] };
 
   const updateField = (field: keyof Contract, items: ContractItem[]) => {
     updateNodeData(node.id, { contract: { ...contract, [field]: items } });
@@ -1234,7 +1229,7 @@ export function PropertiesPanel({ node, edge, onUpdateEdge, codeLevel, hints, on
   if ((totalSelected ?? 0) >= 2) {
     if (multiSelected && multiSelected.length >= 2 && canGroup && onCreateGroup && onAddToGroup) {
       return (
-        <div className={`${panelBase} w-60 flex flex-col`}>
+        <div className={`${panelBase} w-80 flex flex-col`}>
           <div className="flex-1 min-h-0 p-4 flex flex-col overflow-y-auto">
             <MultiSelectionPanel
               selectedIds={multiSelected}
@@ -1258,11 +1253,25 @@ export function PropertiesPanel({ node, edge, onUpdateEdge, codeLevel, hints, on
 
   // Build tabs
   let tabs: PanelTab[] | null = null;
-  if (isModel && node) {
+  if (isGroup && node && groups && onUpdateGroups) {
+    tabs = [
+      {
+        id: "properties",
+        label: "Properties",
+        content: <GroupPropertiesContent node={node} groups={groups} onUpdateGroups={onUpdateGroups} allNodes={allNodes ?? []} />,
+      },
+      {
+        id: "contract",
+        label: "Contract",
+        badge: <ContractTabBadge contract={groups.find((g) => g.id === node.id)?.contract} />,
+        content: <GroupContractContent node={node} groups={groups} onUpdateGroups={onUpdateGroups} />,
+      },
+    ];
+  } else if (isModel && node) {
     tabs = getModelTabs(node);
   } else if (isProcess && node) {
     tabs = getProcessTabs(node, processMentionNames ?? []);
-  } else if (node && !isGroup && !isProcess && !isModel) {
+  } else if (node && !isProcess && !isModel) {
     tabs = getNodeTabs(
       node,
       hints ?? [],
@@ -1281,7 +1290,7 @@ export function PropertiesPanel({ node, edge, onUpdateEdge, codeLevel, hints, on
   if (hasTabs && tabs) {
     const activeTabObj = tabs.find((t) => t.id === activeTab) ?? tabs[0];
     return (
-      <div className={`${panelBase} w-60 flex flex-col overflow-hidden`}>
+      <div className={`${panelBase} w-80 flex flex-col overflow-hidden`}>
         <TabBar
           tabs={tabs}
           activeTab={activeTabObj.id}
@@ -1296,16 +1305,14 @@ export function PropertiesPanel({ node, edge, onUpdateEdge, codeLevel, hints, on
 
   // ── Non-tabbed panel ──
   let content: ReactNode = null;
-  if (isGroup && node && groups && onUpdateGroups) {
-    content = <GroupPanel node={node} groups={groups} onUpdateGroups={onUpdateGroups} allNodes={allNodes ?? []} />;
-  } else if (!node && edge) {
+  if (!node && edge) {
     content = <EdgePanel edge={edge} onUpdate={(data) => onUpdateEdge(edge.id, data)} codeLevel={codeLevel} />;
   } else if (tabs && tabs.length === 1) {
     content = tabs[0].content;
   }
 
   return (
-    <div className={`${panelBase} w-60 flex flex-col`}>
+    <div className={`${panelBase} w-80 flex flex-col`}>
       <div className="flex-1 min-h-0 p-4 flex flex-col overflow-y-auto">
         {content}
       </div>

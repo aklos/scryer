@@ -113,8 +113,11 @@ export function RelationshipEdge({
 
     edgePath = `M ${sx} ${sy} C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${tx} ${ty}`;
 
-    labelX = 0.125 * sx + 0.375 * cp1x + 0.375 * cp2x + 0.125 * tx;
-    labelY = 0.125 * sy + 0.375 * cp1y + 0.375 * cp2y + 0.125 * ty;
+    // Place label near the source end (t≈0.25) so bidirectional labels don't overlap
+    const t = 0.25;
+    const u = 1 - t;
+    labelX = u*u*u*sx + 3*u*u*t*cp1x + 3*u*t*t*cp2x + t*t*t*tx;
+    labelY = u*u*u*sy + 3*u*u*t*cp1y + 3*u*t*t*cp2y + t*t*t*ty;
   } else if (CORNER_HANDLES.has(sourceHandleId ?? "") || CORNER_HANDLES.has(targetHandleId ?? "")) {
     // Corner handles — cubic bezier where each end leaves at 45 degrees
     const dist = Math.sqrt((targetX - sourceX) ** 2 + (targetY - sourceY) ** 2) || 1;

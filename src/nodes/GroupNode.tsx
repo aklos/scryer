@@ -1,7 +1,8 @@
 import { useCallback } from "react";
 import type { NodeProps } from "@xyflow/react";
-import type { C4Node as C4NodeType } from "../types";
+import type { C4Node as C4NodeType, Contract } from "../types";
 import { NodeHandles } from "./NodeHandles";
+import { ContractBadge } from "./ContractBadge";
 
 const KIND_LABELS: Record<string, string> = {
   deployment: "Deployment",
@@ -9,8 +10,10 @@ const KIND_LABELS: Record<string, string> = {
 };
 
 export function GroupNode({ id, data, selected }: NodeProps<C4NodeType>) {
-  const groupKind = (data as Record<string, unknown>).groupKind as string | undefined;
+  const rawData = data as Record<string, unknown>;
+  const groupKind = rawData.groupKind as string | undefined;
   const kindLabel = groupKind ? KIND_LABELS[groupKind] : undefined;
+  const contract = rawData.contract as Contract | undefined;
 
   const handleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -36,6 +39,7 @@ export function GroupNode({ id, data, selected }: NodeProps<C4NodeType>) {
           <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
             {data.name}
           </span>
+          <ContractBadge contract={contract} inline />
         </div>
       </div>
       <NodeHandles />
