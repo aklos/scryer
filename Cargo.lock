@@ -3504,7 +3504,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scryer"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "notify",
  "scryer-core",
@@ -3520,7 +3520,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "dirs 5.0.1",
  "ignore",
@@ -3531,7 +3531,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-mcp"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "base64 0.22.1",
  "rmcp",
@@ -3545,7 +3545,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-suggest"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "llm",
  "scryer-core",
@@ -5826,7 +5826,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "yoke"
