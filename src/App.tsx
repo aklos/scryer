@@ -270,6 +270,27 @@ function Flow() {
 
   // --- Remaining inline logic ---
 
+  // Safety: if the expanded path points to a deleted node or a node with no
+  // children, pop up until we find a valid level. Prevents blank canvas when
+  // AI deletes/rearranges nodes.
+  useEffect(() => {
+    if (expandedPath.length === 0 || nodes.length === 0) return;
+    const nodeById = new Map(nodes.map((n) => [n.id, n]));
+    // Find the deepest valid ancestor that still has children
+    let validDepth = 0;
+    for (let i = 0; i < expandedPath.length; i++) {
+      if (!nodeById.has(expandedPath[i])) break;
+      validDepth = i + 1;
+      // Check if this level has at least one child node
+      const parentId = expandedPath[i];
+      const hasChildren = nodes.some((n) => n.parentId === parentId);
+      if (!hasChildren) break;
+    }
+    if (validDepth < expandedPath.length) {
+      setExpandedPath(expandedPath.slice(0, validDepth));
+    }
+  }, [expandedPath, nodes, setExpandedPath]);
+
   const breadcrumbs = useMemo(
     () => buildBreadcrumbs(nodes, expandedPath),
     [nodes, expandedPath],
