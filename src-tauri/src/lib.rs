@@ -305,8 +305,35 @@ fn check_claude_settings(path: &PathBuf) -> (bool, bool) {
 }
 
 #[tauri::command]
+/// Check if a project has .mcp.json with a scryer entry.
+fn check_mcp_json(project_path: &str) -> bool {
+    let path = PathBuf::from(project_path).join(".mcp.json");
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
+            return root.pointer("/mcpServers/scryer").is_some();
+        }
+    }
+    false
+}
+
+/// Check if a project has .codex/config.toml with a scryer MCP entry.
+fn check_codex_toml(project_path: &str) -> bool {
+    let path = PathBuf::from(project_path).join(".codex").join("config.toml");
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        if let Ok(doc) = contents.parse::<toml_edit::DocumentMut>() {
+            return doc.get("mcp_servers")
+                .and_then(|t| t.as_table())
+                .map(|t| t.contains_key("scryer"))
+                .unwrap_or(false);
+        }
+    }
+    false
+}
+
+#[tauri::command]
 fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value {
     let has_claude = which::which("claude").is_ok();
+    let has_codex = which::which("codex").is_ok();
     let mut hook_enabled = false;
     let mut perms_enabled = false;
 
@@ -332,13 +359,18 @@ fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value {
         }
     }
 
+    let claude_mcp = project_path.as_deref().map(check_mcp_json).unwrap_or(false);
+    let codex_mcp = project_path.as_deref().map(check_codex_toml).unwrap_or(false);
+
     serde_json::json!({
         "claude": has_claude,
-        "codex": which::which("codex").is_ok(),
+        "codex": has_codex,
         "claudeHookEnabled": hook_enabled,
         "claudePermsEnabled": perms_enabled,
         "claudeHookGlobal": hook_global,
         "claudePermsGlobal": perms_global,
+        "claudeMcpEnabled": claude_mcp,
+        "codexMcpEnabled": codex_mcp,
     })
 }
 
@@ -439,6 +471,67 @@ fn setup_claude_integration(
             if let Some(arr) = root.pointer_mut("/permissions/allow").and_then(|v| v.as_array_mut()) {
                 arr.retain(|v| v.as_str() != Some("mcp__scryer__*"));
             }
+        }
+        "mcp" => {
+            // Write .mcp.json for Claude Code — requires project_path
+            let pp = project_path.as_deref()
+                .ok_or("project_path is required for MCP setup")?;
+            let binary_path = find_scryer_mcp()
+                .ok_or("scryer-mcp binary not found")?;
+
+            let mcp_path = PathBuf::from(pp).join(".mcp.json");
+            let mut mcp_root: serde_json::Value = if mcp_path.exists() {
+                let contents = std::fs::read_to_string(&mcp_path).map_err(|e| e.to_string())?;
+                serde_json::from_str(&contents).unwrap_or_else(|_| serde_json::json!({}))
+            } else {
+                serde_json::json!({})
+            };
+
+            if !mcp_root.get("mcpServers").is_some_and(|v| v.is_object()) {
+                mcp_root["mcpServers"] = serde_json::json!({});
+            }
+            mcp_root["mcpServers"]["scryer"] = serde_json::json!({
+                "type": "stdio",
+                "command": binary_path,
+                "args": [],
+            });
+
+            std::fs::write(&mcp_path, serde_json::to_string_pretty(&mcp_root).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+
+            return Ok(mcp_path.to_string_lossy().to_string());
+        }
+        "mcp_codex" => {
+            // Write .codex/config.toml for Codex — requires project_path
+            let pp = project_path.as_deref()
+                .ok_or("project_path is required for MCP setup")?;
+            let binary_path = find_scryer_mcp()
+                .ok_or("scryer-mcp binary not found")?;
+
+            let codex_dir = PathBuf::from(pp).join(".codex");
+            let config_path = codex_dir.join("config.toml");
+
+            let mut doc: toml_edit::DocumentMut = if config_path.exists() {
+                std::fs::read_to_string(&config_path)
+                    .map_err(|e| e.to_string())?
+                    .parse()
+                    .unwrap_or_default()
+            } else {
+                toml_edit::DocumentMut::new()
+            };
+
+            if !doc.contains_table("mcp_servers") {
+                doc["mcp_servers"] = toml_edit::Item::Table(toml_edit::Table::new());
+            }
+            let mut server = toml_edit::Table::new();
+            server.insert("command", toml_edit::value(&binary_path));
+            server.insert("args", toml_edit::value(toml_edit::Array::new()));
+            doc["mcp_servers"]["scryer"] = toml_edit::Item::Table(server);
+
+            std::fs::create_dir_all(&codex_dir).map_err(|e| e.to_string())?;
+            std::fs::write(&config_path, doc.to_string()).map_err(|e| e.to_string())?;
+
+            return Ok(config_path.to_string_lossy().to_string());
         }
         _ => return Err(format!("Unknown action: {}", action)),
     }

@@ -90,11 +90,14 @@ function ProjectMenu({
   }, [onClose]);
 
   const showClaude = aiTools.claude && !!projectPath;
+  const showCodex = aiTools.codex && !!projectPath;
 
-  const handleToggle = async (field: "claudeHookEnabled" | "claudePermsEnabled", checked: boolean) => {
-    const actionMap = {
+  const handleToggle = async (field: "claudeHookEnabled" | "claudePermsEnabled" | "claudeMcpEnabled" | "codexMcpEnabled", checked: boolean) => {
+    const actionMap: Record<string, string> = {
       claudeHookEnabled: checked ? "hook" : "remove_hook",
       claudePermsEnabled: checked ? "permissions" : "remove_permissions",
+      claudeMcpEnabled: "mcp",
+      codexMcpEnabled: "mcp_codex",
     };
     try {
       await invoke<string>("setup_claude_integration", {
@@ -138,6 +141,38 @@ function ProjectMenu({
         </div>
       )}
 
+      {(showClaude || showCodex) && (
+        <>
+          <div className="my-1 border-t border-zinc-200/60 dark:border-zinc-700/60" />
+          <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+            MCP Server
+          </div>
+          {showClaude && (
+            <div className="flex items-center justify-between px-3 py-1.5">
+              <div>
+                <div className="text-xs text-zinc-600 dark:text-zinc-300">Claude Code</div>
+                <div className="text-[10px] text-zinc-400 dark:text-zinc-500 max-w-[160px]">.mcp.json</div>
+              </div>
+              <Toggle
+                checked={aiTools.claudeMcpEnabled}
+                onChange={(checked) => { if (checked) handleToggle("claudeMcpEnabled", checked); }}
+              />
+            </div>
+          )}
+          {showCodex && (
+            <div className="flex items-center justify-between px-3 py-1.5">
+              <div>
+                <div className="text-xs text-zinc-600 dark:text-zinc-300">Codex</div>
+                <div className="text-[10px] text-zinc-400 dark:text-zinc-500 max-w-[160px]">.codex/config.toml</div>
+              </div>
+              <Toggle
+                checked={aiTools.codexMcpEnabled}
+                onChange={(checked) => { if (checked) handleToggle("codexMcpEnabled", checked); }}
+              />
+            </div>
+          )}
+        </>
+      )}
       {showClaude && (() => {
         const allGlobal = aiTools.claudeHookGlobal && aiTools.claudePermsGlobal;
         return (

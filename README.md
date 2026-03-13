@@ -31,16 +31,18 @@ Opinionated [C4](https://c4model.com/) hierarchy (system, container, component, 
 
 ## Features
 
-- **C4 Architecture Diagrams** — drag-and-drop editor for persons, systems, containers, components, operations, processes, and data models. Drill down through levels.
-- **Behavioral Flows** — model user journeys, data pipelines, deploy sequences. Link flow steps to processes. Supports branching and decision points.
+- **C4 Architecture Diagrams** — drag-and-drop editor for persons, systems, containers, components, operations, processes, and data models. Drill down through levels. Code-level nodes (operations, processes, models) show in a compact list view.
+- **Behavioral Flows** — model user journeys, data pipelines, deploy sequences. Supports branching and decision points. Link flows to test files and run tests from the flow view.
 - **Data Models** — define typed properties on model nodes, visible on the canvas alongside your architecture.
-- **Contracts** — expect/ask/never rules that constrain how AI agents implement your code. Inherited down the hierarchy. Expect items have pass/fail flags that gate the "ready" status.
-- **Status Tracking** — three-status progression: proposed (planned), wip (code exists), ready (production-ready). "Ready" is gated — requires all contract expect items to pass. Agents must provide a reason for every status change.
-- **Source Mapping** — link architecture nodes to files in your codebase with glob patterns and line ranges.
-- **Groups** — organize containers into deployment or package groups for containers that ship together.
-- **MCP Server** — AI agents connect to read, modify, and implement from your architecture model in real-time.
-- **AI Advisor** — optional LLM-powered review that flags structural issues in your diagrams.
-- **Implementation Workflow** — `get_task` feeds work to AI agents one unit at a time with dependency ordering, contract inheritance, and progress tracking. Build, mark wip, repeat.
+- **Contracts** — expect/ask/never rules that tell AI agents how to implement your code. Inherited down the hierarchy. Expect items have pass/fail flags that control when a node can be marked "ready".
+- **Status Tracking** — three statuses: proposed (planned), wip (code exists), ready (production-ready). A node can only be marked "ready" when all its expect items pass. Agents must explain every status change.
+- **Source Mapping** — link architecture nodes to files in your codebase with file patterns and line ranges. Click to open in your editor.
+- **Groups** — organize containers into deployment or package groups when they ship together.
+- **MCP Server** — AI agents connect to read, modify, and build from your architecture model in real-time.
+- **AI Advisor** — optional LLM-powered review that flags structural issues in your diagrams. Supports OpenAI, Anthropic, Google, Groq, Mistral, DeepSeek, and Ollama.
+- **Implementation Workflow** — `get_task` gives AI agents one piece of work at a time, ordered by dependencies, with contracts inherited from parent nodes. Build, mark wip, repeat.
+- **AI Tool Setup** — detects Claude Code and Codex, writes MCP config for your project. For Claude Code, also sets up drift-detection hooks and auto-approved permissions.
+- **Theming** — customize the color palette for every part of the diagram. Dark mode included.
 
 ## Getting started
 
@@ -48,11 +50,12 @@ Download the latest release for your platform from the [releases page](https://g
 
 ### Typical workflow
 
-1. Tell your AI agent: *"Use scryer to model this project's architecture"*
-2. The AI calls MCP tools — nodes appear in the visual editor in real-time
-3. Review, drag things around, rename, remove, restructure
-4. Tell the AI: *"Implement this model"*
-5. The AI reads the model and generates code from it — marking each node as wip with a reason as it goes
+1. Link your project directory in the app and enable AI tool integration when prompted (or run `scryer-mcp init`)
+2. Tell your AI agent: *"Use scryer to model this project's architecture"*
+3. The AI calls MCP tools — nodes appear in the visual editor in real-time
+4. Review, drag things around, rename, remove, restructure
+5. Tell the AI: *"Implement this model"*
+6. The AI reads the model and generates code from it — marking each node as wip with a reason as it goes
 
 ## MCP server
 
@@ -60,18 +63,12 @@ The MCP server lets AI agents read and modify your architecture models. It ships
 
 ### Setup
 
-In any project directory, run:
-
-```bash
-scryer-mcp init
-```
-
-This detects which AI tools you have installed (Claude Code, Codex) and writes project-scoped config for each:
+Link a project directory in the app and click "Enable" on the prompt, or run `scryer-mcp init` from the command line. Both detect installed AI tools and write config:
 
 - **Claude Code** — `.mcp.json`
 - **Codex** — `.codex/config.toml`
 
-Existing config files are preserved — only the `scryer` entry is added or updated. If neither tool is found in PATH, the command tells you.
+Existing config files are preserved — only the `scryer` entry is added or updated.
 
 ### Manual setup
 
@@ -111,7 +108,7 @@ command = "/path/to/scryer-mcp"
 - Add, update, and remove nodes and edges
 - Define behavioral flows with branching (`set_flows`)
 - Organize containers into groups (`set_groups`)
-- Link nodes to source code (`update_source_map`)
+- Link nodes and flows to source code (`update_source_map`)
 - Validate the model against C4 rules (`validate_model`)
 
 ## Tech

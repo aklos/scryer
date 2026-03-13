@@ -137,7 +137,7 @@ function Flow() {
 
   // Theme
   const [settingsTab, setSettingsTab] = useState<"ai" | "theme" | null>(null);
-  const [aiTools, setAiTools] = useState<AiToolsState>({ claude: false, codex: false, claudeHookEnabled: false, claudePermsEnabled: false, claudeHookGlobal: false, claudePermsGlobal: false });
+  const [aiTools, setAiTools] = useState<AiToolsState>({ claude: false, codex: false, claudeHookEnabled: false, claudePermsEnabled: false, claudeHookGlobal: false, claudePermsGlobal: false, claudeMcpEnabled: false, codexMcpEnabled: false });
   const [themeTick, setThemeTick] = useState(0); // force re-render on theme change
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -744,26 +744,48 @@ function Flow() {
 
   const activeFlow = activeFlowId ? flows.find((s) => s.id === activeFlowId) ?? null : null;
 
-  // Integration nudge: show when Claude Code is installed, project has a path, but neither hook nor perms configured
+  // Integration nudge: show when AI tools are installed, project has a path, but MCP or settings not configured
   const [nudgeDismissed, setNudgeDismissed] = useState(false);
+  const needsSetup = (aiTools.claude && (!aiTools.claudeMcpEnabled || !aiTools.claudeHookEnabled || !aiTools.claudePermsEnabled))
+    || (aiTools.codex && !aiTools.codexMcpEnabled);
   const showNudge = currentModel !== null
-    && aiTools.claude
+    && (aiTools.claude || aiTools.codex)
     && !!projectPath
-    && !aiTools.claudeHookEnabled
-    && !aiTools.claudePermsEnabled
+    && needsSetup
     && !nudgeDismissed
     && !localStorage.getItem(`scryer:hookNudgeDismissed:${projectPath}`);
 
   const handleNudgeSetup = useCallback(async () => {
+    const pp = projectPath ?? null;
     try {
-      await invoke<string>("setup_claude_integration", { action: "hook", projectPath: projectPath ?? null });
-      await invoke<string>("setup_claude_integration", { action: "permissions", projectPath: projectPath ?? null });
-      setAiTools((prev) => ({ ...prev, claudeHookEnabled: true, claudePermsEnabled: true }));
+      // Set up MCP configs for detected tools
+      if (aiTools.claude && !aiTools.claudeMcpEnabled) {
+        await invoke<string>("setup_claude_integration", { action: "mcp", projectPath: pp });
+      }
+      if (aiTools.codex && !aiTools.codexMcpEnabled) {
+        await invoke<string>("setup_claude_integration", { action: "mcp_codex", projectPath: pp });
+      }
+      // Set up Claude Code settings (hook + permissions)
+      if (aiTools.claude) {
+        if (!aiTools.claudeHookEnabled) {
+          await invoke<string>("setup_claude_integration", { action: "hook", projectPath: pp });
+        }
+        if (!aiTools.claudePermsEnabled) {
+          await invoke<string>("setup_claude_integration", { action: "permissions", projectPath: pp });
+        }
+      }
+      setAiTools((prev) => ({
+        ...prev,
+        claudeMcpEnabled: prev.claude || prev.claudeMcpEnabled,
+        codexMcpEnabled: prev.codex || prev.codexMcpEnabled,
+        claudeHookEnabled: prev.claude || prev.claudeHookEnabled,
+        claudePermsEnabled: prev.claude || prev.claudePermsEnabled,
+      }));
     } catch {
       // fallback: just dismiss
     }
     setNudgeDismissed(true);
-  }, [projectPath]);
+  }, [projectPath, aiTools]);
 
   const handleNudgeDismiss = useCallback(() => {
     if (projectPath) {
@@ -850,8 +872,8 @@ function Flow() {
           {showNudge && (
             <div className="absolute top-3 right-3 z-10 flex items-start gap-3 px-4 py-3 rounded-lg border border-zinc-200/80 bg-white/90 shadow-lg backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-800/90 max-w-[320px]">
               <div className="flex-1 min-w-0">
-                <div className="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-1">Claude Code integration</div>
-                <div className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">Enable drift detection and auto-approved tools for this project.</div>
+                <div className="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-1">AI tool integration</div>
+                <div className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">Set up MCP{aiTools.claude ? ", drift detection, and auto-approved tools" : ""} for this project.</div>
                 <button
                   type="button"
                   className="mt-2 px-2.5 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 cursor-pointer text-[11px] font-medium transition-colors"

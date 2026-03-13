@@ -28,5 +28,6 @@ notify = "6"
 tokio = { version = "1", features = ["rt-multi-thread", "process"] }
 which = "7"
 dirs = "6.0.0"
+toml_edit = "0.22"
 tauri-plugin-dialog = "2"
 

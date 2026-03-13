@@ -145,4 +145,6 @@ export type AiToolsState = {
   claudePermsEnabled: boolean;
   claudeHookGlobal: boolean;
   claudePermsGlobal: boolean;
+  claudeMcpEnabled: boolean;
+  codexMcpEnabled: boolean;
 };
