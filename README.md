@@ -27,18 +27,20 @@
 
 AI agents write code, but natural language is a lossy way to tell them what to build. Scryer gives you a shared visual model — you edit it in a drag-and-drop editor, the agent reads and modifies it through MCP. Once the model looks right, the agent generates code from it — `get_task` feeds work one unit at a time with dependency ordering, inherited contracts, and progress tracking.
 
-Opinionated [C4](https://c4model.com/) hierarchy (system, container, component, operation), typed relationships, behavioral flows, contracts.
+Opinionated [C4](https://c4model.com/) hierarchy (system, container, component, operation/process/model), typed relationships, behavioral flows, contracts.
 
 ## Features
 
-- **C4 Architecture Diagrams** — drag-and-drop editor for persons, systems, containers, components, and operations. Drill down through levels.
-- **Behavioral Flows** — model user journeys, data pipelines, deploy sequences. Link flow steps to components.
+- **C4 Architecture Diagrams** — drag-and-drop editor for persons, systems, containers, components, operations, processes, and data models. Drill down through levels.
+- **Behavioral Flows** — model user journeys, data pipelines, deploy sequences. Link flow steps to processes. Supports branching and decision points.
 - **Data Models** — define typed properties on model nodes, visible on the canvas alongside your architecture.
-- **Contracts** — always/ask/never rules that constrain how AI agents implement your code. Inherited down the hierarchy.
-- **Source Mapping** — link architecture nodes to files in your codebase.
+- **Contracts** — expect/ask/never rules that constrain how AI agents implement your code. Inherited down the hierarchy. Expect items have pass/fail flags that gate the "ready" status.
+- **Status Tracking** — three-status progression: proposed (planned), wip (code exists), ready (production-ready). "Ready" is gated — requires all contract expect items to pass. Agents must provide a reason for every status change.
+- **Source Mapping** — link architecture nodes to files in your codebase with glob patterns and line ranges.
+- **Groups** — organize containers into deployment or package groups for containers that ship together.
 - **MCP Server** — AI agents connect to read, modify, and implement from your architecture model in real-time.
 - **AI Advisor** — optional LLM-powered review that flags structural issues in your diagrams.
-- **State Machine Workflow** — `get_task` feeds work to AI agents one unit at a time with dependency ordering, contract inheritance, and progress tracking. Build, mark done, repeat.
+- **Implementation Workflow** — `get_task` feeds work to AI agents one unit at a time with dependency ordering, contract inheritance, and progress tracking. Build, mark wip, repeat.
 
 ## Getting started
 
@@ -50,7 +52,7 @@ Download the latest release for your platform from the [releases page](https://g
 2. The AI calls MCP tools — nodes appear in the visual editor in real-time
 3. Review, drag things around, rename, remove, restructure
 4. Tell the AI: *"Implement this model"*
-5. The AI reads the model and generates code from it
+5. The AI reads the model and generates code from it — marking each node as wip with a reason as it goes
 
 ## MCP server
 
@@ -97,11 +99,20 @@ command = "/path/to/scryer-mcp"
 
 ### What the MCP server provides
 
-- Read the full model or scoped subtrees (`get_model`, `get_node`)
+**Reading:**
+- `get_model` — full model with all nodes, edges, flows, groups, source map
+- `get_node` — scoped read of a subtree with internal/external edges and context
+- `get_changes` — diff against baseline (what changed since you last looked)
+- `get_task` — next implementation task with dependency ordering and inherited contracts
+- `get_rules` — full C4 modeling rules and workflow guidance
+- `get_structure` — annotated project directory tree (manifests, infrastructure, environments)
+
+**Writing:**
 - Add, update, and remove nodes and edges
-- Define behavioral flows (`set_flows`)
-- Get implementation tasks in dependency order (`get_task`)
-- Detect what changed since last read (`get_changes`)
+- Define behavioral flows with branching (`set_flows`)
+- Organize containers into groups (`set_groups`)
+- Link nodes to source code (`update_source_map`)
+- Validate the model against C4 rules (`validate_model`)
 
 ## Tech
 

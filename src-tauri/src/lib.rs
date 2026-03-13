@@ -118,6 +118,15 @@ fn save_ai_settings(
 }
 
 #[tauri::command]
+async fn fetch_models(provider: String, api_key: Option<String>, state: tauri::State<'_, SettingsState>) -> Result<Vec<String>, String> {
+    let key = match api_key {
+        Some(k) if !k.is_empty() => k,
+        _ => state.0.lock().unwrap().api_key.clone(),
+    };
+    scryer_suggest::models::fetch_models(&provider, &key).await
+}
+
+#[tauri::command]
 async fn get_hints(data: String, state: tauri::State<'_, SettingsState>) -> Result<String, String> {
     let settings = state.0.lock().unwrap().clone();
     if !scryer_core::ai_configured(&settings) {
@@ -129,6 +138,27 @@ async fn get_hints(data: String, state: tauri::State<'_, SettingsState>) -> Resu
 
     let hints = scryer_suggest::get_hints(&model, &settings).await;
     serde_json::to_string(&hints).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn run_command(command: String, project_path: Option<String>) -> Result<serde_json::Value, String> {
+    let cwd = project_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let output = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(&command)
+        .current_dir(&cwd)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run command: {e}"))?;
+
+    Ok(serde_json::json!({
+        "exitCode": output.status.code().unwrap_or(-1),
+        "stdout": String::from_utf8_lossy(&output.stdout),
+        "stderr": String::from_utf8_lossy(&output.stderr),
+    }))
 }
 
 #[tauri::command]
@@ -235,6 +265,190 @@ fn open_in_editor(file: String, line: Option<u32>, project_path: Option<String>)
     Ok(())
 }
 
+/// Resolve the Claude settings path: per-project if project_path given, otherwise global.
+fn claude_settings_path(project_path: &Option<String>) -> Option<PathBuf> {
+    if let Some(ref pp) = project_path {
+        Some(PathBuf::from(pp).join(".claude").join("settings.json"))
+    } else {
+        dirs::home_dir().map(|h| h.join(".claude").join("settings.json"))
+    }
+}
+
+/// Check a Claude settings file for scryer hook and permissions.
+fn check_claude_settings(path: &PathBuf) -> (bool, bool) {
+    let mut hook_enabled = false;
+    let mut perms_enabled = false;
+    if let Ok(contents) = std::fs::read_to_string(path) {
+        if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
+            hook_enabled = root.pointer("/hooks/PostToolUse")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().any(|entry| {
+                    entry["hooks"].as_array()
+                        .map(|h| h.iter().any(|hk| {
+                            hk["command"].as_str()
+                                .map(|c| c.contains("scryer-mcp check-drift"))
+                                .unwrap_or(false)
+                        }))
+                        .unwrap_or(false)
+                }))
+                .unwrap_or(false);
+
+            perms_enabled = root.pointer("/permissions/allow")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().any(|v| {
+                    v.as_str() == Some("mcp__scryer__*")
+                }))
+                .unwrap_or(false);
+        }
+    }
+    (hook_enabled, perms_enabled)
+}
+
+#[tauri::command]
+fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value {
+    let has_claude = which::which("claude").is_ok();
+    let mut hook_enabled = false;
+    let mut perms_enabled = false;
+
+    let mut hook_global = false;
+    let mut perms_global = false;
+
+    if has_claude {
+        // Check global first to know the source
+        if let Some(home) = dirs::home_dir() {
+            let global_settings = home.join(".claude").join("settings.json");
+            let (h, p) = check_claude_settings(&global_settings);
+            hook_global = h;
+            perms_global = p;
+            hook_enabled = h;
+            perms_enabled = p;
+        }
+        // Check per-project (overrides global for detection)
+        if let Some(ref pp) = project_path {
+            let project_settings = PathBuf::from(pp).join(".claude").join("settings.json");
+            let (h, p) = check_claude_settings(&project_settings);
+            if h { hook_enabled = true; }
+            if p { perms_enabled = true; }
+        }
+    }
+
+    serde_json::json!({
+        "claude": has_claude,
+        "codex": which::which("codex").is_ok(),
+        "claudeHookEnabled": hook_enabled,
+        "claudePermsEnabled": perms_enabled,
+        "claudeHookGlobal": hook_global,
+        "claudePermsGlobal": perms_global,
+    })
+}
+
+/// Find the scryer-mcp binary path by checking common locations.
+fn find_scryer_mcp() -> Option<String> {
+    // Check next to scryer (same install dir)
+    if let Ok(exe) = std::env::current_exe() {
+        let sibling = exe.parent().map(|p| p.join("scryer-mcp"));
+        if let Some(s) = sibling {
+            if s.exists() {
+                return Some(s.to_string_lossy().to_string());
+            }
+        }
+    }
+    // Check PATH
+    which::which("scryer-mcp")
+        .ok()
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn setup_claude_integration(
+    action: String,
+    project_path: Option<String>,
+) -> Result<String, String> {
+    let settings_path = claude_settings_path(&project_path)
+        .ok_or("Could not determine Claude settings path")?;
+    if let Some(parent) = settings_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let mut root: serde_json::Value = if settings_path.exists() {
+        let contents = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&contents).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    match action.as_str() {
+        "hook" => {
+            let binary_path = find_scryer_mcp()
+                .ok_or("scryer-mcp binary not found")?;
+
+            if !root.get("hooks").is_some_and(|v| v.is_object()) {
+                root["hooks"] = serde_json::json!({});
+            }
+
+            let hook_entry = serde_json::json!({
+                "matcher": "Edit|Write",
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("{} check-drift", binary_path),
+                }]
+            });
+
+            if let Some(arr) = root["hooks"]["PostToolUse"].as_array_mut() {
+                let already = arr.iter().any(|entry| {
+                    entry["hooks"]
+                        .as_array()
+                        .map(|h| h.iter().any(|hk| {
+                            hk["command"].as_str().map(|c| c.contains("scryer-mcp check-drift")).unwrap_or(false)
+                        }))
+                        .unwrap_or(false)
+                });
+                if !already {
+                    arr.push(hook_entry);
+                }
+            } else {
+                root["hooks"]["PostToolUse"] = serde_json::json!([hook_entry]);
+            }
+        }
+        "permissions" => {
+            if !root.get("permissions").is_some_and(|v| v.is_object()) {
+                root["permissions"] = serde_json::json!({});
+            }
+            if let Some(arr) = root["permissions"]["allow"].as_array_mut() {
+                let rule = serde_json::Value::String("mcp__scryer__*".to_string());
+                if !arr.contains(&rule) {
+                    arr.push(rule);
+                }
+            } else {
+                root["permissions"]["allow"] = serde_json::json!(["mcp__scryer__*"]);
+            }
+        }
+        "remove_hook" => {
+            if let Some(arr) = root.pointer_mut("/hooks/PostToolUse").and_then(|v| v.as_array_mut()) {
+                arr.retain(|entry| {
+                    !entry["hooks"]
+                        .as_array()
+                        .map(|h| h.iter().any(|hk| {
+                            hk["command"].as_str().map(|c| c.contains("scryer-mcp check-drift")).unwrap_or(false)
+                        }))
+                        .unwrap_or(false)
+                });
+            }
+        }
+        "remove_permissions" => {
+            if let Some(arr) = root.pointer_mut("/permissions/allow").and_then(|v| v.as_array_mut()) {
+                arr.retain(|v| v.as_str() != Some("mcp__scryer__*"));
+            }
+        }
+        _ => return Err(format!("Unknown action: {}", action)),
+    }
+
+    std::fs::write(&settings_path, serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+
+    Ok(settings_path.to_string_lossy().to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let settings = scryer_core::read_settings();
@@ -242,6 +456,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(SettingsState(settings_state))
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -308,11 +523,15 @@ pub fn run() {
             write_model,
             delete_model,
             get_hints,
+            fetch_models,
             list_templates,
             load_template,
             get_ai_settings,
             save_ai_settings,
             open_in_editor,
+            run_command,
+            detect_ai_tools,
+            setup_claude_integration,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

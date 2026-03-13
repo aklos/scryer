@@ -14,6 +14,7 @@ interface UseVisibleNodesParams {
   selectedGroupId: string | null;
   setRefPositions: React.Dispatch<React.SetStateAction<Record<string, { x: number; y: number }>>>;
   activeHints: Record<string, Hint[]>;
+  changedNodeIds: Set<string>;
 }
 
 export function useVisibleNodes({
@@ -25,6 +26,7 @@ export function useVisibleNodes({
   selectedGroupId,
   setRefPositions,
   activeHints,
+  changedNodeIds,
 }: UseVisibleNodesParams) {
   const levelPrefix = currentParentId ?? "root";
 
@@ -323,10 +325,11 @@ export function useVisibleNodes({
     return visibleNodes.map((n) => {
       const nodeHints = activeHints[n.id];
       const memberHighlight = groupHighlightInfo?.memberIds.has(n.id);
-      if (!nodeHints && !memberHighlight) return n;
-      return { ...n, data: { ...n.data, ...(nodeHints ? { _hints: nodeHints } : {}), ...(memberHighlight ? { _groupHighlight: true } : {}) } };
+      const changed = changedNodeIds.has(n.id);
+      if (!nodeHints && !memberHighlight && !changed) return n;
+      return { ...n, data: { ...n.data, ...(nodeHints ? { _hints: nodeHints } : {}), ...(memberHighlight ? { _groupHighlight: true } : {}), ...(changed ? { _changed: true } : {}) } };
     });
-  }, [visibleNodes, activeHints, groupHighlightInfo]);
+  }, [visibleNodes, activeHints, groupHighlightInfo, changedNodeIds]);
 
   // Only show edges between visible nodes, assigning handles via graph-aware routing
   // At code level (inside a component), no edges are needed — the rack view handles display

@@ -1,10 +1,27 @@
 pub mod rules;
 pub mod scan;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+
+/// Deserialize notes from either a single string (old format) or array of strings (new format).
+fn deserialize_notes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum NotesCompat {
+        Single(String),
+        List(Vec<String>),
+    }
+    match NotesCompat::deserialize(deserializer)? {
+        NotesCompat::Single(s) => {
+            if s.is_empty() { Ok(Vec::new()) }
+            else { Ok(s.lines().map(|l| l.to_string()).collect()) }
+        }
+        NotesCompat::List(v) => Ok(v),
+    }
+}
 
 // --- Types (matching src/types.ts) ---
 
@@ -35,10 +52,9 @@ pub enum C4Shape {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum Status {
-    Implemented,
     Proposed,
-    Changed,
-    Deprecated,
+    Wip,
+    Ready,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -154,11 +170,14 @@ pub struct C4NodeData {
     pub sources: Vec<Reference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<Status>,
+    /// Reason the agent gave for the current status (e.g. "Scaffolded handler with TODO for auth")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Contract::is_empty")]
     pub contract: Contract,
     /// Freeform notes: conventions, context, rationale
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub notes: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "deserialize_notes")]
+    pub notes: Vec<String>,
     /// Properties for Model-kind nodes (label/description pairs)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<ModelProperty>,
@@ -216,11 +235,13 @@ pub enum StartingLevel {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceLocation {
-    pub file: String,
+    pub pattern: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_line: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
@@ -277,9 +298,6 @@ pub struct FlowStep {
     /// Backward compat: kept for deserialization of old files, not serialized.
     #[serde(default, skip_serializing)]
     pub position: Option<Position>,
-    /// IDs of processes this step exercises. Set by the AI agent to link flow steps to architecture.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub process_ids: Vec<String>,
     /// If present, this step is a decision point with branching paths.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub branches: Vec<FlowBranch>,

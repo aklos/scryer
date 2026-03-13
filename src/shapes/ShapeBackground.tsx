@@ -22,6 +22,7 @@ interface Props {
   opacity?: number;
   kind?: C4Kind;
   external?: boolean;
+  changed?: boolean;
 }
 
 export function ShapeBackground({
@@ -33,6 +34,7 @@ export function ShapeBackground({
   opacity,
   kind,
   external,
+  changed,
 }: Props) {
   return (
     <svg
@@ -77,7 +79,59 @@ export function ShapeBackground({
           strokeDasharray={strokeDasharray}
         />
       )}
+      {changed && (
+        <GlowOverlay shape={shape} kind={kind} />
+      )}
     </svg>
+  );
+}
+
+/** Pulsing glow overlay that follows the shape contour */
+function GlowOverlay({ shape, kind }: { shape: C4Shape; kind?: C4Kind }) {
+  const glowProps = {
+    fill: "none",
+    stroke: "var(--color-violet-400)",
+    strokeWidth: 3,
+  };
+
+  const paths = (() => {
+    switch (shape) {
+      case "rectangle":
+        return <path d={rectanglePath(W, H)} {...glowProps} />;
+      case "person":
+        return <path d={personPath(W, H)} {...glowProps} />;
+      case "cylinder": {
+        const c = cylinderParts(W, H);
+        return <><path d={c.bodyPath} {...glowProps} /><path d={c.topCapPath} {...glowProps} /></>;
+      }
+      case "pipe": {
+        const p = pipeParts(W, H);
+        return <><path d={p.bodyPath} {...glowProps} /><path d={p.rightCapPath} {...glowProps} /></>;
+      }
+      case "trapezoid":
+        return <path d={trapezoidPath(W, H)} {...glowProps} />;
+      case "bucket": {
+        const b = bucketParts(W, H);
+        return <><path d={b.bodyPath} {...glowProps} /><path d={b.bottomCapPath} {...glowProps} /></>;
+      }
+      case "hexagon":
+        return <path d={hexagonPath(W, H)} {...glowProps} />;
+    }
+  })();
+
+  return (
+    <g className="scryer-changed-glow">
+      {paths}
+      {kind === "component" && shape === "rectangle" && (
+        <path d={`M0,0 V-9 Q0,-12 3,-12 H39 Q42,-12 44,-9 L45,0`} {...glowProps} />
+      )}
+      {kind === "container" && shape === "rectangle" && (
+        <path d={`M0,0 V-10 H${W} V0`} {...glowProps} />
+      )}
+      {kind === "system" && shape === "rectangle" && (
+        <rect x={-6} y={-6} width={W + 12} height={H + 12} rx={6} {...glowProps} strokeWidth={2} />
+      )}
+    </g>
   );
 }
 

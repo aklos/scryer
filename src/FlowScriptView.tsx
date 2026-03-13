@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { Plus, Trash2, GitBranch, GripVertical } from "lucide-react";
+import { Plus, Trash2, GitBranch, GripVertical, Play, CheckCircle2, XCircle, FileText } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import { MentionTextarea, type MentionItem } from "./MentionTextarea";
 import { DescriptionText, type MentionNodeInfo } from "./DescriptionText";
 import type {
@@ -8,6 +9,7 @@ import type {
   Flow,
   FlowStep,
   FlowBranch,
+  SourceLocation,
 } from "./types";
 
 
@@ -191,7 +193,7 @@ function StepCard({
       }}
     >
       <div
-        className="w-[560px] text-left rounded-lg border px-4 py-3 transition-colors group border-zinc-200 bg-white hover:border-zinc-300 dark:border-zinc-700/80 dark:bg-zinc-900 dark:hover:border-zinc-500"
+        className="w-[560px] text-left rounded-lg border px-4 py-2.5 transition-colors group border-zinc-200/80 bg-zinc-50 hover:border-zinc-300 dark:border-zinc-700/60 dark:bg-zinc-900/80 dark:hover:border-zinc-600"
       >
         <div className="flex items-start gap-2">
           {/* Drag handle */}
@@ -234,7 +236,7 @@ function StepCard({
               <div
                 className={`text-sm leading-6 break-words cursor-text ${
                   step.description
-                    ? "text-zinc-500 dark:text-zinc-400"
+                    ? "text-zinc-700 dark:text-zinc-300"
                     : "text-zinc-400 dark:text-zinc-500 italic"
                 }`}
                 onClick={() => setEditingStepId(step.id)}
@@ -279,31 +281,33 @@ function StepCard({
 
       {/* Branches */}
       {step.branches && step.branches.length > 0 && (
-        <div className="ml-6 mt-1 mb-1">
+        <div className="ml-10 mt-1.5 mb-1 space-y-1">
           {step.branches.map((branch, bi) => (
             <div
               key={bi}
-              className="border-l-2 border-zinc-200 dark:border-zinc-700 pl-3 py-1"
+              className="border-l-2 border-zinc-300/60 dark:border-zinc-600/60 pl-4 py-1.5"
             >
               {/* Branch label */}
-              <div className="flex items-center gap-1 mb-1 group/branch">
-                <input
-                  className="text-xs font-mono font-medium text-zinc-400 dark:text-zinc-500 bg-transparent outline-none w-20 placeholder:text-zinc-300 dark:placeholder:text-zinc-600"
-                  value={branch.condition}
-                  placeholder={
-                    bi === 0
-                      ? "if:"
-                      : bi === (step.branches?.length ?? 0) - 1
-                        ? "else:"
-                        : "elif:"
-                  }
-                  onChange={(e) =>
-                    onUpdateBranch(step.id, bi, { condition: e.target.value })
-                  }
-                />
+              <div className="flex items-center gap-1.5 mb-2 group/branch">
+                <span className="inline-flex items-center rounded bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 min-w-0 flex-1">
+                  <input
+                    className="text-[11px] font-mono font-medium text-zinc-500 dark:text-zinc-400 bg-transparent outline-none w-full placeholder:text-zinc-300 dark:placeholder:text-zinc-600"
+                    value={branch.condition}
+                    placeholder={
+                      bi === 0
+                        ? "if:"
+                        : bi === (step.branches?.length ?? 0) - 1
+                          ? "else:"
+                          : "elif:"
+                    }
+                    onChange={(e) =>
+                      onUpdateBranch(step.id, bi, { condition: e.target.value })
+                    }
+                  />
+                </span>
                 <button
                   type="button"
-                  className="p-0.5 rounded text-zinc-300 hover:text-red-500 dark:text-zinc-600 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover/branch:opacity-100 transition-opacity"
+                  className="shrink-0 p-0.5 rounded text-zinc-300 hover:text-red-500 dark:text-zinc-600 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover/branch:opacity-100 transition-opacity"
                   title="Delete branch"
                   onClick={() => onDeleteBranch(step.id, bi)}
                 >
@@ -344,7 +348,7 @@ function StepCard({
               {/* Add step to branch */}
               <button
                 type="button"
-                className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer py-1 mt-0.5"
+                className="flex items-center gap-1 text-[11px] text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer py-1 mt-1"
                 onClick={() => onAddStepToBranch(step.id, bi)}
               >
                 <Plus size={10} /> step
@@ -353,7 +357,7 @@ function StepCard({
           ))}
           <button
             type="button"
-            className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer py-0.5 ml-1"
+            className="flex items-center gap-1 text-[11px] text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer py-0.5 ml-1"
             onClick={() => onAddBranchArm(step.id)}
           >
             <GitBranch size={10} /> branch
@@ -369,14 +373,45 @@ function StepCard({
 interface FlowScriptViewProps {
   flow: Flow;
   onUpdate: (updated: Flow) => void;
+  onDelete: () => void;
   allNodes: C4Node[];
+  sourceMap: Record<string, SourceLocation[]>;
+  projectPath?: string;
 }
+
+type TestResult = { exitCode: number; stdout: string; stderr: string };
 
 export function FlowScriptView({
   flow,
   onUpdate,
+  onDelete,
   allNodes,
+  sourceMap,
+  projectPath,
 }: FlowScriptViewProps) {
+  const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const [testRunning, setTestRunning] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  const flowSources = sourceMap[flow.id] ?? [];
+  const testSource = flowSources.find((s) => s.command);
+
+  const runTest = useCallback(async () => {
+    if (!testSource?.command) return;
+    setTestRunning(true);
+    setTestResult(null);
+    try {
+      const result = await invoke<TestResult>("run_command", {
+        command: testSource.command,
+        projectPath: projectPath ?? null,
+      });
+      setTestResult(result);
+    } catch (e) {
+      setTestResult({ exitCode: -1, stdout: "", stderr: String(e) });
+    } finally {
+      setTestRunning(false);
+    }
+  }, [testSource?.command, projectPath]);
   const labels = useMemo(
     () => computeNumbering(flow.steps, "", 1),
     [flow.steps],
@@ -607,6 +642,101 @@ export function FlowScriptView({
         }}
       >
         <div className="max-w-2xl mx-auto py-8 px-6 space-y-2">
+          {/* Flow header */}
+          <div className="mb-6 group/header">
+            <div className="flex items-start justify-between gap-2">
+              <input
+                className="text-lg font-semibold bg-transparent outline-none text-zinc-800 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 w-full"
+                value={flow.name}
+                placeholder="Flow name..."
+                onChange={(e) => onUpdate({ ...flow, name: e.target.value })}
+              />
+              {confirmingDelete ? (
+                <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
+                  <span className="text-xs text-zinc-500 dark:text-zinc-400">Delete?</span>
+                  <button
+                    type="button"
+                    className="text-xs px-1.5 py-0.5 rounded bg-red-500 text-white hover:bg-red-600 cursor-pointer"
+                    onClick={onDelete}
+                  >
+                    Yes
+                  </button>
+                  <button
+                    type="button"
+                    className="text-xs px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-300 dark:hover:bg-zinc-600 cursor-pointer"
+                    onClick={() => setConfirmingDelete(false)}
+                  >
+                    No
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="shrink-0 mt-1 opacity-0 group-hover/header:opacity-100 transition-opacity text-xs text-zinc-400 hover:text-red-500 dark:text-zinc-500 dark:hover:text-red-400 cursor-pointer"
+                  onClick={() => setConfirmingDelete(true)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
+            </div>
+            <textarea
+              ref={(el) => { if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; } }}
+              className="w-full mt-1 text-sm bg-transparent outline-none text-zinc-500 dark:text-zinc-400 placeholder-zinc-300 dark:placeholder-zinc-600 resize-none leading-relaxed"
+              rows={1}
+              value={flow.description ?? ""}
+              placeholder="What does this flow describe?"
+              onChange={(e) => {
+                const el = e.target;
+                el.style.height = "auto";
+                el.style.height = el.scrollHeight + "px";
+                onUpdate({ ...flow, description: el.value || undefined });
+              }}
+            />
+            <div className="flex items-center gap-2 mt-2 text-xs">
+              {flowSources.length > 0 ? (
+                <>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1 text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200 cursor-pointer"
+                    onClick={() => {
+                      const src = flowSources[0];
+                      invoke("open_in_editor", { file: src.pattern, line: src.line ?? null, projectPath: projectPath ?? null });
+                    }}
+                  >
+                    <FileText size={12} />
+                    <span className="font-mono">{flowSources[0].pattern}</span>
+                  </button>
+                  {testSource && (
+                    <>
+                      <button
+                        type="button"
+                        disabled={testRunning}
+                        className="flex items-center gap-1 px-2 py-0.5 rounded text-emerald-700 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-900/30 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 disabled:opacity-50 cursor-pointer"
+                        onClick={runTest}
+                      >
+                        <Play size={10} />
+                        {testRunning ? "Running..." : "Run"}
+                      </button>
+                      {testResult && (
+                        <span
+                          title={testResult.stdout + testResult.stderr}
+                          className="flex items-center gap-0.5"
+                        >
+                          {testResult.exitCode === 0 ? (
+                            <CheckCircle2 size={14} className="text-emerald-500" />
+                          ) : (
+                            <XCircle size={14} className="text-red-500" />
+                          )}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </>
+              ) : (
+                <span className="text-zinc-400 dark:text-zinc-600 italic">No test linked</span>
+              )}
+            </div>
+          </div>
           {flow.steps.length === 0 && (
             <div className="flex flex-col items-center py-16 text-zinc-400 dark:text-zinc-500 text-sm gap-4">
               <div className="text-center space-y-1.5">

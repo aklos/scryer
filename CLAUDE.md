@@ -68,9 +68,11 @@ The frontend calls Rust functions via Tauri's `invoke()` from `@tauri-apps/api/c
 
 - Model state lives on disk as `.scry` JSON files in `~/.scryer/`
 - No cloud dependency — everything runs locally
-- C4 hierarchy: Person, System, Container, Component, Operation
-- Nodes support contracts (always/ask/never rules), source mappings, and status tracking
-- Behavioral flows model user journeys and link steps to architecture nodes
+- C4 hierarchy: Person, System, Container, Component, Operation, Process, Model
+- Nodes support contracts (expect/ask/never rules), source mappings, and status tracking (proposed/wip/ready)
+- "Ready" status is gated — requires all inherited expect contract items to have `passed: true`
+- Behavioral flows model user journeys and link steps to processes
+- Groups organize containers into deployment or package units
 
 ### MCP Setup for Development
 

@@ -4,10 +4,11 @@ import { useNodeDataOverride } from "./NodeDataContext";
 import { invoke } from "@tauri-apps/api/core";
 import type { C4Node, C4NodeData, C4Edge, Hint, Status, SourceLocation, ModelProperty, Group, Contract, ContractItem, ContractImage, Flow } from "./types";
 import { contractText, contractPassed, contractUrl } from "./types";
-import { ShapeIcon, resolveShape, defaultShapeForKind, ALL_SHAPES, SHAPE_LABELS } from "./shapes";
+import { ShapeIcon, resolveShape, defaultShapeForKind, ALL_SHAPES } from "./shapes";
 import { statusHex } from "./statusColors";
 import { getThemedHex } from "./theme";
-import { Button, Input, Textarea, Section, Divider, KVRow, Toggle, PillToggle, Field } from "./ui";
+import { Button, Input, Textarea, Section, Divider, KVRow, Toggle, Field } from "./ui";
+import { STATUS_COLORS } from "./statusColors";
 import { MentionTextarea, type MentionItem } from "./MentionTextarea";
 
 /** Use context override (code-level rack) or fall back to ReactFlow's updateNodeData */
@@ -33,6 +34,43 @@ function sanitizeTypeName(raw: string): string {
   const first = stripped[0];
   if (/[a-zA-Z]/.test(first)) return first + stripped.slice(1);
   return stripped.slice(1);
+}
+
+/* ── Status bar ───────────────────────────────────────────────────── */
+
+const STATUS_OPTIONS: { value: Status | undefined; label: string }[] = [
+  { value: undefined, label: "None" },
+  { value: "proposed", label: "Proposed" },
+  { value: "wip", label: "WIP" },
+  { value: "ready", label: "Ready" },
+];
+
+function StatusBar({ value, onChange }: { value: Status | undefined; onChange: (s: Status | undefined) => void }) {
+  return (
+    <div className="flex items-center gap-0.5 rounded-lg bg-zinc-100 dark:bg-zinc-800/80 p-0.5">
+      {STATUS_OPTIONS.map((opt) => {
+        const isActive = value === opt.value;
+        const sc = opt.value ? STATUS_COLORS[opt.value] : null;
+        return (
+          <button
+            key={String(opt.value ?? "__none__")}
+            type="button"
+            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-[11px] font-medium rounded-md cursor-pointer transition-all ${
+              isActive
+                ? sc
+                  ? `${sc.pillClass} shadow-sm`
+                  : "bg-white dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 shadow-sm"
+                : "text-zinc-400 dark:text-zinc-500 hover:text-zinc-500 dark:hover:text-zinc-400"
+            }`}
+            onClick={() => onChange(opt.value)}
+          >
+            {sc && isActive && <span className={`w-1.5 h-1.5 rounded-full ${sc.dotClass}`} />}
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 /* ── Tab type ─────────────────────────────────────────────────────── */
@@ -121,11 +159,11 @@ function GroupContractContent({ node, groups, onUpdateGroups }: { node: C4Node; 
       </Section>
       <Divider />
       <Section title="Ask first">
-        <ContractList items={contract.ask} onChange={(items) => updateField("ask", items)} placeholder="Confirm before..." />
+        <ContractList items={contract.ask} onChange={(items) => updateField("ask", items)} placeholder="Confirm before..." showToggle={false} />
       </Section>
       <Divider />
       <Section title="Never">
-        <ContractList items={contract.never} onChange={(items) => updateField("never", items)} placeholder="Must never..." />
+        <ContractList items={contract.never} onChange={(items) => updateField("never", items)} placeholder="Must never..." showToggle={false} />
       </Section>
     </>
   );
@@ -262,7 +300,7 @@ function resizeImage(file: File): Promise<ContractImage> {
 
 /* ── Node tab content ─────────────────────────────────────────────── */
 
-function NodePropertiesContent({ node, hints, onFixHint, onDismissHint, sourceLocations, projectPath, mentionNames }: { node: C4Node; hints: Hint[]; onFixHint: (hint: Hint) => void; onDismissHint: (hint: Hint) => void; sourceLocations?: SourceLocation[]; projectPath?: string; mentionNames?: MentionItem[] }) {
+function NodePropertiesContent({ node, sourceLocations, projectPath, mentionNames }: { node: C4Node; sourceLocations?: SourceLocation[]; projectPath?: string; mentionNames?: MentionItem[] }) {
   const updateNodeData = useUpdateNodeData();
   const { data } = node;
   const isCodeLevel = data.kind === "operation";
@@ -273,7 +311,7 @@ function NodePropertiesContent({ node, hints, onFixHint, onDismissHint, sourceLo
 
   return (
     <>
-      {/* ── Name ── */}
+      {/* ── Identity ── */}
       <Input
         variant="title"
         value={data.name}
@@ -282,17 +320,6 @@ function NodePropertiesContent({ node, hints, onFixHint, onDismissHint, sourceLo
         onChange={(e) => updateNodeData(node.id, { name: isCodeLevel ? sanitizeIdentifier(e.target.value) : e.target.value })}
       />
 
-      {/* ── Identity — external toggle for systems ── */}
-      {data.kind === "system" && (
-        <>
-          <Divider />
-          <KVRow label="External">
-            <Toggle value={!!data.external} onChange={(v) => updateNodeData(node.id, { external: v || undefined, ...(v ? { status: undefined } : {}) })} />
-          </KVRow>
-        </>
-      )}
-
-      {/* ── Technology ── */}
       {showTechnology && (
         <>
           <Divider />
@@ -308,6 +335,39 @@ function NodePropertiesContent({ node, hints, onFixHint, onDismissHint, sourceLo
             <datalist id={listId}>
               {suggestions.map((s) => <option key={s} value={s} />)}
             </datalist>
+          </KVRow>
+        </>
+      )}
+
+      {showShape && (
+        <>
+          <Divider />
+          <KVRow label="Shape">
+            <div className="flex gap-0.5">
+              {ALL_SHAPES.filter((s) => s !== "person").map((s) => {
+                const effective = resolveShape(data.kind, data.shape);
+                const isDefault = s === defaultShapeForKind(data.kind);
+                return (
+                  <ShapeIcon
+                    key={s}
+                    shape={s}
+                    active={effective === s}
+                    onClick={() =>
+                      updateNodeData(node.id, { shape: isDefault ? undefined : s })
+                    }
+                  />
+                );
+              })}
+            </div>
+          </KVRow>
+        </>
+      )}
+
+      {data.kind === "system" && (
+        <>
+          <Divider />
+          <KVRow label="External">
+            <Toggle value={!!data.external} onChange={(v) => updateNodeData(node.id, { external: v || undefined, ...(v ? { status: undefined } : {}) })} />
           </KVRow>
         </>
       )}
@@ -335,7 +395,7 @@ function NodePropertiesContent({ node, hints, onFixHint, onDismissHint, sourceLo
           />
         ) : (
           <Textarea
-            rows={7}
+            rows={5}
             maxLength={200}
             value={data.description}
             placeholder="Describe this node..."
@@ -344,86 +404,47 @@ function NodePropertiesContent({ node, hints, onFixHint, onDismissHint, sourceLo
         )}
       </Field>
 
-      {/* ── Notes — conventions, context, rationale ── */}
-      {!isCodeLevel && (
+      {/* ── Status ── */}
+      {data.kind !== "person" && !data.external && (
         <>
           <Divider />
-          <Field label="Notes">
-            <Textarea
-              rows={4}
-              value={data.notes ?? ""}
-              placeholder="Internal reference notes..."
-              onChange={(e) => updateNodeData(node.id, { notes: e.target.value || undefined })}
-            />
+          <Field label="Status">
+            <StatusBar value={data.status} onChange={(s) => updateNodeData(node.id, { status: s, statusReason: undefined })} />
+            {data.statusReason && (
+              <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed italic">{data.statusReason}</p>
+            )}
           </Field>
         </>
       )}
 
-      {/* ── Links & Attachments (containers & components only) ── */}
-      {(data.kind === "container" || data.kind === "component") && (
-        <>
-        </>
-      )}
-
-      <Divider />
-
-      {/* ── Implementation — status, source locations ── */}
-      <Field label="Status">
-        {data.kind !== "person" && !data.external && (
-          <PillToggle<Status | undefined>
-            options={[
-              { value: undefined, label: "None" },
-              { value: "implemented", label: "Implemented", variant: "success" },
-              { value: "proposed", label: "Proposed", variant: "info" },
-            { value: "changed", label: "Changed", variant: "warning" },
-            ]}
-            value={data.status}
-            onChange={(s) => updateNodeData(node.id, { status: s })}
-          />
-        )}
-
-        {isCodeLevel && sourceLocations && sourceLocations.length > 0 && (
-          <div className="flex flex-col gap-0.5 mt-1.5">
-            {sourceLocations.map((loc, i) => (
-              <button
-                key={i}
-                type="button"
-                className="flex items-baseline gap-1 text-left text-xs text-blue-400 hover:text-blue-300 cursor-pointer truncate"
-                title={loc.file + (loc.line ? `:${loc.line}` : "")}
-                onClick={() => invoke("open_in_editor", { file: loc.file, line: loc.line, projectPath }).catch((e) => console.error("open_in_editor:", e))}
-              >
-                <span className="truncate">{loc.file}</span>
-                {loc.line != null && <span className="shrink-0 text-zinc-500">:{loc.line}</span>}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {(data.kind === "person" || data.external) && !(isCodeLevel && sourceLocations && sourceLocations.length > 0) && (
-          <span className="text-xs text-zinc-300 dark:text-zinc-600 italic">No implementation tracking</span>
-        )}
-      </Field>
-
-      {/* ── Appearance — shape, collapsed by default ── */}
-      {showShape && (
+      {/* ── Sources ── */}
+      {sourceLocations && sourceLocations.length > 0 && (
         <>
           <Divider />
-          <Field label="Shape">
-            <div className="grid grid-cols-3 gap-1">
-              {ALL_SHAPES.filter((s) => s !== "person").map((s) => {
-                const effective = resolveShape(data.kind, data.shape);
-                const isDefault = s === defaultShapeForKind(data.kind);
-                return (
-                  <div key={s} className="flex flex-col items-center gap-0.5">
-                    <ShapeIcon
-                      shape={s}
-                      active={effective === s}
-                      onClick={() =>
-                        updateNodeData(node.id, { shape: isDefault ? undefined : s })
-                      }
-                    />
-                    <span className="text-[10px] text-zinc-500 dark:text-zinc-500 leading-none">{SHAPE_LABELS[s]}</span>
-                  </div>
+          <Field label="Sources">
+            <div className="flex flex-col gap-0.5 rounded-md border border-zinc-200/50 dark:border-zinc-700/50 overflow-hidden">
+              {sourceLocations.map((loc, i) => {
+                const isGlob = /[*?{}\[\]]/.test(loc.pattern);
+                const inner = (
+                  <>
+                    <span className="truncate font-mono">{loc.pattern}</span>
+                    {loc.line != null && <span className="shrink-0 text-zinc-500 font-mono">:{loc.line}</span>}
+                  </>
+                );
+                return isGlob ? (
+                  <span key={i} className="flex items-baseline gap-1 px-2.5 py-1.5 text-[11px] text-zinc-500 dark:text-zinc-400 truncate" title={loc.pattern}>
+                    {inner}
+                  </span>
+                ) : (
+                  <button
+                    key={i}
+                    type="button"
+                    className="flex items-baseline gap-1 px-2.5 py-1.5 text-left text-[11px] text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer truncate transition-colors"
+                    title={loc.pattern + (loc.line ? `:${loc.line}` : "")}
+                    onClick={() => invoke("open_in_editor", { file: loc.pattern, line: loc.line, projectPath }).catch((e) => console.error("open_in_editor:", e))}
+                  >
+                    {inner}
+                  </button>
                 );
               })}
             </div>
@@ -431,47 +452,26 @@ function NodePropertiesContent({ node, hints, onFixHint, onDismissHint, sourceLo
         </>
       )}
 
-      {/* ── Hints — open by default ── */}
-      {hints.length > 0 && (
+      {(data.kind === "person" || data.external) && (
         <>
           <Divider />
-          <Section title="Hints" count={hints.length}>
-            <div className="flex flex-col gap-1.5">
-              {hints.map((hint, i) => (
-                <div
-                  key={i}
-                  className={`rounded-md border px-2 py-1.5 text-xs leading-relaxed ${
-                    hint.severity === "warning"
-                      ? "border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-300"
-                      : "border-teal-200 bg-teal-50 text-teal-700 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-300"
-                  }`}
-                >
-                  <div className="flex justify-between items-start gap-1">
-                    <span>{hint.message}</span>
-                    <button
-                      type="button"
-                      className="shrink-0 text-xs opacity-40 hover:opacity-80 cursor-pointer leading-none"
-                      onClick={() => onDismissHint(hint)}
-                      title="Dismiss"
-                    >
-                      &times;
-                    </button>
-                  </div>
-                  {hint.action && (
-                    <button
-                      type="button"
-                      className="mt-1 block rounded bg-white/70 px-1.5 py-0.5 text-[11px] font-medium hover:bg-white cursor-pointer dark:bg-zinc-800/70 dark:hover:bg-zinc-800"
-                      onClick={() => onFixHint(hint)}
-                    >
-                      Fix
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
+          <span className="text-xs text-zinc-300 dark:text-zinc-600 italic px-3">No implementation tracking</span>
+        </>
+      )}
+
+      {/* ── Notes ── */}
+      {!isCodeLevel && (
+        <>
+          <Divider />
+          <Section title="Notes" count={(data.notes ?? []).filter(Boolean).length || undefined}>
+            <NotesList
+              items={data.notes ?? []}
+              onChange={(items) => updateNodeData(node.id, { notes: items.length ? items : undefined })}
+            />
           </Section>
         </>
       )}
+
     </>
   );
 }
@@ -640,7 +640,7 @@ function ContractBulletItem({ item, focused, placeholder, onCommit, onFocus, onB
   item: ContractItem; focused: boolean; placeholder?: string;
   onCommit: (value: string) => void; onFocus: () => void; onBlur: () => void;
   onEnter: () => void; onDeleteEmpty: () => void; onRemove: () => void;
-  onToggle: () => void; onUrlChange: (url: string | undefined) => void;
+  onToggle?: () => void; onUrlChange: (url: string | undefined) => void;
   onImageChange: (image: ContractImage | undefined) => void;
 }) {
   const spanRef = useRef<HTMLSpanElement>(null);
@@ -689,7 +689,11 @@ function ContractBulletItem({ item, focused, placeholder, onCommit, onFocus, onB
   return (
     <div className={`group relative rounded-md px-1.5 py-1 border border-transparent ${focused ? "bg-zinc-100 dark:bg-zinc-800/80" : "hover:bg-zinc-50 dark:hover:bg-zinc-800/40"}`} onMouseLeave={() => setMenuOpen(false)}>
       <div className="flex items-start gap-2">
-        <ContractItemToggle passed={passed} onClick={onToggle} />
+        {onToggle ? (
+          <ContractItemToggle passed={passed} onClick={onToggle} />
+        ) : (
+          <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500 mt-[7px]" />
+        )}
         <span
           ref={spanRef}
           contentEditable
@@ -788,7 +792,7 @@ function ContractBulletItem({ item, focused, placeholder, onCommit, onFocus, onB
   );
 }
 
-function ContractList({ items, onChange, placeholder }: { items: ContractItem[]; onChange: (items: ContractItem[]) => void; placeholder?: string }) {
+function ContractList({ items, onChange, placeholder, showToggle = true }: { items: ContractItem[]; onChange: (items: ContractItem[]) => void; placeholder?: string; showToggle?: boolean }) {
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
 
   /** Build a full ContractItem preserving all fields, with overrides */
@@ -821,14 +825,18 @@ function ContractList({ items, onChange, placeholder }: { items: ContractItem[];
           onEnter={() => onChange([...items.slice(0, i + 1), { text: "" }, ...items.slice(i + 1)])}
           onDeleteEmpty={() => onChange(items.filter((_, j) => j !== i))}
           onRemove={() => onChange(items.filter((_, j) => j !== i))}
-          onToggle={() => togglePassed(i)}
+          onToggle={showToggle ? () => togglePassed(i) : undefined}
           onUrlChange={(url) => patchItem(i, { url })}
           onImageChange={(image) => patchItem(i, { image })}
         />
       ))}
       {/* Ghost item */}
       <div className="flex items-start gap-1.5 min-h-[22px] px-1.5 py-1 rounded opacity-40 hover:opacity-70 focus-within:opacity-100 transition-opacity">
-        <span className="shrink-0 w-3.5 h-3.5 rounded-full border border-zinc-300 dark:border-zinc-600 mt-[3px]" />
+        {showToggle ? (
+          <span className="shrink-0 w-3.5 h-3.5 rounded-full border border-zinc-300 dark:border-zinc-600 mt-[3px]" />
+        ) : (
+          <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500 mt-[7px]" />
+        )}
         <span
           contentEditable
           suppressContentEditableWarning
@@ -861,18 +869,18 @@ function ContractList({ items, onChange, placeholder }: { items: ContractItem[];
 
 function ContractTabBadge({ contract }: { contract?: Contract }) {
   if (!contract) return null;
-  const all = [...(contract.expect ?? []), ...(contract.ask ?? []), ...(contract.never ?? [])];
-  if (all.length === 0) return null;
+  const expectItems = contract.expect ?? [];
+  const totalItems = expectItems.length + (contract.ask?.length ?? 0) + (contract.never?.length ?? 0);
+  if (totalItems === 0) return null;
   let passed = 0, failed = 0;
-  for (const item of all) {
+  for (const item of expectItems) {
     const p = contractPassed(item);
     if (p === true) passed++;
     else if (p === false) failed++;
   }
-  const total = all.length;
   const color = failed > 0
     ? "bg-red-500"
-    : passed === total
+    : expectItems.length > 0 && passed === expectItems.length
       ? "bg-emerald-500"
       : "bg-zinc-300 dark:bg-zinc-600";
   return (
@@ -905,6 +913,7 @@ function NodeContractContent({ node }: { node: C4Node }) {
           items={contract.ask}
           onChange={(items) => updateField("ask", items)}
           placeholder="Confirm before..."
+          showToggle={false}
         />
       </Section>
       <Divider />
@@ -913,6 +922,7 @@ function NodeContractContent({ node }: { node: C4Node }) {
           items={contract.never}
           onChange={(items) => updateField("never", items)}
           placeholder="Must never..."
+          showToggle={false}
         />
       </Section>
     </>
@@ -956,16 +966,10 @@ function ProcessPropertiesContent({ node, mentionNames }: { node: C4Node; mentio
       </Field>
       <Divider />
       <Field label="Status">
-        <PillToggle<Status | undefined>
-          options={[
-            { value: undefined, label: "None" },
-            { value: "implemented", label: "Implemented", variant: "success" },
-            { value: "proposed", label: "Proposed", variant: "info" },
-            { value: "changed", label: "Changed", variant: "warning" },
-          ]}
-          value={data.status}
-          onChange={(s) => updateNodeData(node.id, { status: s })}
-        />
+        <StatusBar value={data.status} onChange={(s) => updateNodeData(node.id, { status: s, statusReason: undefined })} />
+        {data.statusReason && (
+          <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed italic">{data.statusReason}</p>
+        )}
       </Field>
     </>
   );
@@ -1057,16 +1061,10 @@ function ModelPropertiesContent({ node }: { node: C4Node }) {
       </Section>
       <Divider />
       <Field label="Status">
-        <PillToggle<Status | undefined>
-          options={[
-            { value: undefined, label: "None" },
-            { value: "implemented", label: "Implemented", variant: "success" },
-            { value: "proposed", label: "Proposed", variant: "info" },
-            { value: "changed", label: "Changed", variant: "warning" },
-          ]}
-          value={data.status}
-          onChange={(s) => updateNodeData(node.id, { status: s })}
-        />
+        <StatusBar value={data.status} onChange={(s) => updateNodeData(node.id, { status: s, statusReason: undefined })} />
+        {data.statusReason && (
+          <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed italic">{data.statusReason}</p>
+        )}
       </Field>
     </>
   );
@@ -1076,9 +1074,6 @@ function ModelPropertiesContent({ node }: { node: C4Node }) {
 
 function getNodeTabs(
   node: C4Node,
-  hints: Hint[],
-  onFixHint: (hint: Hint) => void,
-  onDismissHint: (hint: Hint) => void,
   sourceLocations: SourceLocation[] | undefined,
   projectPath: string | undefined,
   onUpdateOperationData?: (fnId: string, data: Record<string, unknown>) => void,
@@ -1091,9 +1086,6 @@ function getNodeTabs(
       content: (
         <NodePropertiesContent
           node={node}
-          hints={hints}
-          onFixHint={onFixHint}
-          onDismissHint={onDismissHint}
           sourceLocations={sourceLocations}
           projectPath={projectPath}
           mentionNames={mentionNames}
@@ -1274,9 +1266,6 @@ export function PropertiesPanel({ node, edge, onUpdateEdge, codeLevel, hints, on
   } else if (node && !isProcess && !isModel) {
     tabs = getNodeTabs(
       node,
-      hints ?? [],
-      onFixHint ?? (() => {}),
-      onDismissHint ?? (() => {}),
       sourceLocations,
       projectPath,
       onUpdateOperationData,
@@ -1299,6 +1288,11 @@ export function PropertiesPanel({ node, edge, onUpdateEdge, codeLevel, hints, on
         <div className="flex-1 min-h-0 p-4 flex flex-col overflow-y-auto">
           {activeTabObj.content}
         </div>
+        <HintsFooter
+          hints={hints ?? []}
+          onFixHint={onFixHint ?? (() => {})}
+          onDismissHint={onDismissHint ?? (() => {})}
+        />
       </div>
     );
   }
@@ -1315,6 +1309,152 @@ export function PropertiesPanel({ node, edge, onUpdateEdge, codeLevel, hints, on
     <div className={`${panelBase} w-80 flex flex-col`}>
       <div className="flex-1 min-h-0 p-4 flex flex-col overflow-y-auto">
         {content}
+      </div>
+      <HintsFooter
+        hints={hints ?? []}
+        onFixHint={onFixHint ?? (() => {})}
+        onDismissHint={onDismissHint ?? (() => {})}
+      />
+    </div>
+  );
+}
+
+function HintsFooter({ hints, onFixHint, onDismissHint }: { hints: Hint[]; onFixHint: (hint: Hint) => void; onDismissHint: (hint: Hint) => void }) {
+  if (hints.length === 0) return null;
+  return (
+    <div className="shrink-0 border-t border-zinc-200 dark:border-zinc-700 max-h-[40%] overflow-y-auto">
+      <div className="px-4 py-2 flex flex-col gap-1.5">
+        <Section title="Hints" count={hints.length}>
+          <div className="flex flex-col gap-1.5">
+            {hints.map((hint, i) => (
+              <div
+                key={i}
+                className={`rounded-md border px-2 py-1.5 text-xs leading-relaxed ${
+                  hint.severity === "warning"
+                    ? "border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-300"
+                    : "border-teal-200 bg-teal-50 text-teal-700 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-300"
+                }`}
+              >
+                <div className="flex justify-between items-start gap-1">
+                  <span>{hint.message}</span>
+                  <button
+                    type="button"
+                    className="shrink-0 text-xs opacity-40 hover:opacity-80 cursor-pointer leading-none"
+                    onClick={() => onDismissHint(hint)}
+                    title="Dismiss"
+                  >
+                    &times;
+                  </button>
+                </div>
+                {hint.action && (
+                  <button
+                    type="button"
+                    className="mt-1 block rounded bg-white/70 px-1.5 py-0.5 text-[11px] font-medium hover:bg-white cursor-pointer dark:bg-zinc-800/70 dark:hover:bg-zinc-800"
+                    onClick={() => onFixHint(hint)}
+                  >
+                    Fix
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </Section>
+      </div>
+    </div>
+  );
+}
+
+function NotesList({ items, onChange }: { items: string[]; onChange: (items: string[]) => void }) {
+  const [focusIdx, setFocusIdx] = useState<number | null>(null);
+  const itemRefs = useRef<(HTMLSpanElement | null)[]>([]);
+
+  // Focus newly added item
+  useEffect(() => {
+    if (focusIdx !== null && itemRefs.current[focusIdx]) {
+      const el = itemRefs.current[focusIdx];
+      el?.focus();
+      // Place cursor at end
+      const range = document.createRange();
+      range.selectNodeContents(el!);
+      range.collapse(false);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      setFocusIdx(null);
+    }
+  }, [focusIdx, items.length]);
+
+  const commit = (i: number, text: string) => {
+    if (text !== items[i]) {
+      onChange(items.map((x, j) => j === i ? text : x));
+    }
+  };
+
+  const bullet = <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500 mt-[7px]" />;
+
+  return (
+    <div className="flex flex-col">
+      {items.map((item, i) => (
+        <div key={i} className="group flex items-start gap-1.5 min-h-[22px] px-1.5 py-1 rounded hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+          {bullet}
+          <span
+            ref={(el) => { itemRefs.current[i] = el; }}
+            contentEditable
+            suppressContentEditableWarning
+            className="flex-1 min-w-0 text-xs text-zinc-600 dark:text-zinc-300 caret-current outline-none leading-relaxed break-words"
+            onBlur={(e) => commit(i, (e.target as HTMLSpanElement).textContent ?? "")}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commit(i, (e.target as HTMLSpanElement).textContent ?? "");
+                onChange([...items.slice(0, i + 1), "", ...items.slice(i + 1)]);
+                setFocusIdx(i + 1);
+              }
+              if (e.key === "Backspace" && !(e.target as HTMLSpanElement).textContent) {
+                e.preventDefault();
+                onChange(items.filter((_, j) => j !== i));
+                if (i > 0) setFocusIdx(i - 1);
+              }
+            }}
+          >
+            {item}
+          </span>
+          <button
+            type="button"
+            className="shrink-0 opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-400 text-xs cursor-pointer transition-opacity mt-0.5"
+            onClick={() => onChange(items.filter((_, j) => j !== i))}
+          >
+            &times;
+          </button>
+        </div>
+      ))}
+      {/* Ghost item */}
+      <div className="flex items-start gap-1.5 min-h-[22px] px-1.5 py-1 rounded opacity-40 hover:opacity-70 focus-within:opacity-100 transition-opacity">
+        {bullet}
+        <span
+          contentEditable
+          suppressContentEditableWarning
+          className="flex-1 min-w-0 text-xs text-zinc-400 dark:text-zinc-500 caret-current outline-none leading-relaxed break-words empty:before:content-[attr(data-placeholder)] empty:before:text-zinc-400 dark:empty:before:text-zinc-500"
+          data-placeholder="Add note..."
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              const text = (e.target as HTMLSpanElement).textContent ?? "";
+              if (text) {
+                onChange([...items, text]);
+                (e.target as HTMLSpanElement).textContent = "";
+                setFocusIdx(items.length);
+              }
+            }
+          }}
+          onInput={(e) => {
+            const text = (e.target as HTMLSpanElement).textContent ?? "";
+            if (text && text.includes("\n")) {
+              onChange([...items, text.replace(/\n/g, "")]);
+              (e.target as HTMLSpanElement).textContent = "";
+            }
+          }}
+        />
       </div>
     </div>
   );

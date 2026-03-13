@@ -563,8 +563,7 @@
         },
         {
           "id": "step-3",
-          "description": "@[Tenant Handler] triggers @[tenantOnboarding] to provision the new @[tenant]",
-          "processIds": ["node-27"]
+          "description": "@[Tenant Handler] triggers @[tenantOnboarding] to provision the new @[tenant]"
         },
         {
           "id": "step-4",

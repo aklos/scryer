@@ -408,8 +408,7 @@
         },
         {
           "id": "step-3",
-          "description": "@[Physics Plugin] runs the @[physicsTick] pipeline",
-          "processIds": ["node-43"]
+          "description": "@[Physics Plugin] runs the @[physicsTick] pipeline"
         },
         {
           "id": "step-4",

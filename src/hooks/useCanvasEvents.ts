@@ -48,7 +48,7 @@ export function useCanvasEvents({
               ...n.data,
               _originalParentId: origParent,
               _originalStatus: origStatus,
-              status: movedAway ? ("changed" as Status) : origStatus,
+              status: movedAway ? ("wip" as Status) : origStatus,
             } as C4NodeData,
           };
         }),

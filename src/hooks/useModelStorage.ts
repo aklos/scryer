@@ -76,12 +76,21 @@ export function parseModelData(raw: string): C4ModelData {
     const contract = rawContract ? migrateContract(rawContract) : undefined;
     // Migrate references→sources
     const sources = nodeData.sources ?? nodeData.references;
+    // Strip invalid/old status values (e.g. "implemented", "changed", "deprecated" from older models)
+    const VALID_STATUSES = new Set(["proposed", "wip", "ready"]);
+    if (nodeData.status && !VALID_STATUSES.has(nodeData.status as string)) {
+      nodeData.status = undefined;
+    }
     // Person and external system nodes never have status
     const stripStatus = kind === "person" || (kind === "system" && nodeData.external);
+    // Migrate notes: string → string[]
+    const rawNotes = nodeData.notes;
+    const notes = typeof rawNotes === "string" ? (rawNotes ? rawNotes.split("\n").filter(Boolean) : undefined)
+      : Array.isArray(rawNotes) && rawNotes.length > 0 ? rawNotes : undefined;
     // Detect nodes with no position (null/undefined from Rust Option<Position>)
     const hasPosition = n.position != null && typeof n.position === "object";
     const position = hasPosition ? n.position as { x: number; y: number } : { x: 0, y: 0 };
-    const patched = { ...n, type: expectedType, position, data: { ...nodeData, contract, sources, guidelines: undefined, references: undefined, ...(stripStatus ? { status: undefined } : {}), ...(!hasPosition ? { _needsLayout: true } : {}) } };
+    const patched = { ...n, type: expectedType, position, data: { ...nodeData, contract, sources, notes, guidelines: undefined, references: undefined, ...(stripStatus ? { status: undefined } : {}), ...(!hasPosition ? { _needsLayout: true } : {}) } };
     return patched as unknown as C4Node;
   });
 
@@ -159,6 +168,8 @@ export function useModelStorage(
   const skipSave = useRef(false);
   const reloadTimer = useRef<ReturnType<typeof setTimeout>>(null);
   const lastKnownDisk = useRef<string>(""); // last JSON string we wrote or loaded from disk
+  const [changedNodeIds, setChangedNodeIds] = useState<Set<string>>(new Set());
+  const changeClearTimer = useRef<ReturnType<typeof setTimeout>>(null);
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
   const edgesRef = useRef(edges);
@@ -287,6 +298,7 @@ export function useModelStorage(
 
       // Collect parentIds of changed/added/deleted nodes
       const changedParents = new Map<string, number>();
+      const changedIds = new Set<string>();
       const bumpParent = (parentId: string | undefined) => {
         const key = parentId ?? "";
         changedParents.set(key, (changedParents.get(key) ?? 0) + 1);
@@ -297,6 +309,7 @@ export function useModelStorage(
         if (!old) {
           // New node
           bumpParent(n.parentId);
+          changedIds.add(n.id);
         } else if ((() => {
           // Strip transient fields before comparing
           const { _needsLayout: _a, ...oldData } = old.data;
@@ -305,6 +318,7 @@ export function useModelStorage(
         })()) {
           // Changed node
           bumpParent(n.parentId);
+          changedIds.add(n.id);
         }
       }
       for (const n of oldNodes) {
@@ -347,6 +361,13 @@ export function useModelStorage(
 
       applyModelData(data, true);
       setRefPositions(data.refPositions ?? {});
+
+      // Flash changed nodes briefly
+      if (changedIds.size > 0) {
+        setChangedNodeIds(changedIds);
+        if (changeClearTimer.current) clearTimeout(changeClearTimer.current);
+        changeClearTimer.current = setTimeout(() => setChangedNodeIds(new Set()), 3000);
+      }
 
       // Auto-navigate to the changed level.
       // Skip when the model was empty — AI typically defines systems + containers
@@ -487,9 +508,8 @@ export function useModelStorage(
     const unlisten = listen<string>("model-created", (event) => {
       if (event.payload === currentModel) {
         reloadModel(event.payload);
-      } else if (followAIRef.current) {
-        loadModel(event.payload);
       }
+      refreshList();
     });
     return () => { unlisten.then((fn) => fn()); };
   }, [currentModel, loadModel, reloadModel]);
@@ -523,5 +543,6 @@ export function useModelStorage(
     refreshList,
     followAI,
     setFollowAI,
+    changedNodeIds,
   };
 }

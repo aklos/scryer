@@ -9,10 +9,9 @@ const CURVE_OFFSET = 24;
 const ENDPOINT_OFFSET = 5;
 
 const STATUS_PRIORITY: Record<Status, number> = {
-  deprecated: 4,
   proposed: 3,
-  changed: 2,
-  implemented: 1,
+  wip: 2,
+  ready: 1,
 };
 
 export function RelationshipEdge({

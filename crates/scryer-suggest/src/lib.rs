@@ -1,4 +1,5 @@
 pub mod engine;
+pub mod models;
 mod parse;
 mod prompt;
 

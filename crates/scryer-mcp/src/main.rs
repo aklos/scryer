@@ -512,12 +512,12 @@ struct AddNodeItem {
     shape: Option<String>,
     /// Source file locations as JSON array of {"pattern": "glob", "comment": "description"} objects. Pattern is a file glob (e.g. "src/auth/**/*.rs"), comment describes what those files do.
     sources: Option<Vec<scryer_core::Reference>>,
-    /// Status: "implemented", "proposed", "changed", or "deprecated"
+    /// Status: "proposed", "wip", or "ready"
     status: Option<String>,
     /// Implementation contract: expect/ask/never rules
     contract: Option<scryer_core::Contract>,
-    /// Freeform notes: conventions, context, rationale. Inherited by descendants via get_task.
-    notes: Option<String>,
+    /// Freeform notes (array of strings): conventions, context, rationale. Inherited by descendants via get_task.
+    notes: Option<Vec<String>>,
     /// Properties (model-kind nodes only): label/description pairs
     properties: Option<Vec<ModelProperty>>,
 }
@@ -546,14 +546,21 @@ struct UpdateNodeItem {
     shape: Option<String>,
     /// New source file locations as JSON array of {"pattern": "glob", "comment": "description"} objects
     sources: Option<Vec<scryer_core::Reference>>,
-    /// New status: "implemented", "proposed", "changed", or "deprecated"
+    /// New status: "proposed", "wip", or "ready". "ready" requires all inherited expect contract items to have passed: true.
     status: Option<String>,
+    /// Required when changing status. State what's still missing or what was just completed — e.g. "Needs auth middleware and rate limiting", "Missing error handling". For ready: "All contract items pass". Keep it short and factual.
+    reason: Option<String>,
     /// Updated implementation contract
     contract: Option<scryer_core::Contract>,
-    /// Updated notes (conventions, context, rationale)
-    notes: Option<String>,
+    /// Updated notes (array of strings): conventions, context, rationale
+    notes: Option<Vec<String>>,
     /// Updated properties (model-kind nodes only)
     properties: Option<Vec<ModelProperty>>,
+    /// Source code location(s) for this node. Sets the source map entry.
+    /// Example: [{"pattern": "src/auth/handler.ts", "line": 15, "endLine": 42}]
+    /// For containers/components, a glob: [{"pattern": "src/auth/**/*.ts"}]
+    /// Pass an empty array to clear.
+    source: Option<Vec<scryer_core::SourceLocation>>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -630,9 +637,9 @@ struct DeleteEdgeRequest {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct SourceMapEntry {
-    /// ID of the node to set source locations for
+    /// ID of the node or flow to set source locations for
     node_id: String,
-    /// Array of source locations. Each has "file" (path), optional "line", optional "end_line". Empty array clears.
+    /// Array of source locations. Each has "pattern" (glob), optional "line", optional "endLine", optional "command" (shell command to run the test). Empty array clears.
     locations: Vec<SourceLocation>,
 }
 
@@ -729,7 +736,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Get the full JSON content of a model. Returns {nodes: [{id, parentId?, data: {name, description, kind, technology?, external?, shape?, status?, sources?, contract?}}], edges: [{id, source, target, data: {label, method?}}], flows: [{id, name, description?, steps: [{id, description?, branches?: [{condition, steps}]}]}], sourceMap: {nodeId: [{file, line?, endLine?}]}, contract?, startingLevel?}. Positions and node type are omitted (UI-only). Step descriptions can use @[Name] mentions to reference architecture nodes. For scoped reads, prefer get_node. For implementation, use get_task instead — it handles dependency ordering and returns one work unit at a time."
+        description = "Get the full JSON content of a model. Returns {nodes: [{id, parentId?, data: {name, description, kind, technology?, external?, shape?, status?, sources?, contract?}}], edges: [{id, source, target, data: {label, method?}}], flows: [{id, name, description?, steps: [{id, description?, branches?: [{condition, steps}]}]}], sourceMap: {nodeId: [{pattern, line?, endLine?}]}, contract?, startingLevel?}. Positions and node type are omitted (UI-only). Step descriptions can use @[Name] mentions to reference architecture nodes. For scoped reads, prefer get_node. For implementation, use get_task instead — it handles dependency ordering and returns one work unit at a time."
     )]
     fn get_model(
         &self,
@@ -739,10 +746,10 @@ impl ScryerServer {
             Ok(model) => {
                 let _ = scryer_core::save_baseline(&req.name, &model);
                 let mut val = serde_json::to_value(&model).unwrap();
-                strip_ui_fields(&mut val);
+                strip_fields_compact(&mut val);
 
                 externalize_attachments(&mut val, &req.name);
-                let json = serde_json::to_string_pretty(&val)
+                let json = serde_json::to_string(&val)
                     .unwrap_or_else(|e| format!("Serialization error: {}", e));
                 Ok(CallToolResult::success(vec![Content::text(json)]))
             }
@@ -931,6 +938,13 @@ impl ScryerServer {
             }
         }
 
+        // Set project_path to cwd if not already set — needed for source map → editor linking
+        if model.project_path.is_none() {
+            if let Ok(cwd) = std::env::current_dir() {
+                model.project_path = Some(cwd.to_string_lossy().to_string());
+            }
+        }
+
         // Strip all positions — layout is a UI concern
         for node in &mut model.nodes {
             node.position = None;
@@ -1078,8 +1092,9 @@ impl ScryerServer {
                     shape,
                     sources: item.sources.clone().unwrap_or_default(),
                     status,
+                    status_reason: None,
                     contract: item.contract.clone().unwrap_or_default(),
-                    notes: item.notes.clone(),
+                    notes: item.notes.clone().unwrap_or_default(),
                     properties: item.properties.clone().unwrap_or_default(),
                 },
                 parent_id: item.parent_id.clone(),
@@ -1421,8 +1436,8 @@ impl ScryerServer {
 
         let mut updated = Vec::new();
         for item in req.nodes {
-            let node = match model.nodes.iter_mut().find(|n| n.id == item.node_id) {
-                Some(n) => n,
+            let node_idx = match model.nodes.iter().position(|n| n.id == item.node_id) {
+                Some(i) => i,
                 None => {
                     return Ok(CallToolResult::error(vec![Content::text(format!(
                         "Node '{}' not found",
@@ -1430,6 +1445,24 @@ impl ScryerServer {
                     ))]));
                 }
             };
+
+            // Pre-validate ready gate before taking mutable borrow
+            if let Some(ref s) = item.status {
+                let new_status = parse_status(s);
+                if new_status == Some(Status::Ready) && model.nodes[node_idx].data.kind != C4Kind::Person {
+                    let parent_id = model.nodes[node_idx].parent_id.clone();
+                    let own_contract = item.contract.as_ref().unwrap_or(&model.nodes[node_idx].data.contract).clone();
+                    let unmet = check_ready_gate(&model.nodes, &model.groups, &item.node_id, &parent_id, &own_contract);
+                    if !unmet.is_empty() {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Cannot set '{}' to ready. These expect contract items are not yet passed:\n{}\n\nMark each as passed (passed: true) or set status to 'wip' instead.",
+                            item.node_id, unmet.join("\n")
+                        ))]));
+                    }
+                }
+            }
+
+            let node = &mut model.nodes[node_idx];
 
             if let Some(name) = item.name {
                 if node.data.kind == C4Kind::Operation {
@@ -1482,22 +1515,40 @@ impl ScryerServer {
             if let Some(sources) = item.sources {
                 node.data.sources = sources;
             }
-            if let Some(s) = item.status {
+            if let Some(ref s) = item.status {
                 if node.data.kind != C4Kind::Person {
-                    node.data.status = parse_status(&s);
+                    let new_status = parse_status(s);
+                    // Require reason when changing status
+                    let reason = item.reason.as_deref().unwrap_or("").trim();
+                    if reason.is_empty() {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Node '{}': `reason` is required when changing status. Explain why you're setting status to '{}'.",
+                            item.node_id, s
+                        ))]));
+                    }
+                    // Ready gate already validated above (before mutable borrow)
+                    node.data.status = new_status;
+                    node.data.status_reason = Some(reason.to_string());
                 }
             }
             if let Some(g) = item.contract {
                 node.data.contract = g;
             }
             if let Some(d) = item.notes {
-                node.data.notes = if d.is_empty() { None } else { Some(d) };
+                node.data.notes = d;
             }
             if let Some(p) = item.properties {
                 if let Err(e) = validate_property_labels(&p, &format!("node '{}'", item.node_id)) {
                     return Ok(CallToolResult::error(vec![Content::text(e)]));
                 }
                 node.data.properties = p;
+            }
+            if let Some(locations) = item.source {
+                if locations.is_empty() {
+                    model.source_map.remove(&item.node_id);
+                } else {
+                    model.source_map.insert(item.node_id.clone(), locations);
+                }
             }
             updated.push(item.node_id);
         }
@@ -1829,7 +1880,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Set source file locations for one or more nodes. Used to map operation nodes to their source code. Pass an empty locations array to clear a node's source map."
+        description = "Set source file locations for one or more nodes or flows. Used to map operation nodes to their source code and to link flows to test files. Pass an empty locations array to clear a node's source map. Each location has a required `pattern` (file glob), optional `line`/`endLine`, and optional `command` (shell command to run the test, e.g. `pytest tests/test_auth.py`). When linking a flow to a test, use the flow ID as the `node_id` and include a `command` so the test can be executed from the UI."
     )]
     fn update_source_map(
         &self,
@@ -1846,9 +1897,11 @@ impl ScryerServer {
         };
 
         for entry in &req.entries {
-            if !model.nodes.iter().any(|n| n.id == entry.node_id) {
+            let is_node = model.nodes.iter().any(|n| n.id == entry.node_id);
+            let is_flow = model.flows.iter().any(|f| f.id == entry.node_id);
+            if !is_node && !is_flow {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Node '{}' not found",
+                    "Node or flow '{}' not found",
                     entry.node_id
                 ))]));
             }
@@ -1906,7 +1959,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Get the next implementation task. Returns one logical work unit at a time, ordered by dependencies. Workflow: call get_task → build the returned task → mark nodes as implemented via update_nodes → call get_task again for the next task. Pass node_id to scope to a subtree."
+        description = "Get the next implementation task. Returns one logical work unit at a time, ordered by dependencies. Workflow: call get_task → build the returned task → mark nodes as wip via update_nodes (with a reason) → call get_task again for the next task. Pass node_id to scope to a subtree."
     )]
     fn get_task(
         &self,
@@ -1985,13 +2038,13 @@ impl ScryerServer {
         let collect_notes = |chain: &[&C4Node], node: &C4Node| -> Vec<String> {
             let mut collected = Vec::new();
             for ancestor in chain {
-                if let Some(d) = &ancestor.data.notes {
-                    collected.push(format!("{}: {}", ancestor.data.name, d));
+                if !ancestor.data.notes.is_empty() {
+                    for n in &ancestor.data.notes {
+                        collected.push(format!("{}: {}", ancestor.data.name, n));
+                    }
                 }
             }
-            if let Some(d) = &node.data.notes {
-                collected.push(d.clone());
-            }
+            collected.extend(node.data.notes.iter().cloned());
             collected
         };
 
@@ -2008,8 +2061,8 @@ impl ScryerServer {
             })
         };
 
-        // Helper: check if all status-bearing children are implemented
-        let children_all_implemented = |node: &C4Node| -> bool {
+        // Helper: check if all status-bearing children are done (wip or ready)
+        let children_all_done = |node: &C4Node| -> bool {
             let child_kind = match node.data.kind {
                 C4Kind::Container => C4Kind::Component,
                 C4Kind::System => C4Kind::Container,
@@ -2021,23 +2074,23 @@ impl ScryerServer {
                         && n.data.kind == child_kind
                         && n.data.status.is_some()
                 })
-                .all(|n| matches!(n.data.status, Some(Status::Implemented)))
+                .all(|n| matches!(n.data.status, Some(Status::Wip) | Some(Status::Ready)))
         };
 
         // Classify nodes: satisfied vs needs-work
         // For containers with component children (or systems with container children),
-        // satisfaction requires ALL children to be implemented — not just the container itself.
+        // satisfaction requires ALL children to be done (wip/ready) — not just the container itself.
         let is_satisfied = |node: &C4Node| -> bool {
             if node.data.external == Some(true) {
                 return true;
             }
             if has_status_children(node) {
-                return children_all_implemented(node);
+                return children_all_done(node);
             }
-            matches!(node.data.status, Some(Status::Implemented) | None)
+            matches!(node.data.status, Some(Status::Wip) | Some(Status::Ready) | None)
         };
 
-        // Collect task-eligible nodes: containers and components (excluding deprecated and None-status)
+        // Collect task-eligible nodes: containers and components (excluding None-status)
         // Containers that have component children with status are NOT tasks themselves — their components are.
         let task_nodes: Vec<&C4Node> = model
             .nodes
@@ -2047,8 +2100,8 @@ impl ScryerServer {
                 if !eligible {
                     return false;
                 }
-                // Skip deprecated nodes and None-status nodes (context/framework defaults)
-                if matches!(n.data.status, Some(Status::Deprecated) | None) {
+                // Skip None-status nodes (context/framework defaults)
+                if n.data.status.is_none() {
                     return false;
                 }
                 // Skip external systems' children
@@ -2087,19 +2140,19 @@ impl ScryerServer {
         if work_nodes.is_empty() {
             let completed = task_nodes.iter().filter(|n| is_satisfied(n)).count();
 
-            // Check for containers/systems that should be marked implemented
+            // Check for containers/systems that should be marked wip
             let mut propagate_nodes: Vec<(&str, &str)> = Vec::new(); // (id, name)
             for node in &model.nodes {
                 if !matches!(node.data.kind, C4Kind::Container | C4Kind::System) {
                     continue;
                 }
-                if matches!(node.data.status, Some(Status::Implemented)) {
+                if matches!(node.data.status, Some(Status::Wip) | Some(Status::Ready)) {
                     continue;
                 }
                 if !has_status_children(node) {
                     continue;
                 }
-                if children_all_implemented(node) {
+                if children_all_done(node) {
                     propagate_nodes.push((&node.id, &node.data.name));
                 }
             }
@@ -2111,11 +2164,11 @@ impl ScryerServer {
             }
 
             let mut output = format!(
-                "All {} tasks complete.\n\nMark these parent nodes as implemented:\n```\nupdate_nodes(model: \"{}\", nodes: [{}])\n```",
+                "All {} tasks complete.\n\nMark these parent nodes as wip:\n```\nupdate_nodes(model: \"{}\", nodes: [{}])\n```",
                 completed,
                 req.name,
                 propagate_nodes.iter()
-                    .map(|(id, _)| format!("{{node_id: \"{}\", status: \"implemented\"}}", id))
+                    .map(|(id, _)| format!("{{node_id: \"{}\", status: \"wip\", reason: \"Needs review\", source: [{{pattern: \"src/module/**/*.ts\"}}]}}", id))
                     .collect::<Vec<_>>()
                     .join(", ")
             );
@@ -2123,26 +2176,27 @@ impl ScryerServer {
                 output.push_str(&format!("\n- {}", name));
             }
 
-            // Check for member nodes (operations/processes/models) that aren't implemented yet
+            // Check for member nodes (operations/processes/models) that are still proposed
             let mut pending_members: Vec<(&C4Node, &str)> = Vec::new();
             for node in &model.nodes {
                 if node.data.kind != C4Kind::Component {
                     continue;
                 }
-                if !matches!(node.data.status, Some(Status::Implemented)) {
+                if !matches!(node.data.status, Some(Status::Wip) | Some(Status::Ready)) {
                     continue;
                 }
                 for member in model.nodes.iter().filter(|n| {
                     n.parent_id.as_deref() == Some(&node.id)
                         && matches!(n.data.kind, C4Kind::Operation | C4Kind::Process | C4Kind::Model)
                         && n.data.status.is_some()
-                        && !matches!(n.data.status, Some(Status::Implemented))
+                        && matches!(n.data.status, Some(Status::Proposed))
+
                 }) {
                     pending_members.push((member, &node.data.name));
                 }
             }
             if !pending_members.is_empty() {
-                output.push_str("\n\nThese member nodes still need status confirmation — mark as `implemented` if done, or flag any that need changes:\n");
+                output.push_str("\n\nThese member nodes are still proposed — mark as `wip` with a reason explaining what was built:\n");
                 for (member, parent_name) in &pending_members {
                     output.push_str(&format!(
                         "  - {} [{}] ({}, {}) in {}\n",
@@ -2230,6 +2284,7 @@ impl ScryerServer {
             let all_members_proposed = group.member_ids.iter().all(|mid| {
                 model.nodes.iter().find(|n| n.id == *mid).map_or(false, |n| {
                     matches!(n.data.status, Some(Status::Proposed))
+
                 })
             });
 
@@ -2290,12 +2345,12 @@ impl ScryerServer {
 
                 output.push_str(&format!("\n---\n\n{}\n\n", TASK_INSTRUCTIONS));
 
-                // Node IDs to mark implemented
+                // Node IDs to mark wip
                 let ids: Vec<&str> = member_containers.iter().map(|n| n.id.as_str()).collect();
                 output.push_str(&format!(
-                    "After scaffolding, mark these as implemented:\n```\nupdate_nodes(model: \"{}\", nodes: [{}])\n```\n",
+                    "After scaffolding, mark these as wip with a reason explaining what was scaffolded:\n```\nupdate_nodes(model: \"{}\", nodes: [{}])\n```\n",
                     req.name,
-                    ids.iter().map(|id| format!("{{node_id: \"{}\", status: \"implemented\"}}", id)).collect::<Vec<_>>().join(", ")
+                    ids.iter().map(|id| format!("{{node_id: \"{}\", status: \"wip\", reason: \"Needs implementation\"}}", id)).collect::<Vec<_>>().join(", ")
                 ));
 
                 // Next up
@@ -2380,6 +2435,7 @@ impl ScryerServer {
         let task_num = completed_tasks + 1;
         let is_scaffold = work_unit.iter().all(|n| {
             n.data.kind == C4Kind::Container && matches!(n.data.status, Some(Status::Proposed))
+
         }) && work_unit.len() > 1;
 
         let unit_label = if is_scaffold {
@@ -2581,30 +2637,29 @@ impl ScryerServer {
 
         output.push_str(&format!("---\n\n{}\n\n", TASK_INSTRUCTIONS));
 
-        // Mark-as-implemented hint
+        // Mark-as-wip hint
         let ids: Vec<&str> = work_unit.iter().map(|n| n.id.as_str()).collect();
         output.push_str(&format!(
-            "After building, mark as implemented:\n```\nupdate_nodes(model: \"{}\", nodes: [{}])\n```\n",
+            "After building, mark as wip with a reason and set source locations:\n```\nupdate_nodes(model: \"{}\", nodes: [{}])\n```\n",
             req.name,
-            ids.iter().map(|id| format!("{{node_id: \"{}\", status: \"implemented\"}}", id)).collect::<Vec<_>>().join(", ")
+            ids.iter().map(|id| format!("{{node_id: \"{}\", status: \"wip\", reason: \"Needs error handling\", source: [{{pattern: \"src/module/file.ts\", line: 1, endLine: 50}}]}}", id)).collect::<Vec<_>>().join(", ")
         ));
 
-        // Member status confirmation: collect operations/processes/models with non-implemented status
+        // Member status confirmation: collect operations/processes/models still proposed
         let mut pending_members: Vec<(&C4Node, &str)> = Vec::new(); // (node, parent_name)
         for node in &work_unit {
             if node.data.kind == C4Kind::Component {
                 for member in model.nodes.iter().filter(|n| {
                     n.parent_id.as_deref() == Some(&node.id)
                         && matches!(n.data.kind, C4Kind::Operation | C4Kind::Process | C4Kind::Model)
-                        && n.data.status.is_some()
-                        && !matches!(n.data.status, Some(Status::Implemented))
+                        && matches!(n.data.status, Some(Status::Proposed))
                 }) {
                     pending_members.push((member, &node.data.name));
                 }
             }
         }
         if !pending_members.is_empty() {
-            output.push_str("\nAlso confirm the status of these member nodes — mark each as `implemented` if done, or flag any that need changes:\n");
+            output.push_str("\nAlso mark these member nodes as `wip` with a reason explaining what was built:\n");
             for (member, parent_name) in &pending_members {
                 output.push_str(&format!(
                     "  - {} [{}] ({}, {}) in {}\n",
@@ -2629,7 +2684,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Create or replace one or more flows. Pass a single flow object or an array of flows — use an array to create multiple flows in one call. If a flow with the given ID exists, it is replaced; otherwise it is appended.\n\nFlows describe behavioral sequences — user journeys, data syncs, deploy pipelines, cron jobs. Each flow has an ordered list of steps.\n\nStep granularity: each step = one meaningful system interaction, NOT a UI gesture. Good: 'System validates credentials'. Bad: 'User clicks button'.\n\nStep schema: {id, description, branches?}. Use `description` for step text — numbering is auto-computed. Step IDs: 'step-N'. Flow IDs: 'scenario-N'.\n\nBranching: steps can have a `branches` array of {condition, steps[]} objects to model decision points. Each branch has a condition label (e.g. \"if: valid\", \"else:\") and its own ordered list of sub-steps. Branches can nest recursively.\n\nTo reference architecture nodes in step descriptions, use @[Name] mentions (e.g. \"@[AuthService] validates the JWT token\"). Use process names for linking flow behavior to C4 architecture.\n\nOld format (flat transitions array) is still accepted for backward compatibility but transitions are ignored — use step ordering and branches instead."
+        description = "Create or replace one or more flows. Pass a single flow object or an array of flows — use an array to create multiple flows in one call. If a flow with the given ID exists, it is replaced; otherwise it is appended.\n\nFlows describe behavioral sequences — user journeys, data syncs, deploy pipelines, cron jobs. Each flow has an ordered list of steps.\n\nStep granularity: each step = one meaningful system interaction, NOT a UI gesture. Good: 'System validates credentials'. Bad: 'User clicks button'.\n\nStep schema: {id, description, branches?}. Use `description` for step text — numbering is auto-computed. Step IDs: 'step-N'. Flow IDs: 'scenario-N'.\n\nBranching: steps can have a `branches` array of {condition, steps[]} objects to model decision points. Each branch has a condition label (e.g. \"if: valid\", \"else:\") and its own ordered list of sub-steps. Branches can nest recursively.\n\nTo reference architecture nodes in step descriptions, use @[Name] mentions (e.g. \"@[AuthService] validates the JWT token\").\n\nFlows are integration test specs. Each flow describes what should happen end-to-end. When you implement a test for a flow, use `update_source_map` to link the flow to the test file.\n\nOld format (flat transitions array) is still accepted for backward compatibility but transitions are ignored — use step ordering and branches instead."
     )]
     fn set_flows(
         &self,
@@ -2909,18 +2964,41 @@ impl ServerHandler for ScryerServer {
 
 /// Recursively strip UI-only fields (position, type, refPositions) from a JSON value.
 fn strip_ui_fields(val: &mut serde_json::Value) {
+    strip_fields(val, false);
+}
+
+fn strip_fields_compact(val: &mut serde_json::Value) {
+    strip_fields(val, true);
+}
+
+fn strip_fields(val: &mut serde_json::Value, compact: bool) {
     match val {
         serde_json::Value::Object(map) => {
+            // Always strip UI-only fields
             map.remove("position");
             map.remove("type");
             map.remove("refPositions");
+
+            if compact {
+                // Strip notes (available via get_node/get_task)
+                map.remove("notes");
+                // Strip empty strings
+                map.retain(|_, v| !matches!(v, serde_json::Value::String(s) if s.is_empty()));
+                // Strip nulls
+                map.retain(|_, v| !v.is_null());
+                // Strip empty arrays
+                map.retain(|_, v| !matches!(v, serde_json::Value::Array(a) if a.is_empty()));
+                // Strip empty objects
+                map.retain(|_, v| !matches!(v, serde_json::Value::Object(m) if m.is_empty()));
+            }
+
             for (_, v) in map.iter_mut() {
-                strip_ui_fields(v);
+                strip_fields(v, compact);
             }
         }
         serde_json::Value::Array(arr) => {
             for v in arr.iter_mut() {
-                strip_ui_fields(v);
+                strip_fields(v, compact);
             }
         }
         _ => {}
@@ -2996,10 +3074,9 @@ fn parse_kind(s: &str) -> Result<C4Kind, McpError> {
 
 fn parse_status(s: &str) -> Option<Status> {
     match s {
-        "implemented" => Some(Status::Implemented),
         "proposed" => Some(Status::Proposed),
-        "changed" => Some(Status::Changed),
-        "deprecated" | "removed" => Some(Status::Deprecated),
+        "wip" => Some(Status::Wip),
+        "ready" => Some(Status::Ready),
         _ => None,
     }
 }
@@ -3015,6 +3092,54 @@ fn parse_shape(s: &str) -> Option<C4Shape> {
         "hexagon" => Some(C4Shape::Hexagon),
         _ => None,
     }
+}
+
+/// Check if a node can be set to "ready" by verifying all inherited expect contract items are passed.
+/// Walks: own contract → ancestor chain → group membership.
+/// Returns a list of unmet items (empty = gate passes).
+fn check_ready_gate(
+    nodes: &[C4Node],
+    groups: &[scryer_core::Group],
+    node_id: &str,
+    parent_id: &Option<String>,
+    own_contract: &scryer_core::Contract,
+) -> Vec<String> {
+    let mut unmet = Vec::new();
+    // Check own expect items
+    for ci in &own_contract.expect {
+        if ci.passed() != Some(true) {
+            unmet.push(format!("  - {}", ci.text()));
+        }
+    }
+    // Walk ancestor chain
+    let mut cur_id = parent_id.clone();
+    while let Some(pid) = &cur_id {
+        if let Some(anc) = nodes.iter().find(|n| n.id == *pid) {
+            for ci in &anc.data.contract.expect {
+                if ci.passed() != Some(true) {
+                    unmet.push(format!("  - {} (from {})", ci.text(), anc.data.name));
+                }
+            }
+            cur_id = anc.parent_id.clone();
+        } else {
+            break;
+        }
+    }
+    // Check group contracts — walk node + ancestors, check if any is a group member
+    let mut check_id = Some(node_id.to_string());
+    while let Some(cid) = &check_id {
+        for g in groups {
+            if g.member_ids.contains(cid) {
+                for ci in &g.contract.expect {
+                    if ci.passed() != Some(true) {
+                        unmet.push(format!("  - {} (from group {})", ci.text(), g.name));
+                    }
+                }
+            }
+        }
+        check_id = nodes.iter().find(|n| n.id == *cid).and_then(|n| n.parent_id.clone());
+    }
+    unmet
 }
 
 fn validate_parent(
@@ -3092,17 +3217,31 @@ Trust your training knowledge for well-known frameworks and tools. \
 Do not research standard framework setup — you already know how.
 
 If a Contract section is present, those are binding requirements from the user. \
-MUST items are non-negotiable. ASK USER FIRST items require confirmation before deciding. \
-NEVER items are hard constraints. If a contract item includes a URL, read it for context. \
-Do not mark the task as implemented until all MUST items are satisfied.
+MUST items are non-negotiable — each has a passed/failed flag that gates the `ready` status. \
+ASK USER FIRST items require confirmation before deciding. \
+NEVER items are hard constraints. If a contract item includes a URL, read it for context.
+
+## Status meanings
+- **proposed**: Planned, no code yet. \
+- **wip** (work in progress): Code exists but may be incomplete — stubs, partial impl, scaffolding. \
+- **ready**: Production-ready. Can ONLY be set when all `expect` contract items (including inherited ones) have `passed: true`. \
+A `reason` is required on every status change — state what's still missing or what was just completed. For wip: \"Needs auth middleware and rate limiting\". For ready: \"All contract items pass\".
 
 If something is unclear or the spec doesn't cover a decision you need to make, \
 ask the user — don't spiral into web searches.
 
 ## After building
-1. Mark ONLY the node(s) listed above as implemented using update_nodes.
+1. Mark ONLY the node(s) listed above as `wip` using update_nodes. Include a `reason` explaining what was built. \
+Include `source` on every node — a glob pattern (and line/endLine for operations). \
+Containers and components: `[{\"pattern\": \"src/auth/**/*.ts\"}]`. \
+Operations: `[{\"pattern\": \"src/auth/handler.ts\", \"line\": 15, \"endLine\": 42}]`.
 2. Call get_task immediately to get the next task. Do NOT stop — there are more tasks.
-3. Repeat until get_task returns \"All tasks complete.\"";
+3. Repeat until get_task returns \"All tasks complete.\"
+
+## When modifying existing code
+If you rename, move, delete, or restructure code that is source-mapped in the model, \
+update the model in the same response using update_nodes. \
+Delete removed nodes with delete_nodes. The model must stay in sync with the code.";
 
 fn format_contract_and_notes(
     name: &str,
@@ -3160,7 +3299,7 @@ fn find_next_name<'a>(
 fn format_done_message(model: &C4ModelData) -> String {
     let mut output = String::from("All tasks complete.");
 
-    // Check for member nodes (operations/processes/models) that aren't implemented yet
+    // Check for member nodes (operations/processes/models) that are still proposed
     let mut pending_members: Vec<(&C4Node, &str)> = Vec::new();
     for node in &model.nodes {
         if node.data.kind != C4Kind::Component {
@@ -3169,14 +3308,13 @@ fn format_done_message(model: &C4ModelData) -> String {
         for member in model.nodes.iter().filter(|n| {
             n.parent_id.as_deref() == Some(&node.id)
                 && matches!(n.data.kind, C4Kind::Operation | C4Kind::Process | C4Kind::Model)
-                && n.data.status.is_some()
-                && !matches!(n.data.status, Some(Status::Implemented))
+                && matches!(n.data.status, Some(Status::Proposed))
         }) {
             pending_members.push((member, &node.data.name));
         }
     }
     if !pending_members.is_empty() {
-        output.push_str("\n\nThese member nodes still need status confirmation — mark as `implemented` if done, or flag any that need changes:\n");
+        output.push_str("\n\nThese member nodes are still proposed — mark as `wip` with a reason explaining what was built:\n");
         for (member, parent_name) in &pending_members {
             output.push_str(&format!(
                 "  - {} [{}] ({}, {}) in {}\n",
@@ -3196,7 +3334,7 @@ fn format_done_message(model: &C4ModelData) -> String {
         return output;
     }
 
-    output.push_str("\n\nPlease validate that the model's flows still accurately describe the system behavior. Update step descriptions as needed using `set_flows`. Use @[Name] mentions in step descriptions to reference processes and other architecture nodes.\n");
+    output.push_str("\n\nPlease validate that the model's flows still accurately describe the system behavior. Flows are integration test specs — update step descriptions as needed using `set_flows`. Use @[Name] mentions in step descriptions to reference architecture nodes. When a test exists for a flow, use `update_source_map` to link the flow to the test file with a `command` field containing the shell command to run the test (e.g. `pytest tests/test_auth.py`).\n");
 
     for flow in &model.flows {
         let all_steps = collect_all_steps(&flow.steps);
@@ -3220,10 +3358,9 @@ fn kind_str(k: &C4Kind) -> &'static str {
 
 fn status_str(s: &Option<Status>) -> &'static str {
     match s {
-        Some(Status::Implemented) => "implemented",
         Some(Status::Proposed) => "proposed",
-        Some(Status::Changed) => "changed",
-        Some(Status::Deprecated) => "deprecated",
+        Some(Status::Wip) => "wip",
+        Some(Status::Ready) => "ready",
         None => "none",
     }
 }
@@ -3588,18 +3725,23 @@ All nodes use type `"c4"`, except: operation uses `"operation"`, process uses `"
 ## Naming Rules
 Operation and process names must be valid identifiers: start with a lowercase letter, then `[a-zA-Z0-9_]`. **Match the target language's naming convention** — use snake_case for Python/Rust/Ruby/Go, camelCase for JavaScript/TypeScript/Java/C#. Model names may start with an uppercase letter (PascalCase like `UserProfile`) or lowercase. Model property labels must be valid identifiers matching the target language convention.
 
+## Description vs Notes
+- **description**: What this node *is* — its role and purpose at the appropriate abstraction level. Visible on the diagram. Keep it concise and architectural. Do NOT include deployment details, environment config, hosting providers, or implementation specifics.
+- **notes**: Implementation context, conventions, deployment details, rationale — anything useful during development but not part of the architectural identity. Notes are inherited by descendants via `get_task` and shown as context during implementation. Put things like "hosted on Fly.io", "uses replica set for change streams", "prod and dev environments" here.
+
 ## Source Map
-The model has an optional `sourceMap` field: a mapping from node ID to an array of source locations (`{file, line?, endLine?}`). Use `update_source_map` to attach file/line references to operation nodes. This is separate from `sources` (glob patterns on higher-level nodes).
+The model has an optional `sourceMap` field: a mapping from node or flow ID to an array of source locations (`{pattern, line?, endLine?, command?}`). You can set source maps inline via the `source` field on `update_nodes`, or use `update_source_map` for bulk updates. Always set source locations when marking nodes as wip — containers/components get glob patterns, operations get specific file patterns + line ranges. This is separate from `sources` (glob patterns on higher-level nodes). Flow IDs are also valid keys — use them to link a flow to its test file with a `command` to run the test.
 
 ## Status
 Set status on nodes that represent work. Omit status for framework defaults that require no implementation effort. Nodes without status are context — visible but not actionable by `get_task`. Edges do not have status — edge color is inferred from endpoint nodes in the UI.
 
-- **"implemented"** (green): Exists in the codebase and works.
-- **"proposed"** (blue): Brand new — doesn't exist yet.
-- **"changed"** (yellow): Exists but needs modification.
-- **"deprecated"** (red): Technical debt — should be removed or replaced.
+- **"proposed"** (blue): Planned — doesn't exist yet.
+- **"wip"** (amber): Work in progress — code exists but may be incomplete (stubs, partial implementation, scaffolding).
+- **"ready"** (green): Production-ready. **Gated**: can only be set when ALL inherited `expect` contract items have `passed: true`.
 
-**Container/system status propagates upward**: when all component children of a container are implemented, `get_task` will prompt you to mark the container as implemented. Same for systems when all containers are done.
+A `reason` is required on every status change via `update_nodes`. State what's still missing or what was just completed. For wip: "Needs auth middleware and rate limiting". For ready: "All contract items pass".
+
+**Container/system status propagates upward**: when all component children of a container are wip/ready, `get_task` will prompt you to mark the container as wip. Same for systems when all containers are done.
 
 ## IDs
 Node IDs: "node-N" (auto-generated). Edge IDs: "edge-{source}-{target}". Use `get_model` to discover existing IDs.
@@ -3611,7 +3753,7 @@ Call `get_rules` before creating or editing a model — it contains the full mod
 When building code from a model, use `get_task` in a loop. Each call returns one work unit with dependency ordering, contract inheritance, and progress tracking built in.
 1. Call `get_task` to get one work unit.
 2. Build what the task describes. A scaffold task may cover multiple nodes at once — that's fine.
-3. Mark the node(s) as implemented via `update_nodes`. Only mark nodes listed in the task.
+3. Mark the node(s) as `wip` via `update_nodes` with a `reason` explaining what was built. Only mark nodes listed in the task.
 4. **Call `get_task` again immediately.** Do not stop after one task — there are always more until it returns "All tasks complete."
 The task system tracks what's done and what's next. Do not read the full model via `get_model` to derive your own implementation order.
 
@@ -3620,9 +3762,11 @@ Do NOT delegate scryer write operations (`set_model`, `set_node`, `add_nodes`, `
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Handle `scryer-mcp init` subcommand
-    if std::env::args().nth(1).as_deref() == Some("init") {
-        return init_project();
+    // Handle subcommands
+    match std::env::args().nth(1).as_deref() {
+        Some("init") => return init_project(),
+        Some("check-drift") => return check_drift(),
+        _ => {}
     }
 
     let service = ScryerServer::new()
@@ -3630,6 +3774,83 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .inspect_err(|e| eprintln!("MCP server error: {}", e))?;
     service.waiting().await?;
+    Ok(())
+}
+
+/// Claude Code PostToolUse hook handler. Reads hook input JSON from stdin,
+/// checks if the edited file matches any source map pattern across all models,
+/// and outputs a nudge for the AI if so.
+fn check_drift() -> Result<(), Box<dyn std::error::Error>> {
+    let input: serde_json::Value = serde_json::from_reader(std::io::stdin().lock())?;
+    let file_path = input
+        .pointer("/tool_input/file_path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if file_path.is_empty() {
+        return Ok(());
+    }
+
+    // Normalize to relative path from cwd
+    let cwd = std::env::current_dir()?;
+    let abs_path = std::path::Path::new(file_path);
+    let rel_path = abs_path.strip_prefix(&cwd).unwrap_or(abs_path);
+    let rel_str = rel_path.to_string_lossy();
+
+    let models = scryer_core::list_models().unwrap_or_default();
+    let mut matches: Vec<(String, String, String)> = Vec::new(); // (model, node_id, node_name)
+
+    for model_name in &models {
+        let model = match scryer_core::read_model(model_name) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        for (node_id, locations) in &model.source_map {
+            for loc in locations {
+                let pat = &loc.pattern;
+                // Check glob match or prefix match
+                let is_match = if pat.contains('*') || pat.contains('?') || pat.contains('[') {
+                    glob::Pattern::new(pat)
+                        .map(|g| g.matches(&rel_str))
+                        .unwrap_or(false)
+                } else {
+                    rel_str.starts_with(pat) || rel_str == pat.as_str()
+                };
+                if is_match {
+                    let node_name = model
+                        .nodes
+                        .iter()
+                        .find(|n| n.id == *node_id)
+                        .map(|n| n.data.name.clone())
+                        .unwrap_or_default();
+                    matches.push((model_name.clone(), node_id.clone(), node_name));
+                    break; // one match per node is enough
+                }
+            }
+        }
+    }
+
+    if matches.is_empty() {
+        return Ok(());
+    }
+
+    // Group by model
+    let mut by_model: std::collections::BTreeMap<&str, Vec<String>> = std::collections::BTreeMap::new();
+    for (model, id, name) in &matches {
+        by_model.entry(model).or_default().push(format!("{} [{}]", name, id));
+    }
+    let msg = by_model.iter()
+        .map(|(model, nodes)| format!("scryer \u{2014} update if changed ({}): {}", model, nodes.join(", ")))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Exit 0 with additionalContext — non-blocking nudge to the AI
+    let output = serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": msg
+        }
+    });
+    println!("{}", output);
     Ok(())
 }
 
@@ -3671,6 +3892,10 @@ fn init_project() -> Result<(), Box<dyn std::error::Error>> {
             if has_codex { Some("Codex") } else { None },
         ].into_iter().flatten().collect();
         eprintln!("\nDone. {} will use scryer in this project.", tools.join(" and "));
+        if has_claude {
+            eprintln!("\nTo auto-approve scryer tools in Claude Code, add to .claude/settings.json:");
+            eprintln!("  \"permissions\": {{ \"allow\": [\"mcp__scryer__*\"] }}");
+        }
     }
 
     Ok(())

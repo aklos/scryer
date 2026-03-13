@@ -9,21 +9,20 @@ import type {
   OnEdgesChange,
   OnConnect,
 } from "@xyflow/react";
+import { invoke } from "@tauri-apps/api/core";
 import { TopBar } from "./TopBar";
 import { Sidebar } from "./Sidebar";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { SettingsPanel } from "./SettingsPanel";
-import { ThemePanel } from "./ThemePanel";
 import { loadTheme, ThemeContext } from "./theme";
 import { CommandPalette } from "./CommandPalette";
 import { FlowScriptView } from "./FlowScriptView";
 import { C4Canvas } from "./C4Canvas";
-import { FlowEditPopup } from "./FlowEditPopup";
 import { expandGuidePanel } from "./GuidePanels";
 import { autoLayout } from "./layout";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ToastProvider } from "./Toast";
-import type { C4Kind, C4NodeData, C4Node, C4Edge, SourceLocation, Group, Flow, StartingLevel } from "./types";
+import type { C4Kind, C4NodeData, C4Node, C4Edge, SourceLocation, Group, Flow, StartingLevel, AiToolsState } from "./types";
 import { useModelStorage } from "./hooks/useModelStorage";
 import type { ModelStorageState } from "./hooks/useModelStorage";
 import { useHistory } from "./hooks/useHistory";
@@ -93,7 +92,7 @@ function buildStarterModel(): { nodes: C4Node[]; edges: C4Edge[]; flows: Flow[];
       name: "Core workflow",
       steps: [
         { id: step1, description: "@[User] sends payload with @[record] data" },
-        { id: step2, description: "@[System] validates payload and creates @[record] in @[Database]", processIds: [processId] },
+        { id: step2, description: "@[System] validates payload and creates @[record] in @[Database]" },
       ],
     },
   ];
@@ -129,7 +128,7 @@ function Flow() {
   // Flows
   const [flows, setFlows] = useState<Flow[]>([]);
   const [activeFlowId, setActiveFlowId] = useState<string | null>(null);
-  const [editingFlow, setEditingFlow] = useState(false);
+
 
   // Viewport is uncontrolled — use ReactFlow instance methods to read/set
 
@@ -137,7 +136,8 @@ function Flow() {
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   // Theme
-  const [themeOpen, setThemeOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"ai" | "theme" | null>(null);
+  const [aiTools, setAiTools] = useState<AiToolsState>({ claude: false, codex: false, claudeHookEnabled: false, claudePermsEnabled: false, claudeHookGlobal: false, claudePermsGlobal: false });
   const [themeTick, setThemeTick] = useState(0); // force re-render on theme change
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -184,6 +184,13 @@ function Flow() {
     },
     scheduleFitView,
   );
+
+  // Detect Claude Code integration state when project changes
+  useEffect(() => {
+    invoke<AiToolsState>("detect_ai_tools", { projectPath: projectPath ?? null })
+      .then(setAiTools)
+      .catch(() => {});
+  }, [projectPath, currentModel]);
 
   // --- History (undo/redo) ---
   const history = useHistory();
@@ -255,6 +262,7 @@ function Flow() {
   const { visibleNodes, visibleNodesWithHints, visibleEdges, refNodeIds, groupNodeIds } = useVisibleNodes({
     nodes, edges, currentParentId, refPositions,
     groups, selectedGroupId, setRefPositions, activeHints: advisor.hints,
+    changedNodeIds: storage.changedNodeIds,
   });
 
   const onNodesChange = useNodesChange({
@@ -736,6 +744,34 @@ function Flow() {
 
   const activeFlow = activeFlowId ? flows.find((s) => s.id === activeFlowId) ?? null : null;
 
+  // Integration nudge: show when Claude Code is installed, project has a path, but neither hook nor perms configured
+  const [nudgeDismissed, setNudgeDismissed] = useState(false);
+  const showNudge = currentModel !== null
+    && aiTools.claude
+    && !!projectPath
+    && !aiTools.claudeHookEnabled
+    && !aiTools.claudePermsEnabled
+    && !nudgeDismissed
+    && !localStorage.getItem(`scryer:hookNudgeDismissed:${projectPath}`);
+
+  const handleNudgeSetup = useCallback(async () => {
+    try {
+      await invoke<string>("setup_claude_integration", { action: "hook", projectPath: projectPath ?? null });
+      await invoke<string>("setup_claude_integration", { action: "permissions", projectPath: projectPath ?? null });
+      setAiTools((prev) => ({ ...prev, claudeHookEnabled: true, claudePermsEnabled: true }));
+    } catch {
+      // fallback: just dismiss
+    }
+    setNudgeDismissed(true);
+  }, [projectPath]);
+
+  const handleNudgeDismiss = useCallback(() => {
+    if (projectPath) {
+      localStorage.setItem(`scryer:hookNudgeDismissed:${projectPath}`, "1");
+    }
+    setNudgeDismissed(true);
+  }, [projectPath]);
+
   return (
     <ThemeContext.Provider value={themeTick}>
     <div className="flex flex-col h-screen w-screen">
@@ -743,8 +779,7 @@ function Flow() {
         currentModel={currentModel}
         onOpenPalette={() => setPaletteOpen(true)}
         onNavigateToRoot={() => navigateToBreadcrumb(null)}
-        onOpenSettings={() => advisor.setSettingsOpen(true)}
-        onOpenTheme={() => setThemeOpen(true)}
+        onOpenSettings={() => setSettingsTab("ai")}
         onCloseModel={storage.newModel}
         onSaveAs={() => {
           const raw = window.prompt("Save model as:", currentModel ?? "");
@@ -752,8 +787,6 @@ function Flow() {
           const name = raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-");
           if (name) storage.saveModelAs(name);
         }}
-        followAI={storage.followAI}
-        onToggleFollowAI={() => storage.setFollowAI(!storage.followAI)}
         hasModel={currentModel !== null || nodes.length > 0}
         breadcrumbs={breadcrumbs}
         currentParentKind={currentParentKind}
@@ -762,6 +795,10 @@ function Flow() {
         activeFlowName={activeFlow?.name ?? null}
         dependencies={parentDependencies}
         onNavigateToNode={navigateToNode}
+        projectPath={projectPath}
+        aiTools={aiTools}
+        onAiToolsChange={setAiTools}
+        onSetProjectPath={setProjectPath}
       />
       <div className="flex flex-1 min-h-0">
         <Sidebar
@@ -796,8 +833,7 @@ function Flow() {
           }}
           flows={flows}
           activeFlowId={activeFlowId}
-          onSelectFlow={(id) => { setActiveFlowId(id); setEditingFlow(false); }}
-          onEditFlow={(id) => { setActiveFlowId(id); setEditingFlow(true); }}
+          onSelectFlow={(id) => { setActiveFlowId(id); }}
           onNewFlow={() => {
             const maxNum = flows
               .map((s) => s.id.replace("scenario-", ""))
@@ -810,12 +846,44 @@ function Flow() {
             setActiveFlowId(newId);
                      }}
         />
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col relative">
+          {showNudge && (
+            <div className="absolute top-3 right-3 z-10 flex items-start gap-3 px-4 py-3 rounded-lg border border-zinc-200/80 bg-white/90 shadow-lg backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-800/90 max-w-[320px]">
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-1">Claude Code integration</div>
+                <div className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">Enable drift detection and auto-approved tools for this project.</div>
+                <button
+                  type="button"
+                  className="mt-2 px-2.5 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 cursor-pointer text-[11px] font-medium transition-colors"
+                  onClick={handleNudgeSetup}
+                >
+                  Enable
+                </button>
+              </div>
+              <button
+                type="button"
+                className="text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer text-sm leading-none mt-0.5"
+                onClick={handleNudgeDismiss}
+                title="Dismiss"
+              >
+                &times;
+              </button>
+            </div>
+          )}
           {activeFlow ? (
             <FlowScriptView
               flow={activeFlow}
               onUpdate={(updated: Flow) => setFlows((prev) => prev.map((s) => s.id === updated.id ? updated : s))}
+              onDelete={() => {
+                const idx = flows.findIndex((s) => s.id === activeFlowId);
+                const remaining = flows.filter((s) => s.id !== activeFlowId);
+                setFlows(remaining);
+                const next = remaining[Math.min(idx, remaining.length - 1)] ?? null;
+                setActiveFlowId(next?.id ?? null);
+              }}
               allNodes={nodes}
+              sourceMap={sourceMap}
+              projectPath={projectPath}
             />
           ) : (
             <C4Canvas
@@ -838,7 +906,7 @@ function Flow() {
               aiEnabled={advisor.aiEnabled}
               hintLoading={advisor.hintLoading}
               fetchHints={advisor.fetchHints}
-              setSettingsOpen={advisor.setSettingsOpen}
+              setSettingsOpen={(open: boolean) => { if (open) setSettingsTab("ai"); else setSettingsTab(null); }}
               parentName={currentParentId ? (nodes.find((n) => n.id === currentParentId)?.data as C4NodeData | undefined)?.name : undefined}
               parentKind={currentParentKindForGroup}
               selectedNode={selectedNode}
@@ -850,25 +918,10 @@ function Flow() {
               currentParentKind={currentParentKind}
               layoutPending={layoutPending || visibleNodes.some((n) => n.data._needsLayout && n.type !== "groupBox")}
               setNodes={setNodes}
+              followAI={storage.followAI}
+              onToggleFollowAI={() => storage.setFollowAI(!storage.followAI)}
             />
           )}
-          {/* Flow edit popup */}
-          {editingFlow && activeFlowId && (() => {
-            const sc = flows.find((s) => s.id === activeFlowId);
-            if (!sc) return null;
-            return (
-              <FlowEditPopup
-                flow={sc}
-                onUpdate={(updates) => setFlows((prev) => prev.map((s) => s.id === activeFlowId ? { ...s, ...updates } : s))}
-                onDelete={() => {
-                  setFlows((prev) => prev.filter((s) => s.id !== activeFlowId));
-                  setActiveFlowId(null);
-                                   setEditingFlow(false);
-                }}
-                onClose={() => setEditingFlow(false)}
-              />
-            );
-          })()}
           {/* Command palette */}
           {paletteOpen && (
             <CommandPalette
@@ -882,18 +935,13 @@ function Flow() {
             />
           )}
           {/* Settings panel */}
-          {advisor.settingsOpen && (
+          {settingsTab != null && (
             <SettingsPanel
-              onClose={() => advisor.setSettingsOpen(false)}
+              onClose={() => setSettingsTab(null)}
               onSaved={(configured: boolean) => advisor.setAiConfigured(configured)}
-            />
-          )}
-          {/* Theme panel */}
-          {themeOpen && (
-            <ThemePanel
               theme={loadTheme()}
-              onChange={() => setThemeTick((t) => t + 1)}
-              onClose={() => setThemeOpen(false)}
+              onThemeChange={() => setThemeTick((t) => t + 1)}
+              initialTab={settingsTab ?? "ai"}
             />
           )}
         </div>

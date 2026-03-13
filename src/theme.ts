@@ -7,6 +7,7 @@
  */
 
 import { createContext } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 /**
  * Tick counter that increments on every theme change.
@@ -141,7 +142,7 @@ export const DEFAULT_THEME: ThemeConfig = {
   offsets: {},
   canvasLight: 1,
   nodeLight: -1,
-  canvasDark: 10,
+  canvasDark: 9,
   nodeDark: 8,
 };
 
@@ -183,12 +184,17 @@ export function applyColorMode(mode: ColorMode): void {
 
   apply(isDarkActive(mode));
 
-  // When "system", track OS changes
+  // Sync Tauri webview theme — forces the webview's prefers-color-scheme to match.
+  // For "system", reset to null so it follows the OS automatically.
+  const win = getCurrentWindow();
   if (mode === "system") {
+    win.setTheme(null).catch(() => {});
     const mql = window.matchMedia("(prefers-color-scheme: dark)");
     const handler = (e: MediaQueryListEvent) => apply(e.matches);
     mql.addEventListener("change", handler);
     _systemDarkListener = () => mql.removeEventListener("change", handler);
+  } else {
+    win.setTheme(mode === "dark" ? "dark" : "light").catch(() => {});
   }
 }
 

@@ -14,3 +14,4 @@ llm = { version = "1.3", default-features = false, features = [
     "default-tls",
 ] }
 tokio = { version = "1", features = ["rt", "sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "default-tls"] }

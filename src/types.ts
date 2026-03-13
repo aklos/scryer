@@ -4,7 +4,7 @@ export type C4Kind = "person" | "system" | "container" | "component" | "operatio
 
 export type C4Shape = "rectangle" | "person" | "cylinder" | "pipe" | "trapezoid" | "bucket" | "hexagon";
 
-export type Status = "implemented" | "proposed" | "changed" | "deprecated";
+export type Status = "proposed" | "wip" | "ready";
 
 export interface ContractImage {
   filename: string;
@@ -45,8 +45,9 @@ export type C4NodeData = {
   shape?: C4Shape;
   sources?: { pattern: string; comment: string }[];
   status?: Status;
+  statusReason?: string;
   contract?: Contract;
-  notes?: string;
+  notes?: string[];
   properties?: ModelProperty[];
   _reference?: boolean;
   _relationships?: { direction: "in" | "out"; label: string; method?: string }[];
@@ -64,9 +65,10 @@ export type C4Node = Node<C4NodeData>;
 export type C4Edge = Edge<C4EdgeData>;
 
 export type SourceLocation = {
-  file: string;
+  pattern: string;
   line?: number;
   endLine?: number;
+  command?: string;
 };
 
 export interface ModelProperty {
@@ -93,7 +95,6 @@ export interface FlowBranch {
 export interface FlowStep {
   id: string;
   description?: string;
-  processIds?: string[];
   branches?: FlowBranch[];
 }
 
@@ -135,3 +136,13 @@ export interface Hint {
 export type HintAction =
   | { type: "setShape"; shape: string }
   | { type: "setExternal"; value: boolean };
+
+// AI coding tool integration state
+export type AiToolsState = {
+  claude: boolean;
+  codex: boolean;
+  claudeHookEnabled: boolean;
+  claudePermsEnabled: boolean;
+  claudeHookGlobal: boolean;
+  claudePermsGlobal: boolean;
+};

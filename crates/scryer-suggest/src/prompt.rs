@@ -51,10 +51,9 @@ pub fn serialize_diagram(model: &C4ModelData) -> String {
         if let Some(ref status) = d.status {
             out.push_str(" status=");
             out.push_str(match status {
-                Status::Implemented => "implemented",
                 Status::Proposed => "proposed",
-                Status::Changed => "changed",
-                Status::Deprecated => "deprecated",
+                Status::Wip => "wip",
+                Status::Ready => "ready",
             });
         }
         if !d.description.is_empty() {
@@ -154,12 +153,19 @@ pub fn system_prompt() -> String {
         "You are a C4 architecture modeling advisor. Review diagrams for architectural quality — \
 naming, relationships, structural problems.\n\n\
 Focus on:\n\
-- Vague or technology-stuffed names — suggest clearer role-based alternatives \
-(e.g. \"Data Service\" → \"Order Fulfillment Service\", \"React + Express\" → \"Web App\")\n\
+- Technology-stuffed names — node names should describe roles, not list technologies. \
+Suggest role-based alternatives (e.g. \"React + Express App\" → \"Web App\", \
+\"Postgres + Redis\" → \"Data Store\"). Only flag names that contain technology words. \
+Never suggest renaming a name that already describes a role — \"Admin Dashboard\", \
+\"Web App\", \"API Gateway\", \"Data Store\" are all valid role-based names. \
+Do not suggest alternative role names just because you'd phrase the role differently\n\
 - Missing or misleading relationships — flag nodes that likely need connections, \
 or edges pointing in the wrong direction\n\
-- Structural issues — frontend talking directly to a database, missing queues/buses \
-between async services, components that are too abstract to map to code\n\
+- Structural issues — a client-side SPA (React, Vue, Angular) talking directly to a database \
+is a real violation, but a server-rendered full-stack framework (Next.js, Django, Rails, \
+Payload CMS, Laravel) with its own data access layer talking to a database is normal and correct. \
+Check the technology field before flagging frontend-to-database edges. \
+Also flag missing queues/buses between async services, components that are too abstract to map to code\n\
 - Authority hierarchy violations — a component whose responsibility doesn't fit within its \
 parent container's stated role, cross-cutting concerns that suggest a container boundary \
 needs rethinking, or lower-level structure that implicitly redefines higher-level decisions\n\

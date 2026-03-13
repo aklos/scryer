@@ -405,6 +405,7 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
   }
 
   const groupHighlight = (data as Record<string, unknown>)._groupHighlight;
+  const changed = (data as Record<string, unknown>)._changed;
 
   return (
     <div
@@ -439,26 +440,8 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
           strokeDasharray={isExternal ? "6 3" : undefined}
           kind={data.kind}
           external={!!isExternal}
+          changed={!!changed}
         />
-        {/* Deprecated status: line through center */}
-        {data.status === "deprecated" && !isExternal && (
-          <svg
-            className="absolute inset-0 pointer-events-none"
-            width="180"
-            height="160"
-            viewBox="0 0 180 160"
-          >
-            <line
-              x1="20"
-              y1="80"
-              x2="160"
-              y2="80"
-              stroke={getThemedHex("red", "400")}
-              strokeWidth="1.5"
-              opacity="0.5"
-            />
-          </svg>
-        )}
         <NodeHandles />
 
         {/* Drill-in — visible when selected */}

@@ -18,7 +18,6 @@ interface SidebarProps {
   flows: Flow[];
   activeFlowId: string | null;
   onSelectFlow: (id: string) => void;
-  onEditFlow: (id: string) => void;
   onNewFlow: () => void;
 }
 
@@ -163,7 +162,7 @@ function GroupTreeRow({ group, memberNodes, depth, open, ctx }: { group: Group; 
 export function Sidebar({
   currentModel, nodes, selectedNodeId, expandedPath, modelList, onLoadModel, onNavigateToNode, onExpandNode,
   groups, onHighlightGroup,
-  flows, activeFlowId, onSelectFlow, onEditFlow, onNewFlow,
+  flows, activeFlowId, onSelectFlow, onNewFlow,
 }: SidebarProps) {
   const [activeTab, setActiveTab] = useState<"nodes" | "flows">("nodes");
   const [treeOpen, setTreeOpen] = useState<Set<string>>(new Set());
@@ -288,14 +287,6 @@ export function Sidebar({
                   >
                     <span className="shrink-0 text-zinc-400 dark:text-zinc-500">&#8227;</span>
                     <span className="truncate flex-1">{sc.name}</span>
-                    <button
-                      type="button"
-                      className="text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer text-xs shrink-0 transition-colors"
-                      onClick={(e) => { e.stopPropagation(); onEditFlow(sc.id); }}
-                      title="Edit flow"
-                    >
-                      &#8943;
-                    </button>
                   </div>
                 ))}
                 {flows.length === 0 && (

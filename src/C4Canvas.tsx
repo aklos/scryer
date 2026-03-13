@@ -20,7 +20,7 @@ import { nodeTypes } from "./nodes";
 import { edgeTypes } from "./edges";
 import { CodeLevelRack } from "./CodeLevelRack";
 import { GuidePanel } from "./GuidePanels";
-import { Bot, Loader2, Trash2, Plus } from "lucide-react";
+import { Bot, Loader2, Trash2, Plus, Navigation } from "lucide-react";
 import { Button } from "./ui";
 import type { C4Node, C4Edge, C4Kind, Group } from "./types";
 
@@ -62,6 +62,8 @@ interface C4CanvasProps {
   currentParentKind: C4Kind | undefined;
   layoutPending?: boolean;
   setNodes: React.Dispatch<React.SetStateAction<C4Node[]>>;
+  followAI: boolean;
+  onToggleFollowAI: () => void;
 }
 
 export function C4Canvas({
@@ -96,6 +98,8 @@ export function C4Canvas({
   currentParentKind,
   layoutPending,
   setNodes,
+  followAI,
+  onToggleFollowAI,
 }: C4CanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const selectionStartPos = useRef<{ x: number; y: number } | null>(null);
@@ -227,7 +231,11 @@ export function C4Canvas({
     if (selectedIds.size > 0) {
       setEdges((eds) => eds.map((e) => e.selected ? { ...e, selected: false } : e) as C4Edge[]);
     }
-  }, [visibleNodesWithHints, onNodesChange, setEdges]);
+
+    // Manually fire onSelectionChange since we suppressed it during drag
+    const selectedNodes = visibleNodesWithHints.filter((n) => selectedIds.has(n.id));
+    onSelectionChange({ nodes: selectedNodes, edges: [] });
+  }, [visibleNodesWithHints, onNodesChange, setEdges, onSelectionChange]);
 
   // During box selection, suppress ReactFlow's (incorrect) live select changes.
   // Our handleSelectionEnd dispatches the correct selection at the end.
@@ -399,7 +407,7 @@ export function C4Canvas({
         onSelectionChange={wrappedOnSelectionChange}
         onSelectionStart={handleSelectionStart}
         onSelectionEnd={handleSelectionEnd}
-        colorMode="system"
+        colorMode={document.documentElement.classList.contains("dark") ? "dark" : "light"}
         proOptions={proOptions}
       >
         <Background gap={20} variant={BackgroundVariant.Dots} size={1} color="var(--grid-color, #e4e4e7)" />
@@ -449,6 +457,21 @@ export function C4Canvas({
           </Panel>
         )}
         <Panel position="bottom-right" className="flex items-center gap-2 !m-2">
+          {nodes.length > 0 && (
+            <button
+              type="button"
+              className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] cursor-pointer transition-colors ${
+                followAI
+                  ? "text-blue-500 hover:bg-zinc-100 dark:text-blue-400 dark:hover:bg-zinc-800"
+                  : "text-zinc-400 hover:bg-zinc-100 dark:text-zinc-500 dark:hover:bg-zinc-800"
+              }`}
+              onClick={onToggleFollowAI}
+              title={followAI ? "Following AI changes (click to disable)" : "Not following AI changes (click to enable)"}
+            >
+              <Navigation className="h-3 w-3" />
+              Follow AI
+            </button>
+          )}
           {nodes.length > 0 && (
             <button
               type="button"

@@ -22,6 +22,15 @@
   }
 }
 
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0; }
+  25%, 75% { opacity: 1; }
+}
+
+.scryer-changed-glow {
+  animation: pulse-glow 1s ease-in-out 3;
+}
+
 /* Edges render above nodes so shape decorations don't overlap arrows */
 .react-flow__edges {
   z-index: 1 !important;

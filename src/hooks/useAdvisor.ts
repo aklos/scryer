@@ -16,7 +16,7 @@ export function useAdvisor({ nodes, edges, startingLevel, sourceMap }: UseAdviso
 
   const [aiConfigured, setAiConfigured] = useState(false);
   const [aiEnabled, setAiEnabled] = useState(() => localStorage.getItem("scryer:aiEnabled") !== "false");
-  const [settingsOpen, setSettingsOpen] = useState(false);
+
 
   // Check AI settings on mount
   useEffect(() => {
@@ -73,7 +73,5 @@ export function useAdvisor({ nodes, edges, startingLevel, sourceMap }: UseAdviso
     setAiConfigured,
     aiEnabled,
     setAiEnabled,
-    settingsOpen,
-    setSettingsOpen,
   };
 }

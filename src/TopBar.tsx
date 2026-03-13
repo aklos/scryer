@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Minus, Square, X, Settings, Keyboard, FolderX, SaveAll, Menu, Palette, Navigation } from "lucide-react";
-import type { C4Kind } from "./types";
+import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { Minus, Square, X, Settings, Keyboard, FolderX, SaveAll, Menu, FolderOpen } from "lucide-react";
+import type { C4Kind, AiToolsState } from "./types";
 import type { RackDependency } from "./CodeLevelRack";
 
 interface TopBarProps {
@@ -9,11 +11,8 @@ interface TopBarProps {
   onOpenPalette: () => void;
   onNavigateToRoot: () => void;
   onOpenSettings: () => void;
-  onOpenTheme: () => void;
   onCloseModel: () => void;
   onSaveAs: () => void;
-  followAI: boolean;
-  onToggleFollowAI: () => void;
   hasModel: boolean;
 
   breadcrumbs: { id: string; name: string; kind: C4Kind }[];
@@ -23,24 +22,190 @@ interface TopBarProps {
   activeFlowName: string | null;
   dependencies?: RackDependency[];
   onNavigateToNode?: (id: string) => void;
+
+  projectPath?: string;
+  aiTools: AiToolsState;
+  onAiToolsChange: (tools: AiToolsState) => void;
+  onSetProjectPath: (path: string | undefined) => void;
 }
 
 const appWindow = getCurrentWindow();
 
+function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors ${
+        checked ? "bg-blue-500" : "bg-zinc-300 dark:bg-zinc-600"
+      }`}
+      onClick={() => onChange(!checked)}
+    >
+      <span
+        className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform mt-0.5 ${
+          checked ? "translate-x-[18px]" : "translate-x-0.5"
+        }`}
+      />
+    </button>
+  );
+}
 
-
-function AppMenu({ onClose, onOpenSettings, onOpenTheme, onOpenPalette, onCloseModel, onSaveAs, hasModel, followAI, onToggleFollowAI }: { onClose: () => void; onOpenSettings: () => void; onOpenTheme: () => void; onOpenPalette: () => void; onCloseModel: () => void; onSaveAs: () => void; hasModel: boolean; followAI: boolean; onToggleFollowAI: () => void }) {
+function ProjectMenu({
+  onClose,
+  onOpenPalette,
+  projectPath,
+  aiTools,
+  onAiToolsChange,
+  triggerRef,
+  onSetProjectPath,
+}: {
+  onClose: () => void;
+  onOpenPalette: () => void;
+  projectPath?: string;
+  aiTools: AiToolsState;
+  onAiToolsChange: (tools: AiToolsState) => void;
+  triggerRef: React.RefObject<HTMLButtonElement | null>;
+  onSetProjectPath: (path: string | undefined) => void;
+}) {
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handler = (e: PointerEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)
+          && !(triggerRef.current && triggerRef.current.contains(e.target as Node))) {
         onClose();
       }
     };
     document.addEventListener("pointerdown", handler, true);
     return () => document.removeEventListener("pointerdown", handler, true);
+  }, [onClose, triggerRef]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
+
+  const showClaude = aiTools.claude && !!projectPath;
+
+  const handleToggle = async (field: "claudeHookEnabled" | "claudePermsEnabled", checked: boolean) => {
+    const actionMap = {
+      claudeHookEnabled: checked ? "hook" : "remove_hook",
+      claudePermsEnabled: checked ? "permissions" : "remove_permissions",
+    };
+    try {
+      await invoke<string>("setup_claude_integration", {
+        action: actionMap[field],
+        projectPath: projectPath ?? null,
+      });
+      onAiToolsChange({ ...aiTools, [field]: checked });
+    } catch {
+      // silently fail — user will see toggle didn't change
+    }
+  };
+
+  return (
+    <div
+      ref={menuRef}
+      className="absolute top-full left-0 mt-1 z-50 min-w-[240px] rounded-lg border border-zinc-200/80 bg-white/80 shadow-sm backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-900/80 py-1"
+    >
+      <button
+        type="button"
+        className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-700 cursor-pointer transition-colors"
+        onClick={() => { onOpenPalette(); onClose(); }}
+      >
+        <Keyboard className="h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" />
+        <span className="flex-1 text-left">Switch model</span>
+        <span className="text-[10px] text-zinc-400 dark:text-zinc-500">Ctrl+K</span>
+      </button>
+      <button
+        type="button"
+        className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-700 cursor-pointer transition-colors"
+        onClick={async () => {
+          const selected = await openDialog({ directory: true, title: "Select project folder", defaultPath: projectPath });
+          if (selected) onSetProjectPath(selected);
+        }}
+      >
+        <FolderOpen className="h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" />
+        <span className="flex-1 text-left truncate">{projectPath ? "Change project" : "Link project"}</span>
+      </button>
+      {projectPath && (
+        <div className="px-3 py-1 text-[10px] text-zinc-400 dark:text-zinc-500 truncate max-w-[240px]" title={projectPath}>
+          {projectPath}
+        </div>
+      )}
+
+      {showClaude && (() => {
+        const allGlobal = aiTools.claudeHookGlobal && aiTools.claudePermsGlobal;
+        return (
+          <>
+            <div className="my-1 border-t border-zinc-200/60 dark:border-zinc-700/60" />
+            <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+              Claude Code
+            </div>
+            {allGlobal ? (
+              <div className="px-3 py-1.5 text-[10px] text-zinc-400 dark:text-zinc-500 leading-relaxed">
+                Drift detection and auto-approve are enabled globally in ~/.claude/settings.json
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between px-3 py-1.5">
+                  <div>
+                    <div className={`text-xs ${aiTools.claudeHookGlobal ? "text-zinc-400 dark:text-zinc-500" : "text-zinc-600 dark:text-zinc-300"}`}>Drift detection hook</div>
+                    <div className="text-[10px] text-zinc-400 dark:text-zinc-500 max-w-[160px]">
+                      {aiTools.claudeHookGlobal ? "Enabled globally" : "Nudge AI when source files change"}
+                    </div>
+                  </div>
+                  {aiTools.claudeHookGlobal ? (
+                    <Toggle checked={true} onChange={() => {}} />
+                  ) : (
+                    <Toggle
+                      checked={aiTools.claudeHookEnabled}
+                      onChange={(checked) => handleToggle("claudeHookEnabled", checked)}
+                    />
+                  )}
+                </div>
+                <div className="flex items-center justify-between px-3 py-1.5">
+                  <div>
+                    <div className={`text-xs ${aiTools.claudePermsGlobal ? "text-zinc-400 dark:text-zinc-500" : "text-zinc-600 dark:text-zinc-300"}`}>Auto-approve tools</div>
+                    <div className="text-[10px] text-zinc-400 dark:text-zinc-500 max-w-[160px]">
+                      {aiTools.claudePermsGlobal ? "Enabled globally" : "Skip prompts for scryer MCP tools"}
+                    </div>
+                  </div>
+                  {aiTools.claudePermsGlobal ? (
+                    <Toggle checked={true} onChange={() => {}} />
+                  ) : (
+                    <Toggle
+                      checked={aiTools.claudePermsEnabled}
+                      onChange={(checked) => handleToggle("claudePermsEnabled", checked)}
+                    />
+                  )}
+                </div>
+              </>
+            )}
+          </>
+        );
+      })()}
+    </div>
+  );
+}
+
+function AppMenu({ onClose, onOpenSettings, onOpenPalette, onCloseModel, onSaveAs, hasModel, triggerRef }: { onClose: () => void; onOpenSettings: () => void; onOpenPalette: () => void; onCloseModel: () => void; onSaveAs: () => void; hasModel: boolean; triggerRef: React.RefObject<HTMLButtonElement | null> }) {
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: PointerEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)
+          && !(triggerRef.current && triggerRef.current.contains(e.target as Node))) {
+        onClose();
+      }
+    };
+    document.addEventListener("pointerdown", handler, true);
+    return () => document.removeEventListener("pointerdown", handler, true);
+  }, [onClose, triggerRef]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -54,9 +219,7 @@ function AppMenu({ onClose, onOpenSettings, onOpenTheme, onOpenPalette, onCloseM
     { label: "Open model", icon: Keyboard, shortcut: "Ctrl+K", onClick: () => { onOpenPalette(); onClose(); } },
     { label: "Save as…", icon: SaveAll, onClick: () => { onSaveAs(); onClose(); }, disabled: !hasModel },
     { label: "Close model", icon: FolderX, onClick: () => { onCloseModel(); onClose(); }, disabled: !hasModel },
-    { label: "Follow AI", icon: Navigation, onClick: () => { onToggleFollowAI(); onClose(); }, active: followAI },
-    { label: "Theme", icon: Palette, onClick: () => { onOpenTheme(); onClose(); } },
-    { label: "AI settings", icon: Settings, onClick: () => { onOpenSettings(); onClose(); } },
+    { label: "Settings", icon: Settings, onClick: () => { onOpenSettings(); onClose(); } },
   ];
 
   return (
@@ -88,13 +251,17 @@ function AppMenu({ onClose, onOpenSettings, onOpenTheme, onOpenPalette, onCloseM
 }
 
 export function TopBar({
-  currentModel, onOpenPalette, onNavigateToRoot, onOpenSettings, onOpenTheme, onCloseModel, onSaveAs, followAI, onToggleFollowAI, hasModel,
+  currentModel, onOpenPalette, onNavigateToRoot, onOpenSettings, onCloseModel, onSaveAs, hasModel,
   breadcrumbs, currentParentKind, navigateToBreadcrumb,
   activeFlowId, activeFlowName,
   dependencies = [], onNavigateToNode,
+  projectPath, aiTools, onAiToolsChange, onSetProjectPath,
 }: TopBarProps) {
   const isFlow = !!activeFlowId;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const projectMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const appMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const toggleMenu = useCallback(() => setMenuOpen((prev) => !prev), []);
 
   return (
@@ -105,6 +272,7 @@ export function TopBar({
       {/* Logo + app menu */}
       <div className="relative shrink-0 flex items-center">
         <button
+          ref={appMenuTriggerRef}
           type="button"
           className="h-9 w-10 flex items-center justify-center text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700/60 cursor-pointer transition-colors"
           onClick={toggleMenu}
@@ -116,13 +284,11 @@ export function TopBar({
           <AppMenu
             onClose={() => setMenuOpen(false)}
             onOpenSettings={onOpenSettings}
-            onOpenTheme={onOpenTheme}
             onOpenPalette={onOpenPalette}
             onCloseModel={onCloseModel}
             onSaveAs={onSaveAs}
             hasModel={hasModel}
-            followAI={followAI}
-            onToggleFollowAI={onToggleFollowAI}
+            triggerRef={appMenuTriggerRef}
           />
         )}
       </div>
@@ -138,13 +304,27 @@ export function TopBar({
         >
           {currentModel ?? "Untitled"}
         </span>
-        <button
-          type="button"
-          className="rounded px-1.5 py-0.5 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 text-xs shrink-0 cursor-pointer transition-colors"
-          onClick={onOpenPalette}
-        >
-          &#8943;
-        </button>
+        <div className="relative shrink-0">
+          <button
+            ref={projectMenuTriggerRef}
+            type="button"
+            className="rounded px-1.5 py-0.5 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 text-xs shrink-0 cursor-pointer transition-colors"
+            onClick={() => setProjectMenuOpen((prev) => !prev)}
+          >
+            &#8943;
+          </button>
+          {projectMenuOpen && (
+            <ProjectMenu
+              onClose={() => setProjectMenuOpen(false)}
+              onOpenPalette={onOpenPalette}
+              projectPath={projectPath}
+              aiTools={aiTools}
+              onAiToolsChange={onAiToolsChange}
+              onSetProjectPath={onSetProjectPath}
+              triggerRef={projectMenuTriggerRef}
+            />
+          )}
+        </div>
       </div>
 
       {/* Center: level indicator + toolbar */}

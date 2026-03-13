@@ -479,8 +479,7 @@
         },
         {
           "id": "step-2",
-          "description": "@[Admin Dashboard] sends a publish request to @[Content API]",
-          "processIds": ["node-25"]
+          "description": "@[Admin Dashboard] sends a publish request to @[Content API]"
         },
         {
           "id": "step-3",

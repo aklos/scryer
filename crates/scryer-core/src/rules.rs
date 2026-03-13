@@ -102,8 +102,8 @@ creating everything at once makes it easy to miss gaps that leave nodes disconne
    Do NOT add components unless the user explicitly asks for deeper detail.\n\
    **Model for production, not for demos.** Look for cross-cutting concerns: authentication, input validation, \
 data migrations, background jobs, observability. Model them explicitly — do not leave them implied.\n\
-   **Set status on every node.** When modeling an existing codebase, set `status: \"implemented\"` on all nodes \
-that already exist in the code. Set `status: \"proposed\"` on new nodes being added as part of a feature or change. \
+   **Set status on every node.** When modeling an existing codebase, set `status: \"ready\"` on all nodes \
+that already exist and work in production. Set `status: \"proposed\"` on new nodes being added as part of a feature or change. \
 Nodes without status appear grey and unactionable in the UI — always be explicit.\n\
    **When you do add components** to a container (because the user asked for component-level detail or you're \
 adding a feature), model ALL components in that container — not just the new ones. Use `set_node` to populate \
@@ -119,6 +119,19 @@ accepts edges to any node in the model, not just nodes within the subtree. If yo
 warn you — fix missing edges immediately with `add_edges`.\n\
 5. **Do NOT create flows during initial modeling.** Flows are added later by the user or on explicit request. \
 Focus on the structural model (persons, systems, containers, components, operations).\n\
+   **When creating flows, structure branches correctly:**\n\
+   - Steps are sequential — each step follows the previous one in the normal (happy) path.\n\
+   - **Branches represent decision points where the flow diverges.** A step with branches means \
+\"at this point, one of these paths is taken.\" Every branch must have a condition.\n\
+   - **Use branches only for true if/else or switch logic** — where different conditions lead to \
+genuinely different paths. If a step has branches, provide at least two (e.g. success + failure). \
+A single branch with no alternative is not a decision — it is just the next step.\n\
+   - **The happy path should be sequential steps, not a branch.** If step 10 is \"Router passes \
+response to Sender\" and step 11 is \"Sender delivers the message,\" that is two sequential steps. \
+Do NOT wrap step 11 in an \"if: success\" branch unless there is also an \"if: failure\" branch \
+with a different path.\n\
+   - After branches, the flow resumes at the next sequential step. Branches do not need to \
+reconverge explicitly — the next step after the branching step is the continuation.\n\
 6. **When adding components, populate them with all three code-level node kinds:**\n\
    - **model** nodes for data structures. **Always include the `properties` array** — each property has a `label` \
 (valid identifier) and `description`. Do NOT just describe fields in the description text. Example: a `todo` model \
@@ -140,9 +153,9 @@ the diagram before implementing. Don't automatically call `get_task` and start w
 scryer is visual verification before implementation. If the user asks you to implement, build, or code in the \
 same request, go ahead.\n\
 8. **Implementation loop.** Use `get_task` to get the next implementation task. Build it, mark nodes as \
-implemented via `update_nodes`, then call `get_task` again. **Repeat this loop until `get_task` returns \
+as wip via `update_nodes` (with a reason), then call `get_task` again. **Repeat this loop until `get_task` returns \
 \"All tasks complete.\"** Do not read the full model and plan your own work order — `get_task` handles dependency \
-ordering, contract inheritance, and progress tracking. Parent containers and systems are marked implemented via \
+ordering, contract inheritance, and progress tracking. Parent containers and systems are marked wip via \
 completion hints from `get_task` once all their children are done.\n\
 \n\
 ## Authority Hierarchy\n\

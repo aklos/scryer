@@ -14,7 +14,7 @@ export function Section({ title, count, defaultOpen = true, children }: {
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="flex w-fit items-center gap-1 py-1 text-[11px] font-medium uppercase tracking-wider text-zinc-500 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer select-none"
+        className="sticky top-0 z-10 flex w-full items-center gap-1 py-1 text-[11px] font-medium uppercase tracking-wider text-zinc-500 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer select-none bg-zinc-50 dark:bg-zinc-900"
       >
         <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${open ? "rotate-90" : ""}`} />
         <span>{title}</span>
