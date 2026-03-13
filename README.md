@@ -36,12 +36,10 @@ Opinionated [C4](https://c4model.com/) hierarchy (system, container, component, 
 - **Contracts** — expect/ask/never rules that tell AI agents how to implement your code. Inherited down the hierarchy. Expect items have pass/fail flags that control when a node can be marked "ready".
 - **Status Tracking** — three statuses: proposed (planned), wip (code exists), ready (verified). During implementation, agents mark nodes as wip. "Ready" is a separate verification step — the implementation must be complete (no stubs or TODOs), existing tests must pass, and all expect contract items must be satisfied.
 - **Source Mapping** — link architecture nodes to files in your codebase with file patterns and line ranges. Click to open in your editor.
-- **Groups** — organize containers into deployment or package groups when they ship together.
 - **MCP Server** — AI agents connect to read, modify, and build from your architecture model in real-time.
 - **AI Advisor** — optional LLM-powered review that flags structural issues in your diagrams. Supports OpenAI, Anthropic, Google, Groq, Mistral, DeepSeek, and Ollama.
 - **Implementation Workflow** — `get_task` gives AI agents one piece of work at a time, ordered by dependencies, with contracts inherited from parent nodes. Build, mark wip, repeat.
 - **AI Tool Setup** — detects Claude Code and Codex, writes MCP config for your project. For Claude Code, also sets up drift-detection hooks and auto-approved permissions.
-- **Theming** — customize the color palette for every part of the diagram. Dark mode included.
 
 ## Getting started
 
