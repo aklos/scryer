@@ -3757,6 +3757,14 @@ When building code from a model, use `get_task` in a loop. Each call returns one
 4. **Call `get_task` again immediately.** Do not stop after one task — there are always more until it returns "All tasks complete."
 The task system tracks what's done and what's next. Do not read the full model via `get_model` to derive your own implementation order.
 
+### Verification (wip → ready)
+"Ready" is separate from implementation — do not set it during the implementation loop. A node is ready when:
+- The implementation is complete — no stubs, TODOs, or placeholder logic.
+- The code does what the node's description says.
+- If tests exist for this code, they pass.
+- All inherited `expect` contract items are satisfied (mark each as `passed: true`).
+The user decides when to verify. When asked, check each point. If anything fails, leave the node as `wip` and explain what's missing.
+
 ## Subagents
 Do NOT delegate scryer write operations (`set_model`, `set_node`, `add_nodes`, `update_nodes`, `delete_nodes`, `add_edges`, `update_edges`, `delete_edges`, `set_flows`, `delete_flow`, `update_source_map`) to subagents. Subagents may use read tools (`list_models`, `get_model`, `get_node`, `get_rules`, `get_changes`, `get_task`) for research, but all model mutations must happen in the main conversation context."#;
 

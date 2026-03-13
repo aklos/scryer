@@ -153,10 +153,18 @@ the diagram before implementing. Don't automatically call `get_task` and start w
 scryer is visual verification before implementation. If the user asks you to implement, build, or code in the \
 same request, go ahead.\n\
 8. **Implementation loop.** Use `get_task` to get the next implementation task. Build it, mark nodes as \
-as wip via `update_nodes` (with a reason), then call `get_task` again. **Repeat this loop until `get_task` returns \
+wip via `update_nodes` (with a reason), then call `get_task` again. **Repeat this loop until `get_task` returns \
 \"All tasks complete.\"** Do not read the full model and plan your own work order — `get_task` handles dependency \
 ordering, contract inheritance, and progress tracking. Parent containers and systems are marked wip via \
 completion hints from `get_task` once all their children are done.\n\
+9. **Verification (wip → ready).** \"Ready\" is a separate step from implementation — do not set it during the \
+implementation loop. A node is ready when:\n\
+   - The implementation is complete — no stubs, no TODOs, no placeholder logic.\n\
+   - The code does what the node's description says it does.\n\
+   - If tests exist for this code, they pass.\n\
+   - All inherited `expect` contract items are satisfied (mark each as `passed: true`).\n\
+The user decides when to verify. When asked, check each point above. If anything fails, leave the node as \
+`wip` and explain what's missing.\n\
 \n\
 ## Authority Hierarchy\n\
 The model is a specification, not just documentation. Higher-level nodes have authority over lower-level ones.\n\

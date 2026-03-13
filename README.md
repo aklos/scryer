@@ -33,9 +33,8 @@ Opinionated [C4](https://c4model.com/) hierarchy (system, container, component, 
 
 - **C4 Architecture Diagrams** — drag-and-drop editor for persons, systems, containers, components, operations, processes, and data models. Drill down through levels. Code-level nodes (operations, processes, models) show in a compact list view.
 - **Behavioral Flows** — model user journeys, data pipelines, deploy sequences. Supports branching and decision points. Link flows to test files and run tests from the flow view.
-- **Data Models** — define typed properties on model nodes, visible on the canvas alongside your architecture.
 - **Contracts** — expect/ask/never rules that tell AI agents how to implement your code. Inherited down the hierarchy. Expect items have pass/fail flags that control when a node can be marked "ready".
-- **Status Tracking** — three statuses: proposed (planned), wip (code exists), ready (production-ready). A node can only be marked "ready" when all its expect items pass. Agents must explain every status change.
+- **Status Tracking** — three statuses: proposed (planned), wip (code exists), ready (verified). During implementation, agents mark nodes as wip. "Ready" is a separate verification step — the implementation must be complete (no stubs or TODOs), existing tests must pass, and all expect contract items must be satisfied.
 - **Source Mapping** — link architecture nodes to files in your codebase with file patterns and line ranges. Click to open in your editor.
 - **Groups** — organize containers into deployment or package groups when they ship together.
 - **MCP Server** — AI agents connect to read, modify, and build from your architecture model in real-time.
@@ -55,7 +54,8 @@ Download the latest release for your platform from the [releases page](https://g
 3. The AI calls MCP tools — nodes appear in the visual editor in real-time
 4. Review, drag things around, rename, remove, restructure
 5. Tell the AI: *"Implement this model"*
-6. The AI reads the model and generates code from it — marking each node as wip with a reason as it goes
+6. The AI builds each piece one at a time, marking nodes as wip as it goes
+7. When you're satisfied, ask the AI to verify — it checks for stubs, runs any existing tests, and confirms contract items pass before marking nodes as ready
 
 ## MCP server
 
