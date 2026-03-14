@@ -152,13 +152,21 @@ async fn run_command(command: String, project_path: Option<String>) -> Result<se
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    let output = tokio::process::Command::new("sh")
-        .arg("-c")
-        .arg(&command)
-        .current_dir(&cwd)
-        .output()
-        .await
-        .map_err(|e| format!("Failed to run command: {e}"))?;
+    let output = if cfg!(target_os = "windows") {
+        tokio::process::Command::new("cmd")
+            .args(["/C", &command])
+            .current_dir(&cwd)
+            .output()
+            .await
+    } else {
+        tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .current_dir(&cwd)
+            .output()
+            .await
+    }
+    .map_err(|e| format!("Failed to run command: {e}"))?;
 
     Ok(serde_json::json!({
         "exitCode": output.status.code().unwrap_or(-1),
@@ -212,13 +220,21 @@ fn open_in_editor(file: String, line: Option<u32>, project_path: Option<String>)
     let editor = match editor {
         Some(e) => e,
         None => {
-            // Fallback: xdg-open on Linux, open on macOS
-            let fallback = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-            std::process::Command::new(fallback)
-                .arg(&*path_str)
-                .stdin(std::process::Stdio::null())
-                .spawn()
-                .map_err(|e| format!("Failed to open file: {e}"))?;
+            // Fallback: open on macOS, start on Windows, xdg-open on Linux
+            if cfg!(target_os = "windows") {
+                std::process::Command::new("cmd")
+                    .args(["/C", "start", "", &*path_str])
+                    .stdin(std::process::Stdio::null())
+                    .spawn()
+                    .map_err(|e| format!("Failed to open file: {e}"))?;
+            } else {
+                let fallback = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+                std::process::Command::new(fallback)
+                    .arg(&*path_str)
+                    .stdin(std::process::Stdio::null())
+                    .spawn()
+                    .map_err(|e| format!("Failed to open file: {e}"))?;
+            }
             return Ok(());
         }
     };

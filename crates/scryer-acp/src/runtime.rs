@@ -250,6 +250,12 @@ fn start_cli_session(
         use std::os::unix::process::CommandExt;
         unsafe { cmd.pre_exec(|| { libc::setpgid(0, 0); Ok(()) }); }
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+    }
 
     let mut child = cmd.spawn()
         .map_err(|e| format!("Failed to spawn {agent_binary}: {e}"))?;
@@ -400,7 +406,11 @@ async fn start_acp_session(
 ///
 /// On Unix, the child was placed in its own process group via `setpgid(0, 0)`,
 /// so `killpg` sends the signal to the whole group (child + grandchildren like
-/// the MCP server subprocess). Falls back to `child.kill()` if the PID is gone.
+/// the MCP server subprocess).
+///
+/// On Windows, uses `taskkill /F /T /PID` to recursively kill the process tree.
+///
+/// Falls back to `child.kill()` if the PID is gone or platform-specific methods fail.
 async fn kill_process_tree(child: &mut tokio::process::Child, pid: Option<u32>) {
     #[cfg(unix)]
     if let Some(pid) = pid {
@@ -412,6 +422,21 @@ async fn kill_process_tree(child: &mut tokio::process::Child, pid: Option<u32>) 
         let _ = child.wait().await;
         return;
     }
+
+    #[cfg(windows)]
+    if let Some(pid) = pid {
+        // taskkill /F /T kills the process and all its children
+        let _ = tokio::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+        let _ = child.wait().await;
+        return;
+    }
+
     let _ = child.kill().await;
     let _ = child.wait().await;
 }
