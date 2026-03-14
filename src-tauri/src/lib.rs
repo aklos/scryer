@@ -306,7 +306,6 @@ const SCRYER_READ_TOOLS: &[&str] = &[
     "mcp__scryer__get_rules",
     "mcp__scryer__get_changes",
     "mcp__scryer__get_structure",
-    "mcp__scryer__get_task",
 ];
 
 /// Check if Claude Code has auto-approved scryer read tools in project settings.

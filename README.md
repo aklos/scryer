@@ -118,8 +118,7 @@ For Claude Code, you can also auto-approve Scryer's read tools so the agent does
       "mcp__scryer__get_node",
       "mcp__scryer__get_rules",
       "mcp__scryer__get_changes",
-      "mcp__scryer__get_structure",
-      "mcp__scryer__get_task"
+      "mcp__scryer__get_structure"
     ]
   }
 }
@@ -131,11 +130,11 @@ For Claude Code, you can also auto-approve Scryer's read tools so the agent does
 - `get_model` — full model with all nodes, edges, flows, groups, source map
 - `get_node` — scoped read of a subtree with internal/external edges and context
 - `get_changes` — diff against baseline (what changed since you last looked)
-- `get_task` — next implementation task with dependency ordering and inherited contracts
 - `get_rules` — full C4 modeling rules and workflow guidance
 - `get_structure` — annotated project directory tree (manifests, infrastructure, environments)
 
-**Writing:**
+**Implementation:**
+- `get_task` — next implementation task with dependency ordering and inherited contracts
 - Add, update, and remove nodes and edges
 - Define behavioral flows with branching (`set_flows`)
 - Organize containers into groups (`set_groups`)
