@@ -690,8 +690,11 @@ pub fn run() {
             let dir = scryer_core::models_dir();
             let _ = std::fs::create_dir_all(&dir);
 
-            // Track known model names so we can detect new models from rename events
-            // (atomic writes use temp + rename, which fires Modify instead of Create)
+            // Track known model names so we can detect genuinely new models.
+            // On Windows, atomic rename (temp + rename) fires Remove + Create instead
+            // of Modify. We intentionally keep names in the set on Remove so that a
+            // subsequent Create from an atomic rename is treated as a change, not a
+            // new model. True deletions are handled by list refresh in the frontend.
             let mut known_models: HashSet<String> = std::fs::read_dir(&dir)
                 .into_iter()
                 .flatten()
@@ -723,8 +726,11 @@ pub fn run() {
                     if name.ends_with(".baseline") {
                         continue;
                     }
+                    // Skip Remove events — don't clear from known_models so that
+                    // Windows atomic rename (Remove + Create) won't falsely emit
+                    // model-created. The frontend refreshes the list to detect
+                    // true deletions.
                     if matches!(event.kind, EventKind::Remove(_)) {
-                        known_models.remove(name);
                         continue;
                     }
                     if known_models.insert(name.to_string()) {

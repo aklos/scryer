@@ -500,25 +500,13 @@ export function useModelStorage(
     await refreshList();
   }, [nodes, edges, startingLevel, sourceMap, refPositions, groups, flows, refreshList, setCurrentModel]);
 
-  // Auto-open models created externally (e.g. by MCP agent).
+  // File watcher: reload when external tools (MCP, etc.) modify model files.
+  // Handles both model-created and model-changed events.
   // On Windows, atomic rename (write_model_raw) fires Remove + Create instead of
-  // Modify, so model-created can fire for the already-open model. In that case,
-  // use reloadModel to preserve navigation state instead of loadModel which resets it.
+  // Modify, producing both events — the debounce collapses them into a single reload.
+  // Self-writes are caught by the lastKnownDisk comparison in reloadModel.
   useEffect(() => {
-    const unlisten = listen<string>("model-created", (event) => {
-      if (event.payload === currentModel) {
-        reloadModel(event.payload);
-      }
-      refreshList();
-    });
-    return () => { unlisten.then((fn) => fn()); };
-  }, [currentModel, loadModel, reloadModel]);
-
-  // File watcher: reload when external tools modify model files.
-  // The string comparison in reloadModel handles self-write detection.
-  useEffect(() => {
-    const unlisten = listen<string>("model-changed", (event) => {
-      const name = event.payload;
+    const handler = (name: string) => {
       if (reloadTimer.current) clearTimeout(reloadTimer.current);
       reloadTimer.current = setTimeout(() => {
         if (name === currentModel) {
@@ -526,9 +514,12 @@ export function useModelStorage(
         }
         refreshList();
       }, 300);
-    });
+    };
+    const unlistenCreated = listen<string>("model-created", (e) => handler(e.payload));
+    const unlistenChanged = listen<string>("model-changed", (e) => handler(e.payload));
     return () => {
-      unlisten.then((fn) => fn());
+      unlistenCreated.then((fn) => fn());
+      unlistenChanged.then((fn) => fn());
       if (reloadTimer.current) clearTimeout(reloadTimer.current);
     };
   }, [currentModel, reloadModel, refreshList]);
