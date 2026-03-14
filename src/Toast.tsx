@@ -17,10 +17,16 @@ const ToastContext = createContext<ToastContextValue>({ toast: () => {} });
 
 export const useToast = () => useContext(ToastContext);
 
+const VARIANT_ICON: Record<ToastVariant, string> = {
+  error: "!",
+  success: "\u2713",
+  info: "\u2022",
+};
+
 const VARIANT_CLASSES: Record<ToastVariant, string> = {
-  error: "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/60 dark:text-red-300",
-  success: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300",
-  info: "border-zinc-200 bg-zinc-50 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
+  error: "text-red-600 dark:text-red-400",
+  success: "text-emerald-600 dark:text-emerald-400",
+  info: "text-zinc-500 dark:text-zinc-400",
 };
 
 export function ToastProvider({ children }: { children: ReactNode }) {
@@ -43,20 +49,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext.Provider value={{ toast }}>
       {children}
       {toasts.length > 0 && (
-        <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
+        <div className="fixed bottom-12 right-4 z-50 flex flex-col gap-1.5 max-w-[280px]">
           {toasts.map((t) => (
             <div
               key={t.id}
-              className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs shadow-lg backdrop-blur-sm animate-in slide-in-from-bottom-2 ${VARIANT_CLASSES[t.variant]}`}
+              className="flex items-center gap-1.5 rounded border border-zinc-200/80 bg-white/90 dark:border-zinc-700/80 dark:bg-zinc-900/90 backdrop-blur-md px-2.5 py-1.5 text-[11px] shadow-sm cursor-pointer animate-in slide-in-from-bottom-2"
+              onClick={() => dismiss(t.id)}
             >
-              <span className="flex-1">{t.message}</span>
-              <button
-                type="button"
-                className="shrink-0 opacity-50 hover:opacity-100 cursor-pointer"
-                onClick={() => dismiss(t.id)}
-              >
-                &times;
-              </button>
+              <span className={`shrink-0 text-[10px] font-medium ${VARIANT_CLASSES[t.variant]}`}>{VARIANT_ICON[t.variant]}</span>
+              <span className="text-zinc-600 dark:text-zinc-300">{t.message}</span>
             </div>
           ))}
         </div>
