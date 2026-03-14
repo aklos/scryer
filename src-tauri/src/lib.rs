@@ -8,6 +8,12 @@ use tauri::{Emitter, Manager, path::BaseDirectory};
 /// Managed state wrapping the AI settings.
 struct SettingsState(Arc<Mutex<scryer_core::AiSettings>>);
 
+/// Managed state for the ACP runtime (agent orchestration).
+struct AcpState(Mutex<Option<scryer_acp::AcpRuntime>>);
+
+/// Pre-sync model snapshot for diffing after agent completes.
+struct SyncSnapshot(Mutex<Option<scryer_core::C4ModelData>>);
+
 #[tauri::command]
 fn list_models() -> Result<Vec<String>, String> {
     scryer_core::list_models()
@@ -265,45 +271,6 @@ fn open_in_editor(file: String, line: Option<u32>, project_path: Option<String>)
     Ok(())
 }
 
-/// Resolve the Claude settings path: per-project if project_path given, otherwise global.
-fn claude_settings_path(project_path: &Option<String>) -> Option<PathBuf> {
-    if let Some(ref pp) = project_path {
-        Some(PathBuf::from(pp).join(".claude").join("settings.json"))
-    } else {
-        dirs::home_dir().map(|h| h.join(".claude").join("settings.json"))
-    }
-}
-
-/// Check a Claude settings file for scryer hook and permissions.
-fn check_claude_settings(path: &PathBuf) -> (bool, bool) {
-    let mut hook_enabled = false;
-    let mut perms_enabled = false;
-    if let Ok(contents) = std::fs::read_to_string(path) {
-        if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
-            hook_enabled = root.pointer("/hooks/PostToolUse")
-                .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().any(|entry| {
-                    entry["hooks"].as_array()
-                        .map(|h| h.iter().any(|hk| {
-                            hk["command"].as_str()
-                                .map(|c| c.contains("scryer-mcp check-drift"))
-                                .unwrap_or(false)
-                        }))
-                        .unwrap_or(false)
-                }))
-                .unwrap_or(false);
-
-            perms_enabled = root.pointer("/permissions/allow")
-                .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().any(|v| {
-                    v.as_str() == Some("mcp__scryer__*")
-                }))
-                .unwrap_or(false);
-        }
-    }
-    (hook_enabled, perms_enabled)
-}
-
 #[tauri::command]
 /// Check if a project has .mcp.json with a scryer entry.
 fn check_mcp_json(project_path: &str) -> bool {
@@ -311,6 +278,35 @@ fn check_mcp_json(project_path: &str) -> bool {
     if let Ok(contents) = std::fs::read_to_string(&path) {
         if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
             return root.pointer("/mcpServers/scryer").is_some();
+        }
+    }
+    false
+}
+
+const SCRYER_READ_TOOLS: &[&str] = &[
+    "mcp__scryer__list_models",
+    "mcp__scryer__get_model",
+    "mcp__scryer__get_node",
+    "mcp__scryer__get_rules",
+    "mcp__scryer__get_changes",
+    "mcp__scryer__get_structure",
+    "mcp__scryer__get_task",
+];
+
+/// Check if Claude Code has auto-approved scryer read tools in project settings.
+fn check_claude_read_approved(project_path: &str) -> bool {
+    // Check both settings.local.json and settings.json
+    for filename in &["settings.local.json", "settings.json"] {
+        let path = PathBuf::from(project_path).join(".claude").join(filename);
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
+                if let Some(allow) = root.pointer("/permissions/allow").and_then(|v| v.as_array()) {
+                    let allowed: HashSet<&str> = allow.iter().filter_map(|v| v.as_str()).collect();
+                    if SCRYER_READ_TOOLS.iter().all(|t| allowed.contains(t)) {
+                        return true;
+                    }
+                }
+            }
         }
     }
     false
@@ -334,43 +330,17 @@ fn check_codex_toml(project_path: &str) -> bool {
 fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value {
     let has_claude = which::which("claude").is_ok();
     let has_codex = which::which("codex").is_ok();
-    let mut hook_enabled = false;
-    let mut perms_enabled = false;
-
-    let mut hook_global = false;
-    let mut perms_global = false;
-
-    if has_claude {
-        // Check global first to know the source
-        if let Some(home) = dirs::home_dir() {
-            let global_settings = home.join(".claude").join("settings.json");
-            let (h, p) = check_claude_settings(&global_settings);
-            hook_global = h;
-            perms_global = p;
-            hook_enabled = h;
-            perms_enabled = p;
-        }
-        // Check per-project (overrides global for detection)
-        if let Some(ref pp) = project_path {
-            let project_settings = PathBuf::from(pp).join(".claude").join("settings.json");
-            let (h, p) = check_claude_settings(&project_settings);
-            if h { hook_enabled = true; }
-            if p { perms_enabled = true; }
-        }
-    }
 
     let claude_mcp = project_path.as_deref().map(check_mcp_json).unwrap_or(false);
     let codex_mcp = project_path.as_deref().map(check_codex_toml).unwrap_or(false);
+    let claude_read_approved = project_path.as_deref().map(check_claude_read_approved).unwrap_or(false);
 
     serde_json::json!({
         "claude": has_claude,
         "codex": has_codex,
-        "claudeHookEnabled": hook_enabled,
-        "claudePermsEnabled": perms_enabled,
-        "claudeHookGlobal": hook_global,
-        "claudePermsGlobal": perms_global,
         "claudeMcpEnabled": claude_mcp,
         "codexMcpEnabled": codex_mcp,
+        "claudeReadApproved": claude_read_approved,
     })
 }
 
@@ -392,94 +362,16 @@ fn find_scryer_mcp() -> Option<String> {
 }
 
 #[tauri::command]
-fn setup_claude_integration(
+fn setup_mcp_integration(
     action: String,
-    project_path: Option<String>,
+    project_path: String,
 ) -> Result<String, String> {
-    let settings_path = claude_settings_path(&project_path)
-        .ok_or("Could not determine Claude settings path")?;
-    if let Some(parent) = settings_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-
-    let mut root: serde_json::Value = if settings_path.exists() {
-        let contents = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&contents).unwrap_or_else(|_| serde_json::json!({}))
-    } else {
-        serde_json::json!({})
-    };
-
     match action.as_str() {
-        "hook" => {
-            let binary_path = find_scryer_mcp()
-                .ok_or("scryer-mcp binary not found")?;
-
-            if !root.get("hooks").is_some_and(|v| v.is_object()) {
-                root["hooks"] = serde_json::json!({});
-            }
-
-            let hook_entry = serde_json::json!({
-                "matcher": "Edit|Write",
-                "hooks": [{
-                    "type": "command",
-                    "command": format!("{} check-drift", binary_path),
-                }]
-            });
-
-            if let Some(arr) = root["hooks"]["PostToolUse"].as_array_mut() {
-                let already = arr.iter().any(|entry| {
-                    entry["hooks"]
-                        .as_array()
-                        .map(|h| h.iter().any(|hk| {
-                            hk["command"].as_str().map(|c| c.contains("scryer-mcp check-drift")).unwrap_or(false)
-                        }))
-                        .unwrap_or(false)
-                });
-                if !already {
-                    arr.push(hook_entry);
-                }
-            } else {
-                root["hooks"]["PostToolUse"] = serde_json::json!([hook_entry]);
-            }
-        }
-        "permissions" => {
-            if !root.get("permissions").is_some_and(|v| v.is_object()) {
-                root["permissions"] = serde_json::json!({});
-            }
-            if let Some(arr) = root["permissions"]["allow"].as_array_mut() {
-                let rule = serde_json::Value::String("mcp__scryer__*".to_string());
-                if !arr.contains(&rule) {
-                    arr.push(rule);
-                }
-            } else {
-                root["permissions"]["allow"] = serde_json::json!(["mcp__scryer__*"]);
-            }
-        }
-        "remove_hook" => {
-            if let Some(arr) = root.pointer_mut("/hooks/PostToolUse").and_then(|v| v.as_array_mut()) {
-                arr.retain(|entry| {
-                    !entry["hooks"]
-                        .as_array()
-                        .map(|h| h.iter().any(|hk| {
-                            hk["command"].as_str().map(|c| c.contains("scryer-mcp check-drift")).unwrap_or(false)
-                        }))
-                        .unwrap_or(false)
-                });
-            }
-        }
-        "remove_permissions" => {
-            if let Some(arr) = root.pointer_mut("/permissions/allow").and_then(|v| v.as_array_mut()) {
-                arr.retain(|v| v.as_str() != Some("mcp__scryer__*"));
-            }
-        }
         "mcp" => {
-            // Write .mcp.json for Claude Code — requires project_path
-            let pp = project_path.as_deref()
-                .ok_or("project_path is required for MCP setup")?;
             let binary_path = find_scryer_mcp()
                 .ok_or("scryer-mcp binary not found")?;
 
-            let mcp_path = PathBuf::from(pp).join(".mcp.json");
+            let mcp_path = PathBuf::from(&project_path).join(".mcp.json");
             let mut mcp_root: serde_json::Value = if mcp_path.exists() {
                 let contents = std::fs::read_to_string(&mcp_path).map_err(|e| e.to_string())?;
                 serde_json::from_str(&contents).unwrap_or_else(|_| serde_json::json!({}))
@@ -502,13 +394,10 @@ fn setup_claude_integration(
             return Ok(mcp_path.to_string_lossy().to_string());
         }
         "mcp_codex" => {
-            // Write .codex/config.toml for Codex — requires project_path
-            let pp = project_path.as_deref()
-                .ok_or("project_path is required for MCP setup")?;
             let binary_path = find_scryer_mcp()
                 .ok_or("scryer-mcp binary not found")?;
 
-            let codex_dir = PathBuf::from(pp).join(".codex");
+            let codex_dir = PathBuf::from(&project_path).join(".codex");
             let config_path = codex_dir.join("config.toml");
 
             let mut doc: toml_edit::DocumentMut = if config_path.exists() {
@@ -533,13 +422,240 @@ fn setup_claude_integration(
 
             return Ok(config_path.to_string_lossy().to_string());
         }
-        _ => return Err(format!("Unknown action: {}", action)),
-    }
+        "claude_read_approve" => {
+            let claude_dir = PathBuf::from(&project_path).join(".claude");
+            let settings_path = claude_dir.join("settings.local.json");
 
-    std::fs::write(&settings_path, serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?)
+            let mut root: serde_json::Value = if settings_path.exists() {
+                let contents = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+                serde_json::from_str(&contents).unwrap_or_else(|_| serde_json::json!({}))
+            } else {
+                serde_json::json!({})
+            };
+
+            if !root.pointer("/permissions/allow").is_some_and(|v| v.is_array()) {
+                root["permissions"] = serde_json::json!({ "allow": [] });
+            }
+
+            let allow = root.pointer_mut("/permissions/allow").unwrap().as_array_mut().unwrap();
+            let existing: HashSet<String> = allow.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+            for tool in SCRYER_READ_TOOLS {
+                if !existing.contains(*tool) {
+                    allow.push(serde_json::json!(tool));
+                }
+            }
+
+            std::fs::create_dir_all(&claude_dir).map_err(|e| e.to_string())?;
+            std::fs::write(&settings_path, serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+
+            return Ok(settings_path.to_string_lossy().to_string());
+        }
+        _ => Err(format!("Unknown action: {}", action)),
+    }
+}
+
+fn sync_marker_path(model_name: &str) -> PathBuf {
+    scryer_core::models_dir().join(format!(".sync-{}", model_name))
+}
+
+#[tauri::command]
+fn check_drift(model_name: String) -> Result<serde_json::Value, String> {
+    let model = scryer_core::read_model(&model_name)?;
+    let project_path = model.project_path.as_deref()
+        .ok_or("Model has no project path set")?;
+
+    let scry_path = scryer_core::models_dir().join(format!("{}.scry", model_name));
+    let model_mtime = std::fs::metadata(&scry_path)
+        .and_then(|m| m.modified())
         .map_err(|e| e.to_string())?;
 
-    Ok(settings_path.to_string_lossy().to_string())
+    // Use the later of model mtime and last sync time as the baseline
+    let sync_mtime = std::fs::metadata(sync_marker_path(&model_name))
+        .and_then(|m| m.modified())
+        .ok();
+    let baseline = match sync_mtime {
+        Some(st) if st > model_mtime => st,
+        _ => model_mtime,
+    };
+
+    let report = scryer_core::drift::check_drift(&model, baseline, std::path::Path::new(project_path));
+
+    Ok(serde_json::json!({
+        "nodes": report.nodes.iter().map(|d| {
+            serde_json::json!({
+                "nodeId": d.node_id,
+                "nodeName": d.node_name,
+                "patterns": d.patterns,
+            })
+        }).collect::<Vec<_>>(),
+        "structureChanged": report.structure_changed,
+    }))
+}
+
+/// Touch the sync marker file to record when drift was last addressed.
+#[tauri::command]
+fn mark_synced(model_name: String) -> Result<(), String> {
+    let path = sync_marker_path(&model_name);
+    std::fs::write(&path, b"").map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_active_agent() -> Result<serde_json::Value, String> {
+    let client = scryer_acp::active_client()
+        .ok_or("No agent has connected via MCP yet")?;
+    let launch = scryer_acp::resolve_agent_binary(&client.name);
+    Ok(serde_json::json!({
+        "name": client.name,
+        "version": client.version,
+        "available": launch.is_some(),
+        "launch": launch,
+    }))
+}
+
+#[tauri::command]
+async fn start_agent_session(
+    cwd: String,
+    model_name: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AcpState>,
+    snapshot_state: tauri::State<'_, SyncSnapshot>,
+) -> Result<String, String> {
+    let mcp_binary = find_scryer_mcp()
+        .ok_or("scryer-mcp binary not found — cannot provide MCP server to agent")?;
+
+    // Compute drifted nodes to pass to the agent
+    let model = scryer_core::read_model(&model_name)?;
+
+    // Snapshot the model before sync so we can diff after completion
+    *snapshot_state.0.lock().unwrap() = Some(model.clone());
+    let project_path = model.project_path.as_deref()
+        .ok_or("Model has no project path set")?;
+    let scry_path = scryer_core::models_dir().join(format!("{}.scry", model_name));
+    let model_mtime = std::fs::metadata(&scry_path)
+        .and_then(|m| m.modified())
+        .map_err(|e| e.to_string())?;
+    let sync_mtime = std::fs::metadata(sync_marker_path(&model_name))
+        .and_then(|m| m.modified())
+        .ok();
+    let baseline = match sync_mtime {
+        Some(st) if st > model_mtime => st,
+        _ => model_mtime,
+    };
+    let report = scryer_core::drift::check_drift(&model, baseline, std::path::Path::new(project_path));
+    let drifted = report.nodes;
+
+    // Resolve agent from the last MCP client that connected
+    let client = scryer_acp::active_client()
+        .ok_or("No agent has connected via MCP yet — open scryer in an AI tool first")?;
+    let launch = scryer_acp::resolve_agent_binary(&client.name)
+        .ok_or_else(|| format!("Agent '{}' not found on PATH", client.name))?;
+
+    // Ensure runtime exists and clone it out of the mutex
+    let runtime = {
+        let mut rt = state.0.lock().unwrap();
+        if rt.is_none() {
+            *rt = Some(scryer_acp::AcpRuntime::new());
+        }
+        rt.clone().unwrap()
+    };
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    // Forward agent events to the frontend
+    let handle = app.clone();
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            let _ = handle.emit("agent-event", &event);
+        }
+    });
+
+    let (agent_binary, mode) = match launch {
+        scryer_acp::AgentLaunch::Cli { binary, kind } => {
+            (binary, scryer_acp::runtime::LaunchMode::Cli { kind })
+        }
+        scryer_acp::AgentLaunch::Acp { binary } => {
+            (binary, scryer_acp::runtime::LaunchMode::Acp)
+        }
+    };
+
+    runtime
+        .start_session(agent_binary, mode, cwd, model_name, mcp_binary, drifted, report.structure_changed, event_tx)
+        .await
+}
+
+#[tauri::command]
+async fn cancel_agent_session(
+    state: tauri::State<'_, AcpState>,
+) -> Result<(), String> {
+    let runtime = {
+        let rt = state.0.lock().unwrap();
+        rt.clone().ok_or("ACP runtime not initialized")?
+    };
+    runtime.cancel().await
+}
+
+/// Diff the pre-sync snapshot against the current model on disk.
+/// Returns a summary like "Updated: API Server, Auth Service. Added: Logger."
+/// or "No changes" if the model is identical.
+#[tauri::command]
+fn sync_diff(
+    model_name: String,
+    snapshot_state: tauri::State<'_, SyncSnapshot>,
+) -> Result<String, String> {
+    let baseline = snapshot_state.0.lock().unwrap().take()
+        .ok_or("No sync snapshot available")?;
+    let current = scryer_core::read_model(&model_name)?;
+
+    use std::collections::HashMap;
+    let base_nodes: HashMap<&str, &scryer_core::C4Node> =
+        baseline.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let curr_nodes: HashMap<&str, &scryer_core::C4Node> =
+        current.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+
+    let mut added: Vec<&str> = Vec::new();
+    let mut removed: Vec<&str> = Vec::new();
+    let mut modified: Vec<&str> = Vec::new();
+
+    for n in &current.nodes {
+        match base_nodes.get(n.id.as_str()) {
+            None => added.push(&n.data.name),
+            Some(base) => {
+                if base.data.name != n.data.name
+                    || base.data.description != n.data.description
+                    || base.data.kind != n.data.kind
+                    || base.data.technology != n.data.technology
+                    || base.data.status != n.data.status
+                    || base.data.contract != n.data.contract
+                    || base.parent_id != n.parent_id
+                {
+                    modified.push(&n.data.name);
+                }
+            }
+        }
+    }
+    for n in &baseline.nodes {
+        if !curr_nodes.contains_key(n.id.as_str()) {
+            removed.push(&n.data.name);
+        }
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    if !modified.is_empty() {
+        parts.push(format!("Updated: {}", modified.join(", ")));
+    }
+    if !added.is_empty() {
+        parts.push(format!("Added: {}", added.join(", ")));
+    }
+    if !removed.is_empty() {
+        parts.push(format!("Removed: {}", removed.join(", ")));
+    }
+
+    if parts.is_empty() {
+        Ok("Model is up to date".to_string())
+    } else {
+        Ok(parts.join(". "))
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -551,6 +667,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(SettingsState(settings_state))
+        .manage(AcpState(Mutex::new(None)))
+        .manage(SyncSnapshot(Mutex::new(None)))
         .setup(move |app| {
             let handle = app.handle().clone();
             let dir = scryer_core::models_dir();
@@ -624,7 +742,13 @@ pub fn run() {
             open_in_editor,
             run_command,
             detect_ai_tools,
-            setup_claude_integration,
+            setup_mcp_integration,
+            check_drift,
+            mark_synced,
+            get_active_agent,
+            start_agent_session,
+            cancel_agent_session,
+            sync_diff,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

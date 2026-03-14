@@ -20,7 +20,7 @@ impl Category {
 }
 
 /// Directories to skip even if not in .gitignore.
-const SKIP_DIRS: &[&str] = &[
+pub const SKIP_DIRS: &[&str] = &[
     "node_modules",
     ".git",
     ".next",
@@ -38,7 +38,7 @@ const SKIP_DIRS: &[&str] = &[
 ];
 
 /// Directories that are build output and uninteresting for structure.
-const SKIP_BUILD_DIRS: &[&str] = &[
+pub const SKIP_BUILD_DIRS: &[&str] = &[
     "dist",
     "build",
     "out",

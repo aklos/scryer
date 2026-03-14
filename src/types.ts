@@ -141,10 +141,7 @@ export type HintAction =
 export type AiToolsState = {
   claude: boolean;
   codex: boolean;
-  claudeHookEnabled: boolean;
-  claudePermsEnabled: boolean;
-  claudeHookGlobal: boolean;
-  claudePermsGlobal: boolean;
   claudeMcpEnabled: boolean;
   codexMcpEnabled: boolean;
+  claudeReadApproved: boolean;
 };

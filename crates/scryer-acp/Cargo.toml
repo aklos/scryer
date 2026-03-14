@@ -1,0 +1,19 @@
+[package]
+name = "scryer-acp"
+version = "0.2.0"
+edition = "2021"
+description = "Agent sync for Scryer — spawns AI agents to update architecture models"
+authors = ["Alexander Klos"]
+
+[dependencies]
+agent-client-protocol = "0.10"
+scryer-core = { path = "../scryer-core" }
+tokio = { version = "1", features = ["rt", "sync", "process", "macros", "io-util", "time"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+which = "7"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

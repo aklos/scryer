@@ -13,7 +13,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Handle subcommands
     match std::env::args().nth(1).as_deref() {
         Some("init") => return init_project(),
-        Some("check-drift") => return check_drift(),
+
         _ => {}
     }
 
@@ -22,83 +22,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .inspect_err(|e| eprintln!("MCP server error: {}", e))?;
     service.waiting().await?;
-    Ok(())
-}
-
-/// Claude Code PostToolUse hook handler. Reads hook input JSON from stdin,
-/// checks if the edited file matches any source map pattern across all models,
-/// and outputs a nudge for the AI if so.
-fn check_drift() -> Result<(), Box<dyn std::error::Error>> {
-    let input: serde_json::Value = serde_json::from_reader(std::io::stdin().lock())?;
-    let file_path = input
-        .pointer("/tool_input/file_path")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    if file_path.is_empty() {
-        return Ok(());
-    }
-
-    // Normalize to relative path from cwd
-    let cwd = std::env::current_dir()?;
-    let abs_path = std::path::Path::new(file_path);
-    let rel_path = abs_path.strip_prefix(&cwd).unwrap_or(abs_path);
-    let rel_str = rel_path.to_string_lossy();
-
-    let models = scryer_core::list_models().unwrap_or_default();
-    let mut matches: Vec<(String, String, String)> = Vec::new(); // (model, node_id, node_name)
-
-    for model_name in &models {
-        let model = match scryer_core::read_model(model_name) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        for (node_id, locations) in &model.source_map {
-            for loc in locations {
-                let pat = &loc.pattern;
-                // Check glob match or prefix match
-                let is_match = if pat.contains('*') || pat.contains('?') || pat.contains('[') {
-                    glob::Pattern::new(pat)
-                        .map(|g| g.matches(&rel_str))
-                        .unwrap_or(false)
-                } else {
-                    rel_str.starts_with(pat) || rel_str == pat.as_str()
-                };
-                if is_match {
-                    let node_name = model
-                        .nodes
-                        .iter()
-                        .find(|n| n.id == *node_id)
-                        .map(|n| n.data.name.clone())
-                        .unwrap_or_default();
-                    matches.push((model_name.clone(), node_id.clone(), node_name));
-                    break; // one match per node is enough
-                }
-            }
-        }
-    }
-
-    if matches.is_empty() {
-        return Ok(());
-    }
-
-    // Group by model
-    let mut by_model: std::collections::BTreeMap<&str, Vec<String>> = std::collections::BTreeMap::new();
-    for (model, id, name) in &matches {
-        by_model.entry(model).or_default().push(format!("{} [{}]", name, id));
-    }
-    let msg = by_model.iter()
-        .map(|(model, nodes)| format!("scryer \u{2014} update if changed ({}): {}", model, nodes.join(", ")))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    // Exit 0 with additionalContext — non-blocking nudge to the AI
-    let output = serde_json::json!({
-        "hookSpecificOutput": {
-            "hookEventName": "PostToolUse",
-            "additionalContext": msg
-        }
-    });
-    println!("{}", output);
     Ok(())
 }
 

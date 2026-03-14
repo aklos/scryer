@@ -20,7 +20,7 @@ import { nodeTypes } from "./nodes";
 import { edgeTypes } from "./edges";
 import { CodeLevelRack } from "./CodeLevelRack";
 import { GuidePanel } from "./GuidePanels";
-import { Bot, Loader2, Trash2, Plus, Navigation } from "lucide-react";
+import { Bot, Loader2, Trash2, Plus, Navigation, RefreshCw, HelpCircle } from "lucide-react";
 import { Button } from "./ui";
 import type { C4Node, C4Edge, C4Kind, Group } from "./types";
 
@@ -64,6 +64,11 @@ interface C4CanvasProps {
   setNodes: React.Dispatch<React.SetStateAction<C4Node[]>>;
   followAI: boolean;
   onToggleFollowAI: () => void;
+  hasDrift: boolean;
+  syncStatus: "idle" | "running" | "error";
+  hasAgent: boolean;
+  onSync: () => void;
+  onCancelSync: () => void;
 }
 
 export function C4Canvas({
@@ -100,10 +105,26 @@ export function C4Canvas({
   setNodes,
   followAI,
   onToggleFollowAI,
+  hasDrift,
+  syncStatus,
+  hasAgent,
+  onSync,
+  onCancelSync,
 }: C4CanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const selectionStartPos = useRef<{ x: number; y: number } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; screenX: number; screenY: number; nodeId?: string; edgeId?: string } | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
+
+  // Close help popover on escape or click outside
+  useEffect(() => {
+    if (!showHelp) return;
+    const close = () => setShowHelp(false);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("pointerdown", close); window.removeEventListener("keydown", onKey); };
+  }, [showHelp]);
 
   // Close context menu on click anywhere or escape
   useEffect(() => {
@@ -472,6 +493,28 @@ export function C4Canvas({
               Follow AI
             </button>
           )}
+          {(hasDrift || syncStatus === "running") && hasAgent && (
+            <button
+              type="button"
+              className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] cursor-pointer transition-colors ${
+                syncStatus === "running"
+                  ? "text-amber-500 hover:bg-zinc-100 dark:text-amber-400 dark:hover:bg-zinc-800"
+                  : "text-emerald-500 hover:bg-zinc-100 dark:text-emerald-400 dark:hover:bg-zinc-800"
+              }`}
+              onClick={syncStatus === "running" ? onCancelSync : onSync}
+              title={
+                syncStatus === "running"
+                  ? "Syncing… (click to cancel)"
+                  : "Model may be out of sync with code"
+              }
+            >
+              {syncStatus === "running"
+                ? <Loader2 className="h-3 w-3 animate-spin" />
+                : <RefreshCw className="h-3 w-3" />
+              }
+              Sync
+            </button>
+          )}
           {nodes.length > 0 && (
             <button
               type="button"
@@ -493,6 +536,33 @@ export function C4Canvas({
               {!aiConfigured ? "Configure AI" : aiEnabled ? "Review" : "AI off"}
             </button>
           )}
+          <div className="relative">
+            <button
+              type="button"
+              className="text-zinc-300 hover:text-zinc-500 dark:text-zinc-600 dark:hover:text-zinc-400 cursor-pointer transition-colors"
+              onClick={() => setShowHelp((v) => !v)}
+              title="Keyboard shortcuts"
+            >
+              <HelpCircle className="h-3 w-3" />
+            </button>
+            {showHelp && (
+              <div
+                className="absolute bottom-6 right-0 z-50 w-56 rounded-lg border border-zinc-200/80 bg-white/95 shadow-lg backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-900/95 p-3 text-[11px] text-zinc-600 dark:text-zinc-300 space-y-1.5"
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                <div className="font-medium text-zinc-800 dark:text-zinc-100 mb-2">Shortcuts</div>
+                <div className="flex justify-between"><span>Selection box</span><kbd className="text-[10px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded">Shift + drag</kbd></div>
+                <div className="flex justify-between"><span>Multi-select</span><kbd className="text-[10px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded">Shift + click</kbd></div>
+                <div className="flex justify-between"><span>Switch model</span><kbd className="text-[10px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded">Ctrl+K</kbd></div>
+                <div className="flex justify-between"><span>Undo / Redo</span><kbd className="text-[10px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded">Ctrl+Z / Y</kbd></div>
+                <div className="flex justify-between"><span>Delete selected</span><kbd className="text-[10px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded">Del</kbd></div>
+                <div className="border-t border-zinc-200/60 dark:border-zinc-700/60 pt-1.5 mt-1.5 space-y-1.5">
+                  <div className="text-zinc-400 dark:text-zinc-500">Right-click the <b>Review</b> button for AI settings</div>
+                  <div className="text-zinc-400 dark:text-zinc-500">Right-click the <b>Sync</b> button to toggle auto-sync</div>
+                </div>
+              </div>
+            )}
+          </div>
           <span className="text-[10px] text-zinc-300 dark:text-zinc-600">scryer <span className="opacity-60">{appVersion}</span></span>
         </Panel>
         {(currentModel !== null || nodes.length > 0) && (

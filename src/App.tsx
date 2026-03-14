@@ -10,6 +10,7 @@ import type {
   OnConnect,
 } from "@xyflow/react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { TopBar } from "./TopBar";
 import { Sidebar } from "./Sidebar";
 import { PropertiesPanel } from "./PropertiesPanel";
@@ -21,7 +22,7 @@ import { C4Canvas } from "./C4Canvas";
 import { expandGuidePanel } from "./GuidePanels";
 import { autoLayout } from "./layout";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { ToastProvider } from "./Toast";
+import { ToastProvider, useToast } from "./Toast";
 import type { C4Kind, C4NodeData, C4Node, C4Edge, SourceLocation, Group, Flow, StartingLevel, AiToolsState } from "./types";
 import { useModelStorage } from "./hooks/useModelStorage";
 import type { ModelStorageState } from "./hooks/useModelStorage";
@@ -110,6 +111,7 @@ function buildStarterModel(): { nodes: C4Node[]; edges: C4Edge[]; flows: Flow[];
 }
 
 function Flow() {
+  const { toast } = useToast();
   const [nodes, setNodes] = useState<C4Node[]>([]);
   const [edges, setEdges] = useState<C4Edge[]>([]);
   const [modelList, setModelList] = useState<string[]>([]);
@@ -137,8 +139,15 @@ function Flow() {
 
   // Theme
   const [settingsTab, setSettingsTab] = useState<"ai" | "theme" | null>(null);
-  const [aiTools, setAiTools] = useState<AiToolsState>({ claude: false, codex: false, claudeHookEnabled: false, claudePermsEnabled: false, claudeHookGlobal: false, claudePermsGlobal: false, claudeMcpEnabled: false, codexMcpEnabled: false });
+  const [aiTools, setAiTools] = useState<AiToolsState>({ claude: false, codex: false, claudeMcpEnabled: false, codexMcpEnabled: false, claudeReadApproved: false });
   const [themeTick, setThemeTick] = useState(0); // force re-render on theme change
+
+  // Drift detection + agent sync
+  type DriftInfo = { nodeId: string; nodeName: string; patterns: string[] };
+  const [driftedNodes, setDriftedNodes] = useState<DriftInfo[]>([]);
+  const [structureChanged, setStructureChanged] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<"idle" | "running" | "error">("idle");
+  const [activeAgent, setActiveAgent] = useState<{ name: string; available: boolean } | null>(null);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
@@ -186,11 +195,83 @@ function Flow() {
   );
 
   // Detect Claude Code integration state when project changes
+  const [aiToolsReady, setAiToolsReady] = useState(false);
   useEffect(() => {
+    setAiToolsReady(false);
     invoke<AiToolsState>("detect_ai_tools", { projectPath: projectPath ?? null })
-      .then(setAiTools)
-      .catch(() => {});
+      .then((tools) => { setAiTools(tools); setAiToolsReady(true); })
+      .catch(() => { setAiToolsReady(true); });
   }, [projectPath, currentModel]);
+
+  // Check for drifted nodes on window focus
+  const checkDrift = useCallback(() => {
+    if (!currentModel) return;
+    invoke<{ nodes: DriftInfo[]; structureChanged: boolean }>("check_drift", { modelName: currentModel })
+      .then((report) => {
+        setDriftedNodes(report.nodes);
+        setStructureChanged(report.structureChanged);
+      })
+      .catch(() => { setDriftedNodes([]); setStructureChanged(false); });
+    invoke<{ name: string; available: boolean }>("get_active_agent")
+      .then(setActiveAgent)
+      .catch(() => setActiveAgent(null));
+  }, [currentModel]);
+
+  useEffect(() => {
+    checkDrift();
+    const handler = () => checkDrift();
+    window.addEventListener("focus", handler);
+    // Poll every 30s when auto-sync is enabled so drift is caught while user is active
+    return () => {
+      window.removeEventListener("focus", handler);
+    };
+  }, [checkDrift]);
+
+  const handleSync = useCallback(async () => {
+    if (!currentModel || !projectPath || syncStatus === "running") return;
+    setSyncStatus("running");
+    try {
+      await invoke<string>("start_agent_session", { cwd: projectPath, modelName: currentModel });
+    } catch (e) {
+      const msg = typeof e === "string" ? e : (e as Error)?.message ?? "Unknown error";
+      toast(`Sync failed: ${msg}`);
+      setSyncStatus("idle");
+    }
+  }, [currentModel, projectPath, syncStatus]);
+
+
+  // Listen for agent session completion/failure events
+  useEffect(() => {
+    const unlisten = listen<{ kind: string; error?: string }>("agent-event", (event) => {
+      const { kind, error } = event.payload;
+      if (kind === "completed" || kind === "cancelled") {
+        // Mark this model as synced so drift baseline moves forward
+        if (currentModel) {
+          invoke("mark_synced", { modelName: currentModel }).catch(() => {});
+        }
+        setSyncStatus("idle");
+        setDriftedNodes([]);
+        setStructureChanged(false);
+        checkDrift(); // re-check against new baseline
+        if (kind === "completed" && currentModel) {
+          invoke<string>("sync_diff", { modelName: currentModel })
+            .then((summary) => toast(summary, "success"))
+            .catch(() => toast("Sync complete", "success"));
+        }
+      } else if (kind === "failed") {
+        toast(`Sync failed: ${error ?? "unknown error"}`);
+        setSyncStatus("idle");
+      }
+    });
+    return () => { unlisten.then((f) => f()); };
+  }, [checkDrift, currentModel, nodes]);
+
+  const handleCancelSync = useCallback(async () => {
+    try {
+      await invoke("cancel_agent_session");
+    } catch { /* ignore */ }
+    // syncStatus will be set to "idle" by the agent-event listener when cancellation completes
+  }, []);
 
   // --- History (undo/redo) ---
   const history = useHistory();
@@ -744,42 +825,31 @@ function Flow() {
 
   const activeFlow = activeFlowId ? flows.find((s) => s.id === activeFlowId) ?? null : null;
 
-  // Integration nudge: show when AI tools are installed, project has a path, but MCP or settings not configured
+  // Integration nudge: show when AI tools are installed, project has a path, but MCP not configured
   const [nudgeDismissed, setNudgeDismissed] = useState(false);
-  const needsSetup = (aiTools.claude && (!aiTools.claudeMcpEnabled || !aiTools.claudeHookEnabled || !aiTools.claudePermsEnabled))
+  const needsSetup = (aiTools.claude && !aiTools.claudeMcpEnabled)
     || (aiTools.codex && !aiTools.codexMcpEnabled);
-  const showNudge = currentModel !== null
+  const alreadyDismissed = !!projectPath && !!localStorage.getItem(`scryer:mcpNudgeDismissed:${projectPath}`);
+  const showNudge = aiToolsReady
+    && currentModel !== null
     && (aiTools.claude || aiTools.codex)
     && !!projectPath
     && needsSetup
     && !nudgeDismissed
-    && !localStorage.getItem(`scryer:hookNudgeDismissed:${projectPath}`);
+    && !alreadyDismissed;
 
   const handleNudgeSetup = useCallback(async () => {
-    const pp = projectPath ?? null;
     try {
-      // Set up MCP configs for detected tools
       if (aiTools.claude && !aiTools.claudeMcpEnabled) {
-        await invoke<string>("setup_claude_integration", { action: "mcp", projectPath: pp });
+        await invoke<string>("setup_mcp_integration", { action: "mcp", projectPath });
       }
       if (aiTools.codex && !aiTools.codexMcpEnabled) {
-        await invoke<string>("setup_claude_integration", { action: "mcp_codex", projectPath: pp });
-      }
-      // Set up Claude Code settings (hook + permissions)
-      if (aiTools.claude) {
-        if (!aiTools.claudeHookEnabled) {
-          await invoke<string>("setup_claude_integration", { action: "hook", projectPath: pp });
-        }
-        if (!aiTools.claudePermsEnabled) {
-          await invoke<string>("setup_claude_integration", { action: "permissions", projectPath: pp });
-        }
+        await invoke<string>("setup_mcp_integration", { action: "mcp_codex", projectPath });
       }
       setAiTools((prev) => ({
         ...prev,
         claudeMcpEnabled: prev.claude || prev.claudeMcpEnabled,
         codexMcpEnabled: prev.codex || prev.codexMcpEnabled,
-        claudeHookEnabled: prev.claude || prev.claudeHookEnabled,
-        claudePermsEnabled: prev.claude || prev.claudePermsEnabled,
       }));
     } catch {
       // fallback: just dismiss
@@ -789,7 +859,7 @@ function Flow() {
 
   const handleNudgeDismiss = useCallback(() => {
     if (projectPath) {
-      localStorage.setItem(`scryer:hookNudgeDismissed:${projectPath}`, "1");
+      localStorage.setItem(`scryer:mcpNudgeDismissed:${projectPath}`, "1");
     }
     setNudgeDismissed(true);
   }, [projectPath]);
@@ -873,7 +943,7 @@ function Flow() {
             <div className="absolute top-3 right-3 z-10 flex items-start gap-3 px-4 py-3 rounded-lg border border-zinc-200/80 bg-white/90 shadow-lg backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-800/90 max-w-[320px]">
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-1">AI tool integration</div>
-                <div className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">Set up MCP{aiTools.claude ? ", drift detection, and auto-approved tools" : ""} for this project.</div>
+                <div className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">Set up MCP server for this project so AI tools can read and update the model.</div>
                 <button
                   type="button"
                   className="mt-2 px-2.5 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 cursor-pointer text-[11px] font-medium transition-colors"
@@ -942,6 +1012,11 @@ function Flow() {
               setNodes={setNodes}
               followAI={storage.followAI}
               onToggleFollowAI={() => storage.setFollowAI(!storage.followAI)}
+              hasDrift={driftedNodes.length > 0 || structureChanged}
+              syncStatus={syncStatus}
+              hasAgent={!!activeAgent?.available}
+              onSync={handleSync}
+              onCancelSync={handleCancelSync}
             />
           )}
           {/* Command palette */}

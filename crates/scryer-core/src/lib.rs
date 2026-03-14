@@ -1,3 +1,4 @@
+pub mod drift;
 pub mod rules;
 pub mod scan;
 

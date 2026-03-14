@@ -24,6 +24,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 scryer-core = { path = "../crates/scryer-core" }
 scryer-suggest = { path = "../crates/scryer-suggest" }
+scryer-acp = { path = "../crates/scryer-acp" }
 notify = "6"
 tokio = { version = "1", features = ["rt-multi-thread", "process"] }
 which = "7"

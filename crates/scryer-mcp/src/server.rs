@@ -1,7 +1,8 @@
 use crate::instructions::INSTRUCTIONS;
 use rmcp::{
     handler::server::router::tool::ToolRouter,
-    model::{ServerCapabilities, ServerInfo},
+    model::{InitializeRequestParams, InitializeResult, ServerCapabilities, ServerInfo},
+    service::{RequestContext, RoleServer},
     tool_handler, ServerHandler,
 };
 
@@ -35,5 +36,36 @@ impl ServerHandler for ScryerServer {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
+    }
+
+    fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<InitializeResult, rmcp::ErrorData>> + Send + '_ {
+        // Record which client connected so the Tauri app can use ACP with the same agent
+        let client_name = request.client_info.name.clone();
+        let client_version = request.client_info.version.clone();
+        write_active_client(&client_name, &client_version);
+
+        // Default behavior: store peer info and return server info
+        if context.peer.peer_info().is_none() {
+            context.peer.set_peer_info(request);
+        }
+        std::future::ready(Ok(self.get_info()))
+    }
+}
+
+/// Write the connected client identity to ~/.scryer/active-client.json
+/// so the Tauri app knows which agent to launch via ACP.
+fn write_active_client(name: &str, version: &str) {
+    let dir = scryer_core::models_dir();
+    let path = dir.join("active-client.json");
+    let data = serde_json::json!({
+        "name": name,
+        "version": version,
+    });
+    if let Ok(json) = serde_json::to_string_pretty(&data) {
+        let _ = std::fs::write(&path, json);
     }
 }

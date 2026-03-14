@@ -92,15 +92,14 @@ function ProjectMenu({
   const showClaude = aiTools.claude && !!projectPath;
   const showCodex = aiTools.codex && !!projectPath;
 
-  const handleToggle = async (field: "claudeHookEnabled" | "claudePermsEnabled" | "claudeMcpEnabled" | "codexMcpEnabled", checked: boolean) => {
+  const handleToggle = async (field: "claudeMcpEnabled" | "codexMcpEnabled" | "claudeReadApproved", checked: boolean) => {
     const actionMap: Record<string, string> = {
-      claudeHookEnabled: checked ? "hook" : "remove_hook",
-      claudePermsEnabled: checked ? "permissions" : "remove_permissions",
       claudeMcpEnabled: "mcp",
       codexMcpEnabled: "mcp_codex",
+      claudeReadApproved: "claude_read_approve",
     };
     try {
-      await invoke<string>("setup_claude_integration", {
+      await invoke<string>("setup_mcp_integration", {
         action: actionMap[field],
         projectPath: projectPath ?? null,
       });
@@ -148,16 +147,30 @@ function ProjectMenu({
             MCP Server
           </div>
           {showClaude && (
-            <div className="flex items-center justify-between px-3 py-1.5">
-              <div>
-                <div className="text-xs text-zinc-600 dark:text-zinc-300">Claude Code</div>
-                <div className="text-[10px] text-zinc-400 dark:text-zinc-500 max-w-[160px]">.mcp.json</div>
+            <>
+              <div className="flex items-center justify-between px-3 py-1.5">
+                <div>
+                  <div className="text-xs text-zinc-600 dark:text-zinc-300">Claude Code</div>
+                  <div className="text-[10px] text-zinc-400 dark:text-zinc-500 max-w-[160px]">.mcp.json</div>
+                </div>
+                <Toggle
+                  checked={aiTools.claudeMcpEnabled}
+                  onChange={(checked) => { if (checked) handleToggle("claudeMcpEnabled", checked); }}
+                />
               </div>
-              <Toggle
-                checked={aiTools.claudeMcpEnabled}
-                onChange={(checked) => { if (checked) handleToggle("claudeMcpEnabled", checked); }}
-              />
-            </div>
+              {aiTools.claudeMcpEnabled && (
+                <div className="flex items-center justify-between px-3 py-1.5 pl-6">
+                  <div>
+                    <div className="text-xs text-zinc-600 dark:text-zinc-300">Auto-approve reads</div>
+                    <div className="text-[10px] text-zinc-400 dark:text-zinc-500 max-w-[140px]">settings.local.json</div>
+                  </div>
+                  <Toggle
+                    checked={aiTools.claudeReadApproved}
+                    onChange={(checked) => { if (checked) handleToggle("claudeReadApproved", checked); }}
+                  />
+                </div>
+              )}
+            </>
           )}
           {showCodex && (
             <div className="flex items-center justify-between px-3 py-1.5">
@@ -173,57 +186,6 @@ function ProjectMenu({
           )}
         </>
       )}
-      {showClaude && (() => {
-        const allGlobal = aiTools.claudeHookGlobal && aiTools.claudePermsGlobal;
-        return (
-          <>
-            <div className="my-1 border-t border-zinc-200/60 dark:border-zinc-700/60" />
-            <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-              Claude Code
-            </div>
-            {allGlobal ? (
-              <div className="px-3 py-1.5 text-[10px] text-zinc-400 dark:text-zinc-500 leading-relaxed">
-                Drift detection and auto-approve are enabled globally in ~/.claude/settings.json
-              </div>
-            ) : (
-              <>
-                <div className="flex items-center justify-between px-3 py-1.5">
-                  <div>
-                    <div className={`text-xs ${aiTools.claudeHookGlobal ? "text-zinc-400 dark:text-zinc-500" : "text-zinc-600 dark:text-zinc-300"}`}>Drift detection hook</div>
-                    <div className="text-[10px] text-zinc-400 dark:text-zinc-500 max-w-[160px]">
-                      {aiTools.claudeHookGlobal ? "Enabled globally" : "Nudge AI when source files change"}
-                    </div>
-                  </div>
-                  {aiTools.claudeHookGlobal ? (
-                    <Toggle checked={true} onChange={() => {}} />
-                  ) : (
-                    <Toggle
-                      checked={aiTools.claudeHookEnabled}
-                      onChange={(checked) => handleToggle("claudeHookEnabled", checked)}
-                    />
-                  )}
-                </div>
-                <div className="flex items-center justify-between px-3 py-1.5">
-                  <div>
-                    <div className={`text-xs ${aiTools.claudePermsGlobal ? "text-zinc-400 dark:text-zinc-500" : "text-zinc-600 dark:text-zinc-300"}`}>Auto-approve tools</div>
-                    <div className="text-[10px] text-zinc-400 dark:text-zinc-500 max-w-[160px]">
-                      {aiTools.claudePermsGlobal ? "Enabled globally" : "Skip prompts for scryer MCP tools"}
-                    </div>
-                  </div>
-                  {aiTools.claudePermsGlobal ? (
-                    <Toggle checked={true} onChange={() => {}} />
-                  ) : (
-                    <Toggle
-                      checked={aiTools.claudePermsEnabled}
-                      onChange={(checked) => handleToggle("claudePermsEnabled", checked)}
-                    />
-                  )}
-                </div>
-              </>
-            )}
-          </>
-        );
-      })()}
     </div>
   );
 }
