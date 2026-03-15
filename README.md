@@ -8,6 +8,8 @@
     <b>Visual architecture models that AI agents build from. Edit C4 diagrams in a drag-and-drop editor — AI agents read, modify, and implement the same model through MCP.</b>
     <br />
     <br />
+    <a href="https://aklos.github.io/scryer/">Docs</a>
+    <span>&nbsp;&nbsp;&bull;&nbsp;&nbsp;</span>
     <a href="#features">Features</a>
     <span>&nbsp;&nbsp;&bull;&nbsp;&nbsp;</span>
     <a href="#getting-started">Getting started</a>
