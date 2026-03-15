@@ -273,17 +273,22 @@ impl ScryerServer {
         let completed_tasks = task_nodes.iter().filter(|n| is_satisfied(n)).count();
 
         // Check if all edge dependencies are satisfied
-        // Edge direction: source → target means source depends on target
+        // Only enforce dependencies between sibling components (same parent container).
+        // Containers are always choosable — edge direction between containers represents
+        // architectural relationships, not build-order constraints.
         let deps_satisfied = |node: &C4Node| -> bool {
+            if node.data.kind != C4Kind::Component {
+                return true;
+            }
             for edge in &model.edges {
                 if edge.source == node.id {
-                    // This node depends on edge.target — check if target is satisfied
-                    // But only check targets that are task-eligible (containers/components)
                     if let Some(target) = model.nodes.iter().find(|n| n.id == edge.target) {
-                        if matches!(target.data.kind, C4Kind::Container | C4Kind::Component) {
-                            if !is_satisfied(target) {
-                                return false;
-                            }
+                        // Only block on sibling components (same parent)
+                        if target.data.kind == C4Kind::Component
+                            && target.parent_id == node.parent_id
+                            && !is_satisfied(target)
+                        {
+                            return false;
                         }
                     }
                 }
@@ -320,33 +325,36 @@ impl ScryerServer {
         // Phase 2: Individual containers not in groups that are proposed
         // Phase 3: Components (grouped by parent if siblings have no inter-deps)
 
-        // Check for scaffold tasks: deployment groups with all members proposed
+        // Check for scaffold tasks: deployment groups where ALL member containers are proposed
+        // Check against the full model, not ready_nodes (which skips containers with components)
         for group in &model.groups {
             if group.kind != scryer_core::GroupKind::Deployment {
                 continue;
             }
-            let member_containers: Vec<&C4Node> = ready_nodes
+            let member_containers: Vec<&C4Node> = model.nodes
                 .iter()
                 .filter(|n| {
                     n.data.kind == C4Kind::Container && group.member_ids.contains(&n.id)
                 })
-                .copied()
                 .collect();
 
-            // All group members must be proposed (not just the ready ones)
-            let all_members_proposed = group.member_ids.iter().all(|mid| {
-                model.nodes.iter().find(|n| n.id == *mid).map_or(false, |n| {
-                    matches!(n.data.status, Some(Status::Proposed))
-
-                })
+            // All group members must be proposed
+            let all_members_proposed = member_containers.iter().all(|n| {
+                matches!(n.data.status, Some(Status::Proposed))
             });
 
+            // Skip if scoped to a node not in this group
+            if let Some(scope) = scope_filter {
+                let in_group = member_containers.iter().any(|n| n.id == scope)
+                    || member_containers.iter().any(|n| is_descendant_of(scope, &n.id));
+                if !in_group { continue; }
+            }
+
             if !member_containers.is_empty() && all_members_proposed {
-                // Scaffold task for this deployment group
-                let task_num = completed_tasks + 1;
+                // Scaffold task for this deployment group — step 0, not counted in task total
                 let mut output = format!(
-                    "# Task {} of {}\n\n## Scaffold: {}\n\n",
-                    task_num, total_tasks, group.name
+                    "# Setup\n\n## Scaffold: {}\n\n",
+                    group.name
                 );
                 if let Some(desc) = &group.description {
                     output.push_str(&format!("{}\n\n", desc));
@@ -431,15 +439,104 @@ impl ScryerServer {
             .copied()
             .collect();
 
-        // Pick the work unit: prefer containers, then components
+        // When multiple work items exist and no scope is set, present the choice
+        // at the container level so the agent sees the right abstraction.
+        // Collect all containers that have unsatisfied work (either the container
+        // itself or its component children).
+        if scope_filter.is_none() {
+            let mut choosable_containers: Vec<&C4Node> = Vec::new();
+            for node in &model.nodes {
+                if node.data.kind != C4Kind::Container { continue; }
+                if node.data.status.is_none() { continue; }
+                if node.data.external == Some(true) { continue; }
+                // Skip if parent is external
+                if let Some(pid) = &node.parent_id {
+                    if let Some(parent) = model.nodes.iter().find(|p| p.id == *pid) {
+                        if parent.data.external == Some(true) { continue; }
+                    }
+                }
+                // Include if the container itself or any of its children need work
+                let self_needs_work = !is_satisfied(node);
+                let children_need_work = model.nodes.iter().any(|n| {
+                    n.parent_id.as_deref() == Some(&node.id)
+                        && n.data.status.is_some()
+                        && !matches!(n.data.status, Some(Status::Wip) | Some(Status::Ready))
+                });
+                if self_needs_work || children_need_work {
+                    choosable_containers.push(node);
+                }
+            }
+
+            if choosable_containers.len() > 1 {
+                let mut output = format!(
+                    "# Task {} of {}\n\n## Choose next task\n\nThese containers are ready to build. Pick the one that makes the most sense to start with.\n\n",
+                    completed_tasks + 1, total_tasks
+                );
+
+                // Collect which containers belong to groups
+                let mut grouped: std::collections::HashMap<String, (String, Option<String>, Vec<&C4Node>)> = std::collections::HashMap::new();
+                let mut ungrouped: Vec<&C4Node> = Vec::new();
+                for node in &choosable_containers {
+                    let group = model.groups.iter().find(|g| g.member_ids.contains(&node.id));
+                    if let Some(g) = group {
+                        let entry = grouped.entry(g.id.clone()).or_insert_with(|| (g.name.clone(), g.description.clone(), Vec::new()));
+                        entry.2.push(node);
+                    } else {
+                        ungrouped.push(node);
+                    }
+                }
+
+                // Show groups first
+                for (_gid, (name, desc, members)) in &grouped {
+                    output.push_str(&format!("**Group: {}**", name));
+                    if let Some(d) = desc {
+                        output.push_str(&format!(" — {}", d));
+                    }
+                    output.push('\n');
+                    for node in members {
+                        output.push_str(&format!("  - **{}** [{}]", node.data.name, node.id));
+                        if let Some(tech) = &node.data.technology {
+                            output.push_str(&format!(" — {}", tech));
+                        }
+                        output.push('\n');
+                        if !node.data.description.is_empty() {
+                            output.push_str(&format!("    {}\n", node.data.description));
+                        }
+                        let notes = collect_notes(&get_ancestor_chain(&node.id), node);
+                        for n in &notes {
+                            output.push_str(&format!("    Note: {}\n", n));
+                        }
+                    }
+                }
+
+                // Then ungrouped containers
+                for node in &ungrouped {
+                    output.push_str(&format!("- **{}** [{}]", node.data.name, node.id));
+                    if let Some(tech) = &node.data.technology {
+                        output.push_str(&format!(" — {}", tech));
+                    }
+                    output.push('\n');
+                    if !node.data.description.is_empty() {
+                        output.push_str(&format!("  {}\n", node.data.description));
+                    }
+                    let notes = collect_notes(&get_ancestor_chain(&node.id), node);
+                    for n in &notes {
+                        output.push_str(&format!("  Note: {}\n", n));
+                    }
+                }
+
+                output.push_str("\nCall `get_task` again with `node_id` set to the chosen container's ID.");
+                output.push_str(&format!(
+                    "\n\n---\nProgress: {}/{} tasks complete",
+                    completed_tasks, total_tasks
+                ));
+                return Ok(CallToolResult::success(vec![Content::text(output)]));
+            }
+        }
+
+        // Single ready container or components — build directly
         let work_unit: Vec<&C4Node> = if !ready_containers.is_empty() {
-            // Group containers by parent system — take the first system's containers
-            let first_parent = ready_containers[0].parent_id.as_deref();
             ready_containers
-                .iter()
-                .filter(|n| n.parent_id.as_deref() == first_parent)
-                .copied()
-                .collect()
         } else {
             // Group sibling components (same parent container) with no inter-dependencies
             let first_parent = ready_components[0].parent_id.as_deref();
@@ -485,7 +582,31 @@ impl ScryerServer {
         }
 
         // Format the work unit
-        let task_num = completed_tasks + 1;
+        // Use global task count for progress even when scoped
+        let global_total: usize = model.nodes.iter().filter(|n| {
+            let eligible = matches!(n.data.kind, C4Kind::Container | C4Kind::Component);
+            if !eligible || n.data.status.is_none() { return false; }
+            if let Some(pid) = &n.parent_id {
+                if let Some(parent) = model.nodes.iter().find(|p| p.id == *pid) {
+                    if parent.data.external == Some(true) { return false; }
+                }
+            }
+            if n.data.kind == C4Kind::Container && has_status_children(n) { return false; }
+            true
+        }).count();
+        let global_completed: usize = model.nodes.iter().filter(|n| {
+            let eligible = matches!(n.data.kind, C4Kind::Container | C4Kind::Component);
+            if !eligible || n.data.status.is_none() { return false; }
+            if let Some(pid) = &n.parent_id {
+                if let Some(parent) = model.nodes.iter().find(|p| p.id == *pid) {
+                    if parent.data.external == Some(true) { return false; }
+                }
+            }
+            if n.data.kind == C4Kind::Container && has_status_children(n) { return false; }
+            is_satisfied(n)
+        }).count();
+
+        let task_num = global_completed + 1;
         let is_scaffold = work_unit.iter().all(|n| {
             n.data.kind == C4Kind::Container && matches!(n.data.status, Some(Status::Proposed))
 
@@ -505,8 +626,8 @@ impl ScryerServer {
         };
 
         let mut output = format!(
-            "# Task {} of {}\n\n## {}\n\n",
-            task_num, total_tasks, unit_label
+            "# Task {} of {}\n\n## {}\n\nBuild ONLY what this task describes. Do not scaffold or set up other parts of the project.\n\n",
+            task_num, global_total, unit_label
         );
 
         for node in &work_unit {
@@ -729,7 +850,7 @@ impl ScryerServer {
         let next_name = find_next_name(&blocked_nodes, &ready_nodes, &work_unit);
         output.push_str(&format!(
             "\n---\nProgress: {}/{} tasks complete{}",
-            completed_tasks, total_tasks,
+            global_completed, global_total,
             if let Some(name) = next_name { format!(" | Next up: {}", name) } else { String::new() }
         ));
 

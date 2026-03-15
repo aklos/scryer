@@ -23,12 +23,13 @@
 }
 
 @keyframes pulse-glow {
-  0%, 100% { opacity: 0; }
-  25%, 75% { opacity: 1; }
+  0% { opacity: 0; }
+  15% { opacity: 0.7; }
+  100% { opacity: 0; }
 }
 
 .scryer-changed-glow {
-  animation: pulse-glow 1s ease-in-out 3;
+  animation: pulse-glow 3s ease-in-out;
 }
 
 /* Edges render above nodes so shape decorations don't overlap arrows */

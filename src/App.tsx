@@ -78,12 +78,12 @@ function buildStarterModel(): { nodes: C4Node[]; edges: C4Edge[]; flows: Flow[];
   ];
 
   const edges: C4Edge[] = [
-    { id: crypto.randomUUID(), source: personId, target: systemId, data: { label: "Uses" } },
-    { id: crypto.randomUUID(), source: personId, target: appId, data: { label: "Uses" } },
-    { id: crypto.randomUUID(), source: appId, target: dbId, data: { label: "Reads/writes" } },
-    { id: crypto.randomUUID(), source: personId, target: serviceId, data: { label: "Uses" } },
-    { id: crypto.randomUUID(), source: serviceId, target: repoId, data: { label: "Uses" } },
-    { id: crypto.randomUUID(), source: repoId, target: dbId, data: { label: "Reads/writes" } },
+    { id: crypto.randomUUID(), source: personId, target: systemId, data: { label: "uses" } },
+    { id: crypto.randomUUID(), source: personId, target: appId, data: { label: "uses" } },
+    { id: crypto.randomUUID(), source: appId, target: dbId, data: { label: "reads/writes" } },
+    { id: crypto.randomUUID(), source: personId, target: serviceId, data: { label: "uses" } },
+    { id: crypto.randomUUID(), source: serviceId, target: repoId, data: { label: "uses" } },
+    { id: crypto.randomUUID(), source: repoId, target: dbId, data: { label: "reads/writes" } },
   ];
 
   const step1 = crypto.randomUUID();
@@ -233,6 +233,7 @@ function Flow() {
     if (!currentModel || !projectPath || syncStatus === "running") return;
     setSyncStatus("running");
     setSyncMessage(null);
+    setNodes((nds) => nds.map((n) => ({ ...n, selected: false })) as C4Node[]);
     try {
       await invoke<string>("start_agent_session", { cwd: projectPath, modelName: currentModel });
     } catch (e) {
@@ -405,6 +406,25 @@ function Flow() {
   }, [visibleEdges]);
 
   const isCodeLevelSelected = selectedNode?.data?.kind === "process" || selectedNode?.data?.kind === "operation";
+
+  // Keep canvas centered on window resize (not internal layout shifts like panel open/close)
+  useEffect(() => {
+    let prevW = window.innerWidth;
+    let prevH = window.innerHeight;
+    const handler = () => {
+      const newW = window.innerWidth;
+      const newH = window.innerHeight;
+      if (newW === prevW && newH === prevH) return;
+      const dw = newW - prevW;
+      const dh = newH - prevH;
+      prevW = newW;
+      prevH = newH;
+      const vp = getViewport();
+      setViewport({ x: vp.x + dw / 2, y: vp.y + dh / 2, zoom: vp.zoom });
+    };
+    window.addEventListener("resize", handler);
+    return () => window.removeEventListener("resize", handler);
+  }, [getViewport, setViewport]);
 
   const onSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: { nodes: C4Node[]; edges: C4Edge[] }) => {
     const ids = selectedNodes
@@ -971,9 +991,6 @@ function Flow() {
               </button>
             </div>
           )}
-          {syncStatus === "running" && (
-            <div className="absolute inset-0 z-50 bg-zinc-500/5 dark:bg-zinc-900/10 pointer-events-auto" />
-          )}
           {activeFlow ? (
             <FlowScriptView
               flow={activeFlow}
@@ -995,11 +1012,11 @@ function Flow() {
               expandedPath={expandedPath}
               visibleNodesWithHints={visibleNodesWithHints}
               visibleEdges={visibleEdges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
+              onNodesChange={syncStatus === "running" ? (changes) => onNodesChange(changes.filter((c) => c.type !== "select")) : onNodesChange}
+              onEdgesChange={syncStatus === "running" ? (changes) => onEdgesChange(changes.filter((c: any) => c.type !== "select")) : onEdgesChange}
               onConnect={onConnect}
               onBulkDelete={onBulkDelete}
-              onSelectionChange={onSelectionChange}
+              onSelectionChange={syncStatus === "running" ? () => {} : onSelectionChange}
               currentParentId={currentParentId}
               nodes={nodes}
               onAutoLayout={onAutoLayout}
@@ -1026,17 +1043,20 @@ function Flow() {
               onToggleFollowAI={() => storage.setFollowAI(!storage.followAI)}
             />
           )}
-          <SyncBar
-            activeAgent={activeAgent}
-            driftedNodes={driftedNodes}
-            structureChanged={structureChanged}
-            syncStatus={syncStatus}
-            syncMessage={syncMessage}
-            onSync={handleSync}
-            onCancelSync={handleCancelSync}
-            onDismissMessage={() => { setSyncMessage(null); if (syncStatus === "error") setSyncStatus("idle"); }}
-            onNavigateToNode={navigateToNode}
-          />
+          {currentModel && (
+            <SyncBar
+              activeAgent={activeAgent}
+              driftedNodes={driftedNodes}
+              structureChanged={structureChanged}
+              syncStatus={syncStatus}
+              syncMessage={syncMessage}
+              onSync={handleSync}
+              onCancelSync={handleCancelSync}
+              onDismissMessage={() => { setSyncMessage(null); if (syncStatus === "error") setSyncStatus("idle"); }}
+              onDismissDrift={() => { if (currentModel) { invoke("mark_synced", { modelName: currentModel }).then(() => { setDriftedNodes([]); setStructureChanged(false); }).catch(() => {}); } }}
+              onNavigateToNode={navigateToNode}
+            />
+          )}
           {/* Command palette */}
           {paletteOpen && (
             <CommandPalette

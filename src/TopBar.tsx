@@ -53,20 +53,20 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 
 function ProjectMenu({
   onClose,
-  onOpenPalette,
   projectPath,
   aiTools,
   onAiToolsChange,
   triggerRef,
   onSetProjectPath,
+  onSaveAs,
 }: {
   onClose: () => void;
-  onOpenPalette: () => void;
   projectPath?: string;
   aiTools: AiToolsState;
   onAiToolsChange: (tools: AiToolsState) => void;
   triggerRef: React.RefObject<HTMLButtonElement | null>;
   onSetProjectPath: (path: string | undefined) => void;
+  onSaveAs: () => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -117,11 +117,10 @@ function ProjectMenu({
       <button
         type="button"
         className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-700 cursor-pointer transition-colors"
-        onClick={() => { onOpenPalette(); onClose(); }}
+        onClick={() => { onSaveAs(); onClose(); }}
       >
-        <Keyboard className="h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" />
-        <span className="flex-1 text-left">Switch model</span>
-        <span className="text-[10px] text-zinc-400 dark:text-zinc-500">Ctrl+K</span>
+        <SaveAll className="h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" />
+        <span className="flex-1 text-left">Save as…</span>
       </button>
       <button
         type="button"
@@ -132,7 +131,7 @@ function ProjectMenu({
         }}
       >
         <FolderOpen className="h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" />
-        <span className="flex-1 text-left truncate">{projectPath ? "Change project" : "Link project"}</span>
+        <span className="flex-1 text-left truncate">{projectPath ? "Change codebase" : "Link codebase"}</span>
       </button>
       {projectPath && (
         <div className="px-3 py-1 text-[10px] text-zinc-400 dark:text-zinc-500 truncate max-w-[240px]" title={projectPath}>
@@ -190,7 +189,7 @@ function ProjectMenu({
   );
 }
 
-function AppMenu({ onClose, onOpenSettings, onOpenPalette, onCloseModel, onSaveAs, hasModel, triggerRef }: { onClose: () => void; onOpenSettings: () => void; onOpenPalette: () => void; onCloseModel: () => void; onSaveAs: () => void; hasModel: boolean; triggerRef: React.RefObject<HTMLButtonElement | null> }) {
+function AppMenu({ onClose, onOpenSettings, onOpenPalette, onCloseModel, hasModel, triggerRef }: { onClose: () => void; onOpenSettings: () => void; onOpenPalette: () => void; onCloseModel: () => void; hasModel: boolean; triggerRef: React.RefObject<HTMLButtonElement | null> }) {
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -214,7 +213,6 @@ function AppMenu({ onClose, onOpenSettings, onOpenPalette, onCloseModel, onSaveA
 
   const items: { label: string; icon: typeof Settings; shortcut?: string; onClick: () => void; disabled?: boolean; active?: boolean }[] = [
     { label: "Open model", icon: Keyboard, shortcut: "Ctrl+K", onClick: () => { onOpenPalette(); onClose(); } },
-    { label: "Save as…", icon: SaveAll, onClick: () => { onSaveAs(); onClose(); }, disabled: !hasModel },
     { label: "Close model", icon: FolderX, onClick: () => { onCloseModel(); onClose(); }, disabled: !hasModel },
     { label: "Settings", icon: Settings, onClick: () => { onOpenSettings(); onClose(); } },
   ];
@@ -283,7 +281,6 @@ export function TopBar({
             onOpenSettings={onOpenSettings}
             onOpenPalette={onOpenPalette}
             onCloseModel={onCloseModel}
-            onSaveAs={onSaveAs}
             hasModel={hasModel}
             triggerRef={appMenuTriggerRef}
           />
@@ -301,27 +298,29 @@ export function TopBar({
         >
           {currentModel ?? "Untitled"}
         </span>
-        <div className="relative shrink-0">
-          <button
-            ref={projectMenuTriggerRef}
-            type="button"
-            className="rounded px-1.5 py-0.5 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 text-xs shrink-0 cursor-pointer transition-colors"
-            onClick={() => setProjectMenuOpen((prev) => !prev)}
-          >
-            &#8943;
-          </button>
-          {projectMenuOpen && (
-            <ProjectMenu
-              onClose={() => setProjectMenuOpen(false)}
-              onOpenPalette={onOpenPalette}
-              projectPath={projectPath}
-              aiTools={aiTools}
-              onAiToolsChange={onAiToolsChange}
-              onSetProjectPath={onSetProjectPath}
-              triggerRef={projectMenuTriggerRef}
-            />
-          )}
-        </div>
+        {hasModel && (
+          <div className="relative shrink-0">
+            <button
+              ref={projectMenuTriggerRef}
+              type="button"
+              className="rounded px-1.5 py-0.5 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 text-xs shrink-0 cursor-pointer transition-colors"
+              onClick={() => setProjectMenuOpen((prev) => !prev)}
+            >
+              &#8943;
+            </button>
+            {projectMenuOpen && (
+              <ProjectMenu
+                onClose={() => setProjectMenuOpen(false)}
+                projectPath={projectPath}
+                aiTools={aiTools}
+                onAiToolsChange={onAiToolsChange}
+                onSetProjectPath={onSetProjectPath}
+                onSaveAs={onSaveAs}
+                triggerRef={projectMenuTriggerRef}
+              />
+            )}
+          </div>
+        )}
       </div>
 
       {/* Center: level indicator + toolbar */}

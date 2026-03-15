@@ -10,16 +10,46 @@ use rmcp::{
 use scryer_core::{C4Node, SourceLocation};
 use std::collections::{HashMap, HashSet};
 
+/// Resolve an optional model name: if provided, use it; otherwise look up
+/// the model linked to the current working directory.
+fn resolve_model_name(name: Option<String>) -> Result<String, CallToolResult> {
+    match name {
+        Some(n) => Ok(n),
+        None => {
+            let cwd = std::env::current_dir().map_err(|_| {
+                CallToolResult::error(vec![Content::text("Cannot determine current working directory")])
+            })?;
+            scryer_core::resolve_model_for_project(&cwd).ok_or_else(|| {
+                CallToolResult::error(vec![Content::text(
+                    "No model is linked to the current working directory. Pass a model name explicitly, or use list_models to see available models."
+                )])
+            })
+        }
+    }
+}
+
 #[tool_router(router = tool_router_read, vis = "pub(crate)")]
 impl ScryerServer {
-    #[tool(description = "List all available architecture models")]
+    #[tool(description = "List all available architecture models. Shows which model is linked to the current working directory (marked with *).")]
     fn list_models(&self) -> Result<CallToolResult, McpError> {
         match scryer_core::list_models() {
             Ok(names) => {
                 let text = if names.is_empty() {
                     "No models found. Use set_model to create one.".to_string()
                 } else {
-                    names.join("\n")
+                    let cwd = std::env::current_dir().ok();
+                    let cwd_canonical = cwd.as_ref().and_then(|p| std::fs::canonicalize(p).ok());
+                    names.iter().map(|name| {
+                        let linked = if let Some(ref cc) = cwd_canonical {
+                            scryer_core::read_model(name).ok()
+                                .and_then(|m| m.project_path)
+                                .and_then(|pp| std::fs::canonicalize(&pp).ok())
+                                .map_or(false, |mc| &mc == cc)
+                        } else {
+                            false
+                        };
+                        if linked { format!("* {name}") } else { name.clone() }
+                    }).collect::<Vec<_>>().join("\n")
                 };
                 Ok(CallToolResult::success(vec![Content::text(text)]))
             }
@@ -28,26 +58,30 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Get the full JSON content of a model. Returns {nodes: [{id, parentId?, data: {name, description, kind, technology?, external?, shape?, status?, sources?, contract?}}], edges: [{id, source, target, data: {label, method?}}], flows: [{id, name, description?, steps: [{id, description?, branches?: [{condition, steps}]}]}], sourceMap: {nodeId: [{pattern, line?, endLine?}]}, contract?, startingLevel?}. Positions and node type are omitted (UI-only). Step descriptions can use @[Name] mentions to reference architecture nodes. For scoped reads, prefer get_node. For implementation, use get_task instead — it handles dependency ordering and returns one work unit at a time."
+        description = "Get the full JSON content of a model. If name is omitted, automatically resolves the model linked to the current working directory. Returns {nodes: [{id, parentId?, data: {name, description, kind, technology?, external?, shape?, status?, sources?, contract?}}], edges: [{id, source, target, data: {label, method?}}], flows: [{id, name, description?, steps: [{id, description?, branches?: [{condition, steps}]}]}], sourceMap: {nodeId: [{pattern, line?, endLine?}]}, contract?, startingLevel?}. Positions and node type are omitted (UI-only). Step descriptions can use @[Name] mentions to reference architecture nodes. For scoped reads, prefer get_node. For implementation, use get_task instead — it handles dependency ordering and returns one work unit at a time."
     )]
     fn get_model(
         &self,
         Parameters(req): Parameters<GetModelRequest>,
     ) -> Result<CallToolResult, McpError> {
-        match scryer_core::read_model(&req.name) {
+        let name = match resolve_model_name(req.name) {
+            Ok(n) => n,
+            Err(e) => return Ok(e),
+        };
+        match scryer_core::read_model(&name) {
             Ok(model) => {
-                let _ = scryer_core::save_baseline(&req.name, &model);
+                let _ = scryer_core::save_baseline(&name, &model);
                 let mut val = serde_json::to_value(&model).unwrap();
                 strip_fields_compact(&mut val);
 
-                externalize_attachments(&mut val, &req.name);
+                externalize_attachments(&mut val, &name);
                 let json = serde_json::to_string(&val)
                     .unwrap_or_else(|e| format!("Serialization error: {}", e));
                 Ok(CallToolResult::success(vec![Content::text(json)]))
             }
             Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
                 "Failed to read model '{}': {}",
-                req.name, e
+                name, e
             ))])),
         }
     }
@@ -164,7 +198,11 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<GetModelRequest>,
     ) -> Result<CallToolResult, McpError> {
-        match scryer_core::read_model(&req.name) {
+        let name = match resolve_model_name(req.name) {
+            Ok(n) => n,
+            Err(e) => return Ok(e),
+        };
+        match scryer_core::read_model(&name) {
             Ok(model) => {
                 let disconnected = check_disconnected_nodes(&model);
                 let bidir = check_bidirectional_edges(&model);
@@ -181,11 +219,11 @@ impl ScryerServer {
                 let total: usize = all_warnings.iter().map(|(_, w)| w.len()).sum();
                 if total == 0 {
                     return Ok(CallToolResult::success(vec![Content::text(
-                        format!("Model '{}' passed all checks.", req.name)
+                        format!("Model '{name}' passed all checks.")
                     )]));
                 }
 
-                let mut msg = format!("Model '{}' — {} warning(s):", req.name, total);
+                let mut msg = format!("Model '{name}' — {total} warning(s):");
                 for (label, warnings) in all_warnings {
                     if !warnings.is_empty() {
                         msg.push_str(&format!("\n\n⚠️ {}:\n- {}", label, warnings.join("\n- ")));

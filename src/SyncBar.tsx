@@ -12,10 +12,11 @@ interface SyncBarProps {
   onSync: () => void;
   onCancelSync: () => void;
   onDismissMessage: () => void;
+  onDismissDrift: () => void;
   onNavigateToNode?: (nodeId: string) => void;
 }
 
-export function SyncBar({ activeAgent, driftedNodes, structureChanged, syncStatus, syncMessage, onSync, onCancelSync, onDismissMessage, onNavigateToNode }: SyncBarProps) {
+export function SyncBar({ activeAgent, driftedNodes, structureChanged, syncStatus, syncMessage, onSync, onCancelSync, onDismissMessage, onDismissDrift, onNavigateToNode }: SyncBarProps) {
   const [expanded, setExpanded] = useState(false);
   const sortedDriftedNodes = useMemo(
     () => [...driftedNodes].sort((a, b) => a.nodeName.localeCompare(b.nodeName)),
@@ -133,7 +134,15 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, syncStatu
 
             <div className="flex-1" />
 
-            {/* Sync action button */}
+            {/* Dismiss + Sync action buttons */}
+            <button
+              type="button"
+              className="text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer transition-colors shrink-0"
+              onClick={onDismissDrift}
+              title="Dismiss — mark as in sync"
+            >
+              <X className="h-3 w-3" />
+            </button>
             <button
               type="button"
               className="flex items-center gap-1.5 rounded px-2.5 py-0.5 text-[11px] font-medium bg-emerald-500 text-white hover:bg-emerald-600 cursor-pointer transition-colors shrink-0"

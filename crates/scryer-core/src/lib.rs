@@ -375,6 +375,26 @@ pub fn list_models() -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+/// Find the model linked to a given project path.
+/// Scans all models and returns the name of the first one whose `project_path`
+/// matches (via canonical path comparison).
+pub fn resolve_model_for_project(project_path: &std::path::Path) -> Option<String> {
+    let canonical = std::fs::canonicalize(project_path).ok()?;
+    let names = list_models().ok()?;
+    for name in names {
+        if let Ok(model) = read_model(&name) {
+            if let Some(ref pp) = model.project_path {
+                if let Ok(model_canonical) = std::fs::canonicalize(pp) {
+                    if model_canonical == canonical {
+                        return Some(name);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Read a model as raw JSON string (for Tauri frontend compatibility).
 pub fn read_model_raw(name: &str) -> Result<String, String> {
     let path = models_dir().join(format!("{}.scry", name));

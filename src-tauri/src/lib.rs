@@ -147,35 +147,6 @@ async fn get_hints(data: String, state: tauri::State<'_, SettingsState>) -> Resu
 }
 
 #[tauri::command]
-async fn run_command(command: String, project_path: Option<String>) -> Result<serde_json::Value, String> {
-    let cwd = project_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-
-    let output = if cfg!(target_os = "windows") {
-        tokio::process::Command::new("cmd")
-            .args(["/C", &command])
-            .current_dir(&cwd)
-            .output()
-            .await
-    } else {
-        tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(&command)
-            .current_dir(&cwd)
-            .output()
-            .await
-    }
-    .map_err(|e| format!("Failed to run command: {e}"))?;
-
-    Ok(serde_json::json!({
-        "exitCode": output.status.code().unwrap_or(-1),
-        "stdout": String::from_utf8_lossy(&output.stdout),
-        "stderr": String::from_utf8_lossy(&output.stderr),
-    }))
-}
-
-#[tauri::command]
 fn open_in_editor(file: String, line: Option<u32>, project_path: Option<String>) -> Result<(), String> {
     // Resolve absolute path
     let path = {
@@ -781,7 +752,6 @@ pub fn run() {
             get_ai_settings,
             save_ai_settings,
             open_in_editor,
-            run_command,
             detect_ai_tools,
             setup_mcp_integration,
             check_drift,

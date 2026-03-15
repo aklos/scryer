@@ -206,13 +206,13 @@ function quantizeToGrid(simNodes: SimNode[], simLinks: SimLink[]): void {
   const freeNodes = simNodes.filter((n) => !n.pinned);
   if (freeNodes.length === 0) return;
 
-  // Grid cell size: based on the largest node + padding
+  // Grid cell size: square cells so edges between aligned nodes are
+  // straight horizontal/vertical or clean 45° diagonals.
   const maxW = Math.max(...simNodes.map((n) => n.width));
   const maxH = Math.max(...simNodes.map((n) => n.height));
-  // Padding accounts for edge labels between nodes and diagonal clearance.
-  // Edge labels need ~150px clear space to not overlap node boundaries.
-  const cellW = maxW + 160;
-  const cellH = maxH + 120;
+  const cellSize = Math.max(maxW + 160, maxH + 120);
+  const cellW = cellSize;
+  const cellH = cellSize;
 
   // Snap each free node to nearest grid cell
   // Track occupied cells to avoid collisions
@@ -775,9 +775,10 @@ export async function autoLayout(
 
   // Create simulation nodes
   // d3-force uses center-based coordinates; we convert from/to top-left
+  // Use base NODE_H for component nodes so member lists don't inflate the layout grid
   const simNodes: SimNode[] = nodes.map((n) => {
     const w = n.measured?.width ?? NODE_W;
-    const h = n.measured?.height ?? NODE_H;
+    const h = (n.data as { kind?: string }).kind === "component" ? NODE_H : (n.measured?.height ?? NODE_H);
     const pinned = !fullRelayout && !n.data._needsLayout;
 
     const cx = n.position.x + w / 2;
@@ -902,6 +903,34 @@ export async function autoLayout(
 
   // Post-process: snap to coarse grid while preserving topology
   quantizeToGrid(simNodes, simLinks);
+
+  // Post-pass: resolve overlaps caused by actual node heights (member lists)
+  // that were ignored during layout. Push nodes down when a taller node above
+  // would overlap them.
+  const actualHeights = new Map<string, number>();
+  for (const n of nodes) {
+    actualHeights.set(n.id, n.measured?.height ?? NODE_H);
+  }
+  const PAD = 40;
+  for (let pass = 0; pass < 5; pass++) {
+    let shifted = false;
+    for (const a of simNodes) {
+      const ah = actualHeights.get(a.id) ?? NODE_H;
+      for (const b of simNodes) {
+        if (a.id === b.id || b.pinned) continue;
+        // Only check nodes that are below and horizontally nearby
+        if (b.y! <= a.y!) continue;
+        const bh = actualHeights.get(b.id) ?? NODE_H;
+        const overlapX = (a.width + b.width) / 2 + PAD - Math.abs(b.x! - a.x!);
+        if (overlapX <= 0) continue;
+        const overlapY = (ah + bh) / 2 + PAD - (b.y! - a.y!);
+        if (overlapY <= 0) continue;
+        b.y! += overlapY;
+        shifted = true;
+      }
+    }
+    if (!shifted) break;
+  }
 
   // Convert center-based coordinates back to top-left and snap to fine grid
   return nodes.map((n) => {

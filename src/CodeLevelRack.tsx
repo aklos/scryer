@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef } from "react";
-import { Code, Workflow, Table, Plus, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { Code, Workflow, Table, Plus, Trash2, ChevronRight, ChevronDown } from "lucide-react";
 import { DescriptionText, type MentionNodeInfo } from "./DescriptionText";
 import { STATUS_COLORS } from "./statusColors";
 import { Button } from "./ui";
@@ -124,6 +124,7 @@ function RackColumn({
   onAddNode,
   onDeleteNode,
   nodeMap,
+  stacked,
 }: {
   title: string;
   kind: C4Kind;
@@ -134,6 +135,7 @@ function RackColumn({
   onAddNode: (kind: C4Kind) => void;
   onDeleteNode: (id: string) => void;
   nodeMap: Map<string, MentionNodeInfo>;
+  stacked: boolean;
 }) {
   const sorted = useMemo(
     () =>
@@ -143,10 +145,31 @@ function RackColumn({
     [nodes],
   );
 
+  const [collapsed, setCollapsed] = useState(stacked && nodes.length === 0);
+
+  // Auto-expand when items appear, auto-collapse empty sections on stack
+  useEffect(() => {
+    if (!stacked) return;
+    if (nodes.length > 0 && collapsed) setCollapsed(false);
+  }, [nodes.length, stacked]);
+
+  const expanded = !stacked || !collapsed;
+  const Chevron = expanded ? ChevronDown : ChevronRight;
+
   return (
-    <div className="flex-1 flex flex-col min-w-0 border-r last:border-r-0 border-zinc-200 dark:border-zinc-800">
+    <div className={`flex flex-col min-w-0 min-h-0 ${
+      stacked
+        ? `border-b last:border-b-0 border-zinc-200 dark:border-zinc-800${expanded ? " flex-1" : ""}`
+        : "flex-1 border-r last:border-r-0 border-zinc-200 dark:border-zinc-800"
+    }`}>
       {/* Column header */}
-      <div className="flex items-center gap-1.5 px-3 py-2 h-[32px] border-b border-zinc-200 dark:border-zinc-800 bg-white/50 dark:bg-zinc-900/80 shrink-0">
+      <div
+        className={`flex items-center gap-1.5 px-3 py-2 h-[32px] border-b border-zinc-200 dark:border-zinc-800 bg-white/50 dark:bg-zinc-900/80 shrink-0 ${
+          stacked ? "cursor-pointer select-none" : ""
+        }`}
+        onClick={stacked ? () => setCollapsed((c) => !c) : undefined}
+      >
+        {stacked && <Chevron className="h-3 w-3 text-zinc-400 dark:text-zinc-500" />}
         <Icon className="h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" />
         <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
           {title}
@@ -157,24 +180,26 @@ function RackColumn({
         <Button
           variant="ghost"
           className="ml-auto !px-1.5 !py-0.5"
-          onClick={() => onAddNode(kind)}
+          onClick={(e) => { e.stopPropagation(); onAddNode(kind); }}
         >
           <Plus className="h-3 w-3" />
         </Button>
       </div>
       {/* Scrollable card list */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-1.5 bg-zinc-50 dark:bg-zinc-950">
-        {sorted.map((node) => (
-          <RackCard
-            key={node.id}
-            node={node}
-            selected={node.id === selectedNodeId}
-            onClick={() => onSelectNode(node.id)}
-            onDelete={() => onDeleteNode(node.id)}
-            nodeMap={nodeMap}
-          />
-        ))}
-      </div>
+      {expanded && (
+        <div className="flex-1 overflow-y-auto p-2 space-y-1.5 bg-zinc-50 dark:bg-zinc-950">
+          {sorted.map((node) => (
+            <RackCard
+              key={node.id}
+              node={node}
+              selected={node.id === selectedNodeId}
+              onClick={() => onSelectNode(node.id)}
+              onDelete={() => onDeleteNode(node.id)}
+              nodeMap={nodeMap}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -268,9 +293,27 @@ export function CodeLevelRack({
     return result;
   }, [nodes]);
 
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [stacked, setStacked] = useState(false);
+
+  const checkWidth = useCallback(() => {
+    if (containerRef.current) {
+      setStacked(containerRef.current.clientWidth < 700);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkWidth();
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(checkWidth);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [checkWidth]);
+
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="flex-1 flex overflow-hidden">
+    <div ref={containerRef} className="flex-1 flex flex-col overflow-hidden">
+      <div className={`flex-1 overflow-hidden ${stacked ? "flex flex-col" : "flex"}`}>
         {COLUMN_CONFIG.map(({ kind, title, icon }) => (
           <RackColumn
             key={kind}
@@ -283,6 +326,7 @@ export function CodeLevelRack({
             onAddNode={onAddNode}
             onDeleteNode={onDeleteNode}
             nodeMap={nodeMap}
+            stacked={stacked}
           />
         ))}
       </div>

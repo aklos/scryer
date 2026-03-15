@@ -34,7 +34,7 @@ Opinionated [C4](https://c4model.com/) hierarchy (system, container, component, 
 ## Features
 
 - **C4 Architecture Diagrams** — drag-and-drop editor for persons, systems, containers, components, operations, processes, and data models. Drill down through levels. Code-level nodes (operations, processes, models) show in a compact list view.
-- **Behavioral Flows** — model user journeys, data pipelines, deploy sequences. Supports branching and decision points. Link flows to test files and run tests from the flow view.
+- **Behavioral Flows** — model user journeys, data pipelines, deploy sequences. Supports branching and decision points. Flows serve as integration test specs — link them to test files via source mapping.
 - **Contracts** — expect/ask/never rules that tell AI agents how to implement your code. Inherited down the hierarchy. Expect items have pass/fail flags that control when a node can be marked "ready".
 - **Status Tracking** — three statuses: proposed (planned), wip (code exists), ready (verified). During implementation, agents mark nodes as wip. "Ready" is a separate verification step — the implementation must be complete (no stubs or TODOs), existing tests must pass, and all expect contract items must be satisfied.
 - **Source Mapping** — link architecture nodes to files in your codebase with file patterns and line ranges. Click to open in your editor.
@@ -127,14 +127,14 @@ For Claude Code, you can also auto-approve Scryer's read tools so the agent does
 ### What the MCP server provides
 
 **Reading:**
-- `get_model` — full model with all nodes, edges, flows, groups, source map
+- `get_model` — full model with all nodes, edges, flows, groups, source map. Name is optional — auto-resolves the model linked to the current working directory
 - `get_node` — scoped read of a subtree with internal/external edges and context
 - `get_changes` — diff against baseline (what changed since you last looked)
 - `get_rules` — full C4 modeling rules and workflow guidance
 - `get_structure` — annotated project directory tree (manifests, infrastructure, environments)
 
 **Implementation:**
-- `get_task` — next implementation task with dependency ordering and inherited contracts
+- `get_task` — next implementation task. When multiple containers are ready, presents a choice menu with groups. Scaffold tasks fire first for deployment groups. The model is the spec — agents must build exactly what it describes and clean up anything templates add that isn't in the model
 - Add, update, and remove nodes and edges
 - Define behavioral flows with branching (`set_flows`)
 - Organize containers into groups (`set_groups`)
@@ -147,10 +147,10 @@ Architecture models go stale as code changes. Scryer detects drift two ways: sou
 
 When drift is detected:
 
-1. A **sync button** appears in the editor toolbar
-2. Clicking it spawns your agent (Claude Code via `claude -p`, Codex via `codex exec`) with Scryer's MCP server attached
+1. A **sync bar** appears at the bottom of the editor showing potentially drifted nodes — click any node name to navigate to it on the canvas
+2. Click **Sync** to spawn your agent (Claude Code via `claude -p`, Codex via `codex exec`) with Scryer's MCP server attached. The canvas is locked during sync — cancel rolls back all agent changes
 3. The agent receives a list of potentially drifted nodes, reads the changed source files, and updates the model only where code has actually diverged
-4. Model changes appear in the editor in real-time
+4. Model changes appear in the editor in real-time. If nothing actually drifted, dismiss the notification to reset the baseline
 
 For Claude Code, the MCP server config is passed inline via `--mcp-config`. For Codex, the project must have MCP already configured (via `scryer-mcp init` or the app's setup flow) since Codex reads MCP config from `.codex/config.toml`.
 

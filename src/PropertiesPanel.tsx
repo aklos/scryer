@@ -317,13 +317,13 @@ function NodePropertiesContent({ node, sourceLocations, projectPath, mentionName
         value={data.name}
         placeholder={isCodeLevel ? "e.g. handleLogin" : "Name..."}
         className={isCodeLevel ? "font-mono" : undefined}
-        onChange={(e) => updateNodeData(node.id, { name: isCodeLevel ? sanitizeIdentifier(e.target.value) : e.target.value })}
+        onChange={(e) => updateNodeData(node.id, { name: isCodeLevel ? (data.kind === "model" ? sanitizeTypeName(e.target.value) : sanitizeIdentifier(e.target.value)) : e.target.value })}
       />
 
       {showTechnology && (
         <>
           <Divider />
-          <KVRow label="Technology">
+          <KVRow label={data.kind === "component" ? "Implements" : "Technology"}>
             <Input
               variant="inline"
               list={listId}
@@ -538,7 +538,7 @@ function NodeChildrenContent({ node, onUpdateOperationData }: { node: C4Node; on
                   variant="inline"
                   className="!w-auto !text-left font-mono text-zinc-600 dark:text-zinc-300 focus:border-zinc-300 dark:focus:border-zinc-600"
                   value={m.name}
-                  onChange={(e) => onUpdateOperationData?.(m.id, { name: sanitizeIdentifier(e.target.value) })}
+                  onChange={(e) => onUpdateOperationData?.(m.id, { name: sanitizeTypeName(e.target.value) })}
                 />
                 <button
                   type="button"
@@ -769,7 +769,7 @@ function ContractBulletItem({ item, focused, placeholder, onCommit, onFocus, onB
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="3" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="8" cy="13" r="1.5"/></svg>
         </button>
         {menuOpen && (
-          <div className="absolute right-0 top-full z-50 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-md shadow-lg py-1 min-w-[120px] text-[11px]">
+          <div className="fixed z-[100] bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-md shadow-lg py-1 min-w-[120px] text-[11px]" style={{ top: menuRef.current?.getBoundingClientRect().bottom ?? 0, right: window.innerWidth - (menuRef.current?.getBoundingClientRect().right ?? 0) }}>
             <button type="button" className="w-full text-left px-2.5 py-1 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 cursor-pointer" onClick={() => { setMenuOpen(false); setEditingUrl(!editingUrl); }}>
               {url ? "Edit link" : "Add link"}
             </button>
@@ -1205,14 +1205,6 @@ export function PropertiesPanel({ node, edge, onUpdateEdge, codeLevel, hints, on
   activeFlow?: Flow | null;
 }) {
   const [activeTab, setActiveTab] = useState<string>("properties");
-
-  const selectionId = node?.id ?? edge?.id ?? null;
-
-  useEffect(() => {
-    if (selectionId) {
-      setActiveTab("properties");
-    }
-  }, [selectionId]);
 
   // Flow mode: no properties panel (step editing is inline)
   if (activeFlow) return null;

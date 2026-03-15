@@ -85,6 +85,11 @@ Operations: `[{\"pattern\": \"src/auth/handler.ts\", \"line\": 15, \"endLine\": 
 2. Call get_task immediately to get the next task. Do NOT stop — there are more tasks.
 3. Repeat until get_task returns \"All tasks complete.\"
 
+## The model is the spec
+The architecture model is your source of truth. Build exactly what it describes — no more, no less. \
+If a template or generator adds code that isn't in the model (extra collections, pages, blocks, routes, etc.), \
+remove it. The model defines what should exist. Anything not in the model is drift and must be cleaned up.
+
 ## When modifying existing code
 If you rename, move, delete, or restructure code that is source-mapped in the model, \
 update the model in the same response using update_nodes. \

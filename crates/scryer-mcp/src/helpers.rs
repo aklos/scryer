@@ -294,7 +294,7 @@ pub(crate) fn format_done_message(model: &C4ModelData) -> String {
         return output;
     }
 
-    output.push_str("\n\nPlease validate that the model's flows still accurately describe the system behavior. Flows are integration test specs — update step descriptions as needed using `set_flows`. Use @[Name] mentions in step descriptions to reference architecture nodes. When a test exists for a flow, use `update_source_map` to link the flow to the test file with a `command` field containing the shell command to run the test (e.g. `pytest tests/test_auth.py`).\n");
+    output.push_str("\n\nPlease validate that the model's flows still accurately describe the system behavior. Flows are integration test specs — update step descriptions as needed using `set_flows`. Use @[Name] mentions in step descriptions to reference architecture nodes. When a test exists for a flow, use `update_source_map` to link the flow to the test file.\n");
 
     for flow in &model.flows {
         let all_steps = collect_all_steps(&flow.steps);

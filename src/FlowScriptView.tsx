@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { Plus, Trash2, GitBranch, GripVertical, Play, CheckCircle2, XCircle, FileText } from "lucide-react";
+import { Plus, Trash2, GitBranch, GripVertical, FileText } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { MentionTextarea, type MentionItem } from "./MentionTextarea";
 import { DescriptionText, type MentionNodeInfo } from "./DescriptionText";
@@ -379,7 +379,6 @@ interface FlowScriptViewProps {
   projectPath?: string;
 }
 
-type TestResult = { exitCode: number; stdout: string; stderr: string };
 
 export function FlowScriptView({
   flow,
@@ -389,29 +388,9 @@ export function FlowScriptView({
   sourceMap,
   projectPath,
 }: FlowScriptViewProps) {
-  const [testResult, setTestResult] = useState<TestResult | null>(null);
-  const [testRunning, setTestRunning] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const flowSources = sourceMap[flow.id] ?? [];
-  const testSource = flowSources.find((s) => s.command);
-
-  const runTest = useCallback(async () => {
-    if (!testSource?.command) return;
-    setTestRunning(true);
-    setTestResult(null);
-    try {
-      const result = await invoke<TestResult>("run_command", {
-        command: testSource.command,
-        projectPath: projectPath ?? null,
-      });
-      setTestResult(result);
-    } catch (e) {
-      setTestResult({ exitCode: -1, stdout: "", stderr: String(e) });
-    } finally {
-      setTestRunning(false);
-    }
-  }, [testSource?.command, projectPath]);
   const labels = useMemo(
     () => computeNumbering(flow.steps, "", 1),
     [flow.steps],
@@ -706,31 +685,6 @@ export function FlowScriptView({
                     <FileText size={12} />
                     <span className="font-mono">{flowSources[0].pattern}</span>
                   </button>
-                  {testSource && (
-                    <>
-                      <button
-                        type="button"
-                        disabled={testRunning}
-                        className="flex items-center gap-1 px-2 py-0.5 rounded text-emerald-700 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-900/30 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 disabled:opacity-50 cursor-pointer"
-                        onClick={runTest}
-                      >
-                        <Play size={10} />
-                        {testRunning ? "Running..." : "Run"}
-                      </button>
-                      {testResult && (
-                        <span
-                          title={testResult.stdout + testResult.stderr}
-                          className="flex items-center gap-0.5"
-                        >
-                          {testResult.exitCode === 0 ? (
-                            <CheckCircle2 size={14} className="text-emerald-500" />
-                          ) : (
-                            <XCircle size={14} className="text-red-500" />
-                          )}
-                        </span>
-                      )}
-                    </>
-                  )}
                 </>
               ) : (
                 <span className="text-zinc-400 dark:text-zinc-600 italic">No test linked</span>

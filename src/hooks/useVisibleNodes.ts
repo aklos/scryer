@@ -298,8 +298,12 @@ export function useVisibleNodes({
     return [...groupBoxes, ...extraNodes, ...injectMembers(effectiveChildNodes), ...refNodes];
   }, [nodes, edges, currentParentId, refPositions, groups, selectedGroupId]);
 
-  // Lock in auto-computed reference positions so they don't shift when children move
+  // Lock in auto-computed reference positions so they don't shift when children move.
+  // Wait until auto-layout is done (no _needsLayout nodes) so refs are positioned
+  // relative to the final child layout, not the pre-layout default positions.
   useEffect(() => {
+    const hasLayoutPending = visibleNodes.some((n) => n.data._needsLayout && n.type !== "groupBox" && !n.data._reference);
+    if (hasLayoutPending) return;
     const refs = visibleNodes.filter((n) => n.data._reference);
     if (refs.length === 0) return;
     const updates: Record<string, { x: number; y: number }> = {};

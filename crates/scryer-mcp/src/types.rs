@@ -3,9 +3,9 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct GetModelRequest {
-    /// Name of the model to retrieve
+    /// Name of the model to retrieve. If omitted, resolves the model linked to the current working directory.
     #[serde(alias = "model")]
-    pub name: String,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -171,7 +171,7 @@ pub(crate) struct DeleteEdgeRequest {
 pub(crate) struct SourceMapEntry {
     /// ID of the node or flow to set source locations for
     pub node_id: String,
-    /// Array of source locations. Each has "pattern" (glob), optional "line", optional "endLine", optional "command" (shell command to run the test). Empty array clears.
+    /// Array of source locations. Each has "pattern" (glob), optional "line", optional "endLine". Empty array clears.
     pub locations: Vec<SourceLocation>,
 }
 
