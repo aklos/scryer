@@ -474,25 +474,45 @@ fn sync_marker_path(model_name: &str) -> PathBuf {
     scryer_core::models_dir().join(format!(".sync-{}", model_name))
 }
 
+/// Get the drift baseline for a model. Reads a stored timestamp from the sync
+/// marker file. If no marker exists, initializes it from the .scry file's
+/// current mtime. This avoids using the .scry mtime directly, which changes
+/// on every auto-save and would falsely clear detected drift.
+fn drift_baseline(model_name: &str) -> Result<std::time::SystemTime, String> {
+    let marker = sync_marker_path(model_name);
+    if let Ok(contents) = std::fs::read_to_string(&marker) {
+        if let Ok(nanos) = contents.trim().parse::<u128>() {
+            let duration = std::time::Duration::from_nanos(nanos as u64);
+            return Ok(std::time::UNIX_EPOCH + duration);
+        }
+        // Legacy empty marker — fall back to its mtime
+        if let Ok(meta) = std::fs::metadata(&marker) {
+            return meta.modified().map_err(|e| e.to_string());
+        }
+    }
+    // No sync marker yet — initialize from model file mtime
+    let scry_path = scryer_core::models_dir().join(format!("{}.scry", model_name));
+    let model_mtime = std::fs::metadata(&scry_path)
+        .and_then(|m| m.modified())
+        .map_err(|e| e.to_string())?;
+    write_sync_marker(&marker, model_mtime)?;
+    Ok(model_mtime)
+}
+
+fn write_sync_marker(path: &std::path::Path, time: std::time::SystemTime) -> Result<(), String> {
+    let nanos = time.duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    std::fs::write(path, nanos.to_string()).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn check_drift(model_name: String) -> Result<serde_json::Value, String> {
     let model = scryer_core::read_model(&model_name)?;
     let project_path = model.project_path.as_deref()
         .ok_or("Model has no project path set")?;
 
-    let scry_path = scryer_core::models_dir().join(format!("{}.scry", model_name));
-    let model_mtime = std::fs::metadata(&scry_path)
-        .and_then(|m| m.modified())
-        .map_err(|e| e.to_string())?;
-
-    // Use the later of model mtime and last sync time as the baseline
-    let sync_mtime = std::fs::metadata(sync_marker_path(&model_name))
-        .and_then(|m| m.modified())
-        .ok();
-    let baseline = match sync_mtime {
-        Some(st) if st > model_mtime => st,
-        _ => model_mtime,
-    };
+    let baseline = drift_baseline(&model_name)?;
 
     let report = scryer_core::drift::check_drift(&model, baseline, std::path::Path::new(project_path));
 
@@ -508,11 +528,11 @@ fn check_drift(model_name: String) -> Result<serde_json::Value, String> {
     }))
 }
 
-/// Touch the sync marker file to record when drift was last addressed.
+/// Record the current time as the drift baseline (drift was addressed).
 #[tauri::command]
 fn mark_synced(model_name: String) -> Result<(), String> {
     let path = sync_marker_path(&model_name);
-    std::fs::write(&path, b"").map_err(|e| e.to_string())
+    write_sync_marker(&path, std::time::SystemTime::now())
 }
 
 #[tauri::command]
@@ -546,17 +566,7 @@ async fn start_agent_session(
     *snapshot_state.0.lock().unwrap() = Some(model.clone());
     let project_path = model.project_path.as_deref()
         .ok_or("Model has no project path set")?;
-    let scry_path = scryer_core::models_dir().join(format!("{}.scry", model_name));
-    let model_mtime = std::fs::metadata(&scry_path)
-        .and_then(|m| m.modified())
-        .map_err(|e| e.to_string())?;
-    let sync_mtime = std::fs::metadata(sync_marker_path(&model_name))
-        .and_then(|m| m.modified())
-        .ok();
-    let baseline = match sync_mtime {
-        Some(st) if st > model_mtime => st,
-        _ => model_mtime,
-    };
+    let baseline = drift_baseline(&model_name)?;
     let report = scryer_core::drift::check_drift(&model, baseline, std::path::Path::new(project_path));
     let drifted = report.nodes;
 
@@ -601,13 +611,23 @@ async fn start_agent_session(
 
 #[tauri::command]
 async fn cancel_agent_session(
+    model_name: String,
     state: tauri::State<'_, AcpState>,
+    snapshot_state: tauri::State<'_, SyncSnapshot>,
 ) -> Result<(), String> {
     let runtime = {
         let rt = state.0.lock().unwrap();
         rt.clone().ok_or("ACP runtime not initialized")?
     };
-    runtime.cancel().await
+    runtime.cancel().await?;
+
+    // Restore the model to its pre-sync state
+    let snapshot = snapshot_state.0.lock().unwrap().take();
+    if let Some(data) = snapshot {
+        let json = serde_json::to_string(&data).map_err(|e| e.to_string())?;
+        scryer_core::write_model_raw(&model_name, &json)?;
+    }
+    Ok(())
 }
 
 /// Diff the pre-sync snapshot against the current model on disk.

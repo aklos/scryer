@@ -148,6 +148,7 @@ export interface ModelStorageState {
   refPositions: Record<string, { x: number; y: number }>;
   groups: Group[];
   flows: Flow[];
+  syncing?: boolean;
 }
 
 export function useModelStorage(
@@ -155,7 +156,7 @@ export function useModelStorage(
   setters: ModelStorageSetters,
   scheduleFitView: () => void,
 ) {
-  const { nodes, edges, currentModel, startingLevel, sourceMap, projectPath, refPositions, groups, flows } = state;
+  const { nodes, edges, currentModel, startingLevel, sourceMap, projectPath, refPositions, groups, flows, syncing } = state;
   const {
     setNodes, setEdges, setStartingLevel, setSourceMap, setProjectPath,
     setRefPositions, setGroups,
@@ -204,7 +205,7 @@ export function useModelStorage(
 
   // Auto-save with debounce
   useEffect(() => {
-    if (!currentModel || skipSave.current) {
+    if (!currentModel || skipSave.current || syncing) {
       skipSave.current = false;
       return;
     }
@@ -225,7 +226,7 @@ export function useModelStorage(
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [nodeFingerprint, edges, currentModel, startingLevel, sourceMap, refPositions, groups, flows]);
+  }, [nodeFingerprint, edges, currentModel, startingLevel, sourceMap, refPositions, groups, flows, syncing]);
 
   const refreshList = useCallback(async () => {
     const list = await invoke<string[]>("list_models").catch(() => { toast("Failed to refresh model list"); return []; });
@@ -307,9 +308,10 @@ export function useModelStorage(
       for (const n of data.nodes) {
         const old = oldMap.get(n.id);
         if (!old) {
-          // New node
+          // New node — mark it and its parent (so ancestors glow too)
           bumpParent(n.parentId);
           changedIds.add(n.id);
+          if (n.parentId) changedIds.add(n.parentId);
         } else if ((() => {
           // Strip transient fields before comparing
           const { _needsLayout: _a, ...oldData } = old.data;
@@ -323,8 +325,9 @@ export function useModelStorage(
       }
       for (const n of oldNodes) {
         if (!newMap.has(n.id)) {
-          // Deleted node
+          // Deleted node — mark parent so it glows
           bumpParent(n.parentId);
+          if (n.parentId) changedIds.add(n.parentId);
         }
       }
 

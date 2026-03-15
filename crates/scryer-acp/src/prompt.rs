@@ -33,7 +33,7 @@ The following nodes have source files that were modified since the model was las
 3. For each node above, read the changed source files to understand what (if anything) changed.
 4. Update the model only where the code has actually diverged:
    - Fix descriptions, technology labels, or status with `update_nodes`
-   - Add new structures with `add_nodes` (status "proposed") if the code introduced something the model doesn't cover
+   - Add new structures with `add_nodes` (status "wip") if the code introduced something the model doesn't cover — these are existing code being added to the model, not proposals
    - Remove nodes with `delete_nodes` if the code deleted what the model still shows
    - Add or remove edges with `add_edges`/`delete_edges` if relationships changed
 5. Call `get_changes` to produce a summary.

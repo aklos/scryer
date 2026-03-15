@@ -20,7 +20,7 @@ import { nodeTypes } from "./nodes";
 import { edgeTypes } from "./edges";
 import { CodeLevelRack } from "./CodeLevelRack";
 import { GuidePanel } from "./GuidePanels";
-import { Bot, Loader2, Trash2, Plus, Navigation, RefreshCw, HelpCircle } from "lucide-react";
+import { Bot, Loader2, Trash2, Plus, Navigation, HelpCircle } from "lucide-react";
 import { Button } from "./ui";
 import type { C4Node, C4Edge, C4Kind, Group } from "./types";
 
@@ -64,11 +64,6 @@ interface C4CanvasProps {
   setNodes: React.Dispatch<React.SetStateAction<C4Node[]>>;
   followAI: boolean;
   onToggleFollowAI: () => void;
-  hasDrift: boolean;
-  syncStatus: "idle" | "running" | "error";
-  hasAgent: boolean;
-  onSync: () => void;
-  onCancelSync: () => void;
 }
 
 export function C4Canvas({
@@ -105,11 +100,6 @@ export function C4Canvas({
   setNodes,
   followAI,
   onToggleFollowAI,
-  hasDrift,
-  syncStatus,
-  hasAgent,
-  onSync,
-  onCancelSync,
 }: C4CanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const selectionStartPos = useRef<{ x: number; y: number } | null>(null);
@@ -493,28 +483,6 @@ export function C4Canvas({
               Follow AI
             </button>
           )}
-          {(hasDrift || syncStatus === "running") && hasAgent && (
-            <button
-              type="button"
-              className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] cursor-pointer transition-colors ${
-                syncStatus === "running"
-                  ? "text-amber-500 hover:bg-zinc-100 dark:text-amber-400 dark:hover:bg-zinc-800"
-                  : "text-emerald-500 hover:bg-zinc-100 dark:text-emerald-400 dark:hover:bg-zinc-800"
-              }`}
-              onClick={syncStatus === "running" ? onCancelSync : onSync}
-              title={
-                syncStatus === "running"
-                  ? "Syncing… (click to cancel)"
-                  : "Model may be out of sync with code"
-              }
-            >
-              {syncStatus === "running"
-                ? <Loader2 className="h-3 w-3 animate-spin" />
-                : <RefreshCw className="h-3 w-3" />
-              }
-              Sync
-            </button>
-          )}
           {nodes.length > 0 && (
             <button
               type="button"
@@ -558,7 +526,6 @@ export function C4Canvas({
                 <div className="flex justify-between"><span>Delete selected</span><kbd className="text-[10px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded">Del</kbd></div>
                 <div className="border-t border-zinc-200/60 dark:border-zinc-700/60 pt-1.5 mt-1.5 space-y-1.5">
                   <div className="text-zinc-400 dark:text-zinc-500">Right-click the <b>Review</b> button for AI settings</div>
-                  <div className="text-zinc-400 dark:text-zinc-500">Right-click the <b>Sync</b> button to toggle auto-sync</div>
                 </div>
               </div>
             )}

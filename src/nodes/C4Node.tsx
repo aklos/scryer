@@ -14,7 +14,7 @@ import { ContractBadge } from "./ContractBadge";
 import { STATUS_COLORS, statusHex } from "../statusColors";
 import { getThemedHex, ThemeContext } from "../theme";
 import { DescriptionText } from "../DescriptionText";
-import { Code, Workflow, Table, Layers } from "lucide-react";
+import { Code, Workflow, Table, Layers, RefreshCw } from "lucide-react";
 
 /** Whether this kind can be drilled into */
 function isExpandable(kind: C4NodeData["kind"]): boolean {
@@ -406,6 +406,7 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
 
   const groupHighlight = (data as Record<string, unknown>)._groupHighlight;
   const changed = (data as Record<string, unknown>)._changed;
+  const drifted = (data as Record<string, unknown>)._drifted;
 
   return (
     <div
@@ -457,6 +458,13 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
             >
               &#8599;
             </button>
+          </div>
+        )}
+
+        {/* Drift indicator — bottom left */}
+        {!!drifted && (
+          <div className="absolute bottom-2 left-2.5 z-10 pointer-events-none">
+            <RefreshCw size={12} strokeWidth={2} className="text-indigo-500 dark:text-indigo-400" />
           </div>
         )}
 

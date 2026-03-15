@@ -19,10 +19,11 @@ import { loadTheme, ThemeContext } from "./theme";
 import { CommandPalette } from "./CommandPalette";
 import { FlowScriptView } from "./FlowScriptView";
 import { C4Canvas } from "./C4Canvas";
+import { SyncBar } from "./SyncBar";
 import { expandGuidePanel } from "./GuidePanels";
 import { autoLayout } from "./layout";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { ToastProvider, useToast } from "./Toast";
+import { ToastProvider } from "./Toast";
 import type { C4Kind, C4NodeData, C4Node, C4Edge, SourceLocation, Group, Flow, StartingLevel, AiToolsState } from "./types";
 import { useModelStorage } from "./hooks/useModelStorage";
 import type { ModelStorageState } from "./hooks/useModelStorage";
@@ -111,7 +112,7 @@ function buildStarterModel(): { nodes: C4Node[]; edges: C4Edge[]; flows: Flow[];
 }
 
 function Flow() {
-  const { toast } = useToast();
+
   const [nodes, setNodes] = useState<C4Node[]>([]);
   const [edges, setEdges] = useState<C4Edge[]>([]);
   const [modelList, setModelList] = useState<string[]>([]);
@@ -147,6 +148,7 @@ function Flow() {
   const [driftedNodes, setDriftedNodes] = useState<DriftInfo[]>([]);
   const [structureChanged, setStructureChanged] = useState(false);
   const [syncStatus, setSyncStatus] = useState<"idle" | "running" | "error">("idle");
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [activeAgent, setActiveAgent] = useState<{ name: string; available: boolean } | null>(null);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -230,12 +232,13 @@ function Flow() {
   const handleSync = useCallback(async () => {
     if (!currentModel || !projectPath || syncStatus === "running") return;
     setSyncStatus("running");
+    setSyncMessage(null);
     try {
       await invoke<string>("start_agent_session", { cwd: projectPath, modelName: currentModel });
     } catch (e) {
       const msg = typeof e === "string" ? e : (e as Error)?.message ?? "Unknown error";
-      toast(`Sync failed: ${msg}`);
-      setSyncStatus("idle");
+      setSyncMessage(msg);
+      setSyncStatus("error");
     }
   }, [currentModel, projectPath, syncStatus]);
 
@@ -255,27 +258,28 @@ function Flow() {
         checkDrift(); // re-check against new baseline
         if (kind === "completed" && currentModel) {
           invoke<string>("sync_diff", { modelName: currentModel })
-            .then((summary) => toast(summary, "success"))
-            .catch(() => toast("Sync complete", "success"));
+            .then((summary) => setSyncMessage(summary))
+            .catch(() => setSyncMessage("Sync complete"));
         }
       } else if (kind === "failed") {
-        toast(`Sync failed: ${error ?? "unknown error"}`);
-        setSyncStatus("idle");
+        setSyncMessage(error ?? "Unknown error");
+        setSyncStatus("error");
       }
     });
     return () => { unlisten.then((f) => f()); };
   }, [checkDrift, currentModel, nodes]);
 
   const handleCancelSync = useCallback(async () => {
+    if (!currentModel) return;
     try {
-      await invoke("cancel_agent_session");
+      await invoke("cancel_agent_session", { modelName: currentModel });
     } catch { /* ignore */ }
     // syncStatus will be set to "idle" by the agent-event listener when cancellation completes
-  }, []);
+  }, [currentModel]);
 
   // --- History (undo/redo) ---
   const history = useHistory();
-  const storageState: ModelStorageState = { nodes, edges, currentModel, startingLevel, sourceMap, projectPath, refPositions, groups, flows };
+  const storageState: ModelStorageState = { nodes, edges, currentModel, startingLevel, sourceMap, projectPath, refPositions, groups, flows, syncing: syncStatus === "running" };
 
   useEffect(() => {
     history.capture(storageState);
@@ -340,10 +344,13 @@ function Flow() {
     setTimeout(() => fitView({ padding: 0.3, duration: 300 }), 50);
   }, [storage, history, fitView]);
 
+  const driftedNodeIdSet = useMemo(() => new Set(driftedNodes.map((d) => d.nodeId)), [driftedNodes]);
+
   const { visibleNodes, visibleNodesWithHints, visibleEdges, refNodeIds, groupNodeIds } = useVisibleNodes({
     nodes, edges, currentParentId, refPositions,
     groups, selectedGroupId, setRefPositions, activeHints: advisor.hints,
     changedNodeIds: storage.changedNodeIds,
+    driftedNodeIds: driftedNodeIdSet,
   });
 
   const onNodesChange = useNodesChange({
@@ -536,7 +543,7 @@ function Flow() {
       const node = nodes.find((n) => n.id === id);
       if (!node) return;
       setActiveFlowId(null);
-           const path: string[] = [];
+      const path: string[] = [];
       let cur = node.parentId;
       while (cur) {
         path.unshift(cur);
@@ -544,6 +551,8 @@ function Flow() {
         cur = parent?.parentId;
       }
       setExpandedPath(path);
+      scheduleFitView();
+      // Wait for ReactFlow to remount (key changes with expandedPath) and measure nodes
       setTimeout(() => {
         setNodes((nds) =>
           nds.map((n) => ({ ...n, selected: n.id === id })) as C4Node[],
@@ -567,9 +576,9 @@ function Flow() {
           }
         };
         requestAnimationFrame(() => tryCenter(10));
-      }, 50);
+      }, 150);
     },
-    [nodes, getFlowNode, getViewport, setViewport],
+    [nodes, getFlowNode, getViewport, setViewport, scheduleFitView],
   );
 
 
@@ -962,6 +971,9 @@ function Flow() {
               </button>
             </div>
           )}
+          {syncStatus === "running" && (
+            <div className="absolute inset-0 z-50 bg-zinc-500/5 dark:bg-zinc-900/10 pointer-events-auto" />
+          )}
           {activeFlow ? (
             <FlowScriptView
               flow={activeFlow}
@@ -1012,13 +1024,19 @@ function Flow() {
               setNodes={setNodes}
               followAI={storage.followAI}
               onToggleFollowAI={() => storage.setFollowAI(!storage.followAI)}
-              hasDrift={driftedNodes.length > 0 || structureChanged}
-              syncStatus={syncStatus}
-              hasAgent={!!activeAgent?.available}
-              onSync={handleSync}
-              onCancelSync={handleCancelSync}
             />
           )}
+          <SyncBar
+            activeAgent={activeAgent}
+            driftedNodes={driftedNodes}
+            structureChanged={structureChanged}
+            syncStatus={syncStatus}
+            syncMessage={syncMessage}
+            onSync={handleSync}
+            onCancelSync={handleCancelSync}
+            onDismissMessage={() => { setSyncMessage(null); if (syncStatus === "error") setSyncStatus("idle"); }}
+            onNavigateToNode={navigateToNode}
+          />
           {/* Command palette */}
           {paletteOpen && (
             <CommandPalette
