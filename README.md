@@ -22,7 +22,7 @@
 <br/>
 
 <p align="center">
-<video src="https://github.com/user-attachments/assets/807bc3e5-ee3b-4d80-bf53-df6017ec35ae" width="100%" autoplay loop muted></video>
+<video src="https://github.com/user-attachments/assets/a67f5159-aac1-49b7-abba-dae11aad9499" width="100%" autoplay loop muted></video>
 </p>
 
 AI agents write code, but natural language is a lossy way to tell them what to build. Scryer gives you a shared visual model — you edit it in a drag-and-drop editor, the agent reads and modifies it through MCP. Once the model looks right, the agent generates code from it — `get_task` feeds work one unit at a time with dependency ordering, inherited contracts, and progress tracking.
