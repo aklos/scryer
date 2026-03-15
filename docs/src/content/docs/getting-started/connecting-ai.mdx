@@ -1,0 +1,99 @@
+---
+title: Connecting AI Tools
+description: Set up Claude Code, Codex, or any MCP-compatible agent to work with your architecture model.
+---
+
+Scryer's real power comes from having AI agents work directly with your architecture model. The agent sees the same nodes, edges, and contracts you see in the editor — no lossy text descriptions.
+
+## Quick setup
+
+1. Open your model in scryer
+2. Click the **project menu** (top bar) and link your project directory
+3. Scryer detects installed AI tools and offers to configure them
+
+That's it. The next time you start your AI agent in that project directory, it will have access to your architecture model through MCP.
+
+## What gets configured
+
+### Claude Code
+
+Scryer writes two files:
+
+- **`.mcp.json`** in your project root — tells Claude Code where to find the scryer MCP server
+- **`.claude/settings.local.json`** — auto-approves scryer's read-only tools so the agent doesn't prompt you for every `get_model` call
+
+### Codex
+
+Scryer writes:
+
+- **`.codex/config.toml`** — MCP server configuration for Codex
+
+### Other agents
+
+Any agent that supports [MCP](https://modelcontextprotocol.io/) can connect. You'll need to point it at the `scryer-mcp` binary — check your agent's MCP configuration docs.
+
+## Manual setup
+
+If you prefer to configure things yourself:
+
+**Claude Code** — add to `.mcp.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "scryer": {
+      "type": "stdio",
+      "command": "/path/to/scryer-mcp"
+    }
+  }
+}
+```
+
+**Codex** — add to `.codex/config.toml`:
+
+```toml
+[mcp_servers.scryer]
+command = "/path/to/scryer-mcp"
+```
+
+You can also run `scryer-mcp init` from the command line in your project directory — it detects installed tools and writes the config files for you.
+
+## Auto-approve read tools
+
+For Claude Code, you can auto-approve scryer's read-only tools so the agent can browse your model without prompting. Add to `.claude/settings.local.json`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__scryer__list_models",
+      "mcp__scryer__get_model",
+      "mcp__scryer__get_node",
+      "mcp__scryer__get_rules",
+      "mcp__scryer__get_changes",
+      "mcp__scryer__get_structure"
+    ]
+  }
+}
+```
+
+Scryer can set this up for you automatically from the project menu.
+
+## Verifying the connection
+
+Once configured, start your AI agent and ask it to read your model:
+
+> "Use scryer to show me the current architecture model"
+
+The agent should call `get_model` and describe what it sees. If the nodes and edges match what's on your canvas, you're good to go.
+
+## What agents can do
+
+Through the MCP server, agents can:
+
+- **Read** the full model, individual nodes, changes since last read, and project structure
+- **Write** nodes, edges, flows, groups, and source mappings
+- **Get tasks** — implementation work ordered by dependencies with inherited contracts
+- **Validate** the model against C4 rules
+
+All changes made by the agent appear on your canvas in real-time.

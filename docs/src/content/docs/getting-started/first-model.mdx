@@ -1,0 +1,65 @@
+---
+title: Your First Model
+description: Create a C4 architecture diagram from scratch.
+---
+
+import { NodeDemo, NodeGallery } from "../../../components/NodeDemo";
+
+Let's build a simple architecture diagram — a web app with an API and database.
+
+## 1. Create a new model
+
+Press <kbd>Ctrl+K</kbd> to open the command palette, then click **New model**. Give it a name like "my-app".
+
+## 2. Add a person
+
+Right-click the canvas and choose **Add node → Person**. This is a user of your system. Name it something like "User" and give it a brief description — "A customer using the web application."
+
+<NodeGallery client:load>
+  <NodeDemo kind="person" shape="person" label="User" />
+</NodeGallery>
+
+## 3. Add your system
+
+Right-click again and add a **System**. Name it "My App" with a description like "The main application." This is the top-level boundary for everything you're building.
+
+<NodeGallery client:load>
+  <NodeDemo kind="person" shape="person" label="User" />
+  <NodeDemo kind="system" shape="rectangle" label="My App" />
+</NodeGallery>
+
+## 4. Draw a relationship
+
+Hover over the User node — you'll see connection handles appear on each side. Click and drag from a handle to the System node to create an edge. Give the edge a label like "Uses".
+
+## 5. Drill into the system
+
+Select the "My App" system and click the expand button (↗) to zoom in and see its containers. The canvas is now scoped to this system — the breadcrumb at the top shows your navigation path.
+
+## 6. Add containers
+
+Right-click and add containers for the parts of your system:
+
+<NodeGallery client:load>
+  <NodeDemo kind="container" label="Website" technology="React" />
+  <NodeDemo kind="container" label="API" technology="Node.js" />
+  <NodeDemo kind="container" label="Database" technology="PostgreSQL" shape="cylinder" />
+</NodeGallery>
+
+Draw edges between them: Website → API → Database.
+
+:::tip
+Use the **cylinder** shape for data stores and the **pipe** shape for message queues. Pick the shape in the Properties panel on the right.
+:::
+
+## 7. Keep going
+
+Expand a container to add **components** inside it. Components are the logical modules — your auth service, user repository, API routes, etc.
+
+Inside components, you can add **operations** (individual functions), **processes** (multi-step workflows), and **models** (data structures). These appear in a compact list view instead of on the canvas.
+
+## What's next
+
+- [Canvas & Navigation](/scryer/editor/canvas/) — learn all the ways to move around your diagrams
+- [Nodes](/scryer/editor/nodes/) — deep dive into every node type and what you can configure
+- [Connecting AI Tools](/scryer/getting-started/connecting-ai/) — let your AI agent read and modify this model

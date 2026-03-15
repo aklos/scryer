@@ -1,0 +1,64 @@
+---
+title: Implementation Workflow
+description: How AI agents build code from your architecture model — one task at a time.
+---
+
+Once your architecture model looks right, the AI agent can implement it. The `get_task` tool drives this process — it gives the agent one piece of work at a time, ordered by dependencies, with contracts inherited from parent nodes.
+
+## The loop
+
+The implementation workflow is a simple loop:
+
+1. Agent calls **`get_task`** → receives one work unit
+2. Agent **builds** what the task describes
+3. Agent marks the node as <span class="status-pill status-wip">WIP</span> via `update_nodes` with a reason
+4. Agent calls **`get_task`** again → gets the next piece
+5. Repeat until `get_task` returns "All tasks complete"
+
+The agent doesn't need to figure out what to build next or in what order — `get_task` handles dependency ordering and progress tracking.
+
+## What a task contains
+
+Each task includes:
+
+- **The target node** — what to build
+- **Inherited contracts** — expect/ask/never rules from all ancestors, merged
+- **Dependencies** — what this node depends on (already built)
+- **Context** — descriptions and notes from parent nodes
+
+## Task ordering
+
+Tasks follow the dependency graph:
+
+1. **Scaffold tasks** fire first for deployment groups — setting up the project structure
+2. **Leaf nodes** with no dependencies come next
+3. **Dependent nodes** only appear after their dependencies are WIP or ready
+4. **Parent rollup** — when all children of a container are done, `get_task` prompts the agent to mark the container as WIP
+
+## Contracts during implementation
+
+The task includes the full chain of inherited contracts. An expect item on a system flows down to every container, component, and operation inside it.
+
+The agent should:
+- Follow **expect** rules as implementation requirements
+- Pause on **ask** items and check with you before proceeding
+- Avoid anything listed in **never**
+
+## Verification (WIP → Ready)
+
+Moving to <span class="status-pill status-ready">Ready</span> is a separate step from implementation — don't do it during the build loop. A node is ready when:
+
+- Implementation is complete — no stubs, no TODOs, no placeholder logic
+- The code does what the node's description says
+- If tests exist, they pass
+- All inherited expect items are marked `passed: true`
+
+You decide when to verify. Ask the agent to check — it will review each point and either mark the node ready or explain what's missing.
+
+## Working with multiple containers
+
+When `get_task` encounters multiple containers ready to start, it presents a choice menu. If containers are in a deployment group, the group scaffold fires first, then individual container work follows.
+
+## The model is the spec
+
+During implementation, the model above is the authority. If the agent discovers something that doesn't fit the model, it should flag the conflict rather than silently change the architecture. Higher-level boundaries (which systems exist, what containers they contain) require your approval to change.

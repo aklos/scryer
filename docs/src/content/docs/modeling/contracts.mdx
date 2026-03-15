@@ -1,0 +1,67 @@
+---
+title: Contracts
+description: Tell AI agents exactly how to implement your architecture — with expect, ask, and never rules.
+---
+
+import { ContractBadgeDemo } from "../../../components/ContractBadgeDemo";
+
+Contracts are instructions attached to nodes that tell AI agents *how* to implement them. They're more precise than descriptions — they're checkable rules.
+
+## The three sections
+
+### Expect
+
+Properties the implementation **must** have. Each expect item has a pass/fail checkbox:
+- **Passed** — the implementation satisfies this requirement
+- **Failed** — the implementation doesn't meet this yet
+- **Unchecked** — hasn't been verified
+
+For example:
+- "Passwords are hashed with bcrypt, min 12 rounds"
+- "Rate limit: 5 login attempts per minute per IP"
+- "JWT tokens expire after 1 hour"
+
+Expect items are the gate for the **Ready** status — a node can only be marked "ready" when every expect item has passed.
+
+### Ask
+
+Questions or confirmations the agent should ask before implementing. Use these for decisions that need human input — "Which OAuth provider?", "PostgreSQL or MySQL?", "Should this be async?"
+
+### Never
+
+Anti-patterns to avoid. Hard rules about what the implementation must *not* do — "Never mock the database in integration tests", "Never use `any` types", "Never call this endpoint without authentication."
+
+## Contract badges
+
+On the canvas, nodes with contracts show a small badge with icons and counts:
+
+<ContractBadgeDemo
+  client:load
+  contract={{
+    expect: [
+      { text: "Hashed passwords", passed: true },
+      { text: "Rate limiting", passed: false },
+      { text: "JWT expiry" },
+    ],
+    ask: [{ text: "Redis or main DB?" }],
+    never: [{ text: "No plaintext passwords" }],
+  }}
+/>
+
+The shield icon shows expect items (green if all pass, red if any fail, gray if unchecked). The message icon shows ask items. The ban icon shows never items.
+
+## Inheritance
+
+Contracts flow down the hierarchy. If a system has an expect rule "All APIs must return JSON", every container, component, and operation inside that system inherits it. When an AI agent requests a task via `get_task`, it receives the full chain of inherited contracts.
+
+This means you can set project-wide rules at the system level and detailed implementation rules at the component level.
+
+## Adding contracts
+
+Select a node and scroll to the **Contract** section in the Properties panel. Click the + button in any section (Expect, Ask, Never) to add a new item. Type your rule and press Enter.
+
+For expect items, click the checkbox to toggle passed/failed/unchecked state.
+
+## Images in contracts
+
+Expect items can include an image — useful for UI mockups, API response examples, or reference screenshots. Click the image button on an expect item to upload. Images are stored inline in the model file (base64, resized to max 1280px).

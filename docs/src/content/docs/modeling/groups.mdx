@@ -1,0 +1,50 @@
+---
+title: Groups
+description: Organize containers and components into deployment units, packages, or logical groupings.
+---
+
+Groups let you bundle related nodes together — containers that deploy as a single unit, components that belong to the same package, or any logical grouping that makes sense for your project.
+
+## Creating a group
+
+Select multiple nodes on the canvas (<kbd>Shift</kbd> + drag), then use the multi-selection panel on the right to **Create group**. Name it and optionally add a description.
+
+You can also add nodes to an existing group from the same panel.
+
+## What groups look like
+
+On the canvas, groups appear as a subtle labeled box behind their member nodes. In the sidebar, groups show as collapsible rows with a member count.
+
+## Use cases
+
+### Deployment groups
+
+Bundle containers that ship together. If your API server, admin panel, and background worker are all part of one deployment, group them. This tells the AI agent's task system to scaffold them together.
+
+### Package groups
+
+At the component level, group components that belong to the same code package or module.
+
+### Logical groupings
+
+Any semantic grouping — "payment subsystem", "user-facing services", "internal tools."
+
+## Group rules
+
+- A node can belong to **at most one group**
+- Groups have their own **contracts** — expect/ask/never rules that apply to all members
+- Groups live at one level of the hierarchy (container groups at container level, component groups at component level)
+
+## Groups and the task system
+
+When an AI agent calls `get_task` and multiple containers are ready to work on, the task system presents a choice menu grouped by deployment groups. Scaffold tasks fire first for the group, then individual container tasks follow.
+
+## Editing groups
+
+Select a group in the sidebar or click the group box on the canvas to see its properties:
+
+- **Name** and **description** — editable in the Properties panel
+- **Members** — listed with remove buttons
+- **Contracts** — group-level rules
+
+Delete a group by removing it from the sidebar. The member nodes stay — they just lose their grouping.

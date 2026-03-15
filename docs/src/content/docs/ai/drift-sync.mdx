@@ -1,0 +1,58 @@
+---
+title: Drift & Sync
+description: Scryer detects when code and architecture diverge — and helps you bring them back in sync.
+---
+
+Architecture models go stale as code changes. Someone refactors a service, adds a new endpoint, removes a dependency — and the diagram no longer matches reality. Scryer detects this automatically.
+
+## How drift detection works
+
+Scryer monitors the source-mapped files in your project. It flags drift in two ways:
+
+1. **Changed files** — a source-mapped file was modified since the last sync
+2. **New files** — files appear in the project that aren't covered by any node's source map
+
+When drift is detected, a **sync bar** appears at the bottom of the editor.
+
+## The sync bar
+
+The sync bar shows:
+- The connected agent's name
+- A list of potentially drifted nodes — click any name to navigate to it on the canvas
+- A **Sync** button to start the sync process
+
+## Syncing
+
+Click **Sync** to have Scryer spawn your connected AI agent with the MCP server attached. The agent:
+
+1. Receives a list of potentially drifted nodes and their source patterns
+2. Reads the changed files
+3. Updates the model where the code has actually diverged
+4. Model changes appear on your canvas in real-time
+
+The canvas is **locked during sync** — you can watch the agent work but can't make conflicting edits.
+
+## Canceling a sync
+
+Click **Cancel** during a sync to roll back all changes the agent made. The model reverts to its state before the sync started.
+
+## Agent spawning
+
+Scryer uses CLI spawning for sync:
+
+- **Claude Code** — spawned via `claude -p` (uses your Anthropic subscription)
+- **Codex** — spawned via `codex exec` (uses your OpenAI API key)
+
+The MCP server is attached automatically. For Claude Code, the config is passed inline via `--mcp-config`. For Codex, it reads from the project's `.codex/config.toml`.
+
+## Dismissing drift
+
+If the drift notification is a false positive — files changed but the architecture didn't actually diverge — click **Dismiss** to reset the baseline. Scryer won't flag those changes again.
+
+## Keeping models fresh
+
+For best results:
+
+- Set **source mappings** on containers and components so Scryer knows which files to watch
+- Run sync regularly after significant code changes
+- Use broad glob patterns for containers (`src/api/**`) and narrow paths for operations (`src/api/routes/users.ts:24-48`)

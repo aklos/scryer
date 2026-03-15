@@ -1,0 +1,55 @@
+---
+title: Source Mapping
+description: Link architecture nodes to files in your codebase — and click to open them in your editor.
+---
+
+Source mapping connects your visual architecture to actual code. Every node can have file patterns that point to where it lives in your project.
+
+## Adding source locations
+
+Select a node and find the **Sources** section in the Properties panel. Add file patterns:
+
+- **Glob patterns** — `src/auth/**/*.ts`, `lib/models/*.py`
+- **Exact files** — `src/routes/users.ts`
+- **With line ranges** — `src/routes/users.ts:24-48` for a specific function
+
+Containers and components typically use glob patterns (broad). Operations use specific file paths with line ranges (narrow).
+
+## Click to open
+
+Source locations are clickable. Click one to open the file in your editor at the right line.
+
+Scryer detects and supports:
+- **VS Code** and **Cursor** — `--reuse-window --goto`
+- **Zed** — `-a` with `file:line` syntax
+- **Sublime Text** — `file:line` syntax
+- Falls back to your system's default editor
+
+## Source mapping and AI agents
+
+AI agents set source maps through the `update_source_map` MCP tool. When an agent implements a node, it links the generated code back to the architecture model.
+
+This enables two important features:
+
+### Drift detection
+
+Scryer watches source-mapped files. When a file changes, the corresponding node is flagged as potentially drifted. See [Drift & Sync](/scryer/ai/drift-sync/).
+
+### Flow test linking
+
+Flow IDs are valid source map keys too. You can link a behavioral flow to its integration test file:
+
+```json
+{
+  "flow-1": [{ "pattern": "tests/checkout.test.ts" }]
+}
+```
+
+This lets agents know which test file covers a given flow.
+
+## How it's stored
+
+Source maps live in the model's `sourceMap` field — a mapping from node or flow ID to an array of source locations. Each location has:
+
+- `pattern` — file path or glob
+- `line` / `endLine` — optional line range

@@ -1,0 +1,79 @@
+---
+title: Canvas & Navigation
+description: Moving around your architecture diagrams — zooming, drilling, breadcrumbs, and more.
+---
+
+The canvas is your main workspace. It's a zoomable, pannable surface where your architecture nodes live as draggable cards connected by edges.
+
+## Basic controls
+
+| Action | How |
+|--------|-----|
+| **Pan** | Click and drag on empty canvas |
+| **Zoom** | Scroll wheel, or use the +/- buttons in the bottom-left |
+| **Fit view** | Click the fit button (bottom-left controls) to zoom to show all nodes |
+| **Select node** | Click on it |
+| **Multi-select** | <kbd>Shift</kbd> + drag to draw a selection box |
+| **Delete** | Select node(s), press <kbd>Delete</kbd> or <kbd>Backspace</kbd> |
+
+## Drilling in and out
+
+C4 diagrams are hierarchical — systems contain containers, containers contain components. **Select** any node and click the **expand button** (↗) to drill into it and see its children.
+
+When you drill in:
+- The canvas shows only that node's children
+- A **breadcrumb trail** appears at the top showing your path
+- Click any breadcrumb segment to jump back to that level
+- Click the **up arrow** button to go one level up
+
+At the **code level** (inside a component), the view switches from a canvas to a compact **list view** with three columns: Models, Operations, and Processes. These are too granular for spatial layout — the list view is more practical.
+
+## The sidebar
+
+The left sidebar has two tabs:
+
+### Model tab
+
+A tree view of your entire architecture. Every node is listed hierarchically with expand/collapse controls. Click a node to select it on the canvas.
+
+Nodes show:
+- **Kind icon** — color-coded by type (system, container, component, etc.)
+- **Status dot** — colored indicator if the node has a status
+- **Name** — the node's display name
+
+Groups appear as collapsible rows with member counts.
+
+### Flows tab
+
+Lists all behavioral flows in the model. Click a flow to switch to the flow editor. See [Flows](/scryer/modeling/flows/) for details.
+
+## Context menus
+
+Right-click on different elements for contextual actions:
+
+- **Canvas** — Add a new node (with kind selection)
+- **Node** — Delete, manage edges, add to group
+- **Edge** — Delete, edit label or method
+
+## Command palette
+
+Press <kbd>Ctrl+K</kbd> (<kbd>Cmd+K</kbd> on macOS) to open the command palette. From here you can:
+
+- Search and open any model
+- Create a new model
+- Save the current model with a new name
+- Delete a model (select it, press <kbd>Delete</kbd>)
+
+Navigate with arrow keys and press <kbd>Enter</kbd> to open.
+
+## Undo / Redo
+
+The toolbar includes undo and redo buttons. Scryer keeps the last 10 states in memory. Changes are batched — rapid edits within a second are grouped as one undo step.
+
+## Auto-save
+
+Every change is automatically saved after a 500ms pause. Your `.scry` file stays up to date without manual saves.
+
+## Grid snapping
+
+Nodes snap to a 20px grid when you drag them, keeping your layout tidy.

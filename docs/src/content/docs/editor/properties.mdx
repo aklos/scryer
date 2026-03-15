@@ -1,0 +1,69 @@
+---
+title: Properties Panel
+description: The right sidebar where you configure everything about the selected node, edge, or group.
+---
+
+The Properties panel appears on the right side when you select a node, edge, or group. It's where you configure details that don't belong directly on the canvas.
+
+## Node properties
+
+When you select a node, the panel shows:
+
+### Identity
+- **Name** — click to edit inline
+- **Kind** — the node type (person, system, container, etc.)
+- **Technology** — framework or platform, with autocomplete suggestions
+- **Shape** — pick from 7 shapes (rectangle, person, cylinder, pipe, trapezoid, bucket, hexagon)
+- **External** — toggle for system nodes (marks as third-party)
+
+### Status
+A segmented control to set the node's status: Proposed, WIP, Ready, or none. See [Status Tracking](/scryer/modeling/status/).
+
+When a status is set, you can add a **reason** — "Needs auth middleware", "All tests passing", etc. This appears as context in the task system.
+
+### Description
+What this node *is* — its role and purpose. Keep it concise and architectural. This is visible on the canvas and in the model export.
+
+Max 200 characters. A subtle counter appears when you're close to the limit.
+
+### Notes
+Implementation details, deployment context, conventions — anything useful during development but not part of the architectural identity. Notes are inherited by descendant nodes when AI agents request tasks.
+
+### Source locations
+File patterns that link this node to code in your project. See [Source Mapping](/scryer/modeling/source-mapping/).
+
+### Contracts
+Expect/ask/never rules for AI implementation. See [Contracts](/scryer/modeling/contracts/).
+
+## Edge properties
+
+When you select an edge:
+
+- **Label** — description of the relationship
+- **Method** — protocol or mechanism (REST, gRPC, SQL, etc.)
+
+## Group properties
+
+When you select a group:
+
+- **Name** — the group's display name
+- **Description** — what this group represents
+- **Members** — list of nodes in the group
+- **Contracts** — rules that apply to the group
+
+## Multi-selection
+
+Select multiple nodes (<kbd>Shift</kbd> + drag) to see bulk actions:
+
+- **Create group** — wrap the selected nodes in a new group
+- **Add to group** — add them to an existing group
+
+## Code-level content
+
+When viewing a component, the panel shows sub-sections for the component's code-level children:
+
+- **Models** — data structures with their properties
+- **Operations** — functions and handlers
+- **Processes** — multi-step workflows
+
+Each section has a + button to add new items. Click any item to see and edit its details.

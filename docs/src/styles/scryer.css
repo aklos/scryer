@@ -1,0 +1,82 @@
+@import "tailwindcss";
+
+/* Starlight uses [data-theme="dark"] instead of @media (prefers-color-scheme) */
+@variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* Scan doc components AND the app source files they import for Tailwind classes */
+@source "../components";
+@source "../../../src/shapes";
+@source "../../../src/nodes";
+@source "../../../src/statusColors.ts";
+@source "../../../src/kindIcons.ts";
+@source "../../../src/DescriptionText.tsx";
+@source "../../../src/FlowScriptView.tsx";
+@source "../../../src/MentionTextarea.tsx";
+
+/* scryer node CSS vars — the app sets these dynamically via theme.ts,
+   but docs need static defaults matching the default zinc theme. */
+:root {
+  --scryer-node-bg: #ffffff;
+  --scryer-ext-bg: #d4d4d8;
+  --scryer-ref-bg: #e8e8eb;
+  --scryer-person-fill: #d4d4d8;
+  --scryer-select-stroke: #09090b;
+  --scryer-outline-stroke: #a1a1aa;
+}
+:root[data-theme="dark"] {
+  --scryer-node-bg: #27272a;
+  --scryer-ext-bg: #35353a;
+  --scryer-ref-bg: #2e2e32;
+  --scryer-person-fill: #35353a;
+  --scryer-select-stroke: #e4e4e7;
+  --scryer-outline-stroke: #3f3f46;
+}
+
+/* Starlight accent — use scryer's blue */
+:root {
+  --sl-color-accent-low: #1e3a8a;
+  --sl-color-accent: #2563eb;
+  --sl-color-accent-high: #dbeafe;
+  --sl-font: "system-ui", sans-serif;
+}
+:root[data-theme="dark"] {
+  --sl-color-accent-low: #1a2744;
+  --sl-color-accent: #60a5fa;
+  --sl-color-accent-high: #c8ddf8;
+}
+
+/* Status pills — same Tailwind classes the app uses */
+.status-pill {
+  @apply inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold;
+}
+.status-pill::before {
+  content: "";
+  @apply w-2 h-2 rounded-full;
+}
+.status-proposed {
+  @apply bg-blue-100 text-blue-800;
+}
+.status-proposed::before {
+  @apply bg-blue-500;
+}
+.status-wip {
+  @apply bg-amber-100 text-amber-800;
+}
+.status-wip::before {
+  @apply bg-amber-500;
+}
+.status-ready {
+  @apply bg-emerald-100 text-emerald-800;
+}
+.status-ready::before {
+  @apply bg-emerald-500;
+}
+:root[data-theme="dark"] .status-proposed {
+  @apply bg-blue-900/50 text-blue-200;
+}
+:root[data-theme="dark"] .status-wip {
+  @apply bg-amber-900/50 text-amber-200;
+}
+:root[data-theme="dark"] .status-ready {
+  @apply bg-emerald-900/50 text-emerald-200;
+}

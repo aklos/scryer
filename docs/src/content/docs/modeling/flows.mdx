@@ -1,0 +1,86 @@
+---
+title: Flows
+description: Model user journeys, data pipelines, and multi-step processes with behavioral flows.
+---
+
+import { FlowDemo } from "../../../components/FlowDemo";
+
+Flows are behavioral specifications — they describe *what happens* when a user does something or when a process runs. Think of them as integration test scripts for your architecture.
+
+## Creating a flow
+
+Switch to the **Flows** tab in the sidebar and click the + button. Give your flow a name like "User Registration" or "Order Checkout."
+
+## The script view
+
+Flows use a script view — a vertical list of numbered steps. Each step describes one thing that happens.
+
+<FlowDemo
+  client:load
+  flow={{
+    id: "demo-1",
+    name: "User Registration",
+    description: "New user signs up for an account",
+    steps: [
+      { id: "s1", description: "User submits registration form" },
+      { id: "s2", description: "API validates input fields" },
+      { id: "s3", description: "API checks for existing account" },
+      { id: "s4", description: "API creates user record" },
+      { id: "s5", description: "API sends welcome email" },
+    ],
+  }}
+/>
+
+Click on any step to edit its description. Use the + button between steps to insert new ones. Drag the handle on the left to reorder.
+
+## Branching
+
+Real flows have decision points — "if the payment succeeds, do X; if it fails, do Y." Click the branch button on a step to add branches.
+
+<FlowDemo
+  client:load
+  flow={{
+    id: "demo-2",
+    name: "Payment Checkout",
+    steps: [
+      { id: "s1", description: "User submits payment" },
+      {
+        id: "s2",
+        description: "Payment gateway processes charge",
+        branches: [
+          {
+            condition: "if: payment succeeds",
+            steps: [
+              { id: "s2a1", description: "Create order record" },
+              { id: "s2a2", description: "Send confirmation email" },
+            ],
+          },
+          {
+            condition: "if: payment fails",
+            steps: [
+              { id: "s2b1", description: "Show error message to user" },
+              { id: "s2b2", description: "Log failed attempt" },
+            ],
+          },
+        ],
+      },
+      { id: "s3", description: "Redirect user to order page" },
+    ],
+  }}
+/>
+
+Each branch needs a **condition** — what triggers this path. The flow resumes at the next sequential step after the branches.
+
+:::tip
+Use branches only for real decision points where the flow genuinely diverges. If there's only one path forward, it's just the next step — not a branch with one option.
+:::
+
+## Process linking
+
+Steps can reference **processes** and **operations** from your model. These appear as violet pills under the step description. This links the behavioral flow to the actual code that implements each step.
+
+AI agents use these links to understand which code supports which business flow. The [AI Advisor](/scryer/ai/advisor/) checks for coverage gaps — steps without linked processes, or processes not covered by any flow.
+
+## Flows as test specs
+
+Flows aren't just documentation — they're specifications that can drive integration tests. You can link a flow to a test file via [source mapping](/scryer/modeling/source-mapping/), including a test command. The agent knows what to test and how to run it.

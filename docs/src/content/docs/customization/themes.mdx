@@ -1,0 +1,56 @@
+---
+title: Themes
+description: Customize every color in scryer — swap palettes, adjust shades, light or dark.
+---
+
+Scryer's entire color system is customizable. You can swap any color role to a different Tailwind palette, adjust shade offsets, and tweak canvas and node backgrounds independently.
+
+## Opening the theme editor
+
+Click the **gear icon** in the top bar, then switch to the **Theme** tab.
+
+## Color mode
+
+Choose between **Light**, **Dark**, or **System** (follows your OS preference). The app switches instantly — no restart needed.
+
+## Color roles
+
+Scryer uses 11 semantic color roles. Each can be mapped to any of 22 Tailwind palettes:
+
+| Role | Default palette | Used for |
+|------|----------------|----------|
+| **Zinc** | zinc | Neutral backgrounds, borders, text |
+| **Slate** | slate | System nodes, edge strokes |
+| **Blue** | blue | Accent, buttons, selection, proposed status |
+| **Emerald** | emerald | WIP status, process nodes |
+| **Amber** | amber | Ready status, model nodes |
+| **Red** | red | Errors, danger actions, never contracts |
+| **Violet** | violet | Components, secondary accent |
+| **Indigo** | indigo | Focus rings, tertiary buttons |
+| **Cyan** | cyan | Container nodes |
+| **Orange** | orange | Warning hint badges |
+| **Teal** | teal | Info hint badges |
+
+Click any role to see a picker with all 22 palette options. Each palette preview shows its shade range so you can pick one that feels right.
+
+## Shade offsets
+
+Each color role has a **shade offset** slider (-3 to +3). This shifts all shades lighter or darker. A +2 offset on blue means `blue-500` actually renders as `blue-700` — useful for making accents more or less prominent without switching the entire palette.
+
+## Canvas & node backgrounds
+
+Separate controls for:
+- **Canvas background** — the grid surface (light: shade 0-10, dark: shade 0-10)
+- **Node fill** — the background color of node shapes
+
+These let you fine-tune contrast between the canvas and the nodes sitting on it.
+
+## How it works under the hood
+
+Scryer uses Tailwind v4, which compiles utilities like `bg-blue-500` to `background-color: var(--color-blue-500)`. By overriding these CSS custom properties at runtime, every Tailwind class in the app automatically picks up the new palette.
+
+No rebuild needed — it's instant. Your theme is saved to `localStorage` and applied before the first render, so there's no flash of default colors.
+
+## Resetting
+
+Click **Reset to default** in the theme editor to go back to the original colors.

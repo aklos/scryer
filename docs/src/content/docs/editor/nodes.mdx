@@ -1,0 +1,126 @@
+---
+title: Nodes
+description: Every type of node in scryer — from high-level systems to individual functions.
+---
+
+import { NodeDemo, NodeGallery, ShapeGallery } from "../../../components/NodeDemo";
+
+Nodes are the building blocks of your architecture model. Each represents something real — a user, a system, an app, a module, a function.
+
+## The hierarchy
+
+| Level | What it represents |
+|-------|-------------------|
+| **Person** | Users and actors |
+| **System** | Software systems |
+| ↳ **Container** | Apps, services, data stores |
+| &nbsp;&nbsp;↳ **Component** | Logical modules |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ **Operation** | Functions & handlers |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ **Process** | Multi-step workflows |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ **Model** | Data structures |
+
+Each level nests inside the one above it. You drill into a system to see its containers, into a container to see its components, and into a component to see its operations, processes, and models.
+
+## Architecture-level nodes
+
+These are the nodes you place on the canvas and connect with edges.
+
+### Person
+
+An external user or actor that interacts with your systems.
+
+<NodeGallery client:load>
+  <NodeDemo kind="person" label="Customer" />
+  <NodeDemo kind="person" label="Admin" />
+</NodeGallery>
+
+Persons are always top-level — they don't nest inside anything. They don't have a technology field or status tracking.
+
+### System
+
+A top-level software system. This is the highest-level boundary for something your team builds and maintains. Systems have a subtle outer border to distinguish them.
+
+<NodeGallery client:load>
+  <NodeDemo kind="system" label="Order Platform" />
+  <NodeDemo kind="system" label="Stripe" external />
+</NodeGallery>
+
+Systems can be marked **external** — these are third-party services you don't control (like Stripe, AWS, Twilio). External systems appear with a dashed border and cannot contain children.
+
+### Container
+
+A deployable unit inside a system — a web app, API server, database, message queue, background worker, etc. Select a system and expand it to see its containers.
+
+<NodeGallery client:load>
+  <NodeDemo kind="container" label="Website" technology="React" />
+  <NodeDemo kind="container" label="API Server" technology="Express" />
+  <NodeDemo kind="container" label="Database" technology="PostgreSQL" shape="cylinder" />
+  <NodeDemo kind="container" label="Message Queue" technology="RabbitMQ" shape="pipe" />
+</NodeGallery>
+
+Containers have a **technology** field — the framework, language, or platform they run on.
+
+### Component
+
+A logical module inside a container — an auth service, a repository, a set of API routes. Expand a container to see its components.
+
+<NodeGallery client:load>
+  <NodeDemo kind="component" label="Auth Service" technology="JWT" />
+  <NodeDemo kind="component" label="User Repository" technology="Prisma" />
+</NodeGallery>
+
+Components have a small tab decoration at the top-left. They should correspond to concrete code units — a class, module, package, or folder in your codebase.
+
+## Code-level nodes
+
+Inside a component, you work with three kinds of code-level nodes. These appear in a list view rather than on the canvas.
+
+### Operation
+
+A single function, method, or handler — something you can point to in one file. Operations use monospace font and follow your language's naming convention (`camelCase` for JS/TS, `snake_case` for Python/Rust).
+
+### Process
+
+A multi-step workflow that orchestrates multiple operations — like a saga, pipeline, or scheduled job. If it maps to a single function, it's an operation, not a process.
+
+### Model
+
+A data structure — a type, interface, or schema. Models have a **properties** list where each field has a name and description.
+
+## Shapes
+
+Every node can have a shape. The default is rectangle, but you can change it in the Properties panel.
+
+<ShapeGallery client:load />
+
+Common conventions:
+- **Rectangle** — default for most nodes
+- **Person** — for person nodes
+- **Cylinder** — databases and data stores
+- **Pipe** — message queues and event buses
+- **Hexagon** — external services or gateways
+
+## Creating nodes
+
+Three ways to add nodes:
+
+1. **Right-click the canvas** → Add node → pick a kind
+2. **Inside a component**, use the + buttons in the list view columns
+3. **AI agents** add nodes through the MCP server
+
+## Node properties
+
+Every node has:
+- **Name** — displayed on the node
+- **Description** — what this node *is* (max 200 characters, shown on canvas)
+- **Notes** — implementation details, deployment context, rationale (not shown on canvas)
+
+Architecture nodes also have:
+- **Technology** — framework, language, or platform (max 28 characters)
+- **Shape** — visual shape on canvas
+- **Status** — proposed, wip, or ready (see [Status Tracking](/scryer/modeling/status/))
+- **External** — for system nodes only
+
+## Mentions
+
+In code-level descriptions, use `@[Name]` to cross-reference sibling nodes. For example: "Validates the `@[UserInput]` model before calling `@[createUser]`." These render as clickable pills in the editor.

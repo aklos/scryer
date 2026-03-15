@@ -1,0 +1,67 @@
+---
+title: MCP Server
+description: The scryer MCP server — how AI agents read and modify your architecture model.
+---
+
+The MCP (Model Context Protocol) server is what makes scryer a two-way tool. You edit the visual diagram, and AI agents read and modify the same model programmatically.
+
+## How it works
+
+The `scryer-mcp` binary ships bundled with the desktop app. When configured, your AI agent spawns it as a subprocess and communicates over stdio.
+
+Everything the agent does through MCP shows up on your canvas in real-time. Add a node through the API? It appears in the editor. Move things around in the editor? The agent sees the updated positions on its next read.
+
+## Available tools
+
+### Reading
+
+| Tool | What it does |
+|------|-------------|
+| `list_models` | List all saved models |
+| `get_model` | Full model — all nodes, edges, flows, groups, source map |
+| `get_node` | Scoped read of one node + its descendants + internal/external edges |
+| `get_rules` | C4 modeling rules and workflow guidance |
+| `get_changes` | Diff since the agent last read the model |
+| `get_structure` | Annotated project directory tree — manifests, infra configs, env templates |
+
+### Writing
+
+| Tool | What it does |
+|------|-------------|
+| `set_model` | Create or replace a full model |
+| `set_node` | Set a node's full subtree (children, edges) |
+| `add_nodes` | Add new nodes |
+| `update_nodes` | Update existing node properties |
+| `delete_nodes` | Remove nodes (cascading to children) |
+| `add_edges` | Add new edges |
+| `update_edges` | Update edge properties |
+| `delete_edges` | Remove edges |
+| `set_flows` | Define behavioral flows with steps and branches |
+| `delete_flow` | Remove a flow |
+| `update_source_map` | Link nodes/flows to source files |
+| `set_groups` | Organize nodes into groups |
+| `validate_model` | Check the model against C4 rules |
+
+### Implementation
+
+| Tool | What it does |
+|------|-------------|
+| `get_task` | Get the next piece of implementation work — dependency-ordered, with inherited contracts |
+
+## Reading strategies
+
+Agents don't always need the full model. The MCP server provides three levels of detail:
+
+- **`get_model`** — everything. Use once at the start of a session to understand the full picture.
+- **`get_node`** — a focused subtree. Use when working on one container or component. Returns the target node, its descendants, internal edges, and external edges with context.
+- **`get_changes`** — just the diff. After the initial read, use this to see what changed since the last read. Efficient for keeping track of user edits.
+
+## The modeling workflow
+
+When an agent models your architecture through MCP, it follows a level-by-level approach:
+
+1. **System level first** — persons, systems, external systems, and system-level edges
+2. **Container level** — all containers inside a system, plus container-level edges
+3. **Component level** — only when asked for deeper detail
+
+Each level is validated for edge completeness. The agent builds top-down and fixes any warnings before going deeper.

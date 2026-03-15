@@ -1,0 +1,52 @@
+name: Deploy docs
+
+on:
+  push:
+    branches: [main]
+    paths: [docs/**, src/shapes/**, src/nodes/**, src/statusColors.ts, src/kindIcons.ts, src/types.ts, src/theme.ts, src/DescriptionText.tsx, src/FlowScriptView.tsx, src/MentionTextarea.tsx]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
+
+      - run: pnpm install
+        working-directory: docs
+
+      - run: pnpm build
+        working-directory: docs
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

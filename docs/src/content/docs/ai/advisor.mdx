@@ -1,0 +1,58 @@
+---
+title: AI Advisor
+description: Optional LLM-powered review that flags structural issues in your architecture diagrams.
+---
+
+The AI Advisor is an optional feature that reviews your diagrams and suggests improvements. It runs in the background and surfaces hints as small badges on nodes.
+
+## What it checks
+
+The advisor evaluates your model against C4 best practices:
+
+- **Missing edges** — nodes that should be connected but aren't
+- **Incorrect shapes** — a database container with the default rectangle instead of a cylinder
+- **External system flags** — third-party services that should be marked external
+- **Description quality** — vague or missing descriptions
+- **Flow coverage** — steps without linked processes, or processes not covered by any flow
+- **Structural issues** — frontend-to-database shortcuts, duplicate nodes, unclear boundaries
+
+## How hints appear
+
+When the advisor finds something, a colored dot appears on the affected node:
+
+- 🟠 **Orange dot** — a warning that likely needs attention
+- 🟢 **Teal dot** — informational suggestion
+
+Select the node to see the hint message in the Properties panel. Some hints have **actions** — like "Set shape to cylinder" or "Mark as external" — that you can apply with one click.
+
+## Dismissing hints
+
+If a hint isn't relevant, check the dismiss box in the Properties panel. Dismissed hints won't reappear for that node unless the model changes significantly.
+
+## Setting up the advisor
+
+Open **Settings** (gear icon in the top bar) and go to the **AI Review** tab.
+
+Choose a provider and enter your API key:
+
+| Provider | Models |
+|----------|--------|
+| OpenAI | GPT-4o, GPT-4, etc. |
+| Anthropic | Claude Sonnet, Claude Opus, etc. |
+| Google | Gemini Pro, etc. |
+| Groq | Mixtral, Llama, etc. |
+| Mistral | Mistral Large, etc. |
+| DeepSeek | DeepSeek Chat, etc. |
+| Ollama | Any locally running model |
+
+Click **Fetch models** to see available models for your provider. Select one and save.
+
+## When it runs
+
+The advisor runs automatically after a 10-second pause following model changes. It doesn't run on every keystroke — only when the model's structure changes (adding/removing nodes, changing edges, etc.).
+
+The advisor is purely optional. Scryer works fine without it — it's just an extra layer of review.
+
+## Privacy
+
+When using cloud providers, your model's structure (node names, descriptions, edges) is sent to the API. No source code is sent. If you prefer to keep everything local, use **Ollama** with a locally running model.

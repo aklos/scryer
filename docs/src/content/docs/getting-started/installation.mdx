@@ -1,0 +1,53 @@
+---
+title: Installation
+description: Download and install scryer on macOS, Windows, or Linux.
+---
+
+## Download
+
+Grab the latest release for your platform from the [GitHub releases page](https://github.com/aklos/scryer/releases).
+
+| Platform | File |
+|----------|------|
+| macOS (Apple Silicon) | `.dmg` |
+| macOS (Intel) | `.dmg` |
+| Windows | `.msi` |
+| Linux | `.AppImage` or `.deb` |
+
+Open the installer and follow the prompts. On macOS, drag scryer to your Applications folder.
+
+## First launch
+
+When you open scryer for the first time, you'll see an empty canvas with a command palette. Press <kbd>Ctrl+K</kbd> (or <kbd>Cmd+K</kbd> on macOS) to open it at any time.
+
+From the command palette you can:
+- **Create a new model** — starts with a blank canvas
+- **Open an existing model** — browse your saved diagrams
+- **Load a template** — start from a pre-built architecture
+
+Models are saved as `.scry` files in `~/.scryer/` — everything stays local on your machine.
+
+## Building from source
+
+If you want to build scryer yourself:
+
+### Prerequisites
+
+- [Rust](https://rustup.rs/) (stable)
+- [Node.js](https://nodejs.org/) 20+
+- [pnpm](https://pnpm.io/)
+- System dependencies for [Tauri 2](https://v2.tauri.app/start/prerequisites/)
+
+If you use Nix, `shell.nix` provides everything:
+
+```bash
+nix-shell
+```
+
+### Build & develop
+
+```bash
+pnpm install          # Install dependencies
+pnpm tauri dev        # Run full app (Tauri + Vite on :1420)
+pnpm tauri build      # Production build
+```

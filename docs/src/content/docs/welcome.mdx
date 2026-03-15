@@ -1,0 +1,60 @@
+---
+title: Welcome to scryer
+description: Visual architecture models that AI agents build from.
+hero:
+  title: scryer
+  tagline: Visual architecture models that AI agents build from.
+  actions:
+    - text: Get started
+      link: /scryer/getting-started/installation/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/aklos/scryer
+      variant: minimal
+      icon: external
+---
+
+Scryer is a visual architecture tool for working with AI coding assistants. You draw C4 diagrams in a drag-and-drop editor — AI agents read, modify, and implement from the same model through [MCP](https://modelcontextprotocol.io/).
+
+The core idea: **natural language is a lossy way to tell an AI what to build.** A visual model forces the kind of precision that prose can't. You see the same architecture the agent sees — misalignment gets caught before code gets written.
+
+## How it works
+
+1. **Model your architecture** — drag nodes onto the canvas, draw relationships, drill into detail
+2. **Connect your AI tool** — Claude Code, Codex, or any MCP-compatible agent
+3. **The agent reads your model** — it sees exactly what you see: systems, containers, components, data flows
+4. **You iterate visually** — the agent proposes changes, you see them on the canvas in real-time
+5. **Implementation follows the model** — `get_task` feeds the agent one piece of work at a time, ordered by dependencies
+
+## The C4 hierarchy
+
+Scryer uses a C4-based hierarchy. Each level zooms in further:
+
+| Level | What it represents |
+|-------|-------------------|
+| **Person** | Users and actors |
+| **System** | Software systems |
+| ↳ **Container** | Apps, services, data stores |
+| &nbsp;&nbsp;↳ **Component** | Logical modules |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ **Operation** | Functions & handlers |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ **Process** | Multi-step workflows |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ **Model** | Data structures |
+
+**Person** and **System** are top-level. Select a system and click the expand button to see its containers. Expand a container to see its components. Components contain the code-level detail: operations (functions), processes (workflows), and models (data structures).
+
+## What you can do
+
+- **Drag-and-drop editor** with multiple node shapes, auto-layout, and zoom controls
+- **Behavioral flows** — model user journeys and data pipelines with branching
+- **Contracts** — tell AI agents *exactly* how to implement each piece, with pass/fail tracking
+- **Status tracking** — three statuses: <span class="status-pill status-proposed">Proposed</span> <span class="status-pill status-wip">WIP</span> <span class="status-pill status-ready">Ready</span>
+- **Source mapping** — link architecture nodes to files in your codebase
+- **Drift detection** — Scryer watches your code and flags when the architecture model goes stale
+- **AI advisor** — optional LLM review that flags structural issues in your diagrams
+- **Themes** — customize every color in the app
+
+## Next steps
+
+- [Install scryer](/scryer/getting-started/installation/) and create your first model
+- Learn about [the canvas](/scryer/editor/canvas/) and how to navigate your diagrams
+- Set up [AI tool integration](/scryer/getting-started/connecting-ai/) with Claude Code or Codex

@@ -1,0 +1,48 @@
+---
+title: Edges & Relationships
+description: Drawing connections between nodes — edges represent how things talk to each other.
+---
+
+Edges are the arrows between nodes. They represent relationships — who calls what, what depends on what, where data flows.
+
+## Creating edges
+
+Hover over any node to see **connection handles** appear on each side. Click and drag from a handle to another node to create an edge.
+
+The arrow points from the **initiator** to the **dependency**:
+- Web App → API Server (the app calls the API)
+- API Server → Database (the API reads from the database)
+- User → Web App (the user interacts with the app)
+
+## Edge properties
+
+Select an edge to see its properties in the right panel:
+
+- **Label** — describes the relationship, e.g. "Makes API calls", "Reads/writes data", "Sends emails via"
+- **Method** — the protocol or mechanism, e.g. "REST/HTTPS", "SQL", "gRPC", "WebSocket"
+
+## One edge per relationship
+
+A single edge captures the full interaction between two nodes. Don't split a "send request" and "receive response" into two separate edges — one edge covers the round trip.
+
+Two edges between the same pair of nodes are only valid when they represent genuinely **independent** relationships with different purposes.
+
+## Edges at every level
+
+Because scryer shows one abstraction level at a time, you should have edges at each level:
+
+- **System level** — Person → System, System → System
+- **Container level** — Person → Container, Container → Container, Container → External System
+- **Component level** — Component → Component, Component → External System
+
+When you add components to a container, also add edges that reflect the container-level relationships at the component level.
+
+:::note
+Component-level edges should go from a component to the target *container* — not to a component inside another container. The container is the public interface; its components are implementation details.
+:::
+
+## Deleting edges
+
+Select an edge and press <kbd>Delete</kbd>, or right-click it and choose delete.
+
+For **reference nodes** (dimmed nodes from outside the current scope), pressing delete removes the edge connection, not the referenced node.
