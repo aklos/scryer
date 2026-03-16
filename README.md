@@ -29,7 +29,7 @@
 <video src="https://github.com/user-attachments/assets/a67f5159-aac1-49b7-abba-dae11aad9499" width="100%" autoplay loop muted></video>
 </p>
 
-AI agents can handle writing code, but the way we describe our tasks and what actually gets implemented can easily drift. Scryer gives you a shared visual model: you edit it in a drag-and-drop editor, the agent reads and modifies it through MCP. Once the model looks right, the agent generates code from it — `get_task` feeds work one unit at a time with dependency ordering, inherited contracts, and progress tracking.
+AI agents can write code, but what you describe and what gets implemented tends to drift. Scryer gives you a shared visual model: you edit it in a drag-and-drop editor, the agent reads and modifies it through MCP. Once the model looks right, the agent generates code from it — `get_task` feeds work one unit at a time with dependency ordering, inherited contracts, and progress tracking.
 
 Works with <b>Claude Code</b> and <b>Codex</b> out of the box. Any agent that supports [MCP](https://modelcontextprotocol.io/) can read and write models. Agents that support [ACP](https://agentclientprotocol.com/get-started/introduction) can also be spawned by Scryer for automated sync.
 
