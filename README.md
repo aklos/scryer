@@ -5,11 +5,11 @@
   <h1>scryer</h1>
 
   <p>
-    <b>Visual architecture models that AI agents build from. Edit C4 diagrams in a drag-and-drop editor — AI agents read, modify, and implement the same model through MCP.</b>
+    <b>MDD for AI agents.</b>
+    <br />
+    Scryer is a visual C4 modeling tool where you and your AI agent work from the same architecture model.
     <br />
     <br />
-    <a href="https://aklos.github.io/scryer/">Docs</a>
-    <span>&nbsp;&nbsp;&bull;&nbsp;&nbsp;</span>
     <a href="#features">Features</a>
     <span>&nbsp;&nbsp;&bull;&nbsp;&nbsp;</span>
     <a href="#getting-started">Getting started</a>
@@ -17,6 +17,8 @@
     <a href="#mcp-server">MCP server</a>
     <span>&nbsp;&nbsp;&bull;&nbsp;&nbsp;</span>
     <a href="#building-from-source">Building from source</a>
+    <span>&nbsp;&nbsp;&bull;&nbsp;&nbsp;</span>
+    <a href="https://aklos.github.io/scryer/">Docs</a>
   </p>
 
 </div>
@@ -27,24 +29,39 @@
 <video src="https://github.com/user-attachments/assets/a67f5159-aac1-49b7-abba-dae11aad9499" width="100%" autoplay loop muted></video>
 </p>
 
-AI agents write code, but natural language is a lossy way to tell them what to build. Scryer gives you a shared visual model — you edit it in a drag-and-drop editor, the agent reads and modifies it through MCP. Once the model looks right, the agent generates code from it — `get_task` feeds work one unit at a time with dependency ordering, inherited contracts, and progress tracking.
+AI agents can handle writing code, but the way we describe our tasks and what actually gets implemented can easily drift. Scryer gives you a shared visual model: you edit it in a drag-and-drop editor, the agent reads and modifies it through MCP. Once the model looks right, the agent generates code from it — `get_task` feeds work one unit at a time with dependency ordering, inherited contracts, and progress tracking.
 
-Works with [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) and [Codex](https://github.com/openai/codex) out of the box. Any agent that supports [MCP](https://modelcontextprotocol.io/) can read and write models. Agents that support [ACP](https://agentclientprotocol.com/get-started/introduction) can also be spawned by Scryer for automated sync.
+Works with <b>Claude Code</b> and <b>Codex</b> out of the box. Any agent that supports [MCP](https://modelcontextprotocol.io/) can read and write models. Agents that support [ACP](https://agentclientprotocol.com/get-started/introduction) can also be spawned by Scryer for automated sync.
 
 Opinionated [C4](https://c4model.com/) hierarchy (system, container, component, operation/process/model), typed relationships, behavioral flows, contracts.
 
 ## Features
 
-- **C4 Architecture Diagrams** — drag-and-drop editor for persons, systems, containers, components, operations, processes, and data models. Drill down through levels. Code-level nodes (operations, processes, models) show in a compact list view.
-- **Behavioral Flows** — model user journeys, data pipelines, deploy sequences. Supports branching and decision points. Flows serve as integration test specs — link them to test files via source mapping.
-- **Contracts** — expect/ask/never rules that tell AI agents how to implement your code. Inherited down the hierarchy. Expect items have pass/fail flags that control when a node can be marked "ready".
-- **Status Tracking** — three statuses: proposed (planned), wip (code exists), ready (verified). During implementation, agents mark nodes as wip. "Ready" is a separate verification step — the implementation must be complete (no stubs or TODOs), existing tests must pass, and all expect contract items must be satisfied.
-- **Source Mapping** — link architecture nodes to files in your codebase with file patterns and line ranges. Click to open in your editor.
-- **MCP Server** — AI agents connect to read, modify, and build from your architecture model in real-time.
-- **Drift Detection & Sync** — Scryer tracks when source files change relative to the model. When drift is detected, click sync to have Scryer spawn the connected agent to update the model.
-- **AI Advisor** — optional LLM-powered review that flags structural issues in your diagrams. Supports OpenAI, Anthropic, Google, Groq, Mistral, DeepSeek, and Ollama.
-- **Implementation Workflow** — `get_task` gives AI agents one piece of work at a time, ordered by dependencies, with contracts inherited from parent nodes. Build, mark wip, repeat.
-- **AI Tool Setup** — detects Claude Code and Codex, writes MCP config and auto-approve permissions for your project.
+- **C4 Architecture Diagrams**
+  - Drag-and-drop editor for systems, containers, components, and operations. Drill down through levels.
+  - Code-level nodes (operations, processes, models) show in a compact list view.
+- **Behavioral Flows**
+  - Model user journeys, data pipelines, deploy sequences. Supports branching and decision points.
+  - Flows serve as integration test specs — link them to test files via source mapping.
+- **Contracts**
+  - Expect/ask/never rules that tell AI agents how to implement your code. Inherited down the hierarchy.
+  - Expect items have pass/fail flags that control when a node can be marked "ready".
+- **Status Tracking**
+  - Three statuses: proposed (planned), wip (code exists), ready (verified).
+  - During implementation, agents mark nodes as wip. "Ready" is a separate verification step — the implementation must be complete (no stubs or TODOs), existing tests must pass, and all expect contract items must be satisfied.
+- **Source Mapping**
+  - Link architecture nodes to files in your codebase with file patterns and line ranges.
+  - Click to open in your editor.
+- **MCP Server**
+  - AI agents connect to read, modify, and build from your architecture model in real-time.
+- **Drift Detection & Sync**
+  - Scryer tracks when source files change relative to the model. When drift is detected, click sync to have Scryer spawn the connected agent to update the model.
+- **AI Advisor**
+  - Optional LLM-powered review that flags structural issues in your diagrams. Supports OpenAI, Anthropic, Google, Groq, Mistral, DeepSeek, and Ollama.
+- **Implementation Workflow**
+  - `get_task` gives AI agents one piece of work at a time, ordered by dependencies, with contracts inherited from parent nodes. Build, mark wip, repeat.
+- **AI Tool Setup**
+  - Detects Claude Code and Codex, writes MCP config and auto-approve permissions for your project.
 
 ## Getting started
 
@@ -58,7 +75,7 @@ Download the latest release for your platform from the [releases page](https://g
 4. Review, drag things around, rename, remove, restructure
 5. Tell the AI: *"Implement this model"*
 6. The AI builds each piece one at a time, marking nodes as wip as it goes
-7. When you're satisfied, ask the AI to verify — it checks for stubs, runs any existing tests, and confirms contract items pass before marking nodes as ready
+7. When you're satisfied, ask the AI to verify: check for stubs, run any existing tests, and confirm contract items pass before marking nodes as ready
 
 As you work on code, Scryer detects when source files drift from the model. Click the sync button to have Scryer spawn your agent to update the model.
 
