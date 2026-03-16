@@ -776,10 +776,23 @@ export async function autoLayout(
   // Create simulation nodes
   // d3-force uses center-based coordinates; we convert from/to top-left
   // Use base NODE_H for component nodes so member lists don't inflate the layout grid
+  // Build set of grouped node IDs
+  const groupedIds = new Set<string>();
+  if (groups) {
+    for (const g of groups) {
+      for (const id of g.memberIds) groupedIds.add(id);
+    }
+  }
+
   const simNodes: SimNode[] = nodes.map((n) => {
     const w = n.measured?.width ?? NODE_W;
     const h = (n.data as { kind?: string }).kind === "component" ? NODE_H : (n.measured?.height ?? NODE_H);
-    const pinned = !fullRelayout && !n.data._needsLayout;
+    // During full relayout, still pin grouped nodes that have been manually
+    // positioned — relayout should rearrange the groups relative to each
+    // other, but not blow away the internal arrangement of group members.
+    const hasPosition = n.position.x !== 0 || n.position.y !== 0;
+    const pinInGroup = fullRelayout && groupedIds.has(n.id) && hasPosition;
+    const pinned = pinInGroup || (!fullRelayout && !n.data._needsLayout);
 
     const cx = n.position.x + w / 2;
     const cy = n.position.y + h / 2;

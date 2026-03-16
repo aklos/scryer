@@ -4,285 +4,409 @@
       "id": "node-1",
       "type": "c4",
       "data": {
-        "name": "Content Author",
-        "description": "Writes and publishes articles, manages media assets",
+        "name": "Visitor",
+        "description": "Browses the public website",
         "kind": "person"
+      },
+      "position": {
+        "x": -80,
+        "y": -420
       }
     },
     {
       "id": "node-2",
       "type": "c4",
       "data": {
-        "name": "Site Visitor",
-        "description": "Reads articles and browses the published website",
+        "name": "Admin",
+        "description": "Manages CMS content, pages, and lead submissions",
         "kind": "person"
+      },
+      "position": {
+        "x": -80,
+        "y": -80
       }
     },
     {
       "id": "node-3",
       "type": "c4",
       "data": {
-        "name": "CMS Platform",
-        "description": "Manages content creation, publishing, and delivery to visitors",
+        "name": "Website",
+        "description": "Marketing website with CMS-managed content and lead capture",
         "kind": "system",
         "status": "proposed"
+      },
+      "position": {
+        "x": 260,
+        "y": -80
       }
     },
     {
       "id": "node-4",
       "type": "c4",
       "data": {
-        "name": "Cloudflare",
-        "description": "Caches and delivers static assets and pages globally",
+        "name": "HubSpot",
+        "description": "CRM platform for managing synced leads",
         "kind": "system",
         "external": true
+      },
+      "position": {
+        "x": 260,
+        "y": 260
       }
     },
-    {
-      "id": "node-5",
-      "type": "c4",
-      "data": {
-        "name": "Resend",
-        "description": "Sends notification emails to subscribers on publish",
-        "kind": "system",
-        "external": true
-      }
-    },
-    {
-      "id": "node-6",
-      "type": "c4",
-      "data": {
-        "name": "Typesense",
-        "description": "Full-text search index for published content",
-        "kind": "system",
-        "external": true
-      }
-    },
-
     {
       "id": "node-10",
       "type": "c4",
       "data": {
         "name": "Admin Dashboard",
-        "description": "Editorial interface for writing, editing, and publishing content",
+        "description": "Headless CMS for managing pages, blocks, and lead submissions",
         "kind": "container",
-        "technology": "React",
+        "technology": "Payload CMS, Next.js",
         "status": "proposed"
       },
-      "parentId": "node-3"
+      "parentId": "node-3",
+      "position": {
+        "x": 100,
+        "y": 260
+      }
     },
     {
       "id": "node-11",
       "type": "c4",
       "data": {
-        "name": "Content API",
-        "description": "CRUD operations for articles, pages, and media",
+        "name": "Website",
+        "description": "Server-rendered public site that displays CMS-managed pages",
         "kind": "container",
-        "technology": "Express",
-        "status": "proposed",
-        "notes": "Express chosen over Fastify for ecosystem maturity and middleware availability. Prisma as ORM for type-safe queries."
+        "technology": "Next.js, React, Tailwind",
+        "status": "proposed"
       },
-      "parentId": "node-3"
+      "parentId": "node-3",
+      "position": {
+        "x": 100,
+        "y": 620
+      }
     },
     {
       "id": "node-12",
       "type": "c4",
       "data": {
-        "name": "Public Website",
-        "description": "Server-renders and serves published content to visitors",
+        "name": "Database",
+        "description": "Stores CMS content, pages, and lead submissions",
         "kind": "container",
-        "technology": "Next.js",
-        "status": "proposed"
-      },
-      "parentId": "node-3"
-    },
-    {
-      "id": "node-13",
-      "type": "c4",
-      "data": {
-        "name": "Content Database",
-        "description": "Stores articles, pages, metadata, and user accounts",
-        "kind": "container",
-        "technology": "PostgreSQL",
+        "technology": "MongoDB",
         "shape": "cylinder",
-        "status": "proposed"
+        "status": "proposed",
+        "contract": {
+          "expect": [
+            "Runnable locally through docker-compose"
+          ]
+        }
       },
-      "parentId": "node-3"
+      "parentId": "node-3",
+      "position": {
+        "x": 600,
+        "y": 260
+      }
     },
-    {
-      "id": "node-14",
-      "type": "c4",
-      "data": {
-        "name": "Media Storage",
-        "description": "Stores uploaded images, videos, and documents",
-        "kind": "container",
-        "technology": "S3",
-        "shape": "cylinder",
-        "status": "proposed"
-      },
-      "parentId": "node-3"
-    },
-
     {
       "id": "node-20",
       "type": "c4",
       "data": {
-        "name": "Article Router",
-        "description": "Handles HTTP endpoints for article CRUD and the @[publishArticle] workflow",
+        "name": "Pages",
+        "description": "CMS collection for pages with block-based layouts, hero sections, and SEO metadata",
         "kind": "component",
-        "technology": "Express Router",
-        "status": "proposed",
-        "contract": {
-          "expect": [
-            "All endpoints require authentication via @[Auth Middleware]",
-            "Responses follow JSON:API envelope format"
-          ],
-          "ask": [],
-          "never": [
-            "Return unpublished drafts from public-facing endpoints"
-          ]
-        }
+        "technology": "Payload Collection",
+        "status": "proposed"
       },
-      "parentId": "node-11"
+      "parentId": "node-10",
+      "position": {
+        "x": -420,
+        "y": 280
+      }
     },
     {
       "id": "node-21",
       "type": "c4",
       "data": {
-        "name": "Auth Middleware",
-        "description": "Validates JWT tokens and enforces role-based access control",
+        "name": "Leads",
+        "description": "CMS collection for capturing and managing contact form submissions",
         "kind": "component",
-        "technology": "Passport.js",
-        "status": "proposed",
-        "contract": {
-          "expect": [
-            "Reject expired or malformed tokens with 401",
-            "Attach decoded user context to request object"
-          ],
-          "ask": [],
-          "never": [
-            "Cache tokens beyond their expiry window"
-          ]
-        }
+        "technology": "Payload Collection",
+        "status": "proposed"
       },
-      "parentId": "node-11"
+      "parentId": "node-10",
+      "position": {
+        "x": -420,
+        "y": 580
+      }
     },
     {
       "id": "node-22",
       "type": "c4",
       "data": {
-        "name": "Database Client",
-        "description": "Type-safe ORM for querying and mutating @[article] data",
+        "name": "Blocks",
+        "description": "Reusable content section definitions for composing page layouts (hero, content, media, CTA, form, archive)",
         "kind": "component",
-        "technology": "Prisma",
+        "technology": "Payload Block Fields",
         "status": "proposed"
       },
-      "parentId": "node-11"
+      "parentId": "node-10",
+      "position": {
+        "x": -420,
+        "y": -80
+      }
     },
-    {
-      "id": "node-23",
-      "type": "c4",
-      "data": {
-        "name": "Media Processor",
-        "description": "Resizes images, generates thumbnails, uploads to @[Media Storage]",
-        "kind": "component",
-        "technology": "Sharp",
-        "status": "proposed",
-        "accepts": [
-          "Generates WebP and AVIF variants for each upload",
-          "Strips EXIF data before storing"
-        ]
-      },
-      "parentId": "node-11"
-    },
-    {
-      "id": "node-24",
-      "type": "model",
-      "data": {
-        "name": "article",
-        "description": "Core content entity representing a blog post or page",
-        "kind": "model",
-        "status": "proposed",
-        "properties": [
-          { "label": "id", "description": "UUID primary key" },
-          { "label": "title", "description": "Display title, max 200 characters" },
-          { "label": "slug", "description": "URL-safe identifier, unique across all articles" },
-          { "label": "body", "description": "Markdown content with embedded media references" },
-          { "label": "status", "description": "Draft, scheduled, or published" },
-          { "label": "authorId", "description": "Foreign key to the author's user record" },
-          { "label": "publishedAt", "description": "Timestamp when the article went live, null if draft" },
-          { "label": "tags", "description": "Array of tag slugs for categorization" }
-        ]
-      },
-      "parentId": "node-11"
-    },
-    {
-      "id": "node-25",
-      "type": "process",
-      "data": {
-        "name": "publishArticle",
-        "description": "Multi-step workflow: validate draft, set publish timestamp, index in @[Typesense], notify subscribers via @[Resend]",
-        "kind": "process",
-        "status": "proposed",
-        "contract": {
-          "expect": [
-            "Only articles in draft status can be published",
-            "Search index is updated before email notifications are sent"
-          ],
-          "ask": [
-            "Should publishing be synchronous or use a job queue?"
-          ],
-          "never": [
-            "Send subscriber notifications for unpublished content"
-          ]
-        }
-      },
-      "parentId": "node-20"
-    },
-
     {
       "id": "node-30",
-      "type": "operation",
+      "type": "c4",
       "data": {
-        "name": "listArticles",
-        "description": "GET /articles — paginated list with filtering by status, author, and tag. Queries @[article] records via @[Database Client]",
-        "kind": "operation",
+        "name": "Catch-all Route",
+        "description": "Dynamic Next.js route that resolves any URL slug to a CMS page",
+        "kind": "component",
+        "technology": "Next.js [[...slug]]",
         "status": "proposed"
       },
-      "parentId": "node-20"
+      "parentId": "node-11",
+      "position": {
+        "x": 0,
+        "y": 260
+      }
     },
     {
       "id": "node-31",
-      "type": "operation",
+      "type": "c4",
       "data": {
-        "name": "getArticle",
-        "description": "GET /articles/:slug — fetch a single @[article] with resolved media URLs from @[Media Storage]",
-        "kind": "operation",
+        "name": "Block Renderers",
+        "description": "React components that render each CMS block type on the public site",
+        "kind": "component",
+        "technology": "React, TSX",
         "status": "proposed"
       },
-      "parentId": "node-20"
+      "parentId": "node-11",
+      "position": {
+        "x": 0,
+        "y": -80
+      }
     },
     {
       "id": "node-32",
-      "type": "operation",
+      "type": "c4",
       "data": {
-        "name": "createArticle",
-        "description": "POST /articles — validate input against @[article] schema, create draft, process inline images via @[Media Processor]",
-        "kind": "operation",
+        "name": "UI Elements",
+        "description": "Shared UI primitives: rich text renderer, responsive media, links, and buttons",
+        "kind": "component",
+        "technology": "React, Tailwind",
         "status": "proposed"
       },
-      "parentId": "node-20"
+      "parentId": "node-11",
+      "position": {
+        "x": 340,
+        "y": -80
+      }
     },
     {
-      "id": "node-33",
+      "id": "node-40",
+      "type": "model",
+      "data": {
+        "name": "Page",
+        "description": "CMS page with a block-based layout and SEO metadata",
+        "kind": "model",
+        "status": "proposed",
+        "properties": [
+          {
+            "label": "title",
+            "description": "Page display title"
+          },
+          {
+            "label": "slug",
+            "description": "URL path segment, unique per page"
+          },
+          {
+            "label": "layout",
+            "description": "Ordered array of blocks that compose the page content"
+          },
+          {
+            "label": "meta",
+            "description": "SEO metadata: title, description, og image"
+          },
+          {
+            "label": "publishedAt",
+            "description": "Publication date"
+          },
+          {
+            "label": "status",
+            "description": "Draft or published state"
+          }
+        ]
+      },
+      "parentId": "node-20",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "node-41",
+      "type": "model",
+      "data": {
+        "name": "Lead",
+        "description": "Contact form submission captured from the website",
+        "kind": "model",
+        "status": "proposed",
+        "properties": [
+          {
+            "label": "name",
+            "description": "Full name of the lead"
+          },
+          {
+            "label": "email",
+            "description": "Contact email address"
+          },
+          {
+            "label": "phone",
+            "description": "Optional phone number"
+          },
+          {
+            "label": "company",
+            "description": "Optional company name"
+          },
+          {
+            "label": "message",
+            "description": "Free-text message from the form"
+          },
+          {
+            "label": "source",
+            "description": "Which page or form captured this lead"
+          },
+          {
+            "label": "createdAt",
+            "description": "Timestamp of submission"
+          }
+        ]
+      },
+      "parentId": "node-21",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "node-42",
+      "type": "model",
+      "data": {
+        "name": "Hero",
+        "description": "Full-width banner section with heading, rich text, optional background media, and CTA links",
+        "kind": "model",
+        "status": "proposed",
+        "properties": [
+          {
+            "label": "heading",
+            "description": "Primary heading text"
+          },
+          {
+            "label": "richText",
+            "description": "Supporting body content"
+          },
+          {
+            "label": "media",
+            "description": "Optional background image or video"
+          },
+          {
+            "label": "links",
+            "description": "Array of CTA buttons"
+          }
+        ]
+      },
+      "parentId": "node-22",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "node-43",
+      "type": "model",
+      "data": {
+        "name": "ContentBlock",
+        "description": "Rich text content section with optional column layout",
+        "kind": "model",
+        "status": "proposed",
+        "properties": [
+          {
+            "label": "columns",
+            "description": "Array of column objects with rich text content"
+          },
+          {
+            "label": "richText",
+            "description": "Full-width rich text when not using columns"
+          }
+        ]
+      },
+      "parentId": "node-22",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "node-50",
       "type": "operation",
       "data": {
-        "name": "deleteArticle",
-        "description": "DELETE /articles/:id — soft-delete an @[article], remove from search index",
+        "name": "validateLeadData",
+        "description": "beforeChange hook that validates and normalizes lead fields before persisting",
         "kind": "operation",
         "status": "proposed"
       },
-      "parentId": "node-20"
+      "parentId": "node-21",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "node-51",
+      "type": "process",
+      "data": {
+        "name": "syncLeadsToHubSpot",
+        "description": "afterChange hook that pushes new lead submissions to @[HubSpot] via API",
+        "kind": "process",
+        "status": "proposed"
+      },
+      "parentId": "node-21",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "node-52",
+      "type": "operation",
+      "data": {
+        "name": "renderBlocks",
+        "description": "Maps each block in the page layout array to its corresponding React component",
+        "kind": "operation",
+        "status": "proposed"
+      },
+      "parentId": "node-31",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "node-53",
+      "type": "operation",
+      "data": {
+        "name": "renderHero",
+        "description": "Renders a hero section with variant support (high/medium/low impact)",
+        "kind": "operation",
+        "status": "proposed"
+      },
+      "parentId": "node-31",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
     }
   ],
   "edges": [
@@ -290,275 +414,290 @@
       "id": "edge-node-1-node-3",
       "source": "node-1",
       "target": "node-3",
-      "data": { "label": "manages content via" }
+      "data": {
+        "label": "browses"
+      }
     },
     {
       "id": "edge-node-2-node-3",
       "source": "node-2",
       "target": "node-3",
-      "data": { "label": "reads articles on" }
+      "data": {
+        "label": "manages content via"
+      }
     },
     {
       "id": "edge-node-3-node-4",
       "source": "node-3",
       "target": "node-4",
-      "data": { "label": "delivers assets via", "method": "HTTPS" }
+      "data": {
+        "label": "syncs leads to"
+      }
     },
     {
-      "id": "edge-node-3-node-5",
-      "source": "node-3",
-      "target": "node-5",
-      "data": { "label": "sends notifications via", "method": "REST" }
-    },
-    {
-      "id": "edge-node-3-node-6",
-      "source": "node-3",
-      "target": "node-6",
-      "data": { "label": "indexes content in", "method": "REST" }
-    },
-
-    {
-      "id": "edge-node-1-node-10",
+      "id": "edge-node-1-node-11",
       "source": "node-1",
-      "target": "node-10",
-      "data": { "label": "writes content in" }
+      "target": "node-11",
+      "data": {
+        "label": "browses"
+      }
     },
     {
-      "id": "edge-node-2-node-12",
+      "id": "edge-node-2-node-10",
       "source": "node-2",
-      "target": "node-12",
-      "data": { "label": "browses" }
+      "target": "node-10",
+      "data": {
+        "label": "manages content via"
+      }
     },
     {
-      "id": "edge-node-10-node-11",
+      "id": "edge-node-11-node-10",
+      "source": "node-11",
+      "target": "node-10",
+      "data": {
+        "label": "fetches content from"
+      }
+    },
+    {
+      "id": "edge-node-10-node-12",
       "source": "node-10",
-      "target": "node-11",
-      "data": { "label": "makes API calls to", "method": "REST/JSON" }
+      "target": "node-12",
+      "data": {
+        "label": "reads/writes"
+      }
     },
     {
-      "id": "edge-node-12-node-11",
-      "source": "node-12",
-      "target": "node-11",
-      "data": { "label": "fetches content from", "method": "REST/JSON" }
-    },
-    {
-      "id": "edge-node-11-node-13",
-      "source": "node-11",
-      "target": "node-13",
-      "data": { "label": "reads/writes", "method": "Prisma" }
-    },
-    {
-      "id": "edge-node-11-node-14",
-      "source": "node-11",
-      "target": "node-14",
-      "data": { "label": "stores uploads in", "method": "S3 API" }
-    },
-    {
-      "id": "edge-node-12-node-4",
-      "source": "node-12",
+      "id": "edge-node-10-node-4",
+      "source": "node-10",
       "target": "node-4",
-      "data": { "label": "serves pages via", "method": "HTTPS" }
+      "data": {
+        "label": "syncs leads to"
+      }
     },
     {
-      "id": "edge-node-11-node-5",
-      "source": "node-11",
-      "target": "node-5",
-      "data": { "label": "sends emails via", "method": "REST" }
-    },
-    {
-      "id": "edge-node-11-node-6",
-      "source": "node-11",
-      "target": "node-6",
-      "data": { "label": "indexes content in", "method": "REST" }
-    },
-
-    {
-      "id": "edge-node-20-node-21",
-      "source": "node-20",
-      "target": "node-21",
-      "data": { "label": "validates requests with" }
-    },
-    {
-      "id": "edge-node-20-node-22",
-      "source": "node-20",
-      "target": "node-22",
-      "data": { "label": "queries articles via" }
-    },
-    {
-      "id": "edge-node-20-node-23",
-      "source": "node-20",
-      "target": "node-23",
-      "data": { "label": "processes uploads with" }
-    },
-    {
-      "id": "edge-node-22-node-13",
-      "source": "node-22",
-      "target": "node-13",
-      "data": { "label": "reads/writes", "method": "Prisma" }
-    },
-    {
-      "id": "edge-node-23-node-14",
-      "source": "node-23",
-      "target": "node-14",
-      "data": { "label": "uploads to", "method": "S3 API" }
-    },
-
-    {
-      "id": "edge-node-30-node-22",
+      "id": "edge-node-30-node-10",
       "source": "node-30",
-      "target": "node-22",
-      "data": { "label": "queries articles from" }
+      "target": "node-10",
+      "data": {
+        "label": "fetches page data from"
+      }
     },
     {
-      "id": "edge-node-31-node-22",
+      "id": "edge-node-30-node-31",
+      "source": "node-30",
+      "target": "node-31",
+      "data": {
+        "label": "renders page layout via"
+      }
+    },
+    {
+      "id": "edge-node-31-node-32",
       "source": "node-31",
+      "target": "node-32",
+      "data": {
+        "label": "uses"
+      }
+    },
+    {
+      "id": "edge-node-21-node-12",
+      "source": "node-21",
+      "target": "node-12",
+      "data": {
+        "label": "reads/writes"
+      }
+    },
+    {
+      "id": "edge-node-20-node-12",
+      "source": "node-20",
+      "target": "node-12",
+      "data": {
+        "label": "reads/writes"
+      }
+    },
+    {
+      "id": "edge-node-51-node-4",
+      "source": "node-51",
+      "target": "node-4",
+      "data": {
+        "label": "pushes leads to"
+      }
+    },
+    {
+      "source": "node-2",
+      "sourceHandle": "right",
+      "target": "d3cc2e09-434e-425f-b1d3-8011b7f93e32",
+      "targetHandle": "left",
+      "data": {
+        "label": "manages"
+      },
+      "id": "xy-edge__node-2right-d3cc2e09-434e-425f-b1d3-8011b7f93e32left"
+    },
+    {
+      "source": "node-21",
+      "sourceHandle": "right",
+      "target": "node-4",
+      "targetHandle": "left",
+      "data": {
+        "label": "syncs to"
+      },
+      "id": "xy-edge__node-21right-node-4left"
+    },
+    {
+      "source": "node-11",
+      "sourceHandle": "right",
+      "target": "node-20",
+      "targetHandle": "left",
+      "data": {
+        "label": "renders content from"
+      },
+      "id": "xy-edge__node-11right-node-20left"
+    },
+    {
+      "source": "node-20",
+      "sourceHandle": "top",
       "target": "node-22",
-      "data": { "label": "fetches article from" }
+      "targetHandle": "bottom",
+      "data": {
+        "label": "uses"
+      },
+      "id": "xy-edge__node-20top-node-22bottom"
     },
     {
-      "id": "edge-node-32-node-22",
-      "source": "node-32",
-      "target": "node-22",
-      "data": { "label": "inserts draft via" }
-    },
-    {
-      "id": "edge-node-32-node-23",
-      "source": "node-32",
-      "target": "node-23",
-      "data": { "label": "processes images with" }
-    },
-    {
-      "id": "edge-node-25-node-22",
-      "source": "node-25",
-      "target": "node-22",
-      "data": { "label": "updates publish status via" }
-    },
-    {
-      "id": "edge-node-25-node-6",
-      "source": "node-25",
-      "target": "node-6",
-      "data": { "label": "indexes article in", "method": "REST" }
-    },
-    {
-      "id": "edge-node-25-node-5",
-      "source": "node-25",
-      "target": "node-5",
-      "data": { "label": "notifies subscribers via", "method": "REST" }
-    },
-    {
-      "id": "edge-node-33-node-22",
-      "source": "node-33",
-      "target": "node-22",
-      "data": { "label": "soft-deletes via" }
-    },
-    {
-      "id": "edge-node-33-node-6",
-      "source": "node-33",
-      "target": "node-6",
-      "data": { "label": "removes from index", "method": "REST" }
+      "source": "node-1",
+      "sourceHandle": "right",
+      "target": "node-30",
+      "targetHandle": "left",
+      "data": {
+        "label": "browses"
+      },
+      "id": "xy-edge__node-1right-node-30left"
     }
   ],
   "groups": [
     {
       "id": "group-1",
-      "kind": "deployment",
-      "name": "Vercel",
-      "description": "Admin dashboard and public website deploy together on Vercel",
-      "memberIds": ["node-10", "node-12"]
+      "name": "Next.js App",
+      "description": "Admin dashboard and public website share a single Next.js deployment",
+      "memberIds": [
+        "node-10",
+        "node-11"
+      ],
+      "kind": "deployment"
+    },
+    {
+      "id": "group-2",
+      "name": "Frontend Components",
+      "memberIds": [
+        "node-31",
+        "node-32"
+      ],
+      "kind": "deployment"
+    },
+    {
+      "id": "d3cc2e09-434e-425f-b1d3-8011b7f93e32",
+      "kind": "package",
+      "name": "Collections",
+      "memberIds": [
+        "node-20",
+        "node-21"
+      ]
     }
   ],
   "flows": [
     {
       "id": "scenario-1",
-      "name": "Publish Article",
-      "description": "Author publishes a draft article, making it visible to site visitors",
+      "name": "Lead capture and CRM sync",
+      "description": "A visitor submits a contact form, the lead is validated and stored, then synced to the CRM",
       "steps": [
         {
           "id": "step-1",
-          "description": "@[Content Author] opens a draft article in @[Admin Dashboard] and clicks Publish"
+          "description": "@[Visitor] submits a contact form on a @[Page]"
         },
         {
           "id": "step-2",
-          "description": "@[Admin Dashboard] sends a publish request to @[Content API]"
+          "description": "@[Admin Dashboard] creates a form submission and triggers the @[Leads] collection hooks"
         },
         {
           "id": "step-3",
-          "description": "@[Content API] validates the draft is complete and sets the publishedAt timestamp in @[Content Database]"
+          "description": "@[validateLeadData] normalizes the @[Lead] fields"
         },
         {
           "id": "step-4",
-          "description": "@[Content API] indexes the article in @[Typesense] for full-text search"
+          "description": "@[Leads] persists the @[Lead] record to the @[Database]"
         },
         {
           "id": "step-5",
-          "description": "@[Content API] sends subscriber notification emails via @[Resend]"
-        },
-        {
-          "id": "step-6",
-          "description": "@[Site Visitor] can now find and read the article on @[Public Website]"
-        }
-      ]
-    },
-    {
-      "id": "scenario-2",
-      "name": "Create Article with Media",
-      "description": "Author creates a new article with inline images",
-      "steps": [
-        {
-          "id": "step-1",
-          "description": "@[Content Author] writes a new article in @[Admin Dashboard] and pastes images inline"
-        },
-        {
-          "id": "step-2",
-          "description": "@[Admin Dashboard] uploads images and article body to @[Content API]"
-        },
-        {
-          "id": "step-3",
-          "description": "@[Media Processor] generates WebP and AVIF variants, strips EXIF data",
+          "description": "@[syncLeadsToHubSpot] fires as an afterChange hook",
           "branches": [
             {
-              "condition": "if: image is oversized",
+              "condition": "if: CRM API key is configured",
               "steps": [
                 {
-                  "id": "step-3a",
-                  "description": "@[Media Processor] resizes to max dimensions before generating variants"
+                  "id": "step-5a",
+                  "description": "@[syncLeadsToHubSpot] pushes the @[Lead] to @[HubSpot]"
                 }
               ]
             },
             {
-              "condition": "else:",
+              "condition": "else: no API key",
               "steps": [
                 {
-                  "id": "step-3b",
-                  "description": "@[Media Processor] generates variants at original resolution"
+                  "id": "step-5b",
+                  "description": "Sync is skipped \u2014 @[Lead] is saved locally only"
                 }
               ]
             }
           ]
-        },
-        {
-          "id": "step-4",
-          "description": "@[Media Processor] uploads all variants to @[Media Storage] and returns URLs"
-        },
-        {
-          "id": "step-5",
-          "description": "@[Database Client] inserts the draft @[article] with resolved media URLs into @[Content Database]"
         }
       ]
     }
   ],
   "contract": {
     "expect": [
-      "All API responses use JSON:API envelope format",
-      "Media files are served through Cloudflare CDN, never directly from S3"
-    ],
-    "ask": [
-      "Should article versioning track full history or just current and previous?"
+      "Use Payload CMS website template from GitHub as scaffold",
+      "Pages are server-rendered with static generation where possible"
     ],
     "never": [
-      "Store user credentials in the content database — use external auth provider",
-      "Serve original uploaded images without processing through Sharp"
+      "Don't use Payload template CLI (requires human interaction)"
     ]
   },
-  "startingLevel": "system"
+  "startingLevel": "system",
+  "refPositions": {
+    "node-3/node-1": {
+      "x": -420,
+      "y": 620
+    },
+    "node-3/node-2": {
+      "x": -420,
+      "y": 260
+    },
+    "node-3/node-4": {
+      "x": 100,
+      "y": -80
+    },
+    "node-10/node-2": {
+      "x": -760,
+      "y": -80
+    },
+    "node-10/node-11": {
+      "x": -760,
+      "y": 280
+    },
+    "node-10/node-12": {
+      "x": -80,
+      "y": 280
+    },
+    "node-10/node-4": {
+      "x": -80,
+      "y": 580
+    },
+    "node-11/node-1": {
+      "x": -420,
+      "y": 260
+    },
+    "node-11/node-10": {
+      "x": -420,
+      "y": -80
+    }
+  }
 }

@@ -1,0 +1,743 @@
+{
+  "nodes": [
+    {
+      "id": "node-1",
+      "type": "c4",
+      "data": {
+        "name": "Player",
+        "description": "Plays the game",
+        "kind": "person"
+      },
+      "position": {
+        "x": -80,
+        "y": -80
+      }
+    },
+    {
+      "id": "node-2",
+      "type": "c4",
+      "data": {
+        "name": "Game",
+        "description": "Single-player game built with Godot's scene tree architecture",
+        "kind": "system",
+        "status": "proposed"
+      },
+      "position": {
+        "x": 260,
+        "y": -80
+      }
+    },
+    {
+      "id": "node-10",
+      "type": "c4",
+      "data": {
+        "name": "Game Client",
+        "description": "Godot application \u2014 gameplay, rendering, UI, audio, and all runtime logic",
+        "kind": "container",
+        "technology": "Godot 4, GDScript",
+        "status": "proposed"
+      },
+      "parentId": "node-2",
+      "position": {
+        "x": 260,
+        "y": -80
+      }
+    },
+    {
+      "id": "node-11",
+      "type": "c4",
+      "data": {
+        "name": "Save Data",
+        "description": "Persistent game state on disk \u2014 player progress, settings, and world state",
+        "kind": "container",
+        "technology": "JSON, user://",
+        "shape": "cylinder",
+        "status": "proposed",
+        "contract": {
+          "expect": [
+            "Save files live in user:// directory",
+            "Never overwrite without confirmation"
+          ],
+          "never": [
+            "Store in res:// \u2014 read-only in exports"
+          ]
+        }
+      },
+      "parentId": "node-2",
+      "position": {
+        "x": 260,
+        "y": -420
+      }
+    },
+    {
+      "id": "node-20",
+      "type": "c4",
+      "data": {
+        "name": "Player Controller",
+        "description": "Reads input and drives movement, animation, and collision response",
+        "kind": "component",
+        "technology": "CharacterBody3D, GDScript",
+        "status": "proposed",
+        "contract": {
+          "expect": [
+            "Uses move_and_slide() for collision",
+            "All physics in _physics_process"
+          ],
+          "never": [
+            "Modify position directly"
+          ]
+        }
+      },
+      "parentId": "node-10",
+      "position": {
+        "x": -80,
+        "y": -40
+      }
+    },
+    {
+      "id": "node-21",
+      "type": "c4",
+      "data": {
+        "name": "Combat System",
+        "description": "Hitbox/hurtbox detection, damage, health tracking, and death",
+        "kind": "component",
+        "technology": "Area3D, Signals",
+        "status": "proposed",
+        "contract": {
+          "expect": [
+            "Signal-based hitbox/hurtbox system",
+            "Health changes emit signals"
+          ]
+        }
+      },
+      "parentId": "node-10",
+      "position": {
+        "x": 320,
+        "y": -420
+      }
+    },
+    {
+      "id": "node-22",
+      "type": "c4",
+      "data": {
+        "name": "AI",
+        "description": "Enemy behavior, pathfinding, state machines, and aggro",
+        "kind": "component",
+        "technology": "NavigationAgent3D, GDScript",
+        "status": "proposed"
+      },
+      "parentId": "node-10",
+      "position": {
+        "x": 320,
+        "y": -40
+      }
+    },
+    {
+      "id": "node-23",
+      "type": "c4",
+      "data": {
+        "name": "Inventory",
+        "description": "Item pickup, storage, equipment, and consumables",
+        "kind": "component",
+        "technology": "Resource, GDScript",
+        "status": "proposed"
+      },
+      "parentId": "node-10",
+      "position": {
+        "x": -80,
+        "y": -420
+      }
+    },
+    {
+      "id": "node-24",
+      "type": "c4",
+      "data": {
+        "name": "Levels",
+        "description": "Level scenes with geometry, spawn points, triggers, and transitions",
+        "kind": "component",
+        "technology": "PackedScene, Node3D",
+        "status": "proposed"
+      },
+      "parentId": "node-10",
+      "position": {
+        "x": -80,
+        "y": 340
+      }
+    },
+    {
+      "id": "node-25",
+      "type": "c4",
+      "data": {
+        "name": "HUD",
+        "description": "In-game overlay \u2014 health, inventory, minimap, and prompts",
+        "kind": "component",
+        "technology": "Control, CanvasLayer",
+        "status": "proposed"
+      },
+      "parentId": "node-10",
+      "position": {
+        "x": -80,
+        "y": -800
+      }
+    },
+    {
+      "id": "node-26",
+      "type": "c4",
+      "data": {
+        "name": "Menus",
+        "description": "Main menu, pause, settings, and inventory screen",
+        "kind": "component",
+        "technology": "Control, CanvasLayer",
+        "status": "proposed",
+        "contract": {
+          "expect": [
+            "Pause stops tree via get_tree().paused",
+            "Works with keyboard and gamepad"
+          ]
+        }
+      },
+      "parentId": "node-10",
+      "position": {
+        "x": -1060,
+        "y": -800
+      }
+    },
+    {
+      "id": "node-27",
+      "type": "c4",
+      "data": {
+        "name": "Audio Manager",
+        "description": "Music, sound effects, and audio bus routing",
+        "kind": "component",
+        "technology": "AudioStreamPlayer, Autoload",
+        "status": "proposed"
+      },
+      "parentId": "node-10",
+      "position": {
+        "x": 320,
+        "y": -800
+      }
+    },
+    {
+      "id": "node-28",
+      "type": "c4",
+      "data": {
+        "name": "Camera",
+        "description": "Player-following camera with smoothing and shake",
+        "kind": "component",
+        "technology": "Camera3D, GDScript",
+        "status": "proposed"
+      },
+      "parentId": "node-10",
+      "position": {
+        "x": -600,
+        "y": -800
+      }
+    },
+    {
+      "id": "node-29",
+      "type": "c4",
+      "data": {
+        "name": "Scene Manager",
+        "description": "Scene transitions and loading screens",
+        "kind": "component",
+        "technology": "Autoload, GDScript",
+        "status": "proposed",
+        "contract": {
+          "expect": [
+            "Non-blocking transitions with loading screen"
+          ],
+          "never": [
+            "Load large scenes synchronously"
+          ]
+        }
+      },
+      "parentId": "node-10",
+      "position": {
+        "x": -1060,
+        "y": -40
+      }
+    },
+    {
+      "id": "node-30",
+      "type": "c4",
+      "data": {
+        "name": "Save System",
+        "description": "Serializes game state to disk and restores it",
+        "kind": "component",
+        "technology": "FileAccess, Autoload",
+        "status": "proposed"
+      },
+      "parentId": "node-10",
+      "position": {
+        "x": -1420,
+        "y": -40
+      }
+    },
+    {
+      "id": "node-31",
+      "type": "c4",
+      "data": {
+        "name": "Input Manager",
+        "description": "Maps raw input to named actions, supports rebinding",
+        "kind": "component",
+        "technology": "InputMap, Autoload",
+        "status": "proposed",
+        "contract": {
+          "expect": [
+            "All input through named actions",
+            "Remappable at runtime"
+          ]
+        }
+      },
+      "parentId": "node-10",
+      "position": {
+        "x": -740,
+        "y": -40
+      }
+    },
+    {
+      "id": "node-40",
+      "type": "model",
+      "data": {
+        "name": "PlayerState",
+        "description": "Serializable player data",
+        "kind": "model",
+        "status": "proposed",
+        "properties": [
+          {
+            "label": "position",
+            "description": "Vector3 world position"
+          },
+          {
+            "label": "health",
+            "description": "Current health points"
+          },
+          {
+            "label": "inventory",
+            "description": "Array of item resource paths"
+          },
+          {
+            "label": "current_level",
+            "description": "Path to active level scene"
+          }
+        ]
+      },
+      "parentId": "node-30",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "node-41",
+      "type": "model",
+      "data": {
+        "name": "ItemDef",
+        "description": "Item definition resource",
+        "kind": "model",
+        "status": "proposed",
+        "properties": [
+          {
+            "label": "id",
+            "description": "Unique identifier"
+          },
+          {
+            "label": "name",
+            "description": "Display name"
+          },
+          {
+            "label": "description",
+            "description": "Flavor text"
+          },
+          {
+            "label": "icon",
+            "description": "Texture2D for UI"
+          },
+          {
+            "label": "item_type",
+            "description": "weapon, armor, consumable, key"
+          },
+          {
+            "label": "stats",
+            "description": "Dictionary of stat modifiers"
+          }
+        ]
+      },
+      "parentId": "node-23",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "node-50",
+      "type": "operation",
+      "data": {
+        "name": "physics_process",
+        "description": "Per-tick: reads input, applies gravity, calls move_and_slide()",
+        "kind": "operation",
+        "status": "proposed"
+      },
+      "parentId": "node-20",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "node-51",
+      "type": "operation",
+      "data": {
+        "name": "apply_damage",
+        "description": "Reduces health, emits signal, triggers death at zero",
+        "kind": "operation",
+        "status": "proposed"
+      },
+      "parentId": "node-21",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "node-52",
+      "type": "operation",
+      "data": {
+        "name": "change_scene",
+        "description": "Transitions to a new scene with loading screen and fade",
+        "kind": "operation",
+        "status": "proposed"
+      },
+      "parentId": "node-29",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "node-53",
+      "type": "operation",
+      "data": {
+        "name": "save_game",
+        "description": "Collects @[PlayerState], writes to @[Save Data]",
+        "kind": "operation",
+        "status": "proposed"
+      },
+      "parentId": "node-30",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "node-54",
+      "type": "operation",
+      "data": {
+        "name": "load_game",
+        "description": "Reads from @[Save Data], restores @[PlayerState]",
+        "kind": "operation",
+        "status": "proposed"
+      },
+      "parentId": "node-30",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-1-2",
+      "source": "node-1",
+      "target": "node-2",
+      "data": {
+        "label": "plays"
+      }
+    },
+    {
+      "id": "edge-1-10",
+      "source": "node-1",
+      "target": "node-10",
+      "data": {
+        "label": "plays"
+      }
+    },
+    {
+      "id": "edge-10-11",
+      "source": "node-10",
+      "target": "node-11",
+      "data": {
+        "label": "reads/writes"
+      }
+    },
+    {
+      "id": "edge-31-20",
+      "source": "node-31",
+      "target": "node-20",
+      "data": {
+        "label": "sends actions to"
+      }
+    },
+    {
+      "id": "edge-20-21",
+      "source": "node-20",
+      "target": "node-21",
+      "data": {
+        "label": "uses"
+      }
+    },
+    {
+      "id": "edge-20-23",
+      "source": "node-20",
+      "target": "node-23",
+      "data": {
+        "label": "uses"
+      }
+    },
+    {
+      "id": "edge-22-21",
+      "source": "node-22",
+      "target": "node-21",
+      "data": {
+        "label": "attacks via"
+      }
+    },
+    {
+      "id": "edge-22-20",
+      "source": "node-22",
+      "target": "node-20",
+      "data": {
+        "label": "targets"
+      }
+    },
+    {
+      "id": "edge-22-24",
+      "source": "node-22",
+      "target": "node-24",
+      "data": {
+        "label": "spawned by"
+      }
+    },
+    {
+      "id": "edge-21-25",
+      "source": "node-21",
+      "target": "node-25",
+      "data": {
+        "label": "updates"
+      }
+    },
+    {
+      "id": "edge-21-27",
+      "source": "node-21",
+      "target": "node-27",
+      "data": {
+        "label": "triggers sounds on"
+      }
+    },
+    {
+      "id": "edge-28-20",
+      "source": "node-28",
+      "target": "node-20",
+      "data": {
+        "label": "follows"
+      }
+    },
+    {
+      "id": "edge-25-23",
+      "source": "node-25",
+      "target": "node-23",
+      "data": {
+        "label": "displays"
+      }
+    },
+    {
+      "id": "edge-26-29",
+      "source": "node-26",
+      "target": "node-29",
+      "data": {
+        "label": "triggers transitions via"
+      }
+    },
+    {
+      "id": "edge-26-30",
+      "source": "node-26",
+      "target": "node-30",
+      "data": {
+        "label": "triggers save/load via"
+      }
+    },
+    {
+      "id": "edge-29-24",
+      "source": "node-29",
+      "target": "node-24",
+      "data": {
+        "label": "loads and unloads"
+      }
+    },
+    {
+      "id": "edge-30-11",
+      "source": "node-30",
+      "target": "node-11",
+      "data": {
+        "label": "reads/writes"
+      }
+    },
+    {
+      "id": "edge-30-29",
+      "source": "node-30",
+      "target": "node-29",
+      "data": {
+        "label": "triggers scene load"
+      }
+    },
+    {
+      "source": "node-1",
+      "sourceHandle": "right",
+      "target": "node-20",
+      "targetHandle": "left",
+      "data": {
+        "label": "controls via"
+      },
+      "id": "xy-edge__node-1right-node-20left",
+      "selected": false
+    }
+  ],
+  "groups": [
+    {
+      "id": "group-1",
+      "kind": "package",
+      "name": "Gameplay",
+      "memberIds": [
+        "node-20",
+        "node-21",
+        "node-22",
+        "node-23",
+        "node-24"
+      ]
+    },
+    {
+      "id": "group-2",
+      "kind": "package",
+      "name": "Presentation",
+      "memberIds": [
+        "node-25",
+        "node-26",
+        "node-27",
+        "node-28"
+      ]
+    },
+    {
+      "id": "group-3",
+      "kind": "package",
+      "name": "Infrastructure",
+      "memberIds": [
+        "node-29",
+        "node-30",
+        "node-31"
+      ]
+    }
+  ],
+  "flows": [
+    {
+      "id": "scenario-1",
+      "name": "Combat encounter",
+      "description": "Player enters an area, enemies engage, combat resolves",
+      "steps": [
+        {
+          "id": "step-1",
+          "description": "@[Player Controller] enters a trigger zone in @[Levels]"
+        },
+        {
+          "id": "step-2",
+          "description": "@[AI] detects the player and enters attack state"
+        },
+        {
+          "id": "step-3",
+          "description": "@[AI] navigates toward the player and attacks"
+        },
+        {
+          "id": "step-4",
+          "description": "@[Combat System] detects hitbox overlap and calls @[apply_damage]",
+          "branches": [
+            {
+              "condition": "if: health reaches zero",
+              "steps": [
+                {
+                  "id": "step-4a",
+                  "description": "@[Combat System] emits death signal, enemy drops loot"
+                }
+              ]
+            },
+            {
+              "condition": "else: target survives",
+              "steps": [
+                {
+                  "id": "step-4b",
+                  "description": "@[HUD] flashes damage indicator"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "scenario-2",
+      "name": "Save and load",
+      "description": "Player saves progress and resumes later",
+      "steps": [
+        {
+          "id": "step-1",
+          "description": "@[Player] opens the pause menu in @[Menus]"
+        },
+        {
+          "id": "step-2",
+          "description": "@[save_game] collects @[PlayerState]"
+        },
+        {
+          "id": "step-3",
+          "description": "@[Save System] writes to @[Save Data]"
+        },
+        {
+          "id": "step-4",
+          "description": "Later, @[Player] selects Load from @[Menus]"
+        },
+        {
+          "id": "step-5",
+          "description": "@[load_game] reads @[Save Data] and restores @[PlayerState]"
+        },
+        {
+          "id": "step-6",
+          "description": "@[Scene Manager] loads the saved level"
+        }
+      ]
+    }
+  ],
+  "contract": {
+    "expect": [
+      "Gameplay logic in _physics_process only",
+      "Scenes are self-contained and independently testable",
+      "Cross-system communication uses signals"
+    ],
+    "never": [
+      "Gameplay logic in _process",
+      "Global state outside Autoload singletons"
+    ]
+  },
+  "startingLevel": "system",
+  "refPositions": {
+    "node-2/node-1": {
+      "x": -80,
+      "y": -420
+    },
+    "node-10/node-1": {
+      "x": -760,
+      "y": -420
+    },
+    "node-10/node-11": {
+      "x": -1100,
+      "y": 260
+    }
+  }
+}

@@ -3,27 +3,39 @@
     {
       "id": "node-1",
       "type": "c4",
+      "position": {
+        "x": 600,
+        "y": -420
+      },
       "data": {
-        "name": "End User",
-        "description": "Subscribes to the platform and uses it day-to-day",
-        "kind": "person"
-      }
-    },
-    {
-      "id": "node-3",
-      "type": "c4",
-      "data": {
-        "name": "Admin",
-        "description": "Manages tenant accounts, monitors platform health",
+        "name": "User",
+        "description": "Creates chatbots, configures their behavior, and monitors conversations",
         "kind": "person"
       }
     },
     {
       "id": "node-2",
       "type": "c4",
+      "position": {
+        "x": 220,
+        "y": -80
+      },
       "data": {
-        "name": "SaaS Platform",
-        "description": "The core product — handles tenants, billing, and the main application",
+        "name": "End User",
+        "description": "Chats with a deployed bot via the embeddable widget",
+        "kind": "person"
+      }
+    },
+    {
+      "id": "node-3",
+      "type": "c4",
+      "position": {
+        "x": 600,
+        "y": -80
+      },
+      "data": {
+        "name": "Chatbot Platform",
+        "description": "SaaS platform where users create AI chatbots, train them on their own content, and deploy them as embeddable widgets",
         "kind": "system",
         "status": "proposed"
       }
@@ -31,9 +43,13 @@
     {
       "id": "node-4",
       "type": "c4",
+      "position": {
+        "x": 980,
+        "y": -80
+      },
       "data": {
-        "name": "Auth0",
-        "description": "Handles SSO, social login, and identity verification",
+        "name": "OpenAI",
+        "description": "LLM provider for chat completions and embeddings",
         "kind": "system",
         "external": true
       }
@@ -41,628 +57,745 @@
     {
       "id": "node-5",
       "type": "c4",
+      "position": {
+        "x": 600,
+        "y": 240
+      },
       "data": {
         "name": "Stripe",
-        "description": "Processes subscription payments, invoicing, and metered billing",
+        "description": "Subscription billing and payment processing",
         "kind": "system",
         "external": true
       }
     },
-    {
-      "id": "node-6",
-      "type": "c4",
-      "data": {
-        "name": "Postmark",
-        "description": "Sends transactional emails and notifications",
-        "kind": "system",
-        "external": true
-      }
-    },
-
     {
       "id": "node-10",
       "type": "c4",
+      "position": {
+        "x": 260,
+        "y": -760
+      },
       "data": {
-        "name": "Web App",
-        "description": "Server-rendered application for end users and tenant admins",
+        "name": "Dashboard",
+        "description": "Admin interface where users manage bots, upload knowledge base documents, view conversation logs, and manage billing",
         "kind": "container",
-        "technology": "SvelteKit",
+        "technology": "Payload CMS, Next.js",
         "status": "proposed"
       },
-      "parentId": "node-2"
+      "parentId": "node-3"
     },
     {
       "id": "node-11",
       "type": "c4",
-      "data": {
-        "name": "API Server",
-        "description": "Handles all business logic, tenant isolation, and billing orchestration",
-        "kind": "container",
-        "technology": "Go",
-        "status": "proposed",
-        "notes": "Go chosen for low latency and predictable memory usage under multi-tenant load. Chi router for lightweight HTTP handling. pgx for direct PostgreSQL access without ORM overhead."
+      "position": {
+        "x": 260,
+        "y": -420
       },
-      "parentId": "node-2"
+      "data": {
+        "name": "Chat API",
+        "description": "Handles inbound chat messages, retrieves context from the knowledge base, and streams LLM responses",
+        "kind": "container",
+        "technology": "Next.js API Routes",
+        "status": "proposed"
+      },
+      "parentId": "node-3"
     },
     {
       "id": "node-12",
       "type": "c4",
-      "data": {
-        "name": "Application Database",
-        "description": "Multi-tenant data store with row-level security",
-        "kind": "container",
-        "technology": "PostgreSQL",
-        "shape": "cylinder",
-        "status": "proposed"
+      "position": {
+        "x": -80,
+        "y": -760
       },
-      "parentId": "node-2"
+      "data": {
+        "name": "Widget",
+        "description": "Embeddable chat widget that end users interact with on the customer's website",
+        "kind": "container",
+        "technology": "React, iframe",
+        "status": "proposed",
+        "contract": {
+          "expect": [
+            "Widget loads via a single script tag with a bot ID",
+            "Chat state persists across page navigations using sessionStorage"
+          ],
+          "never": [
+            "Access the host page DOM outside the iframe boundary"
+          ]
+        }
+      },
+      "parentId": "node-3"
     },
     {
       "id": "node-13",
       "type": "c4",
-      "data": {
-        "name": "Job Queue",
-        "description": "Processes background tasks like email sends and report generation",
-        "kind": "container",
-        "technology": "Redis",
-        "shape": "pipe",
-        "status": "proposed"
+      "position": {
+        "x": 600,
+        "y": -420
       },
-      "parentId": "node-2"
-    },
-    {
-      "id": "node-14",
-      "type": "c4",
       "data": {
-        "name": "Admin Dashboard",
-        "description": "Internal tool for platform ops and tenant management",
+        "name": "Database",
+        "description": "Stores user accounts, bot configs, knowledge base documents, and conversation logs",
         "kind": "container",
-        "technology": "React",
-        "status": "proposed"
-      },
-      "parentId": "node-2"
-    },
-
-    {
-      "id": "node-20",
-      "type": "c4",
-      "data": {
-        "name": "Tenant Handler",
-        "description": "REST endpoints for tenant CRUD, plan changes, and suspension via @[tenantOnboarding]",
-        "kind": "component",
-        "technology": "Chi",
+        "technology": "MongoDB",
+        "shape": "cylinder",
         "status": "proposed",
-        "sources": [
-          { "pattern": "internal/handler/tenant*.go", "comment": "HTTP handlers for tenant endpoints" }
-        ],
         "contract": {
           "expect": [
-            "All tenant mutations are scoped by the authenticated tenant ID",
-            "Plan changes are validated against Stripe before persisting"
-          ],
-          "ask": [],
-          "never": [
-            "Allow cross-tenant data access"
+            "All queries are scoped to the authenticated user's bots",
+            "Conversation logs are TTL-indexed for automatic cleanup"
           ]
         }
       },
-      "parentId": "node-11"
+      "parentId": "node-3"
+    },
+    {
+      "id": "node-20",
+      "type": "c4",
+      "position": {
+        "x": -80,
+        "y": 600
+      },
+      "data": {
+        "name": "Bots",
+        "description": "Payload collection for chatbot configurations \u2014 name, system prompt, model, temperature, and appearance",
+        "kind": "component",
+        "technology": "Payload Collection",
+        "status": "proposed",
+        "contract": {
+          "expect": [
+            "Each bot belongs to exactly one user",
+            "Bot config includes a system prompt, model selection, and widget appearance settings"
+          ]
+        }
+      },
+      "parentId": "node-10"
     },
     {
       "id": "node-21",
       "type": "c4",
-      "data": {
-        "name": "Auth Middleware",
-        "description": "Validates Auth0 JWTs and resolves tenant context from claims",
-        "kind": "component",
-        "technology": "golang-jwt",
-        "status": "proposed",
-        "sources": [
-          { "pattern": "internal/middleware/auth.go", "comment": "JWT validation and tenant context extraction" }
-        ]
+      "position": {
+        "x": -80,
+        "y": 260
       },
-      "parentId": "node-11"
+      "data": {
+        "name": "Knowledge Base",
+        "description": "Payload collection for documents the bot uses as context \u2014 uploaded files are chunked and embedded",
+        "kind": "component",
+        "technology": "Payload Collection",
+        "status": "proposed",
+        "contract": {
+          "expect": [
+            "Documents are chunked into segments of ~500 tokens with overlap",
+            "Each chunk stores its embedding vector for similarity search"
+          ],
+          "never": [
+            "Send entire documents to the LLM \u2014 always retrieve relevant chunks only"
+          ]
+        }
+      },
+      "parentId": "node-10"
     },
     {
       "id": "node-22",
       "type": "c4",
+      "position": {
+        "x": -80,
+        "y": -80
+      },
       "data": {
-        "name": "Data Access Layer",
-        "description": "Type-safe SQL queries with connection pooling and tenant scoping",
+        "name": "Conversations",
+        "description": "Payload collection for conversation logs \u2014 stores message history per session for review and analytics",
         "kind": "component",
-        "technology": "pgx",
+        "technology": "Payload Collection",
+        "status": "proposed"
+      },
+      "parentId": "node-10"
+    },
+    {
+      "id": "node-23",
+      "type": "c4",
+      "position": {
+        "x": 260,
+        "y": 600
+      },
+      "data": {
+        "name": "Billing",
+        "description": "Manages Stripe subscriptions, usage metering, and plan limits",
+        "kind": "component",
+        "technology": "Payload Plugin, stripe",
         "status": "proposed",
-        "sources": [
-          { "pattern": "internal/db/**/*.go", "comment": "Query builders and connection pool management" }
-        ],
         "contract": {
           "expect": [
-            "Every query includes a tenant_id WHERE clause via row-level security",
-            "Connection pool is bounded to prevent database exhaustion"
+            "Message usage is metered and reported to Stripe",
+            "Bots are disabled when the user exceeds their plan's message quota"
+          ]
+        }
+      },
+      "parentId": "node-10"
+    },
+    {
+      "id": "node-30",
+      "type": "c4",
+      "position": {
+        "x": -420,
+        "y": 260
+      },
+      "data": {
+        "name": "Chat Handler",
+        "description": "Receives a message and bot ID, retrieves relevant knowledge chunks, builds the prompt, and streams the LLM response",
+        "kind": "component",
+        "technology": "Next.js API Routes",
+        "status": "proposed",
+        "contract": {
+          "expect": [
+            "Responses are streamed via Server-Sent Events",
+            "Each request validates the bot ID and checks the owner's usage quota before calling the LLM"
           ],
-          "ask": [],
           "never": [
-            "Execute raw SQL without parameterized queries"
+            "Expose the bot's system prompt or knowledge base content in the response"
           ]
         }
       },
       "parentId": "node-11"
     },
     {
-      "id": "node-23",
+      "id": "node-31",
       "type": "c4",
+      "position": {
+        "x": -420,
+        "y": -80
+      },
       "data": {
-        "name": "Billing Service",
-        "description": "Manages Stripe subscriptions, webhook handling, and usage metering",
+        "name": "Retriever",
+        "description": "Performs vector similarity search against the knowledge base to find relevant context for the current message",
         "kind": "component",
-        "technology": "stripe-go",
+        "technology": "MongoDB Atlas Search",
         "status": "proposed",
-        "sources": [
-          { "pattern": "internal/billing/**/*.go", "comment": "Stripe integration and subscription lifecycle" }
-        ]
+        "contract": {
+          "expect": [
+            "Returns top-k chunks ranked by cosine similarity",
+            "Results are scoped to the specific bot's knowledge base"
+          ]
+        }
       },
       "parentId": "node-11"
     },
     {
-      "id": "node-24",
-      "type": "c4",
-      "data": {
-        "name": "Event Publisher",
-        "description": "Enqueues background jobs for async processing via @[Job Queue]",
-        "kind": "component",
-        "technology": "Asynq",
-        "status": "proposed"
-      },
-      "parentId": "node-11"
-    },
-    {
-      "id": "node-26",
+      "id": "node-40",
       "type": "model",
       "data": {
-        "name": "tenant",
-        "description": "Core multi-tenant entity representing a customer organization",
+        "name": "Bot",
+        "description": "Chatbot configuration created by a user",
         "kind": "model",
         "status": "proposed",
         "properties": [
-          { "label": "id", "description": "UUID primary key" },
-          { "label": "name", "description": "Organization display name" },
-          { "label": "slug", "description": "URL-safe unique identifier used in subdomains" },
-          { "label": "planId", "description": "Reference to the active Stripe subscription plan" },
-          { "label": "status", "description": "Active, suspended, or pending_deletion" },
-          { "label": "stripeCustomerId", "description": "Stripe customer ID for billing operations" },
-          { "label": "createdAt", "description": "Timestamp of initial provisioning" },
-          { "label": "usageQuota", "description": "Monthly usage limit based on plan tier" }
+          {
+            "label": "name",
+            "description": "Display name for the bot"
+          },
+          {
+            "label": "systemPrompt",
+            "description": "Instructions that define the bot's persona and behavior"
+          },
+          {
+            "label": "model",
+            "description": "LLM model to use (e.g. gpt-4o-mini)"
+          },
+          {
+            "label": "temperature",
+            "description": "Sampling temperature for responses"
+          },
+          {
+            "label": "appearance",
+            "description": "Widget color, icon, and greeting message"
+          },
+          {
+            "label": "ownerId",
+            "description": "Reference to the user who owns this bot"
+          },
+          {
+            "label": "active",
+            "description": "Whether the bot is currently accepting messages"
+          }
         ]
       },
-      "parentId": "node-11"
+      "parentId": "node-20",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
     },
     {
-      "id": "node-27",
+      "id": "node-41",
+      "type": "model",
+      "data": {
+        "name": "KnowledgeChunk",
+        "description": "A chunk of a knowledge base document with its embedding vector",
+        "kind": "model",
+        "status": "proposed",
+        "properties": [
+          {
+            "label": "botId",
+            "description": "Which bot this chunk belongs to"
+          },
+          {
+            "label": "documentId",
+            "description": "Source document reference"
+          },
+          {
+            "label": "content",
+            "description": "Text content of the chunk (~500 tokens)"
+          },
+          {
+            "label": "embedding",
+            "description": "Vector embedding from OpenAI"
+          },
+          {
+            "label": "metadata",
+            "description": "Source filename, page number, chunk index"
+          }
+        ]
+      },
+      "parentId": "node-21",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "node-42",
+      "type": "model",
+      "data": {
+        "name": "Message",
+        "description": "A single message in a conversation",
+        "kind": "model",
+        "status": "proposed",
+        "properties": [
+          {
+            "label": "role",
+            "description": "user or assistant"
+          },
+          {
+            "label": "content",
+            "description": "Message text"
+          },
+          {
+            "label": "sessionId",
+            "description": "Groups messages into a conversation"
+          },
+          {
+            "label": "botId",
+            "description": "Which bot handled this message"
+          },
+          {
+            "label": "createdAt",
+            "description": "Timestamp"
+          }
+        ]
+      },
+      "parentId": "node-22",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "node-50",
       "type": "process",
       "data": {
-        "name": "tenantOnboarding",
-        "description": "Provisions a new @[tenant]: creates database schema, sets up Stripe customer, sends welcome email via @[Postmark]",
+        "name": "ingestDocument",
+        "description": "Chunks an uploaded document, generates embeddings via @[OpenAI], and stores @[KnowledgeChunk] records in the @[Database]",
         "kind": "process",
         "status": "proposed",
         "contract": {
           "expect": [
-            "Database schema is created before Stripe customer to ensure rollback is possible",
-            "Welcome email is sent only after all provisioning steps succeed"
-          ],
-          "ask": [],
-          "never": [
-            "Leave a partially provisioned tenant in active status"
+            "Old chunks for the same document are deleted before re-ingesting",
+            "Chunking preserves paragraph boundaries where possible"
           ]
-        },
-        "accepts": [
-          "New tenant can log in within 30 seconds of signup",
-          "Failed provisioning rolls back all steps and notifies admin"
-        ]
+        }
       },
-      "parentId": "node-20"
+      "parentId": "node-21",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
     },
-
     {
-      "id": "node-30",
+      "id": "node-51",
       "type": "operation",
       "data": {
-        "name": "createTenant",
-        "description": "POST /tenants — triggers @[tenantOnboarding] to provision isolated schema and Stripe customer",
+        "name": "handleChatMessage",
+        "description": "Validates the request, retrieves context via @[Retriever], builds the prompt with conversation history, and streams the @[OpenAI] response",
         "kind": "operation",
         "status": "proposed"
       },
-      "parentId": "node-20"
+      "parentId": "node-30",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
     },
     {
-      "id": "node-31",
+      "id": "node-52",
       "type": "operation",
       "data": {
-        "name": "getTenant",
-        "description": "GET /tenants/:id — returns @[tenant] config, usage stats, and current plan",
+        "name": "searchChunks",
+        "description": "Embeds the query, runs a vector similarity search against @[KnowledgeChunk] records, and returns the top-k results",
         "kind": "operation",
         "status": "proposed"
       },
-      "parentId": "node-20"
+      "parentId": "node-31",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
     },
     {
-      "id": "node-32",
-      "type": "operation",
-      "data": {
-        "name": "updatePlan",
-        "description": "PUT /tenants/:id/plan — upgrades or downgrades @[tenant] subscription via @[Billing Service]",
-        "kind": "operation",
-        "status": "proposed"
-      },
-      "parentId": "node-20"
-    },
-    {
-      "id": "node-33",
-      "type": "operation",
-      "data": {
-        "name": "suspendTenant",
-        "description": "POST /tenants/:id/suspend — disables @[tenant] access and pauses Stripe billing",
-        "kind": "operation",
-        "status": "proposed"
-      },
-      "parentId": "node-20"
-    },
-    {
-      "id": "node-34",
+      "id": "node-53",
       "type": "operation",
       "data": {
         "name": "handleStripeWebhook",
-        "description": "POST /webhooks/stripe — processes payment events, updates @[tenant] status on payment failure",
+        "description": "Processes Stripe webhook events for subscription changes, payment failures, and usage reporting",
         "kind": "operation",
         "status": "proposed",
         "contract": {
           "expect": [
             "Verifies Stripe webhook signature before processing",
-            "Idempotent — safe to receive the same event multiple times"
-          ],
-          "ask": [],
-          "never": [
-            "Trust webhook payload without signature verification"
+            "Idempotent \u2014 safe to receive the same event multiple times"
           ]
         }
       },
-      "parentId": "node-23"
+      "parentId": "node-23",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
     }
   ],
   "edges": [
     {
-      "id": "edge-node-1-node-2",
+      "id": "edge-node-1-node-3",
       "source": "node-1",
-      "target": "node-2",
-      "data": { "label": "uses" }
+      "target": "node-3",
+      "data": {
+        "label": "creates and manages bots via"
+      }
     },
     {
-      "id": "edge-node-3-node-2",
+      "id": "edge-node-2-node-3",
+      "source": "node-2",
+      "target": "node-3",
+      "data": {
+        "label": "chats with bots via"
+      }
+    },
+    {
+      "id": "edge-node-3-node-4",
       "source": "node-3",
-      "target": "node-2",
-      "data": { "label": "manages tenants via" }
-    },
-    {
-      "id": "edge-node-2-node-4",
-      "source": "node-2",
       "target": "node-4",
-      "data": { "label": "authenticates via", "method": "OAuth 2.0" }
+      "data": {
+        "label": "generates responses via"
+      }
     },
     {
-      "id": "edge-node-2-node-5",
-      "source": "node-2",
+      "id": "edge-node-3-node-5",
+      "source": "node-3",
       "target": "node-5",
-      "data": { "label": "processes payments via", "method": "REST" }
+      "data": {
+        "label": "processes payments via"
+      }
     },
-    {
-      "id": "edge-node-2-node-6",
-      "source": "node-2",
-      "target": "node-6",
-      "data": { "label": "sends emails via", "method": "SMTP" }
-    },
-
     {
       "id": "edge-node-1-node-10",
       "source": "node-1",
       "target": "node-10",
-      "data": { "label": "uses" }
+      "data": {
+        "label": "manages bots via"
+      }
     },
     {
-      "id": "edge-node-3-node-14",
-      "source": "node-3",
-      "target": "node-14",
-      "data": { "label": "manages platform via" }
-    },
-    {
-      "id": "edge-node-10-node-11",
-      "source": "node-10",
-      "target": "node-11",
-      "data": { "label": "makes API calls to", "method": "REST/JSON" }
-    },
-    {
-      "id": "edge-node-14-node-11",
-      "source": "node-14",
-      "target": "node-11",
-      "data": { "label": "manages platform via", "method": "REST/JSON" }
-    },
-    {
-      "id": "edge-node-11-node-12",
-      "source": "node-11",
+      "id": "edge-node-2-node-12",
+      "source": "node-2",
       "target": "node-12",
-      "data": { "label": "reads/writes", "method": "pgx" }
+      "data": {
+        "label": "chats via"
+      }
+    },
+    {
+      "id": "edge-node-12-node-11",
+      "source": "node-12",
+      "target": "node-11",
+      "data": {
+        "label": "sends messages to"
+      }
+    },
+    {
+      "id": "edge-node-10-node-13",
+      "source": "node-10",
+      "target": "node-13",
+      "data": {
+        "label": "reads/writes"
+      }
     },
     {
       "id": "edge-node-11-node-13",
       "source": "node-11",
       "target": "node-13",
-      "data": { "label": "enqueues jobs to", "method": "Asynq" }
+      "data": {
+        "label": "reads/writes"
+      }
     },
     {
       "id": "edge-node-11-node-4",
       "source": "node-11",
       "target": "node-4",
-      "data": { "label": "validates tokens with", "method": "JWKS" }
+      "data": {
+        "label": "generates responses via"
+      }
     },
     {
-      "id": "edge-node-11-node-5",
-      "source": "node-11",
+      "id": "edge-node-10-node-5",
+      "source": "node-10",
       "target": "node-5",
-      "data": { "label": "processes payments via", "method": "REST" }
+      "data": {
+        "label": "manages subscriptions via"
+      }
     },
     {
-      "id": "edge-node-13-node-6",
-      "source": "node-13",
-      "target": "node-6",
-      "data": { "label": "sends emails via", "method": "SMTP" }
-    },
-
-    {
-      "id": "edge-node-20-node-21",
-      "source": "node-20",
-      "target": "node-21",
-      "data": { "label": "validates requests with" }
+      "id": "edge-node-1-collections",
+      "source": "node-1",
+      "target": "d93a9d8b-8718-4c2b-aa34-5122c8db7961",
+      "data": {
+        "label": "manages"
+      }
     },
     {
-      "id": "edge-node-20-node-22",
-      "source": "node-20",
-      "target": "node-22",
-      "data": { "label": "queries tenants via" }
-    },
-    {
-      "id": "edge-node-20-node-23",
-      "source": "node-20",
-      "target": "node-23",
-      "data": { "label": "manages subscriptions via" }
-    },
-    {
-      "id": "edge-node-20-node-24",
-      "source": "node-20",
-      "target": "node-24",
-      "data": { "label": "emits tenant events to" }
-    },
-    {
-      "id": "edge-node-22-node-12",
-      "source": "node-22",
-      "target": "node-12",
-      "data": { "label": "queries", "method": "pgx" }
-    },
-    {
-      "id": "edge-node-24-node-13",
-      "source": "node-24",
+      "id": "edge-node-23-node-13",
+      "source": "node-23",
       "target": "node-13",
-      "data": { "label": "enqueues to", "method": "Asynq" }
+      "data": {
+        "label": "reads/writes billing data"
+      }
     },
     {
-      "id": "edge-node-21-node-4",
-      "source": "node-21",
+      "id": "edge-node-12-node-30",
+      "source": "node-12",
+      "target": "node-30",
+      "data": {
+        "label": "sends messages to"
+      }
+    },
+    {
+      "id": "edge-node-30-node-31",
+      "source": "node-30",
+      "target": "node-31",
+      "data": {
+        "label": "retrieves context from"
+      }
+    },
+    {
+      "id": "edge-node-30-node-4",
+      "source": "node-30",
       "target": "node-4",
-      "data": { "label": "fetches JWKS from", "method": "HTTPS" }
+      "data": {
+        "label": "streams completions from"
+      }
+    },
+    {
+      "id": "edge-node-31-node-13",
+      "source": "node-31",
+      "target": "node-13",
+      "data": {
+        "label": "vector search on"
+      }
+    },
+    {
+      "id": "edge-node-50-node-4",
+      "source": "node-50",
+      "target": "node-4",
+      "data": {
+        "label": "generates embeddings via"
+      }
+    },
+    {
+      "id": "edge-node-50-node-13",
+      "source": "node-50",
+      "target": "node-13",
+      "data": {
+        "label": "stores chunks in"
+      }
+    },
+    {
+      "id": "edge-node-20-node-13",
+      "source": "node-20",
+      "target": "node-13",
+      "data": {
+        "label": "reads/writes"
+      }
+    },
+    {
+      "id": "edge-node-21-node-13",
+      "source": "node-21",
+      "target": "node-13",
+      "data": {
+        "label": "reads/writes"
+      }
+    },
+    {
+      "id": "edge-node-22-node-13",
+      "source": "node-22",
+      "target": "node-13",
+      "data": {
+        "label": "reads/writes"
+      }
     },
     {
       "id": "edge-node-23-node-5",
       "source": "node-23",
       "target": "node-5",
-      "data": { "label": "manages subscriptions via", "method": "REST" }
-    },
-
-    {
-      "id": "edge-node-27-node-22",
-      "source": "node-27",
-      "target": "node-22",
-      "data": { "label": "provisions schema via" }
-    },
-    {
-      "id": "edge-node-27-node-23",
-      "source": "node-27",
-      "target": "node-23",
-      "data": { "label": "creates Stripe customer via" }
-    },
-    {
-      "id": "edge-node-27-node-24",
-      "source": "node-27",
-      "target": "node-24",
-      "data": { "label": "enqueues welcome email via" }
-    },
-    {
-      "id": "edge-node-30-node-22",
-      "source": "node-30",
-      "target": "node-22",
-      "data": { "label": "provisions schema via" }
-    },
-    {
-      "id": "edge-node-30-node-23",
-      "source": "node-30",
-      "target": "node-23",
-      "data": { "label": "creates customer via" }
-    },
-    {
-      "id": "edge-node-31-node-22",
-      "source": "node-31",
-      "target": "node-22",
-      "data": { "label": "queries tenant from" }
-    },
-    {
-      "id": "edge-node-32-node-23",
-      "source": "node-32",
-      "target": "node-23",
-      "data": { "label": "changes subscription via" }
-    },
-    {
-      "id": "edge-node-33-node-22",
-      "source": "node-33",
-      "target": "node-22",
-      "data": { "label": "disables tenant via" }
-    },
-    {
-      "id": "edge-node-33-node-23",
-      "source": "node-33",
-      "target": "node-23",
-      "data": { "label": "pauses billing via" }
-    },
-    {
-      "id": "edge-node-34-node-22",
-      "source": "node-34",
-      "target": "node-22",
-      "data": { "label": "updates tenant status via" }
-    },
-    {
-      "id": "edge-node-34-node-5",
-      "source": "node-34",
-      "target": "node-5",
-      "data": { "label": "verifies signature with", "method": "REST" }
+      "data": {
+        "label": "manages subscriptions via"
+      }
     }
   ],
   "groups": [
     {
       "id": "group-1",
       "kind": "deployment",
-      "name": "Fly.io App",
-      "description": "API server and web app deploy as a single Fly.io machine",
-      "memberIds": ["node-10", "node-11"]
+      "name": "Next.js App",
+      "description": "Dashboard and Chat API share a single Next.js deployment",
+      "memberIds": [
+        "node-10",
+        "node-11"
+      ]
     },
     {
-      "id": "group-2",
+      "id": "d93a9d8b-8718-4c2b-aa34-5122c8db7961",
       "kind": "package",
-      "name": "Tenant Module",
-      "description": "All tenant lifecycle code — handlers, data access, and onboarding",
-      "memberIds": ["node-20", "node-22"]
+      "name": "Collections",
+      "memberIds": [
+        "node-20",
+        "node-21",
+        "node-22"
+      ]
     }
   ],
   "flows": [
     {
       "id": "scenario-1",
-      "name": "Tenant Onboarding",
-      "description": "New customer signs up and gets a fully provisioned tenant",
+      "name": "Chat with a deployed bot",
+      "description": "An end user sends a message through the widget and receives a streamed AI response",
       "steps": [
         {
           "id": "step-1",
-          "description": "@[End User] signs up via @[Auth0] and is redirected to @[Web App]"
+          "description": "@[End User] types a message in the @[Widget] on a customer's website"
         },
         {
           "id": "step-2",
-          "description": "@[Web App] sends a create tenant request to @[API Server]"
+          "description": "@[Widget] sends the message and session ID to the @[Chat API]"
         },
         {
           "id": "step-3",
-          "description": "@[Tenant Handler] triggers @[tenantOnboarding] to provision the new @[tenant]"
+          "description": "@[handleChatMessage] validates the bot ID and checks the owner's usage quota"
         },
         {
           "id": "step-4",
-          "description": "@[Data Access Layer] creates an isolated schema in @[Application Database]"
+          "description": "@[searchChunks] embeds the query and retrieves relevant @[KnowledgeChunk] records from the @[Database]"
         },
         {
           "id": "step-5",
-          "description": "@[Billing Service] creates a Stripe customer and attaches the selected plan in @[Stripe]"
+          "description": "@[Chat Handler] builds the prompt with the @[Bot] system prompt, retrieved context, and conversation history"
         },
         {
           "id": "step-6",
-          "description": "@[Event Publisher] enqueues a welcome email job in @[Job Queue]",
-          "branches": [
-            {
-              "condition": "if: provisioning succeeds",
-              "steps": [
-                {
-                  "id": "step-6a",
-                  "description": "@[Job Queue] sends welcome email via @[Postmark]"
-                },
-                {
-                  "id": "step-6b",
-                  "description": "@[End User] receives confirmation and can start using the platform"
-                }
-              ]
-            },
-            {
-              "condition": "if: provisioning fails",
-              "steps": [
-                {
-                  "id": "step-6c",
-                  "description": "@[tenantOnboarding] rolls back database schema and Stripe customer"
-                },
-                {
-                  "id": "step-6d",
-                  "description": "@[Event Publisher] enqueues an admin alert in @[Job Queue]"
-                }
-              ]
-            }
-          ]
+          "description": "@[Chat Handler] streams the response from @[OpenAI] back through the @[Widget]"
+        },
+        {
+          "id": "step-7",
+          "description": "@[Conversations] logs the @[Message] pair in the @[Database]"
         }
       ]
     },
     {
       "id": "scenario-2",
-      "name": "Payment Failure",
-      "description": "Stripe reports a failed payment and the tenant is suspended",
+      "name": "Upload knowledge base document",
+      "description": "A user uploads a document that gets chunked, embedded, and made available to their bot",
       "steps": [
         {
           "id": "step-1",
-          "description": "@[Stripe] sends a payment_failed webhook to @[API Server]"
+          "description": "@[User] uploads a document in the @[Dashboard] knowledge base section"
         },
         {
           "id": "step-2",
-          "description": "@[handleStripeWebhook] verifies the webhook signature and parses the event"
+          "description": "@[ingestDocument] splits the document into ~500-token chunks"
         },
         {
           "id": "step-3",
-          "description": "@[Billing Service] looks up the @[tenant] by stripeCustomerId",
-          "branches": [
-            {
-              "condition": "if: retry count exceeded",
-              "steps": [
-                {
-                  "id": "step-3a",
-                  "description": "@[Data Access Layer] sets @[tenant] status to suspended in @[Application Database]"
-                },
-                {
-                  "id": "step-3b",
-                  "description": "@[Event Publisher] enqueues a suspension notification email"
-                }
-              ]
-            },
-            {
-              "condition": "else:",
-              "steps": [
-                {
-                  "id": "step-3c",
-                  "description": "@[Event Publisher] enqueues a payment reminder email via @[Postmark]"
-                }
-              ]
-            }
-          ]
+          "description": "@[ingestDocument] sends each chunk to @[OpenAI] for embedding generation"
+        },
+        {
+          "id": "step-4",
+          "description": "@[Knowledge Base] stores the @[KnowledgeChunk] records with their vectors in the @[Database]"
+        },
+        {
+          "id": "step-5",
+          "description": "The bot can now answer questions using the uploaded content"
         }
       ]
     }
   ],
   "contract": {
     "expect": [
-      "All data access is scoped to the authenticated tenant via row-level security",
-      "Webhook handlers are idempotent — safe to process duplicate events"
-    ],
-    "ask": [
-      "What is the maximum number of concurrent tenants per database instance?"
+      "All data access is scoped to the authenticated user's bots",
+      "LLM responses are streamed \u2014 never buffer the full response before sending",
+      "Webhook handlers are idempotent \u2014 safe to process duplicate events"
     ],
     "never": [
-      "Allow cross-tenant data leakage through shared queries or caching",
-      "Store Stripe API keys in the application database"
+      "Expose a bot's system prompt or raw knowledge base content to end users",
+      "Call the LLM without checking the owner's usage quota first"
     ]
+  },
+  "refPositions": {
+    "node-3/node-1": {
+      "x": 260,
+      "y": -1100
+    },
+    "node-3/node-2": {
+      "x": -80,
+      "y": -1100
+    },
+    "node-3/node-4": {
+      "x": -80,
+      "y": -420
+    },
+    "node-3/node-5": {
+      "x": 600,
+      "y": -1100
+    },
+    "node-10/node-1": {
+      "x": -420,
+      "y": -420
+    },
+    "node-10/node-13": {
+      "x": 260,
+      "y": 260
+    },
+    "node-10/node-5": {
+      "x": 260,
+      "y": 940
+    },
+    "node-11/node-12": {
+      "x": -780,
+      "y": 260
+    },
+    "node-11/node-13": {
+      "x": -80,
+      "y": 260
+    },
+    "node-11/node-4": {
+      "x": -420,
+      "y": 600
+    }
   },
   "startingLevel": "system"
 }

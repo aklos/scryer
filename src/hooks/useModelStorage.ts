@@ -488,7 +488,7 @@ export function useModelStorage(
       applyModelData(data);
       setCurrentModel(null);
       setExpandedPath([]);
-      setRefPositions({});
+      setRefPositions(data.refPositions ?? {});
       setActiveFlowId(null);
       scheduleFitView();
     } catch {
