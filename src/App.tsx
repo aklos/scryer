@@ -518,9 +518,10 @@ function Flow() {
   const onConnect: OnConnect = useCallback(
     (connection) => {
       if (currentParentKind === "component") return;
+      if (refNodeIds.has(connection.source) && refNodeIds.has(connection.target)) return;
       setEdges((eds) => addEdge({ ...connection, data: { label: "" } }, eds) as C4Edge[]);
     },
-    [currentParentKind],
+    [currentParentKind, refNodeIds],
   );
 
   const updateEdgeData = useCallback(
@@ -1050,6 +1051,7 @@ function Flow() {
               structureChanged={structureChanged}
               syncStatus={syncStatus}
               syncMessage={syncMessage}
+              projectPath={projectPath}
               onSync={handleSync}
               onCancelSync={handleCancelSync}
               onDismissMessage={() => { setSyncMessage(null); if (syncStatus === "error") setSyncStatus("idle"); }}

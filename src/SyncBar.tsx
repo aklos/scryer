@@ -9,6 +9,7 @@ interface SyncBarProps {
   structureChanged: boolean;
   syncStatus: "idle" | "running" | "error";
   syncMessage: string | null;
+  projectPath: string | undefined;
   onSync: () => void;
   onCancelSync: () => void;
   onDismissMessage: () => void;
@@ -16,7 +17,7 @@ interface SyncBarProps {
   onNavigateToNode?: (nodeId: string) => void;
 }
 
-export function SyncBar({ activeAgent, driftedNodes, structureChanged, syncStatus, syncMessage, onSync, onCancelSync, onDismissMessage, onDismissDrift, onNavigateToNode }: SyncBarProps) {
+export function SyncBar({ activeAgent, driftedNodes, structureChanged, syncStatus, syncMessage, projectPath, onSync, onCancelSync, onDismissMessage, onDismissDrift, onNavigateToNode }: SyncBarProps) {
   const [expanded, setExpanded] = useState(false);
   const sortedDriftedNodes = useMemo(
     () => [...driftedNodes].sort((a, b) => a.nodeName.localeCompare(b.nodeName)),
@@ -34,25 +35,43 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, syncStatu
     return () => clearTimeout(timer);
   }, [isSuccess]);
 
-  // Don't render at all if no agent is available
-  if (!activeAgent?.available) return null;
+  // Don't render if no agent and no useful state to show
+  if (!activeAgent?.available && projectPath) return null;
+  if (!activeAgent?.available && !projectPath) {
+    return (
+      <div className="shrink-0 border-t border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 select-none">
+        <div className="flex items-center h-7 px-3 gap-3 text-[11px]">
+          <div className="flex items-center gap-1.5 text-zinc-400 dark:text-zinc-500">
+            <span>No codebase linked yet</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-  const agentName = activeAgent.name;
+  const agentName = activeAgent!.name;
 
   return (
     <div className="shrink-0 border-t border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 select-none">
       {/* Main bar row */}
       <div className="flex items-center h-7 px-3 gap-3 text-[11px]">
-        {/* Agent identity */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
-          <span className="text-zinc-500 dark:text-zinc-400 font-medium">{agentName}</span>
-        </div>
-
-        <div className="w-px h-3 bg-zinc-200 dark:bg-zinc-700" />
+        {/* Agent identity — only when linked to a codebase */}
+        {projectPath ? (
+          <>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
+              <span className="text-zinc-500 dark:text-zinc-400 font-medium">{agentName}</span>
+            </div>
+            <div className="w-px h-3 bg-zinc-200 dark:bg-zinc-700" />
+          </>
+        ) : null}
 
         {/* Sync status */}
-        {syncStatus === "running" ? (
+        {!projectPath ? (
+          <div className="flex items-center gap-1.5 text-zinc-400 dark:text-zinc-500">
+            <span>No codebase linked yet</span>
+          </div>
+        ) : syncStatus === "running" ? (
           <>
             <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
               <Loader2 className="h-3 w-3 animate-spin" />
