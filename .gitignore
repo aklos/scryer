@@ -35,6 +35,9 @@ Thumbs.db
 .env.*
 .direnv
 
+# Docs build artifacts
+docs/.astro
+
 # Saved models
 .scryer
 target

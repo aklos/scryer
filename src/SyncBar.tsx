@@ -149,7 +149,7 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, syncStatu
               onClick={onSync}
             >
               <RefreshCw className="h-3 w-3" />
-              Sync
+              Sync from codebase
             </button>
           </>
         ) : (
