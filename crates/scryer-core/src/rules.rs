@@ -23,18 +23,21 @@ A Person→System edge (system level) and a Person→Container edge (container l
 the system-level edge is correct at that zoom level, and the container-level edge adds detail. \
 Similarly, a Container→System deployment edge is not redundant with a System→System edge. \
 Do not flag cross-level edges as duplicates or suggest removing them.\n\
-9. Split for coherent inner graphs. The test for whether something should be one container or two: \
-would the component-level view make sense? If combining two concerns would produce an inner graph \
-with unrelated components mixed together, split them into separate containers. Each container should \
-tell one coherent story at component level. Example: a Next.js app with Payload CMS should be separate \
-containers (\"Website\" + \"CMS Admin\") because their components are entirely unrelated — page routes \
-vs admin panels vs content schemas. Use a deployment group if they ship together. The container diagram \
-captures logical separation; groups handle deployment topology.\n\
-10. Auto-generated framework layers are not containers. If something only exists as an implementation \
-detail of another container (e.g. Payload CMS REST API, Django admin ORM, Rails ActiveRecord) and \
-cannot be addressed independently, it's a component, not a container. But if it has its own distinct \
-set of concerns that would clutter the parent's component view, it may warrant its own container — \
-apply rule 9.\n\
+9. Containers are runtime boundaries. Start with process boundaries — each separately deployable \
+process is at least one container. Within a single runtime, split further when a single component \
+view would force the viewer to context-switch between unrelated concerns. The test: if you would \
+give two separate tours of the internals (\"here is how the CMS works\" / \"here is how the website \
+works\"), those are separate containers. Components in each container can still reference the other \
+via container-level edges — the split gives each a focused component view. Use a deployment group \
+when split containers share a runtime. Example: a Next.js app with Payload CMS should be two \
+containers (\"Website\" + \"CMS Admin\") grouped together, because their components serve different \
+audiences and you would explain them independently.\n\
+10. Framework internals are not containers. Auto-generated or framework-provided layers (e.g. \
+Django admin ORM, Rails ActiveRecord) that exist only as implementation details of another container \
+are components, not containers. A framework layer warrants its own container only when it has a \
+distinct user-facing surface that you would tour independently — Payload CMS has admin panels, \
+content schemas, and API routes that deserve their own component view, so it is a separate container \
+grouped with the app it is embedded in. If you would not explain it on its own, it is a component.\n\
 11. Components map to code structures. A component should correspond to a concrete code unit \
 in your codebase: a class in OOP languages (C#, C++, Java), a module or package in Go/Rust/Python, \
 or a folder/file boundary in JavaScript/TypeScript. Third-party libraries your code imports are not \
