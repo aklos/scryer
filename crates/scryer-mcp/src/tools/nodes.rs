@@ -577,7 +577,7 @@ impl ScryerServer {
         }
     }
 
-    #[tool(description = "Update properties of one or more existing nodes")]
+    #[tool(description = "Patch one or more existing nodes. This is a partial update — only include fields you want to change. Omitted fields are left unchanged. Do NOT use set_node or set_model just to change a few properties.\n\nCommon uses:\n- Change status: {\"node_id\": \"node-5\", \"status\": \"implemented\", \"reason\": \"Built handler and tests\"}\n- Update description: {\"node_id\": \"node-3\", \"description\": \"New description\"}\n- Set source map: {\"node_id\": \"node-5\", \"source\": [{\"pattern\": \"src/handler.ts\", \"line\": 10, \"endLine\": 30}]}\n- Multiple nodes at once: pass an array of patches to the nodes parameter")]
     fn update_nodes(
         &self,
         Parameters(req): Parameters<UpdateNodeRequest>,
