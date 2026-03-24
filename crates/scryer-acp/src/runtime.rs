@@ -34,6 +34,7 @@ enum RuntimeCommand {
         mcp_binary: String,
         drifted: Vec<DriftedNode>,
         structure_changed: bool,
+        model_json: String,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
         result_tx: oneshot::Sender<Result<String, String>>,
     },
@@ -77,6 +78,7 @@ impl AcpRuntime {
         mcp_binary: String,
         drifted: Vec<DriftedNode>,
         structure_changed: bool,
+        model_json: String,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
     ) -> Result<String, String> {
         let (result_tx, result_rx) = oneshot::channel();
@@ -89,6 +91,7 @@ impl AcpRuntime {
                 mcp_binary,
                 drifted,
                 structure_changed,
+                model_json,
                 event_tx,
                 result_tx,
             })
@@ -131,6 +134,7 @@ fn runtime_thread(
                     mcp_binary,
                     drifted,
                     structure_changed,
+                    model_json,
                     event_tx,
                     result_tx,
                 } => {
@@ -152,11 +156,11 @@ fn runtime_thread(
                     let result = match mode {
                         LaunchMode::Cli { kind } => start_cli_session(
                             &agent_binary, &kind, &cwd, &model_name, &mcp_binary,
-                            &drifted, structure_changed, event_tx, done_tx.clone(),
+                            &drifted, structure_changed, &model_json, event_tx, done_tx.clone(),
                         ),
                         LaunchMode::Acp => start_acp_session(
                             &agent_binary, &cwd, &model_name, &mcp_binary,
-                            &drifted, structure_changed, event_tx, done_tx.clone(),
+                            &drifted, structure_changed, &model_json, event_tx, done_tx.clone(),
                         ).await,
                     };
 
@@ -198,10 +202,11 @@ fn start_cli_session(
     mcp_binary: &str,
     drifted: &[DriftedNode],
     structure_changed: bool,
+    model_json: &str,
     event_tx: mpsc::UnboundedSender<AgentEvent>,
     done_tx: mpsc::UnboundedSender<RuntimeCommand>,
 ) -> Result<oneshot::Sender<()>, String> {
-    let prompt = sync_prompt(model_name, cwd, drifted, structure_changed);
+    let prompt = sync_prompt(model_name, cwd, drifted, structure_changed, model_json);
 
     let mut cmd = tokio::process::Command::new(agent_binary);
 
@@ -264,8 +269,30 @@ fn start_cli_session(
     let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
 
     tokio::task::spawn_local(async move {
+        // Stream stdout line-by-line to detect tool call events
+        let stdout = child.stdout.take();
+
+        let monitor = async {
+            if let Some(stdout) = stdout {
+                use tokio::io::{AsyncBufReadExt, BufReader};
+                let reader = BufReader::new(stdout);
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if let Some(tool) = extract_scryer_tool(&line) {
+                        let _ = event_tx.send(AgentEvent::ToolCall {
+                            id: String::new(),
+                            name: tool,
+                            status: "running".into(),
+                        });
+                    }
+                }
+            }
+            // stdout closed — process has exited or is about to
+            child.wait().await
+        };
+
         tokio::select! {
-            result = child.wait() => {
+            result = monitor => {
                 match result {
                     Ok(status) if status.success() => {
                         let _ = event_tx.send(AgentEvent::Completed {
@@ -301,6 +328,20 @@ fn start_cli_session(
     Ok(cancel_tx)
 }
 
+/// Extract a scryer MCP tool name from a JSON output line.
+/// Looks for `"mcp__scryer__<tool>"` anywhere in the line.
+fn extract_scryer_tool(line: &str) -> Option<String> {
+    let marker = "\"mcp__scryer__";
+    let idx = line.find(marker)?;
+    let after = &line[idx + marker.len()..];
+    let end = after.find('"').unwrap_or(after.len());
+    let tool = &after[..end];
+    if tool.is_empty() || tool.contains('*') {
+        return None;
+    }
+    Some(tool.to_string())
+}
+
 // ---------------------------------------------------------------------------
 // ACP mode: full protocol handshake
 // ---------------------------------------------------------------------------
@@ -312,6 +353,7 @@ async fn start_acp_session(
     mcp_binary: &str,
     drifted: &[DriftedNode],
     structure_changed: bool,
+    model_json: &str,
     event_tx: mpsc::UnboundedSender<AgentEvent>,
     done_tx: mpsc::UnboundedSender<RuntimeCommand>,
 ) -> Result<oneshot::Sender<()>, String> {
@@ -357,7 +399,7 @@ async fn start_acp_session(
         .map_err(|e| format!("ACP new_session failed: {e}"))?;
 
     let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-    let prompt_text = sync_prompt(model_name, cwd, drifted, structure_changed);
+    let prompt_text = sync_prompt(model_name, cwd, drifted, structure_changed, model_json);
     let sid = session.session_id.clone();
 
     tokio::task::spawn_local(async move {

@@ -32,6 +32,11 @@
   animation: pulse-glow 3s ease-in-out;
 }
 
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
 /* Edges render above nodes so shape decorations don't overlap arrows */
 .react-flow__edges {
   z-index: 1 !important;

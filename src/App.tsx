@@ -149,6 +149,7 @@ function Flow() {
   const [structureChanged, setStructureChanged] = useState(false);
   const [syncStatus, setSyncStatus] = useState<"idle" | "running" | "error">("idle");
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [syncActivity, setSyncActivity] = useState<string | null>(null);
   const [activeAgent, setActiveAgent] = useState<{ name: string; available: boolean } | null>(null);
   const [implementing, setImplementing] = useState(false);
   useEffect(() => {
@@ -235,6 +236,7 @@ function Flow() {
     if (!currentModel || !projectPath || syncStatus === "running") return;
     setSyncStatus("running");
     setSyncMessage(null);
+    setSyncActivity(null);
     setNodes((nds) => nds.map((n) => ({ ...n, selected: false })) as C4Node[]);
     try {
       await invoke<string>("start_agent_session", { cwd: projectPath, modelName: currentModel });
@@ -246,16 +248,19 @@ function Flow() {
   }, [currentModel, projectPath, syncStatus]);
 
 
-  // Listen for agent session completion/failure events
+  // Listen for agent session completion/failure/toolCall events
   useEffect(() => {
-    const unlisten = listen<{ kind: string; error?: string }>("agent-event", (event) => {
-      const { kind, error } = event.payload;
-      if (kind === "completed" || kind === "cancelled") {
+    const unlisten = listen<{ kind: string; error?: string; name?: string }>("agent-event", (event) => {
+      const { kind, error, name } = event.payload;
+      if (kind === "toolCall" && name) {
+        setSyncActivity(name);
+      } else if (kind === "completed" || kind === "cancelled") {
         // Mark this model as synced so drift baseline moves forward
         if (currentModel) {
           invoke("mark_synced", { modelName: currentModel }).catch(() => {});
         }
         setSyncStatus("idle");
+        setSyncActivity(null);
         setDriftedNodes([]);
         setStructureChanged(false);
         checkDrift(); // re-check against new baseline
@@ -267,6 +272,7 @@ function Flow() {
       } else if (kind === "failed") {
         setSyncMessage(error ?? "Unknown error");
         setSyncStatus("error");
+        setSyncActivity(null);
       }
     });
     return () => { unlisten.then((f) => f()); };
@@ -1062,6 +1068,7 @@ function Flow() {
               implementing={implementing}
               syncStatus={syncStatus}
               syncMessage={syncMessage}
+              syncActivity={syncActivity}
               projectPath={projectPath}
               onSync={handleSync}
               onCancelSync={handleCancelSync}

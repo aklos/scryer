@@ -589,6 +589,9 @@ async fn start_agent_session(
     let report = scryer_core::drift::check_drift(&model, baseline, std::path::Path::new(project_path));
     let drifted = report.nodes;
 
+    // Pre-serialize model for embedding in the sync prompt (saves a get_model round trip)
+    let model_json = scryer_acp::prompt::serialize_model_for_prompt(&model);
+
     // Resolve agent from the last MCP client that connected
     let client = scryer_acp::active_client()
         .ok_or("No agent has connected via MCP yet — open scryer in an AI tool first")?;
@@ -624,7 +627,7 @@ async fn start_agent_session(
     };
 
     runtime
-        .start_session(agent_binary, mode, cwd, model_name, mcp_binary, drifted, report.structure_changed, event_tx)
+        .start_session(agent_binary, mode, cwd, model_name, mcp_binary, drifted, report.structure_changed, model_json, event_tx)
         .await
 }
 
