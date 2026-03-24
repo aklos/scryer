@@ -60,10 +60,6 @@
   opacity: 1;
 }
 
-/* Only show handles when actively dragging a connection */
-.connecting .react-flow__handle {
-  opacity: 1;
-}
 
 /* edge midpoint dot: hidden by default, shown when hovering the edge */
 .edge-handle-dot {

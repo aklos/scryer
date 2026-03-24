@@ -301,13 +301,6 @@ export function C4Canvas({
     onSelectionChange(args);
   }, [onSelectionChange]);
 
-  const onConnectStart = useCallback(() => {
-    wrapperRef.current?.classList.add("connecting");
-  }, []);
-
-  const onConnectEnd = useCallback(() => {
-    wrapperRef.current?.classList.remove("connecting");
-  }, []);
 
   // Show overlay while layout is pending — hold for min 500ms, then fade out over 200ms
   const [overlayMounted, setOverlayMounted] = useState(!!layoutPending);
@@ -405,8 +398,6 @@ export function C4Canvas({
         onNodesChange={wrappedOnNodesChange}
         onEdgesChange={wrappedOnEdgesChange}
         onConnect={onConnect}
-        onConnectStart={onConnectStart}
-        onConnectEnd={onConnectEnd}
         connectionMode={ConnectionMode.Loose}
         defaultEdgeOptions={defaultEdgeOptions}
         edgesReconnectable={false}
