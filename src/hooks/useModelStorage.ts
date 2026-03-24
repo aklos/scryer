@@ -77,7 +77,7 @@ export function parseModelData(raw: string): C4ModelData {
     // Migrate references→sources
     const sources = nodeData.sources ?? nodeData.references;
     // Strip invalid/old status values (e.g. "implemented", "changed", "deprecated" from older models)
-    const VALID_STATUSES = new Set(["proposed", "wip", "ready"]);
+    const VALID_STATUSES = new Set(["proposed", "implemented", "verified", "vagrant"]);
     if (nodeData.status && !VALID_STATUSES.has(nodeData.status as string)) {
       nodeData.status = undefined;
     }

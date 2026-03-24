@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { RefreshCw, Loader2, Check, ChevronDown, ChevronUp, X, AlertCircle } from "lucide-react";
+import { RefreshCw, Loader2, Check, ChevronDown, ChevronUp, X, AlertCircle, Lock, Unlock } from "lucide-react";
 
 type DriftInfo = { nodeId: string; nodeName: string; patterns: string[] };
 
@@ -7,6 +7,7 @@ interface SyncBarProps {
   activeAgent: { name: string; available: boolean } | null;
   driftedNodes: DriftInfo[];
   structureChanged: boolean;
+  implementing: boolean;
   syncStatus: "idle" | "running" | "error";
   syncMessage: string | null;
   projectPath: string | undefined;
@@ -14,10 +15,11 @@ interface SyncBarProps {
   onCancelSync: () => void;
   onDismissMessage: () => void;
   onDismissDrift: () => void;
+  onToggleLock: () => void;
   onNavigateToNode?: (nodeId: string) => void;
 }
 
-export function SyncBar({ activeAgent, driftedNodes, structureChanged, syncStatus, syncMessage, projectPath, onSync, onCancelSync, onDismissMessage, onDismissDrift, onNavigateToNode }: SyncBarProps) {
+export function SyncBar({ activeAgent, driftedNodes, structureChanged, implementing, syncStatus, syncMessage, projectPath, onSync, onCancelSync, onDismissMessage, onDismissDrift, onToggleLock, onNavigateToNode }: SyncBarProps) {
   const [expanded, setExpanded] = useState(false);
   const sortedDriftedNodes = useMemo(
     () => [...driftedNodes].sort((a, b) => a.nodeName.localeCompare(b.nodeName)),
@@ -71,6 +73,23 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, syncStatu
           <div className="flex items-center gap-1.5 text-zinc-400 dark:text-zinc-500">
             <span>No codebase linked yet</span>
           </div>
+        ) : implementing ? (
+          <>
+            <div className="flex items-center gap-1.5 text-zinc-500 dark:text-zinc-400">
+              <Lock className="h-3 w-3" />
+              <span>Drift detection locked</span>
+            </div>
+            <div className="flex-1" />
+            <button
+              type="button"
+              className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-zinc-500 hover:text-zinc-700 hover:bg-zinc-200 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-zinc-700 cursor-pointer transition-colors shrink-0"
+              onClick={onToggleLock}
+              title="Unlock drift detection"
+            >
+              <Unlock className="h-3 w-3" />
+              Unlock
+            </button>
+          </>
         ) : syncStatus === "running" ? (
           <>
             <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
@@ -172,10 +191,21 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, syncStatu
             </button>
           </>
         ) : (
-          <div className="flex items-center gap-1.5 text-zinc-400 dark:text-zinc-500">
-            <Check className="h-3 w-3 text-emerald-500" />
-            <span>In sync</span>
-          </div>
+          <>
+            <div className="flex items-center gap-1.5 text-zinc-400 dark:text-zinc-500">
+              <Check className="h-3 w-3 text-emerald-500" />
+              <span>In sync</span>
+            </div>
+            <div className="flex-1" />
+            <button
+              type="button"
+              className="text-zinc-300 hover:text-zinc-500 dark:text-zinc-600 dark:hover:text-zinc-400 cursor-pointer transition-colors shrink-0"
+              onClick={onToggleLock}
+              title="Lock drift detection"
+            >
+              <Lock className="h-3 w-3" />
+            </button>
+          </>
         )}
       </div>
 

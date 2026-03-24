@@ -284,6 +284,23 @@ impl ScryerServer {
         }
     }
 
+    #[tool(
+        description = "Suppress or resume drift detection for a model. Call with active=true before starting implementation from a model to prevent the UI from showing drift notifications while you are writing code. Call with active=false when implementation is complete."
+    )]
+    fn set_implementing(
+        &self,
+        Parameters(req): Parameters<SetImplementingRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        scryer_core::set_implementing(&req.model, req.active)
+            .map_err(|e| McpError::internal_error(e, None))?;
+        let msg = if req.active {
+            format!("Drift detection suppressed for '{}'", req.model)
+        } else {
+            format!("Drift detection resumed for '{}'", req.model)
+        };
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
+    }
+
     #[tool(description = "Delete a group by ID. Members are ungrouped, not deleted.")]
     fn delete_group(
         &self,

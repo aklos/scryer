@@ -41,8 +41,9 @@ function sanitizeTypeName(raw: string): string {
 const STATUS_OPTIONS: { value: Status | undefined; label: string }[] = [
   { value: undefined, label: "None" },
   { value: "proposed", label: "Proposed" },
-  { value: "wip", label: "WIP" },
-  { value: "ready", label: "Ready" },
+  { value: "implemented", label: "Implemented" },
+  { value: "verified", label: "Verified" },
+  { value: "vagrant", label: "Vagrant" },
 ];
 
 function StatusBar({ value, onChange }: { value: Status | undefined; onChange: (s: Status | undefined) => void }) {

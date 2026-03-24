@@ -7,6 +7,18 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+/// Deserialize status leniently — unknown values become None instead of failing.
+fn deserialize_status_lenient<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Status>, D::Error> {
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    Ok(opt.and_then(|s| match s.as_str() {
+        "proposed" => Some(Status::Proposed),
+        "implemented" => Some(Status::Implemented),
+        "verified" => Some(Status::Verified),
+        "vagrant" => Some(Status::Vagrant),
+        _ => None,
+    }))
+}
+
 /// Deserialize notes from either a single string (old format) or array of strings (new format).
 fn deserialize_notes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
     #[derive(Deserialize)]
@@ -54,8 +66,9 @@ pub enum C4Shape {
 #[serde(rename_all = "camelCase")]
 pub enum Status {
     Proposed,
-    Wip,
-    Ready,
+    Implemented,
+    Verified,
+    Vagrant,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -169,7 +182,7 @@ pub struct C4NodeData {
     pub shape: Option<C4Shape>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<Reference>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_status_lenient")]
     pub status: Option<Status>,
     /// Reason the agent gave for the current status (e.g. "Scaffolded handler with TODO for auth")
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -353,6 +366,30 @@ pub fn models_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".scryer")
+}
+
+/// Path to the implementing lock file for a model.
+pub fn implementing_path(model_name: &str) -> PathBuf {
+    models_dir().join(format!(".implementing-{}", model_name))
+}
+
+/// Check if a model is currently being implemented by an agent.
+pub fn is_implementing(model_name: &str) -> bool {
+    implementing_path(model_name).exists()
+}
+
+/// Set or clear the implementing flag for a model.
+pub fn set_implementing(model_name: &str, active: bool) -> Result<(), String> {
+    let path = implementing_path(model_name);
+    if active {
+        fs::write(&path, "").map_err(|e| format!("Failed to set implementing flag: {}", e))
+    } else {
+        if path.exists() {
+            fs::remove_file(&path).map_err(|e| format!("Failed to clear implementing flag: {}", e))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// List all model names (without .scry extension), sorted.

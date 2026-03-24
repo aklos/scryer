@@ -48,7 +48,7 @@ export function useCanvasEvents({
               ...n.data,
               _originalParentId: origParent,
               _originalStatus: origStatus,
-              status: movedAway ? ("wip" as Status) : origStatus,
+              status: movedAway ? ("implemented" as Status) : origStatus,
             } as C4NodeData,
           };
         }),
@@ -71,7 +71,6 @@ export function useCanvasEvents({
           name: "newOperation",
           description: "",
           kind: "operation" as C4Kind,
-          status: "proposed",
         },
         parentId: componentId,
       };
@@ -108,7 +107,6 @@ export function useCanvasEvents({
           name: "New process",
           description: "",
           kind: "process" as C4Kind,
-          status: "proposed",
         },
         parentId: componentId,
       };
@@ -154,7 +152,6 @@ export function useCanvasEvents({
           name: "NewModel",
           description: "",
           kind: "model" as C4Kind,
-          status: "proposed",
           properties: [],
         },
         parentId: componentId,

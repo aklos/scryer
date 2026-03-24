@@ -12,7 +12,7 @@ use scryer_core::{C4Kind, C4Node, Contract, Status};
 #[tool_router(router = tool_router_task, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "Get the next implementation task. Returns one logical work unit at a time, ordered by dependencies. Workflow: call get_task → build the returned task → mark nodes as wip via update_nodes (with a reason) → call get_task again for the next task. Pass node_id to scope to a subtree."
+        description = "Get the next implementation task. Returns one logical work unit at a time, ordered by dependencies. Workflow: call get_task → build the returned task → mark nodes as implemented via update_nodes (with a reason) → call get_task again for the next task. Pass node_id to scope to a subtree."
     )]
     fn get_task(
         &self,
@@ -114,7 +114,7 @@ impl ScryerServer {
             })
         };
 
-        // Helper: check if all status-bearing children are done (wip or ready)
+        // Helper: check if all status-bearing children are done (implemented, verified, or vagrant)
         let children_all_done = |node: &C4Node| -> bool {
             let child_kind = match node.data.kind {
                 C4Kind::Container => C4Kind::Component,
@@ -127,12 +127,12 @@ impl ScryerServer {
                         && n.data.kind == child_kind
                         && n.data.status.is_some()
                 })
-                .all(|n| matches!(n.data.status, Some(Status::Wip) | Some(Status::Ready)))
+                .all(|n| matches!(n.data.status, Some(Status::Implemented) | Some(Status::Verified) | Some(Status::Vagrant)))
         };
 
         // Classify nodes: satisfied vs needs-work
         // For containers with component children (or systems with container children),
-        // satisfaction requires ALL children to be done (wip/ready) — not just the container itself.
+        // satisfaction requires ALL children to be done — not just the container itself.
         let is_satisfied = |node: &C4Node| -> bool {
             if node.data.external == Some(true) {
                 return true;
@@ -140,7 +140,7 @@ impl ScryerServer {
             if has_status_children(node) {
                 return children_all_done(node);
             }
-            matches!(node.data.status, Some(Status::Wip) | Some(Status::Ready) | None)
+            matches!(node.data.status, Some(Status::Implemented) | Some(Status::Verified) | Some(Status::Vagrant) | None)
         };
 
         // Collect task-eligible nodes: containers and components (excluding None-status)
@@ -153,8 +153,8 @@ impl ScryerServer {
                 if !eligible {
                     return false;
                 }
-                // Skip None-status nodes (context/framework defaults)
-                if n.data.status.is_none() {
+                // Skip None-status and vagrant nodes (not actionable tasks)
+                if n.data.status.is_none() || matches!(n.data.status, Some(Status::Vagrant)) {
                     return false;
                 }
                 // Skip external systems' children
@@ -193,13 +193,13 @@ impl ScryerServer {
         if work_nodes.is_empty() {
             let completed = task_nodes.iter().filter(|n| is_satisfied(n)).count();
 
-            // Check for containers/systems that should be marked wip
+            // Check for containers/systems that should be marked implemented
             let mut propagate_nodes: Vec<(&str, &str)> = Vec::new(); // (id, name)
             for node in &model.nodes {
                 if !matches!(node.data.kind, C4Kind::Container | C4Kind::System) {
                     continue;
                 }
-                if matches!(node.data.status, Some(Status::Wip) | Some(Status::Ready)) {
+                if matches!(node.data.status, Some(Status::Implemented) | Some(Status::Verified)) {
                     continue;
                 }
                 if !has_status_children(node) {
@@ -217,11 +217,11 @@ impl ScryerServer {
             }
 
             let mut output = format!(
-                "All {} tasks complete.\n\nMark these parent nodes as wip:\n```\nupdate_nodes(model: \"{}\", nodes: [{}])\n```",
+                "All {} tasks complete.\n\nMark these parent nodes as implemented:\n```\nupdate_nodes(model: \"{}\", nodes: [{}])\n```",
                 completed,
                 req.name,
                 propagate_nodes.iter()
-                    .map(|(id, _)| format!("{{node_id: \"{}\", status: \"wip\", reason: \"Needs review\", source: [{{pattern: \"src/module/**/*.ts\"}}]}}", id))
+                    .map(|(id, _)| format!("{{node_id: \"{}\", status: \"implemented\", reason: \"Needs review\", source: [{{pattern: \"src/module/**/*.ts\"}}]}}", id))
                     .collect::<Vec<_>>()
                     .join(", ")
             );
@@ -235,7 +235,7 @@ impl ScryerServer {
                 if node.data.kind != C4Kind::Component {
                     continue;
                 }
-                if !matches!(node.data.status, Some(Status::Wip) | Some(Status::Ready)) {
+                if !matches!(node.data.status, Some(Status::Implemented) | Some(Status::Verified)) {
                     continue;
                 }
                 for member in model.nodes.iter().filter(|n| {
@@ -249,7 +249,7 @@ impl ScryerServer {
                 }
             }
             if !pending_members.is_empty() {
-                output.push_str("\n\nThese member nodes are still proposed — mark as `wip` with a reason explaining what was built:\n");
+                output.push_str("\n\nThese member nodes are still proposed — mark as `implemented` with a reason explaining what was built:\n");
                 for (member, parent_name) in &pending_members {
                     output.push_str(&format!(
                         "  - {} [{}] ({}, {}) in {}\n",
@@ -406,12 +406,12 @@ impl ScryerServer {
 
                 output.push_str(&format!("\n---\n\n{}\n\n", TASK_INSTRUCTIONS));
 
-                // Node IDs to mark wip
+                // Node IDs to mark implemented
                 let ids: Vec<&str> = member_containers.iter().map(|n| n.id.as_str()).collect();
                 output.push_str(&format!(
-                    "After scaffolding, mark these as wip with a reason explaining what was scaffolded:\n```\nupdate_nodes(model: \"{}\", nodes: [{}])\n```\n",
+                    "After scaffolding, mark these as implemented with a reason explaining what was scaffolded:\n```\nupdate_nodes(model: \"{}\", nodes: [{}])\n```\n",
                     req.name,
-                    ids.iter().map(|id| format!("{{node_id: \"{}\", status: \"wip\", reason: \"Needs implementation\"}}", id)).collect::<Vec<_>>().join(", ")
+                    ids.iter().map(|id| format!("{{node_id: \"{}\", status: \"implemented\", reason: \"Needs implementation\"}}", id)).collect::<Vec<_>>().join(", ")
                 ));
 
                 // Next up
@@ -460,7 +460,7 @@ impl ScryerServer {
                 let children_need_work = model.nodes.iter().any(|n| {
                     n.parent_id.as_deref() == Some(&node.id)
                         && n.data.status.is_some()
-                        && !matches!(n.data.status, Some(Status::Wip) | Some(Status::Ready))
+                        && !matches!(n.data.status, Some(Status::Implemented) | Some(Status::Verified) | Some(Status::Vagrant))
                 });
                 if self_needs_work || children_need_work {
                     choosable_containers.push(node);
@@ -811,12 +811,12 @@ impl ScryerServer {
 
         output.push_str(&format!("---\n\n{}\n\n", TASK_INSTRUCTIONS));
 
-        // Mark-as-wip hint
+        // Mark-as-implemented hint
         let ids: Vec<&str> = work_unit.iter().map(|n| n.id.as_str()).collect();
         output.push_str(&format!(
-            "After building, mark as wip with a reason and set source locations:\n```\nupdate_nodes(model: \"{}\", nodes: [{}])\n```\n",
+            "After building, mark as implemented with a reason and set source locations:\n```\nupdate_nodes(model: \"{}\", nodes: [{}])\n```\n",
             req.name,
-            ids.iter().map(|id| format!("{{node_id: \"{}\", status: \"wip\", reason: \"Needs error handling\", source: [{{pattern: \"src/module/file.ts\", line: 1, endLine: 50}}]}}", id)).collect::<Vec<_>>().join(", ")
+            ids.iter().map(|id| format!("{{node_id: \"{}\", status: \"implemented\", reason: \"Needs error handling\", source: [{{pattern: \"src/module/file.ts\", line: 1, endLine: 50}}]}}", id)).collect::<Vec<_>>().join(", ")
         ));
 
         // Member status confirmation: collect operations/processes/models still proposed
@@ -833,7 +833,7 @@ impl ScryerServer {
             }
         }
         if !pending_members.is_empty() {
-            output.push_str("\nAlso mark these member nodes as `wip` with a reason explaining what was built:\n");
+            output.push_str("\nAlso mark these member nodes as `implemented` with a reason explaining what was built:\n");
             for (member, parent_name) in &pending_members {
                 output.push_str(&format!(
                     "  - {} [{}] ({}, {}) in {}\n",

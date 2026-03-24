@@ -4,7 +4,7 @@ export type C4Kind = "person" | "system" | "container" | "component" | "operatio
 
 export type C4Shape = "rectangle" | "person" | "cylinder" | "pipe" | "trapezoid" | "bucket" | "hexagon";
 
-export type Status = "proposed" | "wip" | "ready";
+export type Status = "proposed" | "implemented" | "verified" | "vagrant";
 
 export interface ContractImage {
   filename: string;

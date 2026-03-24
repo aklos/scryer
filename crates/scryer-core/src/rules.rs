@@ -44,7 +44,12 @@ in your codebase, it is probably a container or a vague grouping that should be 
 12. Message queues and topics are explicit. A queue, topic, or event bus (e.g. RabbitMQ, Kafka, \
 SQS) should be its own container node — not hidden inside an edge label. If service A publishes \
 to a queue and service B consumes from it, model as A → Queue → B, not A → B with a \"via queue\" \
-label. The queue is infrastructure that can fail, scale, and be monitored independently.\n\
+label. The queue is infrastructure that can fail, scale, and be monitored independently. \
+**Avoid fan traps**: when multiple producers and consumers connect through a single broker node, \
+the specific communication paths are lost — it looks like every producer talks to every consumer. \
+Resolve this by decomposing the broker into its topics or queues as components (broker = container, \
+each topic = component), then route edges through the specific topics. At the system level a fan \
+through the broker is fine — that is the right abstraction. The detail lives one level down.\n\
 13. Node names describe roles, not technology stacks. A node name should say what it IS \
 (\"Website\", \"CMS\", \"API Gateway\"), not list its technologies with \"+\" or \"&\". \
 Technology details belong in the technology field. If a container uses multiple frameworks \
@@ -102,7 +107,7 @@ creating everything at once makes it easy to miss gaps that leave nodes disconne
    Do NOT add components unless the user explicitly asks for deeper detail.\n\
    **Model for production, not for demos.** Look for cross-cutting concerns: authentication, input validation, \
 data migrations, background jobs, observability. Model them explicitly — do not leave them implied.\n\
-   **Set status on every node.** When modeling an existing codebase, set `status: \"ready\"` on all nodes \
+   **Set status on every node.** When modeling an existing codebase, set `status: \"verified\"` on all nodes \
 that already exist and work in production. Set `status: \"proposed\"` on new nodes being added as part of a feature or change. \
 Nodes without status appear grey and unactionable in the UI — always be explicit.\n\
    **When you do add components** to a container (because the user asked for component-level detail or you're \
@@ -153,18 +158,18 @@ the diagram before implementing. Don't automatically call `get_task` and start w
 scryer is visual verification before implementation. If the user asks you to implement, build, or code in the \
 same request, go ahead.\n\
 8. **Implementation loop.** Use `get_task` to get the next implementation task. Build it, mark nodes as \
-wip via `update_nodes` (with a reason), then call `get_task` again. **Repeat this loop until `get_task` returns \
+implemented via `update_nodes` (with a reason), then call `get_task` again. **Repeat this loop until `get_task` returns \
 \"All tasks complete.\"** Do not read the full model and plan your own work order — `get_task` handles dependency \
-ordering, contract inheritance, and progress tracking. Parent containers and systems are marked wip via \
+ordering, contract inheritance, and progress tracking. Parent containers and systems are marked implemented via \
 completion hints from `get_task` once all their children are done.\n\
-9. **Verification (wip → ready).** \"Ready\" is a separate step from implementation — do not set it during the \
-implementation loop. A node is ready when:\n\
+9. **Verification (implemented → verified).** \"Verified\" is a separate step from implementation — do not set it during the \
+implementation loop. A node is verified when:\n\
    - The implementation is complete — no stubs, no TODOs, no placeholder logic.\n\
    - The code does what the node's description says it does.\n\
    - If tests exist for this code, they pass.\n\
    - All inherited `expect` contract items are satisfied (mark each as `passed: true`).\n\
 The user decides when to verify. When asked, check each point above. If anything fails, leave the node as \
-`wip` and explain what's missing.\n\
+`implemented` and explain what's missing.\n\
 \n\
 ## Authority Hierarchy\n\
 The model is a specification, not just documentation. Higher-level nodes have authority over lower-level ones.\n\

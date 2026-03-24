@@ -20,18 +20,19 @@ Operation and process names must be valid identifiers: start with a lowercase le
 - **notes**: Implementation context, conventions, deployment details, rationale — anything useful during development but not part of the architectural identity. Notes are inherited by descendants via `get_task` and shown as context during implementation. Put things like "hosted on Fly.io", "uses replica set for change streams", "prod and dev environments" here.
 
 ## Source Map
-The model has an optional `sourceMap` field: a mapping from node or flow ID to an array of source locations (`{pattern, line?, endLine?, command?}`). You can set source maps inline via the `source` field on `update_nodes`, or use `update_source_map` for bulk updates. Always set source locations when marking nodes as wip — containers/components get glob patterns, operations get specific file patterns + line ranges. This is separate from `sources` (glob patterns on higher-level nodes). Flow IDs are also valid keys — use them to link a flow to its test file with a `command` to run the test.
+The model has an optional `sourceMap` field: a mapping from node or flow ID to an array of source locations (`{pattern, line?, endLine?, command?}`). You can set source maps inline via the `source` field on `update_nodes`, or use `update_source_map` for bulk updates. Always set source locations when marking nodes as implemented — containers/components get glob patterns, operations get specific file patterns + line ranges. This is separate from `sources` (glob patterns on higher-level nodes). Flow IDs are also valid keys — use them to link a flow to its test file with a `command` to run the test.
 
 ## Status
 Set status on nodes that represent work. Omit status for framework defaults that require no implementation effort. Nodes without status are context — visible but not actionable by `get_task`. Edges do not have status — edge color is inferred from endpoint nodes in the UI.
 
 - **"proposed"** (blue): Planned — doesn't exist yet.
-- **"wip"** (amber): Work in progress — code exists but may be incomplete (stubs, partial implementation, scaffolding).
-- **"ready"** (green): Production-ready. **Gated**: can only be set when ALL inherited `expect` contract items have `passed: true`.
+- **"implemented"** (amber): Code exists but may be incomplete (stubs, partial implementation, scaffolding).
+- **"verified"** (green): Production-ready. **Gated**: can only be set when ALL inherited `expect` contract items have `passed: true`.
+- **"vagrant"** (violet): Discovered during codebase sync — exists in code but was not part of the architecture plan. Needs review: keep it or remove it.
 
-A `reason` is required on every status change via `update_nodes`. State what's still missing or what was just completed. For wip: "Needs auth middleware and rate limiting". For ready: "All contract items pass".
+A `reason` is required on every status change via `update_nodes`. State what's still missing or what was just completed. For implemented: "Needs auth middleware and rate limiting". For verified: "All contract items pass".
 
-**Container/system status propagates upward**: when all component children of a container are wip/ready, `get_task` will prompt you to mark the container as wip. Same for systems when all containers are done.
+**Container/system status propagates upward**: when all component children of a container are implemented/verified, `get_task` will prompt you to mark the container as implemented. Same for systems when all containers are done.
 
 ## IDs
 Node IDs: "node-N" (auto-generated). Edge IDs: "edge-{source}-{target}". Use `get_model` to discover existing IDs.
@@ -43,17 +44,17 @@ Call `get_rules` before creating or editing a model — it contains the full mod
 When building code from a model, use `get_task` in a loop. Each call returns one work unit with dependency ordering, contract inheritance, and progress tracking built in.
 1. Call `get_task` to get one work unit.
 2. Build what the task describes. A scaffold task may cover multiple nodes at once — that's fine.
-3. Mark the node(s) as `wip` via `update_nodes` with a `reason` explaining what was built. Only mark nodes listed in the task.
+3. Mark the node(s) as `implemented` via `update_nodes` with a `reason` explaining what was built. Only mark nodes listed in the task.
 4. **Call `get_task` again immediately.** Do not stop after one task — there are always more until it returns "All tasks complete."
 The task system tracks what's done and what's next. Do not read the full model via `get_model` to derive your own implementation order.
 
-### Verification (wip → ready)
-"Ready" is separate from implementation — do not set it during the implementation loop. A node is ready when:
+### Verification (implemented → verified)
+"Verified" is separate from implementation — do not set it during the implementation loop. A node is verified when:
 - The implementation is complete — no stubs, TODOs, or placeholder logic.
 - The code does what the node's description says.
 - If tests exist for this code, they pass.
 - All inherited `expect` contract items are satisfied (mark each as `passed: true`).
-The user decides when to verify. When asked, check each point. If anything fails, leave the node as `wip` and explain what's missing.
+The user decides when to verify. When asked, check each point. If anything fails, leave the node as `implemented` and explain what's missing.
 
 ## Subagents
 Do NOT delegate scryer write operations (`set_model`, `set_node`, `add_nodes`, `update_nodes`, `delete_nodes`, `add_edges`, `update_edges`, `delete_edges`, `set_flows`, `delete_flow`, `update_source_map`) to subagents. Subagents may use read tools (`list_models`, `get_model`, `get_node`, `get_rules`, `get_changes`, `get_task`) for research, but all model mutations must happen in the main conversation context."#;
@@ -64,21 +65,21 @@ Trust your training knowledge for well-known frameworks and tools. \
 Do not research standard framework setup — you already know how.
 
 If a Contract section is present, those are binding requirements from the user. \
-MUST items are non-negotiable — each has a passed/failed flag that gates the `ready` status. \
+MUST items are non-negotiable — each has a passed/failed flag that gates the `verified` status. \
 ASK USER FIRST items require confirmation before deciding. \
 NEVER items are hard constraints. If a contract item includes a URL, read it for context.
 
 ## Status meanings
 - **proposed**: Planned, no code yet. \
-- **wip** (work in progress): Code exists but may be incomplete — stubs, partial impl, scaffolding. \
-- **ready**: Production-ready. Can ONLY be set when all `expect` contract items (including inherited ones) have `passed: true`. \
-A `reason` is required on every status change — state what's still missing or what was just completed. For wip: \"Needs auth middleware and rate limiting\". For ready: \"All contract items pass\".
+- **implemented**: Code exists but may be incomplete — stubs, partial impl, scaffolding. \
+- **verified**: Production-ready. Can ONLY be set when all `expect` contract items (including inherited ones) have `passed: true`. \
+A `reason` is required on every status change — state what's still missing or what was just completed. For implemented: \"Needs auth middleware and rate limiting\". For verified: \"All contract items pass\".
 
 If something is unclear or the spec doesn't cover a decision you need to make, \
 ask the user — don't spiral into web searches.
 
 ## After building
-1. Mark ONLY the node(s) listed above as `wip` using update_nodes. Include a `reason` explaining what was built. \
+1. Mark ONLY the node(s) listed above as `implemented` using update_nodes. Include a `reason` explaining what was built. \
 Include `source` on every node — a glob pattern (and line/endLine for operations). \
 Containers and components: `[{\"pattern\": \"src/auth/**/*.ts\"}]`. \
 Operations: `[{\"pattern\": \"src/auth/handler.ts\", \"line\": 15, \"endLine\": 42}]`.

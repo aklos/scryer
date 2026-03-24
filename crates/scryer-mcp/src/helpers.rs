@@ -146,8 +146,9 @@ pub(crate) fn parse_kind(s: &str) -> Result<C4Kind, McpError> {
 pub(crate) fn parse_status(s: &str) -> Option<Status> {
     match s {
         "proposed" => Some(Status::Proposed),
-        "wip" => Some(Status::Wip),
-        "ready" => Some(Status::Ready),
+        "implemented" => Some(Status::Implemented),
+        "verified" => Some(Status::Verified),
+        "vagrant" => Some(Status::Vagrant),
         _ => None,
     }
 }
@@ -180,8 +181,9 @@ pub(crate) fn kind_str(k: &C4Kind) -> &'static str {
 pub(crate) fn status_str(s: &Option<Status>) -> &'static str {
     match s {
         Some(Status::Proposed) => "proposed",
-        Some(Status::Wip) => "wip",
-        Some(Status::Ready) => "ready",
+        Some(Status::Implemented) => "implemented",
+        Some(Status::Verified) => "verified",
+        Some(Status::Vagrant) => "vagrant",
         None => "none",
     }
 }
@@ -274,7 +276,7 @@ pub(crate) fn format_done_message(model: &C4ModelData) -> String {
         }
     }
     if !pending_members.is_empty() {
-        output.push_str("\n\nThese member nodes are still proposed — mark as `wip` with a reason explaining what was built:\n");
+        output.push_str("\n\nThese member nodes are still proposed — mark as `implemented` with a reason explaining what was built:\n");
         for (member, parent_name) in &pending_members {
             output.push_str(&format!(
                 "  - {} [{}] ({}, {}) in {}\n",

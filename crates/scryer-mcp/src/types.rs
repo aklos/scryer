@@ -44,7 +44,7 @@ pub(crate) struct AddNodeItem {
     pub shape: Option<String>,
     /// Source file locations as JSON array of {"pattern": "glob", "comment": "description"} objects. Pattern is a file glob (e.g. "src/auth/**/*.rs"), comment describes what those files do.
     pub sources: Option<Vec<scryer_core::Reference>>,
-    /// Status: "proposed", "wip", or "ready"
+    /// Status: "proposed", "implemented", "verified", or "vagrant"
     pub status: Option<String>,
     /// Implementation contract: expect/ask/never rules
     pub contract: Option<Contract>,
@@ -78,9 +78,9 @@ pub(crate) struct UpdateNodeItem {
     pub shape: Option<String>,
     /// New source file locations as JSON array of {"pattern": "glob", "comment": "description"} objects
     pub sources: Option<Vec<scryer_core::Reference>>,
-    /// New status: "proposed", "wip", or "ready". "ready" requires all inherited expect contract items to have passed: true.
+    /// New status: "proposed", "implemented", "verified", or "vagrant". "verified" requires all inherited expect contract items to have passed: true.
     pub status: Option<String>,
-    /// Required when changing status. State what's still missing or what was just completed — e.g. "Needs auth middleware and rate limiting", "Missing error handling". For ready: "All contract items pass". Keep it short and factual.
+    /// Required when changing status. State what's still missing or what was just completed — e.g. "Needs auth middleware and rate limiting", "Missing error handling". For verified: "All contract items pass". Keep it short and factual.
     pub reason: Option<String>,
     /// Updated implementation contract
     pub contract: Option<Contract>,
@@ -235,4 +235,12 @@ pub(crate) struct DeleteGroupRequest {
 pub(crate) struct GetStructureRequest {
     /// Absolute path to the project directory to scan
     pub path: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SetImplementingRequest {
+    /// Name of the model
+    pub model: String,
+    /// true to suppress drift detection, false to resume it
+    pub active: bool,
 }

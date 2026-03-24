@@ -6,7 +6,7 @@ export interface MentionItem {
   /** If set, this value is inserted into text instead of name. Used for step IDs. */
   insertValue?: string;
   kind: "person" | "system" | "container" | "component" | "operation" | "process" | "model" | "step";
-  status?: "proposed" | "wip" | "ready";
+  status?: "proposed" | "implemented" | "verified" | "vagrant";
   ref?: boolean;
 }
 

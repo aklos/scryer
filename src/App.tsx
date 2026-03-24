@@ -150,6 +150,7 @@ function Flow() {
   const [syncStatus, setSyncStatus] = useState<"idle" | "running" | "error">("idle");
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [activeAgent, setActiveAgent] = useState<{ name: string; available: boolean } | null>(null);
+  const [implementing, setImplementing] = useState(false);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
@@ -208,10 +209,11 @@ function Flow() {
   // Check for drifted nodes on window focus
   const checkDrift = useCallback(() => {
     if (!currentModel) return;
-    invoke<{ nodes: DriftInfo[]; structureChanged: boolean }>("check_drift", { modelName: currentModel })
+    invoke<{ nodes: DriftInfo[]; structureChanged: boolean; implementing: boolean }>("check_drift", { modelName: currentModel })
       .then((report) => {
         setDriftedNodes(report.nodes);
         setStructureChanged(report.structureChanged);
+        setImplementing(report.implementing);
       })
       .catch(() => { setDriftedNodes([]); setStructureChanged(false); });
     invoke<{ name: string; available: boolean }>("get_active_agent")
@@ -269,6 +271,15 @@ function Flow() {
     });
     return () => { unlisten.then((f) => f()); };
   }, [checkDrift, currentModel, nodes]);
+
+  const handleToggleLock = useCallback(async () => {
+    if (!currentModel) return;
+    try {
+      const locked = await invoke<boolean>("toggle_drift_lock", { modelName: currentModel });
+      setImplementing(locked);
+      if (!locked) checkDrift();
+    } catch { /* ignore */ }
+  }, [currentModel, checkDrift]);
 
   const handleCancelSync = useCallback(async () => {
     if (!currentModel) return;
@@ -631,7 +642,6 @@ function Flow() {
         name: defaultName,
         description: "",
         kind,
-        status: kind === "person" ? undefined : "proposed",
         ...(kind === "model" ? { properties: [] } : {}),
       },
       ...(currentParentId ? { parentId: currentParentId } : {}),
@@ -1049,6 +1059,7 @@ function Flow() {
               activeAgent={activeAgent}
               driftedNodes={driftedNodes}
               structureChanged={structureChanged}
+              implementing={implementing}
               syncStatus={syncStatus}
               syncMessage={syncMessage}
               projectPath={projectPath}
@@ -1056,6 +1067,7 @@ function Flow() {
               onCancelSync={handleCancelSync}
               onDismissMessage={() => { setSyncMessage(null); if (syncStatus === "error") setSyncStatus("idle"); }}
               onDismissDrift={() => { if (currentModel) { invoke("mark_synced", { modelName: currentModel }).then(() => { setDriftedNodes([]); setStructureChanged(false); }).catch(() => {}); } }}
+              onToggleLock={handleToggleLock}
               onNavigateToNode={navigateToNode}
             />
           )}

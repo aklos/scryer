@@ -604,16 +604,16 @@ impl ScryerServer {
                 }
             };
 
-            // Pre-validate ready gate before taking mutable borrow
+            // Pre-validate verified gate before taking mutable borrow
             if let Some(ref s) = item.status {
                 let new_status = parse_status(s);
-                if new_status == Some(Status::Ready) && model.nodes[node_idx].data.kind != C4Kind::Person {
+                if new_status == Some(Status::Verified) && model.nodes[node_idx].data.kind != C4Kind::Person {
                     let parent_id = model.nodes[node_idx].parent_id.clone();
                     let own_contract = item.contract.as_ref().unwrap_or(&model.nodes[node_idx].data.contract).clone();
-                    let unmet = check_ready_gate(&model.nodes, &model.groups, &item.node_id, &parent_id, &own_contract);
+                    let unmet = check_verified_gate(&model.nodes, &model.groups, &item.node_id, &parent_id, &own_contract);
                     if !unmet.is_empty() {
                         return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "Cannot set '{}' to ready. These expect contract items are not yet passed:\n{}\n\nMark each as passed (passed: true) or set status to 'wip' instead.",
+                            "Cannot set '{}' to verified. These expect contract items are not yet passed:\n{}\n\nMark each as passed (passed: true) or set status to 'implemented' instead.",
                             item.node_id, unmet.join("\n")
                         ))]));
                     }
@@ -684,7 +684,7 @@ impl ScryerServer {
                             item.node_id, s
                         ))]));
                     }
-                    // Ready gate already validated above (before mutable borrow)
+                    // Verified gate already validated above (before mutable borrow)
                     node.data.status = new_status;
                     node.data.status_reason = Some(reason.to_string());
                 }

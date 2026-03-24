@@ -514,6 +514,9 @@ fn write_sync_marker(path: &std::path::Path, time: std::time::SystemTime) -> Res
 
 #[tauri::command]
 fn check_drift(model_name: String) -> Result<serde_json::Value, String> {
+    // If an agent is actively implementing, suppress drift detection
+    let implementing = scryer_core::is_implementing(&model_name);
+
     let model = scryer_core::read_model(&model_name)?;
     let project_path = model.project_path.as_deref()
         .ok_or("Model has no project path set")?;
@@ -523,14 +526,17 @@ fn check_drift(model_name: String) -> Result<serde_json::Value, String> {
     let report = scryer_core::drift::check_drift(&model, baseline, std::path::Path::new(project_path));
 
     Ok(serde_json::json!({
-        "nodes": report.nodes.iter().map(|d| {
-            serde_json::json!({
-                "nodeId": d.node_id,
-                "nodeName": d.node_name,
-                "patterns": d.patterns,
-            })
-        }).collect::<Vec<_>>(),
-        "structureChanged": report.structure_changed,
+        "nodes": if implementing { vec![] } else {
+            report.nodes.iter().map(|d| {
+                serde_json::json!({
+                    "nodeId": d.node_id,
+                    "nodeName": d.node_name,
+                    "patterns": d.patterns,
+                })
+            }).collect::<Vec<_>>()
+        },
+        "structureChanged": if implementing { false } else { report.structure_changed },
+        "implementing": implementing,
     }))
 }
 
@@ -539,6 +545,13 @@ fn check_drift(model_name: String) -> Result<serde_json::Value, String> {
 fn mark_synced(model_name: String) -> Result<(), String> {
     let path = sync_marker_path(&model_name);
     write_sync_marker(&path, std::time::SystemTime::now())
+}
+
+#[tauri::command]
+fn toggle_drift_lock(model_name: String) -> Result<bool, String> {
+    let active = scryer_core::is_implementing(&model_name);
+    scryer_core::set_implementing(&model_name, !active)?;
+    Ok(!active)
 }
 
 #[tauri::command]
@@ -794,6 +807,7 @@ pub fn run() {
             setup_mcp_integration,
             check_drift,
             mark_synced,
+            toggle_drift_lock,
             get_active_agent,
             start_agent_session,
             cancel_agent_session,

@@ -382,8 +382,8 @@ pub(crate) fn check_cross_container_edges(model: &C4ModelData) -> Vec<String> {
     warnings
 }
 
-/// Check if a node can be set to "ready" by verifying all inherited expect contract items are passed.
-pub(crate) fn check_ready_gate(
+/// Check if a node can be set to "verified" by verifying all inherited expect contract items are passed.
+pub(crate) fn check_verified_gate(
     nodes: &[C4Node],
     groups: &[scryer_core::Group],
     node_id: &str,

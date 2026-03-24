@@ -52,8 +52,9 @@ pub fn serialize_diagram(model: &C4ModelData) -> String {
             out.push_str(" status=");
             out.push_str(match status {
                 Status::Proposed => "proposed",
-                Status::Wip => "wip",
-                Status::Ready => "ready",
+                Status::Implemented => "implemented",
+                Status::Verified => "verified",
+                Status::Vagrant => "vagrant",
             });
         }
         if !d.description.is_empty() {
