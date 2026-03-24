@@ -1,31 +1,37 @@
 ---
 title: Status Tracking
-description: Track implementation progress with three statuses — proposed, wip, and ready.
+description: Track implementation progress with four statuses — proposed, implemented, verified, and vagrant.
 ---
 
 import { NodeDemo, NodeGallery } from "../../../components/NodeDemo";
 
 Every node in your model can have a status that tracks where it is in the implementation lifecycle.
 
-## The three statuses
+## The four statuses
 
-<span class="status-pill status-proposed">Proposed</span> <span class="status-pill status-wip">WIP</span> <span class="status-pill status-ready">Ready</span>
+<span class="status-pill status-proposed">Proposed</span> <span class="status-pill status-implemented">Implemented</span> <span class="status-pill status-verified">Verified</span> <span class="status-pill status-vagrant">Vagrant</span>
 
 ### Proposed
 
 <span class="status-pill status-proposed">Proposed</span> — this node is planned but doesn't exist in code yet. It's a design decision waiting to be built.
 
-### WIP (Work in Progress)
+### Implemented
 
-<span class="status-pill status-wip">WIP</span> — code exists for this node, but it might be incomplete. Stubs, partial implementations, scaffolding — anything that's started but not finished.
+<span class="status-pill status-implemented">Implemented</span> — code exists for this node, but it might be incomplete. Stubs, partial implementations, scaffolding — anything that's started but not finished.
 
-When an AI agent implements a node, it marks it as WIP with a **reason** explaining what was built: "Basic CRUD endpoints, needs auth middleware and rate limiting."
+When an AI agent implements a node, it marks it as Implemented with a **reason** explaining what was built: "Basic CRUD endpoints, needs auth middleware and rate limiting."
 
-### Ready
+### Verified
 
-<span class="status-pill status-ready">Ready</span> — this node is production-ready. The implementation is complete, tests pass, and all contract items are satisfied.
+<span class="status-pill status-verified">Verified</span> — this node is production-ready. The implementation is complete, tests pass, and all contract items are satisfied.
 
-**Ready is gated.** A node can only be marked ready when every inherited **expect** contract item has `passed: true`. If even one expect item is unchecked or failed, the ready status is blocked.
+**Verified is gated.** A node can only be marked verified when every inherited **expect** contract item has `passed: true`. If even one expect item is unchecked or failed, the verified status is blocked.
+
+### Vagrant
+
+<span class="status-pill status-vagrant">Vagrant</span> — this node was discovered during a codebase sync but wasn't part of the architecture plan. It exists in code but has no home in the model yet.
+
+Vagrant nodes need a decision: incorporate them into the architecture or remove them from the codebase.
 
 ## What gets status
 
@@ -36,20 +42,21 @@ Marking a system or container as external automatically clears its status.
 
 ## Nodes without status
 
-Nodes without any status appear gray and unactionable. Use "no status" for framework defaults or infrastructure that doesn't need implementation effort — things that are just *there*.
+New nodes default to no status. Nodes without any status appear gray and unactionable. Use "no status" for framework defaults or infrastructure that doesn't need implementation effort — things that are just *there*.
 
 ## How status looks on the canvas
 
 <NodeGallery client:load>
   <NodeDemo kind="container" label="Auth API" technology="Express" status="proposed" />
-  <NodeDemo kind="container" label="User Service" technology="Express" status="wip" />
-  <NodeDemo kind="container" label="Database" technology="PostgreSQL" shape="cylinder" status="ready" />
+  <NodeDemo kind="container" label="User Service" technology="Express" status="implemented" />
+  <NodeDemo kind="container" label="Database" technology="PostgreSQL" shape="cylinder" status="verified" />
 </NodeGallery>
 
 Nodes show a colored status dot and border:
 - **Blue** border and dot for proposed
-- **Amber** for WIP
-- **Green** for ready
+- **Amber** for implemented
+- **Green** for verified
+- **Violet** for vagrant
 
 In the sidebar tree, the same colored dots appear next to node names for a quick overview of project progress.
 
@@ -57,9 +64,9 @@ In the sidebar tree, the same colored dots appear next to node names for a quick
 
 During the [implementation workflow](/scryer/ai/implementation-workflow/):
 
-1. All new nodes start as **proposed**
-2. The agent builds each piece and marks it **WIP** with a reason
+1. The agent sets nodes as **proposed** when planning
+2. The agent builds each piece and marks it **implemented** with a reason
 3. When you're satisfied, ask the agent to **verify** — it checks for stubs, runs tests, and confirms contract items
-4. If everything checks out, the node moves to **ready**
+4. If everything checks out, the node moves to **verified**
 
-Status propagates upward: when all components in a container are WIP or ready, the task system prompts the agent to mark the container as WIP too.
+Status propagates upward: when all components in a container are implemented or verified, the task system prompts the agent to mark the container as implemented too.

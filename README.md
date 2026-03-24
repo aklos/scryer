@@ -45,10 +45,10 @@ Opinionated [C4](https://c4model.com/) hierarchy (system, container, component, 
   - Flows serve as integration test specs — link them to test files via source mapping.
 - **Contracts**
   - Expect/ask/never rules that tell AI agents how to implement your code. Inherited down the hierarchy.
-  - Expect items have pass/fail flags that control when a node can be marked "ready".
+  - Expect items have pass/fail flags that control when a node can be marked "verified".
 - **Status Tracking**
-  - Three statuses: proposed (planned), wip (code exists), ready (verified).
-  - During implementation, agents mark nodes as wip. "Ready" is a separate verification step — the implementation must be complete (no stubs or TODOs), existing tests must pass, and all expect contract items must be satisfied.
+  - Four statuses: proposed (planned), implemented (code exists), verified (contracts satisfied), vagrant (discovered during sync).
+  - During implementation, agents mark nodes as implemented. "Verified" is a separate step — the implementation must be complete (no stubs or TODOs), existing tests must pass, and all expect contract items must be satisfied.
 - **Source Mapping**
   - Link architecture nodes to files in your codebase with file patterns and line ranges.
   - Click to open in your editor.
@@ -59,7 +59,7 @@ Opinionated [C4](https://c4model.com/) hierarchy (system, container, component, 
 - **AI Advisor**
   - Optional LLM-powered review that flags structural issues in your diagrams. Supports OpenAI, Anthropic, Google, Groq, Mistral, DeepSeek, and Ollama.
 - **Implementation Workflow**
-  - `get_task` gives AI agents one piece of work at a time, ordered by dependencies, with contracts inherited from parent nodes. Build, mark wip, repeat.
+  - `get_task` gives AI agents one piece of work at a time, ordered by dependencies, with contracts inherited from parent nodes. Build, mark implemented, repeat.
 - **AI Tool Setup**
   - Detects Claude Code and Codex, writes MCP config and auto-approve permissions for your project.
 
@@ -74,8 +74,8 @@ Download the latest release for your platform from the [releases page](https://g
 3. The AI calls MCP tools — nodes appear in the visual editor in real-time
 4. Review, drag things around, rename, remove, restructure
 5. Tell the AI: *"Implement this model"*
-6. The AI builds each piece one at a time, marking nodes as wip as it goes
-7. When you're satisfied, ask the AI to verify: check for stubs, run any existing tests, and confirm contract items pass before marking nodes as ready
+6. The AI builds each piece one at a time, marking nodes as implemented as it goes
+7. When you're satisfied, ask the AI to verify: check for stubs, run any existing tests, and confirm contract items pass before marking nodes as verified
 
 As you work on code, Scryer detects when source files drift from the model. Click the sync button to have Scryer spawn your agent to update the model.
 
@@ -153,7 +153,7 @@ For Claude Code, you can also auto-approve Scryer's read tools so the agent does
 - `get_structure` — annotated project directory tree (manifests, infrastructure, environments)
 
 **Implementation:**
-- `get_task` — next implementation task. When multiple containers are ready, presents a choice menu with groups. Scaffold tasks fire first for deployment groups. The model is the spec — agents must build exactly what it describes and clean up anything templates add that isn't in the model
+- `get_task` — next implementation task. When multiple containers are available, presents a choice menu with groups. Scaffold tasks fire first for deployment groups. The model is the spec — agents must build exactly what it describes and clean up anything templates add that isn't in the model
 - Add, update, and remove nodes and edges
 - Define behavioral flows with branching (`set_flows`)
 - Organize containers into groups (`set_groups`)

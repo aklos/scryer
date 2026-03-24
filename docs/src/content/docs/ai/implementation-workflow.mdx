@@ -11,7 +11,7 @@ The implementation workflow is a simple loop:
 
 1. Agent calls **`get_task`** → receives one work unit
 2. Agent **builds** what the task describes
-3. Agent marks the node as <span class="status-pill status-wip">WIP</span> via `update_nodes` with a reason
+3. Agent marks the node as <span class="status-pill status-implemented">Implemented</span> via `update_nodes` with a reason
 4. Agent calls **`get_task`** again → gets the next piece
 5. Repeat until `get_task` returns "All tasks complete"
 
@@ -32,8 +32,8 @@ Tasks follow the dependency graph:
 
 1. **Scaffold tasks** fire first for deployment groups — setting up the project structure
 2. **Leaf nodes** with no dependencies come next
-3. **Dependent nodes** only appear after their dependencies are WIP or ready
-4. **Parent rollup** — when all children of a container are done, `get_task` prompts the agent to mark the container as WIP
+3. **Dependent nodes** only appear after their dependencies are implemented or verified
+4. **Parent rollup** — when all children of a container are done, `get_task` prompts the agent to mark the container as implemented
 
 ## Contracts during implementation
 
@@ -44,20 +44,20 @@ The agent should:
 - Pause on **ask** items and check with you before proceeding
 - Avoid anything listed in **never**
 
-## Verification (WIP → Ready)
+## Verification (Implemented → Verified)
 
-Moving to <span class="status-pill status-ready">Ready</span> is a separate step from implementation — don't do it during the build loop. A node is ready when:
+Moving to <span class="status-pill status-verified">Verified</span> is a separate step from implementation — don't do it during the build loop. A node is verified when:
 
 - Implementation is complete — no stubs, no TODOs, no placeholder logic
 - The code does what the node's description says
 - If tests exist, they pass
 - All inherited expect items are marked `passed: true`
 
-You decide when to verify. Ask the agent to check — it will review each point and either mark the node ready or explain what's missing.
+You decide when to verify. Ask the agent to check — it will review each point and either mark the node verified or explain what's missing.
 
 ## Working with multiple containers
 
-When `get_task` encounters multiple containers ready to start, it presents a choice menu. If containers are in a deployment group, the group scaffold fires first, then individual container work follows.
+When `get_task` encounters multiple containers available to start, it presents a choice menu. If containers are in a deployment group, the group scaffold fires first, then individual container work follows.
 
 ## The model is the spec
 

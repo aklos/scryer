@@ -59,24 +59,33 @@
 .status-proposed::before {
   @apply bg-blue-500;
 }
-.status-wip {
+.status-implemented {
   @apply bg-amber-100 text-amber-800;
 }
-.status-wip::before {
+.status-implemented::before {
   @apply bg-amber-500;
 }
-.status-ready {
+.status-verified {
   @apply bg-emerald-100 text-emerald-800;
 }
-.status-ready::before {
+.status-verified::before {
   @apply bg-emerald-500;
+}
+.status-vagrant {
+  @apply bg-violet-100 text-violet-800;
+}
+.status-vagrant::before {
+  @apply bg-violet-500;
 }
 :root[data-theme="dark"] .status-proposed {
   @apply bg-blue-900/50 text-blue-200;
 }
-:root[data-theme="dark"] .status-wip {
+:root[data-theme="dark"] .status-implemented {
   @apply bg-amber-900/50 text-amber-200;
 }
-:root[data-theme="dark"] .status-ready {
+:root[data-theme="dark"] .status-verified {
   @apply bg-emerald-900/50 text-emerald-200;
+}
+:root[data-theme="dark"] .status-vagrant {
+  @apply bg-violet-900/50 text-violet-200;
 }

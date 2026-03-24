@@ -16,7 +16,7 @@ interface NodeDemoProps {
   label?: string;
   technology?: string;
   description?: string;
-  status?: "proposed" | "wip" | "ready";
+  status?: "proposed" | "implemented" | "verified" | "vagrant";
   external?: boolean;
 }
 
