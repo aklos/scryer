@@ -346,11 +346,9 @@ export function useVisibleNodes({
     if (isCodeLevel) return [];
 
     const ids = new Set(visibleNodes.map((n) => n.id));
-    const refIds = new Set(visibleNodes.filter((n) => n.data._reference).map((n) => n.id));
     const selIds = new Set(visibleNodes.filter((n) => n.selected).map((n) => n.id));
     const filtered = edges.filter((e) => {
       if (!ids.has(e.source) || !ids.has(e.target)) return false;
-      if (currentParentId && refIds.has(e.source) && refIds.has(e.target)) return false;
       return true;
     });
     const handleMap = assignAllHandles(visibleNodes, filtered);
