@@ -132,20 +132,20 @@ export function MentionTextarea({ value, onChange, mentionNames, placeholder, ro
 
   const dropdown = triggerPos !== null && filtered.length > 0 && dropdownPos && createPortal(
     <div
-      className="fixed max-h-32 overflow-y-auto overflow-x-hidden rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg"
+      className="fixed max-h-32 overflow-y-auto overflow-x-hidden rounded-md border border-[var(--border)] bg-[var(--surface-raised)] shadow-lg"
       style={{ top: dropdownPos.top, left: dropdownPos.left, width: dropdownPos.width, zIndex: 9999 }}
     >
       {filtered.map((item) => (
         <button
           key={`${item.kind}:${item.name}:${item.ref ?? ""}`}
           type="button"
-          className="w-full flex items-center gap-1.5 text-left px-2.5 py-1.5 text-xs text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"
+          className="w-full flex items-center gap-1.5 text-left px-2.5 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-tint)] cursor-pointer"
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => insertMention(item.name, item.insertValue)}
         >
-          {item.ref && <span className="text-[10px] text-zinc-400 dark:text-zinc-500">&rarr;</span>}
+          {item.ref && <span className="text-[10px] text-[var(--text-muted)]">&rarr;</span>}
           <span className={item.kind === "operation" ? "font-mono" : ""}>{item.name}</span>
-          <span className="ml-auto text-[10px] text-zinc-400 dark:text-zinc-500">{item.kind}</span>
+          <span className="ml-auto text-[10px] text-[var(--text-muted)]">{item.kind}</span>
         </button>
       ))}
     </div>,

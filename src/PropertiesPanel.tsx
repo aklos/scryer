@@ -48,7 +48,7 @@ const STATUS_OPTIONS: { value: Status | undefined; label: string }[] = [
 
 function StatusBar({ value, onChange }: { value: Status | undefined; onChange: (s: Status | undefined) => void }) {
   return (
-    <div className="flex items-center gap-0.5 rounded-lg bg-zinc-100 dark:bg-zinc-800/80 p-0.5">
+    <div className="grid grid-cols-3 gap-0.5 rounded-lg bg-[var(--surface-tint)] p-0.5">
       {STATUS_OPTIONS.map((opt) => {
         const isActive = value === opt.value;
         const sc = opt.value ? STATUS_COLORS[opt.value] : null;
@@ -56,16 +56,16 @@ function StatusBar({ value, onChange }: { value: Status | undefined; onChange: (
           <button
             key={String(opt.value ?? "__none__")}
             type="button"
-            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-[11px] font-medium rounded-md cursor-pointer transition-all ${
+            title={opt.label}
+            className={`flex items-center justify-center px-1.5 py-1 text-[10px] font-medium rounded-md cursor-pointer ${
               isActive
                 ? sc
                   ? `${sc.pillClass} shadow-sm`
-                  : "bg-white dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 shadow-sm"
-                : "text-zinc-400 dark:text-zinc-500 hover:text-zinc-500 dark:hover:text-zinc-400"
+                  : "bg-[var(--surface-raised)] text-[var(--text-secondary)] shadow-sm"
+                : "text-[var(--text-muted)] hover:text-[var(--text-tertiary)]"
             }`}
             onClick={() => onChange(opt.value)}
           >
-            {sc && isActive && <span className={`w-1.5 h-1.5 rounded-full ${sc.dotClass}`} />}
             {opt.label}
           </button>
         );
@@ -124,11 +124,11 @@ function GroupPropertiesContent({ node, groups, onUpdateGroups, allNodes }: { no
             const memberNode = allNodes.find((n) => n.id === memberId);
             const name = (memberNode?.data as C4NodeData | undefined)?.name ?? memberId;
             return (
-              <div key={memberId} className="flex items-center gap-1.5 group rounded-md px-1.5 py-1 -mx-1.5 hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60 transition-colors">
-                <span className="truncate flex-1 text-xs text-zinc-600 dark:text-zinc-300">{name}</span>
+              <div key={memberId} className="flex items-center gap-1.5 group rounded-md px-1.5 py-1 -mx-1.5 hover:bg-[var(--surface-hover)] transition-colors">
+                <span className="truncate flex-1 text-xs text-[var(--text-secondary)]">{name}</span>
                 <button
                   type="button"
-                  className="shrink-0 text-xs text-zinc-300 hover:text-red-400 dark:text-zinc-600 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover:opacity-100"
+                  className="shrink-0 text-xs text-[var(--text-ghost)] hover:text-red-400 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover:opacity-100"
                   title="Remove from group"
                   onClick={() => removeMember(memberId)}
                 >
@@ -181,7 +181,7 @@ function MultiSelectionPanel({ selectedIds, groups, groupKind, onCreateGroup, on
 
   return (
     <>
-      <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+      <span className="text-xs font-medium text-[var(--text-tertiary)]">
         {selectedIds.length} nodes selected
       </span>
       <Divider />
@@ -219,11 +219,11 @@ function MultiSelectionPanel({ selectedIds, groups, groupKind, onCreateGroup, on
                 <button
                   key={g.id}
                   type="button"
-                  className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-left text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60 transition-colors cursor-pointer"
+                  className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-left text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors cursor-pointer"
                   onClick={() => onAddToGroup(g.id, selectedIds)}
                 >
                   <span className="truncate flex-1">{g.name}</span>
-                  <span className="text-[10px] text-zinc-500 dark:text-zinc-500">{g.memberIds.length}</span>
+                  <span className="text-[10px] text-[var(--text-tertiary)]">{g.memberIds.length}</span>
                 </button>
               ))}
             </div>
@@ -379,7 +379,7 @@ function NodePropertiesContent({ node, sourceLocations, projectPath, mentionName
       <Field
         label="Description"
         trailing={
-          <span className={`text-[10px] tabular-nums ${data.description.length > 180 ? "text-amber-500" : "text-zinc-400/50 dark:text-zinc-500/50"}`}>
+          <span className={`text-[10px] tabular-nums ${data.description.length > 180 ? "text-amber-500" : "text-[var(--text-muted)]/50"}`}>
             {data.description.length}/200
           </span>
         }
@@ -391,7 +391,7 @@ function NodePropertiesContent({ node, sourceLocations, projectPath, mentionName
             mentionNames={mentionNames}
             maxLength={200}
             rows={5}
-            className="w-full rounded-md border border-zinc-200 dark:border-transparent bg-zinc-100/60 dark:bg-zinc-800/60 focus:bg-zinc-100 dark:focus:bg-zinc-700/60 px-2.5 py-2 text-xs text-zinc-700 dark:text-zinc-200 leading-relaxed outline-none resize-none transition-colors placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
+            className="w-full rounded-md border border-[var(--border)] bg-[var(--surface-raised)] px-2.5 py-2 text-xs text-[var(--text)] leading-relaxed outline-none resize-none transition-colors placeholder:text-[var(--text-muted)]"
             placeholder="Describe this operation... Use @[Name] to reference sibling operations, processes, or models."
           />
         ) : (
@@ -412,7 +412,7 @@ function NodePropertiesContent({ node, sourceLocations, projectPath, mentionName
           <Field label="Status">
             <StatusBar value={data.status} onChange={(s) => updateNodeData(node.id, { status: s, statusReason: undefined })} />
             {data.statusReason && (
-              <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed italic">{data.statusReason}</p>
+              <p className="mt-1 text-[11px] text-[var(--text-tertiary)] leading-relaxed italic">{data.statusReason}</p>
             )}
           </Field>
         </>
@@ -423,7 +423,7 @@ function NodePropertiesContent({ node, sourceLocations, projectPath, mentionName
         <>
           <Divider />
           <Field label="Sources">
-            <div className="flex flex-col gap-0.5 rounded-md border border-zinc-200/50 dark:border-zinc-700/50 overflow-hidden">
+            <div className="flex flex-col gap-0.5 rounded-md border border-[var(--border-subtle)] overflow-hidden">
               {sourceLocations.map((loc, i) => {
                 const isGlob = /[*?{}\[\]]/.test(loc.pattern);
                 const inner = (
@@ -433,14 +433,14 @@ function NodePropertiesContent({ node, sourceLocations, projectPath, mentionName
                   </>
                 );
                 return isGlob ? (
-                  <span key={i} className="flex items-baseline gap-1 px-2.5 py-1.5 text-[11px] text-zinc-500 dark:text-zinc-400 truncate" title={loc.pattern}>
+                  <span key={i} className="flex items-baseline gap-1 px-2.5 py-1.5 text-[11px] text-[var(--text-tertiary)] truncate" title={loc.pattern}>
                     {inner}
                   </span>
                 ) : (
                   <button
                     key={i}
                     type="button"
-                    className="flex items-baseline gap-1 px-2.5 py-1.5 text-left text-[11px] text-blue-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer truncate transition-colors"
+                    className="flex items-baseline gap-1 px-2.5 py-1.5 text-left text-[11px] text-blue-400 hover:bg-[var(--surface-tint)] cursor-pointer truncate transition-colors"
                     title={loc.pattern + (loc.line ? `:${loc.line}` : "")}
                     onClick={() => invoke("open_in_editor", { file: loc.pattern, line: loc.line, projectPath }).catch((e) => console.error("open_in_editor:", e))}
                   >
@@ -456,7 +456,7 @@ function NodePropertiesContent({ node, sourceLocations, projectPath, mentionName
       {(data.kind === "person" || data.external) && (
         <>
           <Divider />
-          <span className="text-xs text-zinc-300 dark:text-zinc-600 italic px-3">No implementation tracking</span>
+          <span className="text-xs text-[var(--text-ghost)] italic px-3">No implementation tracking</span>
         </>
       )}
 
@@ -490,20 +490,20 @@ function NodeChildrenContent({ node, onUpdateOperationData }: { node: C4Node; on
           <div className="flex flex-col gap-1">
             {procs.map((p) => {
               return (
-              <div key={p.id} className="flex items-center gap-1.5 group rounded-md px-1.5 py-1 -mx-1.5 hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60 transition-colors">
+              <div key={p.id} className="flex items-center gap-1.5 group rounded-md px-1.5 py-1 -mx-1.5 hover:bg-[var(--surface-hover)] transition-colors">
                 <span
                   className="shrink-0 w-1.5 h-1.5 rounded-full"
                   style={{ backgroundColor: p.status ? statusHex(p.status as import("./types").Status) : getThemedHex("zinc", "400") }}
                 />
                 <Input
                   variant="inline"
-                  className="!w-auto !text-left font-mono text-zinc-600 dark:text-zinc-300 focus:border-zinc-300 dark:focus:border-zinc-600"
+                  className="!w-auto !text-left font-mono text-[var(--text-secondary)] focus:border-[var(--border-strong)]"
                   value={p.name}
                   onChange={(e) => onUpdateOperationData?.(p.id, { name: e.target.value })}
                 />
                 <button
                   type="button"
-                  className="shrink-0 text-xs text-zinc-300 hover:text-red-400 dark:text-zinc-600 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover:opacity-100"
+                  className="shrink-0 text-xs text-[var(--text-ghost)] hover:text-red-400 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover:opacity-100"
                   title="Remove process"
                   onClick={() => window.dispatchEvent(new CustomEvent("remove-node", { detail: { nodeId: p.id } }))}
                 >
@@ -530,20 +530,20 @@ function NodeChildrenContent({ node, onUpdateOperationData }: { node: C4Node; on
           <div className="flex flex-col gap-1">
             {mdls.map((m) => {
               return (
-              <div key={m.id} className="flex items-center gap-1.5 group rounded-md px-1.5 py-1 -mx-1.5 hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60 transition-colors">
+              <div key={m.id} className="flex items-center gap-1.5 group rounded-md px-1.5 py-1 -mx-1.5 hover:bg-[var(--surface-hover)] transition-colors">
                 <span
                   className="shrink-0 w-1.5 h-1.5 rounded-full"
                   style={{ backgroundColor: m.status ? statusHex(m.status as import("./types").Status) : getThemedHex("zinc", "400") }}
                 />
                 <Input
                   variant="inline"
-                  className="!w-auto !text-left font-mono text-zinc-600 dark:text-zinc-300 focus:border-zinc-300 dark:focus:border-zinc-600"
+                  className="!w-auto !text-left font-mono text-[var(--text-secondary)] focus:border-[var(--border-strong)]"
                   value={m.name}
                   onChange={(e) => onUpdateOperationData?.(m.id, { name: sanitizeTypeName(e.target.value) })}
                 />
                 <button
                   type="button"
-                  className="shrink-0 text-xs text-zinc-300 hover:text-red-400 dark:text-zinc-600 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover:opacity-100"
+                  className="shrink-0 text-xs text-[var(--text-ghost)] hover:text-red-400 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover:opacity-100"
                   title="Remove model"
                   onClick={() => window.dispatchEvent(new CustomEvent("remove-node", { detail: { nodeId: m.id } }))}
                 >
@@ -570,17 +570,17 @@ function NodeChildrenContent({ node, onUpdateOperationData }: { node: C4Node; on
           <div className="flex flex-col gap-1">
             {fns.map((fn) => {
               return (
-                <div key={fn.id} className="flex items-center gap-1.5 group rounded-md px-1.5 py-1 -mx-1.5 hover:bg-zinc-100/60 dark:hover:bg-zinc-800/60 transition-colors">
+                <div key={fn.id} className="flex items-center gap-1.5 group rounded-md px-1.5 py-1 -mx-1.5 hover:bg-[var(--surface-hover)] transition-colors">
                   <span className="shrink-0 w-1.5 h-1.5 rounded-full" style={{ backgroundColor: fn.status ? statusHex(fn.status as import("./types").Status) : getThemedHex("zinc", "400") }} />
                   <Input
                     variant="inline"
-                    className="!w-auto !text-left font-mono text-zinc-600 dark:text-zinc-300 focus:border-zinc-300 dark:focus:border-zinc-600"
+                    className="!w-auto !text-left font-mono text-[var(--text-secondary)] focus:border-[var(--border-strong)]"
                     value={fn.name}
                     onChange={(e) => onUpdateOperationData?.(fn.id, { name: sanitizeIdentifier(e.target.value) })}
                   />
                   <button
                     type="button"
-                    className="shrink-0 text-xs text-zinc-300 hover:text-red-400 dark:text-zinc-600 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover:opacity-100"
+                    className="shrink-0 text-xs text-[var(--text-ghost)] hover:text-red-400 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover:opacity-100"
                     title="Remove operation"
                     onClick={() => window.dispatchEvent(new CustomEvent("remove-node", { detail: { nodeId: fn.id } }))}
                   >
@@ -614,7 +614,7 @@ function ContractItemToggle({ passed, onClick }: { passed?: boolean; onClick: ()
           ? "bg-emerald-500 border-emerald-500"
           : passed === false
             ? "bg-red-500 border-red-500"
-            : "border-zinc-300 dark:border-zinc-600 hover:border-zinc-400 dark:hover:border-zinc-500"
+            : "border-[var(--border-strong)] hover:border-[var(--text-muted)]"
       }`}
       onClick={onClick}
       title={passed === true ? "Passing" : passed === false ? "Failing" : "Unchecked — click to mark"}
@@ -688,18 +688,18 @@ function ContractBulletItem({ item, focused, placeholder, onCommit, onFocus, onB
   };
 
   return (
-    <div className={`group relative rounded-md px-1.5 py-1 border border-transparent ${focused ? "bg-zinc-100 dark:bg-zinc-800/80" : "hover:bg-zinc-50 dark:hover:bg-zinc-800/40"}`} onMouseLeave={() => setMenuOpen(false)}>
+    <div className={`group relative rounded-md px-1.5 py-1 border border-transparent ${focused ? "bg-[var(--surface-tint)]" : "hover:bg-[var(--surface-hover)]"}`} onMouseLeave={() => setMenuOpen(false)}>
       <div className="flex items-start gap-2">
         {onToggle ? (
           <ContractItemToggle passed={passed} onClick={onToggle} />
         ) : (
-          <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500 mt-[7px]" />
+          <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-[var(--text-muted)] mt-[7px]" />
         )}
         <span
           ref={spanRef}
           contentEditable
           suppressContentEditableWarning
-          className="flex-1 min-w-0 text-xs text-zinc-700 dark:text-zinc-200 caret-current outline-none leading-relaxed break-words empty:before:content-[attr(data-placeholder)] empty:before:text-zinc-400 dark:empty:before:text-zinc-500"
+          className="flex-1 min-w-0 text-xs text-[var(--text)] caret-current outline-none leading-relaxed break-words empty:before:content-[attr(data-placeholder)] empty:before:text-[var(--text-muted)]"
           data-placeholder={placeholder}
           onFocus={onFocus}
           onBlur={(e) => {
@@ -755,7 +755,7 @@ function ContractBulletItem({ item, focused, placeholder, onCommit, onFocus, onB
             <img
               src={`data:${image.mimeType};base64,${image.data}`}
               alt={image.filename}
-              className="rounded border border-zinc-200 dark:border-zinc-700 object-cover w-full"
+              className="rounded border border-[var(--border)] object-cover w-full"
               style={{ maxHeight: imageExpanded ? "none" : "80px" }}
             />
           </button>
@@ -766,24 +766,24 @@ function ContractBulletItem({ item, focused, placeholder, onCommit, onFocus, onB
       <input ref={fileInputRef} type="file" accept="image/*,.pdf,.doc,.docx" className="hidden" onChange={handleFileSelect} />
       {/* Overflow menu — hover to reveal trigger, click to open */}
       <div ref={menuRef} className="absolute top-1 right-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button type="button" className="cursor-pointer text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 px-1" onClick={() => setMenuOpen(!menuOpen)}>
+        <button type="button" className="cursor-pointer text-[var(--text-muted)] hover:text-[var(--text-secondary)] px-1" onClick={() => setMenuOpen(!menuOpen)}>
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="3" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="8" cy="13" r="1.5"/></svg>
         </button>
         {menuOpen && (
-          <div className="fixed z-[100] bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-md shadow-lg py-1 min-w-[120px] text-[11px]" style={{ top: menuRef.current?.getBoundingClientRect().bottom ?? 0, right: window.innerWidth - (menuRef.current?.getBoundingClientRect().right ?? 0) }}>
-            <button type="button" className="w-full text-left px-2.5 py-1 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 cursor-pointer" onClick={() => { setMenuOpen(false); setEditingUrl(!editingUrl); }}>
+          <div className="fixed z-[100] bg-[var(--surface-raised)] border border-[var(--border)] rounded-md shadow-lg py-1 min-w-[120px] text-[11px]" style={{ top: menuRef.current?.getBoundingClientRect().bottom ?? 0, right: window.innerWidth - (menuRef.current?.getBoundingClientRect().right ?? 0) }}>
+            <button type="button" className="w-full text-left px-2.5 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] cursor-pointer" onClick={() => { setMenuOpen(false); setEditingUrl(!editingUrl); }}>
               {url ? "Edit link" : "Add link"}
             </button>
             {url && (
-              <button type="button" className="w-full text-left px-2.5 py-1 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 cursor-pointer" onClick={() => { setMenuOpen(false); onUrlChange(undefined); setEditingUrl(false); }}>
+              <button type="button" className="w-full text-left px-2.5 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] cursor-pointer" onClick={() => { setMenuOpen(false); onUrlChange(undefined); setEditingUrl(false); }}>
                 Remove link
               </button>
             )}
-            <button type="button" className="w-full text-left px-2.5 py-1 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 cursor-pointer" onClick={() => { setMenuOpen(false); image ? onImageChange(undefined) : fileInputRef.current?.click(); }}>
+            <button type="button" className="w-full text-left px-2.5 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] cursor-pointer" onClick={() => { setMenuOpen(false); image ? onImageChange(undefined) : fileInputRef.current?.click(); }}>
               {image ? "Remove image" : "Add image"}
             </button>
-            <div className="border-t border-zinc-200 dark:border-zinc-700 my-1" />
-            <button type="button" className="w-full text-left px-2.5 py-1 text-red-500 hover:bg-zinc-100 dark:hover:bg-zinc-700 cursor-pointer" onClick={() => { setMenuOpen(false); onRemove(); }}>
+            <div className="border-t border-[var(--border)] my-1" />
+            <button type="button" className="w-full text-left px-2.5 py-1 text-red-500 hover:bg-[var(--surface-hover)] cursor-pointer" onClick={() => { setMenuOpen(false); onRemove(); }}>
               Remove
             </button>
           </div>
@@ -834,14 +834,14 @@ function ContractList({ items, onChange, placeholder, showToggle = true }: { ite
       {/* Ghost item */}
       <div className="flex items-start gap-1.5 min-h-[22px] px-1.5 py-1 rounded opacity-40 hover:opacity-70 focus-within:opacity-100 transition-opacity">
         {showToggle ? (
-          <span className="shrink-0 w-3.5 h-3.5 rounded-full border border-zinc-300 dark:border-zinc-600 mt-[3px]" />
+          <span className="shrink-0 w-3.5 h-3.5 rounded-full border border-[var(--border-strong)] mt-[3px]" />
         ) : (
-          <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500 mt-[7px]" />
+          <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-[var(--text-muted)] mt-[7px]" />
         )}
         <span
           contentEditable
           suppressContentEditableWarning
-          className="flex-1 min-w-0 text-xs text-zinc-700 dark:text-zinc-200 caret-current outline-none leading-relaxed break-words empty:before:content-[attr(data-placeholder)] empty:before:text-zinc-400 dark:empty:before:text-zinc-500"
+          className="flex-1 min-w-0 text-xs text-[var(--text)] caret-current outline-none leading-relaxed break-words empty:before:content-[attr(data-placeholder)] empty:before:text-[var(--text-muted)]"
           data-placeholder={placeholder ?? "Add..."}
           onInput={(e) => {
             const text = (e.target as HTMLSpanElement).textContent ?? "";
@@ -883,7 +883,7 @@ function ContractTabBadge({ contract }: { contract?: Contract }) {
     ? "bg-red-500"
     : expectItems.length > 0 && passed === expectItems.length
       ? "bg-emerald-500"
-      : "bg-zinc-300 dark:bg-zinc-600";
+      : "bg-[var(--border-strong)]";
   return (
     <span className={`ml-1 inline-block w-1.5 h-1.5 rounded-full ${color}`} />
   );
@@ -950,7 +950,7 @@ function ProcessPropertiesContent({ node, mentionNames }: { node: C4Node; mentio
       <Field
         label="Description"
         trailing={
-          <span className={`text-[10px] tabular-nums ${data.description.length > 360 ? "text-amber-500" : "text-zinc-400/50 dark:text-zinc-500/50"}`}>
+          <span className={`text-[10px] tabular-nums ${data.description.length > 360 ? "text-amber-500" : "text-[var(--text-muted)]/50"}`}>
             {data.description.length}/400
           </span>
         }
@@ -961,7 +961,7 @@ function ProcessPropertiesContent({ node, mentionNames }: { node: C4Node; mentio
           mentionNames={mentionNames}
           maxLength={400}
           rows={8}
-          className="w-full rounded-md border border-zinc-200 dark:border-transparent bg-zinc-100/60 dark:bg-zinc-800/60 focus:bg-zinc-100 dark:focus:bg-zinc-700/60 px-2.5 py-2 text-xs text-zinc-700 dark:text-zinc-200 leading-relaxed outline-none resize-none transition-colors placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
+          className="w-full rounded-md border border-[var(--border)] bg-[var(--surface-raised)] px-2.5 py-2 text-xs text-[var(--text)] leading-relaxed outline-none resize-none transition-colors placeholder:text-[var(--text-muted)]"
           placeholder="What does this process do? Use @[Name] to reference operations or other processes."
         />
       </Field>
@@ -969,7 +969,7 @@ function ProcessPropertiesContent({ node, mentionNames }: { node: C4Node; mentio
       <Field label="Status">
         <StatusBar value={data.status} onChange={(s) => updateNodeData(node.id, { status: s, statusReason: undefined })} />
         {data.statusReason && (
-          <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed italic">{data.statusReason}</p>
+          <p className="mt-1 text-[11px] text-[var(--text-tertiary)] leading-relaxed italic">{data.statusReason}</p>
         )}
       </Field>
     </>
@@ -1009,7 +1009,7 @@ function ModelPropertiesContent({ node }: { node: C4Node }) {
       <Field
         label="Description"
         trailing={
-          <span className={`text-[10px] tabular-nums ${data.description.length > 180 ? "text-amber-500" : "text-zinc-400/50 dark:text-zinc-500/50"}`}>
+          <span className={`text-[10px] tabular-nums ${data.description.length > 180 ? "text-amber-500" : "text-[var(--text-muted)]/50"}`}>
             {data.description.length}/200
           </span>
         }
@@ -1027,7 +1027,7 @@ function ModelPropertiesContent({ node }: { node: C4Node }) {
         {properties.length > 0 && (
           <div className="flex flex-col gap-1">
             {properties.map((prop: ModelProperty, i: number) => (
-              <div key={i} className="group flex items-start gap-1.5 border-l-2 border-zinc-200 dark:border-zinc-700 pl-2 py-0.5">
+              <div key={i} className="group flex items-start gap-1.5 border-l-2 border-[var(--border)] pl-2 py-0.5">
                 <div className="flex-1 min-w-0 flex flex-col">
                   <Input
                     variant="inline"
@@ -1038,7 +1038,7 @@ function ModelPropertiesContent({ node }: { node: C4Node }) {
                   />
                   <Input
                     variant="inline"
-                    className="!text-left !w-full !bg-transparent text-[11px] !text-zinc-400 dark:!text-zinc-500"
+                    className="!text-left !w-full !bg-transparent text-[11px] !text-[var(--text-muted)]"
                     value={prop.description}
                     placeholder="Description"
                     onChange={(e) => updateProperty(i, { description: e.target.value })}
@@ -1046,7 +1046,7 @@ function ModelPropertiesContent({ node }: { node: C4Node }) {
                 </div>
                 <button
                   type="button"
-                  className="shrink-0 mt-1 text-xs text-zinc-300 hover:text-red-400 dark:text-zinc-600 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover:opacity-100"
+                  className="shrink-0 mt-1 text-xs text-[var(--text-ghost)] hover:text-red-400 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover:opacity-100"
                   title="Remove property"
                   onClick={() => removeProperty(i)}
                 >
@@ -1064,7 +1064,7 @@ function ModelPropertiesContent({ node }: { node: C4Node }) {
       <Field label="Status">
         <StatusBar value={data.status} onChange={(s) => updateNodeData(node.id, { status: s, statusReason: undefined })} />
         {data.statusReason && (
-          <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed italic">{data.statusReason}</p>
+          <p className="mt-1 text-[11px] text-[var(--text-tertiary)] leading-relaxed italic">{data.statusReason}</p>
         )}
       </Field>
     </>
@@ -1156,15 +1156,15 @@ function getModelTabs(
 
 function TabBar({ tabs, activeTab, onTabClick }: { tabs: PanelTab[]; activeTab: string; onTabClick: (id: string) => void }) {
   return (
-    <div className="flex shrink-0 gap-0.5 px-2 py-1.5 border-b border-zinc-200 dark:border-zinc-700">
+    <div className="flex shrink-0 gap-0.5 px-2 py-1.5 border-b border-[var(--border)]">
       {tabs.map((tab) => (
         <button
           key={tab.id}
           type="button"
           className={`px-1.5 py-0.5 text-[10px] uppercase tracking-wide font-semibold cursor-pointer transition-colors rounded ${
             activeTab === tab.id
-              ? "text-zinc-700 bg-zinc-200 dark:text-zinc-200 dark:bg-zinc-700"
-              : "text-zinc-500 hover:text-zinc-600 hover:bg-zinc-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-800"
+              ? "text-[var(--text)] bg-[var(--surface-active)]"
+              : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
           }`}
           onClick={() => onTabClick(tab.id)}
         >
@@ -1178,7 +1178,7 @@ function TabBar({ tabs, activeTab, onTabClick }: { tabs: PanelTab[]; activeTab: 
 
 /* ── Panel shell ──────────────────────────────────────────────────── */
 
-const panelBase = "shrink-0 border-l border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900";
+const panelBase = "shrink-0 border-l border-[var(--border)] bg-[var(--surface)]";
 
 /* ── Main panel ───────────────────────────────────────────────────── */
 
@@ -1315,7 +1315,7 @@ export function PropertiesPanel({ node, edge, onUpdateEdge, codeLevel, hints, on
 function HintsFooter({ hints, onFixHint, onDismissHint }: { hints: Hint[]; onFixHint: (hint: Hint) => void; onDismissHint: (hint: Hint) => void }) {
   if (hints.length === 0) return null;
   return (
-    <div className="shrink-0 border-t border-zinc-200 dark:border-zinc-700 max-h-[40%] overflow-y-auto">
+    <div className="shrink-0 border-t border-[var(--border)] max-h-[40%] overflow-y-auto">
       <div className="px-4 py-2 flex flex-col gap-1.5">
         <Section title="Hints" count={hints.length}>
           <div className="flex flex-col gap-1.5">
@@ -1342,7 +1342,7 @@ function HintsFooter({ hints, onFixHint, onDismissHint }: { hints: Hint[]; onFix
                 {hint.action && (
                   <button
                     type="button"
-                    className="mt-1 block rounded bg-white/70 px-1.5 py-0.5 text-[11px] font-medium hover:bg-white cursor-pointer dark:bg-zinc-800/70 dark:hover:bg-zinc-800"
+                    className="mt-1 block rounded bg-[var(--surface-overlay)] px-1.5 py-0.5 text-[11px] font-medium hover:bg-[var(--surface-raised)] cursor-pointer"
                     onClick={() => onFixHint(hint)}
                   >
                     Fix
@@ -1383,18 +1383,18 @@ function NotesList({ items, onChange }: { items: string[]; onChange: (items: str
     }
   };
 
-  const bullet = <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500 mt-[7px]" />;
+  const bullet = <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-[var(--text-muted)] mt-[7px]" />;
 
   return (
     <div className="flex flex-col">
       {items.map((item, i) => (
-        <div key={i} className="group flex items-start gap-1.5 min-h-[22px] px-1.5 py-1 rounded hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+        <div key={i} className="group flex items-start gap-1.5 min-h-[22px] px-1.5 py-1 rounded hover:bg-[var(--surface-hover)]">
           {bullet}
           <span
             ref={(el) => { itemRefs.current[i] = el; }}
             contentEditable
             suppressContentEditableWarning
-            className="flex-1 min-w-0 text-xs text-zinc-600 dark:text-zinc-300 caret-current outline-none leading-relaxed break-words"
+            className="flex-1 min-w-0 text-xs text-[var(--text-secondary)] caret-current outline-none leading-relaxed break-words"
             onBlur={(e) => commit(i, (e.target as HTMLSpanElement).textContent ?? "")}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
@@ -1427,7 +1427,7 @@ function NotesList({ items, onChange }: { items: string[]; onChange: (items: str
         <span
           contentEditable
           suppressContentEditableWarning
-          className="flex-1 min-w-0 text-xs text-zinc-400 dark:text-zinc-500 caret-current outline-none leading-relaxed break-words empty:before:content-[attr(data-placeholder)] empty:before:text-zinc-400 dark:empty:before:text-zinc-500"
+          className="flex-1 min-w-0 text-xs text-[var(--text-muted)] caret-current outline-none leading-relaxed break-words empty:before:content-[attr(data-placeholder)] empty:before:text-[var(--text-muted)]"
           data-placeholder="Add note..."
           onKeyDown={(e) => {
             if (e.key === "Enter") {

@@ -28,7 +28,7 @@ Set status on nodes that represent work. Omit status for framework defaults that
 - **"proposed"** (blue): Planned — doesn't exist yet.
 - **"implemented"** (amber): Code exists but may be incomplete (stubs, partial implementation, scaffolding).
 - **"verified"** (green): Production-ready. **Gated**: can only be set when ALL inherited `expect` contract items have `passed: true`.
-- **"vagrant"** (violet): Discovered during codebase sync — exists in code but was not part of the architecture plan. Needs review: keep it or remove it.
+- **"vagrant"** (rose): Discovered during codebase sync — exists in code but was not part of the architecture plan. Needs review: keep it or remove it.
 
 A `reason` is required on every status change via `update_nodes`. State what's still missing or what was just completed. For implemented: "Needs auth middleware and rate limiting". For verified: "All contract items pass".
 

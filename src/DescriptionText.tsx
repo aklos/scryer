@@ -33,7 +33,7 @@ function parseRefs(text: string, onMentionClick?: (name: string) => void, onMent
         className={`inline-flex items-baseline gap-0.5 rounded px-1 font-medium font-mono text-[0.85em] leading-none align-baseline ${
           sc
             ? `${sc.pillClass}${onMentionClick ? ` cursor-pointer ${sc.pillHoverClass}` : ""}`
-            : `bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300${onMentionClick ? " cursor-pointer hover:bg-zinc-200 dark:hover:bg-zinc-700" : ""}`
+            : `bg-[var(--surface-tint)] text-[var(--text-secondary)]${onMentionClick ? " cursor-pointer hover:bg-[var(--surface-active)]" : ""}`
         }`}
         onClick={onMentionClick ? (e) => { e.stopPropagation(); onMentionClick(rawName); } : undefined}
         onMouseEnter={onMentionHover ? () => onMentionHover(rawName) : undefined}

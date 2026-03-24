@@ -86,9 +86,9 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, implement
   if (!activeAgent?.available && projectPath) return null;
   if (!activeAgent?.available && !projectPath) {
     return (
-      <div className="shrink-0 border-t border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 select-none">
+      <div className="shrink-0 border-t border-[var(--border)] bg-[var(--surface)] select-none">
         <div className="flex items-center h-7 px-3 gap-3 text-[11px]">
-          <div className="flex items-center gap-1.5 text-zinc-400 dark:text-zinc-500">
+          <div className="flex items-center gap-1.5 text-[var(--text-muted)]">
             <span>No codebase linked yet</span>
           </div>
         </div>
@@ -100,10 +100,10 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, implement
   const activityLabel = syncActivity ? (TOOL_LABELS[syncActivity] ?? syncActivity) : null;
 
   return (
-    <div className="shrink-0 border-t border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 select-none">
+    <div className="shrink-0 border-t border-[var(--border)] bg-[var(--surface)] select-none">
       {/* Animated progress bar during sync */}
       {syncStatus === "running" && (
-        <div className="h-0.5 w-full bg-zinc-200 dark:bg-zinc-700 overflow-hidden">
+        <div className="h-0.5 w-full bg-[var(--border)] overflow-hidden">
           <div className="h-full w-1/3 bg-amber-500 dark:bg-amber-400 animate-[shimmer_1.5s_ease-in-out_infinite]" />
         </div>
       )}
@@ -114,27 +114,27 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, implement
           <>
             <div className="flex items-center gap-1.5 shrink-0">
               <div className={`h-1.5 w-1.5 rounded-full shrink-0 ${syncStatus === "running" ? "bg-amber-500 animate-pulse" : "bg-emerald-500"}`} />
-              <span className="text-zinc-500 dark:text-zinc-400 font-medium">{agentName}</span>
+              <span className="text-[var(--text-tertiary)] font-medium">{agentName}</span>
             </div>
-            <div className="w-px h-3 bg-zinc-200 dark:bg-zinc-700" />
+            <div className="w-px h-3 bg-[var(--border)]" />
           </>
         ) : null}
 
         {/* Sync status */}
         {!projectPath ? (
-          <div className="flex items-center gap-1.5 text-zinc-400 dark:text-zinc-500">
+          <div className="flex items-center gap-1.5 text-[var(--text-muted)]">
             <span>No codebase linked yet</span>
           </div>
         ) : implementing ? (
           <>
-            <div className="flex items-center gap-1.5 text-zinc-500 dark:text-zinc-400">
+            <div className="flex items-center gap-1.5 text-[var(--text-tertiary)]">
               <Lock className="h-3 w-3" />
               <span>Drift detection locked</span>
             </div>
             <div className="flex-1" />
             <button
               type="button"
-              className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-zinc-500 hover:text-zinc-700 hover:bg-zinc-200 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-zinc-700 cursor-pointer transition-colors shrink-0"
+              className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-[var(--text-tertiary)] hover:text-[var(--text)] hover:bg-[var(--surface-hover)] cursor-pointer transition-colors shrink-0"
               onClick={onToggleLock}
               title="Unlock drift detection"
             >
@@ -149,12 +149,12 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, implement
               <span>Syncing… {formatElapsed(elapsed)}</span>
             </div>
             {activityLabel && (
-              <span className="text-zinc-400 dark:text-zinc-500 truncate">{activityLabel}</span>
+              <span className="text-[var(--text-muted)] truncate">{activityLabel}</span>
             )}
             <div className="flex-1" />
             <button
               type="button"
-              className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-zinc-500 hover:text-zinc-700 hover:bg-zinc-200 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-zinc-700 cursor-pointer transition-colors shrink-0"
+              className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-[var(--text-tertiary)] hover:text-[var(--text)] hover:bg-[var(--surface-hover)] cursor-pointer transition-colors shrink-0"
               onClick={onCancelSync}
             >
               <X className="h-3 w-3" />
@@ -169,7 +169,7 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, implement
             </div>
             <button
               type="button"
-              className="text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer transition-colors shrink-0"
+              className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] cursor-pointer transition-colors shrink-0"
               onClick={onDismissMessage}
               title="Dismiss"
             >
@@ -188,7 +188,7 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, implement
               <div className="h-1.5 w-1.5 rounded-full bg-indigo-500 shrink-0" />
               <button
                 type="button"
-                className="text-zinc-600 dark:text-zinc-300 hover:text-zinc-800 dark:hover:text-zinc-100 cursor-pointer transition-colors flex items-center gap-1"
+                className="text-[var(--text-secondary)] hover:text-[var(--text)] cursor-pointer transition-colors flex items-center gap-1"
                 onClick={() => driftedNodes.length > 0 && setExpanded((v) => !v)}
                 title={driftedNodes.length > 0 ? "Show potentially drifted nodes" : undefined}
               >
@@ -219,7 +219,7 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, implement
                   </button>
                 ))}
                 {sortedDriftedNodes.length > 3 && (
-                  <span className="text-[10px] text-zinc-400 dark:text-zinc-500 shrink-0">
+                  <span className="text-[10px] text-[var(--text-muted)] shrink-0">
                     +{sortedDriftedNodes.length - 3} more
                   </span>
                 )}
@@ -231,7 +231,7 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, implement
             {/* Dismiss + Sync action buttons */}
             <button
               type="button"
-              className="text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer transition-colors shrink-0"
+              className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] cursor-pointer transition-colors shrink-0"
               onClick={onDismissDrift}
               title="Dismiss — mark as in sync"
             >
@@ -248,14 +248,14 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, implement
           </>
         ) : (
           <>
-            <div className="flex items-center gap-1.5 text-zinc-400 dark:text-zinc-500">
+            <div className="flex items-center gap-1.5 text-[var(--text-muted)]">
               <Check className="h-3 w-3 text-emerald-500" />
               <span>In sync</span>
             </div>
             <div className="flex-1" />
             <button
               type="button"
-              className="text-zinc-300 hover:text-zinc-500 dark:text-zinc-600 dark:hover:text-zinc-400 cursor-pointer transition-colors shrink-0"
+              className="text-[var(--text-ghost)] hover:text-[var(--text-muted)] cursor-pointer transition-colors shrink-0"
               onClick={onToggleLock}
               title="Lock drift detection"
             >
@@ -267,24 +267,24 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, implement
 
       {/* Expanded drift details */}
       {expanded && sortedDriftedNodes.length > 0 && syncStatus === "idle" && (
-        <div className="border-t border-zinc-200/60 dark:border-zinc-700/60 px-3 py-1.5 space-y-1">
+        <div className="border-t border-[var(--border-subtle)] px-3 py-1.5 space-y-1">
           {sortedDriftedNodes.map((d) => (
             <button
               key={d.nodeId}
               type="button"
-              className="flex items-center gap-2 text-[11px] w-full text-left cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded px-1 -mx-1 transition-colors"
+              className="flex items-center gap-2 text-[11px] w-full text-left cursor-pointer hover:bg-[var(--surface-tint)] rounded px-1 -mx-1 transition-colors"
               onClick={() => onNavigateToNode?.(d.nodeId)}
             >
-              <span className="text-zinc-600 dark:text-zinc-300 font-medium">{d.nodeName}</span>
-              <span className="text-zinc-400 dark:text-zinc-500 truncate text-[10px]">
+              <span className="text-[var(--text-secondary)] font-medium">{d.nodeName}</span>
+              <span className="text-[var(--text-muted)] truncate text-[10px]">
                 {d.patterns.join(", ")}
               </span>
             </button>
           ))}
           {structureChanged && (
             <div className="flex items-center gap-2 text-[11px]">
-              <span className="text-zinc-600 dark:text-zinc-300 font-medium">Project structure</span>
-              <span className="text-zinc-400 dark:text-zinc-500 text-[10px]">New files detected</span>
+              <span className="text-[var(--text-secondary)] font-medium">Project structure</span>
+              <span className="text-[var(--text-muted)] text-[10px]">New files detected</span>
             </div>
           )}
         </div>

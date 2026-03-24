@@ -5,7 +5,7 @@ export function SegmentedControl<T extends string | undefined>({ options, value,
   onChange: (value: T) => void;
 }) {
   return (
-    <div className="flex rounded border border-zinc-200 overflow-hidden dark:border-zinc-600">
+    <div className="flex rounded border border-[var(--border-strong)] overflow-hidden">
       {options.map((opt) => (
         <button
           key={String(opt.value ?? "__none__")}
@@ -13,7 +13,7 @@ export function SegmentedControl<T extends string | undefined>({ options, value,
           className={`flex-1 px-2 py-1 text-xs cursor-pointer transition-colors ${
             value === opt.value
               ? "bg-zinc-700 text-white dark:bg-zinc-200 dark:text-zinc-900"
-              : "bg-white text-zinc-600 hover:bg-zinc-50 dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600"
+              : "bg-[var(--surface-raised)] text-[var(--text-secondary)] hover:bg-[var(--surface)]"
           }`}
           onClick={() => onChange(opt.value)}
         >

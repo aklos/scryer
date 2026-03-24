@@ -324,6 +324,39 @@ export function C4Canvas({
     }
   }, [layoutPending]);
 
+  // ── Connection proximity: show handles on nodes near cursor during edge drag ──
+  const connectSourceRef = useRef<string | null>(null);
+  const connectMoveRef = useRef<((e: MouseEvent) => void) | null>(null);
+
+  const handleConnectStart = useCallback((_: unknown, params: { nodeId: string | null }) => {
+    connectSourceRef.current = params.nodeId;
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    const PROXIMITY = 80;
+    const onMove = (e: MouseEvent) => {
+      const nodeEls = wrapper.querySelectorAll('.react-flow__node');
+      for (const el of nodeEls) {
+        const htmlEl = el as HTMLElement;
+        if (htmlEl.dataset.id === connectSourceRef.current) continue;
+        const rect = htmlEl.getBoundingClientRect();
+        const dx = Math.max(rect.left - e.clientX, 0, e.clientX - rect.right);
+        const dy = Math.max(rect.top - e.clientY, 0, e.clientY - rect.bottom);
+        htmlEl.classList.toggle('connection-nearby', Math.sqrt(dx * dx + dy * dy) < PROXIMITY);
+      }
+    };
+    connectMoveRef.current = onMove;
+    window.addEventListener('mousemove', onMove);
+  }, []);
+
+  const handleConnectEnd = useCallback(() => {
+    connectSourceRef.current = null;
+    if (connectMoveRef.current) {
+      window.removeEventListener('mousemove', connectMoveRef.current);
+      connectMoveRef.current = null;
+    }
+    wrapperRef.current?.querySelectorAll('.connection-nearby').forEach(el => el.classList.remove('connection-nearby'));
+  }, []);
+
   const isCodeLevel = parentKind === "component";
 
   const handleRackSelect = useCallback((id: string) => {
@@ -342,7 +375,7 @@ export function C4Canvas({
 
   if (isCodeLevel) {
     return (
-      <div className="flex-1 relative flex flex-col bg-zinc-50 dark:bg-zinc-950">
+      <div className="flex-1 relative flex flex-col bg-[var(--surface)]">
         <CodeLevelRack
           nodes={visibleNodesWithHints}
           onSelectNode={handleRackSelect}
@@ -358,9 +391,9 @@ export function C4Canvas({
               type="button"
               className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] cursor-pointer transition-colors ${
                 aiConfigured && aiEnabled
-                  ? "text-violet-500 hover:bg-zinc-100 dark:text-violet-400 dark:hover:bg-zinc-800"
+                  ? "text-violet-500 hover:bg-[var(--surface-tint)] dark:text-violet-400 dark:hover:bg-[var(--surface-tint)]"
                   : aiConfigured
-                    ? "text-zinc-400 hover:bg-zinc-100 dark:text-zinc-500 dark:hover:bg-zinc-800"
+                    ? "text-[var(--text-muted)] hover:bg-[var(--surface-tint)]"
                     : "text-violet-500 hover:bg-violet-50 dark:text-violet-400 dark:hover:bg-violet-950/30"
               }`}
               onClick={() => aiConfigured && aiEnabled ? (hintLoading || fetchHints()) : setSettingsOpen(true)}
@@ -374,7 +407,7 @@ export function C4Canvas({
               {!aiConfigured ? "Configure AI" : aiEnabled ? "Review" : "AI off"}
             </button>
           )}
-          <span className="text-[10px] text-zinc-300 dark:text-zinc-600">scryer <span className="opacity-60">{appVersion}</span></span>
+          <span className="text-[10px] text-[var(--text-ghost)]">scryer <span className="opacity-60">{appVersion}</span></span>
         </div>
       </div>
     );
@@ -384,7 +417,7 @@ export function C4Canvas({
     <div className="flex-1 relative" ref={wrapperRef} onContextMenu={handleContextMenu}>
       {overlayMounted && (
         <div
-          className={`absolute inset-0 z-50 flex items-center justify-center bg-zinc-50 dark:bg-zinc-950 transition-opacity duration-200 ${overlayOpaque ? "opacity-100" : "opacity-0"}`}
+          className={`absolute inset-0 z-50 flex items-center justify-center bg-[var(--surface)] transition-opacity duration-200 ${overlayOpaque ? "opacity-100" : "opacity-0"}`}
         >
           <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
         </div>
@@ -398,6 +431,8 @@ export function C4Canvas({
         onNodesChange={wrappedOnNodesChange}
         onEdgesChange={wrappedOnEdgesChange}
         onConnect={onConnect}
+        onConnectStart={handleConnectStart}
+        onConnectEnd={handleConnectEnd}
         connectionMode={ConnectionMode.Loose}
         defaultEdgeOptions={defaultEdgeOptions}
         edgesReconnectable={false}
@@ -416,7 +451,7 @@ export function C4Canvas({
         {/* Canvas toolbar */}
         {(currentModel !== null || nodes.length > 0) && (
           <Panel position="top-center" className="!mt-3">
-            <div className="flex items-center gap-0.5 rounded-lg border border-zinc-200/80 bg-white/80 backdrop-blur-sm shadow-sm px-1 py-0.5 dark:border-zinc-700/80 dark:bg-zinc-900/80">
+            <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border-overlay)] bg-[var(--surface-overlay)] backdrop-blur-sm shadow-sm px-1 py-0.5">
               {(selectedNode || selectedEdge) && (
                 <>
                   <Button
@@ -433,11 +468,11 @@ export function C4Canvas({
                     }}
                   >
                     <Trash2 className="h-3 w-3" />
-                    {selectedNode?.type === "groupBox" ? "ungroup" : "delete"}
+                    {selectedNode?.type === "groupBox" ? "ungroup" : selectedNode?.data._reference ? "disconnect" : "delete"}
                   </Button>
                 </>
               )}
-              {(selectedNode || selectedEdge) && <div className="w-px h-4 bg-zinc-200 dark:bg-zinc-700 mx-0.5" />}
+              {(selectedNode || selectedEdge) && <div className="w-px h-4 bg-[var(--surface-active)] mx-0.5" />}
               {!currentParentId ? (
                 <>
                   <Button variant="ghost" onClick={() => onAddNode("system")}>
@@ -464,8 +499,8 @@ export function C4Canvas({
               type="button"
               className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] cursor-pointer transition-colors ${
                 followAI
-                  ? "text-blue-500 hover:bg-zinc-100 dark:text-blue-400 dark:hover:bg-zinc-800"
-                  : "text-zinc-400 hover:bg-zinc-100 dark:text-zinc-500 dark:hover:bg-zinc-800"
+                  ? "text-blue-500 hover:bg-[var(--surface-tint)] dark:text-blue-400 dark:hover:bg-[var(--surface-tint)]"
+                  : "text-[var(--text-muted)] hover:bg-[var(--surface-tint)]"
               }`}
               onClick={onToggleFollowAI}
               title={followAI ? "Following AI changes (click to disable)" : "Not following AI changes (click to enable)"}
@@ -479,9 +514,9 @@ export function C4Canvas({
               type="button"
               className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] cursor-pointer transition-colors ${
                 aiConfigured && aiEnabled
-                  ? "text-violet-500 hover:bg-zinc-100 dark:text-violet-400 dark:hover:bg-zinc-800"
+                  ? "text-violet-500 hover:bg-[var(--surface-tint)] dark:text-violet-400 dark:hover:bg-[var(--surface-tint)]"
                   : aiConfigured
-                    ? "text-zinc-400 hover:bg-zinc-100 dark:text-zinc-500 dark:hover:bg-zinc-800"
+                    ? "text-[var(--text-muted)] hover:bg-[var(--surface-tint)]"
                     : "text-violet-500 hover:bg-violet-50 dark:text-violet-400 dark:hover:bg-violet-950/30"
               }`}
               onClick={() => aiConfigured && aiEnabled ? (hintLoading || fetchHints()) : setSettingsOpen(true)}
@@ -498,7 +533,7 @@ export function C4Canvas({
           <div className="relative">
             <button
               type="button"
-              className="text-zinc-300 hover:text-zinc-500 dark:text-zinc-600 dark:hover:text-zinc-400 cursor-pointer transition-colors"
+              className="text-[var(--text-ghost)] hover:text-[var(--text-tertiary)] cursor-pointer transition-colors"
               onClick={() => setShowHelp((v) => !v)}
               title="Keyboard shortcuts"
             >
@@ -506,22 +541,22 @@ export function C4Canvas({
             </button>
             {showHelp && (
               <div
-                className="absolute bottom-6 right-0 z-50 w-56 rounded-lg border border-zinc-200/80 bg-white/95 shadow-lg backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-900/95 p-3 text-[11px] text-zinc-600 dark:text-zinc-300 space-y-1.5"
+                className="absolute bottom-6 right-0 z-50 w-56 rounded-lg border border-[var(--border-overlay)] bg-[var(--surface-overlay)] shadow-lg backdrop-blur-sm p-3 text-[11px] text-[var(--text-secondary)] space-y-1.5"
                 onPointerDown={(e) => e.stopPropagation()}
               >
-                <div className="font-medium text-zinc-800 dark:text-zinc-100 mb-2">Shortcuts</div>
-                <div className="flex justify-between"><span>Selection box</span><kbd className="text-[10px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded">Shift + drag</kbd></div>
-                <div className="flex justify-between"><span>Multi-select</span><kbd className="text-[10px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded">Shift + click</kbd></div>
-                <div className="flex justify-between"><span>Switch model</span><kbd className="text-[10px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded">Ctrl+K</kbd></div>
-                <div className="flex justify-between"><span>Undo / Redo</span><kbd className="text-[10px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded">Ctrl+Z / Y</kbd></div>
-                <div className="flex justify-between"><span>Delete selected</span><kbd className="text-[10px] bg-zinc-100 dark:bg-zinc-800 px-1 rounded">Del</kbd></div>
-                <div className="border-t border-zinc-200/60 dark:border-zinc-700/60 pt-1.5 mt-1.5 space-y-1.5">
-                  <div className="text-zinc-400 dark:text-zinc-500">Right-click the <b>Review</b> button for AI settings</div>
+                <div className="font-medium text-[var(--text)] mb-2">Shortcuts</div>
+                <div className="flex justify-between"><span>Selection box</span><kbd className="text-[10px] bg-[var(--surface-tint)] px-1 rounded">Shift + drag</kbd></div>
+                <div className="flex justify-between"><span>Multi-select</span><kbd className="text-[10px] bg-[var(--surface-tint)] px-1 rounded">Shift + click</kbd></div>
+                <div className="flex justify-between"><span>Switch model</span><kbd className="text-[10px] bg-[var(--surface-tint)] px-1 rounded">Ctrl+K</kbd></div>
+                <div className="flex justify-between"><span>Undo / Redo</span><kbd className="text-[10px] bg-[var(--surface-tint)] px-1 rounded">Ctrl+Z / Y</kbd></div>
+                <div className="flex justify-between"><span>Delete selected</span><kbd className="text-[10px] bg-[var(--surface-tint)] px-1 rounded">Del</kbd></div>
+                <div className="border-t border-[var(--border-subtle)] pt-1.5 mt-1.5 space-y-1.5">
+                  <div className="text-[var(--text-muted)]">Right-click the <b>Review</b> button for AI settings</div>
                 </div>
               </div>
             )}
           </div>
-          <span className="text-[10px] text-zinc-300 dark:text-zinc-600">scryer <span className="opacity-60">{appVersion}</span></span>
+          <span className="text-[10px] text-[var(--text-ghost)]">scryer <span className="opacity-60">{appVersion}</span></span>
         </Panel>
         {(currentModel !== null || nodes.length > 0) && (
           <Controls>
@@ -545,10 +580,10 @@ export function C4Canvas({
             <div className="flex items-center gap-4">
               <img src="/logo.png" alt="scryer" className="w-16 h-16" />
               <div className="flex flex-col">
-                <h1 className="text-5xl font-bold tracking-tight text-zinc-800 dark:text-zinc-100" style={{ fontFamily: "'Space Grotesk Variable', sans-serif" }}>scryer</h1>
+                <h1 className="text-5xl font-bold tracking-tight text-[var(--text)]" style={{ fontFamily: "'Space Grotesk Variable', sans-serif" }}>scryer</h1>
               </div>
             </div>
-            <div className="flex flex-col gap-2 text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed">
+            <div className="flex flex-col gap-2 text-sm text-[var(--text-tertiary)] leading-relaxed">
               <p>
                 Plan your software architecture using the{" "}
                 <a href="https://c4model.com" target="_blank" rel="noopener noreferrer" className="font-medium text-blue-500 hover:text-blue-400 underline underline-offset-2">C4 model</a>
@@ -561,7 +596,7 @@ export function C4Canvas({
               </Button>
               {templateList.length > 0 && (
                 <div className="flex flex-col gap-1.5">
-                  <p className="text-[11px] uppercase tracking-wider text-zinc-400 dark:text-zinc-500">or start from a template</p>
+                  <p className="text-[11px] uppercase tracking-wider text-[var(--text-muted)]">or start from a template</p>
                   <div className="flex flex-wrap justify-center gap-1.5">
                     {templateList.map((t) => (
                       <Button key={t} variant="secondary" size="md" className="shadow-sm" onClick={() => loadTemplate(t)}>
@@ -589,7 +624,7 @@ export function C4Canvas({
       {/* Right-click context menu */}
       {contextMenu && (
         <div
-          className="fixed z-50 min-w-[140px] rounded-lg border border-zinc-200/80 bg-white/80 shadow-sm backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-900/80 py-1"
+          className="fixed z-50 min-w-[140px] rounded-lg border border-[var(--border-overlay)] bg-[var(--surface-overlay)] shadow-sm backdrop-blur-sm py-1"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onPointerDown={(e) => e.stopPropagation()}
         >
@@ -599,7 +634,7 @@ export function C4Canvas({
               if (node) onBulkDelete({ nodes: [node], edges: [] });
               setContextMenu(null);
             }}>
-              <Trash2 className="h-3 w-3" /> Delete
+              <Trash2 className="h-3 w-3" /> {visibleNodesWithHints.find((n) => n.id === contextMenu.nodeId)?.data._reference ? "Disconnect" : "Delete"}
             </button>
           ) : contextMenu.edgeId ? (
             <button type="button" className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30 cursor-pointer transition-colors" onClick={() => {
@@ -611,16 +646,16 @@ export function C4Canvas({
             </button>
           ) : !currentParentId ? (
             <>
-              <button type="button" className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-700 cursor-pointer transition-colors" onClick={() => addFromContext("system")}>
+              <button type="button" className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-tint)] cursor-pointer transition-colors" onClick={() => addFromContext("system")}>
                 <Plus className="h-3 w-3" /> Add system
               </button>
-              <button type="button" className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-700 cursor-pointer transition-colors" onClick={() => addFromContext("person")}>
+              <button type="button" className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-tint)] cursor-pointer transition-colors" onClick={() => addFromContext("person")}>
                 <Plus className="h-3 w-3" /> Add person
               </button>
             </>
           ) : (
             <>
-              <button type="button" className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-700 cursor-pointer transition-colors" onClick={() => addFromContext()}>
+              <button type="button" className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-tint)] cursor-pointer transition-colors" onClick={() => addFromContext()}>
                 <Plus className="h-3 w-3" /> Add {currentParentKind === "system" ? "container" : currentParentKind === "container" ? "component" : "operation"}
               </button>
             </>

@@ -66,11 +66,11 @@ function MemberChipList({
           <div
             key={item.id}
             draggable
-            className={`nodrag flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-mono leading-tight cursor-grab border ${
+            className={`nodrag flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono leading-tight cursor-grab border ${
               dimmed
-                ? "bg-zinc-100/50 text-zinc-400 dark:bg-zinc-800/30 dark:text-zinc-500"
-                : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
-            } ${!sc ? (dimmed ? "border-zinc-200/60 dark:border-zinc-700/40" : "border-zinc-200 dark:border-zinc-700") : ""}`}
+                ? "bg-[var(--surface-inset)] text-[var(--text-muted)]"
+                : "bg-[var(--surface-tint)] text-[var(--text-secondary)]"
+            } ${!sc ? (dimmed ? "border-[var(--border-subtle)]" : "border-[var(--border)]") : ""}`}
             style={
               sc && item.status
                 ? { borderColor: dimmed ? statusHex(item.status as Status) + "40" : statusHex(item.status as Status) + "99" }
@@ -99,10 +99,10 @@ function MemberChipList({
       })}
       {overflow > 0 && (
         <div
-          className={`text-center text-[9px] font-mono leading-tight py-0.5 ${
+          className={`text-center text-[10px] font-mono leading-tight py-0.5 ${
             dimmed
-              ? "text-zinc-500 dark:text-zinc-600"
-              : "text-zinc-400 dark:text-zinc-500"
+              ? "text-[var(--text-tertiary)]"
+              : "text-[var(--text-muted)]"
           }`}
         >
           +{overflow} more
@@ -192,8 +192,8 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
               fillClass="fill-[var(--scryer-ref-bg)]"
               strokeClass={
                 selected
-                  ? "stroke-zinc-900 dark:stroke-zinc-300"
-                  : "stroke-zinc-300 dark:stroke-zinc-700"
+                  ? "stroke-[var(--text)]"
+                  : "stroke-[var(--scryer-outline-stroke)]"
               }
               strokeWidth={selected ? 2.5 : 1}
               strokeDasharray={data.external ? "6 3" : undefined}
@@ -204,7 +204,7 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
           {data._codeLevel ? <CenterHandle /> : <NodeHandles />}
 
           <div
-            className={`absolute flex flex-col justify-center items-center text-zinc-500 dark:text-zinc-400 ${isRefPerson ? "overflow-visible" : "overflow-hidden"}`}
+            className={`absolute flex flex-col justify-center items-center text-[var(--text-tertiary)] ${isRefPerson ? "overflow-visible" : "overflow-hidden"}`}
             style={{
               top: isRefPerson && (data.description?.length ?? 0) > 80 ? -20 : insets.top,
               bottom: insets.bottom,
@@ -268,7 +268,7 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
               </svg>
             )}
             <div className="w-full text-center text-sm font-semibold leading-tight break-all">
-              <span className="text-zinc-400 dark:text-zinc-500">
+              <span className="text-[var(--text-muted)]">
                 {data._relationships?.[0]?.direction === "out"
                   ? "\u2190"
                   : "\u2192"}
@@ -328,7 +328,7 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
         <NodeHandles />
         {/* Content — silhouette flows with text */}
         <div
-          className="absolute flex flex-col justify-center items-center text-zinc-800 dark:text-zinc-100 overflow-visible"
+          className="absolute flex flex-col justify-center items-center text-[var(--text)] overflow-visible"
           style={{ top: longDesc ? -20 : 6, bottom: 6, left: 8, right: 8 }}
         >
           {/* Person silhouette — inline, extends above via negative margin */}
@@ -388,7 +388,7 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
             {data.name}
           </div>
           {data.description && (
-            <div className="mt-2 w-full text-[10px] leading-snug text-zinc-400 dark:text-zinc-500 break-words overflow-hidden text-center">
+            <div className="mt-2 w-full text-[10px] leading-snug text-[var(--text-muted)] break-words overflow-hidden text-center">
               <DescriptionText
                 text={data.description}
                 onMentionClick={(name) =>
@@ -428,14 +428,16 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
           }
           strokeClass={
             selected
-              ? "stroke-zinc-900 dark:stroke-zinc-300"
+              ? "stroke-[var(--text)]"
               : statusColor
                 ? groupHighlight
                   ? statusColor.strokeClass
                   : statusColor.dimStrokeClass
                 : groupHighlight
-                  ? "stroke-zinc-400 dark:stroke-zinc-500"
-                  : "stroke-zinc-200 dark:stroke-zinc-700"
+                  ? "stroke-[var(--text-muted)]"
+                  : isExternal
+                    ? "stroke-[var(--scryer-outline-stroke)]"
+                    : "stroke-[var(--border)]"
           }
           strokeWidth={selected ? 2.5 : groupHighlight || statusColor ? 2 : 1}
           strokeDasharray={isExternal ? "6 3" : undefined}
@@ -449,7 +451,7 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
         {expandable && selected && (
           <div className="absolute top-1.5 right-1.5 flex items-center z-10">
             <button
-              className="nodrag flex items-center justify-center w-5 h-5 rounded bg-zinc-100 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 text-xs cursor-pointer hover:bg-zinc-200 dark:hover:bg-zinc-600 transition-colors"
+              className="nodrag flex items-center justify-center w-5 h-5 rounded bg-[var(--surface-tint)] text-[var(--text-secondary)] text-xs cursor-pointer hover:bg-[var(--surface-active)] transition-colors"
               onClick={() =>
                 window.dispatchEvent(
                   new CustomEvent("node-expand", { detail: { nodeId: id } }),
@@ -470,14 +472,14 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
 
         {/* Has-children indicator */}
         {expandable && hasChildren && (
-          <div className="absolute bottom-2 right-2.5 z-10 text-zinc-300 dark:text-zinc-600 pointer-events-none">
+          <div className="absolute bottom-2 right-2.5 z-10 text-[var(--text-ghost)] pointer-events-none">
             <Layers size={12} strokeWidth={1.5} />
           </div>
         )}
 
         {/* Content area */}
         <div
-          className="absolute flex flex-col justify-center items-center text-zinc-800 dark:text-zinc-100 overflow-hidden"
+          className="absolute flex flex-col justify-center items-center text-[var(--text)] overflow-hidden"
           style={{
             top: insets.top,
             bottom: insets.bottom,
@@ -492,14 +494,14 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
 
           {/* Technology */}
           {data.technology && (
-            <div className="mt-0.5 text-center text-[10px] tracking-wider text-zinc-500 dark:text-zinc-400">
+            <div className="mt-0.5 text-center text-[10px] tracking-wider text-[var(--text-tertiary)]">
               {data.technology}
             </div>
           )}
 
           {/* Description */}
           {data.description && (
-            <div className="mt-2 w-full text-[10px] leading-snug text-zinc-400 dark:text-zinc-500 break-words overflow-hidden text-center">
+            <div className="mt-2 w-full text-[10px] leading-snug text-[var(--text-muted)] break-words overflow-hidden text-center">
               <DescriptionText
                 text={data.description}
                 onMentionClick={(name) =>

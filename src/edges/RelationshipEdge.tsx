@@ -209,8 +209,8 @@ export function RelationshipEdge({
 
   const clipId = `clip-${id}`;
   const edgeOpacity = isMention
-    ? (connectedHighlight ? 0.6 : dimmed ? 0.08 : 0.3)
-    : selected || connectedHighlight ? 1 : dimmed ? 0.15 : 0.55;
+    ? (connectedHighlight ? 0.6 : dimmed ? 0.15 : 0.4)
+    : selected || connectedHighlight ? 1 : dimmed ? 0.25 : 0.7;
 
   return (
     <>
@@ -281,12 +281,12 @@ export function RelationshipEdge({
             className="flex flex-col items-center"
           >
             {label && (
-              <div className="px-1.5 py-0.5 text-[10px] rounded bg-zinc-200/80 text-zinc-700 dark:bg-black/60 dark:text-zinc-200 whitespace-nowrap">
+              <div className="px-1.5 py-0.5 text-[10px] rounded bg-[var(--surface-active)]/80 text-[var(--text)] whitespace-nowrap">
                 {label}
               </div>
             )}
             {method && (
-              <div className="text-[9px] text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
+              <div className="text-[9px] text-[var(--text-tertiary)] whitespace-nowrap">
                 [{method}]
               </div>
             )}

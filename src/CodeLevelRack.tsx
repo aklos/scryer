@@ -39,7 +39,7 @@ function StatusDot({ status }: { status?: Status }) {
   const sc = STATUS_COLORS[status];
   return (
     <span
-      className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${sc.dotClass}`}
+      className={`inline-block w-2 h-2 rounded-full shrink-0 ${sc.dotClass}`}
       title={sc.label}
     />
   );
@@ -51,9 +51,9 @@ function PropertyList({ properties }: { properties: ModelProperty[] }) {
     <div className="mt-2 space-y-0.5">
       {properties.map((p) => (
         <div key={p.label} className="flex items-baseline gap-2 text-[11px] leading-snug">
-          <span className="font-mono font-medium text-zinc-700 dark:text-zinc-300 shrink-0">.{p.label}</span>
+          <span className="font-mono font-medium text-[var(--text-secondary)] shrink-0">.{p.label}</span>
           {p.description && (
-            <span className="text-zinc-400 dark:text-zinc-500 truncate">{p.description}</span>
+            <span className="text-[var(--text-muted)] truncate">{p.description}</span>
           )}
         </div>
       ))}
@@ -80,19 +80,19 @@ function RackCard({
       type="button"
       className={`w-full text-left rounded-lg border px-3 py-2.5 transition-colors cursor-pointer group ${
         selected
-          ? "border-zinc-900 dark:border-zinc-300 border-2 px-[11px] py-[9px]"
-          : "border-zinc-200 bg-white hover:border-zinc-300 dark:border-zinc-700/80 dark:bg-zinc-900 dark:hover:border-zinc-500"
+          ? "border-[var(--text)] border-2 px-[11px] py-[9px]"
+          : "border-[var(--border)] bg-[var(--surface-raised)] hover:border-[var(--border-strong)]"
       }`}
       onClick={onClick}
     >
       <div className="flex items-center gap-1.5">
         <StatusDot status={data.status} />
-        <span className="font-mono text-sm font-semibold text-zinc-800 dark:text-zinc-100 truncate">
+        <span className="font-mono text-sm font-semibold text-[var(--text)] truncate">
           {data.name}
         </span>
         <button
           type="button"
-          className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-zinc-400 hover:text-red-500 cursor-pointer"
+          className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-[var(--text-muted)] hover:text-red-500 cursor-pointer"
           onClick={(e) => {
             e.stopPropagation();
             onDelete();
@@ -103,7 +103,7 @@ function RackCard({
         </button>
       </div>
       {data.description && (
-        <div className="mt-1 text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">
+        <div className="mt-1 text-sm leading-relaxed text-[var(--text-tertiary)]">
           <DescriptionText text={data.description} nodeMap={nodeMap} />
         </div>
       )}
@@ -159,22 +159,22 @@ function RackColumn({
   return (
     <div className={`flex flex-col min-w-0 min-h-0 ${
       stacked
-        ? `border-b last:border-b-0 border-zinc-200 dark:border-zinc-800${expanded ? " flex-1" : ""}`
-        : "flex-1 border-r last:border-r-0 border-zinc-200 dark:border-zinc-800"
+        ? `border-b last:border-b-0 border-[var(--border)]${expanded ? " flex-1" : ""}`
+        : "flex-1 border-r last:border-r-0 border-[var(--border)]"
     }`}>
       {/* Column header */}
       <div
-        className={`flex items-center gap-1.5 px-3 py-2 h-[32px] border-b border-zinc-200 dark:border-zinc-800 bg-white/50 dark:bg-zinc-900/80 shrink-0 ${
+        className={`flex items-center gap-1.5 px-3 py-2 h-[32px] border-b border-[var(--border)] bg-[var(--surface-overlay)] shrink-0 ${
           stacked ? "cursor-pointer select-none" : ""
         }`}
         onClick={stacked ? () => setCollapsed((c) => !c) : undefined}
       >
-        {stacked && <Chevron className="h-3 w-3 text-zinc-400 dark:text-zinc-500" />}
-        <Icon className="h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" />
-        <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
+        {stacked && <Chevron className="h-3 w-3 text-[var(--text-muted)]" />}
+        <Icon className="h-3.5 w-3.5 text-[var(--text-muted)]" />
+        <span className="text-xs font-medium text-[var(--text-secondary)]">
           {title}
         </span>
-        <span className="text-[10px] text-zinc-400 dark:text-zinc-500">
+        <span className="text-[10px] text-[var(--text-muted)]">
           {sorted.length}
         </span>
         <Button
@@ -187,7 +187,7 @@ function RackColumn({
       </div>
       {/* Scrollable card list */}
       {expanded && (
-        <div className="flex-1 overflow-y-auto p-2 space-y-1.5 bg-zinc-50 dark:bg-zinc-950">
+        <div className="flex-1 overflow-y-auto p-2 space-y-1.5 bg-[var(--surface)]">
           {sorted.map((node) => (
             <RackCard
               key={node.id}

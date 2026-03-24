@@ -7,7 +7,7 @@ export function HintBadge({ hints }: { nodeId: string; hints: Hint[] }) {
 
   return (
     <div
-      className={`absolute -top-1.5 -right-1.5 z-20 w-4 h-4 rounded-full border-2 border-white dark:border-zinc-800 ${
+      className={`absolute -top-1.5 -right-1.5 z-20 w-4 h-4 rounded-full border-2 border-[var(--surface-canvas)] ${
         hasWarning ? "bg-orange-400" : "bg-teal-400"
       }`}
       title={`${hints.length} hint${hints.length > 1 ? "s" : ""}`}

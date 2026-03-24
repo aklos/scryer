@@ -265,6 +265,23 @@ export function applyTheme(theme: ThemeConfig): void {
   --scryer-person-fill: ${personLightHex};
   --scryer-select-stroke: ${sh(10)};
   --scryer-outline-stroke: ${sh(4)};
+  --surface-canvas: ${canvasLightHex};
+  --surface: ${sh(clamp(theme.canvasLight - 1))};
+  --surface-raised: ${nodeLightHex};
+  --surface-overlay: ${hexAlpha(nodeLightHex, 0.8)};
+  --surface-inset: ${hexAlpha(sh(theme.canvasLight), 0.6)};
+  --surface-tint: ${sh(theme.canvasLight)};
+  --surface-hover: ${hexAlpha(sh(clamp(theme.canvasLight + 1)), 0.6)};
+  --surface-active: ${sh(clamp(theme.canvasLight + 1))};
+  --text: ${sh(8)};
+  --text-secondary: ${sh(6)};
+  --text-tertiary: ${sh(5)};
+  --text-muted: ${sh(4)};
+  --text-ghost: ${sh(3)};
+  --border: ${sh(clamp(theme.canvasLight + 1))};
+  --border-subtle: ${hexAlpha(sh(clamp(theme.canvasLight + 1)), 0.6)};
+  --border-strong: ${sh(clamp(theme.canvasLight + 2))};
+  --border-overlay: ${hexAlpha(sh(clamp(theme.canvasLight + 1)), 0.8)};
 }
 .dark {
   --xy-background-color: ${canvasDarkHex};
@@ -276,6 +293,23 @@ export function applyTheme(theme: ThemeConfig): void {
   --scryer-person-fill: ${personDarkHex};
   --scryer-select-stroke: ${sh(2)};
   --scryer-outline-stroke: ${sh(7)};
+  --surface-canvas: ${canvasDarkHex};
+  --surface: ${sh(theme.canvasDark)};
+  --surface-raised: ${nodeDarkHex};
+  --surface-overlay: ${hexAlpha(sh(theme.canvasDark), 0.8)};
+  --surface-inset: ${hexAlpha(nodeDarkHex, 0.6)};
+  --surface-tint: ${nodeDarkHex};
+  --surface-hover: ${hexAlpha(sh(clamp(theme.nodeDark - 1)), 0.6)};
+  --surface-active: ${sh(clamp(theme.nodeDark - 1))};
+  --text: ${sh(2)};
+  --text-secondary: ${sh(3)};
+  --text-tertiary: ${sh(4)};
+  --text-muted: ${sh(5)};
+  --text-ghost: ${sh(6)};
+  --border: ${sh(clamp(theme.canvasDark - 2))};
+  --border-subtle: ${hexAlpha(sh(clamp(theme.canvasDark - 2)), 0.6)};
+  --border-strong: ${sh(clamp(theme.canvasDark - 3))};
+  --border-overlay: ${hexAlpha(sh(clamp(theme.canvasDark - 2)), 0.8)};
 }`;
 }
 
@@ -350,6 +384,11 @@ function mixHex(a: string, b: string, t: number): string {
 function parseHex(hex: string): [number, number, number] {
   const h = hex.replace("#", "");
   return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+
+/** Append hex alpha channel (0–1 → 00–ff). */
+function hexAlpha(hex: string, opacity: number): string {
+  return hex + Math.round(opacity * 255).toString(16).padStart(2, "0");
 }
 
 /** Get the hex value for a themed color by Tailwind family + shade.

@@ -38,7 +38,7 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
       role="switch"
       aria-checked={checked}
       className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors ${
-        checked ? "bg-blue-500" : "bg-zinc-300 dark:bg-zinc-600"
+        checked ? "bg-blue-500" : "bg-[var(--border-strong)]"
       }`}
       onClick={() => onChange(!checked)}
     >
@@ -112,45 +112,45 @@ function ProjectMenu({
   return (
     <div
       ref={menuRef}
-      className="absolute top-full left-0 mt-1 z-50 min-w-[240px] rounded-lg border border-zinc-200/80 bg-white/80 shadow-sm backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-900/80 py-1"
+      className="absolute top-full left-0 mt-1 z-50 min-w-[240px] rounded-lg border border-[var(--border-overlay)] bg-[var(--surface-overlay)] shadow-sm backdrop-blur-sm py-1"
     >
       <button
         type="button"
-        className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-700 cursor-pointer transition-colors"
+        className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-tint)] cursor-pointer transition-colors"
         onClick={() => { onSaveAs(); onClose(); }}
       >
-        <SaveAll className="h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" />
+        <SaveAll className="h-3.5 w-3.5 text-[var(--text-muted)]" />
         <span className="flex-1 text-left">Save as…</span>
       </button>
       <button
         type="button"
-        className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-700 cursor-pointer transition-colors"
+        className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-tint)] cursor-pointer transition-colors"
         onClick={async () => {
           const selected = await openDialog({ directory: true, title: "Select project folder", defaultPath: projectPath });
           if (selected) onSetProjectPath(selected);
         }}
       >
-        <FolderOpen className="h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500" />
+        <FolderOpen className="h-3.5 w-3.5 text-[var(--text-muted)]" />
         <span className="flex-1 text-left truncate">{projectPath ? "Change codebase" : "Link codebase"}</span>
       </button>
       {projectPath && (
-        <div className="px-3 py-1 text-[10px] text-zinc-400 dark:text-zinc-500 truncate max-w-[240px]" title={projectPath}>
+        <div className="px-3 py-1 text-[10px] text-[var(--text-muted)] truncate max-w-[240px]" title={projectPath}>
           {projectPath}
         </div>
       )}
 
       {(showClaude || showCodex) && (
         <>
-          <div className="my-1 border-t border-zinc-200/60 dark:border-zinc-700/60" />
-          <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+          <div className="my-1 border-t border-[var(--border-subtle)]" />
+          <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
             MCP Server
           </div>
           {showClaude && (
             <>
               <div className="flex items-center justify-between px-3 py-1.5">
                 <div>
-                  <div className="text-xs text-zinc-600 dark:text-zinc-300">Claude Code</div>
-                  <div className="text-[10px] text-zinc-400 dark:text-zinc-500 max-w-[160px]">.mcp.json</div>
+                  <div className="text-xs text-[var(--text-secondary)]">Claude Code</div>
+                  <div className="text-[10px] text-[var(--text-muted)] max-w-[160px]">.mcp.json</div>
                 </div>
                 <Toggle
                   checked={aiTools.claudeMcpEnabled}
@@ -160,8 +160,8 @@ function ProjectMenu({
               {aiTools.claudeMcpEnabled && (
                 <div className="flex items-center justify-between px-3 py-1.5 pl-6">
                   <div>
-                    <div className="text-xs text-zinc-600 dark:text-zinc-300">Auto-approve reads</div>
-                    <div className="text-[10px] text-zinc-400 dark:text-zinc-500 max-w-[140px]">settings.local.json</div>
+                    <div className="text-xs text-[var(--text-secondary)]">Auto-approve reads</div>
+                    <div className="text-[10px] text-[var(--text-muted)] max-w-[140px]">settings.local.json</div>
                   </div>
                   <Toggle
                     checked={aiTools.claudeReadApproved}
@@ -174,8 +174,8 @@ function ProjectMenu({
           {showCodex && (
             <div className="flex items-center justify-between px-3 py-1.5">
               <div>
-                <div className="text-xs text-zinc-600 dark:text-zinc-300">Codex</div>
-                <div className="text-[10px] text-zinc-400 dark:text-zinc-500 max-w-[160px]">.codex/config.toml</div>
+                <div className="text-xs text-[var(--text-secondary)]">Codex</div>
+                <div className="text-[10px] text-[var(--text-muted)] max-w-[160px]">.codex/config.toml</div>
               </div>
               <Toggle
                 checked={aiTools.codexMcpEnabled}
@@ -220,24 +220,24 @@ function AppMenu({ onClose, onOpenSettings, onOpenPalette, onCloseModel, hasMode
   return (
     <div
       ref={menuRef}
-      className="absolute top-full left-0 mt-1 z-50 min-w-[180px] rounded-lg border border-zinc-200/80 bg-white/80 shadow-sm backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-900/80 py-1"
+      className="absolute top-full left-0 mt-1 z-50 min-w-[180px] rounded-lg border border-[var(--border-overlay)] bg-[var(--surface-overlay)] shadow-sm backdrop-blur-sm py-1"
     >
       {items.map((item) => (
         <button
           key={item.label}
           type="button"
-          className={`flex items-center gap-2 w-full px-3 py-1.5 text-xs transition-colors ${item.disabled ? "text-zinc-300 dark:text-zinc-600 cursor-default" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-700 cursor-pointer"}`}
+          className={`flex items-center gap-2 w-full px-3 py-1.5 text-xs transition-colors ${item.disabled ? "text-[var(--text-ghost)] cursor-default" : "text-[var(--text-secondary)] hover:bg-[var(--surface-tint)] cursor-pointer"}`}
           onClick={item.disabled ? undefined : item.onClick}
         >
-          <item.icon className={`h-3.5 w-3.5 ${item.active ? "text-blue-500 dark:text-blue-400" : "text-zinc-400 dark:text-zinc-500"}`} />
+          <item.icon className={`h-3.5 w-3.5 ${item.active ? "text-blue-500 dark:text-blue-400" : "text-[var(--text-muted)]"}`} />
           <span className="flex-1 text-left">{item.label}</span>
           {item.active !== undefined && (
-            <span className={`text-[10px] ${item.active ? "text-blue-500 dark:text-blue-400" : "text-zinc-400 dark:text-zinc-500"}`}>
+            <span className={`text-[10px] ${item.active ? "text-blue-500 dark:text-blue-400" : "text-[var(--text-muted)]"}`}>
               {item.active ? "on" : "off"}
             </span>
           )}
           {item.shortcut && (
-            <span className="text-[10px] text-zinc-400 dark:text-zinc-500">{item.shortcut}</span>
+            <span className="text-[10px] text-[var(--text-muted)]">{item.shortcut}</span>
           )}
         </button>
       ))}
@@ -261,7 +261,7 @@ export function TopBar({
 
   return (
     <div
-      className="flex items-center h-9 shrink-0 border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 select-none"
+      className="flex items-center h-9 shrink-0 border-b border-[var(--border)] bg-[var(--surface)] select-none"
       data-tauri-drag-region
     >
       {/* Logo + app menu */}
@@ -269,7 +269,7 @@ export function TopBar({
         <button
           ref={appMenuTriggerRef}
           type="button"
-          className="h-9 w-10 flex items-center justify-center text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700/60 cursor-pointer transition-colors"
+          className="h-9 w-10 flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--surface-hover)] cursor-pointer transition-colors"
           onClick={toggleMenu}
           title="Menu"
         >
@@ -289,11 +289,11 @@ export function TopBar({
 
       {/* Left: model name */}
       <div
-        className="w-50 shrink-0 flex items-center gap-1 px-2 border-r border-zinc-200 dark:border-zinc-700 h-full"
+        className="w-50 shrink-0 flex items-center gap-1 px-2 border-r border-[var(--border)] h-full"
         data-tauri-drag-region
       >
         <span
-          className="truncate flex-1 text-xs font-semibold text-zinc-700 dark:text-zinc-300 cursor-pointer"
+          className="truncate flex-1 text-xs font-semibold text-[var(--text-secondary)] cursor-pointer"
           onClick={onNavigateToRoot}
         >
           {currentModel ?? "Untitled"}
@@ -303,7 +303,7 @@ export function TopBar({
             <button
               ref={projectMenuTriggerRef}
               type="button"
-              className="rounded px-1.5 py-0.5 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 text-xs shrink-0 cursor-pointer transition-colors"
+              className="rounded px-1.5 py-0.5 text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] text-xs shrink-0 cursor-pointer transition-colors"
               onClick={() => setProjectMenuOpen((prev) => !prev)}
             >
               &#8943;
@@ -326,11 +326,11 @@ export function TopBar({
       {/* Center: level indicator + toolbar */}
       <div className="flex-1 flex items-center gap-2 px-3 h-full min-w-0" data-tauri-drag-region>
         {hasModel && !isFlow && (
-          <div className="flex items-center gap-1.5 text-[11px] shrink-0">
+          <div className="flex items-baseline gap-1.5 text-[11px] shrink-0">
             {breadcrumbs.length > 0 && (
               <button
                 type="button"
-                className="text-zinc-400 hover:text-zinc-700 dark:hover:text-white cursor-pointer transition-colors"
+                className="text-[var(--text-muted)] hover:text-[var(--text)] cursor-pointer transition-colors"
                 onClick={() => {
                   const parent = breadcrumbs.length >= 2 ? breadcrumbs[breadcrumbs.length - 2].id : null;
                   navigateToBreadcrumb(parent);
@@ -340,33 +340,28 @@ export function TopBar({
                 &larr;
               </button>
             )}
-            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-              currentParentKind === "component" ? "bg-zinc-200/60 text-zinc-500 dark:bg-zinc-700/60 dark:text-zinc-400"
-                : currentParentKind === "container" ? "bg-violet-100 text-violet-500 dark:bg-violet-900/30 dark:text-violet-400"
-                : currentParentKind === "system" ? "bg-cyan-100 text-cyan-600 dark:bg-cyan-900/30 dark:text-cyan-400"
-                : "bg-slate-100 text-slate-500 dark:bg-slate-800/50 dark:text-slate-400"
-            }`}>
+            {breadcrumbs.length > 0 && (
+              <span className="text-[var(--text-secondary)] font-medium">
+                {breadcrumbs[breadcrumbs.length - 1].name}
+              </span>
+            )}
+            <span className="text-[10px] text-[var(--text-muted)]">
               {currentParentKind === "component" ? "Code"
                 : currentParentKind === "container" ? "Components"
                 : currentParentKind === "system" ? "Containers"
                 : "System context"}
             </span>
-            {breadcrumbs.length > 0 && (
-              <span className="text-zinc-400 dark:text-zinc-500">
-                {breadcrumbs[breadcrumbs.length - 1].name}
-              </span>
-            )}
             {dependencies.length > 0 && (
               <>
-                <div className="w-px h-3 bg-zinc-300 dark:bg-zinc-600 mx-1" />
+                <span className="text-[var(--text-ghost)] mx-0.5">&middot;</span>
                 {dependencies.filter((d) => d.direction === "out").length > 0 && (
                   <>
-                    <span className="text-[10px] text-zinc-400 dark:text-zinc-500 shrink-0">depends on</span>
+                    <span className="text-[10px] text-[var(--text-muted)] shrink-0">depends on</span>
                     {dependencies.filter((d) => d.direction === "out").map((d) => (
                       <button
                         key={d.id}
                         type="button"
-                        className="rounded px-1.5 py-0.5 text-[10px] text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 cursor-pointer transition-colors truncate max-w-[140px]"
+                        className="rounded px-1.5 py-0.5 text-[10px] text-[var(--text-tertiary)] bg-[var(--surface-tint)] hover:bg-[var(--surface-active)] cursor-pointer transition-colors truncate max-w-[140px]"
                         onClick={() => onNavigateToNode?.(d.id)}
                         title={`${d.label || "depends on"} ${d.name}`}
                       >
@@ -377,12 +372,12 @@ export function TopBar({
                 )}
                 {dependencies.filter((d) => d.direction === "in").length > 0 && (
                   <>
-                    <span className="text-[10px] text-zinc-400 dark:text-zinc-500 shrink-0">used by</span>
+                    <span className="text-[10px] text-[var(--text-muted)] shrink-0">used by</span>
                     {dependencies.filter((d) => d.direction === "in").map((d) => (
                       <button
                         key={d.id}
                         type="button"
-                        className="rounded px-1.5 py-0.5 text-[10px] text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 cursor-pointer transition-colors truncate max-w-[140px]"
+                        className="rounded px-1.5 py-0.5 text-[10px] text-[var(--text-tertiary)] bg-[var(--surface-tint)] hover:bg-[var(--surface-active)] cursor-pointer transition-colors truncate max-w-[140px]"
                         onClick={() => onNavigateToNode?.(d.id)}
                         title={`${d.label || "used by"} ${d.name}`}
                       >
@@ -396,7 +391,7 @@ export function TopBar({
           </div>
         )}
         {hasModel && isFlow && activeFlowName && (
-          <span className="text-[11px] text-zinc-400 dark:text-zinc-500 shrink-0">
+          <span className="text-[11px] text-[var(--text-muted)] shrink-0">
             Flow: {activeFlowName}
           </span>
         )}
@@ -406,7 +401,7 @@ export function TopBar({
       <div className="flex items-center gap-1.5 shrink-0 pr-2.5">
         <button
           type="button"
-          className="h-6 w-6 flex items-center justify-center rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 transition-colors cursor-pointer"
+          className="h-6 w-6 flex items-center justify-center rounded-full text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors cursor-pointer"
           onClick={() => appWindow.minimize()}
           title="Minimize"
         >
@@ -414,7 +409,7 @@ export function TopBar({
         </button>
         <button
           type="button"
-          className="h-6 w-6 flex items-center justify-center rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 transition-colors cursor-pointer"
+          className="h-6 w-6 flex items-center justify-center rounded-full text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors cursor-pointer"
           onClick={() => appWindow.toggleMaximize()}
           title="Maximize"
         >
@@ -422,7 +417,7 @@ export function TopBar({
         </button>
         <button
           type="button"
-          className="h-6 w-6 flex items-center justify-center rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-200 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-700 transition-colors cursor-pointer"
+          className="h-6 w-6 flex items-center justify-center rounded-full text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors cursor-pointer"
           onClick={() => appWindow.close()}
           title="Close"
         >

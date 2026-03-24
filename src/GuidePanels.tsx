@@ -251,7 +251,7 @@ export function GuidePanel({ nodes, edges, visibleNodes, currentParentId, parent
   const allDone = done === total;
 
   return (
-    <div className="w-56 rounded-lg border border-zinc-200/80 bg-white/80 shadow-sm backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-900/80">
+    <div className="w-56 rounded-lg border border-[var(--border-overlay)] bg-[var(--surface-overlay)] shadow-sm backdrop-blur-sm">
       {/* Header */}
       <button
         type="button"
@@ -259,7 +259,7 @@ export function GuidePanel({ nodes, edges, visibleNodes, currentParentId, parent
         onClick={toggleCollapsed}
       >
         <svg
-          className={`h-3 w-3 shrink-0 text-zinc-400 transition-transform ${collapsed ? "-rotate-90" : ""}`}
+          className={`h-3 w-3 shrink-0 text-[var(--text-muted)] transition-transform ${collapsed ? "-rotate-90" : ""}`}
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
@@ -269,7 +269,7 @@ export function GuidePanel({ nodes, edges, visibleNodes, currentParentId, parent
         >
           <polyline points="6 9 12 15 18 9" />
         </svg>
-        <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">Guide</span>
+        <span className="text-xs font-medium text-[var(--text-secondary)]">Guide</span>
         <span
           className={`ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none ${
             allDone
@@ -283,8 +283,8 @@ export function GuidePanel({ nodes, edges, visibleNodes, currentParentId, parent
 
       {/* Body */}
       {!collapsed && (
-        <div className="border-t border-zinc-100 px-3 pb-2.5 pt-2 dark:border-zinc-700">
-          <p className="mb-2 text-[11px] text-zinc-500 dark:text-zinc-500 leading-snug">
+        <div className="border-t border-[var(--border-subtle)] px-3 pb-2.5 pt-2">
+          <p className="mb-2 text-[11px] text-[var(--text-tertiary)] leading-snug">
             {renderGuidance(levelGuidance(level, parentName))}
           </p>
           <ul className="flex flex-col gap-1">
@@ -293,8 +293,8 @@ export function GuidePanel({ nodes, edges, visibleNodes, currentParentId, parent
                 key={item.label}
                 className={`flex items-start gap-1.5 text-[11px] leading-snug ${
                   item.done
-                    ? "text-zinc-500 dark:text-zinc-500"
-                    : "text-zinc-700 dark:text-zinc-200"
+                    ? "text-[var(--text-tertiary)]"
+                    : "text-[var(--text)]"
                 }`}
               >
                 <span className={`shrink-0 ${item.done ? "text-emerald-500" : "text-red-400"}`}>
@@ -342,14 +342,14 @@ export function FlowGuidePanel({ stepCount, stepsWithDescription }: FlowGuidePan
   const allDone = done === total;
 
   return (
-    <div className="w-56 rounded-lg border border-zinc-200/80 bg-white/80 shadow-sm backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-900/80">
+    <div className="w-56 rounded-lg border border-[var(--border-overlay)] bg-[var(--surface-overlay)] shadow-sm backdrop-blur-sm">
       <button
         type="button"
         className="flex w-full items-center gap-1.5 px-3 py-2 text-left cursor-pointer"
         onClick={toggleCollapsed}
       >
         <svg
-          className={`h-3 w-3 shrink-0 text-zinc-400 transition-transform ${collapsed ? "-rotate-90" : ""}`}
+          className={`h-3 w-3 shrink-0 text-[var(--text-muted)] transition-transform ${collapsed ? "-rotate-90" : ""}`}
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
@@ -359,7 +359,7 @@ export function FlowGuidePanel({ stepCount, stepsWithDescription }: FlowGuidePan
         >
           <polyline points="6 9 12 15 18 9" />
         </svg>
-        <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">Guide</span>
+        <span className="text-xs font-medium text-[var(--text-secondary)]">Guide</span>
         <span
           className={`ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none ${
             allDone
@@ -372,8 +372,8 @@ export function FlowGuidePanel({ stepCount, stepsWithDescription }: FlowGuidePan
       </button>
 
       {!collapsed && (
-        <div className="border-t border-zinc-100 px-3 pb-2.5 pt-2 dark:border-zinc-700">
-          <p className="mb-2 text-[11px] text-zinc-500 dark:text-zinc-500 leading-snug">
+        <div className="border-t border-[var(--border-subtle)] px-3 pb-2.5 pt-2">
+          <p className="mb-2 text-[11px] text-[var(--text-tertiary)] leading-snug">
             {renderGuidance("**Flow** — What happens during this flow? Each step is one meaningful interaction (a request, a response, a state change) — not a UI gesture like \"clicks button\".")}
           </p>
           <ul className="flex flex-col gap-1">
@@ -382,8 +382,8 @@ export function FlowGuidePanel({ stepCount, stepsWithDescription }: FlowGuidePan
                 key={item.label}
                 className={`flex items-start gap-1.5 text-[11px] leading-snug ${
                   item.done
-                    ? "text-zinc-500 dark:text-zinc-500"
-                    : "text-zinc-700 dark:text-zinc-200"
+                    ? "text-[var(--text-tertiary)]"
+                    : "text-[var(--text)]"
                 }`}
               >
                 <span className={`shrink-0 ${item.done ? "text-emerald-500" : "text-red-400"}`}>

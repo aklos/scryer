@@ -70,12 +70,12 @@ function TreeNode({ node, depth, ctx }: { node: C4Node; depth: number; ctx: Tree
           isSelected
             ? "bg-blue-500/15 text-blue-700 dark:text-blue-300"
             : isInCurrentGroup
-              ? "bg-zinc-200/50 text-zinc-700 dark:bg-zinc-700/50 dark:text-zinc-200"
+              ? "bg-[var(--surface-active)]/50 text-[var(--text)]"
               : isDrilledInto
-                ? "text-zinc-800 dark:text-zinc-200"
+                ? "text-[var(--text)]"
                 : isExtOrPerson
-                  ? "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-700/30"
-                  : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-700/30"
+                  ? "text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)]"
+                  : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
         }`}
         style={{ paddingLeft: `${indent}px`, paddingRight: 8 }}
         onClick={() => ctx.onNavigateToNode(node.id)}
@@ -91,20 +91,20 @@ function TreeNode({ node, depth, ctx }: { node: C4Node; depth: number; ctx: Tree
             className="shrink-0 w-4 flex items-center justify-center"
             onClick={(e) => { e.stopPropagation(); ctx.onToggleTree(node.id); }}
           >
-            <ChevronRight size={12} className={`text-zinc-500 transition-transform duration-100 ${isOpen ? "rotate-90" : ""}`} />
+            <ChevronRight size={12} className={`text-[var(--text-tertiary)] transition-transform duration-100 ${isOpen ? "rotate-90" : ""}`} />
           </span>
         ) : (
           <span className="w-4 shrink-0" />
         )}
         <kindIcon.Icon className={`shrink-0 mr-1.5 ${kindIcon.color}`} size={14} />
-        <span className={`truncate flex-1 ${isDrilledInto ? "font-medium text-zinc-800 dark:text-zinc-200" : ""} ${isExtOrPerson && !isSelected ? "italic" : ""}`}>{data.name}</span>
+        <span className={`truncate flex-1 ${isDrilledInto ? "font-medium text-[var(--text)]" : ""} ${isExtOrPerson && !isSelected ? "italic" : ""}`}>{data.name}</span>
         {data.status && !data.external && (
-          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ml-1 ${STATUS_COLORS[data.status].dotClass}`} />
+          <span className={`w-2 h-2 rounded-full shrink-0 ml-1 ${STATUS_COLORS[data.status].dotClass}`} />
         )}
       </div>
       {hasChildren && isOpen && (
         <div className="relative">
-          <div className="absolute top-0 bottom-2.5 w-px bg-zinc-300/60 dark:bg-zinc-700/40" style={{ left: `${indent + 7}px` }} />
+          <div className="absolute top-0 bottom-2.5 w-px bg-[var(--border-subtle)]" style={{ left: `${indent + 7}px` }} />
           {relevantGroups.map((g) => {
             const memberNodes = g.memberIds
               .map((mid) => children.find((c) => c.id === mid))
@@ -132,8 +132,8 @@ function GroupTreeRow({ group, memberNodes, depth, open, ctx }: { group: Group; 
       <div
         className={`flex items-center h-[22px] cursor-pointer text-xs ${
           isAtCurrentLevel
-            ? "bg-zinc-200/50 text-zinc-600 dark:bg-zinc-700/50 dark:text-zinc-400"
-            : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-700/30"
+            ? "bg-[var(--surface-active)]/50 text-[var(--text-secondary)]"
+            : "text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)]"
         }`}
         style={{ paddingLeft: `${indent}px`, paddingRight: 8 }}
         onClick={() => ctx.onHighlightGroup(group.id)}
@@ -142,14 +142,14 @@ function GroupTreeRow({ group, memberNodes, depth, open, ctx }: { group: Group; 
           className="shrink-0 w-4 flex items-center justify-center"
           onClick={(e) => { e.stopPropagation(); ctx.onToggleTree(group.id); }}
         >
-          <ChevronRight size={12} className={`text-zinc-500 transition-transform duration-100 ${open ? "rotate-90" : ""}`} />
+          <ChevronRight size={12} className={`text-[var(--text-tertiary)] transition-transform duration-100 ${open ? "rotate-90" : ""}`} />
         </span>
         <span className="truncate flex-1 italic">{group.name}</span>
-        <span className="text-[10px] shrink-0 text-zinc-600">{memberNodes.length}</span>
+        <span className="text-[10px] shrink-0 text-[var(--text-secondary)]">{memberNodes.length}</span>
       </div>
       {open && (
         <div className="relative">
-          <div className="absolute top-0 bottom-2.5 w-px bg-zinc-300/60 dark:bg-zinc-700/40" style={{ left: `${indent + 7}px` }} />
+          <div className="absolute top-0 bottom-2.5 w-px bg-[var(--border-subtle)]" style={{ left: `${indent + 7}px` }} />
           {memberNodes.map((child) => (
             <TreeNode key={child.id} node={child} depth={depth + 1} ctx={ctx} />
           ))}
@@ -202,28 +202,28 @@ export function Sidebar({
   const isWelcome = currentModel === null && nodes.length === 0;
 
   return (
-    <aside className="w-60 shrink-0 border-r border-zinc-200 bg-zinc-50 flex flex-col dark:border-zinc-700 dark:bg-zinc-900 relative">
+    <aside className="w-60 shrink-0 border-r border-[var(--border)] bg-[var(--surface)] flex flex-col relative">
       {isWelcome ? (
         /* Welcome: model list */
         <div className="flex-1 overflow-y-auto">
           {modelList.length > 0 ? (
             <>
               <div className="px-3 pt-3 pb-1.5">
-                <span className="text-[10px] uppercase tracking-wider font-semibold text-zinc-400 dark:text-zinc-500">Models</span>
+                <span className="text-[10px] uppercase tracking-wider font-semibold text-[var(--text-muted)]">Models</span>
               </div>
               {modelList.map((name) => (
                 <div
                   key={name}
-                  className="flex items-center gap-2 px-3 py-1.5 cursor-pointer text-xs text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800 transition-colors"
+                  className="flex items-center gap-2 px-3 py-1.5 cursor-pointer text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-tint)] transition-colors"
                   onClick={() => onLoadModel(name)}
                 >
-                  <FileText size={14} className="shrink-0 text-zinc-400 dark:text-zinc-500" />
+                  <FileText size={14} className="shrink-0 text-[var(--text-muted)]" />
                   <span className="truncate flex-1">{name}</span>
                 </div>
               ))}
             </>
           ) : (
-            <div className="px-3 py-6 text-xs text-zinc-400 dark:text-zinc-500 text-center">
+            <div className="px-3 py-6 text-xs text-[var(--text-muted)] text-center">
               No models yet.
             </div>
           )}
@@ -231,13 +231,13 @@ export function Sidebar({
       ) : (
         /* Normal: tabs + tree */
         <>
-          <div className="flex shrink-0 gap-1 px-3 py-1.5 border-b border-zinc-200 dark:border-zinc-700">
+          <div className="flex shrink-0 gap-1 px-3 py-1.5 border-b border-[var(--border)]">
             <button
               type="button"
               className={`px-2 py-0.5 text-[10px] uppercase tracking-wider font-semibold cursor-pointer transition-colors rounded ${
                 activeTab === "nodes"
-                  ? "text-zinc-700 bg-zinc-200 dark:text-zinc-200 dark:bg-zinc-700"
-                  : "text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-800"
+                  ? "text-[var(--text-secondary)] bg-[var(--surface-active)]"
+                  : "text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-tint)]"
               }`}
               onClick={() => setActiveTab("nodes")}
             >
@@ -247,8 +247,8 @@ export function Sidebar({
               type="button"
               className={`px-2 py-0.5 text-[10px] uppercase tracking-wider font-semibold cursor-pointer transition-colors rounded ${
                 activeTab === "flows"
-                  ? "text-zinc-700 bg-zinc-200 dark:text-zinc-200 dark:bg-zinc-700"
-                  : "text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 dark:text-zinc-500 dark:hover:text-zinc-300 dark:hover:bg-zinc-800"
+                  ? "text-[var(--text-secondary)] bg-[var(--surface-active)]"
+                  : "text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-tint)]"
               }`}
               onClick={() => setActiveTab("flows")}
             >
@@ -267,7 +267,7 @@ export function Sidebar({
                 <div className="flex items-center justify-end px-3 py-1">
                   <button
                     type="button"
-                    className="text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer transition-colors"
+                    className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] cursor-pointer transition-colors"
                     title="Add flow"
                     onClick={onNewFlow}
                   >
@@ -280,22 +280,22 @@ export function Sidebar({
                     className={`flex items-center gap-1.5 py-1 cursor-pointer text-xs transition-colors ${
                       activeFlowId === sc.id
                         ? "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
-                        : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                        : "text-[var(--text-secondary)] hover:bg-[var(--surface-tint)]"
                     }`}
                     style={{ paddingLeft: 12, paddingRight: 12 }}
                     onClick={() => onSelectFlow(sc.id)}
                   >
-                    <span className="shrink-0 text-zinc-400 dark:text-zinc-500">&#8227;</span>
+                    <span className="shrink-0 text-[var(--text-muted)]">&#8227;</span>
                     <span className="truncate flex-1">{sc.name}</span>
                   </div>
                 ))}
                 {flows.length === 0 && (
-                  <div className="px-3 py-6 text-xs text-zinc-400 dark:text-zinc-500 text-center">
+                  <div className="px-3 py-6 text-xs text-[var(--text-muted)] text-center">
                     No flows yet.
                     <br />
                     <button
                       type="button"
-                      className="mt-1.5 text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200 underline cursor-pointer transition-colors"
+                      className="mt-1.5 text-[var(--text-tertiary)] hover:text-[var(--text)] underline cursor-pointer transition-colors"
                       onClick={onNewFlow}
                     >
                       Create one

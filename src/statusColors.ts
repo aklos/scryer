@@ -40,13 +40,13 @@ export const STATUS_COLORS: Record<Status, {
     pillHoverClass: "hover:bg-emerald-200 dark:hover:bg-emerald-800/50",
   },
   vagrant: {
-    strokeClass: "stroke-violet-500 dark:stroke-violet-400",
-    dimStrokeClass: "stroke-violet-500/70 dark:stroke-violet-400/40",
-    hex: "#8b5cf6",
+    strokeClass: "stroke-rose-500 dark:stroke-rose-400",
+    dimStrokeClass: "stroke-rose-500/70 dark:stroke-rose-400/40",
+    hex: "#f43f5e",
     label: "Vagrant",
-    dotClass: "bg-violet-500 dark:bg-violet-400",
-    pillClass: "bg-violet-100 dark:bg-violet-900/50 text-violet-800 dark:text-violet-200",
-    pillHoverClass: "hover:bg-violet-200 dark:hover:bg-violet-800/50",
+    dotClass: "bg-rose-500 dark:bg-rose-400",
+    pillClass: "bg-rose-100 dark:bg-rose-900/50 text-rose-800 dark:text-rose-200",
+    pillHoverClass: "hover:bg-rose-200 dark:hover:bg-rose-800/50",
   },
 };
 
@@ -55,7 +55,7 @@ const STATUS_FAMILY: Record<Status, PaletteRole> = {
   proposed: "blue",
   implemented: "amber",
   verified: "emerald",
-  vagrant: "violet",
+  vagrant: "red",
 };
 
 /** Get the themed hex color for a status, resolving the current theme palette.

@@ -32,11 +32,11 @@ export function GroupNode({ id, data, selected }: NodeProps<C4NodeType>) {
           onClick={handleClick}
         >
           {kindLabel && (
-            <span className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-500">
+            <span className="text-[9px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
               {kindLabel}
             </span>
           )}
-          <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
+          <span className="text-xs font-medium text-[var(--text-secondary)]">
             {data.name}
           </span>
           <ContractBadge contract={contract} inline />

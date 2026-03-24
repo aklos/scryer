@@ -64,7 +64,7 @@ function ShadeOffset({ value, onChange }: { value: number; onChange: (v: number)
       <button
         type="button"
         disabled={value >= 3}
-        className="text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 disabled:opacity-20 cursor-pointer disabled:cursor-default"
+        className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] disabled:opacity-20 cursor-pointer disabled:cursor-default"
         onClick={() => onChange(value + 1)}
       >
         <ChevronUp size={12} />
@@ -72,7 +72,7 @@ function ShadeOffset({ value, onChange }: { value: number; onChange: (v: number)
       <button
         type="button"
         disabled={value <= -3}
-        className="text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 disabled:opacity-20 cursor-pointer disabled:cursor-default"
+        className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] disabled:opacity-20 cursor-pointer disabled:cursor-default"
         onClick={() => onChange(value - 1)}
       >
         <ChevronDown size={12} />
@@ -104,8 +104,8 @@ function ShadeStrip({
           type="button"
           className={`w-5 h-5 rounded-sm border cursor-pointer ${
             value === -1
-              ? "border-zinc-900 dark:border-zinc-100 ring-1 ring-zinc-900 dark:ring-zinc-100"
-              : "border-zinc-300 dark:border-zinc-600"
+              ? "border-[var(--text)] ring-1 ring-[var(--text)]"
+              : "border-[var(--border-strong)]"
           }`}
           style={{ backgroundColor: "#ffffff" }}
           title="White"
@@ -118,8 +118,8 @@ function ShadeStrip({
           type="button"
           className={`w-5 h-5 rounded-sm border cursor-pointer ${
             value === idx
-              ? "border-zinc-900 dark:border-zinc-100 ring-1 ring-zinc-900 dark:ring-zinc-100"
-              : "border-zinc-300 dark:border-zinc-600"
+              ? "border-[var(--text)] ring-1 ring-[var(--text)]"
+              : "border-[var(--border-strong)]"
           }`}
           style={{ backgroundColor: p[SHADES[idx]] }}
           title={SHADES[idx]}
@@ -178,11 +178,11 @@ function AiReviewTab({
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+      <p className="text-xs text-[var(--text-tertiary)]">
         AI Review sends your diagram to an LLM that checks for C4 modeling issues — missing relationships, naming problems, structural anti-patterns. Configure a provider below to enable the <span className="text-violet-500 dark:text-violet-400">Review</span> button on the canvas.
       </p>
       <div>
-        <label className="text-[10px] uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Provider</label>
+        <label className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Provider</label>
         <Select
           variant="bordered"
           options={PROVIDERS.map((p) => ({ value: p.value, label: p.label }))}
@@ -198,7 +198,7 @@ function AiReviewTab({
       </div>
       {currentProvider?.needsKey && (
         <div>
-          <label className="text-[10px] uppercase tracking-wider text-zinc-400 dark:text-zinc-500">API Key</label>
+          <label className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">API Key</label>
           <Input
             type="password"
             value={apiKey}
@@ -209,9 +209,9 @@ function AiReviewTab({
         </div>
       )}
       <div>
-        <label className="text-[10px] uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+        <label className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
           Model
-          {modelsLoading && <span className="ml-1 text-zinc-400 dark:text-zinc-500 normal-case tracking-normal">(loading...)</span>}
+          {modelsLoading && <span className="ml-1 text-[var(--text-muted)] normal-case tracking-normal">(loading...)</span>}
         </label>
         {modelOptions.length > 0 ? (
           <Select
@@ -261,7 +261,7 @@ function ThemeTab({
     <div className="flex flex-col gap-4">
       {/* Color mode */}
       <div className="flex flex-col gap-2">
-        <div className="text-[10px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Appearance</div>
+        <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--text-muted)]">Appearance</div>
         <div className="flex gap-1">
           {([
             { mode: "light" as ColorMode, icon: Sun, label: "Light" },
@@ -273,8 +273,8 @@ function ThemeTab({
               type="button"
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium cursor-pointer transition-colors ${
                 localTheme.colorMode === mode
-                  ? "bg-zinc-200 text-zinc-800 dark:bg-zinc-600 dark:text-zinc-100"
-                  : "text-zinc-500 hover:text-zinc-700 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-zinc-700"
+                  ? "bg-[var(--surface-active)] text-[var(--text)]"
+                  : "text-[var(--text-tertiary)] hover:text-[var(--text)] hover:bg-[var(--surface-hover)]"
               }`}
               onClick={() => commit({ ...localTheme, colorMode: mode })}
             >
@@ -287,40 +287,40 @@ function ThemeTab({
 
       {/* Light mode backgrounds */}
       <div className="flex flex-col gap-3">
-        <div className="text-[10px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Light mode</div>
+        <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--text-muted)]">Light mode</div>
         <div className="flex items-center gap-3">
-          <div className="flex-1 min-w-0"><div className="text-xs font-medium text-zinc-700 dark:text-zinc-200">Canvas</div></div>
+          <div className="flex-1 min-w-0"><div className="text-xs font-medium text-[var(--text)]">Canvas</div></div>
           <ShadeStrip palette={localTheme.zinc} value={localTheme.canvasLight} onChange={(v) => commit({ ...localTheme, canvasLight: v })} />
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex-1 min-w-0"><div className="text-xs font-medium text-zinc-700 dark:text-zinc-200">Nodes</div></div>
+          <div className="flex-1 min-w-0"><div className="text-xs font-medium text-[var(--text)]">Nodes</div></div>
           <ShadeStrip palette={localTheme.zinc} value={localTheme.nodeLight} hasWhite onChange={(v) => commit({ ...localTheme, nodeLight: v })} />
         </div>
       </div>
 
       {/* Dark mode backgrounds */}
       <div className="flex flex-col gap-3">
-        <div className="text-[10px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Dark mode</div>
+        <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--text-muted)]">Dark mode</div>
         <div className="flex items-center gap-3">
-          <div className="flex-1 min-w-0"><div className="text-xs font-medium text-zinc-700 dark:text-zinc-200">Canvas</div></div>
+          <div className="flex-1 min-w-0"><div className="text-xs font-medium text-[var(--text)]">Canvas</div></div>
           <ShadeStrip palette={localTheme.zinc} value={localTheme.canvasDark} reverse onChange={(v) => commit({ ...localTheme, canvasDark: v })} />
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex-1 min-w-0"><div className="text-xs font-medium text-zinc-700 dark:text-zinc-200">Nodes</div></div>
+          <div className="flex-1 min-w-0"><div className="text-xs font-medium text-[var(--text)]">Nodes</div></div>
           <ShadeStrip palette={localTheme.zinc} value={localTheme.nodeDark} reverse onChange={(v) => commit({ ...localTheme, nodeDark: v })} />
         </div>
       </div>
 
       {/* Palette roles */}
       <div className="flex flex-col gap-3">
-        <div className="text-[10px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Colors</div>
+        <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--text-muted)]">Colors</div>
         {THEME_ROLES.map((role) => {
           const offset = localTheme.offsets[role.key] ?? 0;
           return (
             <div key={role.key} className="flex items-center gap-3">
               <div className="flex-1 min-w-0">
-                <div className="text-xs font-medium text-zinc-700 dark:text-zinc-200">{role.label}</div>
-                <div className="text-[10px] text-zinc-400 dark:text-zinc-500 truncate">{role.description}</div>
+                <div className="text-xs font-medium text-[var(--text)]">{role.label}</div>
+                <div className="text-[10px] text-[var(--text-muted)] truncate">{role.description}</div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <PalettePreview name={localTheme[role.key]} offset={offset} />
@@ -413,13 +413,13 @@ export function SettingsPanel({
 
   return (
     <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/20 backdrop-blur-[2px]">
-      <div className="w-[420px] max-h-[80vh] rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800 flex flex-col">
+      <div className="w-[420px] max-h-[80vh] rounded-lg border border-[var(--border)] bg-[var(--surface-raised)] shadow-lg flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-700">
-          <h2 className="text-sm font-medium text-zinc-800 dark:text-zinc-100">Settings</h2>
+        <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+          <h2 className="text-sm font-medium text-[var(--text)]">Settings</h2>
           <button
             type="button"
-            className="text-zinc-400 hover:text-zinc-600 cursor-pointer dark:text-zinc-500 dark:hover:text-zinc-300"
+            className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] cursor-pointer"
             onClick={onClose}
           >
             &times;
@@ -427,7 +427,7 @@ export function SettingsPanel({
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-zinc-200 dark:border-zinc-700 px-4">
+        <div className="flex border-b border-[var(--border)] px-4">
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -435,7 +435,7 @@ export function SettingsPanel({
               className={`px-3 py-2 text-xs font-medium cursor-pointer transition-colors border-b-2 -mb-px ${
                 tab === t.id
                   ? "border-blue-500 text-blue-600 dark:text-blue-400"
-                  : "border-transparent text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+                  : "border-transparent text-[var(--text-tertiary)] hover:text-[var(--text)]"
               }`}
               onClick={() => setTab(t.id)}
             >

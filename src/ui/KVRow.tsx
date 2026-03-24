@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 export function KVRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-2">
-      <span className="text-xs text-zinc-500 dark:text-zinc-500 shrink-0">{label}</span>
+      <span className="text-xs text-[var(--text-tertiary)] shrink-0">{label}</span>
       {children}
     </div>
   );

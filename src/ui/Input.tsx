@@ -10,11 +10,11 @@ const focusClasses: Record<FocusColor, string> = {
 
 const variants: Record<InputVariant, string> = {
   title:
-    "w-full rounded border border-zinc-200 dark:border-transparent bg-zinc-100/60 dark:bg-zinc-800/60 focus:bg-zinc-100 dark:focus:bg-zinc-700/60 text-xs font-medium text-zinc-800 dark:text-zinc-100 outline-none placeholder:text-zinc-300 dark:placeholder:text-zinc-600 px-2 py-1 transition-colors",
+    "w-full rounded border border-[var(--border)] bg-[var(--surface-raised)] text-xs font-medium text-[var(--text)] outline-none placeholder:text-[var(--text-ghost)] px-2 py-1 transition-colors focus:ring-1 focus:ring-blue-400/30",
   inline:
-    "w-0 flex-1 text-right rounded border border-zinc-200 dark:border-transparent bg-zinc-100/60 dark:bg-zinc-800/60 focus:bg-zinc-100 dark:focus:bg-zinc-700/60 text-xs text-zinc-700 dark:text-zinc-200 outline-none px-1.5 py-0.5 transition-colors",
+    "w-0 flex-1 text-right rounded border border-[var(--border)] bg-[var(--surface-raised)] text-xs text-[var(--text-secondary)] outline-none px-1.5 py-0.5 transition-colors focus:ring-1 focus:ring-blue-400/30",
   bordered:
-    "mt-0.5 w-full rounded border border-zinc-200 bg-white px-2 py-1.5 text-xs outline-none dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100",
+    "mt-0.5 w-full rounded border border-[var(--border-strong)] bg-[var(--surface-raised)] px-2 py-1.5 text-xs text-[var(--text)] outline-none focus:ring-1 focus:ring-blue-400/30",
 };
 
 export function Input({

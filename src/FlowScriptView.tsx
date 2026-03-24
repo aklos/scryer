@@ -171,7 +171,7 @@ function StepCard({
     <div
       className={
         dragOverId === step.id
-          ? "border-t-2 border-zinc-400 dark:border-zinc-500 -mt-0.5 pt-0.5"
+          ? "border-t-2 border-[var(--text-muted)] -mt-0.5 pt-0.5"
           : ""
       }
       draggable
@@ -193,12 +193,12 @@ function StepCard({
       }}
     >
       <div
-        className="w-[560px] text-left rounded-lg border px-4 py-2.5 transition-colors group border-zinc-200/80 bg-zinc-50 hover:border-zinc-300 dark:border-zinc-700/60 dark:bg-zinc-900/80 dark:hover:border-zinc-600"
+        className="w-[560px] text-left rounded-lg border px-4 py-2.5 transition-colors group border-[var(--border)] bg-[var(--surface)] hover:border-[var(--border-strong)]"
       >
         <div className="flex items-start gap-2">
           {/* Drag handle */}
           <span
-            className="shrink-0 flex items-center h-6 cursor-grab active:cursor-grabbing text-zinc-300 hover:text-zinc-400 dark:text-zinc-600 dark:hover:text-zinc-500 -ml-1"
+            className="shrink-0 flex items-center h-6 cursor-grab active:cursor-grabbing text-[var(--text-ghost)] hover:text-[var(--text-muted)] -ml-1"
             onMouseDown={() => {
               dragSourceRef.current = step.id;
             }}
@@ -207,7 +207,7 @@ function StepCard({
           </span>
 
           {/* Step number */}
-          <span className="shrink-0 flex items-center justify-center min-w-6 h-6 rounded-full bg-zinc-200 dark:bg-zinc-700 px-1.5 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+          <span className="shrink-0 flex items-center justify-center min-w-6 h-6 rounded-full bg-[var(--surface-active)] px-1.5 text-xs font-semibold text-[var(--text-secondary)]">
             {stepLabel}
           </span>
 
@@ -223,12 +223,12 @@ function StepCard({
                   autoSize
                   autoFocus
                   maxLength={400}
-                  className="w-full bg-transparent px-0 py-0 outline-none text-sm leading-6 text-zinc-700 dark:text-zinc-200 resize-none overflow-hidden placeholder:text-zinc-400 dark:placeholder:text-zinc-500 placeholder:italic"
+                  className="w-full bg-transparent px-0 py-0 outline-none text-sm leading-6 text-[var(--text)] resize-none overflow-hidden placeholder:text-[var(--text-muted)] placeholder:italic"
                   onChange={(val) => {
                     onUpdateStep(step.id, { description: val || undefined });
                   }}
                 />
-                <div className="text-right text-[10px] text-zinc-400 dark:text-zinc-600 mt-0.5">
+                <div className="text-right text-[10px] text-[var(--text-muted)] mt-0.5">
                   {(step.description ?? "").length}/400
                 </div>
               </div>
@@ -236,8 +236,8 @@ function StepCard({
               <div
                 className={`text-sm leading-6 break-words cursor-text ${
                   step.description
-                    ? "text-zinc-700 dark:text-zinc-300"
-                    : "text-zinc-400 dark:text-zinc-500 italic"
+                    ? "text-[var(--text)]"
+                    : "text-[var(--text-muted)] italic"
                 }`}
                 onClick={() => setEditingStepId(step.id)}
               >
@@ -260,7 +260,7 @@ function StepCard({
             {!step.branches?.length && (
               <button
                 type="button"
-                className="p-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 cursor-pointer"
+                className="p-0.5 rounded hover:bg-[var(--surface-tint)] text-[var(--text-muted)] hover:text-[var(--text-secondary)] cursor-pointer"
                 title="Add branches"
                 onClick={() => onAddBranches(step.id)}
               >
@@ -269,7 +269,7 @@ function StepCard({
             )}
             <button
               type="button"
-              className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-zinc-400 hover:text-red-500 cursor-pointer"
+              className="p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-[var(--text-muted)] hover:text-red-500 cursor-pointer"
               title="Delete step"
               onClick={() => onDeleteStep(step.id)}
             >
@@ -285,13 +285,13 @@ function StepCard({
           {step.branches.map((branch, bi) => (
             <div
               key={bi}
-              className="border-l-2 border-zinc-300/60 dark:border-zinc-600/60 pl-4 py-1.5"
+              className="border-l-2 border-[var(--border-subtle)] pl-4 py-1.5"
             >
               {/* Branch label */}
               <div className="flex items-center gap-1.5 mb-2 group/branch">
-                <span className="inline-flex items-center rounded bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 min-w-0 flex-1">
+                <span className="inline-flex items-center rounded bg-[var(--surface-tint)] px-2 py-0.5 min-w-0 flex-1">
                   <input
-                    className="text-[11px] font-mono font-medium text-zinc-500 dark:text-zinc-400 bg-transparent outline-none w-full placeholder:text-zinc-300 dark:placeholder:text-zinc-600"
+                    className="text-[11px] font-mono font-medium text-[var(--text-tertiary)] bg-transparent outline-none w-full placeholder:text-[var(--text-ghost)]"
                     value={branch.condition}
                     placeholder={
                       bi === 0
@@ -307,7 +307,7 @@ function StepCard({
                 </span>
                 <button
                   type="button"
-                  className="shrink-0 p-0.5 rounded text-zinc-300 hover:text-red-500 dark:text-zinc-600 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover/branch:opacity-100 transition-opacity"
+                  className="shrink-0 p-0.5 rounded text-[var(--text-ghost)] hover:text-red-500 dark:hover:text-red-400 cursor-pointer opacity-0 group-hover/branch:opacity-100 transition-opacity"
                   title="Delete branch"
                   onClick={() => onDeleteBranch(step.id, bi)}
                 >
@@ -348,7 +348,7 @@ function StepCard({
               {/* Add step to branch */}
               <button
                 type="button"
-                className="flex items-center gap-1 text-[11px] text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer py-1 mt-1"
+                className="flex items-center gap-1 text-[11px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] cursor-pointer py-1 mt-1"
                 onClick={() => onAddStepToBranch(step.id, bi)}
               >
                 <Plus size={10} /> step
@@ -357,7 +357,7 @@ function StepCard({
           ))}
           <button
             type="button"
-            className="flex items-center gap-1 text-[11px] text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer py-0.5 ml-1"
+            className="flex items-center gap-1 text-[11px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] cursor-pointer py-0.5 ml-1"
             onClick={() => onAddBranchArm(step.id)}
           >
             <GitBranch size={10} /> branch
@@ -612,7 +612,7 @@ export function FlowScriptView({
   );
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden bg-zinc-50 dark:bg-zinc-950">
+    <div className="flex-1 flex flex-col overflow-hidden bg-[var(--surface)]">
       {/* Step list */}
       <div
         className="flex-1 overflow-y-auto"
@@ -625,14 +625,14 @@ export function FlowScriptView({
           <div className="mb-6 group/header">
             <div className="flex items-start justify-between gap-2">
               <input
-                className="text-lg font-semibold bg-transparent outline-none text-zinc-800 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 w-full"
+                className="text-lg font-semibold bg-transparent outline-none text-[var(--text)] placeholder-[var(--text-muted)] w-full"
                 value={flow.name}
                 placeholder="Flow name..."
                 onChange={(e) => onUpdate({ ...flow, name: e.target.value })}
               />
               {confirmingDelete ? (
                 <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
-                  <span className="text-xs text-zinc-500 dark:text-zinc-400">Delete?</span>
+                  <span className="text-xs text-[var(--text-tertiary)]">Delete?</span>
                   <button
                     type="button"
                     className="text-xs px-1.5 py-0.5 rounded bg-red-500 text-white hover:bg-red-600 cursor-pointer"
@@ -642,7 +642,7 @@ export function FlowScriptView({
                   </button>
                   <button
                     type="button"
-                    className="text-xs px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-300 dark:hover:bg-zinc-600 cursor-pointer"
+                    className="text-xs px-1.5 py-0.5 rounded bg-[var(--surface-active)] text-[var(--text-secondary)] hover:bg-[var(--border-strong)] cursor-pointer"
                     onClick={() => setConfirmingDelete(false)}
                   >
                     No
@@ -651,7 +651,7 @@ export function FlowScriptView({
               ) : (
                 <button
                   type="button"
-                  className="shrink-0 mt-1 opacity-0 group-hover/header:opacity-100 transition-opacity text-xs text-zinc-400 hover:text-red-500 dark:text-zinc-500 dark:hover:text-red-400 cursor-pointer"
+                  className="shrink-0 mt-1 opacity-0 group-hover/header:opacity-100 transition-opacity text-xs text-[var(--text-muted)] hover:text-red-500 dark:hover:text-red-400 cursor-pointer"
                   onClick={() => setConfirmingDelete(true)}
                 >
                   <Trash2 size={14} />
@@ -660,7 +660,7 @@ export function FlowScriptView({
             </div>
             <textarea
               ref={(el) => { if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; } }}
-              className="w-full mt-1 text-sm bg-transparent outline-none text-zinc-500 dark:text-zinc-400 placeholder-zinc-300 dark:placeholder-zinc-600 resize-none leading-relaxed"
+              className="w-full mt-1 text-sm bg-transparent outline-none text-[var(--text-tertiary)] placeholder-[var(--text-ghost)] resize-none leading-relaxed"
               rows={1}
               value={flow.description ?? ""}
               placeholder="What does this flow describe?"
@@ -676,7 +676,7 @@ export function FlowScriptView({
                 <>
                   <button
                     type="button"
-                    className="flex items-center gap-1 text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200 cursor-pointer"
+                    className="flex items-center gap-1 text-[var(--text-tertiary)] hover:text-[var(--text)] cursor-pointer"
                     onClick={() => {
                       const src = flowSources[0];
                       invoke("open_in_editor", { file: src.pattern, line: src.line ?? null, projectPath: projectPath ?? null });
@@ -687,27 +687,27 @@ export function FlowScriptView({
                   </button>
                 </>
               ) : (
-                <span className="text-zinc-400 dark:text-zinc-600 italic">No test linked</span>
+                <span className="text-[var(--text-muted)] italic">No test linked</span>
               )}
             </div>
           </div>
           {flow.steps.length === 0 && (
-            <div className="flex flex-col items-center py-16 text-zinc-400 dark:text-zinc-500 text-sm gap-4">
+            <div className="flex flex-col items-center py-16 text-[var(--text-muted)] text-sm gap-4">
               <div className="text-center space-y-1.5">
-                <p className="text-base font-medium text-zinc-500 dark:text-zinc-400">Describe a sequence</p>
+                <p className="text-base font-medium text-[var(--text-tertiary)]">Describe a sequence</p>
                 <p className="text-sm max-w-xs leading-relaxed">
                   Flows model user journeys, data pipelines, or any multi-step process.
                   Each step is one meaningful system interaction.
                 </p>
               </div>
-              <div className="text-xs max-w-xs space-y-1 text-zinc-400 dark:text-zinc-600">
-                <p>Use <span className="font-mono bg-zinc-200/60 dark:bg-zinc-800 px-1 rounded">@</span> to reference processes or other steps</p>
+              <div className="text-xs max-w-xs space-y-1 text-[var(--text-muted)]">
+                <p>Use <span className="font-mono bg-[var(--surface-hover)] px-1 rounded">@</span> to reference processes or other steps</p>
                 <p>Add branches for conditional paths (if/else)</p>
                 <p>Drag the <span className="inline-flex align-text-bottom"><GripVertical size={10} /></span> handle to reorder</p>
               </div>
               <button
                 type="button"
-                className="flex items-center gap-1.5 mt-2 text-xs text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200 cursor-pointer"
+                className="flex items-center gap-1.5 mt-2 text-xs text-[var(--text-tertiary)] hover:text-[var(--text)] cursor-pointer"
                 onClick={onAddStepBottom}
               >
                 <Plus size={12} /> Add first step
@@ -727,7 +727,7 @@ export function FlowScriptView({
           {flow.steps.length > 0 && (
             <button
               type="button"
-              className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 cursor-pointer py-1"
+              className="flex items-center gap-1.5 text-sm text-[var(--text-muted)] hover:text-[var(--text-secondary)] cursor-pointer py-1"
               onClick={onAddStepBottom}
             >
               <Plus size={12} /> Add step

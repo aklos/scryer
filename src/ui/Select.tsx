@@ -10,9 +10,9 @@ type SelectVariant = "inline" | "bordered";
 
 const triggerClasses: Record<SelectVariant, string> = {
   inline:
-    "w-full flex items-center justify-end gap-1 rounded bg-zinc-100/60 dark:bg-zinc-800/60 text-sm text-right text-zinc-700 dark:text-zinc-200 outline-none px-1.5 py-0.5 cursor-pointer",
+    "w-full flex items-center justify-end gap-1 rounded bg-[var(--surface-inset)] text-sm text-right text-[var(--text-secondary)] outline-none px-1.5 py-0.5 cursor-pointer",
   bordered:
-    "mt-0.5 w-full flex items-center justify-between gap-1 rounded border border-zinc-200 bg-white px-2 py-1.5 text-xs text-zinc-700 outline-none cursor-pointer dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100",
+    "mt-0.5 w-full flex items-center justify-between gap-1 rounded border border-[var(--border-strong)] bg-[var(--surface-raised)] px-2 py-1.5 text-xs text-[var(--text-secondary)] outline-none cursor-pointer",
 };
 
 export function Select({
@@ -89,16 +89,16 @@ export function Select({
         onClick={() => setOpen((o) => !o)}
       >
         <span className="truncate">{selected?.label ?? placeholder ?? "Select..."}</span>
-        <ChevronDown className={`h-3 w-3 shrink-0 text-zinc-400 dark:text-zinc-500 transition-transform ${open ? "rotate-180" : ""}`} />
+        <ChevronDown className={`h-3 w-3 shrink-0 text-[var(--text-muted)] transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
-        <div className={`absolute z-50 mt-1 min-w-full rounded border border-zinc-200 bg-white shadow-lg dark:border-zinc-600 dark:bg-zinc-800 flex flex-col ${variant === "bordered" ? "left-0" : "right-0"}`}>
+        <div className={`absolute z-50 mt-1 min-w-full rounded border border-[var(--border-strong)] bg-[var(--surface-raised)] shadow-lg flex flex-col ${variant === "bordered" ? "left-0" : "right-0"}`}>
           {searchable && (
-            <div className="p-1.5 border-b border-zinc-100 dark:border-zinc-700">
+            <div className="p-1.5 border-b border-[var(--border-subtle)]">
               <input
                 ref={searchRef}
                 type="text"
-                className="w-full px-2 py-1 text-xs rounded bg-zinc-50 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-200 outline-none placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
+                className="w-full px-2 py-1 text-xs rounded bg-[var(--surface)] text-[var(--text-secondary)] outline-none placeholder:text-[var(--text-muted)]"
                 placeholder="Search..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -107,7 +107,7 @@ export function Select({
           )}
           <div className="max-h-48 overflow-y-auto">
             {filtered.length === 0 ? (
-              <div className="px-2.5 py-2 text-xs text-zinc-400 dark:text-zinc-500">No matches</div>
+              <div className="px-2.5 py-2 text-xs text-[var(--text-muted)]">No matches</div>
             ) : (
               filtered.map((o) => (
                 <button
@@ -116,7 +116,7 @@ export function Select({
                   className={`w-full px-2.5 py-1 text-xs text-left cursor-pointer transition-colors ${
                     o.value === value
                       ? "bg-violet-50 text-violet-600 dark:bg-violet-500/20 dark:text-violet-300"
-                      : "text-zinc-700 hover:bg-zinc-50 dark:text-zinc-200 dark:hover:bg-zinc-600"
+                      : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
                   }`}
                   onClick={() => handleSelect(o.value)}
                 >

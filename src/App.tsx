@@ -418,6 +418,11 @@ function Flow() {
     return visibleNodes.find((n) => n.selected && !n.data._reference) ?? null;
   }, [visibleNodes]);
 
+  /** Includes reference nodes — used by the toolbar for disconnect action. */
+  const selectedCanvasNode = useMemo(() => {
+    return visibleNodes.find((n) => n.selected) ?? null;
+  }, [visibleNodes]);
+
   const selectedEdge = useMemo(() => {
     return visibleEdges.find((e) => e.selected) ?? null;
   }, [visibleEdges]);
@@ -535,6 +540,7 @@ function Flow() {
   const onConnect: OnConnect = useCallback(
     (connection) => {
       if (currentParentKind === "component") return;
+      if (connection.source === connection.target) return;
       if (refNodeIds.has(connection.source) && refNodeIds.has(connection.target)) return;
       setEdges((eds) => addEdge({ ...connection, data: { label: "" } }, eds) as C4Edge[]);
     },
@@ -1047,7 +1053,7 @@ function Flow() {
               setSettingsOpen={(open: boolean) => { if (open) setSettingsTab("ai"); else setSettingsTab(null); }}
               parentName={currentParentId ? (nodes.find((n) => n.id === currentParentId)?.data as C4NodeData | undefined)?.name : undefined}
               parentKind={currentParentKindForGroup}
-              selectedNode={selectedNode}
+              selectedNode={selectedCanvasNode}
               selectedEdge={selectedEdge}
               deleteNode={deleteNode}
               setEdges={setEdges}

@@ -8,12 +8,46 @@
   --grid-color: #d4d4d8;
   --xy-background-color: #f8f8fa;
   --selection-color: #18181b;
+  --surface-canvas: #f4f4f5;
+  --surface: #fafafa;
+  --surface-raised: #ffffff;
+  --surface-overlay: #ffffffcc;
+  --surface-inset: #f4f4f599;
+  --surface-tint: #f4f4f5;
+  --surface-hover: #e4e4e799;
+  --surface-active: #e4e4e7;
+  --text: #27272a;
+  --text-secondary: #52525b;
+  --text-tertiary: #71717a;
+  --text-muted: #a1a1aa;
+  --text-ghost: #d4d4d8;
+  --border: #e4e4e7;
+  --border-subtle: #e4e4e799;
+  --border-strong: #d4d4d8;
+  --border-overlay: #e4e4e7cc;
 }
 
 .dark {
   --xy-background-color: #18181b;
   --selection-color: #d4d4d8;
   --grid-color: #2a2a2e;
+  --surface-canvas: #18181b;
+  --surface: #18181b;
+  --surface-raised: #27272a;
+  --surface-overlay: #18181bcc;
+  --surface-inset: #27272a99;
+  --surface-tint: #27272a;
+  --surface-hover: #3f3f4699;
+  --surface-active: #3f3f46;
+  --text: #e4e4e7;
+  --text-secondary: #d4d4d8;
+  --text-tertiary: #a1a1aa;
+  --text-muted: #71717a;
+  --text-ghost: #52525b;
+  --border: #3f3f46;
+  --border-subtle: #3f3f4699;
+  --border-strong: #52525b;
+  --border-overlay: #3f3f46cc;
 }
 
 @keyframes dash-flow {
@@ -65,6 +99,11 @@
   opacity: 1;
 }
 
+/* Show handles on nodes near the cursor during connection drag */
+.react-flow__node.connection-nearby .react-flow__handle {
+  opacity: 1;
+}
+
 
 /* edge midpoint dot: hidden by default, shown when hovering the edge */
 .edge-handle-dot {
@@ -83,45 +122,30 @@
 /* Normalize ReactFlow controls to match other canvas panels */
 .react-flow__controls {
   border-radius: 0.5rem;
-  border: 1px solid color-mix(in srgb, var(--color-zinc-200) 80%, transparent);
-  background: color-mix(in srgb, white 80%, transparent);
+  border: 1px solid var(--border-overlay);
+  background: var(--surface-overlay);
   backdrop-filter: blur(4px);
   box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   overflow: hidden;
   margin: 0.75rem !important;
 }
 
-.dark .react-flow__controls {
-  border-color: color-mix(in srgb, var(--color-zinc-700) 80%, transparent);
-  background: color-mix(in srgb, var(--color-zinc-900) 80%, transparent);
-}
-
 .react-flow__controls-button {
   border: none !important;
   background: transparent !important;
-  color: var(--color-zinc-400) !important;
-  fill: var(--color-zinc-400) !important;
+  color: var(--text-muted) !important;
+  fill: var(--text-muted) !important;
   transition: background 0.15s, color 0.15s;
 }
 
 .react-flow__controls-button:hover {
-  background: color-mix(in srgb, var(--color-zinc-200) 50%, transparent) !important;
-  color: var(--color-zinc-600) !important;
-  fill: var(--color-zinc-600) !important;
+  background: var(--surface-hover) !important;
+  color: var(--text-secondary) !important;
+  fill: var(--text-secondary) !important;
 }
 
 .react-flow__controls-button svg {
   fill: currentColor !important;
-}
-
-.dark .react-flow__controls-button {
-  color: var(--color-zinc-500) !important;
-  fill: var(--color-zinc-500) !important;
-}
-.dark .react-flow__controls-button:hover {
-  background: color-mix(in srgb, var(--color-zinc-700) 50%, transparent) !important;
-  color: var(--color-zinc-400) !important;
-  fill: var(--color-zinc-400) !important;
 }
 
 /* Thin scrollbars */

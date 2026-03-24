@@ -14,7 +14,7 @@ const variantClasses: Record<ButtonVariant, Record<ButtonColor, string>> = {
   },
   secondary: {
     default:
-      "rounded-md border border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700",
+      "rounded-md border border-[var(--border-strong)] bg-[var(--surface-raised)] text-[var(--text-secondary)] hover:bg-[var(--surface)]",
     accent:
       "rounded-md border border-indigo-200 text-indigo-600 hover:bg-indigo-50 dark:border-indigo-700 dark:text-indigo-300 dark:hover:bg-indigo-950/40",
     danger:
@@ -22,7 +22,7 @@ const variantClasses: Record<ButtonVariant, Record<ButtonColor, string>> = {
   },
   ghost: {
     default:
-      "rounded text-zinc-500 hover:bg-zinc-200/60 dark:text-zinc-400 dark:hover:bg-zinc-700/60",
+      "rounded text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)]",
     accent:
       "rounded text-indigo-500 hover:bg-indigo-100/60 dark:text-indigo-400 dark:hover:bg-indigo-950/40",
     danger:
@@ -30,7 +30,7 @@ const variantClasses: Record<ButtonVariant, Record<ButtonColor, string>> = {
   },
   link: {
     default:
-      "w-fit self-center text-xs text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300",
+      "w-fit self-center text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)]",
     accent:
       "w-fit self-center text-xs text-indigo-400 hover:text-indigo-600 dark:text-indigo-500 dark:hover:text-indigo-300",
     danger:
