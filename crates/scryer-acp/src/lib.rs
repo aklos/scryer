@@ -6,33 +6,6 @@ pub mod runtime;
 pub use events::AgentEvent;
 pub use runtime::AcpRuntime;
 
-/// macOS GUI apps launched via Spotlight, Dock, or Finder inherit a minimal
-/// PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) that excludes user-local install
-/// directories like `~/.local/bin`, `/opt/homebrew/bin`, or `/usr/local/bin`.
-/// Append common locations so that `which::which()` can find agent binaries.
-#[cfg(target_os = "macos")]
-fn ensure_common_paths() {
-    use std::sync::Once;
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        let current = std::env::var("PATH").unwrap_or_default();
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/nobody".into());
-        let extra = [
-            format!("{home}/.local/bin"),
-            "/usr/local/bin".into(),
-            "/opt/homebrew/bin".into(),
-            format!("{home}/.cargo/bin"),
-        ];
-        let mut parts: Vec<&str> = current.split(':').collect();
-        for dir in &extra {
-            if !parts.contains(&dir.as_str()) {
-                parts.push(dir);
-            }
-        }
-        std::env::set_var("PATH", parts.join(":"));
-    });
-}
-
 /// Read the active MCP client identity written by scryer-mcp on connection.
 /// Returns (name, version) if available.
 pub fn active_client() -> Option<ActiveClient> {
@@ -63,9 +36,6 @@ pub enum AgentLaunch {
 /// Resolve an MCP client name to a launch config.
 /// Known CLI agents get Cli mode; others fall back to ACP conventions.
 pub fn resolve_agent_binary(client_name: &str) -> Option<AgentLaunch> {
-    #[cfg(target_os = "macos")]
-    ensure_common_paths();
-
     // Known CLI agents that support print mode
     match client_name {
         "claude-code" => {

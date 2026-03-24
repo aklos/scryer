@@ -5,6 +5,41 @@ use std::sync::{Arc, Mutex};
 use notify::{recommended_watcher, EventKind, RecursiveMode, Watcher};
 use tauri::{Emitter, Manager, path::BaseDirectory};
 
+/// macOS GUI apps launched via Spotlight, Dock, or Finder inherit a minimal
+/// PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) that excludes user-installed tools.
+/// Recover the user's real PATH by asking their login shell directly.
+#[cfg(target_os = "macos")]
+fn ensure_full_path() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+
+        // Fish outputs PATH as space-separated; ask it for colon-separated
+        let echo_cmd = if shell.ends_with("/fish") {
+            "string join : $PATH"
+        } else {
+            "echo $PATH"
+        };
+
+        let Ok(output) = std::process::Command::new(&shell)
+            .args(["-l", "-c", echo_cmd])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+        else {
+            return;
+        };
+
+        if output.status.success() {
+            let shell_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !shell_path.is_empty() {
+                std::env::set_var("PATH", &shell_path);
+            }
+        }
+    });
+}
+
 /// Managed state wrapping the AI settings.
 struct SettingsState(Arc<Mutex<scryer_core::AiSettings>>);
 
@@ -666,6 +701,9 @@ fn sync_diff(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    ensure_full_path();
+
     let settings = scryer_core::read_settings();
     let settings_state = Arc::new(Mutex::new(settings));
 
