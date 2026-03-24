@@ -112,7 +112,7 @@ function GlowOverlay({ shape, kind }: { shape: C4Shape; kind?: C4Kind }) {
         return <path d={trapezoidPath(W, H)} {...glowProps} />;
       case "bucket": {
         const b = bucketParts(W, H);
-        return <><path d={b.bodyPath} {...glowProps} /><path d={b.bottomCapPath} {...glowProps} /></>;
+        return <><path d={b.bodyPath} {...glowProps} /><path d={b.topCapPath} {...glowProps} /></>;
       }
       case "hexagon":
         return <path d={hexagonPath(W, H)} {...glowProps} />;
@@ -204,7 +204,7 @@ function ShapePaths({
         <>
           {baseFill}
           <path d={b.bodyPath} {...outline} />
-          <path d={b.bottomCapPath} {...outline} />
+          <path d={b.topCapPath} {...outline} />
         </>
       );
     }

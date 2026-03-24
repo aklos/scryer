@@ -100,7 +100,7 @@ function IconPaths({ shape, active }: { shape: C4Shape; active?: boolean }) {
         <>
           {baseFill}
           <path d={b.bodyPath} {...outline} />
-          <path d={b.bottomCapPath} {...outline} />
+          <path d={b.topCapPath} {...outline} />
         </>
       );
     }

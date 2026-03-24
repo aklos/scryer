@@ -104,29 +104,32 @@ export function trapezoidPath(w: number, h: number): string {
 
 export interface BucketParts {
   bodyPath: string;
-  bottomCapPath: string;
+  topCapPath: string;
   capRy: number;
 }
 
-/** Bucket: wider at top (trapezoid sides narrowing down) + elliptical bottom cap. */
+/** Bucket: elliptical rim at top (open container), sides narrow toward flat bottom. */
 export function bucketParts(w: number, h: number): BucketParts {
   const capRy = 16;
   const extend = 24;
+  const rx = (w + 2 * extend) / 2;
 
-  // Body: wide top, sides narrow toward base rect bottom, elliptical bottom edge
+  // Body: elliptical back-arc at top, sides narrow down, elliptical bottom edge
+  const bottomRx = w / 2;
   const bodyPath =
-    `M${-extend},0 H${w + extend}` +
+    `M${-extend},0` +
+    ` A${rx},${capRy} 0 0,1 ${w + extend},0` +
     ` L${w},${h}` +
-    ` A${w / 2},${capRy} 0 0,1 0,${h}` +
+    ` A${bottomRx},${capRy} 0 0,1 0,${h}` +
     ` Z`;
 
-  // Bottom cap: full ellipse at y=h (visible rounded bottom)
-  const bottomCapPath =
-    `M0,${h}` +
-    ` A${w / 2},${capRy} 0 0,0 ${w},${h}` +
-    ` A${w / 2},${capRy} 0 0,0 0,${h} Z`;
+  // Top cap: full ellipse at y=0 (visible rim / opening)
+  const topCapPath =
+    `M${-extend},0` +
+    ` A${rx},${capRy} 0 0,0 ${w + extend},0` +
+    ` A${rx},${capRy} 0 0,0 ${-extend},0 Z`;
 
-  return { bodyPath, bottomCapPath, capRy };
+  return { bodyPath, topCapPath, capRy };
 }
 
 /** Hexagon: pointed sides extend outside the base rect at the midpoint. */
