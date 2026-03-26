@@ -18,12 +18,16 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<GetTaskRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let model = match scryer_core::read_model(&req.name) {
+        let model_ref = match self.resolve_model(req.name) {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
+        let model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to read model '{}': {}",
-                    req.name, e
+                    model_ref, e
                 ))]));
             }
         };
@@ -219,7 +223,7 @@ impl ScryerServer {
             let mut output = format!(
                 "All {} tasks complete.\n\nMark these parent nodes as implemented:\n```\nupdate_nodes(model: \"{}\", nodes: [{}])\n```",
                 completed,
-                req.name,
+                model_ref,
                 propagate_nodes.iter()
                     .map(|(id, _)| format!("{{node_id: \"{}\", status: \"implemented\", reason: \"Needs review\", source: [{{pattern: \"src/module/**/*.ts\"}}]}}", id))
                     .collect::<Vec<_>>()
@@ -410,7 +414,7 @@ impl ScryerServer {
                 let ids: Vec<&str> = member_containers.iter().map(|n| n.id.as_str()).collect();
                 output.push_str(&format!(
                     "After scaffolding, mark these as implemented with a reason explaining what was scaffolded:\n```\nupdate_nodes(model: \"{}\", nodes: [{}])\n```\n",
-                    req.name,
+                    model_ref,
                     ids.iter().map(|id| format!("{{node_id: \"{}\", status: \"implemented\", reason: \"Needs implementation\"}}", id)).collect::<Vec<_>>().join(", ")
                 ));
 
@@ -815,7 +819,7 @@ impl ScryerServer {
         let ids: Vec<&str> = work_unit.iter().map(|n| n.id.as_str()).collect();
         output.push_str(&format!(
             "After building, mark as implemented with a reason and set source locations:\n```\nupdate_nodes(model: \"{}\", nodes: [{}])\n```\n",
-            req.name,
+            model_ref,
             ids.iter().map(|id| format!("{{node_id: \"{}\", status: \"implemented\", reason: \"Needs error handling\", source: [{{pattern: \"src/module/file.ts\", line: 1, endLine: 50}}]}}", id)).collect::<Vec<_>>().join(", ")
         ));
 

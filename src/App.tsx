@@ -20,7 +20,6 @@ import { CommandPalette } from "./CommandPalette";
 import { FlowScriptView } from "./FlowScriptView";
 import { C4Canvas } from "./C4Canvas";
 import { SyncBar } from "./SyncBar";
-import { expandGuidePanel } from "./GuidePanels";
 import { autoLayout } from "./layout";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ToastProvider } from "./Toast";
@@ -149,7 +148,7 @@ function Flow() {
   const [structureChanged, setStructureChanged] = useState(false);
   const [syncStatus, setSyncStatus] = useState<"idle" | "running" | "error">("idle");
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
-  const [syncActivity, setSyncActivity] = useState<string | null>(null);
+  const [syncLog, setSyncLog] = useState<string[]>([]);
   const [activeAgent, setActiveAgent] = useState<{ name: string; available: boolean } | null>(null);
   const [implementing, setImplementing] = useState(false);
   useEffect(() => {
@@ -236,7 +235,7 @@ function Flow() {
     if (!currentModel || !projectPath || syncStatus === "running") return;
     setSyncStatus("running");
     setSyncMessage(null);
-    setSyncActivity(null);
+    setSyncLog([]);
     setNodes((nds) => nds.map((n) => ({ ...n, selected: false })) as C4Node[]);
     try {
       await invoke<string>("start_agent_session", { cwd: projectPath, modelName: currentModel });
@@ -250,18 +249,29 @@ function Flow() {
 
   // Listen for agent session completion/failure/toolCall events
   useEffect(() => {
-    const unlisten = listen<{ kind: string; error?: string; name?: string }>("agent-event", (event) => {
-      const { kind, error, name } = event.payload;
-      if (kind === "toolCall" && name) {
-        setSyncActivity(name);
+    const unlisten = listen<{ kind: string; error?: string; name?: string; text?: string }>("agent-event", (event) => {
+      const { kind, error, text } = event.payload;
+      if (kind === "message" && text) {
+        setSyncLog((prev) => {
+          if (prev.length > 0) {
+            const last = prev[prev.length - 1];
+            // Check if last entry is the same message (with or without counter)
+            const match = last.match(/^(.*) \((\d+)\)$/);
+            const lastText = match ? match[1] : last;
+            const lastCount = match ? parseInt(match[2]) : 1;
+            if (lastText === text) {
+              return [...prev.slice(0, -1), `${text} (${lastCount + 1})`];
+            }
+          }
+          return [...prev.slice(-199), text];
+        });
       } else if (kind === "completed" || kind === "cancelled") {
         // Mark this model as synced so drift baseline moves forward
         if (currentModel) {
           invoke("mark_synced", { modelName: currentModel }).catch(() => {});
         }
         setSyncStatus("idle");
-        setSyncActivity(null);
-        setDriftedNodes([]);
+            setDriftedNodes([]);
         setStructureChanged(false);
         checkDrift(); // re-check against new baseline
         if (kind === "completed" && currentModel) {
@@ -272,8 +282,7 @@ function Flow() {
       } else if (kind === "failed") {
         setSyncMessage(error ?? "Unknown error");
         setSyncStatus("error");
-        setSyncActivity(null);
-      }
+          }
     });
     return () => { unlisten.then((f) => f()); };
   }, [checkDrift, currentModel, nodes]);
@@ -349,18 +358,6 @@ function Flow() {
     history.clear();
     await storage.loadModel(name);
   }, [storage, history]);
-
-  const newModelWithClear = useCallback(() => {
-    history.clear();
-    storage.newModel();
-    expandGuidePanel();
-    const starter = buildStarterModel();
-    setNodes(starter.nodes);
-    setEdges(starter.edges);
-    setFlows(starter.flows);
-    setRefPositions(starter.refPositions);
-    setTimeout(() => fitView({ padding: 0.3, duration: 300 }), 50);
-  }, [storage, history, fitView]);
 
   const driftedNodeIdSet = useMemo(() => new Set(driftedNodes.map((d) => d.nodeId)), [driftedNodes]);
 
@@ -670,6 +667,53 @@ function Flow() {
     setTimeout(() => fitView({ padding: 0.3, duration: 300 }), 50);
   }, [fitView]);
 
+  const handleOpenCodebase = useCallback(async () => {
+    const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
+    const selected = await openDialog({ directory: true, title: "Select project folder" });
+    if (!selected) return;
+
+    // Check if project already has a model
+    const refStr = `project:${selected}`;
+    try {
+      await invoke<string>("read_model", { name: refStr });
+      // Model exists — just load it
+      storage.loadModel(refStr);
+      return;
+    } catch {
+      // No existing model — check if it's actually a codebase
+    }
+
+    const codebase = await invoke<boolean>("is_codebase", { path: selected });
+    if (!codebase) {
+      const { ask } = await import("@tauri-apps/plugin-dialog");
+      const proceed = await ask(
+        "This directory doesn't look like a codebase (no package.json, Cargo.toml, .git, etc). Open it anyway?",
+        { title: "Not a codebase", kind: "warning" },
+      );
+      if (!proceed) return;
+    }
+
+    const folderName = selected.split(/[/\\]/).filter(Boolean).pop() ?? "project";
+    await storage.createAndLoadBlankModel(folderName, selected);
+  }, [storage]);
+
+  const handleBuildWithAI = useCallback(async () => {
+    if (!currentModel || !projectPath) return;
+    setSyncStatus("running");
+    setSyncMessage(null);
+    setSyncLog([]);
+    try {
+      await invoke<string>("start_initial_model_session", {
+        cwd: projectPath,
+        modelName: currentModel,
+      });
+    } catch (e) {
+      const msg = typeof e === "string" ? e : (e as Error)?.message ?? "Unknown error";
+      setSyncMessage(msg);
+      setSyncStatus("error");
+    }
+  }, [currentModel, projectPath]);
+
   const deleteNode = useCallback(
     (id: string) => {
       const toDelete = new Set<string>([id]);
@@ -925,12 +969,6 @@ function Flow() {
         onNavigateToRoot={() => navigateToBreadcrumb(null)}
         onOpenSettings={() => setSettingsTab("ai")}
         onCloseModel={storage.newModel}
-        onSaveAs={() => {
-          const raw = window.prompt("Save model as:", currentModel ?? "");
-          if (!raw) return;
-          const name = raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-");
-          if (name) storage.saveModelAs(name);
-        }}
         hasModel={currentModel !== null || nodes.length > 0}
         breadcrumbs={breadcrumbs}
         currentParentKind={currentParentKind}
@@ -945,13 +983,10 @@ function Flow() {
         onSetProjectPath={setProjectPath}
       />
       <div className="flex flex-1 min-h-0">
-        <Sidebar
-          currentModel={currentModel}
+        {currentModel && <Sidebar
           nodes={nodes}
           selectedNodeId={selectedNode?.id ?? null}
           expandedPath={expandedPath}
-          modelList={modelList}
-          onLoadModel={loadModelWithClear}
           onNavigateToNode={navigateToNode}
           onExpandNode={expandNode}
           groups={groups}
@@ -989,7 +1024,7 @@ function Flow() {
             setFlows((prev) => [...prev, newFlow]);
             setActiveFlowId(newId);
                      }}
-        />
+        />}
         <div className="flex-1 flex flex-col relative">
           {showNudge && (
             <div className="absolute top-3 right-3 z-10 flex items-start gap-3 px-4 py-3 rounded-lg border border-zinc-200/80 bg-white/90 shadow-lg backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-800/90 max-w-[320px]">
@@ -1032,6 +1067,9 @@ function Flow() {
           ) : (
             <C4Canvas
               currentModel={currentModel}
+              syncing={syncStatus === "running"}
+              projectPath={projectPath}
+              onBuildWithAI={handleBuildWithAI}
               expandedPath={expandedPath}
               visibleNodesWithHints={visibleNodesWithHints}
               visibleEdges={visibleEdges}
@@ -1044,6 +1082,7 @@ function Flow() {
               nodes={nodes}
               onAutoLayout={onAutoLayout}
               onNewBlankModel={onNewBlankModel}
+              onOpenCodebase={handleOpenCodebase}
               templateList={templateList}
               loadTemplate={storage.loadTemplate}
               aiConfigured={advisor.aiConfigured}
@@ -1074,7 +1113,7 @@ function Flow() {
               implementing={implementing}
               syncStatus={syncStatus}
               syncMessage={syncMessage}
-              syncActivity={syncActivity}
+              syncLog={syncLog}
               projectPath={projectPath}
               onSync={handleSync}
               onCancelSync={handleCancelSync}
@@ -1087,12 +1126,12 @@ function Flow() {
           {/* Command palette */}
           {paletteOpen && (
             <CommandPalette
-              modelList={modelList}
+              templateList={modelList}
               currentModel={currentModel}
-              onNewModel={newModelWithClear}
-              onLoadModel={loadModelWithClear}
-              onSaveAs={storage.saveModelAs}
-              onDeleteModel={storage.deleteModel}
+              onOpenCodebase={handleOpenCodebase}
+              onLoadTemplate={loadModelWithClear}
+              onDeleteTemplate={storage.deleteModel}
+              onRefreshList={storage.refreshList}
               onClose={() => setPaletteOpen(false)}
             />
           )}

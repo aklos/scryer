@@ -247,6 +247,36 @@ impl TreeNode {
 }
 
 /// Scan a project directory and return an annotated tree of architecturally relevant files.
+/// Quick check: does the directory look like a codebase?
+/// Looks for `.git`, manifest files, or common source directories at the root level.
+pub fn is_codebase(path: &Path) -> bool {
+    const MANIFEST_FILES: &[&str] = &[
+        "package.json", "Cargo.toml", "go.mod", "pyproject.toml", "setup.py",
+        "pom.xml", "build.gradle", "build.gradle.kts", "Gemfile",
+        "composer.json", "mix.exs", "pubspec.yaml", "Package.swift",
+        "Makefile", "CMakeLists.txt", "deno.json", "flake.nix",
+    ];
+    if path.join(".git").exists() {
+        return true;
+    }
+    for name in MANIFEST_FILES {
+        if path.join(name).exists() {
+            return true;
+        }
+    }
+    // Check for .csproj/.sln files
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.ends_with(".csproj") || name.ends_with(".fsproj") || name.ends_with(".sln") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub fn project_structure(path: &Path) -> Result<String, String> {
     if !path.is_dir() {
         return Err(format!("'{}' is not a directory", path.display()));

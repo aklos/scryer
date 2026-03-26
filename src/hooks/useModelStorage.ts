@@ -190,7 +190,9 @@ export function useModelStorage(
 
   // Load model list, templates on mount
   useEffect(() => {
-    invoke<string[]>("list_models").then(setModelList).catch(() => toast("Failed to load model list"));
+    invoke<{ refStr: string; displayName: string; isLocal: boolean }[]>("list_models")
+      .then((entries) => setModelList(entries.filter((e) => !e.isLocal).map((e) => e.refStr)))
+      .catch(() => toast("Failed to load model list"));
     invoke<string[]>("list_templates").then(setTemplateList).catch(() => {});
   }, [setModelList, setTemplateList]);
 
@@ -229,8 +231,8 @@ export function useModelStorage(
   }, [nodeFingerprint, edges, currentModel, startingLevel, sourceMap, refPositions, groups, flows, syncing]);
 
   const refreshList = useCallback(async () => {
-    const list = await invoke<string[]>("list_models").catch(() => { toast("Failed to refresh model list"); return []; });
-    setModelList(list);
+    const entries = await invoke<{ refStr: string; displayName: string; isLocal: boolean }[]>("list_models").catch(() => { toast("Failed to refresh model list"); return [] as { refStr: string; displayName: string; isLocal: boolean }[]; });
+    setModelList(entries.filter((e) => !e.isLocal).map((e) => e.refStr));
   }, [setModelList]);
 
   const applyModelData = useCallback((data: C4ModelData, preserveSelection = false) => {
@@ -271,19 +273,22 @@ export function useModelStorage(
 
   const loadModel = useCallback(async (name: string) => {
     try {
-      const raw = await invoke<string>("read_model", { name });
+      // Auto-migrate global models with project_path to project-local
+      const refStr = await invoke<string>("try_migrate_model", { name });
+      const raw = await invoke<string>("read_model", { name: refStr });
       lastKnownDisk.current = raw;
       const data = parseModelData(raw);
       applyModelData(data);
-      setCurrentModel(name);
+      setCurrentModel(refStr);
       setExpandedPath([]);
       setActiveFlowId(null);
       setRefPositions(data.refPositions ?? {});
       scheduleFitView();
+      if (refStr !== name) refreshList(); // model moved — update list
     } catch {
       toast("Failed to load model");
     }
-  }, [applyModelData, setCurrentModel, setExpandedPath, setActiveFlowId, setRefPositions, scheduleFitView, toast]);
+  }, [applyModelData, setCurrentModel, setExpandedPath, setActiveFlowId, setRefPositions, scheduleFitView, refreshList, toast]);
 
   const reloadModel = useCallback(async (name: string) => {
     try {
@@ -496,12 +501,39 @@ export function useModelStorage(
     }
   }, [applyModelData, setCurrentModel, setExpandedPath, setRefPositions, setActiveFlowId, scheduleFitView, toast]);
 
+  const createAndLoadBlankModel = useCallback(async (name: string, projPath: string) => {
+    const refStr = await invoke<string>("create_blank_model", { name, projectPath: projPath });
+    skipSave.current = true;
+    setNodes([]);
+    skipSave.current = true;
+    setEdges([]);
+    setCurrentModel(refStr);
+    setStartingLevel("system");
+    setExpandedPath([]);
+    setRefPositions({});
+    setSourceMap({});
+    setProjectPath(projPath);
+    setGroups([]);
+    setFlows([]);
+    setActiveFlowId(null);
+    await refreshList();
+  }, [setNodes, setEdges, setCurrentModel, setStartingLevel, setExpandedPath, setRefPositions, setSourceMap, setProjectPath, setGroups, setFlows, setActiveFlowId, refreshList]);
+
   const saveModelAs = useCallback(async (name: string) => {
     const data: C4ModelData = { nodes, edges, startingLevel, sourceMap, refPositions, groups, flows };
     await invoke("write_model", { name, data: JSON.stringify(data) }).catch(() => toast("Failed to save model"));
     setCurrentModel(name);
     await refreshList();
   }, [nodes, edges, startingLevel, sourceMap, refPositions, groups, flows, refreshList, setCurrentModel]);
+
+  // Tell the backend to watch the active model's directory for changes.
+  // For project-local models this starts watching {project}/.scryer/;
+  // for global models it's a no-op (global dir is always watched).
+  useEffect(() => {
+    if (currentModel) {
+      invoke("watch_project", { refStr: currentModel }).catch(() => {});
+    }
+  }, [currentModel]);
 
   // File watcher: reload when external tools (MCP, etc.) modify model files.
   // Handles both model-created and model-changed events.
@@ -532,6 +564,7 @@ export function useModelStorage(
     reloadModel,
     deleteModel,
     newModel,
+    createAndLoadBlankModel,
     loadTemplate,
     saveModelAs,
     refreshList,

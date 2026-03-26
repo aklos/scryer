@@ -16,6 +16,8 @@ pub enum AgentEvent {
     },
     /// The agent produced an execution plan.
     Plan { content: String },
+    /// Heartbeat: the agent is producing output (throttled).
+    Activity,
     /// The session completed normally.
     Completed { stop_reason: String },
     /// The session failed with an error.

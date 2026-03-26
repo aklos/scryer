@@ -36,6 +36,30 @@ fn strip_compact(val: &mut serde_json::Value) {
     }
 }
 
+/// Build a prompt for initial model creation from a codebase.
+/// Guides the agent to scan the project and build system + container levels only.
+pub fn initial_model_prompt(model_name: &str, cwd: &str) -> String {
+    format!(
+        r#"You have access to the scryer MCP server. Build a C4 architecture model named "{model_name}" from the codebase at {cwd}.
+
+## Instructions
+
+1. Call `get_rules` to load the full modeling workflow and C4 rules.
+2. Call `get_structure` with path "{cwd}" to get the annotated directory tree.
+3. Read the manifests that `get_structure` surfaces (package.json, Cargo.toml, go.mod, etc.) to identify runtime dependencies, external services, databases, and frameworks.
+4. Build the model level by level — follow the workflow from `get_rules`:
+   - First: `set_model` with persons, the system, external systems, and system-level edges only. Fix any warnings before proceeding.
+   - Second: `set_node` on the system to add all containers plus container-level edges (Person→Container, Container→Container, Container→ExternalSystem). Fix any warnings.
+   - Group containers that deploy together using `set_groups`.
+5. **Stop at the container level.** Do NOT add components or operations.
+6. Set `status: "implemented"` on all nodes that already exist in the codebase. Do NOT use "verified" — that requires contract items to be checked and passed.
+7. Set source mappings for containers using `update_source_map` — use glob patterns pointing to each container's directory.
+8. Call `get_changes` to produce a summary of what was modeled.
+
+Be thorough — identify all deployable units, data stores, external integrations, background workers, and user-facing surfaces. Model for production, not for demos. Name nodes by their role, not their technology."#
+    )
+}
+
 /// Build a focused sync prompt listing nodes whose source files changed.
 /// Includes the full model JSON so the agent can skip calling `get_model`.
 pub fn sync_prompt(

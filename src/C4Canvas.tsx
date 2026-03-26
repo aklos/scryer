@@ -44,8 +44,12 @@ interface C4CanvasProps {
   nodes: C4Node[];
   onAutoLayout: () => void | Promise<void>;
   onNewBlankModel: () => void;
+  onOpenCodebase: () => void;
   templateList: string[];
   loadTemplate: (name: string) => Promise<void>;
+  syncing: boolean;
+  projectPath?: string;
+  onBuildWithAI: () => void;
   aiConfigured: boolean;
   aiEnabled: boolean;
   hintLoading: boolean;
@@ -80,8 +84,12 @@ export function C4Canvas({
   nodes,
   onAutoLayout,
   onNewBlankModel,
+  onOpenCodebase,
   templateList,
   loadTemplate,
+  syncing,
+  projectPath,
+  onBuildWithAI,
   aiConfigured,
   aiEnabled,
   hintLoading,
@@ -448,8 +456,8 @@ export function C4Canvas({
         proOptions={proOptions}
       >
         <Background gap={20} variant={BackgroundVariant.Dots} size={1} color="var(--grid-color, #e4e4e7)" />
-        {/* Canvas toolbar */}
-        {(currentModel !== null || nodes.length > 0) && (
+        {/* Canvas toolbar — hidden during sync */}
+        {(currentModel !== null || nodes.length > 0) && !syncing && (
           <Panel position="top-center" className="!mt-3">
             <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border-overlay)] bg-[var(--surface-overlay)] backdrop-blur-sm shadow-sm px-1 py-0.5">
               {(selectedNode || selectedEdge) && (
@@ -591,7 +599,10 @@ export function C4Canvas({
               </p>
             </div>
             <div className="flex flex-col gap-3 w-full">
-              <Button variant="primary" size="md" className="rounded-lg px-4 py-2 text-sm font-medium shadow-sm" onClick={onNewBlankModel}>
+              <Button variant="primary" size="md" className="rounded-lg px-4 py-2 text-sm font-medium shadow-sm" onClick={onOpenCodebase}>
+                Open codebase
+              </Button>
+              <Button variant="secondary" size="md" className="rounded-lg px-4 py-2 text-sm font-medium shadow-sm" onClick={onNewBlankModel}>
                 New model
               </Button>
               {templateList.length > 0 && (
@@ -606,6 +617,40 @@ export function C4Canvas({
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Project linked but empty model — compact card, visually distinct from welcome */}
+      {currentModel !== null && nodes.length === 0 && projectPath && !syncing && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
+          <div className="pointer-events-auto w-[380px] rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-lg overflow-hidden">
+            <div className="px-5 py-4 border-b border-[var(--border)] bg-[var(--surface-raised)]">
+              <div className="text-xs font-medium uppercase tracking-wider text-[var(--text-muted)] mb-1">New project</div>
+              <div className="text-lg font-semibold text-[var(--text)]">{projectPath.split(/[/\\]/).filter(Boolean).pop()}</div>
+              <div className="text-[11px] text-[var(--text-muted)] truncate mt-0.5">{projectPath}</div>
+            </div>
+            <div className="px-5 py-4 flex flex-col gap-2.5">
+              <button
+                type="button"
+                className="flex items-center gap-3 w-full rounded-lg border border-[var(--border)] px-4 py-3 text-left hover:bg-[var(--surface-tint)] cursor-pointer transition-colors"
+                onClick={onBuildWithAI}
+              >
+                <div className="flex-1">
+                  <div className="text-sm font-medium text-[var(--text)]">Build with AI</div>
+                  <div className="text-[11px] text-[var(--text-muted)] mt-0.5">Scan the codebase and generate an architecture model</div>
+                </div>
+              </button>
+              <button
+                type="button"
+                className="flex items-center gap-3 w-full rounded-lg border border-[var(--border)] px-4 py-3 text-left hover:bg-[var(--surface-tint)] cursor-pointer transition-colors"
+                onClick={onNewBlankModel}
+              >
+                <div className="flex-1">
+                  <div className="text-sm font-medium text-[var(--text)]">Start blank</div>
+                  <div className="text-[11px] text-[var(--text-muted)] mt-0.5">Add systems, containers, and components manually</div>
+                </div>
+              </button>
             </div>
           </div>
         </div>

@@ -2,15 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import type { C4Node, C4NodeData, Group, Flow } from "./types";
 import { STATUS_COLORS } from "./statusColors";
 import { KIND_ICON } from "./kindIcons";
-import { Plus, ChevronRight, FileText } from "lucide-react";
+import { Plus, ChevronRight } from "lucide-react";
 
 interface SidebarProps {
-  currentModel: string | null;
   nodes: C4Node[];
   selectedNodeId: string | null;
   expandedPath: string[];
-  modelList: string[];
-  onLoadModel: (name: string) => void;
   onNavigateToNode: (id: string) => void;
   onExpandNode: (id: string) => void;
   groups: Group[];
@@ -160,7 +157,7 @@ function GroupTreeRow({ group, memberNodes, depth, open, ctx }: { group: Group; 
 }
 
 export function Sidebar({
-  currentModel, nodes, selectedNodeId, expandedPath, modelList, onLoadModel, onNavigateToNode, onExpandNode,
+  nodes, selectedNodeId, expandedPath, onNavigateToNode, onExpandNode,
   groups, onHighlightGroup,
   flows, activeFlowId, onSelectFlow, onNewFlow,
 }: SidebarProps) {
@@ -199,37 +196,8 @@ export function Sidebar({
     onToggleTree, onNavigateToNode, onExpandNode, onHighlightGroup,
   };
 
-  const isWelcome = currentModel === null && nodes.length === 0;
-
   return (
     <aside className="w-60 shrink-0 border-r border-[var(--border)] bg-[var(--surface)] flex flex-col relative">
-      {isWelcome ? (
-        /* Welcome: model list */
-        <div className="flex-1 overflow-y-auto">
-          {modelList.length > 0 ? (
-            <>
-              <div className="px-3 pt-3 pb-1.5">
-                <span className="text-[10px] uppercase tracking-wider font-semibold text-[var(--text-muted)]">Models</span>
-              </div>
-              {modelList.map((name) => (
-                <div
-                  key={name}
-                  className="flex items-center gap-2 px-3 py-1.5 cursor-pointer text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-tint)] transition-colors"
-                  onClick={() => onLoadModel(name)}
-                >
-                  <FileText size={14} className="shrink-0 text-[var(--text-muted)]" />
-                  <span className="truncate flex-1">{name}</span>
-                </div>
-              ))}
-            </>
-          ) : (
-            <div className="px-3 py-6 text-xs text-[var(--text-muted)] text-center">
-              No models yet.
-            </div>
-          )}
-        </div>
-      ) : (
-        /* Normal: tabs + tree */
         <>
           <div className="flex shrink-0 gap-1 px-3 py-1.5 border-b border-[var(--border)]">
             <button
@@ -306,7 +274,6 @@ export function Sidebar({
             )}
           </div>
         </>
-      )}
     </aside>
   );
 }

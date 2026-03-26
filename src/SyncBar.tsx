@@ -3,31 +3,6 @@ import { RefreshCw, Loader2, Check, ChevronDown, ChevronUp, X, AlertCircle, Lock
 
 type DriftInfo = { nodeId: string; nodeName: string; patterns: string[] };
 
-/** Human-readable labels for scryer MCP tool names. */
-const TOOL_LABELS: Record<string, string> = {
-  get_model: "Reading model",
-  get_node: "Reading node",
-  get_rules: "Reading rules",
-  get_changes: "Summarizing changes",
-  get_structure: "Scanning project",
-  get_task: "Getting task",
-  validate_model: "Validating",
-  update_nodes: "Updating nodes",
-  add_nodes: "Adding nodes",
-  delete_nodes: "Deleting nodes",
-  set_node: "Setting node",
-  set_model: "Setting model",
-  add_edges: "Adding edges",
-  update_edges: "Updating edges",
-  delete_edges: "Deleting edges",
-  update_source_map: "Updating source map",
-  set_flows: "Setting flows",
-  delete_flow: "Deleting flow",
-  set_groups: "Setting groups",
-  delete_group: "Deleting group",
-  list_models: "Listing models",
-};
-
 function formatElapsed(ms: number): string {
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
@@ -41,7 +16,7 @@ interface SyncBarProps {
   implementing: boolean;
   syncStatus: "idle" | "running" | "error";
   syncMessage: string | null;
-  syncActivity: string | null;
+  syncLog: string[];
   projectPath: string | undefined;
   onSync: () => void;
   onCancelSync: () => void;
@@ -51,7 +26,7 @@ interface SyncBarProps {
   onNavigateToNode?: (nodeId: string) => void;
 }
 
-export function SyncBar({ activeAgent, driftedNodes, structureChanged, implementing, syncStatus, syncMessage, syncActivity, projectPath, onSync, onCancelSync, onDismissMessage, onDismissDrift, onToggleLock, onNavigateToNode }: SyncBarProps) {
+export function SyncBar({ activeAgent, driftedNodes, structureChanged, implementing, syncStatus, syncMessage, syncLog, projectPath, onSync, onCancelSync, onDismissMessage, onDismissDrift, onToggleLock, onNavigateToNode }: SyncBarProps) {
   const [expanded, setExpanded] = useState(false);
   const sortedDriftedNodes = useMemo(
     () => [...driftedNodes].sort((a, b) => a.nodeName.localeCompare(b.nodeName)),
@@ -97,7 +72,6 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, implement
   }
 
   const agentName = activeAgent!.name;
-  const activityLabel = syncActivity ? (TOOL_LABELS[syncActivity] ?? syncActivity) : null;
 
   return (
     <div className="shrink-0 border-t border-[var(--border)] bg-[var(--surface)] select-none">
@@ -144,12 +118,17 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, implement
           </>
         ) : syncStatus === "running" ? (
           <>
-            <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
+            <button
+              type="button"
+              className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 cursor-pointer hover:text-amber-500"
+              onClick={() => setExpanded((prev) => !prev)}
+            >
               <Loader2 className="h-3 w-3 animate-spin" />
               <span>Syncing… {formatElapsed(elapsed)}</span>
-            </div>
-            {activityLabel && (
-              <span className="text-[var(--text-muted)] truncate">{activityLabel}</span>
+              {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
+            </button>
+            {syncLog.length > 0 && (
+              <span className="text-[var(--text-muted)] truncate">{syncLog[syncLog.length - 1]}</span>
             )}
             <div className="flex-1" />
             <button
@@ -264,6 +243,18 @@ export function SyncBar({ activeAgent, driftedNodes, structureChanged, implement
           </>
         )}
       </div>
+
+      {/* Expanded sync log */}
+      {syncStatus === "running" && expanded && syncLog.length > 0 && (
+        <div
+          className="border-t border-[var(--border-subtle)] max-h-32 overflow-y-auto px-3 py-1.5 text-[11px] font-mono text-[var(--text-muted)] space-y-0.5"
+          ref={(el) => { if (el) el.scrollTop = el.scrollHeight; }}
+        >
+          {syncLog.map((line, i) => (
+            <div key={i} className="truncate">{line}</div>
+          ))}
+        </div>
+      )}
 
       {/* Expanded drift details */}
       {expanded && sortedDriftedNodes.length > 0 && syncStatus === "idle" && (

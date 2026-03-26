@@ -23,6 +23,10 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<SetModelRequest>,
     ) -> Result<CallToolResult, McpError> {
+        let model_ref = match self.resolve_model(req.name) {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
         let mut model: C4ModelData = match serde_json::from_str(&req.data) {
             Ok(m) => m,
             Err(e) => {
@@ -120,12 +124,16 @@ impl ScryerServer {
         let bidir_warnings = check_bidirectional_edges(&model);
         let mention_warnings = check_mention_edges(&model);
         let cross_container_warnings = check_cross_container_edges(&model);
-        match scryer_core::write_model(&req.name, &model) {
+        match scryer_core::write_model_at(&model_ref, &model) {
             Ok(()) => {
-                let _ = scryer_core::save_baseline(&req.name, &model);
+                let _ = scryer_core::save_baseline_at(&model_ref, &model);
+                // Register the project if project-local
+                if let scryer_core::ModelRef::ProjectLocal(ref path) = model_ref {
+                    let _ = scryer_core::register_project(path);
+                }
                 let mut msg = format!(
                     "Set model '{}' ({} nodes, {} edges)",
-                    req.name, node_count, edge_count
+                    model_ref, node_count, edge_count
                 );
                 if !cross_level_warnings.is_empty() {
                     msg.push_str(&format!(
@@ -171,12 +179,16 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<AddNodeRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let mut model = match scryer_core::read_model(&req.model) {
+        let model_ref = match self.resolve_model(req.model) {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to read model '{}': {}",
-                    req.model, e
+                    model_ref, e
                 ))]));
             }
         };
@@ -260,9 +272,9 @@ impl ScryerServer {
             added_ids.push(id);
         }
 
-        match scryer_core::write_model(&req.model, &model) {
+        match scryer_core::write_model_at(&model_ref, &model) {
             Ok(()) => {
-                let _ = scryer_core::save_baseline(&req.model, &model);
+                let _ = scryer_core::save_baseline_at(&model_ref, &model);
                 Ok(CallToolResult::success(vec![Content::text(format!(
                     "Added {} node(s): {}",
                     added_ids.len(),
@@ -280,12 +292,16 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<SetNodeRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let mut model = match scryer_core::read_model(&req.model) {
+        let model_ref = match self.resolve_model(req.model) {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to read model '{}': {}",
-                    req.model, e
+                    model_ref, e
                 ))]));
             }
         };
@@ -530,9 +546,9 @@ impl ScryerServer {
             }
         }
 
-        match scryer_core::write_model(&req.model, &model) {
+        match scryer_core::write_model_at(&model_ref, &model) {
             Ok(()) => {
-                let _ = scryer_core::save_baseline(&req.model, &model);
+                let _ = scryer_core::save_baseline_at(&model_ref, &model);
                 let mut msg = format!(
                     "Set {} descendant node(s) and {} edge(s) under '{}'",
                     node_count, edge_count, req.node_id
@@ -582,12 +598,16 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<UpdateNodeRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let mut model = match scryer_core::read_model(&req.model) {
+        let model_ref = match self.resolve_model(req.model) {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to read model '{}': {}",
-                    req.model, e
+                    model_ref, e
                 ))]));
             }
         };
@@ -711,9 +731,9 @@ impl ScryerServer {
             updated.push(item.node_id);
         }
 
-        match scryer_core::write_model(&req.model, &model) {
+        match scryer_core::write_model_at(&model_ref, &model) {
             Ok(()) => {
-                let _ = scryer_core::save_baseline(&req.model, &model);
+                let _ = scryer_core::save_baseline_at(&model_ref, &model);
                 Ok(CallToolResult::success(vec![Content::text(format!(
                     "Updated {} node(s)",
                     updated.len()
@@ -730,12 +750,16 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<DeleteNodeRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let mut model = match scryer_core::read_model(&req.model) {
+        let model_ref = match self.resolve_model(req.model) {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to read model '{}': {}",
-                    req.model, e
+                    model_ref, e
                 ))]));
             }
         };
@@ -764,9 +788,9 @@ impl ScryerServer {
             .retain(|e| !to_delete.contains(&e.source) && !to_delete.contains(&e.target));
         let removed = before - model.nodes.len();
 
-        match scryer_core::write_model(&req.model, &model) {
+        match scryer_core::write_model_at(&model_ref, &model) {
             Ok(()) => {
-                let _ = scryer_core::save_baseline(&req.model, &model);
+                let _ = scryer_core::save_baseline_at(&model_ref, &model);
                 Ok(CallToolResult::success(vec![Content::text(format!(
                     "Deleted {} node(s)",
                     removed

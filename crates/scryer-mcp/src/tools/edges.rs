@@ -16,12 +16,16 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<AddEdgeRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let mut model = match scryer_core::read_model(&req.model) {
+        let model_ref = match self.resolve_model(req.model) {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to read model '{}': {}",
-                    req.model, e
+                    model_ref, e
                 ))]));
             }
         };
@@ -72,9 +76,9 @@ impl ScryerServer {
         let bidir_warnings = check_bidirectional_edges(&model);
         let mention_warnings = check_mention_edges(&model);
         let cross_container_warnings = check_cross_container_edges(&model);
-        match scryer_core::write_model(&req.model, &model) {
+        match scryer_core::write_model_at(&model_ref, &model) {
             Ok(()) => {
-                let _ = scryer_core::save_baseline(&req.model, &model);
+                let _ = scryer_core::save_baseline_at(&model_ref, &model);
                 let mut msg = format!("Added {} edge(s)", added.len());
                 if !cross_level_warnings.is_empty() {
                     msg.push_str(&format!(
@@ -118,12 +122,16 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<UpdateEdgeRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let mut model = match scryer_core::read_model(&req.model) {
+        let model_ref = match self.resolve_model(req.model) {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to read model '{}': {}",
-                    req.model, e
+                    model_ref, e
                 ))]));
             }
         };
@@ -159,9 +167,9 @@ impl ScryerServer {
             updated += 1;
         }
 
-        match scryer_core::write_model(&req.model, &model) {
+        match scryer_core::write_model_at(&model_ref, &model) {
             Ok(()) => {
-                let _ = scryer_core::save_baseline(&req.model, &model);
+                let _ = scryer_core::save_baseline_at(&model_ref, &model);
                 Ok(CallToolResult::success(vec![Content::text(format!(
                     "Updated {} edge(s)",
                     updated
@@ -176,12 +184,16 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<DeleteEdgeRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let mut model = match scryer_core::read_model(&req.model) {
+        let model_ref = match self.resolve_model(req.model) {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to read model '{}': {}",
-                    req.model, e
+                    model_ref, e
                 ))]));
             }
         };
@@ -199,9 +211,9 @@ impl ScryerServer {
             .edges
             .retain(|e| !ids_to_delete.contains(e.id.as_str()));
 
-        match scryer_core::write_model(&req.model, &model) {
+        match scryer_core::write_model_at(&model_ref, &model) {
             Ok(()) => {
-                let _ = scryer_core::save_baseline(&req.model, &model);
+                let _ = scryer_core::save_baseline_at(&model_ref, &model);
                 Ok(CallToolResult::success(vec![Content::text(format!(
                     "Deleted {} edge(s)",
                     req.edge_ids.len()

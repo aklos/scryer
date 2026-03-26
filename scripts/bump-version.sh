@@ -16,6 +16,7 @@ CARGO_FILES=(
   "$ROOT/crates/scryer-core/Cargo.toml"
   "$ROOT/crates/scryer-mcp/Cargo.toml"
   "$ROOT/crates/scryer-suggest/Cargo.toml"
+  "$ROOT/crates/scryer-acp/Cargo.toml"
   "$ROOT/crates/xtask/Cargo.toml"
 )
 

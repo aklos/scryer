@@ -8,11 +8,8 @@ use agent_client_protocol::{
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use scryer_core::drift::DriftedNode;
-
 use crate::client::ScryerClient;
 use crate::events::AgentEvent;
-use crate::prompt::sync_prompt;
 use crate::AgentKind;
 
 /// How the agent should be launched.
@@ -32,9 +29,7 @@ enum RuntimeCommand {
         cwd: String,
         model_name: String,
         mcp_binary: String,
-        drifted: Vec<DriftedNode>,
-        structure_changed: bool,
-        model_json: String,
+        prompt: String,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
         result_tx: oneshot::Sender<Result<String, String>>,
     },
@@ -76,9 +71,7 @@ impl AcpRuntime {
         cwd: String,
         model_name: String,
         mcp_binary: String,
-        drifted: Vec<DriftedNode>,
-        structure_changed: bool,
-        model_json: String,
+        prompt: String,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
     ) -> Result<String, String> {
         let (result_tx, result_rx) = oneshot::channel();
@@ -89,9 +82,7 @@ impl AcpRuntime {
                 cwd,
                 model_name,
                 mcp_binary,
-                drifted,
-                structure_changed,
-                model_json,
+                prompt,
                 event_tx,
                 result_tx,
             })
@@ -132,9 +123,7 @@ fn runtime_thread(
                     cwd,
                     model_name,
                     mcp_binary,
-                    drifted,
-                    structure_changed,
-                    model_json,
+                    prompt,
                     event_tx,
                     result_tx,
                 } => {
@@ -156,11 +145,11 @@ fn runtime_thread(
                     let result = match mode {
                         LaunchMode::Cli { kind } => start_cli_session(
                             &agent_binary, &kind, &cwd, &model_name, &mcp_binary,
-                            &drifted, structure_changed, &model_json, event_tx, done_tx.clone(),
+                            &prompt, event_tx, done_tx.clone(),
                         ),
                         LaunchMode::Acp => start_acp_session(
                             &agent_binary, &cwd, &model_name, &mcp_binary,
-                            &drifted, structure_changed, &model_json, event_tx, done_tx.clone(),
+                            &prompt, event_tx, done_tx.clone(),
                         ).await,
                     };
 
@@ -198,16 +187,12 @@ fn start_cli_session(
     agent_binary: &str,
     kind: &AgentKind,
     cwd: &str,
-    model_name: &str,
+    _model_name: &str,
     mcp_binary: &str,
-    drifted: &[DriftedNode],
-    structure_changed: bool,
-    model_json: &str,
+    prompt: &str,
     event_tx: mpsc::UnboundedSender<AgentEvent>,
     done_tx: mpsc::UnboundedSender<RuntimeCommand>,
 ) -> Result<oneshot::Sender<()>, String> {
-    let prompt = sync_prompt(model_name, cwd, drifted, structure_changed, model_json);
-
     let mut cmd = tokio::process::Command::new(agent_binary);
 
     match kind {
@@ -222,7 +207,8 @@ fn start_cli_session(
                 }
             });
             cmd.arg("-p")
-                .arg("--output-format").arg("json")
+                .arg("--output-format").arg("stream-json")
+                .arg("--verbose")
                 .arg("--mcp-config").arg(mcp_config.to_string())
                 .arg("--allowed-tools").arg("mcp__scryer__*")
                 .arg("--no-session-persistence")
@@ -269,51 +255,74 @@ fn start_cli_session(
     let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
 
     tokio::task::spawn_local(async move {
-        // Stream stdout line-by-line to detect tool call events
+        // Stream stdout and stderr to detect activity and tool call events.
+        // Claude Code writes JSON events to stdout; some agents use stderr.
         let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        let event_tx_stdout = event_tx.clone();
+        let event_tx_stderr = event_tx.clone();
 
         let monitor = async {
-            if let Some(stdout) = stdout {
-                use tokio::io::{AsyncBufReadExt, BufReader};
-                let reader = BufReader::new(stdout);
-                let mut lines = reader.lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    if let Some(tool) = extract_scryer_tool(&line) {
-                        let _ = event_tx.send(AgentEvent::ToolCall {
-                            id: String::new(),
-                            name: tool,
-                            status: "running".into(),
-                        });
+            let stdout_task = async {
+                if let Some(stdout) = stdout {
+                    use tokio::io::{AsyncBufReadExt, BufReader};
+                    let reader = BufReader::new(stdout);
+                    let mut lines = reader.lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if let Some(msg) = summarize_event(&line) {
+                            let _ = event_tx_stdout.send(AgentEvent::Message { text: msg });
+                        }
                     }
                 }
-            }
-            // stdout closed — process has exited or is about to
-            child.wait().await
+            };
+
+            let last_stderr = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+            let last_stderr2 = last_stderr.clone();
+            let stderr_task = async move {
+                if let Some(stderr) = stderr {
+                    use tokio::io::{AsyncBufReadExt, BufReader};
+                    let reader = BufReader::new(stderr);
+                    let mut lines = reader.lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        *last_stderr2.lock().unwrap() = line.clone();
+                        let _ = event_tx_stderr.send(AgentEvent::Message { text: line });
+                    }
+                }
+            };
+
+            tokio::join!(stdout_task, stderr_task);
+            // streams closed — process has exited or is about to
+            let status = child.wait().await;
+            (status, last_stderr)
         };
 
         tokio::select! {
             result = monitor => {
-                match result {
-                    Ok(status) if status.success() => {
+                let (status, last_stderr) = result;
+                match status {
+                    Ok(s) if s.success() => {
                         let _ = event_tx.send(AgentEvent::Completed {
                             stop_reason: "end_turn".into(),
                         });
                     }
-                    Ok(status) => {
-                        let mut err_msg = format!("exit code {}", status.code().unwrap_or(-1));
-                        if let Some(mut stderr) = child.stderr.take() {
-                            let mut buf = String::new();
-                            use tokio::io::AsyncReadExt;
-                            if stderr.read_to_string(&mut buf).await.is_ok() && !buf.is_empty() {
-                                err_msg = buf.lines().last().unwrap_or(&err_msg).to_string();
-                            }
-                        }
+                    Ok(s) => {
+                        let stderr_line = last_stderr.lock().unwrap().clone();
+                        let err_msg = if stderr_line.is_empty() {
+                            format!("exit code {}", s.code().unwrap_or(-1))
+                        } else {
+                            stderr_line
+                        };
                         let _ = event_tx.send(AgentEvent::Failed { error: err_msg });
                     }
                     Err(e) => {
-                        let _ = event_tx.send(AgentEvent::Failed {
-                            error: format!("{e}"),
-                        });
+                        let stderr_line = last_stderr.lock().unwrap().clone();
+                        let err_msg = if stderr_line.is_empty() {
+                            format!("{e}")
+                        } else {
+                            stderr_line
+                        };
+                        let _ = event_tx.send(AgentEvent::Failed { error: err_msg });
                     }
                 }
             }
@@ -328,18 +337,40 @@ fn start_cli_session(
     Ok(cancel_tx)
 }
 
-/// Extract a scryer MCP tool name from a JSON output line.
-/// Looks for `"mcp__scryer__<tool>"` anywhere in the line.
-fn extract_scryer_tool(line: &str) -> Option<String> {
-    let marker = "\"mcp__scryer__";
-    let idx = line.find(marker)?;
-    let after = &line[idx + marker.len()..];
-    let end = after.find('"').unwrap_or(after.len());
-    let tool = &after[..end];
-    if tool.is_empty() || tool.contains('*') {
-        return None;
+/// Extract a readable one-liner from a Claude Code stream-json event.
+fn summarize_event(line: &str) -> Option<String> {
+    let val: serde_json::Value = serde_json::from_str(line).ok()?;
+    let kind = val.get("type")?.as_str()?;
+    match kind {
+        "assistant" => {
+            // Extract text content from assistant message
+            let content = val.pointer("/message/content")?.as_array()?;
+            for block in content {
+                if block.get("type")?.as_str()? == "tool_use" {
+                    let name = block.get("name")?.as_str()?;
+                    return Some(format!("-> {}", name));
+                }
+                if block.get("type")?.as_str()? == "text" {
+                    let text = block.get("text")?.as_str()?;
+                    let first = text.trim().lines().next().unwrap_or("").trim();
+                    if !first.is_empty() {
+                        let truncated = if first.len() > 120 { format!("{}…", &first[..120]) } else { first.to_string() };
+                        return Some(truncated);
+                    }
+                }
+            }
+            None
+        }
+        "tool_result" | "tool_use" => {
+            let name = val.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
+            Some(format!("-> {}", name))
+        }
+        "result" => {
+            let subtype = val.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
+            Some(format!("Done ({})", subtype))
+        }
+        _ => None,
     }
-    Some(tool.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -349,11 +380,9 @@ fn extract_scryer_tool(line: &str) -> Option<String> {
 async fn start_acp_session(
     agent_binary: &str,
     cwd: &str,
-    model_name: &str,
+    _model_name: &str,
     mcp_binary: &str,
-    drifted: &[DriftedNode],
-    structure_changed: bool,
-    model_json: &str,
+    prompt: &str,
     event_tx: mpsc::UnboundedSender<AgentEvent>,
     done_tx: mpsc::UnboundedSender<RuntimeCommand>,
 ) -> Result<oneshot::Sender<()>, String> {
@@ -399,7 +428,7 @@ async fn start_acp_session(
         .map_err(|e| format!("ACP new_session failed: {e}"))?;
 
     let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-    let prompt_text = sync_prompt(model_name, cwd, drifted, structure_changed, model_json);
+    let prompt_text = prompt.to_string();
     let sid = session.session_id.clone();
 
     tokio::task::spawn_local(async move {

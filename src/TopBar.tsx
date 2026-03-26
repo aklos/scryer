@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Minus, Square, X, Settings, Keyboard, FolderX, SaveAll, Menu, FolderOpen } from "lucide-react";
+import { Minus, Square, X, Settings, Keyboard, FolderX, Menu, FolderOpen } from "lucide-react";
 import type { C4Kind, AiToolsState } from "./types";
 import type { RackDependency } from "./CodeLevelRack";
 
@@ -12,7 +12,6 @@ interface TopBarProps {
   onNavigateToRoot: () => void;
   onOpenSettings: () => void;
   onCloseModel: () => void;
-  onSaveAs: () => void;
   hasModel: boolean;
 
   breadcrumbs: { id: string; name: string; kind: C4Kind }[];
@@ -58,7 +57,6 @@ function ProjectMenu({
   onAiToolsChange,
   triggerRef,
   onSetProjectPath,
-  onSaveAs,
 }: {
   onClose: () => void;
   projectPath?: string;
@@ -66,7 +64,6 @@ function ProjectMenu({
   onAiToolsChange: (tools: AiToolsState) => void;
   triggerRef: React.RefObject<HTMLButtonElement | null>;
   onSetProjectPath: (path: string | undefined) => void;
-  onSaveAs: () => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -114,14 +111,6 @@ function ProjectMenu({
       ref={menuRef}
       className="absolute top-full left-0 mt-1 z-50 min-w-[240px] rounded-lg border border-[var(--border-overlay)] bg-[var(--surface-overlay)] shadow-sm backdrop-blur-sm py-1"
     >
-      <button
-        type="button"
-        className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-tint)] cursor-pointer transition-colors"
-        onClick={() => { onSaveAs(); onClose(); }}
-      >
-        <SaveAll className="h-3.5 w-3.5 text-[var(--text-muted)]" />
-        <span className="flex-1 text-left">Save as…</span>
-      </button>
       <button
         type="button"
         className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-tint)] cursor-pointer transition-colors"
@@ -246,7 +235,7 @@ function AppMenu({ onClose, onOpenSettings, onOpenPalette, onCloseModel, hasMode
 }
 
 export function TopBar({
-  currentModel, onOpenPalette, onNavigateToRoot, onOpenSettings, onCloseModel, onSaveAs, hasModel,
+  currentModel, onOpenPalette, onNavigateToRoot, onOpenSettings, onCloseModel, hasModel,
   breadcrumbs, currentParentKind, navigateToBreadcrumb,
   activeFlowId, activeFlowName,
   dependencies = [], onNavigateToNode,
@@ -296,7 +285,7 @@ export function TopBar({
           className="truncate flex-1 text-xs font-semibold text-[var(--text-secondary)] cursor-pointer"
           onClick={onNavigateToRoot}
         >
-          {currentModel ?? "Untitled"}
+          {currentModel?.startsWith("project:") ? currentModel.replace(/^project:.*[/\\]/, "") : currentModel ?? "Untitled"}
         </span>
         {hasModel && (
           <div className="relative shrink-0">
@@ -315,7 +304,6 @@ export function TopBar({
                 aiTools={aiTools}
                 onAiToolsChange={onAiToolsChange}
                 onSetProjectPath={onSetProjectPath}
-                onSaveAs={onSaveAs}
                 triggerRef={projectMenuTriggerRef}
               />
             )}

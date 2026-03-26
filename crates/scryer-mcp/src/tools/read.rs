@@ -7,49 +7,74 @@ use rmcp::{
     model::{CallToolResult, Content},
     tool, tool_router, ErrorData as McpError,
 };
-use scryer_core::{C4Node, SourceLocation};
+use scryer_core::{C4Node, ModelRef, SourceLocation};
 use std::collections::{HashMap, HashSet};
 
-/// Resolve an optional model name: if provided, use it; otherwise look up
-/// the model linked to the current working directory.
-fn resolve_model_name(name: Option<String>) -> Result<String, CallToolResult> {
-    match name {
-        Some(n) => Ok(n),
-        None => {
-            let cwd = std::env::current_dir().map_err(|_| {
-                CallToolResult::error(vec![Content::text("Cannot determine current working directory")])
-            })?;
-            scryer_core::resolve_model_for_project(&cwd).ok_or_else(|| {
-                CallToolResult::error(vec![Content::text(
-                    "No model is linked to the current working directory. Pass a model name explicitly, or use list_models to see available models."
-                )])
-            })
-        }
+impl ScryerServer {
+    /// Resolve an optional model name to a ModelRef.
+    /// Priority: explicit name > session active model > cwd project-local > cwd global match.
+    /// Sets the resolved model as the session's active model.
+    pub(crate) fn resolve_model(&self, name: Option<String>) -> Result<ModelRef, CallToolResult> {
+        let model_ref = match name {
+            Some(n) => ModelRef::parse(&n),
+            None => {
+                // Check session state first
+                if let Some(ref active) = *self.active_model.lock().unwrap() {
+                    return Ok(active.clone());
+                }
+                // Fall back to cwd discovery
+                let cwd = std::env::current_dir().map_err(|_| {
+                    CallToolResult::error(vec![Content::text("Cannot determine current working directory")])
+                })?;
+                scryer_core::resolve_model_for_project_ref(&cwd).ok_or_else(|| {
+                    CallToolResult::error(vec![Content::text(
+                        "No model found for the current working directory. Pass a model name explicitly, or use list_models to see available models."
+                    )])
+                })?
+            }
+        };
+        // Remember as active
+        *self.active_model.lock().unwrap() = Some(model_ref.clone());
+        Ok(model_ref)
     }
 }
 
 #[tool_router(router = tool_router_read, vis = "pub(crate)")]
 impl ScryerServer {
-    #[tool(description = "List all available architecture models. Shows which model is linked to the current working directory (marked with *).")]
+    #[tool(description = "List available models. Shows the project model (from .scryer/model.scry in the current working directory, marked with *) and any templates (in ~/.scryer/). The project model is auto-selected as the active model. To work on a template instead, pass its name to any tool.")]
     fn list_models(&self) -> Result<CallToolResult, McpError> {
-        match scryer_core::list_models() {
-            Ok(names) => {
-                let text = if names.is_empty() {
+        match scryer_core::list_all_models() {
+            Ok(entries) => {
+                let text = if entries.is_empty() {
                     "No models found. Use set_model to create one.".to_string()
                 } else {
                     let cwd = std::env::current_dir().ok();
                     let cwd_canonical = cwd.as_ref().and_then(|p| std::fs::canonicalize(p).ok());
-                    names.iter().map(|name| {
+                    let mut project_lines = Vec::new();
+                    let mut template_lines = Vec::new();
+                    for entry in &entries {
                         let linked = if let Some(ref cc) = cwd_canonical {
-                            scryer_core::read_model(name).ok()
-                                .and_then(|m| m.project_path)
-                                .and_then(|pp| std::fs::canonicalize(&pp).ok())
+                            entry.project_path.as_ref()
+                                .and_then(|pp| std::fs::canonicalize(pp).ok())
                                 .map_or(false, |mc| &mc == cc)
                         } else {
                             false
                         };
-                        if linked { format!("* {name}") } else { name.clone() }
-                    }).collect::<Vec<_>>().join("\n")
+                        if entry.is_local {
+                            let prefix = if linked { "* " } else { "  " };
+                            project_lines.push(format!("{}{} (project)", prefix, entry.display_name));
+                        } else {
+                            template_lines.push(format!("  {}", entry.display_name));
+                        }
+                    }
+                    let mut sections = Vec::new();
+                    if !project_lines.is_empty() {
+                        sections.push(project_lines.join("\n"));
+                    }
+                    if !template_lines.is_empty() {
+                        sections.push(format!("Templates:\n{}", template_lines.join("\n")));
+                    }
+                    sections.join("\n\n")
                 };
                 Ok(CallToolResult::success(vec![Content::text(text)]))
             }
@@ -58,30 +83,31 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Get the full JSON content of a model. If name is omitted, automatically resolves the model linked to the current working directory. Returns {nodes: [{id, parentId?, data: {name, description, kind, technology?, external?, shape?, status?, sources?, contract?}}], edges: [{id, source, target, data: {label, method?}}], flows: [{id, name, description?, steps: [{id, description?, branches?: [{condition, steps}]}]}], sourceMap: {nodeId: [{pattern, line?, endLine?}]}, contract?, startingLevel?}. Positions and node type are omitted (UI-only). Step descriptions can use @[Name] mentions to reference architecture nodes. For scoped reads, prefer get_node. For implementation, use get_task instead — it handles dependency ordering and returns one work unit at a time."
+        description = "Get the full JSON content of a model. If name is omitted, automatically resolves the model linked to the current working directory (project-local .scryer/model.scry first, then global). Returns {nodes: [{id, parentId?, data: {name, description, kind, technology?, external?, shape?, status?, sources?, contract?}}], edges: [{id, source, target, data: {label, method?}}], flows: [{id, name, description?, steps: [{id, description?, branches?: [{condition, steps}]}]}], sourceMap: {nodeId: [{pattern, line?, endLine?}]}, contract?, startingLevel?}. Positions and node type are omitted (UI-only). Step descriptions can use @[Name] mentions to reference architecture nodes. For scoped reads, prefer get_node. For implementation, use get_task instead — it handles dependency ordering and returns one work unit at a time."
     )]
     fn get_model(
         &self,
         Parameters(req): Parameters<GetModelRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let name = match resolve_model_name(req.name) {
-            Ok(n) => n,
+        let model_ref = match self.resolve_model(req.name) {
+            Ok(r) => r,
             Err(e) => return Ok(e),
         };
-        match scryer_core::read_model(&name) {
+        match scryer_core::read_model_at(&model_ref) {
             Ok(model) => {
-                let _ = scryer_core::save_baseline(&name, &model);
+                let _ = scryer_core::save_baseline_at(&model_ref, &model);
                 let mut val = serde_json::to_value(&model).unwrap();
                 strip_fields_compact(&mut val);
 
-                externalize_attachments(&mut val, &name);
+                let ref_str = model_ref.to_ref_string();
+                externalize_attachments(&mut val, &ref_str);
                 let json = serde_json::to_string(&val)
                     .unwrap_or_else(|e| format!("Serialization error: {}", e));
                 Ok(CallToolResult::success(vec![Content::text(json)]))
             }
             Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
                 "Failed to read model '{}': {}",
-                name, e
+                model_ref, e
             ))])),
         }
     }
@@ -93,12 +119,16 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<GetNodeRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let model = match scryer_core::read_model(&req.name) {
+        let model_ref = match self.resolve_model(req.name) {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
+        let model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to read model '{}': {}",
-                    req.name, e
+                    model_ref, e
                 ))]));
             }
         };
@@ -169,6 +199,7 @@ impl ScryerServer {
             .map(|(k, v)| (k.as_str(), v))
             .collect();
 
+        let ref_str = model_ref.to_ref_string();
         let mut result = serde_json::json!({
             "node": target,
             "descendants": descendants,
@@ -177,7 +208,7 @@ impl ScryerServer {
             "source_map": source_map,
         });
         strip_ui_fields(&mut result);
-        externalize_attachments(&mut result, &req.name);
+        externalize_attachments(&mut result, &ref_str);
 
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&result).unwrap(),
@@ -198,11 +229,11 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<GetModelRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let name = match resolve_model_name(req.name) {
-            Ok(n) => n,
+        let model_ref = match self.resolve_model(req.name) {
+            Ok(r) => r,
             Err(e) => return Ok(e),
         };
-        match scryer_core::read_model(&name) {
+        match scryer_core::read_model_at(&model_ref) {
             Ok(model) => {
                 let disconnected = check_disconnected_nodes(&model);
                 let bidir = check_bidirectional_edges(&model);
@@ -219,11 +250,11 @@ impl ScryerServer {
                 let total: usize = all_warnings.iter().map(|(_, w)| w.len()).sum();
                 if total == 0 {
                     return Ok(CallToolResult::success(vec![Content::text(
-                        format!("Model '{name}' passed all checks.")
+                        format!("Model '{}' passed all checks.", model_ref)
                     )]));
                 }
 
-                let mut msg = format!("Model '{name}' — {total} warning(s):");
+                let mut msg = format!("Model '{}' — {total} warning(s):", model_ref);
                 for (label, warnings) in all_warnings {
                     if !warnings.is_empty() {
                         msg.push_str(&format!("\n\n⚠️ {}:\n- {}", label, warnings.join("\n- ")));
@@ -256,17 +287,21 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<GetChangesRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let current = match scryer_core::read_model(&req.name) {
+        let model_ref = match self.resolve_model(req.name) {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
+        let current = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to read model '{}': {}",
-                    req.name, e
+                    model_ref, e
                 ))]));
             }
         };
 
-        let baseline = match scryer_core::read_baseline(&req.name) {
+        let baseline = match scryer_core::read_baseline_at(&model_ref) {
             Some(b) => b,
             None => {
                 return Ok(CallToolResult::error(vec![Content::text(

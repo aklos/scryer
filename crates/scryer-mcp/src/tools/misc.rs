@@ -18,12 +18,16 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<UpdateSourceMapRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let mut model = match scryer_core::read_model(&req.model) {
+        let model_ref = match self.resolve_model(req.model) {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to read model '{}': {}",
-                    req.model, e
+                    model_ref, e
                 ))]));
             }
         };
@@ -48,9 +52,9 @@ impl ScryerServer {
             }
         }
 
-        match scryer_core::write_model(&req.model, &model) {
+        match scryer_core::write_model_at(&model_ref, &model) {
             Ok(()) => {
-                let _ = scryer_core::save_baseline(&req.model, &model);
+                let _ = scryer_core::save_baseline_at(&model_ref, &model);
                 Ok(CallToolResult::success(vec![Content::text(format!(
                     "Updated source map for {} node(s)",
                     count
@@ -67,12 +71,16 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<SetFlowRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let mut model = match scryer_core::read_model(&req.model) {
+        let model_ref = match self.resolve_model(req.model) {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to read model '{}': {}",
-                    req.model, e
+                    model_ref, e
                 ))]));
             }
         };
@@ -123,9 +131,9 @@ impl ScryerServer {
             }
         }
 
-        match scryer_core::write_model(&req.model, &model) {
+        match scryer_core::write_model_at(&model_ref, &model) {
             Ok(()) => {
-                let _ = scryer_core::save_baseline(&req.model, &model);
+                let _ = scryer_core::save_baseline_at(&model_ref, &model);
                 let summary: Vec<String> = flows
                     .iter()
                     .map(|s| format!("'{}' ({} steps)", s.name, s.steps.len()))
@@ -145,12 +153,16 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<DeleteFlowRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let mut model = match scryer_core::read_model(&req.model) {
+        let model_ref = match self.resolve_model(req.model) {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to read model '{}': {}",
-                    req.model, e
+                    model_ref, e
                 ))]));
             }
         };
@@ -164,9 +176,9 @@ impl ScryerServer {
             ))]));
         }
 
-        match scryer_core::write_model(&req.model, &model) {
+        match scryer_core::write_model_at(&model_ref, &model) {
             Ok(()) => {
-                let _ = scryer_core::save_baseline(&req.model, &model);
+                let _ = scryer_core::save_baseline_at(&model_ref, &model);
                 Ok(CallToolResult::success(vec![Content::text(format!(
                     "Deleted flow '{}'",
                     req.flow_id
@@ -183,12 +195,16 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<SetGroupsRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let mut model = match scryer_core::read_model(&req.model) {
+        let model_ref = match self.resolve_model(req.model) {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to read model '{}': {}",
-                    req.model, e
+                    model_ref, e
                 ))]));
             }
         };
@@ -271,9 +287,9 @@ impl ScryerServer {
 
         let count = groups.len();
         let names: Vec<&str> = groups.iter().map(|g| g.name.as_str()).collect();
-        match scryer_core::write_model(&req.model, &model) {
+        match scryer_core::write_model_at(&model_ref, &model) {
             Ok(()) => {
-                let _ = scryer_core::save_baseline(&req.model, &model);
+                let _ = scryer_core::save_baseline_at(&model_ref, &model);
                 Ok(CallToolResult::success(vec![Content::text(format!(
                     "Set {} group(s): {}",
                     count,
@@ -291,12 +307,16 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<SetImplementingRequest>,
     ) -> Result<CallToolResult, McpError> {
-        scryer_core::set_implementing(&req.model, req.active)
+        let model_ref = match self.resolve_model(req.model) {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
+        scryer_core::set_implementing_at(&model_ref, req.active)
             .map_err(|e| McpError::internal_error(e, None))?;
         let msg = if req.active {
-            format!("Drift detection suppressed for '{}'", req.model)
+            format!("Drift detection suppressed for '{}'", model_ref)
         } else {
-            format!("Drift detection resumed for '{}'", req.model)
+            format!("Drift detection resumed for '{}'", model_ref)
         };
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
@@ -306,12 +326,16 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<DeleteGroupRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let mut model = match scryer_core::read_model(&req.model) {
+        let model_ref = match self.resolve_model(req.model) {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to read model '{}': {}",
-                    req.model, e
+                    model_ref, e
                 ))]));
             }
         };
@@ -325,9 +349,9 @@ impl ScryerServer {
             ))]));
         }
 
-        match scryer_core::write_model(&req.model, &model) {
+        match scryer_core::write_model_at(&model_ref, &model) {
             Ok(()) => {
-                let _ = scryer_core::save_baseline(&req.model, &model);
+                let _ = scryer_core::save_baseline_at(&model_ref, &model);
                 Ok(CallToolResult::success(vec![Content::text(format!(
                     "Deleted group '{}'",
                     req.group_id

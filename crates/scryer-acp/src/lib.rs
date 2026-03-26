@@ -69,6 +69,24 @@ pub fn resolve_agent_binary(client_name: &str) -> Option<AgentLaunch> {
     None
 }
 
+/// Detect an available agent from PATH without requiring a prior MCP connection.
+/// Prefers Claude Code, then Codex.
+pub fn detect_available_agent() -> Option<AgentLaunch> {
+    if let Ok(path) = which::which("claude") {
+        return Some(AgentLaunch::Cli {
+            binary: path.to_string_lossy().to_string(),
+            kind: AgentKind::ClaudeCode,
+        });
+    }
+    if let Ok(path) = which::which("codex") {
+        return Some(AgentLaunch::Cli {
+            binary: path.to_string_lossy().to_string(),
+            kind: AgentKind::Codex,
+        });
+    }
+    None
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ActiveClient {
     pub name: String,
