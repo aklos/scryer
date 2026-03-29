@@ -23,6 +23,7 @@ impl Category {
 pub const SKIP_DIRS: &[&str] = &[
     "node_modules",
     ".git",
+    ".scryer",
     ".next",
     "__pycache__",
     ".direnv",
