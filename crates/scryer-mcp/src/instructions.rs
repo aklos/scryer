@@ -57,7 +57,13 @@ The task system tracks what's done and what's next. Do not read the full model v
 The user decides when to verify. When asked, check each point. If anything fails, leave the node as `implemented` and explain what's missing.
 
 ## Subagents
-Do NOT delegate scryer write operations (`set_model`, `set_node`, `add_nodes`, `update_nodes`, `delete_nodes`, `add_edges`, `update_edges`, `delete_edges`, `set_flows`, `delete_flow`, `update_source_map`) to subagents. Subagents may use read tools (`list_models`, `get_model`, `get_node`, `get_rules`, `get_changes`, `get_task`) for research, but all model mutations must happen in the main conversation context."#;
+For large models, use subagents to parallelize work across containers:
+
+**Modeling**: After establishing systems and containers (levels 1–2 in the main conversation), spawn a subagent per container to add component-level detail. Each subagent calls `get_node` for its container, then uses `set_node` to populate components, operations, models, and component-level edges within that subtree.
+
+**Implementation**: When `get_task` presents multiple containers to choose from, spawn a subagent per container instead of picking one sequentially. Each subagent runs its own `get_task(node_id: "<container-id>")` loop — build, mark implemented, call `get_task` again — until its subtree is complete.
+
+Subagents can read the full model (via `get_model`, `get_node`, etc.) but must only write to nodes within their scoped subtree. System-level and container-level decisions — adding, removing, renaming, or restructuring systems and containers — must stay in the main conversation."#;
 
 pub(crate) const TASK_INSTRUCTIONS: &str = "\
 The spec above is your source of truth — it tells you WHAT to build. \

@@ -104,7 +104,10 @@ No containers yet. This establishes the system landscape. Fix any warnings befor
 are all part of one Next.js app, group them. If two S3 buckets are provisioned together, group them. \
 Containers split for inner-graph clarity (rule 9) should almost always be grouped.\n\
    - **Later (`set_node` per container):** add components only when the user asks for deeper detail, \
-plus component-level edges. Fix warnings.\n\
+plus component-level edges. Fix warnings. **When detailing multiple containers, spawn a subagent per \
+container** — each subagent calls `get_node` for its container, then `set_node` to populate components, \
+operations, models, and edges within that subtree. This parallelizes the work and keeps each agent's \
+context small and focused.\n\
    Do NOT dump all levels into a single `set_model` call — the tool validates edges per view level, and \
 creating everything at once makes it easy to miss gaps that leave nodes disconnected.\n\
    Do NOT add components unless the user explicitly asks for deeper detail.\n\
@@ -164,7 +167,10 @@ same request, go ahead.\n\
 implemented via `update_nodes` (with a reason), then call `get_task` again. **Repeat this loop until `get_task` returns \
 \"All tasks complete.\"** Do not read the full model and plan your own work order — `get_task` handles dependency \
 ordering, contract inheritance, and progress tracking. Parent containers and systems are marked implemented via \
-completion hints from `get_task` once all their children are done.\n\
+completion hints from `get_task` once all their children are done. **When multiple containers are ready, spawn a \
+subagent per container** instead of working through them sequentially. Each subagent runs its own \
+`get_task(node_id: \"<container-id>\")` loop independently. This is faster and more efficient — each subagent \
+only reads the code relevant to its container.\n\
 9. **Verification (implemented → verified).** \"Verified\" is a separate step from implementation — do not set it during the \
 implementation loop. A node is verified when:\n\
    - The implementation is complete — no stubs, no TODOs, no placeholder logic.\n\
