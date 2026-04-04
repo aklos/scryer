@@ -34,7 +34,10 @@ export interface PlanarLayoutResult {
 
 // ── Graph utilities ────────────────────────────────────────────────────
 
-function buildAdj(nodeIds: string[], edges: EdgePair[]): Map<string, Set<string>> {
+function buildAdj(
+  nodeIds: string[],
+  edges: EdgePair[],
+): Map<string, Set<string>> {
   const adj = new Map<string, Set<string>>();
   for (const id of nodeIds) adj.set(id, new Set());
   for (const [u, v] of edges) {
@@ -59,7 +62,10 @@ export function dedupeEdges(edges: EdgePair[]): EdgePair[] {
 }
 
 /** Find connected components via BFS. */
-export function connectedComponents(nodeIds: string[], edges: EdgePair[]): string[][] {
+export function connectedComponents(
+  nodeIds: string[],
+  edges: EdgePair[],
+): string[][] {
   const adj = buildAdj(nodeIds, edges);
   const visited = new Set<string>();
   const components: string[][] = [];
@@ -88,10 +94,10 @@ export function connectedComponents(nodeIds: string[], edges: EdgePair[]): strin
 
 interface DFSResult {
   parent: Map<string, string | null>;
-  order: string[];           // DFS pre-order
+  order: string[]; // DFS pre-order
   depth: Map<string, number>;
   treeEdges: EdgePair[];
-  backEdges: EdgePair[];     // (descendant, ancestor)
+  backEdges: EdgePair[]; // (descendant, ancestor)
 }
 
 function dfs(nodeIds: string[], edges: EdgePair[]): DFSResult {
@@ -183,7 +189,11 @@ function treeEmbedding(nodeIds: string[], treeEdges: EdgePair[]): Embedding {
  * Walk a face of the embedding starting from half-edge (u → v).
  * Returns the vertex sequence of the face.
  */
-function walkFace(embedding: Embedding, startU: string, startV: string): string[] {
+function walkFace(
+  embedding: Embedding,
+  startU: string,
+  startV: string,
+): string[] {
   const vertices: string[] = [];
   let cur = startU;
   let next = startV;
@@ -273,9 +283,17 @@ function tryAddEdge(embedding: Embedding, u: string, v: string): boolean {
 export function classifyEdges(
   nodeIds: string[],
   edges: EdgePair[],
-): { planarEdges: EdgePair[]; nonPlanarEdges: EdgePair[]; embedding: Embedding } {
+): {
+  planarEdges: EdgePair[];
+  nonPlanarEdges: EdgePair[];
+  embedding: Embedding;
+} {
   if (nodeIds.length <= 2) {
-    return { planarEdges: edges, nonPlanarEdges: [], embedding: treeEmbedding(nodeIds, edges) };
+    return {
+      planarEdges: edges,
+      nonPlanarEdges: [],
+      embedding: treeEmbedding(nodeIds, edges),
+    };
   }
 
   const { treeEdges, backEdges, depth } = dfs(nodeIds, edges);
@@ -391,9 +409,7 @@ function augmentBiconnected(
  * Makes biconnected graphs 3-connected (Whitney's theorem),
  * which is required for Tutte's crossing-free guarantee.
  */
-function triangulate(
-  embedding: Embedding,
-): EdgePair[] {
+function triangulate(embedding: Embedding): EdgePair[] {
   const dummyEdges: EdgePair[] = [];
   let changed = true;
 
@@ -446,6 +462,35 @@ function placeLeaves(
 ): void {
   const LEAF_DIST = 1.5;
 
+  // Collect existing edges for crossing checks
+  const posEdges: [string, string][] = [];
+  for (const [u, nbrs] of adj) {
+    for (const v of nbrs) {
+      if (u < v && positions.has(u) && positions.has(v)) posEdges.push([u, v]);
+    }
+  }
+
+  // Check if placing leaf at (lx,ly) with edge to parent crosses any existing edge
+  function wouldCross(lx: number, ly: number, parentId: string): boolean {
+    const pp = positions.get(parentId)!;
+    for (const [eu, ev] of posEdges) {
+      if (eu === parentId || ev === parentId) continue;
+      const pu = positions.get(eu)!,
+        pv = positions.get(ev)!;
+      // Segment intersection test
+      const d1x = pp.col - lx,
+        d1y = pp.row - ly;
+      const d2x = pv.col - pu.col,
+        d2y = pv.row - pu.row;
+      const cross = d1x * d2y - d1y * d2x;
+      if (Math.abs(cross) < 1e-10) continue;
+      const t = ((pu.col - lx) * d2y - (pu.row - ly) * d2x) / cross;
+      const u = ((pu.col - lx) * d1y - (pu.row - ly) * d1x) / cross;
+      if (t > 0.01 && t < 0.99 && u > 0.01 && u < 0.99) return true;
+    }
+    return false;
+  }
+
   for (const { id, parent } of leaves) {
     const parentPos = positions.get(parent);
     if (!parentPos) {
@@ -459,57 +504,192 @@ function placeLeaves(
       if (nbr === id) continue;
       const nbrPos = positions.get(nbr);
       if (!nbrPos) continue;
-      angles.push(Math.atan2(nbrPos.row - parentPos.row, nbrPos.col - parentPos.col));
+      angles.push(
+        Math.atan2(nbrPos.row - parentPos.row, nbrPos.col - parentPos.col),
+      );
     }
 
     if (angles.length === 0) {
       positions.set(id, { col: parentPos.col, row: parentPos.row - LEAF_DIST });
+      posEdges.push([id, parent]);
       continue;
     }
 
     angles.sort((a, b) => a - b);
 
-    if (outerContour.has(parent)) {
-      // Parent is on outer boundary — place leaf OUTSIDE in widest angular gap
-      let bestGap = 0, bestAngle = 0;
-      for (let i = 0; i < angles.length; i++) {
-        const next = i + 1 < angles.length ? angles[i + 1] : angles[0] + 2 * Math.PI;
-        const gap = next - angles[i];
-        if (gap > bestGap) { bestGap = gap; bestAngle = angles[i] + gap / 2; }
-      }
-      positions.set(id, {
-        col: parentPos.col + LEAF_DIST * Math.cos(bestAngle),
-        row: parentPos.row + LEAF_DIST * Math.sin(bestAngle),
-      });
-    } else {
-      // Parent is INSIDE a face — place leaf inside the same face.
-      // The "inside" direction is toward the centroid of the graph
-      // (away from the outer boundary). Pick the angular gap that points
-      // most toward the graph centroid.
-      let cx = 0, cy = 0, count = 0;
-      for (const p of positions.values()) { cx += p.col; cy += p.row; count++; }
-      cx /= count; cy /= count;
-      const toCentroidAngle = Math.atan2(cy - parentPos.row, cx - parentPos.col);
+    // Build outer contour polygon for inside/outside test
+    const contourVerts = [...outerContour]
+      .map((v) => positions.get(v))
+      .filter((p): p is { col: number; row: number } => !!p);
 
-      // Find gap closest to the centroid direction (stay inside the face)
-      let bestAngle = angles[0];
-      let bestDist = Infinity;
-      for (let i = 0; i < angles.length; i++) {
-        const next = i + 1 < angles.length ? angles[i + 1] : angles[0] + 2 * Math.PI;
-        const gap = next - angles[i];
-        if (gap < 0.1) continue; // skip tiny gaps
-        const midAngle = angles[i] + gap / 2;
-        // Angular distance to centroid direction
-        let diff = Math.abs(midAngle - toCentroidAngle);
-        if (diff > Math.PI) diff = 2 * Math.PI - diff;
-        if (diff < bestDist) { bestDist = diff; bestAngle = midAngle; }
+    function isInsideContour(px: number, py: number): boolean {
+      if (contourVerts.length < 3) return false;
+      let inside = false;
+      for (
+        let i = 0, j = contourVerts.length - 1;
+        i < contourVerts.length;
+        j = i++
+      ) {
+        const xi = contourVerts[i].col,
+          yi = contourVerts[i].row;
+        const xj = contourVerts[j].col,
+          yj = contourVerts[j].row;
+        if (
+          yi > py !== yj > py &&
+          px < ((xj - xi) * (py - yi)) / (yj - yi) + xi
+        ) {
+          inside = !inside;
+        }
       }
+      return inside;
+    }
+
+    // Build gap list sorted by size (widest first)
+    const gaps: { angle: number; size: number }[] = [];
+    for (let i = 0; i < angles.length; i++) {
+      const next =
+        i + 1 < angles.length ? angles[i + 1] : angles[0] + 2 * Math.PI;
+      const gap = next - angles[i];
+      gaps.push({ angle: angles[i] + gap / 2, size: gap });
+    }
+    gaps.sort((a, b) => b.size - a.size);
+
+    const dist = LEAF_DIST;
+
+    // All leaves prefer outside the contour. Crossing check prevents bad placements.
+    // First pass: outside contour + no crossings
+    let placed = false;
+    for (const { angle } of gaps) {
+      const lx = parentPos.col + dist * Math.cos(angle);
+      const ly = parentPos.row + dist * Math.sin(angle);
+      if (!isInsideContour(lx, ly) && !wouldCross(lx, ly, parent)) {
+        positions.set(id, { col: lx, row: ly });
+        placed = true;
+        break;
+      }
+    }
+
+    // Second pass: any non-crossing gap (inside is OK if outside all cross)
+    if (!placed) {
+      for (const { angle } of gaps) {
+        const lx = parentPos.col + dist * Math.cos(angle);
+        const ly = parentPos.row + dist * Math.sin(angle);
+        if (!wouldCross(lx, ly, parent)) {
+          positions.set(id, { col: lx, row: ly });
+          placed = true;
+          break;
+        }
+      }
+    }
+
+    if (!placed) {
+      // All gaps cross — use widest anyway
+      const angle = gaps[0].angle;
       positions.set(id, {
-        col: parentPos.col + LEAF_DIST * 0.7 * Math.cos(bestAngle),
-        row: parentPos.row + LEAF_DIST * 0.7 * Math.sin(bestAngle),
+        col: parentPos.col + dist * Math.cos(angle),
+        row: parentPos.row + dist * Math.sin(angle),
       });
     }
+
+    // Add this leaf's edge for subsequent crossing checks
+    posEdges.push([id, parent]);
   }
+}
+
+// ── Tutte's barycentric embedding ─────────────────────────────────────
+
+/**
+ * Tutte's embedding on a triangulated (3-connected) graph.
+ *
+ * Outer face vertices placed on a circle. Interior vertices iteratively
+ * moved to the barycenter (average) of their neighbors. Guaranteed
+ * crossing-free for 3-connected planar graphs.
+ *
+ * Produces balanced, compact layouts where hub nodes naturally end up
+ * central (pulled by many neighbors).
+ */
+function tuttePlace(
+  embedding: Embedding,
+  outerFaceHint?: string[],
+): {
+  positions: Map<string, { col: number; row: number }>;
+  outerContour: Set<string>;
+} {
+  const allIds = [...embedding.keys()];
+  const n = allIds.length;
+  const pos = new Map<string, { col: number; row: number }>();
+
+  if (n === 0) return { positions: pos, outerContour: new Set<string>() };
+  if (n === 1) {
+    pos.set(allIds[0], { col: 0, row: 0 });
+    return { positions: pos, outerContour: new Set(allIds) };
+  }
+  if (n === 2) {
+    pos.set(allIds[0], { col: 0, row: 0 });
+    pos.set(allIds[1], { col: 2, row: 0 });
+    return { positions: pos, outerContour: new Set(allIds) };
+  }
+
+  // Use provided outer face (pre-triangulation boundary) or fall back to largest
+  let outerFace: string[];
+  if (outerFaceHint && outerFaceHint.length >= 3) {
+    outerFace = outerFaceHint;
+  } else {
+    const faces = allFaces(embedding);
+    outerFace = faces[0] ?? allIds.slice(0, 3);
+    for (const f of faces) {
+      if (f.length > outerFace.length) outerFace = f;
+    }
+  }
+
+  // Place outer face on a circle
+  const outerSet = new Set(outerFace);
+  const R = Math.max(2, n * 0.4); // radius scales with node count
+  const px = new Map<string, number>();
+  const py = new Map<string, number>();
+
+  for (let i = 0; i < outerFace.length; i++) {
+    const angle = (2 * Math.PI * i) / outerFace.length - Math.PI / 2;
+    px.set(outerFace[i], R * Math.cos(angle));
+    py.set(outerFace[i], R * Math.sin(angle));
+  }
+
+  // Initialize interior vertices at centroid
+  const interiorIds = allIds.filter((id) => !outerSet.has(id));
+  for (const id of interiorIds) {
+    px.set(id, 0);
+    py.set(id, 0);
+  }
+
+  // Barycentric relaxation: each interior vertex → average of neighbors
+  for (let iter = 0; iter < 500; iter++) {
+    let maxMove = 0;
+    for (const id of interiorIds) {
+      const neighbors = embedding.get(id) ?? [];
+      if (neighbors.length === 0) continue;
+      let sx = 0,
+        sy = 0;
+      for (const nbr of neighbors) {
+        sx += px.get(nbr) ?? 0;
+        sy += py.get(nbr) ?? 0;
+      }
+      const newX = sx / neighbors.length;
+      const newY = sy / neighbors.length;
+      const move =
+        Math.abs(newX - (px.get(id) ?? 0)) + Math.abs(newY - (py.get(id) ?? 0));
+      maxMove = Math.max(maxMove, move);
+      px.set(id, newX);
+      py.set(id, newY);
+    }
+    if (maxMove < 0.001) break; // converged
+  }
+
+  // Build positions
+  for (const id of allIds) {
+    pos.set(id, { col: px.get(id)!, row: py.get(id)! });
+  }
+
+  return { positions: pos, outerContour: outerSet };
 }
 
 // ── FPP shift method placement ───────────────────────────────────────
@@ -524,15 +704,21 @@ function placeLeaves(
  *
  * Grid size: at most (2n-4) × (n-2).
  */
-function fppPlace(
-  embedding: Embedding,
-): { positions: Map<string, { col: number; row: number }>; outerContour: Set<string> } {
+// @ts-ignore kept for fallback
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function fppPlace(embedding: Embedding): {
+  positions: Map<string, { col: number; row: number }>;
+  outerContour: Set<string>;
+} {
   const allIds = [...embedding.keys()];
   const n = allIds.length;
   const pos = new Map<string, { col: number; row: number }>();
 
   if (n === 0) return { positions: pos, outerContour: new Set<string>() };
-  if (n === 1) { pos.set(allIds[0], { col: 0, row: 0 }); return { positions: pos, outerContour: new Set(allIds) }; }
+  if (n === 1) {
+    pos.set(allIds[0], { col: 0, row: 0 });
+    return { positions: pos, outerContour: new Set(allIds) };
+  }
 
   // Build full adjacency from embedding (symmetric)
   const adj = new Map<string, Set<string>>();
@@ -544,14 +730,34 @@ function fppPlace(
     }
   }
 
-  // Find an outer face edge — pick from the largest face
+  // Find an outer face edge — pick from the largest face, but choose
+  // the two LOWEST-degree vertices as v1/v2. High-degree hubs placed later
+  // end up central instead of pushed to the grid edge by shift accumulation.
   const faces = allFaces(embedding);
   let outerFace = faces[0] ?? allIds.slice(0, 3);
   for (const f of faces) {
     if (f.length > outerFace.length) outerFace = f;
   }
-  const v1 = outerFace[0];
-  const v2 = outerFace[1] ?? allIds[1];
+  // Sort outer face vertices by degree (ascending) and pick two lowest
+  const outerSorted = [...outerFace].sort(
+    (a, b) => (adj.get(a)?.size ?? 0) - (adj.get(b)?.size ?? 0),
+  );
+  // v1 and v2 must be adjacent on the outer face
+  let v1 = outerSorted[0];
+  let v2 = outerSorted[1] ?? outerFace[1] ?? allIds[1];
+  // Ensure v1-v2 are adjacent on the face — if not, pick v1's face neighbor
+  const v1FaceIdx = outerFace.indexOf(v1);
+  const v1Left =
+    outerFace[(v1FaceIdx - 1 + outerFace.length) % outerFace.length];
+  const v1Right = outerFace[(v1FaceIdx + 1) % outerFace.length];
+  if (v2 !== v1Left && v2 !== v1Right) {
+    // v2 isn't adjacent to v1 on the face — pick the lower-degree face neighbor
+    v2 =
+      (adj.get(v1Left)?.size ?? Infinity) <=
+      (adj.get(v1Right)?.size ?? Infinity)
+        ? v1Left
+        : v1Right;
+  }
 
   if (n === 2) {
     pos.set(v1, { col: 0, row: 0 });
@@ -582,14 +788,16 @@ function fppPlace(
   while (placed.size < n) {
     // Find unplaced vertex with ≥2 contour neighbors, preferring smallest span
     let bestV: string | null = null;
-    let bestP = -1, bestQ = -1;
+    let bestP = -1,
+      bestQ = -1;
     let bestSpan = Infinity;
 
     for (const v of allIds) {
       if (placed.has(v)) continue;
       const nbrs = adj.get(v)!;
 
-      let pIdx = -1, qIdx = -1;
+      let pIdx = -1,
+        qIdx = -1;
       for (let i = 0; i < contour.length; i++) {
         if (nbrs.has(contour[i])) {
           if (pIdx === -1) pIdx = i;
@@ -603,7 +811,10 @@ function fppPlace(
         // covering it would be invalid and produce crossings.
         let allIntermediate = true;
         for (let j = pIdx + 1; j < qIdx; j++) {
-          if (!nbrs.has(contour[j])) { allIntermediate = false; break; }
+          if (!nbrs.has(contour[j])) {
+            allIntermediate = false;
+            break;
+          }
         }
         if (!allIntermediate) continue;
 
@@ -615,8 +826,13 @@ function fppPlace(
 
         // Primary: fewest unplaced neighbors (most "ready" — window may close).
         // Secondary: smallest span.
-        const prevUnplaced = bestV ? [...adj.get(bestV)!].filter((nb) => !placed.has(nb)).length : Infinity;
-        if (unplacedNbrs < prevUnplaced || (unplacedNbrs === prevUnplaced && span < bestSpan)) {
+        const prevUnplaced = bestV
+          ? [...adj.get(bestV)!].filter((nb) => !placed.has(nb)).length
+          : Infinity;
+        if (
+          unplacedNbrs < prevUnplaced ||
+          (unplacedNbrs === prevUnplaced && span < bestSpan)
+        ) {
           bestV = v;
           bestP = pIdx;
           bestQ = qIdx;
@@ -631,7 +847,9 @@ function fppPlace(
       for (const v of unplaced) {
         const nbrs = [...adj.get(v)!];
         const onContour = nbrs.filter((nb) => contour.includes(nb));
-        console.warn(`[FPP] stuck: ${v} neighbors=[${nbrs.join(",")}] onContour=[${onContour.join(",")}] contour=[${contour.join(",")}]`);
+        console.warn(
+          `[FPP] stuck: ${v} neighbors=[${nbrs.join(",")}] onContour=[${onContour.join(",")}] contour=[${contour.join(",")}]`,
+        );
       }
       // Fallback: place remaining at fallback positions
       for (const v of unplaced) {
@@ -642,7 +860,9 @@ function fppPlace(
       break;
     }
 
-    console.log(`[FPP] place ${bestV}: span=${bestSpan} contour=[${contour.join(",")}] wp=${contour[bestP]} wq=${contour[bestQ]}`);
+    console.log(
+      `[FPP] place ${bestV}: span=${bestSpan} contour=[${contour.join(",")}] wp=${contour[bestP]} wq=${contour[bestQ]}`,
+    );
 
     // FPP shift + place
     const pIdx = bestP;
@@ -700,7 +920,9 @@ function kamadaKawai(
   nodeIds.forEach((id, i) => idx.set(id, i));
 
   // All-pairs shortest paths (BFS — unweighted graph)
-  const dist: number[][] = Array.from({ length: n }, () => new Array(n).fill(Infinity));
+  const dist: number[][] = Array.from({ length: n }, () =>
+    new Array(n).fill(Infinity),
+  );
   const adj = buildAdj(nodeIds, edges);
   for (let i = 0; i < n; i++) {
     dist[i][i] = 0;
@@ -761,10 +983,14 @@ function kamadaKawai(
   {
     const edgeSet = new Set<string>();
     for (const [u, v] of edges) {
-      const ui = idx.get(u), vi = idx.get(v);
+      const ui = idx.get(u),
+        vi = idx.get(v);
       if (ui === undefined || vi === undefined) continue;
       const key = ui < vi ? `${ui},${vi}` : `${vi},${ui}`;
-      if (!edgeSet.has(key)) { edgeSet.add(key); kkEdges.push([ui, vi]); }
+      if (!edgeSet.has(key)) {
+        edgeSet.add(key);
+        kkEdges.push([ui, vi]);
+      }
     }
   }
 
@@ -777,8 +1003,10 @@ function kamadaKawai(
         if (i === j) continue;
         const [ci, di] = kkEdges[j];
         if (ci === ai || ci === bi || di === ai || di === bi) continue; // shared endpoint
-        const d1x = x[bi] - x[ai], d1y = y[bi] - y[ai];
-        const d2x = x[di] - x[ci], d2y = y[di] - y[ci];
+        const d1x = x[bi] - x[ai],
+          d1y = y[bi] - y[ai];
+        const d2x = x[di] - x[ci],
+          d2y = y[di] - y[ci];
         const cross = d1x * d2y - d1y * d2x;
         if (Math.abs(cross) < 1e-10) continue;
         const t = ((x[ci] - x[ai]) * d2y - (y[ci] - y[ai]) * d2x) / cross;
@@ -799,28 +1027,36 @@ function kamadaKawai(
     let maxM = -1;
 
     for (let m = 0; m < n; m++) {
-      let dEdx = 0, dEdy = 0;
+      let dEdx = 0,
+        dEdy = 0;
       for (let i = 0; i < n; i++) {
         if (i === m || k[m][i] === 0) continue;
         const dx = x[m] - x[i];
         const dy = y[m] - y[i];
         const d = Math.sqrt(dx * dx + dy * dy);
         if (d < 0.001) continue;
-        dEdx += k[m][i] * (dx - l[m][i] * dx / d);
-        dEdy += k[m][i] * (dy - l[m][i] * dy / d);
+        dEdx += k[m][i] * (dx - (l[m][i] * dx) / d);
+        dEdy += k[m][i] * (dy - (l[m][i] * dy) / d);
       }
       const delta = Math.sqrt(dEdx * dEdx + dEdy * dEdy);
-      if (delta > maxDelta) { maxDelta = delta; maxM = m; }
+      if (delta > maxDelta) {
+        maxDelta = delta;
+        maxM = m;
+      }
     }
 
     if (maxDelta < EPSILON || maxM === -1) break;
 
     const m = maxM;
-    const savedX = x[m], savedY = y[m];
+    const savedX = x[m],
+      savedY = y[m];
 
     for (let inner = 0; inner < MAX_INNER; inner++) {
-      let dEdx = 0, dEdy = 0;
-      let d2Edx2 = 0, d2Edy2 = 0, d2Edxdy = 0;
+      let dEdx = 0,
+        dEdy = 0;
+      let d2Edx2 = 0,
+        d2Edy2 = 0,
+        d2Edxdy = 0;
 
       for (let i = 0; i < n; i++) {
         if (i === m || k[m][i] === 0) continue;
@@ -830,11 +1066,11 @@ function kamadaKawai(
         if (d < 0.001) continue;
         const d3 = d * d * d;
 
-        dEdx += k[m][i] * (dx - l[m][i] * dx / d);
-        dEdy += k[m][i] * (dy - l[m][i] * dy / d);
-        d2Edx2 += k[m][i] * (1 - l[m][i] * dy * dy / d3);
-        d2Edy2 += k[m][i] * (1 - l[m][i] * dx * dx / d3);
-        d2Edxdy += k[m][i] * (l[m][i] * dx * dy / d3);
+        dEdx += k[m][i] * (dx - (l[m][i] * dx) / d);
+        dEdy += k[m][i] * (dy - (l[m][i] * dy) / d);
+        d2Edx2 += k[m][i] * (1 - (l[m][i] * dy * dy) / d3);
+        d2Edy2 += k[m][i] * (1 - (l[m][i] * dx * dx) / d3);
+        d2Edxdy += k[m][i] * ((l[m][i] * dx * dy) / d3);
       }
 
       const det = d2Edx2 * d2Edy2 - d2Edxdy * d2Edxdy;
@@ -880,6 +1116,122 @@ function kamadaKawai(
  * 3. Push boundary super nodes (vertex + connected outside subgraph) outward
  * 4. Spread interior nodes within the expanded rectangle
  */
+/**
+ * Local face expansion: for each cramped pre-triangulation face, push its
+ * boundary vertices outward from the face centroid. Each boundary vertex
+ * moves as a super-node (with everything connected on the outside).
+ * Only cramped faces expand — the rest stays put.
+ */
+// @ts-ignore kept for reference
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function expandCrampedFacesLocal(
+  positions: Map<string, { col: number; row: number }>,
+  originalFaces: string[][],
+  _outerContour: Set<string>,
+  leaves: { id: string; parent: string }[],
+  adj: Map<string, Set<string>>,
+): void {
+  const NODE_CELL_W = (180 + 80) / 240;
+  const NODE_CELL_H = (160 + 80) / 200;
+  const nodeArea = NODE_CELL_W * NODE_CELL_H;
+  const moved = new Set<string>(); // vertices already moved by a face expansion
+
+  // Score faces by how cramped they are (most cramped first)
+  const faceScores: { face: string[]; faceScale: number }[] = [];
+  for (const face of originalFaces) {
+    const facePositions = face
+      .map((v) => positions.get(v))
+      .filter((p): p is { col: number; row: number } => !!p);
+    if (facePositions.length < 3) continue;
+
+    // Shoelace area
+    let area = 0;
+    for (let i = 0; i < facePositions.length; i++) {
+      const j = (i + 1) % facePositions.length;
+      area += facePositions[i].col * facePositions[j].row;
+      area -= facePositions[j].col * facePositions[i].row;
+    }
+    area = Math.abs(area) / 2;
+
+    const neededArea = face.length * nodeArea * 2; // 2× for comfortable spacing
+    if (area > 0.001) {
+      const faceScale = Math.sqrt(neededArea / area);
+      if (faceScale > 1.1) {
+        // only expand if significantly cramped
+        faceScores.push({ face, faceScale });
+      }
+    }
+  }
+  faceScores.sort((a, b) => b.faceScale - a.faceScale); // most cramped first
+
+  for (const { face, faceScale } of faceScores) {
+    // Compute face centroid
+    let fcx = 0,
+      fcy = 0,
+      fcount = 0;
+    for (const v of face) {
+      const p = positions.get(v);
+      if (p) {
+        fcx += p.col;
+        fcy += p.row;
+        fcount++;
+      }
+    }
+    if (fcount === 0) continue;
+    fcx /= fcount;
+    fcy /= fcount;
+
+    // Push each boundary vertex outward from face centroid
+    for (const v of face) {
+      if (moved.has(v)) continue; // already moved by a more cramped face
+      const p = positions.get(v);
+      if (!p) continue;
+
+      const dx = p.col - fcx;
+      const dy = p.row - fcy;
+
+      // Displacement: scale outward from centroid
+      const newCol = fcx + dx * faceScale;
+      const newRow = fcy + dy * faceScale;
+      const dispX = newCol - p.col;
+      const dispY = newRow - p.row;
+
+      // Move as super-node: BFS through connected nodes NOT in this face
+      const faceSet = new Set(face);
+      const superNode = new Set<string>([v]);
+      const queue = [v];
+      while (queue.length > 0) {
+        const u = queue.shift()!;
+        for (const nbr of adj.get(u) ?? []) {
+          if (superNode.has(nbr) || faceSet.has(nbr)) continue;
+          if (!positions.has(nbr)) continue;
+          superNode.add(nbr);
+          queue.push(nbr);
+        }
+        // Include leaves
+        for (const leaf of leaves) {
+          if (leaf.parent === u && !superNode.has(leaf.id)) {
+            superNode.add(leaf.id);
+          }
+        }
+      }
+
+      // Apply displacement
+      for (const id of superNode) {
+        const sp = positions.get(id);
+        if (sp) {
+          sp.col += dispX;
+          sp.row += dispY;
+        }
+      }
+
+      moved.add(v);
+    }
+  }
+}
+
+// @ts-ignore kept for potential future use
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function expandCrampedFaces(
   positions: Map<string, { col: number; row: number }>,
   originalFaces: string[][],
@@ -902,20 +1254,29 @@ function expandCrampedFaces(
   const coreIds = [...coreIdSet];
   const interiorCoreIds = coreIds.filter((id) => !outerContour.has(id));
 
-  console.log(`[FaceExpand] coreIds=${coreIds.length} interiorCoreIds=${interiorCoreIds.length} faces=${faces.length}`);
+  console.log(
+    `[FaceExpand] coreIds=${coreIds.length} interiorCoreIds=${interiorCoreIds.length} faces=${faces.length}`,
+  );
   console.log(`[FaceExpand] outerContour: [${[...outerContour].join(",")}]`);
   console.log(`[FaceExpand] interior nodes: [${interiorCoreIds.join(",")}]`);
 
   // For each interior core node, find which face contains it (point-in-triangle)
   // Point-in-polygon using ray casting
   function pointInPolygon(
-    px: number, py: number, verts: { col: number; row: number }[],
+    px: number,
+    py: number,
+    verts: { col: number; row: number }[],
   ): boolean {
     let inside = false;
     for (let i = 0, j = verts.length - 1; i < verts.length; j = i++) {
-      const xi = verts[i].col, yi = verts[i].row;
-      const xj = verts[j].col, yj = verts[j].row;
-      if ((yi > py) !== (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+      const xi = verts[i].col,
+        yi = verts[i].row;
+      const xj = verts[j].col,
+        yj = verts[j].row;
+      if (
+        yi > py !== yj > py &&
+        px < ((xj - xi) * (py - yi)) / (yj - yi) + xi
+      ) {
         inside = !inside;
       }
     }
@@ -936,7 +1297,9 @@ function expandCrampedFaces(
   }
   for (const id of interiorCoreIds) {
     const p = positions.get(id);
-    console.log(`[FaceExpand] interior ${id}: ${p ? `(${p.col.toFixed(1)},${p.row.toFixed(1)})` : "no pos"}`);
+    console.log(
+      `[FaceExpand] interior ${id}: ${p ? `(${p.col.toFixed(1)},${p.row.toFixed(1)})` : "no pos"}`,
+    );
   }
 
   for (const id of interiorCoreIds) {
@@ -947,10 +1310,14 @@ function expandCrampedFaces(
       if (face.length < 3) continue;
       // Skip faces that have this node as a vertex (it's ON the face, not inside)
       if (face.includes(id)) continue;
-      const faceVerts = face.map((v) => positions.get(v)).filter((v): v is { col: number; row: number } => !!v);
+      const faceVerts = face
+        .map((v) => positions.get(v))
+        .filter((v): v is { col: number; row: number } => !!v);
       if (faceVerts.length < 3) continue;
       const isInside = pointInPolygon(p.col, p.row, faceVerts);
-      console.log(`[FaceExpand] test ${id}(${p.col.toFixed(1)},${p.row.toFixed(1)}) in face ${fi} [${face.join(",")}]: ${isInside}`);
+      console.log(
+        `[FaceExpand] test ${id}(${p.col.toFixed(1)},${p.row.toFixed(1)}) in face ${fi} [${face.join(",")}]: ${isInside}`,
+      );
       if (isInside) {
         if (!faceInterior.has(fi)) faceInterior.set(fi, []);
         faceInterior.get(fi)!.push(id);
@@ -969,14 +1336,31 @@ function expandCrampedFaces(
     if (face.length < 3) continue;
 
     const verts = face.slice(0, 3); // triangle vertices
-    const pa = positions.get(verts[0])!, pb = positions.get(verts[1])!, pc = positions.get(verts[2])!;
+    const pa = positions.get(verts[0])!,
+      pb = positions.get(verts[1])!,
+      pc = positions.get(verts[2])!;
     if (!pa || !pb || !pc) continue;
 
     // Find the edge closest to vertical or horizontal — this becomes the spine
     const edgeCandidates = [
-      { a: 0, b: 1, dx: Math.abs(pb.col - pa.col), dy: Math.abs(pb.row - pa.row) },
-      { a: 1, b: 2, dx: Math.abs(pc.col - pb.col), dy: Math.abs(pc.row - pb.row) },
-      { a: 0, b: 2, dx: Math.abs(pc.col - pa.col), dy: Math.abs(pc.row - pa.row) },
+      {
+        a: 0,
+        b: 1,
+        dx: Math.abs(pb.col - pa.col),
+        dy: Math.abs(pb.row - pa.row),
+      },
+      {
+        a: 1,
+        b: 2,
+        dx: Math.abs(pc.col - pb.col),
+        dy: Math.abs(pc.row - pb.row),
+      },
+      {
+        a: 0,
+        b: 2,
+        dx: Math.abs(pc.col - pa.col),
+        dy: Math.abs(pc.row - pa.row),
+      },
     ];
     // Score: how close to axis-aligned (lower = more aligned)
     const scored = edgeCandidates.map((e) => ({
@@ -1002,9 +1386,13 @@ function expandCrampedFaces(
 
     // Current face dimensions
     // Distance from opposite vertex to spine (height of triangle)
-    const spineDx = spB.col - spA.col, spineDy = spB.row - spA.row;
+    const spineDx = spB.col - spA.col,
+      spineDy = spB.row - spA.row;
     const spineNorm = Math.sqrt(spineDx * spineDx + spineDy * spineDy) || 1;
-    const perpDist = Math.abs((opP.col - spA.col) * (-spineDy / spineNorm) + (opP.row - spA.row) * (spineDx / spineNorm));
+    const perpDist = Math.abs(
+      (opP.col - spA.col) * (-spineDy / spineNorm) +
+        (opP.row - spA.row) * (spineDx / spineNorm),
+    );
 
     // Expansion factor: triangle faces have ~50% usable area of a rectangle,
     // so we need roughly 2x the perpendicular distance to fit the same nodes.
@@ -1035,7 +1423,12 @@ function expandCrampedFaces(
     while (queue.length > 0) {
       const u = queue.shift()!;
       for (const nbr of adj.get(u) ?? []) {
-        if (superNodeIds.has(nbr) || faceInteriorSet.has(nbr) || spineSet.has(nbr)) continue;
+        if (
+          superNodeIds.has(nbr) ||
+          faceInteriorSet.has(nbr) ||
+          spineSet.has(nbr)
+        )
+          continue;
         if (!positions.has(nbr)) continue;
         superNodeIds.add(nbr);
         queue.push(nbr);
@@ -1106,11 +1499,13 @@ export async function planarLayout(
   const dedupedEdges = dedupeEdges(edges);
 
   // Trivial cases
-  if (nodeIds.length === 0) return { positions: new Map(), nonPlanarEdges: [], faceRoutes: new Map() };
+  if (nodeIds.length === 0)
+    return { positions: new Map(), nonPlanarEdges: [], faceRoutes: new Map() };
   if (nodeIds.length === 1) {
     return {
       positions: new Map([[nodeIds[0], { col: 0, row: 0 }]]),
-      nonPlanarEdges: [], faceRoutes: new Map(),
+      nonPlanarEdges: [],
+      faceRoutes: new Map(),
     };
   }
   if (nodeIds.length === 2) {
@@ -1119,7 +1514,8 @@ export async function planarLayout(
         [nodeIds[0], { col: 0, row: 0 }],
         [nodeIds[1], { col: 1, row: 0 }],
       ]),
-      nonPlanarEdges: [], faceRoutes: new Map(),
+      nonPlanarEdges: [],
+      faceRoutes: new Map(),
     };
   }
 
@@ -1136,7 +1532,9 @@ export async function planarLayout(
     }
   }
   const coreSet = new Set(coreIds);
-  const coreEdges = dedupedEdges.filter(([u, v]) => coreSet.has(u) && coreSet.has(v));
+  const coreEdges = dedupedEdges.filter(
+    ([u, v]) => coreSet.has(u) && coreSet.has(v),
+  );
 
   // Step 3: If core is too small (e.g. star graph), use KK directly
   if (coreIds.length <= 2) {
@@ -1151,37 +1549,62 @@ export async function planarLayout(
 
   // Step 4: Classify, augment, triangulate the CORE graph
   const coreClassification = classifyEdges(coreIds, coreEdges);
-  augmentBiconnected(coreIds, coreClassification.planarEdges, coreClassification.embedding);
+  augmentBiconnected(
+    coreIds,
+    coreClassification.planarEdges,
+    coreClassification.embedding,
+  );
   // Save faces BEFORE triangulation — these are the real graph faces (polygons, not all triangles).
   // Triangulation subdivides them; interior nodes end up inside these original faces.
   const preTrFaces = allFaces(coreClassification.embedding);
   triangulate(coreClassification.embedding);
 
-  // Step 5: FPP on core graph
-  const { positions, outerContour } = fppPlace(coreClassification.embedding);
+  // Step 5: Tutte's embedding on the triangulated (3-connected) core graph.
+  // Use the pre-triangulation outer face (actual graph boundary) — after
+  // triangulation all faces are triangles so "largest face" is meaningless.
+  const preTrOuter = preTrFaces.reduce(
+    (a, b) => (a.length >= b.length ? a : b),
+    [],
+  );
+  const { positions, outerContour } = tuttePlace(
+    coreClassification.embedding,
+    preTrOuter,
+  );
 
   // Step 6: Normalize — uniform scale to compact size
   {
-    let totalLen = 0, edgeCount = 0;
+    // Scale so shortest edge = 2× node diagonal. Ensures no cramping.
+    const NODE_CELL_W = (180 + 80) / 240;
+    const NODE_CELL_H = (160 + 80) / 200;
+    const minEdgeTarget =
+      Math.sqrt(NODE_CELL_W * NODE_CELL_W + NODE_CELL_H * NODE_CELL_H) * 1.2;
+
+    let minEdgeLen = Infinity;
     for (const [u, v] of coreEdges) {
-      const pu = positions.get(u), pv = positions.get(v);
+      const pu = positions.get(u),
+        pv = positions.get(v);
       if (pu && pv) {
-        totalLen += Math.sqrt((pu.col - pv.col) ** 2 + (pu.row - pv.row) ** 2);
-        edgeCount++;
+        const d = Math.sqrt((pu.col - pv.col) ** 2 + (pu.row - pv.row) ** 2);
+        if (d > 0.001) minEdgeLen = Math.min(minEdgeLen, d);
       }
     }
-    const meanLen = edgeCount > 0 ? totalLen / edgeCount : 1;
-    // More nodes need more room — faces contain multiple nodes that need space
-    const targetLen = 2.0 + positions.size * 0.15;
-    if (meanLen > 0.01) {
-      const scale = targetLen / meanLen;
-      let cx = 0, cy = 0;
-      for (const p of positions.values()) { cx += p.col; cy += p.row; }
-      cx /= positions.size; cy /= positions.size;
-      for (const p of positions.values()) {
-        p.col = (p.col - cx) * scale;
-        p.row = (p.row - cy) * scale;
-      }
+    const scale =
+      minEdgeLen < Infinity && minEdgeLen < minEdgeTarget
+        ? minEdgeTarget / minEdgeLen
+        : 1;
+
+    // Center and scale
+    let cx = 0,
+      cy = 0;
+    for (const p of positions.values()) {
+      cx += p.col;
+      cy += p.row;
+    }
+    cx /= positions.size;
+    cy /= positions.size;
+    for (const p of positions.values()) {
+      p.col = (p.col - cx) * scale;
+      p.row = (p.row - cy) * scale;
     }
   }
 
@@ -1189,12 +1612,118 @@ export async function planarLayout(
   // outside (widest gap) if parent is on outer contour
   placeLeaves(positions, leaves, realAdj, outerContour);
 
-  // Step 8: Expand cramped faces — route 2 triangle edges to form rectangles,
-  // push boundary super nodes outward to fit interior nodes
-  const faceRoutes = expandCrampedFaces(positions, preTrFaces, outerContour, leaves, realAdj);
-  console.log(`[FaceExpand] ${faceRoutes.size} edges routed`);
+  // Step 8: Expand faces where interior nodes are too close to boundary edges.
+  // Only targets faces with actual cramping — leaves/interior nodes near edges.
+  {
+    const NODE_MARGIN = Math.sqrt(((180 + 40) / 240) ** 2 + ((160 + 40) / 200) ** 2) * 0.5;
 
-  return { positions, nonPlanarEdges: coreClassification.nonPlanarEdges, faceRoutes };
+    // Point-to-segment distance
+    function ptSegDist(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+      const dx = bx - ax, dy = by - ay;
+      const lenSq = dx * dx + dy * dy;
+      if (lenSq < 1e-10) return Math.sqrt((px - ax) ** 2 + (py - ay) ** 2);
+      const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+      return Math.sqrt((px - ax - t * dx) ** 2 + (py - ay - t * dy) ** 2);
+    }
+
+    // Point-in-polygon
+    function pip(px: number, py: number, verts: { col: number; row: number }[]): boolean {
+      let inside = false;
+      for (let i = 0, j = verts.length - 1; i < verts.length; j = i++) {
+        const xi = verts[i].col, yi = verts[i].row, xj = verts[j].col, yj = verts[j].row;
+        if ((yi > py) !== (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi) inside = !inside;
+      }
+      return inside;
+    }
+
+    for (const face of preTrFaces) {
+      if (face.length < 3) continue;
+      const faceVerts = face.map((v) => positions.get(v)).filter((p): p is { col: number; row: number } => !!p);
+      if (faceVerts.length < 3) continue;
+      const faceSet = new Set(face);
+
+      // Find all positioned nodes INSIDE this face (not on its boundary)
+      const innerNodes: string[] = [];
+      for (const [id, p] of positions) {
+        if (faceSet.has(id)) continue; // skip face boundary vertices
+        if (pip(p.col, p.row, faceVerts)) innerNodes.push(id);
+      }
+      if (innerNodes.length === 0) continue;
+
+      // Check min distance from any inner node to any face boundary edge
+      let minDist = Infinity;
+      for (const id of innerNodes) {
+        const p = positions.get(id)!;
+        for (let i = 0; i < faceVerts.length; i++) {
+          const j = (i + 1) % faceVerts.length;
+          const d = ptSegDist(p.col, p.row, faceVerts[i].col, faceVerts[i].row, faceVerts[j].col, faceVerts[j].row);
+          minDist = Math.min(minDist, d);
+        }
+      }
+
+      if (minDist >= NODE_MARGIN) continue; // face has enough room
+
+      // Build super-nodes for each face vertex (once, reuse across iterations)
+      const superNodes = new Map<string, Set<string>>();
+      for (const v of face) {
+        const sn = new Set<string>([v]);
+        const queue = [v];
+        while (queue.length > 0) {
+          const u = queue.shift()!;
+          for (const nbr of realAdj.get(u) ?? []) {
+            if (sn.has(nbr) || faceSet.has(nbr)) continue;
+            if (!positions.has(nbr)) continue;
+            sn.add(nbr);
+            queue.push(nbr);
+          }
+          for (const leaf of leaves) {
+            if (leaf.parent === u && !sn.has(leaf.id)) sn.add(leaf.id);
+          }
+        }
+        superNodes.set(v, sn);
+      }
+
+      // Iterate: expand 10% at a time until inner nodes have enough margin
+      for (let step = 0; step < 20; step++) {
+        // Recompute min distance from inner nodes to face edges
+        const curVerts = face.map((v) => positions.get(v)).filter((p): p is { col: number; row: number } => !!p);
+        let curMinDist = Infinity;
+        for (const id of innerNodes) {
+          const p = positions.get(id)!;
+          for (let i = 0; i < curVerts.length; i++) {
+            const j = (i + 1) % curVerts.length;
+            const d = ptSegDist(p.col, p.row, curVerts[i].col, curVerts[i].row, curVerts[j].col, curVerts[j].row);
+            curMinDist = Math.min(curMinDist, d);
+          }
+        }
+        if (curMinDist >= NODE_MARGIN) break; // enough room now
+
+        // Push face vertices outward from centroid by 10%
+        let fcx = 0, fcy = 0;
+        for (const p of curVerts) { fcx += p.col; fcy += p.row; }
+        fcx /= curVerts.length; fcy /= curVerts.length;
+
+        for (const v of face) {
+          const p = positions.get(v);
+          if (!p) continue;
+          const dx = (p.col - fcx) * 0.1;
+          const dy = (p.row - fcy) * 0.1;
+          for (const id of superNodes.get(v) ?? []) {
+            const sp = positions.get(id);
+            if (sp) { sp.col += dx; sp.row += dy; }
+          }
+        }
+      }
+    }
+  }
+
+  const faceRoutes = new Map<string, { col: number; row: number }[]>();
+
+  return {
+    positions,
+    nonPlanarEdges: coreClassification.nonPlanarEdges,
+    faceRoutes,
+  };
 }
 
 /**
@@ -1205,7 +1734,8 @@ export async function layoutGraph(
   nodeIds: string[],
   edges: EdgePair[],
 ): Promise<PlanarLayoutResult> {
-  if (nodeIds.length === 0) return { positions: new Map(), nonPlanarEdges: [], faceRoutes: new Map() };
+  if (nodeIds.length === 0)
+    return { positions: new Map(), nonPlanarEdges: [], faceRoutes: new Map() };
 
   const dedupedEdges = dedupeEdges(edges);
   const components = connectedComponents(nodeIds, dedupedEdges);
@@ -1222,7 +1752,9 @@ export async function layoutGraph(
 
   for (const comp of components) {
     const compSet = new Set(comp);
-    const compEdges = dedupedEdges.filter(([u, v]) => compSet.has(u) && compSet.has(v));
+    const compEdges = dedupedEdges.filter(
+      ([u, v]) => compSet.has(u) && compSet.has(v),
+    );
     const result = await planarLayout(comp, compEdges);
 
     let maxCol = 0;
@@ -1233,10 +1765,17 @@ export async function layoutGraph(
 
     allNonPlanar.push(...result.nonPlanarEdges);
     for (const [key, route] of result.faceRoutes) {
-      allFaceRoutes.set(key, route.map((p) => ({ col: p.col + colOffset, row: p.row })));
+      allFaceRoutes.set(
+        key,
+        route.map((p) => ({ col: p.col + colOffset, row: p.row })),
+      );
     }
     colOffset += maxCol + 3;
   }
 
-  return { positions: allPositions, nonPlanarEdges: allNonPlanar, faceRoutes: allFaceRoutes };
+  return {
+    positions: allPositions,
+    nonPlanarEdges: allNonPlanar,
+    faceRoutes: allFaceRoutes,
+  };
 }
