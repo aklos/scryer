@@ -1549,13 +1549,15 @@ export async function planarLayout(
 
   // Step 4: Classify, augment, triangulate the CORE graph
   const coreClassification = classifyEdges(coreIds, coreEdges);
+  // Save faces from the ORIGINAL classified graph (before augmentation adds dummy edges).
+  // These are the real architectural faces — augmentation subdivides them.
+  const originalFaces = allFaces(coreClassification.embedding);
   augmentBiconnected(
     coreIds,
     coreClassification.planarEdges,
     coreClassification.embedding,
   );
-  // Save faces BEFORE triangulation — these are the real graph faces (polygons, not all triangles).
-  // Triangulation subdivides them; interior nodes end up inside these original faces.
+  // Also save post-augmentation faces (before triangulation)
   const preTrFaces = allFaces(coreClassification.embedding);
   triangulate(coreClassification.embedding);
 
@@ -1612,21 +1614,17 @@ export async function planarLayout(
   // outside (widest gap) if parent is on outer contour
   placeLeaves(positions, leaves, realAdj, outerContour);
 
-  // Step 8: Expand faces where interior nodes are too close to boundary edges.
-  // Only targets faces with actual cramping — leaves/interior nodes near edges.
+  // Step 8: Expand cramped faces — one face at a time, most cramped first.
+  // Checks ALL vertex pairs within each face (not just inner nodes).
   {
-    const NODE_MARGIN = Math.sqrt(((180 + 40) / 240) ** 2 + ((160 + 40) / 200) ** 2) * 0.5;
+    const NODE_MARGIN = Math.sqrt(((180 + 40) / 240) ** 2 + ((160 + 40) / 200) ** 2) * 0.8;
+    const allFacesToCheck = [...new Set([...originalFaces, ...preTrFaces].map((f) => [...f].sort().join(",")))]
+      .map((key) => {
+        const sorted = key.split(",");
+        // Find the original face with these vertices
+        return [...originalFaces, ...preTrFaces].find((f) => [...f].sort().join(",") === key) ?? sorted;
+      });
 
-    // Point-to-segment distance
-    function ptSegDist(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
-      const dx = bx - ax, dy = by - ay;
-      const lenSq = dx * dx + dy * dy;
-      if (lenSq < 1e-10) return Math.sqrt((px - ax) ** 2 + (py - ay) ** 2);
-      const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
-      return Math.sqrt((px - ax - t * dx) ** 2 + (py - ay - t * dy) ** 2);
-    }
-
-    // Point-in-polygon
     function pip(px: number, py: number, verts: { col: number; row: number }[]): boolean {
       let inside = false;
       for (let i = 0, j = verts.length - 1; i < verts.length; j = i++) {
@@ -1636,34 +1634,55 @@ export async function planarLayout(
       return inside;
     }
 
-    for (const face of preTrFaces) {
-      if (face.length < 3) continue;
-      const faceVerts = face.map((v) => positions.get(v)).filter((p): p is { col: number; row: number } => !!p);
-      if (faceVerts.length < 3) continue;
-      const faceSet = new Set(face);
+    // Repeat: find the single most cramped face, expand it, stop.
+    for (let round = 0; round < 5; round++) {
+      let worstFace: string[] | null = null;
+      let worstMinDist = Infinity;
+      let worstAllNodes: string[] = [];
 
-      // Find all positioned nodes INSIDE this face (not on its boundary)
-      const innerNodes: string[] = [];
-      for (const [id, p] of positions) {
-        if (faceSet.has(id)) continue; // skip face boundary vertices
-        if (pip(p.col, p.row, faceVerts)) innerNodes.push(id);
-      }
-      if (innerNodes.length === 0) continue;
+      // Find the outer face (largest) to skip — it's the unbounded region
+      const outerFaceKey = preTrOuter.length > 0 ? [...preTrOuter].sort().join(",") : "";
 
-      // Check min distance from any inner node to any face boundary edge
-      let minDist = Infinity;
-      for (const id of innerNodes) {
-        const p = positions.get(id)!;
-        for (let i = 0; i < faceVerts.length; i++) {
-          const j = (i + 1) % faceVerts.length;
-          const d = ptSegDist(p.col, p.row, faceVerts[i].col, faceVerts[i].row, faceVerts[j].col, faceVerts[j].row);
-          minDist = Math.min(minDist, d);
+      for (const face of allFacesToCheck) {
+        if (face.length < 3) continue;
+        // Skip the outer face — it's unbounded, expanding it blows up the graph
+        if ([...face].sort().join(",") === outerFaceKey) continue;
+        const faceVerts = face.map((v) => positions.get(v)).filter((p): p is { col: number; row: number } => !!p);
+        if (faceVerts.length < 3) continue;
+        const faceSet = new Set(face);
+
+        // Collect face vertices + any nodes inside the face (leaves, etc.)
+        const allNodes = [...face.filter((v) => positions.has(v))];
+        for (const [id, p] of positions) {
+          if (faceSet.has(id)) continue;
+          if (pip(p.col, p.row, faceVerts)) allNodes.push(id);
+        }
+        if (allNodes.length < 2) continue;
+
+        let minDist = Infinity;
+        for (let i = 0; i < allNodes.length; i++) {
+          const pi = positions.get(allNodes[i])!;
+          for (let j = i + 1; j < allNodes.length; j++) {
+            const pj = positions.get(allNodes[j])!;
+            const d = Math.sqrt((pi.col - pj.col) ** 2 + (pi.row - pj.row) ** 2);
+            if (d > 0.001) minDist = Math.min(minDist, d);
+          }
+        }
+
+        if (minDist < NODE_MARGIN && minDist < worstMinDist) {
+          worstFace = face;
+          worstMinDist = minDist;
+          worstAllNodes = allNodes;
         }
       }
 
-      if (minDist >= NODE_MARGIN) continue; // face has enough room
+      if (!worstFace) break;
 
-      // Build super-nodes for each face vertex (once, reuse across iterations)
+      // Expand this one face: push vertices outward from centroid, 10% at a time
+      const face = worstFace;
+      const faceSet = new Set(face);
+
+      // Build super-nodes
       const superNodes = new Map<string, Set<string>>();
       for (const v of face) {
         const sn = new Set<string>([v]);
@@ -1683,25 +1702,24 @@ export async function planarLayout(
         superNodes.set(v, sn);
       }
 
-      // Iterate: expand 10% at a time until inner nodes have enough margin
-      for (let step = 0; step < 20; step++) {
-        // Recompute min distance from inner nodes to face edges
-        const curVerts = face.map((v) => positions.get(v)).filter((p): p is { col: number; row: number } => !!p);
-        let curMinDist = Infinity;
-        for (const id of innerNodes) {
-          const p = positions.get(id)!;
-          for (let i = 0; i < curVerts.length; i++) {
-            const j = (i + 1) % curVerts.length;
-            const d = ptSegDist(p.col, p.row, curVerts[i].col, curVerts[i].row, curVerts[j].col, curVerts[j].row);
-            curMinDist = Math.min(curMinDist, d);
+      for (let step = 0; step < 10; step++) {
+        // Recheck min distance between all nodes in this face
+        let curMin = Infinity;
+        for (let i = 0; i < worstAllNodes.length; i++) {
+          const pi = positions.get(worstAllNodes[i])!;
+          for (let j = i + 1; j < worstAllNodes.length; j++) {
+            const pj = positions.get(worstAllNodes[j])!;
+            const d = Math.sqrt((pi.col - pj.col) ** 2 + (pi.row - pj.row) ** 2);
+            if (d > 0.001) curMin = Math.min(curMin, d);
           }
         }
-        if (curMinDist >= NODE_MARGIN) break; // enough room now
+        if (curMin >= NODE_MARGIN) break;
 
-        // Push face vertices outward from centroid by 10%
+        // Push 10% outward from centroid
+        const fps = face.map((v) => positions.get(v)).filter((p): p is { col: number; row: number } => !!p);
         let fcx = 0, fcy = 0;
-        for (const p of curVerts) { fcx += p.col; fcy += p.row; }
-        fcx /= curVerts.length; fcy /= curVerts.length;
+        for (const p of fps) { fcx += p.col; fcy += p.row; }
+        fcx /= fps.length; fcy /= fps.length;
 
         for (const v of face) {
           const p = positions.get(v);
