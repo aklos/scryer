@@ -978,6 +978,7 @@ function Flow() {
         onNavigateToRoot={() => navigateToBreadcrumb(null)}
         onOpenSettings={() => setSettingsTab("ai")}
         onCloseModel={storage.newModel}
+        onSaveAs={storage.saveModelAs}
         hasModel={currentModel !== null || nodes.length > 0}
         breadcrumbs={breadcrumbs}
         currentParentKind={currentParentKind}

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Minus, Square, X, Settings, Keyboard, FolderX, Menu, FolderOpen } from "lucide-react";
+import { Minus, Square, X, Settings, Keyboard, FolderX, Menu, FolderOpen, Save } from "lucide-react";
 import type { C4Kind, AiToolsState } from "./types";
 import type { RackDependency } from "./CodeLevelRack";
 
@@ -12,6 +12,7 @@ interface TopBarProps {
   onNavigateToRoot: () => void;
   onOpenSettings: () => void;
   onCloseModel: () => void;
+  onSaveAs: (name: string) => void;
   hasModel: boolean;
 
   breadcrumbs: { id: string; name: string; kind: C4Kind }[];
@@ -178,7 +179,7 @@ function ProjectMenu({
   );
 }
 
-function AppMenu({ onClose, onOpenSettings, onOpenPalette, onCloseModel, hasModel, triggerRef }: { onClose: () => void; onOpenSettings: () => void; onOpenPalette: () => void; onCloseModel: () => void; hasModel: boolean; triggerRef: React.RefObject<HTMLButtonElement | null> }) {
+function AppMenu({ onClose, onOpenSettings, onOpenPalette, onCloseModel, onSaveAs, hasModel, canSaveAs, triggerRef }: { onClose: () => void; onOpenSettings: () => void; onOpenPalette: () => void; onCloseModel: () => void; onSaveAs: (name: string) => void; hasModel: boolean; canSaveAs: boolean; triggerRef: React.RefObject<HTMLButtonElement | null> }) {
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -202,6 +203,14 @@ function AppMenu({ onClose, onOpenSettings, onOpenPalette, onCloseModel, hasMode
 
   const items: { label: string; icon: typeof Settings; shortcut?: string; onClick: () => void; disabled?: boolean; active?: boolean }[] = [
     { label: "Open model", icon: Keyboard, shortcut: "Ctrl+K", onClick: () => { onOpenPalette(); onClose(); } },
+    { label: "Save as\u2026", icon: Save, onClick: () => {
+      const name = window.prompt("Model name:");
+      if (!name) return;
+      const sanitized = name.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+      if (!sanitized) return;
+      onSaveAs(sanitized);
+      onClose();
+    }, disabled: !canSaveAs },
     { label: "Close model", icon: FolderX, onClick: () => { onCloseModel(); onClose(); }, disabled: !hasModel },
     { label: "Settings", icon: Settings, onClick: () => { onOpenSettings(); onClose(); } },
   ];
@@ -235,7 +244,7 @@ function AppMenu({ onClose, onOpenSettings, onOpenPalette, onCloseModel, hasMode
 }
 
 export function TopBar({
-  currentModel, onOpenPalette, onNavigateToRoot, onOpenSettings, onCloseModel, hasModel,
+  currentModel, onOpenPalette, onNavigateToRoot, onOpenSettings, onCloseModel, onSaveAs, hasModel,
   breadcrumbs, currentParentKind, navigateToBreadcrumb,
   activeFlowId, activeFlowName,
   dependencies = [], onNavigateToNode,
@@ -270,7 +279,9 @@ export function TopBar({
             onOpenSettings={onOpenSettings}
             onOpenPalette={onOpenPalette}
             onCloseModel={onCloseModel}
+            onSaveAs={onSaveAs}
             hasModel={hasModel}
+            canSaveAs={hasModel}
             triggerRef={appMenuTriggerRef}
           />
         )}
