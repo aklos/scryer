@@ -58,6 +58,7 @@ export type C4NodeData = {
 export type C4EdgeData = {
   label: string;
   method?: string;
+  _route?: { x: number; y: number }[];
   [key: string]: unknown;
 };
 

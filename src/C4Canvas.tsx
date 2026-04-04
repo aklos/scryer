@@ -17,10 +17,10 @@ import type {
 } from "@xyflow/react";
 import { MarkerType } from "@xyflow/react";
 import { nodeTypes } from "./nodes";
-import { edgeTypes } from "./edges";
+import { edgeTypes, StraightEdgesContext } from "./edges";
 import { CodeLevelRack } from "./CodeLevelRack";
 import { GuidePanel } from "./GuidePanels";
-import { Bot, Loader2, Trash2, Plus, Navigation, HelpCircle } from "lucide-react";
+import { Bot, Loader2, Trash2, Plus, Navigation, HelpCircle, Minus } from "lucide-react";
 import { Button } from "./ui";
 import type { C4Node, C4Edge, C4Kind, Group } from "./types";
 
@@ -113,6 +113,7 @@ export function C4Canvas({
   const selectionStartPos = useRef<{ x: number; y: number } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; screenX: number; screenY: number; nodeId?: string; edgeId?: string } | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [straightEdges, setStraightEdges] = useState(true);
 
   // Close help popover on escape or click outside
   useEffect(() => {
@@ -430,6 +431,7 @@ export function C4Canvas({
           <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
         </div>
       )}
+      <StraightEdgesContext.Provider value={straightEdges}>
       <ReactFlow
         key={expandedPath.join("/")}
         nodes={visibleNodesWithHints}
@@ -502,6 +504,21 @@ export function C4Canvas({
           </Panel>
         )}
         <Panel position="bottom-right" className="flex items-center gap-2 !m-2">
+          {nodes.length > 0 && (
+            <button
+              type="button"
+              className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] cursor-pointer transition-colors ${
+                straightEdges
+                  ? "text-blue-500 hover:bg-[var(--surface-tint)] dark:text-blue-400 dark:hover:bg-[var(--surface-tint)]"
+                  : "text-[var(--text-muted)] hover:bg-[var(--surface-tint)]"
+              }`}
+              onClick={() => setStraightEdges((v) => !v)}
+              title={straightEdges ? "Straight edges (click for curves)" : "Curved edges (click for straight)"}
+            >
+              <Minus className="h-3 w-3" />
+              Straight
+            </button>
+          )}
           {nodes.length > 0 && (
             <button
               type="button"
@@ -581,6 +598,7 @@ export function C4Canvas({
           </Controls>
         )}
       </ReactFlow>
+      </StraightEdgesContext.Provider>
       {/* Welcome intro (no model loaded) */}
       {currentModel === null && nodes.length === 0 && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center pointer-events-none">

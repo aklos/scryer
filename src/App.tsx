@@ -361,11 +361,16 @@ function Flow() {
 
   const driftedNodeIdSet = useMemo(() => new Set(driftedNodes.map((d) => d.nodeId)), [driftedNodes]);
 
+  const [nonPlanarEdgeIds, setNonPlanarEdgeIds] = useState<Set<string>>(new Set());
+  const [faceRoutes, setFaceRoutes] = useState<Map<string, { x: number; y: number }[]>>(new Map());
+
   const { visibleNodes, visibleNodesWithHints, visibleEdges, refNodeIds, groupNodeIds } = useVisibleNodes({
     nodes, edges, currentParentId, refPositions,
     groups, selectedGroupId, setRefPositions, activeHints: advisor.hints,
     changedNodeIds: storage.changedNodeIds,
     driftedNodeIds: driftedNodeIdSet,
+    nonPlanarEdgeIds,
+    faceRoutes,
   });
 
   const onNodesChange = useNodesChange({
@@ -822,8 +827,10 @@ function Flow() {
       .map((g) => ({ ...g, memberIds: g.memberIds.filter((id) => layoutIds.has(id)) }))
       .filter((g) => g.memberIds.length >= 2);
 
-    const laid = await autoLayout(layoutNodes, layoutEdges, activeGroups, false, true);
-    const posMap = new Map(laid.map((n) => [n.id, n.position]));
+    const result = await autoLayout(layoutNodes, layoutEdges, activeGroups, false, true);
+    const posMap = new Map(result.nodes.map((n) => [n.id, n.position]));
+    setNonPlanarEdgeIds(result.nonPlanarEdgeIds);
+    setFaceRoutes(result.faceRoutes);
 
     const refIds = new Set(visibleNodes.filter((n) => n.data._reference).map((n) => n.id));
     setNodes((nds) =>
@@ -891,8 +898,10 @@ function Flow() {
       .map((g) => ({ ...g, memberIds: g.memberIds.filter((id) => layoutIds.has(id)) }))
       .filter((g) => g.memberIds.length >= 2);
 
-    autoLayout(layoutNodes, layoutEdges, activeGroups, false).then((laid) => {
-      const posMap = new Map(laid.map((n) => [n.id, n.position]));
+    autoLayout(layoutNodes, layoutEdges, activeGroups, false).then((result) => {
+      const posMap = new Map(result.nodes.map((n) => [n.id, n.position]));
+      setNonPlanarEdgeIds(result.nonPlanarEdgeIds);
+    setFaceRoutes(result.faceRoutes);
       const refIds = new Set(visibleNodes.filter((n) => n.data._reference).map((n) => n.id));
       setNodes((nds) =>
         nds.map((n) => {

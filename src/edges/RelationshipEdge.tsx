@@ -3,6 +3,7 @@ import { BaseEdge, EdgeLabelRenderer, getBezierPath, Position, useStore, type Ed
 import type { C4Edge, C4NodeData, Status } from "../types";
 import { statusHex } from "../statusColors";
 import { getThemedHex, ThemeContext } from "../theme";
+import { StraightEdgesContext } from ".";
 
 const CORNER_HANDLES = new Set(["top-left", "top-right", "bottom-left", "bottom-right"]);
 const CURVE_OFFSET = 24;
@@ -31,6 +32,7 @@ export function RelationshipEdge({
   selected,
 }: EdgeProps<C4Edge>) {
   useContext(ThemeContext);
+  const straightEdges = useContext(StraightEdgesContext);
 
   // Check if a reverse edge exists between the same pair of nodes
   const isBiDirectional = useStore((s: ReactFlowState) =>
@@ -84,7 +86,49 @@ export function RelationshipEdge({
   let labelX: number;
   let labelY: number;
 
-  if (isMention) {
+  // Orthogonal polyline route (for crossing edges rerouted by the router)
+  const route = data?._route as { x: number; y: number }[] | undefined;
+  if (route && route.length >= 1) {
+    // Routes only contain bend points — start/end come from handles like normal edges.
+    // Use quadratic bezier curves to round the corners.
+    const pts = [{ x: sourceX, y: sourceY }, ...route, { x: targetX, y: targetY }];
+    const R = 30; // corner radius in pixels
+    let d = `M ${pts[0].x} ${pts[0].y}`;
+    for (let i = 1; i < pts.length - 1; i++) {
+      const prev = pts[i - 1], cur = pts[i], next = pts[i + 1];
+      // Vector from corner to prev/next
+      const toPrevX = prev.x - cur.x, toPrevY = prev.y - cur.y;
+      const toNextX = next.x - cur.x, toNextY = next.y - cur.y;
+      const lenPrev = Math.sqrt(toPrevX * toPrevX + toPrevY * toPrevY) || 1;
+      const lenNext = Math.sqrt(toNextX * toNextX + toNextY * toNextY) || 1;
+      const r = Math.min(R, lenPrev / 2, lenNext / 2);
+      // Points where the curve starts/ends (offset from corner toward prev/next)
+      const startX = cur.x + (toPrevX / lenPrev) * r;
+      const startY = cur.y + (toPrevY / lenPrev) * r;
+      const endX = cur.x + (toNextX / lenNext) * r;
+      const endY = cur.y + (toNextY / lenNext) * r;
+      d += ` L ${startX} ${startY} Q ${cur.x} ${cur.y} ${endX} ${endY}`;
+    }
+    d += ` L ${pts[pts.length - 1].x} ${pts[pts.length - 1].y}`;
+    edgePath = d;
+    // Place label at midpoint of the longest segment (not at a bend)
+    const segs = [{ x: sourceX, y: sourceY }, ...route, { x: targetX, y: targetY }];
+    let bestLen = 0, bestMidX = sourceX, bestMidY = sourceY;
+    for (let i = 0; i < segs.length - 1; i++) {
+      const segLen = Math.sqrt((segs[i+1].x - segs[i].x) ** 2 + (segs[i+1].y - segs[i].y) ** 2);
+      if (segLen > bestLen) {
+        bestLen = segLen;
+        bestMidX = (pts[i].x + pts[i+1].x) / 2;
+        bestMidY = (pts[i].y + pts[i+1].y) / 2;
+      }
+    }
+    labelX = bestMidX;
+    labelY = bestMidY;
+  } else if (straightEdges && !isMention) {
+    edgePath = `M ${sourceX} ${sourceY} L ${targetX} ${targetY}`;
+    labelX = (sourceX + targetX) / 2;
+    labelY = (sourceY + targetY) / 2;
+  } else if (isMention) {
     edgePath = `M ${sourceX} ${sourceY} L ${targetX} ${targetY}`;
     labelX = (sourceX + targetX) / 2;
     labelY = (sourceY + targetY) / 2;
