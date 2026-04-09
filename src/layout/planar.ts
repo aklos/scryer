@@ -28,8 +28,6 @@ export interface PlanarLayoutResult {
   positions: Map<string, { col: number; row: number }>;
   /** Edges that couldn't be embedded in the planar subgraph. */
   nonPlanarEdges: EdgePair[];
-  /** Pre-computed routes for face expansion edges (L-shaped bends). Key: "source\0target" */
-  faceRoutes: Map<string, { col: number; row: number }[]>;
 }
 
 // ── Graph utilities ────────────────────────────────────────────────────
@@ -460,7 +458,7 @@ function placeLeaves(
   adj: Map<string, Set<string>>,
   outerContour: Set<string>,
 ): void {
-  const LEAF_DIST = 1.5;
+  const LEAF_DIST = 2.0;
 
   // Collect existing edges for crossing checks
   const posEdges: [string, string][] = [];
@@ -692,209 +690,6 @@ function tuttePlace(
   return { positions: pos, outerContour: outerSet };
 }
 
-// ── FPP shift method placement ───────────────────────────────────────
-
-/**
- * Integrated FPP: vertex selection + placement in one pass.
- *
- * Instead of a pre-computed canonical ordering, selects the next vertex
- * based on the ACTUAL contour at each step. Picks the unplaced vertex
- * with the smallest span on the contour (fewest covered nodes), which
- * preserves contour vertices for future placements.
- *
- * Grid size: at most (2n-4) × (n-2).
- */
-// @ts-ignore kept for fallback
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function fppPlace(embedding: Embedding): {
-  positions: Map<string, { col: number; row: number }>;
-  outerContour: Set<string>;
-} {
-  const allIds = [...embedding.keys()];
-  const n = allIds.length;
-  const pos = new Map<string, { col: number; row: number }>();
-
-  if (n === 0) return { positions: pos, outerContour: new Set<string>() };
-  if (n === 1) {
-    pos.set(allIds[0], { col: 0, row: 0 });
-    return { positions: pos, outerContour: new Set(allIds) };
-  }
-
-  // Build full adjacency from embedding (symmetric)
-  const adj = new Map<string, Set<string>>();
-  for (const id of allIds) adj.set(id, new Set());
-  for (const [u, nbrs] of embedding) {
-    for (const v of nbrs) {
-      adj.get(u)!.add(v);
-      adj.get(v)!.add(u);
-    }
-  }
-
-  // Find an outer face edge — pick from the largest face, but choose
-  // the two LOWEST-degree vertices as v1/v2. High-degree hubs placed later
-  // end up central instead of pushed to the grid edge by shift accumulation.
-  const faces = allFaces(embedding);
-  let outerFace = faces[0] ?? allIds.slice(0, 3);
-  for (const f of faces) {
-    if (f.length > outerFace.length) outerFace = f;
-  }
-  // Sort outer face vertices by degree (ascending) and pick two lowest
-  const outerSorted = [...outerFace].sort(
-    (a, b) => (adj.get(a)?.size ?? 0) - (adj.get(b)?.size ?? 0),
-  );
-  // v1 and v2 must be adjacent on the outer face
-  let v1 = outerSorted[0];
-  let v2 = outerSorted[1] ?? outerFace[1] ?? allIds[1];
-  // Ensure v1-v2 are adjacent on the face — if not, pick v1's face neighbor
-  const v1FaceIdx = outerFace.indexOf(v1);
-  const v1Left =
-    outerFace[(v1FaceIdx - 1 + outerFace.length) % outerFace.length];
-  const v1Right = outerFace[(v1FaceIdx + 1) % outerFace.length];
-  if (v2 !== v1Left && v2 !== v1Right) {
-    // v2 isn't adjacent to v1 on the face — pick the lower-degree face neighbor
-    v2 =
-      (adj.get(v1Left)?.size ?? Infinity) <=
-      (adj.get(v1Right)?.size ?? Infinity)
-        ? v1Left
-        : v1Right;
-  }
-
-  if (n === 2) {
-    pos.set(v1, { col: 0, row: 0 });
-    pos.set(v2, { col: 2, row: 0 });
-    return { positions: pos, outerContour: new Set([v1, v2]) };
-  }
-
-  // Place v1 and v2 on baseline
-  pos.set(v1, { col: 0, row: 0 });
-  pos.set(v2, { col: 2, row: 0 });
-  const placed = new Set([v1, v2]);
-
-  // Contour: left-to-right boundary of placed vertices
-  let contour: string[] = [v1, v2];
-
-  // Covered vertices tracking for shift propagation
-  const coveredBy = new Map<string, string[]>();
-  coveredBy.set(v1, []);
-  coveredBy.set(v2, []);
-
-  const shiftVertex = (id: string, dx: number) => {
-    pos.get(id)!.col += dx;
-    for (const cv of coveredBy.get(id) ?? []) {
-      pos.get(cv)!.col += dx;
-    }
-  };
-
-  while (placed.size < n) {
-    // Find unplaced vertex with ≥2 contour neighbors, preferring smallest span
-    let bestV: string | null = null;
-    let bestP = -1,
-      bestQ = -1;
-    let bestSpan = Infinity;
-
-    for (const v of allIds) {
-      if (placed.has(v)) continue;
-      const nbrs = adj.get(v)!;
-
-      let pIdx = -1,
-        qIdx = -1;
-      for (let i = 0; i < contour.length; i++) {
-        if (nbrs.has(contour[i])) {
-          if (pIdx === -1) pIdx = i;
-          qIdx = i;
-        }
-      }
-
-      if (pIdx !== -1 && qIdx !== -1 && pIdx !== qIdx) {
-        // FPP requires ALL contour vertices between wp and wq to be
-        // neighbors of v. If any intermediate vertex is NOT a neighbor,
-        // covering it would be invalid and produce crossings.
-        let allIntermediate = true;
-        for (let j = pIdx + 1; j < qIdx; j++) {
-          if (!nbrs.has(contour[j])) {
-            allIntermediate = false;
-            break;
-          }
-        }
-        if (!allIntermediate) continue;
-
-        const span = qIdx - pIdx;
-        // Count how many of v's neighbors are still unplaced — fewer means
-        // v is "more ready" and should go first (its contour window may close)
-        let unplacedNbrs = 0;
-        for (const nb of nbrs) if (!placed.has(nb)) unplacedNbrs++;
-
-        // Primary: fewest unplaced neighbors (most "ready" — window may close).
-        // Secondary: smallest span.
-        const prevUnplaced = bestV
-          ? [...adj.get(bestV)!].filter((nb) => !placed.has(nb)).length
-          : Infinity;
-        if (
-          unplacedNbrs < prevUnplaced ||
-          (unplacedNbrs === prevUnplaced && span < bestSpan)
-        ) {
-          bestV = v;
-          bestP = pIdx;
-          bestQ = qIdx;
-          bestSpan = span;
-        }
-      }
-    }
-
-    if (!bestV) {
-      // No vertex with ≥2 contour neighbors. Log what's stuck.
-      const unplaced = allIds.filter((v) => !placed.has(v));
-      for (const v of unplaced) {
-        const nbrs = [...adj.get(v)!];
-        const onContour = nbrs.filter((nb) => contour.includes(nb));
-        console.warn(
-          `[FPP] stuck: ${v} neighbors=[${nbrs.join(",")}] onContour=[${onContour.join(",")}] contour=[${contour.join(",")}]`,
-        );
-      }
-      // Fallback: place remaining at fallback positions
-      for (const v of unplaced) {
-        const maxCol = Math.max(...[...pos.values()].map((p) => p.col));
-        pos.set(v, { col: maxCol + 2, row: 0 });
-        placed.add(v);
-      }
-      break;
-    }
-
-    console.log(
-      `[FPP] place ${bestV}: span=${bestSpan} contour=[${contour.join(",")}] wp=${contour[bestP]} wq=${contour[bestQ]}`,
-    );
-
-    // FPP shift + place
-    const pIdx = bestP;
-    const qIdx = bestQ;
-
-    for (let i = pIdx + 1; i < qIdx; i++) shiftVertex(contour[i], 1);
-    for (let i = qIdx; i < contour.length; i++) shiftVertex(contour[i], 2);
-
-    const posP = pos.get(contour[pIdx])!;
-    const posQ = pos.get(contour[qIdx])!;
-    const xk = (posQ.row - posP.row + posQ.col + posP.col) / 2;
-    const yk = posP.row + (xk - posP.col);
-
-    pos.set(bestV, { col: xk, row: yk });
-    placed.add(bestV);
-
-    // Cover vertices between pIdx and qIdx
-    const newCovered: string[] = [];
-    for (let i = pIdx + 1; i < qIdx; i++) {
-      newCovered.push(contour[i]);
-      for (const cv of coveredBy.get(contour[i]) ?? []) newCovered.push(cv);
-      coveredBy.delete(contour[i]);
-    }
-    coveredBy.set(bestV, newCovered);
-
-    // Update contour
-    contour = [...contour.slice(0, pIdx + 1), bestV, ...contour.slice(qIdx)];
-  }
-
-  return { positions: pos, outerContour: new Set(contour ?? []) };
-}
-
 // ── Kamada-Kawai stress minimization ──────────────────────────────────
 
 /**
@@ -1105,383 +900,6 @@ function kamadaKawai(
   }
 }
 
-// ── Face expansion ────────────────────────────────────────────────────
-
-/**
- * Expand cramped triangular faces into rectangles.
- *
- * For each face with interior nodes:
- * 1. Pick the edge closest to vertical/horizontal as the "spine"
- * 2. Route the other 2 edges with right-angle bends to form a rectangle
- * 3. Push boundary super nodes (vertex + connected outside subgraph) outward
- * 4. Spread interior nodes within the expanded rectangle
- */
-/**
- * Local face expansion: for each cramped pre-triangulation face, push its
- * boundary vertices outward from the face centroid. Each boundary vertex
- * moves as a super-node (with everything connected on the outside).
- * Only cramped faces expand — the rest stays put.
- */
-// @ts-ignore kept for reference
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function expandCrampedFacesLocal(
-  positions: Map<string, { col: number; row: number }>,
-  originalFaces: string[][],
-  _outerContour: Set<string>,
-  leaves: { id: string; parent: string }[],
-  adj: Map<string, Set<string>>,
-): void {
-  const NODE_CELL_W = (180 + 80) / 240;
-  const NODE_CELL_H = (160 + 80) / 200;
-  const nodeArea = NODE_CELL_W * NODE_CELL_H;
-  const moved = new Set<string>(); // vertices already moved by a face expansion
-
-  // Score faces by how cramped they are (most cramped first)
-  const faceScores: { face: string[]; faceScale: number }[] = [];
-  for (const face of originalFaces) {
-    const facePositions = face
-      .map((v) => positions.get(v))
-      .filter((p): p is { col: number; row: number } => !!p);
-    if (facePositions.length < 3) continue;
-
-    // Shoelace area
-    let area = 0;
-    for (let i = 0; i < facePositions.length; i++) {
-      const j = (i + 1) % facePositions.length;
-      area += facePositions[i].col * facePositions[j].row;
-      area -= facePositions[j].col * facePositions[i].row;
-    }
-    area = Math.abs(area) / 2;
-
-    const neededArea = face.length * nodeArea * 2; // 2× for comfortable spacing
-    if (area > 0.001) {
-      const faceScale = Math.sqrt(neededArea / area);
-      if (faceScale > 1.1) {
-        // only expand if significantly cramped
-        faceScores.push({ face, faceScale });
-      }
-    }
-  }
-  faceScores.sort((a, b) => b.faceScale - a.faceScale); // most cramped first
-
-  for (const { face, faceScale } of faceScores) {
-    // Compute face centroid
-    let fcx = 0,
-      fcy = 0,
-      fcount = 0;
-    for (const v of face) {
-      const p = positions.get(v);
-      if (p) {
-        fcx += p.col;
-        fcy += p.row;
-        fcount++;
-      }
-    }
-    if (fcount === 0) continue;
-    fcx /= fcount;
-    fcy /= fcount;
-
-    // Push each boundary vertex outward from face centroid
-    for (const v of face) {
-      if (moved.has(v)) continue; // already moved by a more cramped face
-      const p = positions.get(v);
-      if (!p) continue;
-
-      const dx = p.col - fcx;
-      const dy = p.row - fcy;
-
-      // Displacement: scale outward from centroid
-      const newCol = fcx + dx * faceScale;
-      const newRow = fcy + dy * faceScale;
-      const dispX = newCol - p.col;
-      const dispY = newRow - p.row;
-
-      // Move as super-node: BFS through connected nodes NOT in this face
-      const faceSet = new Set(face);
-      const superNode = new Set<string>([v]);
-      const queue = [v];
-      while (queue.length > 0) {
-        const u = queue.shift()!;
-        for (const nbr of adj.get(u) ?? []) {
-          if (superNode.has(nbr) || faceSet.has(nbr)) continue;
-          if (!positions.has(nbr)) continue;
-          superNode.add(nbr);
-          queue.push(nbr);
-        }
-        // Include leaves
-        for (const leaf of leaves) {
-          if (leaf.parent === u && !superNode.has(leaf.id)) {
-            superNode.add(leaf.id);
-          }
-        }
-      }
-
-      // Apply displacement
-      for (const id of superNode) {
-        const sp = positions.get(id);
-        if (sp) {
-          sp.col += dispX;
-          sp.row += dispY;
-        }
-      }
-
-      moved.add(v);
-    }
-  }
-}
-
-// @ts-ignore kept for potential future use
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function expandCrampedFaces(
-  positions: Map<string, { col: number; row: number }>,
-  originalFaces: string[][],
-  outerContour: Set<string>,
-  leaves: { id: string; parent: string }[],
-  adj: Map<string, Set<string>>,
-): Map<string, { col: number; row: number }[]> {
-  const routes = new Map<string, { col: number; row: number }[]>();
-  // Node footprint in cell units
-  const NODE_W = (180 + 80) / 240;
-  const NODE_H = (160 + 80) / 200;
-
-  // Pre-triangulation faces — the real graph faces (polygons, not just triangles)
-  const faces = originalFaces;
-
-  // Identify interior (covered) core nodes — not on outer contour
-  // Core IDs are all unique node IDs that appear in any face
-  const coreIdSet = new Set<string>();
-  for (const face of faces) for (const v of face) coreIdSet.add(v);
-  const coreIds = [...coreIdSet];
-  const interiorCoreIds = coreIds.filter((id) => !outerContour.has(id));
-
-  console.log(
-    `[FaceExpand] coreIds=${coreIds.length} interiorCoreIds=${interiorCoreIds.length} faces=${faces.length}`,
-  );
-  console.log(`[FaceExpand] outerContour: [${[...outerContour].join(",")}]`);
-  console.log(`[FaceExpand] interior nodes: [${interiorCoreIds.join(",")}]`);
-
-  // For each interior core node, find which face contains it (point-in-triangle)
-  // Point-in-polygon using ray casting
-  function pointInPolygon(
-    px: number,
-    py: number,
-    verts: { col: number; row: number }[],
-  ): boolean {
-    let inside = false;
-    for (let i = 0, j = verts.length - 1; i < verts.length; j = i++) {
-      const xi = verts[i].col,
-        yi = verts[i].row;
-      const xj = verts[j].col,
-        yj = verts[j].row;
-      if (
-        yi > py !== yj > py &&
-        px < ((xj - xi) * (py - yi)) / (yj - yi) + xi
-      ) {
-        inside = !inside;
-      }
-    }
-    return inside;
-  }
-
-  // Map: face index → interior node IDs (core + their leaves)
-  const faceInterior = new Map<number, string[]>();
-
-  // Log face geometry
-  for (let fi = 0; fi < faces.length; fi++) {
-    const face = faces[fi];
-    const verts = face.map((v) => {
-      const p = positions.get(v);
-      return p ? `${v}(${p.col.toFixed(1)},${p.row.toFixed(1)})` : `${v}(?)`;
-    });
-    console.log(`[FaceExpand] face ${fi}: [${verts.join(", ")}]`);
-  }
-  for (const id of interiorCoreIds) {
-    const p = positions.get(id);
-    console.log(
-      `[FaceExpand] interior ${id}: ${p ? `(${p.col.toFixed(1)},${p.row.toFixed(1)})` : "no pos"}`,
-    );
-  }
-
-  for (const id of interiorCoreIds) {
-    const p = positions.get(id);
-    if (!p) continue;
-    for (let fi = 0; fi < faces.length; fi++) {
-      const face = faces[fi];
-      if (face.length < 3) continue;
-      // Skip faces that have this node as a vertex (it's ON the face, not inside)
-      if (face.includes(id)) continue;
-      const faceVerts = face
-        .map((v) => positions.get(v))
-        .filter((v): v is { col: number; row: number } => !!v);
-      if (faceVerts.length < 3) continue;
-      const isInside = pointInPolygon(p.col, p.row, faceVerts);
-      console.log(
-        `[FaceExpand] test ${id}(${p.col.toFixed(1)},${p.row.toFixed(1)}) in face ${fi} [${face.join(",")}]: ${isInside}`,
-      );
-      if (isInside) {
-        if (!faceInterior.has(fi)) faceInterior.set(fi, []);
-        faceInterior.get(fi)!.push(id);
-        // Also add this node's leaves
-        for (const leaf of leaves) {
-          if (leaf.parent === id) faceInterior.get(fi)!.push(leaf.id);
-        }
-        break;
-      }
-    }
-  }
-
-  // Expand each face that has interior nodes
-  for (const [fi, interiorIds] of faceInterior) {
-    const face = faces[fi];
-    if (face.length < 3) continue;
-
-    const verts = face.slice(0, 3); // triangle vertices
-    const pa = positions.get(verts[0])!,
-      pb = positions.get(verts[1])!,
-      pc = positions.get(verts[2])!;
-    if (!pa || !pb || !pc) continue;
-
-    // Find the edge closest to vertical or horizontal — this becomes the spine
-    const edgeCandidates = [
-      {
-        a: 0,
-        b: 1,
-        dx: Math.abs(pb.col - pa.col),
-        dy: Math.abs(pb.row - pa.row),
-      },
-      {
-        a: 1,
-        b: 2,
-        dx: Math.abs(pc.col - pb.col),
-        dy: Math.abs(pc.row - pb.row),
-      },
-      {
-        a: 0,
-        b: 2,
-        dx: Math.abs(pc.col - pa.col),
-        dy: Math.abs(pc.row - pa.row),
-      },
-    ];
-    // Score: how close to axis-aligned (lower = more aligned)
-    const scored = edgeCandidates.map((e) => ({
-      ...e,
-      score: Math.min(e.dx, e.dy) / (Math.max(e.dx, e.dy) || 1),
-    }));
-    scored.sort((a, b) => a.score - b.score);
-    const spine = scored[0]; // most axis-aligned edge
-
-    // The third vertex (not on spine) is the one we need to "rectangularize"
-    const spineVerts = [verts[spine.a], verts[spine.b]];
-    const oppositeVert = verts.find((v) => !spineVerts.includes(v))!;
-    const spA = positions.get(spineVerts[0])!;
-    const spB = positions.get(spineVerts[1])!;
-    const opP = positions.get(oppositeVert)!;
-
-    // Compute how much area is needed — grid of nodes with padding
-    const nodesInFace = interiorIds.length;
-    const gridCols = Math.max(1, Math.ceil(Math.sqrt(nodesInFace)));
-    const gridRows = Math.max(1, Math.ceil(nodesInFace / gridCols));
-    const neededWidth = gridCols * NODE_W * 1.5;
-    const neededHeight = gridRows * NODE_H * 1.5;
-
-    // Current face dimensions
-    // Distance from opposite vertex to spine (height of triangle)
-    const spineDx = spB.col - spA.col,
-      spineDy = spB.row - spA.row;
-    const spineNorm = Math.sqrt(spineDx * spineDx + spineDy * spineDy) || 1;
-    const perpDist = Math.abs(
-      (opP.col - spA.col) * (-spineDy / spineNorm) +
-        (opP.row - spA.row) * (spineDx / spineNorm),
-    );
-
-    // Expansion factor: triangle faces have ~50% usable area of a rectangle,
-    // so we need roughly 2x the perpendicular distance to fit the same nodes.
-    const neededPerp = Math.max(neededWidth, neededHeight) * 1.6;
-    const expansionFactor = Math.max(1, neededPerp / Math.max(perpDist, 0.1));
-
-    if (expansionFactor <= 1.1) continue; // face is big enough
-
-    // Push opposite vertex away from spine center
-    const spineCx = (spA.col + spB.col) / 2;
-    const spineCy = (spA.row + spB.row) / 2;
-    const pushDx = opP.col - spineCx;
-    const pushDy = opP.row - spineCy;
-    const pushLen = Math.sqrt(pushDx * pushDx + pushDy * pushDy) || 1;
-
-    const displacement = (expansionFactor - 1) * perpDist;
-    const dx = (pushDx / pushLen) * displacement;
-    const dy = (pushDy / pushLen) * displacement;
-
-    // Move opposite vertex as a super node: vertex + everything connected
-    // on the outside (away from this face)
-    const superNodeIds = new Set<string>();
-    // BFS from opposite vertex through nodes NOT in this face's interior
-    const faceInteriorSet = new Set(interiorIds);
-    const spineSet = new Set(spineVerts);
-    const queue = [oppositeVert];
-    superNodeIds.add(oppositeVert);
-    while (queue.length > 0) {
-      const u = queue.shift()!;
-      for (const nbr of adj.get(u) ?? []) {
-        if (
-          superNodeIds.has(nbr) ||
-          faceInteriorSet.has(nbr) ||
-          spineSet.has(nbr)
-        )
-          continue;
-        if (!positions.has(nbr)) continue;
-        superNodeIds.add(nbr);
-        queue.push(nbr);
-      }
-      // Also include leaves of this node
-      for (const leaf of leaves) {
-        if (leaf.parent === u && !superNodeIds.has(leaf.id)) {
-          superNodeIds.add(leaf.id);
-        }
-      }
-    }
-
-    // Apply displacement to entire super node
-    for (const id of superNodeIds) {
-      const p = positions.get(id);
-      if (p) {
-        p.col += dx;
-        p.row += dy;
-      }
-    }
-
-    // Spread interior nodes within the expanded face
-    const faceCx = (spA.col + spB.col + opP.col + dx) / 3;
-    const faceCy = (spA.row + spB.row + opP.row + dy) / 3;
-    for (let i = 0; i < interiorIds.length; i++) {
-      const p = positions.get(interiorIds[i]);
-      if (!p) continue;
-      const gr = Math.floor(i / gridCols);
-      const gc = i % gridCols;
-      p.col = faceCx + (gc - (gridCols - 1) / 2) * NODE_W * 1.5;
-      p.row = faceCy + (gr - (gridRows - 1) / 2) * NODE_H * 1.5;
-    }
-
-    // Compute L-shaped waypoints for the 2 non-spine edges to form rectangle.
-    // opP was already displaced by the super node move above — use it directly.
-    const corner1 = { col: spA.col, row: opP.row };
-    const corner2 = { col: spB.col, row: opP.row };
-
-    // Only store bend points — edge renderer connects from handle to corner to handle
-    const key1a = `${spineVerts[0]}\0${oppositeVert}`;
-    const key1b = `${oppositeVert}\0${spineVerts[0]}`;
-    routes.set(key1a, [corner1]);
-    routes.set(key1b, [corner1]);
-
-    const key2a = `${spineVerts[1]}\0${oppositeVert}`;
-    const key2b = `${oppositeVert}\0${spineVerts[1]}`;
-    routes.set(key2a, [corner2]);
-    routes.set(key2b, [corner2]);
-  }
-
-  return routes;
-}
-
 // ── Public API ─────────────────────────────────────────────────────────
 
 /**
@@ -1500,22 +918,20 @@ export async function planarLayout(
 
   // Trivial cases
   if (nodeIds.length === 0)
-    return { positions: new Map(), nonPlanarEdges: [], faceRoutes: new Map() };
+    return { positions: new Map(), nonPlanarEdges: [] };
   if (nodeIds.length === 1) {
     return {
       positions: new Map([[nodeIds[0], { col: 0, row: 0 }]]),
       nonPlanarEdges: [],
-      faceRoutes: new Map(),
     };
   }
   if (nodeIds.length === 2) {
     return {
       positions: new Map([
         [nodeIds[0], { col: 0, row: 0 }],
-        [nodeIds[1], { col: 1, row: 0 }],
+        [nodeIds[1], { col: 2, row: 0 }],
       ]),
       nonPlanarEdges: [],
-      faceRoutes: new Map(),
     };
   }
 
@@ -1544,11 +960,28 @@ export async function planarLayout(
     if (coreIds[1]) positions.set(coreIds[1], { col: 2, row: 0 });
     kamadaKawai(positions, coreIds.length > 0 ? coreIds : [hub], coreEdges);
     placeLeaves(positions, leaves, realAdj, new Set(coreIds));
-    return { positions, nonPlanarEdges: [], faceRoutes: new Map() };
+    return { positions, nonPlanarEdges: [] };
   }
 
-  // Step 4: Classify, augment, triangulate the CORE graph
+  // Step 4: Classify edges — planar vs non-planar
   const coreClassification = classifyEdges(coreIds, coreEdges);
+
+  // Non-planar component → KK on all edges (Tutte only guarantees crossing-free
+  // for 3-connected planar graphs; running it on non-planar produces garbage).
+  if (coreClassification.nonPlanarEdges.length > 0) {
+    const positions = new Map<string, { col: number; row: number }>();
+    // Initialize on a circle so KK has a good starting point
+    const R = Math.max(2, coreIds.length * 0.5);
+    for (let i = 0; i < coreIds.length; i++) {
+      const angle = (2 * Math.PI * i) / coreIds.length - Math.PI / 2;
+      positions.set(coreIds[i], { col: R * Math.cos(angle), row: R * Math.sin(angle) });
+    }
+    kamadaKawai(positions, coreIds, coreEdges);
+    placeLeaves(positions, leaves, realAdj, new Set(coreIds));
+    return { positions, nonPlanarEdges: coreClassification.nonPlanarEdges };
+  }
+
+  // Planar component → Tutte pipeline
   // Save faces from the ORIGINAL classified graph (before augmentation adds dummy edges).
   // These are the real architectural faces — augmentation subdivides them.
   const originalFaces = allFaces(coreClassification.embedding);
@@ -1735,12 +1168,9 @@ export async function planarLayout(
     }
   }
 
-  const faceRoutes = new Map<string, { col: number; row: number }[]>();
-
   return {
     positions,
     nonPlanarEdges: coreClassification.nonPlanarEdges,
-    faceRoutes,
   };
 }
 
@@ -1753,7 +1183,7 @@ export async function layoutGraph(
   edges: EdgePair[],
 ): Promise<PlanarLayoutResult> {
   if (nodeIds.length === 0)
-    return { positions: new Map(), nonPlanarEdges: [], faceRoutes: new Map() };
+    return { positions: new Map(), nonPlanarEdges: [] };
 
   const dedupedEdges = dedupeEdges(edges);
   const components = connectedComponents(nodeIds, dedupedEdges);
@@ -1765,7 +1195,6 @@ export async function layoutGraph(
   // Layout each component separately
   const allPositions = new Map<string, { col: number; row: number }>();
   const allNonPlanar: EdgePair[] = [];
-  const allFaceRoutes = new Map<string, { col: number; row: number }[]>();
   let colOffset = 0;
 
   for (const comp of components) {
@@ -1782,18 +1211,11 @@ export async function layoutGraph(
     }
 
     allNonPlanar.push(...result.nonPlanarEdges);
-    for (const [key, route] of result.faceRoutes) {
-      allFaceRoutes.set(
-        key,
-        route.map((p) => ({ col: p.col + colOffset, row: p.row })),
-      );
-    }
     colOffset += maxCol + 3;
   }
 
   return {
     positions: allPositions,
     nonPlanarEdges: allNonPlanar,
-    faceRoutes: allFaceRoutes,
   };
 }

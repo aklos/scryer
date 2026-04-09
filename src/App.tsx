@@ -362,7 +362,6 @@ function Flow() {
   const driftedNodeIdSet = useMemo(() => new Set(driftedNodes.map((d) => d.nodeId)), [driftedNodes]);
 
   const [nonPlanarEdgeIds, setNonPlanarEdgeIds] = useState<Set<string>>(new Set());
-  const [faceRoutes, setFaceRoutes] = useState<Map<string, { x: number; y: number }[]>>(new Map());
 
   const { visibleNodes, visibleNodesWithHints, visibleEdges, refNodeIds, groupNodeIds } = useVisibleNodes({
     nodes, edges, currentParentId, refPositions,
@@ -370,7 +369,6 @@ function Flow() {
     changedNodeIds: storage.changedNodeIds,
     driftedNodeIds: driftedNodeIdSet,
     nonPlanarEdgeIds,
-    faceRoutes,
   });
 
   const onNodesChange = useNodesChange({
@@ -830,7 +828,6 @@ function Flow() {
     const result = await autoLayout(layoutNodes, layoutEdges, activeGroups, false, true);
     const posMap = new Map(result.nodes.map((n) => [n.id, n.position]));
     setNonPlanarEdgeIds(result.nonPlanarEdgeIds);
-    setFaceRoutes(result.faceRoutes);
 
     const refIds = new Set(visibleNodes.filter((n) => n.data._reference).map((n) => n.id));
     setNodes((nds) =>
@@ -901,7 +898,6 @@ function Flow() {
     autoLayout(layoutNodes, layoutEdges, activeGroups, false).then((result) => {
       const posMap = new Map(result.nodes.map((n) => [n.id, n.position]));
       setNonPlanarEdgeIds(result.nonPlanarEdgeIds);
-    setFaceRoutes(result.faceRoutes);
       const refIds = new Set(visibleNodes.filter((n) => n.data._reference).map((n) => n.id));
       setNodes((nds) =>
         nds.map((n) => {

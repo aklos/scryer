@@ -1,7 +1,6 @@
 import { useEffect, useMemo } from "react";
 import type { C4Kind, C4Node, C4NodeData, C4Edge, Group, Hint, Status } from "../types";
 import { assignAllHandles } from "../edgeRouting";
-import { routeCrossingEdges } from "../layout/routing";
 
 const NODE_W = 180;
 const NODE_H = 160;
@@ -18,7 +17,6 @@ interface UseVisibleNodesParams {
   changedNodeIds: Set<string>;
   driftedNodeIds: Set<string>;
   nonPlanarEdgeIds: Set<string>;
-  faceRoutes: Map<string, { x: number; y: number }[]>;
 }
 
 export function useVisibleNodes({
@@ -33,7 +31,6 @@ export function useVisibleNodes({
   changedNodeIds,
   driftedNodeIds,
   nonPlanarEdgeIds,
-  faceRoutes,
 }: UseVisibleNodesParams) {
   const levelPrefix = currentParentId ?? "root";
 
@@ -358,53 +355,17 @@ export function useVisibleNodes({
     });
     const handleMap = assignAllHandles(visibleNodes, filtered);
 
-    // Route only non-planar edges as orthogonal polylines
-    const nonPlanarFiltered = filtered.filter((e) => nonPlanarEdgeIds.has(e.id));
-    const routeMap = nonPlanarFiltered.length > 0
-      ? routeCrossingEdges(
-          visibleNodes.filter((n) => n.type !== "groupBox"),
-          nonPlanarFiltered,
-        )
-      : new Map();
-
-    // For routed edges, override handle assignment based on route approach direction
-    const nodeMap = new Map(visibleNodes.map((n) => [n.id, n]));
-    function handleForApproach(nodeId: string, fromX: number, fromY: number): string {
-      const node = nodeMap.get(nodeId);
-      if (!node) return "top";
-      const cx = node.position.x + (node.measured?.width ?? 180) / 2;
-      const cy = node.position.y + (node.measured?.height ?? 160) / 2;
-      const dx = fromX - cx, dy = fromY - cy;
-      // Pick handle based on which side the approach comes from
-      if (Math.abs(dx) > Math.abs(dy)) {
-        return dx > 0 ? "right" : "left";
-      } else {
-        return dy > 0 ? "bottom" : "top";
-      }
-    }
-
     return filtered.map((e) => {
-      let handles = handleMap.get(e.id);
-      const route = routeMap.get(e.id) ?? faceRoutes.get(e.id);
-
-      // Override handles for routed edges based on route approach direction
-      if (route && route.length >= 1) {
-        const firstBend = route[0];
-        const lastBend = route[route.length - 1];
-        const srcHandle = handleForApproach(e.source, firstBend.x, firstBend.y);
-        const tgtHandle = handleForApproach(e.target, lastBend.x, lastBend.y);
-        handles = { sourceHandle: srcHandle, targetHandle: tgtHandle };
-      }
-
+      const handles = handleMap.get(e.id);
       const connected = selIds.size > 0 && (selIds.has(e.source) || selIds.has(e.target));
       const dimmed = selIds.size > 0 && !connected;
       return {
         ...e,
         ...(handles ?? {}),
-        ...(e.data ? { data: { ...e.data, ...(route ? { _route: route } : {}), ...(connected ? { _highlighted: true } : {}), ...(dimmed ? { _dimmed: true } : {}) } } : {}),
+        ...(e.data ? { data: { ...e.data, ...(connected ? { _highlighted: true } : {}), ...(dimmed ? { _dimmed: true } : {}) } } : {}),
       };
     });
-  }, [edges, visibleNodes, currentParentId, nodes, nonPlanarEdgeIds, faceRoutes]);
+  }, [edges, visibleNodes, currentParentId, nodes, nonPlanarEdgeIds]);
 
   // Track reference/group/process/model node IDs
   const refNodeIds = useMemo(

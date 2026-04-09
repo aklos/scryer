@@ -253,8 +253,6 @@ async function incrementalLayout(
 export interface AutoLayoutResult {
   nodes: C4Node[];
   nonPlanarEdgeIds: Set<string>;
-  /** Pre-computed routes for face expansion edges. Key: edgeId, value: pixel waypoints */
-  faceRoutes: Map<string, { x: number; y: number }[]>;
 }
 
 export async function autoLayout(
@@ -264,12 +262,11 @@ export async function autoLayout(
   codeLevel?: boolean,
   fullRelayout?: boolean,
 ): Promise<AutoLayoutResult> {
-  const emptyRoutes = new Map<string, { x: number; y: number }[]>();
-  if (codeLevel) return { nodes: gridLayout(nodes), nonPlanarEdgeIds: new Set(), faceRoutes: emptyRoutes };
-  if (nodes.length === 0) return { nodes, nonPlanarEdgeIds: new Set(), faceRoutes: emptyRoutes };
+  if (codeLevel) return { nodes: gridLayout(nodes), nonPlanarEdgeIds: new Set() };
+  if (nodes.length === 0) return { nodes, nonPlanarEdgeIds: new Set() };
 
   if (!fullRelayout) {
-    return { nodes: await incrementalLayout(nodes, edges), nonPlanarEdgeIds: new Set(), faceRoutes: emptyRoutes };
+    return { nodes: await incrementalLayout(nodes, edges), nonPlanarEdgeIds: new Set() };
   }
 
   const result = await fullLayout(nodes, edges, groups ?? []);
@@ -280,5 +277,5 @@ export async function autoLayout(
     return { ...n, position: pos };
   });
 
-  return { nodes: laid, nonPlanarEdgeIds: result.nonPlanarEdgeIds, faceRoutes: result.faceRoutes };
+  return { nodes: laid, nonPlanarEdgeIds: result.nonPlanarEdgeIds };
 }
