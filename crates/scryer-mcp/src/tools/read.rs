@@ -113,7 +113,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Get a scoped subtree of a model. Returns the target node, all its descendants, edges between them, and edges connecting the subtree to external nodes (with external node names/kinds for context). Use this instead of get_model when you only need to inspect or work on a specific system, container, or component. Response is a JSON object with: `node` (the target), `descendants` (array), `internal_edges` (edges within subtree), `external_edges` (edges connecting subtree to outside, with `external_node_name` and `external_node_kind` fields added)."
+        description = "Get a scoped subtree of a model. Returns the target node, all its descendants, edges between them, edges connecting the subtree to external nodes (with external node names/kinds for context), and the group membership chain. Use this instead of get_model when you only need to inspect or work on a specific system, container, or component. Response is a JSON object with: `node` (the target), `descendants` (array), `internal_edges` (edges within subtree), `external_edges` (edges connecting subtree to outside, with `external_node_name` and `external_node_kind` fields added), `source_map`, and `groups` (the chain of groups this node belongs to, immediate first then ancestors via parentGroupId — each entry carries name, description, and contract so the AI sees inherited group rules)."
     )]
     fn get_node(
         &self,
@@ -199,6 +199,29 @@ impl ScryerServer {
             .map(|(k, v)| (k.as_str(), v))
             .collect();
 
+        // Group membership chain — walk up parentGroupId from the node's
+        // immediate group so AI sees both direct grouping and inherited
+        // contracts. Empty if node isn't in any group.
+        let mut group_chain: Vec<serde_json::Value> = Vec::new();
+        if let Some(immediate) = model
+            .groups
+            .iter()
+            .find(|g| g.member_ids.iter().any(|id| id == &req.node_id))
+        {
+            let mut cursor: Option<&scryer_core::Group> = Some(immediate);
+            let mut seen: HashSet<String> = HashSet::new();
+            while let Some(g) = cursor {
+                if !seen.insert(g.id.clone()) {
+                    break; // cycle guard
+                }
+                group_chain.push(serde_json::to_value(g).unwrap());
+                cursor = g
+                    .parent_group_id
+                    .as_ref()
+                    .and_then(|pid| model.groups.iter().find(|p| &p.id == pid));
+            }
+        }
+
         let ref_str = model_ref.to_ref_string();
         let mut result = serde_json::json!({
             "node": target,
@@ -206,6 +229,7 @@ impl ScryerServer {
             "internal_edges": internal_edges,
             "external_edges": external_edges,
             "source_map": source_map,
+            "groups": group_chain,
         });
         strip_ui_fields(&mut result);
         externalize_attachments(&mut result, &ref_str);

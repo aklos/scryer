@@ -332,15 +332,16 @@ impl ScryerServer {
         // Check for scaffold tasks: deployment groups where ALL member containers are proposed
         // Check against the full model, not ready_nodes (which skips containers with components)
         for group in &model.groups {
-            if group.kind != scryer_core::GroupKind::Deployment {
-                continue;
-            }
             let member_containers: Vec<&C4Node> = model.nodes
                 .iter()
                 .filter(|n| {
                     n.data.kind == C4Kind::Container && group.member_ids.contains(&n.id)
                 })
                 .collect();
+            // Treat any group whose members are containers as a deployment-style scaffold.
+            if member_containers.len() != group.member_ids.len() || member_containers.is_empty() {
+                continue;
+            }
 
             // All group members must be proposed
             let all_members_proposed = member_containers.iter().all(|n| {

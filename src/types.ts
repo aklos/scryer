@@ -77,14 +77,12 @@ export interface ModelProperty {
   description: string;
 }
 
-export type GroupKind = "deployment" | "package";
-
 export interface Group {
   id: string;
-  kind: GroupKind;
   name: string;
   description?: string;
   memberIds: string[];
+  parentGroupId?: string;
   contract?: Contract;
 }
 

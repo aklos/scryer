@@ -6,7 +6,7 @@ use rmcp::{
     model::{CallToolResult, Content},
     tool, tool_router, ErrorData as McpError,
 };
-use scryer_core::{C4Kind, Flow, Group, GroupKind};
+use scryer_core::{C4Kind, Flow, Group};
 use std::collections::HashSet;
 
 #[tool_router(router = tool_router_misc, vis = "pub(crate)")]
@@ -189,7 +189,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Create or replace one or more groups. Groups organize nodes visually on the canvas. If a group with the given ID exists, it is replaced; otherwise it is appended.\n\nTwo kinds:\n- \"deployment\": Groups containers inside a system. Represents what gets deployed together.\n- \"package\": Groups components inside a container. Represents how code should be organized.\n\nRules: A node can belong to at most one group. Deployment groups contain containers only. Package groups contain components only.\n\nGroup schema: {id, kind, name, memberIds, description?}. The `kind` must match the level: \"deployment\" for containers, \"package\" for components."
+        description = "Create or replace one or more groups. Groups organize nodes that share something beyond topology — common uses: a deployment unit (containers that ship together), a package/module (components in the same folder/bundle), or an ownership boundary. If a group with the given ID exists, it is replaced; otherwise it is appended.\n\nGroups can be nested via `parentGroupId`. Parent and child must contain members at the same C4 level.\n\nRules:\n- A node belongs to at most one group.\n- All `memberIds` in a group must refer to nodes at the same C4 level (containers OR components — other levels not supported).\n- `parentGroupId`, if set, must reference an existing group whose members are at the same C4 level; parent chains must not cycle.\n\nWrite the intent (e.g. \"deploys to Fly.io\", \"bundled as cms module\") into the group's `name` and `description` — that's what agents read.\n\nGroup schema: {id, name, memberIds, description?, parentGroupId?, contract?}."
     )]
     fn set_groups(
         &self,
@@ -229,6 +229,46 @@ impl ScryerServer {
         }
 
         let node_ids: HashSet<&str> = model.nodes.iter().map(|n| n.id.as_str()).collect();
+        let node_kind = |id: &str| model.nodes.iter().find(|n| n.id == id).map(|n| n.data.kind);
+
+        // Determine the effective C4 level of a group by scanning its members.
+        // Only containers and components may be grouped. All members in a group
+        // must share the same level.
+        let group_level = |g: &Group| -> Result<Option<C4Kind>, String> {
+            let mut level: Option<C4Kind> = None;
+            for mid in &g.member_ids {
+                let k = node_kind(mid).ok_or_else(|| {
+                    format!("Member '{}' in group '{}' not found in model", mid, g.name)
+                })?;
+                if !matches!(k, C4Kind::Container | C4Kind::Component) {
+                    return Err(format!(
+                        "Group '{}' contains a {:?} node; only containers and components can be grouped.",
+                        g.name, k
+                    ));
+                }
+                match level {
+                    None => level = Some(k),
+                    Some(l) if l != k => {
+                        return Err(format!(
+                            "Group '{}' mixes {:?} and {:?} members; all members must be at the same C4 level.",
+                            g.name, l, k
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            Ok(level)
+        };
+
+        // Stage the post-update group list so we can validate nesting holistically.
+        let mut staged: Vec<Group> = model.groups.clone();
+        for group in &groups {
+            if let Some(existing) = staged.iter_mut().find(|g| g.id == group.id) {
+                *existing = group.clone();
+            } else {
+                staged.push(group.clone());
+            }
+        }
 
         for group in &groups {
             // Validate member IDs exist
@@ -241,29 +281,56 @@ impl ScryerServer {
                 }
             }
 
-            // Validate kind matches the level of the members
-            if let Some(first_member) = group.member_ids.first() {
-                if let Some(member_node) = model.nodes.iter().find(|n| n.id == *first_member) {
-                    let expected_kind = match member_node.data.kind {
-                        C4Kind::Container => GroupKind::Deployment,
-                        C4Kind::Component => GroupKind::Package,
-                        _ => {
+            // Same-level invariant (and containers/components only).
+            let child_level = match group_level(group) {
+                Ok(l) => l,
+                Err(msg) => return Ok(CallToolResult::error(vec![Content::text(msg)])),
+            };
+
+            // Nesting: parent must exist, must share level, no cycles.
+            if let Some(parent_id) = &group.parent_group_id {
+                if parent_id == &group.id {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Group '{}' cannot be its own parent.",
+                        group.name
+                    ))]));
+                }
+                let mut seen: HashSet<&str> = HashSet::new();
+                seen.insert(group.id.as_str());
+                let mut cursor: Option<&str> = Some(parent_id.as_str());
+                while let Some(cid) = cursor {
+                    if !seen.insert(cid) {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Group '{}' introduces a cycle through parent '{}'.",
+                            group.name, parent_id
+                        ))]));
+                    }
+                    let parent = match staged.iter().find(|g| g.id == cid) {
+                        Some(p) => p,
+                        None => {
                             return Ok(CallToolResult::error(vec![Content::text(format!(
-                                "Group '{}' contains {:?} nodes which cannot be grouped. Only containers (deployment groups) and components (package groups) can be grouped.",
-                                group.name, member_node.data.kind
+                                "Group '{}' references unknown parent '{}'.",
+                                group.name, cid
                             ))]));
                         }
                     };
-                    if group.kind != expected_kind {
-                        return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "Group '{}' has kind {:?} but contains {:?} nodes. Use {:?} for {:?} nodes.",
-                            group.name, group.kind, member_node.data.kind, expected_kind, member_node.data.kind
-                        ))]));
+                    let parent_level = match group_level(parent) {
+                        Ok(l) => l,
+                        Err(msg) => return Ok(CallToolResult::error(vec![Content::text(msg)])),
+                    };
+                    if let (Some(c), Some(p)) = (child_level, parent_level) {
+                        if c != p {
+                            return Ok(CallToolResult::error(vec![Content::text(format!(
+                                "Group '{}' ({:?}) cannot nest under '{}' ({:?}) — parent and child must share the same C4 level.",
+                                group.name, c, parent.name, p
+                            ))]));
+                        }
                     }
+                    cursor = parent.parent_group_id.as_deref();
                 }
             }
 
-            // Replace or append
+            // Replace or append in the real model list.
             if let Some(existing) = model.groups.iter_mut().find(|g| g.id == group.id) {
                 *existing = group.clone();
             } else {

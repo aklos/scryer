@@ -38,7 +38,7 @@ fn deserialize_notes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<S
 
 // --- Types (matching src/types.ts) ---
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum C4Kind {
     Person,
@@ -266,30 +266,19 @@ pub struct ModelProperty {
     pub description: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum GroupKind {
-    Deployment,
-    Package,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Group {
     pub id: String,
-    #[serde(default = "default_group_kind")]
-    pub kind: GroupKind,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default)]
     pub member_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_group_id: Option<String>,
     #[serde(default, skip_serializing_if = "Contract::is_empty")]
     pub contract: Contract,
-}
-
-fn default_group_kind() -> GroupKind {
-    GroupKind::Deployment
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
