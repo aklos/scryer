@@ -20,8 +20,6 @@ const NODE_H = 160;
 
 type HandleId = "top" | "bottom" | "left" | "right" | "top-left" | "top-right" | "bottom-left" | "bottom-right";
 
-const HANDLES: HandleId[] = ["top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"];
-
 function getHandlePositions(node: NodeInput): Record<HandleId, { x: number; y: number }> {
   const styleW = node.style?.width;
   const styleH = node.style?.height;
@@ -45,18 +43,32 @@ function getHandlePositions(node: NodeInput): Record<HandleId, { x: number; y: n
 // edges arriving at the same node spread across different connection points.
 const CONGESTION_PENALTY = 160 ** 2;
 
-// Extra cost for corner handles so they only win when nodes are truly diagonal.
-// Without this, corners are geometrically closer for slightly-off-center nodes
-// and the router flickers between side and corner handles.
-const CORNER_PENALTY = 80 ** 2;
+// Corners are only allowed when the angle between node centers falls within a
+// narrow window around one of the four diagonal directions (±15° of 45/135/
+// 225/315°). Outside those windows, only side handles are considered.
+const CORNER_HALF_WINDOW_DEG = 15;
+
+// Returns the source/target corner handle pair for the diagonal window the
+// angle falls into, or null if it falls outside all four windows.
+function diagonalCornerPair(dx: number, dy: number): [HandleId, HandleId] | null {
+  const angle = (Math.atan2(dy, dx) * 180) / Math.PI; // -180..180, 0 = +x
+  const within = (target: number) => {
+    let d = Math.abs(angle - target);
+    if (d > 180) d = 360 - d;
+    return d <= CORNER_HALF_WINDOW_DEG;
+  };
+  if (within(45))   return ["bottom-right", "top-left"];     // target down-right of source
+  if (within(135))  return ["bottom-left",  "top-right"];    // target down-left of source
+  if (within(-45))  return ["top-right",    "bottom-left"];  // target up-right of source
+  if (within(-135)) return ["top-left",     "bottom-right"]; // target up-left of source
+  return null;
+}
 
 // Penalty for handles that fight the dominant direction between nodes.
 // When one node is clearly above another, edges should flow top→bottom,
 // not exit sideways. This makes vertical relationships use top/bottom handles
 // and horizontal relationships use left/right handles.
 const AXIS_PENALTY = 60 ** 2;
-
-const isCorner = (h: HandleId) => h.includes("-");
 
 // Returns how misaligned a handle is with the direction to the other node.
 // 0 = well-aligned, 1 = perpendicular to the dominant axis.
@@ -151,18 +163,24 @@ export function assignAllHandles(
     const dx = (tgt.position.x + tgtW / 2) - (src.position.x + srcW / 2);
     const dy = (tgt.position.y + tgtH / 2) - (src.position.y + srcH / 2);
 
-    for (const sh of HANDLES) {
+    // Decide which handles are eligible based on the angle between centers.
+    // If the angle falls in one of the four diagonal windows, the matching
+    // corner pair is included; otherwise only side handles are considered.
+    const cornerPair = diagonalCornerPair(dx, dy);
+    const sideHandles: HandleId[] = ["top", "bottom", "left", "right"];
+    const srcCandidates: HandleId[] = cornerPair ? [...sideHandles, cornerPair[0]] : sideHandles;
+    const tgtCandidates: HandleId[] = cornerPair ? [...sideHandles, cornerPair[1]] : sideHandles;
+
+    for (const sh of srcCandidates) {
       const sp = srcHandles[sh];
       const srcPenalty = getUsage(e.source, sh) * CONGESTION_PENALTY;
-      const srcCorner = isCorner(sh) ? CORNER_PENALTY : 0;
       const srcAxis = axisMisalignment(sh, dx, dy) * AXIS_PENALTY;
-      for (const th of HANDLES) {
+      for (const th of tgtCandidates) {
         const tp = tgtHandles[th];
         const tgtPenalty = getUsage(e.target, th) * CONGESTION_PENALTY;
-        const tgtCorner = isCorner(th) ? CORNER_PENALTY : 0;
         const tgtAxis = axisMisalignment(th, dx, dy) * AXIS_PENALTY;
         const cost = (sp.x - tp.x) ** 2 + (sp.y - tp.y) ** 2
-          + srcPenalty + tgtPenalty + srcCorner + tgtCorner + srcAxis + tgtAxis;
+          + srcPenalty + tgtPenalty + srcAxis + tgtAxis;
         if (cost < bestCost) {
           bestCost = cost;
           bestSrc = sh;

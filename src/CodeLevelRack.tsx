@@ -11,14 +11,6 @@ import type {
   ModelProperty,
 } from "./types";
 
-export interface RackDependency {
-  id: string;
-  name: string;
-  kind: C4Kind;
-  direction: "out" | "in";
-  label: string;
-}
-
 interface CodeLevelRackProps {
   nodes: C4Node[];
   onSelectNode: (id: string) => void;

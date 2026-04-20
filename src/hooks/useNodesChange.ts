@@ -5,7 +5,6 @@ import type { C4Node, C4NodeData, C4Edge, Group } from "../types";
 
 interface UseNodesChangeParams {
   refNodeIds: Set<string>;
-  groupNodeIds: Set<string>;
   levelPrefix: string;
   setNodes: React.Dispatch<React.SetStateAction<C4Node[]>>;
   setEdges: React.Dispatch<React.SetStateAction<C4Edge[]>>;
@@ -17,7 +16,6 @@ interface UseNodesChangeParams {
 
 export function useNodesChange({
   refNodeIds,
-  groupNodeIds,
   levelPrefix,
   setNodes,
   setEdges,
@@ -38,24 +36,6 @@ export function useNodesChange({
         }
         if (c.type === "position" && refNodeIds.has(c.id)) {
           if (c.position) refPosUpdates[`${levelPrefix}/${c.id}`] = c.position;
-          return false;
-        }
-        // Group boxes: ignore position changes (auto-computed from members)
-        if (c.type === "position" && groupNodeIds.has(c.id)) return false;
-        // Group box removal: remove the group from state
-        if (c.type === "remove" && groupNodeIds.has(c.id)) {
-          setGroups((prev) => prev.filter((g) => g.id !== c.id));
-          return false;
-        }
-        // Group box selection: track separately since they aren't in `nodes`
-        if (c.type === "select" && groupNodeIds.has(c.id)) {
-          if (c.selected) {
-            setSelectedGroupId(c.id);
-            setNodes((nds) => nds.map((n) => n.selected ? { ...n, selected: false } : n));
-            setEdges((eds) => eds.map((e) => e.selected ? { ...e, selected: false } : e));
-          } else {
-            setSelectedGroupId((prev) => prev === c.id ? null : prev);
-          }
           return false;
         }
         return true;
@@ -134,9 +114,9 @@ export function useNodesChange({
         let changed = updated.length !== nds.length;
         const result = updated.map((n) => {
           const pid = parentMap.get(n.id);
-          const hasTransient = '_hints' in n.data || '_groupHighlight' in n.data || n.data._reference !== undefined || n.data._relationships !== undefined || (n.data as Record<string, unknown>)._operations !== undefined || (n.data as Record<string, unknown>)._processes !== undefined || (n.data as Record<string, unknown>)._models !== undefined || '_originalParentId' in n.data || '_originalStatus' in n.data || '_mentionNames' in n.data;
+          const hasTransient = '_hints' in n.data || '_groupName' in n.data || n.data._reference !== undefined || n.data._relationships !== undefined || (n.data as Record<string, unknown>)._operations !== undefined || (n.data as Record<string, unknown>)._processes !== undefined || (n.data as Record<string, unknown>)._models !== undefined || '_originalParentId' in n.data || '_originalStatus' in n.data || '_mentionNames' in n.data;
           if (hasTransient) {
-            const { _hints, _groupHighlight, _reference, _relationships, _operations, _processes, _models, _originalParentId, _originalStatus, _mentionNames, ...rest } = n.data as C4NodeData & Record<string, unknown>;
+            const { _hints, _groupName, _reference, _relationships, _operations, _processes, _models, _originalParentId, _originalStatus, _mentionNames, ...rest } = n.data as C4NodeData & Record<string, unknown>;
             n = { ...n, data: rest as C4NodeData };
             changed = true;
           }
@@ -154,6 +134,6 @@ export function useNodesChange({
         return changed ? result : nds;
       });
     },
-    [refNodeIds, groupNodeIds, levelPrefix, setNodes, setEdges, setRefPositions, setGroups, setSelectedGroupId, setSourceMap],
+    [refNodeIds, levelPrefix, setNodes, setEdges, setRefPositions, setGroups, setSelectedGroupId, setSourceMap],
   );
 }

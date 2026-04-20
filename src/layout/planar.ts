@@ -445,152 +445,324 @@ function triangulate(embedding: Embedding): EdgePair[] {
   return dummyEdges;
 }
 
-// ── Leaf placement ────────────────────────────────────────────────────
+// ── Face-aware leaf placement ─────────────────────────────────────────
 
 /**
- * Place leaf nodes outside the core graph, near their parent.
- * Each leaf goes in the widest angular gap around its parent,
- * so it's on the outside rather than crammed inside a face.
+ * Three-pass leaf placement:
+ *   1. assign each leaf to one of its parent's faces (or -1 for outer-contour fan)
+ *   2. expand cramped faces so each (parent, face) has room for its leaves
+ *   3. position leaves in the expanded layout
+ *
+ * Returns leafId → face index (−1 for outer-contour fan), used for diagnostics
+ * and for any later passes that want to reason about which face a leaf landed in.
  */
 function placeLeaves(
   positions: Map<string, { col: number; row: number }>,
   leaves: { id: string; parent: string }[],
-  adj: Map<string, Set<string>>,
+  faces: string[][],
+  outerFace: string[],
   outerContour: Set<string>,
+  coreEdges: EdgePair[],
+): Map<string, number> {
+  if (leaves.length === 0) return new Map();
+  const assignments = assignLeavesToFaces(leaves, faces, outerFace, outerContour);
+  balloonRelax(positions, coreEdges, faces, assignments, leaves);
+  positionLeaves(positions, leaves, faces, assignments);
+  return assignments;
+}
+
+/** Round-robin across parent's interior faces (largest first). */
+function assignLeavesToFaces(
+  leaves: { id: string; parent: string }[],
+  faces: string[][],
+  outerFace: string[],
+  outerContour: Set<string>,
+): Map<string, number> {
+  const assignments = new Map<string, number>();
+
+  const outerKey = [...outerFace].sort().join(",");
+  const parentFaces = new Map<string, number[]>();
+  for (let fi = 0; fi < faces.length; fi++) {
+    const f = faces[fi];
+    if (f.length < 3) continue;
+    if ([...f].sort().join(",") === outerKey) continue;
+    for (const v of f) {
+      if (!parentFaces.has(v)) parentFaces.set(v, []);
+      parentFaces.get(v)!.push(fi);
+    }
+  }
+
+  const byParent = new Map<string, { id: string; parent: string }[]>();
+  for (const leaf of leaves) {
+    if (!byParent.has(leaf.parent)) byParent.set(leaf.parent, []);
+    byParent.get(leaf.parent)!.push(leaf);
+  }
+
+  for (const [parentId, parentLeaves] of byParent) {
+    const parentOnOuter = outerContour.has(parentId);
+    const available = parentOnOuter ? [] : (parentFaces.get(parentId) ?? []);
+    if (available.length === 0) {
+      for (const leaf of parentLeaves) assignments.set(leaf.id, -1);
+      continue;
+    }
+    const sorted = [...available].sort((a, b) => faces[b].length - faces[a].length);
+    for (let i = 0; i < parentLeaves.length; i++) {
+      assignments.set(parentLeaves[i].id, sorted[i % sorted.length]);
+    }
+  }
+  return assignments;
+}
+
+/**
+ * "Balloon" relaxation: treat each cramped face as a balloon with outward
+ * radial pressure, and each core edge as a spring holding its natural Tutte
+ * length. Iterate force-directed until equilibrium.
+ *
+ * Unlike constrained Tutte with pinned outer face, this lets the outer
+ * boundary drift outward where a cramped face pushes against it — so the
+ * graph grows locally near the cramp, not uniformly. Non-cramped regions
+ * stay put because edge springs resist compression/extension.
+ *
+ * Planarity is preserved for small-to-moderate expansions starting from a
+ * planar Tutte layout; no explicit crossing check (would add on demand).
+ */
+function balloonRelax(
+  positions: Map<string, { col: number; row: number }>,
+  coreEdges: EdgePair[],
+  faces: string[][],
+  assignments: Map<string, number>,
+  leaves: { id: string; parent: string }[],
 ): void {
-  const LEAF_DIST = 2.0;
+  const leafParent = new Map<string, string>();
+  for (const { id, parent } of leaves) leafParent.set(id, parent);
 
-  // Collect existing edges for crossing checks
-  const posEdges: [string, string][] = [];
-  for (const [u, nbrs] of adj) {
-    for (const v of nbrs) {
-      if (u < v && positions.has(u) && positions.has(v)) posEdges.push([u, v]);
-    }
+  // Faces that carry leaves (with their parent set)
+  const parentsByFace = new Map<number, Set<string>>();
+  for (const [leafId, fi] of assignments) {
+    if (fi < 0) continue;
+    const parent = leafParent.get(leafId);
+    if (!parent) continue;
+    if (!parentsByFace.has(fi)) parentsByFace.set(fi, new Set());
+    parentsByFace.get(fi)!.add(parent);
+  }
+  if (parentsByFace.size === 0) return;
+
+  // Natural length per edge = its current Tutte length.
+  const natural = new Map<string, number>();
+  const edgeKey = (u: string, v: string) => (u < v ? `${u}\0${v}` : `${v}\0${u}`);
+  for (const [u, v] of coreEdges) {
+    const pu = positions.get(u);
+    const pv = positions.get(v);
+    if (!pu || !pv) continue;
+    natural.set(edgeKey(u, v), Math.hypot(pu.col - pv.col, pu.row - pv.row));
   }
 
-  // Check if placing leaf at (lx,ly) with edge to parent crosses any existing edge
-  function wouldCross(lx: number, ly: number, parentId: string): boolean {
-    const pp = positions.get(parentId)!;
-    for (const [eu, ev] of posEdges) {
-      if (eu === parentId || ev === parentId) continue;
-      const pu = positions.get(eu)!,
-        pv = positions.get(ev)!;
-      // Segment intersection test
-      const d1x = pp.col - lx,
-        d1y = pp.row - ly;
-      const d2x = pv.col - pu.col,
-        d2y = pv.row - pu.row;
-      const cross = d1x * d2y - d1y * d2x;
-      if (Math.abs(cross) < 1e-10) continue;
-      const t = ((pu.col - lx) * d2y - (pu.row - ly) * d2x) / cross;
-      const u = ((pu.col - lx) * d1y - (pu.row - ly) * d1x) / cross;
-      if (t > 0.01 && t < 0.99 && u > 0.01 && u < 0.99) return true;
-    }
-    return false;
-  }
+  // Leaf placement parameters (must match positionLeaves):
+  //   NODE_MARGIN — distance from parent to leaf along face axis.
+  // Non-connected constraint:
+  //   NON_EDGE_GAP — minimum distance between leaf and *any other* face
+  //   vertex (which the leaf isn't connected to). Smaller than NODE_MARGIN
+  //   because non-connected nodes only need to not overlap, not fit a label.
+  const NODE_MARGIN = 1.8;
+  const NON_EDGE_GAP = 1.6;
+  const K_FACE = 0.5;
+  const K_EDGE = 0.5;
+  const STEP = 0.15;
+  const MAX_ITER = 500;
+  const CONVERGED = 0.0005;
 
-  for (const { id, parent } of leaves) {
-    const parentPos = positions.get(parent);
-    if (!parentPos) {
-      positions.set(id, { col: 0, row: 0 });
-      continue;
-    }
+  for (let iter = 0; iter < MAX_ITER; iter++) {
+    const forces = new Map<string, [number, number]>();
+    for (const id of positions.keys()) forces.set(id, [0, 0]);
 
-    // Compute angles to all positioned neighbors of the parent
-    const angles: number[] = [];
-    for (const nbr of adj.get(parent) ?? []) {
-      if (nbr === id) continue;
-      const nbrPos = positions.get(nbr);
-      if (!nbrPos) continue;
-      angles.push(
-        Math.atan2(nbrPos.row - parentPos.row, nbrPos.col - parentPos.col),
-      );
-    }
+    // Targeted face pressure: for each (parent, face) with leaves, predict
+    // where the leaf will land (parent + NODE_MARGIN · dir→opposite-centroid),
+    // then for each *other* face vertex, if that vertex is too close to the
+    // predicted leaf position, push it directly away from the leaf.
+    // This only pushes what's cramped, in the direction it actually needs
+    // to move, without translating the rest of the graph.
+    for (const [fi, parents] of parentsByFace) {
+      const face = faces[fi];
+      if (face.length < 3) continue;
 
-    if (angles.length === 0) {
-      positions.set(id, { col: parentPos.col, row: parentPos.row - LEAF_DIST });
-      posEdges.push([id, parent]);
-      continue;
-    }
-
-    angles.sort((a, b) => a - b);
-
-    // Build outer contour polygon for inside/outside test
-    const contourVerts = [...outerContour]
-      .map((v) => positions.get(v))
-      .filter((p): p is { col: number; row: number } => !!p);
-
-    function isInsideContour(px: number, py: number): boolean {
-      if (contourVerts.length < 3) return false;
-      let inside = false;
-      for (
-        let i = 0, j = contourVerts.length - 1;
-        i < contourVerts.length;
-        j = i++
-      ) {
-        const xi = contourVerts[i].col,
-          yi = contourVerts[i].row;
-        const xj = contourVerts[j].col,
-          yj = contourVerts[j].row;
-        if (
-          yi > py !== yj > py &&
-          px < ((xj - xi) * (py - yi)) / (yj - yi) + xi
-        ) {
-          inside = !inside;
+      for (const parent of parents) {
+        const pp = positions.get(parent);
+        if (!pp) continue;
+        const opposite = face.filter((v) => v !== parent);
+        if (opposite.length === 0) continue;
+        let ox = 0, oy = 0;
+        for (const v of opposite) {
+          const p = positions.get(v)!;
+          ox += p.col; oy += p.row;
         }
-      }
-      return inside;
-    }
+        ox /= opposite.length; oy /= opposite.length;
+        const dxo = ox - pp.col;
+        const dyo = oy - pp.row;
+        const do_ = Math.hypot(dxo, dyo);
+        if (do_ < 0.001) continue;
 
-    // Build gap list sorted by size (widest first)
-    const gaps: { angle: number; size: number }[] = [];
-    for (let i = 0; i < angles.length; i++) {
-      const next =
-        i + 1 < angles.length ? angles[i + 1] : angles[0] + 2 * Math.PI;
-      const gap = next - angles[i];
-      gaps.push({ angle: angles[i] + gap / 2, size: gap });
-    }
-    gaps.sort((a, b) => b.size - a.size);
+        const leafX = pp.col + NODE_MARGIN * (dxo / do_);
+        const leafY = pp.row + NODE_MARGIN * (dyo / do_);
 
-    const dist = LEAF_DIST;
-
-    // All leaves prefer outside the contour. Crossing check prevents bad placements.
-    // First pass: outside contour + no crossings
-    let placed = false;
-    for (const { angle } of gaps) {
-      const lx = parentPos.col + dist * Math.cos(angle);
-      const ly = parentPos.row + dist * Math.sin(angle);
-      if (!isInsideContour(lx, ly) && !wouldCross(lx, ly, parent)) {
-        positions.set(id, { col: lx, row: ly });
-        placed = true;
-        break;
-      }
-    }
-
-    // Second pass: any non-crossing gap (inside is OK if outside all cross)
-    if (!placed) {
-      for (const { angle } of gaps) {
-        const lx = parentPos.col + dist * Math.cos(angle);
-        const ly = parentPos.row + dist * Math.sin(angle);
-        if (!wouldCross(lx, ly, parent)) {
-          positions.set(id, { col: lx, row: ly });
-          placed = true;
-          break;
+        for (const X of opposite) {
+          const pX = positions.get(X)!;
+          const dx = pX.col - leafX;
+          const dy = pX.row - leafY;
+          const d = Math.hypot(dx, dy);
+          const cramp = NON_EDGE_GAP - d;
+          if (cramp <= 0) continue;
+          const f = forces.get(X)!;
+          f[0] += (dx / d) * cramp * K_FACE;
+          f[1] += (dy / d) * cramp * K_FACE;
         }
       }
     }
 
-    if (!placed) {
-      // All gaps cross — use widest anyway
-      const angle = gaps[0].angle;
-      positions.set(id, {
-        col: parentPos.col + dist * Math.cos(angle),
-        row: parentPos.row + dist * Math.sin(angle),
-      });
+    // Edge springs toward natural length.
+    for (const [u, v] of coreEdges) {
+      const pu = positions.get(u);
+      const pv = positions.get(v);
+      if (!pu || !pv) continue;
+      const dx = pv.col - pu.col;
+      const dy = pv.row - pu.row;
+      const current = Math.hypot(dx, dy);
+      if (current < 0.001) continue;
+      const target = natural.get(edgeKey(u, v)) ?? current;
+      const mag = ((current - target) * K_EDGE) / current;
+      const fu = forces.get(u)!;
+      const fv = forces.get(v)!;
+      fu[0] += dx * mag;
+      fu[1] += dy * mag;
+      fv[0] -= dx * mag;
+      fv[1] -= dy * mag;
     }
 
-    // Add this leaf's edge for subsequent crossing checks
-    posEdges.push([id, parent]);
+    // Apply forces
+    let maxMove = 0;
+    for (const [id, p] of positions) {
+      const [fx, fy] = forces.get(id)!;
+      const mx = fx * STEP, my = fy * STEP;
+      p.col += mx;
+      p.row += my;
+      const m = Math.hypot(mx, my);
+      if (m > maxMove) maxMove = m;
+    }
+
+    // Anchor against graph-wide drift: recenter to centroid = (0, 0) each step.
+    // Without this, forces on cramped-face vertices translate the whole graph
+    // in that direction because the edge springs drag non-cramp vertices along.
+    let cx = 0, cy = 0;
+    for (const p of positions.values()) { cx += p.col; cy += p.row; }
+    cx /= positions.size; cy /= positions.size;
+    for (const p of positions.values()) { p.col -= cx; p.row -= cy; }
+
+    if (maxMove < CONVERGED) break;
+  }
+}
+
+/** Final leaf positioning, after any face expansion. */
+function positionLeaves(
+  positions: Map<string, { col: number; row: number }>,
+  leaves: { id: string; parent: string }[],
+  faces: string[][],
+  assignments: Map<string, number>,
+): void {
+  const byParent = new Map<string, { id: string; parent: string }[]>();
+  for (const leaf of leaves) {
+    if (!byParent.has(leaf.parent)) byParent.set(leaf.parent, []);
+    byParent.get(leaf.parent)!.push(leaf);
+  }
+
+  // Graph centroid for outer-contour fanning
+  let gcx = 0, gcy = 0, gcN = 0;
+  for (const p of positions.values()) { gcx += p.col; gcy += p.row; gcN++; }
+  if (gcN > 0) { gcx /= gcN; gcy /= gcN; }
+
+  for (const [parentId, parentLeaves] of byParent) {
+    const pp = positions.get(parentId);
+    if (!pp) {
+      for (const leaf of parentLeaves) positions.set(leaf.id, { col: 0, row: 0 });
+      continue;
+    }
+
+    const firstFi = assignments.get(parentLeaves[0].id);
+    if (firstFi === -1 || firstFi === undefined) {
+      // Outer-contour fan
+      const outDx = pp.col - gcx;
+      const outDy = pp.row - gcy;
+      const outLen = Math.sqrt(outDx * outDx + outDy * outDy);
+      const N = parentLeaves.length;
+      const isFullCircle = outLen < 0.001;
+      const fanSpread = Math.PI * 0.4;
+      const angGap = isFullCircle
+        ? (2 * Math.PI) / Math.max(N, 3)
+        : N > 1 ? fanSpread / (N - 1) : Math.PI / 2;
+      const MIN_CHORD = 1.4;
+      const dist = Math.max(1.8, MIN_CHORD / (2 * Math.sin(angGap / 2)));
+
+      if (isFullCircle) {
+        for (let i = 0; i < N; i++) {
+          const angle = (2 * Math.PI * i) / N - Math.PI / 2;
+          positions.set(parentLeaves[i].id, {
+            col: pp.col + dist * Math.cos(angle),
+            row: pp.row + dist * Math.sin(angle),
+          });
+        }
+      } else {
+        const baseAngle = Math.atan2(outDy, outDx);
+        for (let i = 0; i < N; i++) {
+          const t = N === 1 ? 0 : (i / (N - 1) - 0.5) * fanSpread;
+          positions.set(parentLeaves[i].id, {
+            col: pp.col + dist * Math.cos(baseAngle + t),
+            row: pp.row + dist * Math.sin(baseAngle + t),
+          });
+        }
+      }
+      continue;
+    }
+
+    // In-face placement: group by face, place along parent→opposite-side direction
+    const byFace = new Map<number, { id: string; parent: string }[]>();
+    for (const leaf of parentLeaves) {
+      const fi = assignments.get(leaf.id)!;
+      if (!byFace.has(fi)) byFace.set(fi, []);
+      byFace.get(fi)!.push(leaf);
+    }
+
+    for (const [fi, group] of byFace) {
+      const face = faces[fi];
+      const opposite = face.filter((v) => v !== parentId);
+      if (opposite.length === 0) continue;
+      let ox = 0, oy = 0;
+      for (const v of opposite) {
+        const p = positions.get(v)!;
+        ox += p.col; oy += p.row;
+      }
+      ox /= opposite.length; oy /= opposite.length;
+      const dx = ox - pp.col;
+      const dy = oy - pp.row;
+      const dLen = Math.sqrt(dx * dx + dy * dy);
+      if (dLen < 0.001) continue;
+
+      const baseAngle = Math.atan2(dy, dx);
+      const N = group.length;
+      // Leaf distance: match the outer-contour fan's 1.8 unit minimum so
+      // inner-face leaves aren't visibly tighter than star-graph spokes.
+      const NODE_MARGIN = 1.8;
+      const leafDist = Math.max(NODE_MARGIN, Math.min(dLen * 0.8, 2.2));
+      const MIN_CHORD = 1.4;
+      const halfGap = Math.asin(Math.min(0.9, MIN_CHORD / (2 * leafDist)));
+      const spread = Math.min(Math.PI * 0.6, halfGap * 2 * Math.max(N - 1, 0));
+
+      for (let j = 0; j < N; j++) {
+        const t = N === 1 ? 0 : (j / (N - 1) - 0.5) * spread;
+        const angle = baseAngle + t;
+        positions.set(group[j].id, {
+          col: pp.col + leafDist * Math.cos(angle),
+          row: pp.row + leafDist * Math.sin(angle),
+        });
+      }
+    }
   }
 }
 
@@ -959,7 +1131,7 @@ export async function planarLayout(
     positions.set(hub, { col: 0, row: 0 });
     if (coreIds[1]) positions.set(coreIds[1], { col: 2, row: 0 });
     kamadaKawai(positions, coreIds.length > 0 ? coreIds : [hub], coreEdges);
-    placeLeaves(positions, leaves, realAdj, new Set(coreIds));
+    placeLeaves(positions, leaves, [], [], new Set(coreIds), []);
     return { positions, nonPlanarEdges: [] };
   }
 
@@ -977,7 +1149,7 @@ export async function planarLayout(
       positions.set(coreIds[i], { col: R * Math.cos(angle), row: R * Math.sin(angle) });
     }
     kamadaKawai(positions, coreIds, coreEdges);
-    placeLeaves(positions, leaves, realAdj, new Set(coreIds));
+    placeLeaves(positions, leaves, [], [], new Set(coreIds), []);
     return { positions, nonPlanarEdges: coreClassification.nonPlanarEdges };
   }
 
@@ -1009,8 +1181,9 @@ export async function planarLayout(
   // Step 6: Normalize — uniform scale to compact size
   {
     // Scale so shortest edge = 2× node diagonal. Ensures no cramping.
-    const NODE_CELL_W = (180 + 80) / 240;
-    const NODE_CELL_H = (160 + 80) / 200;
+    // Must match CELL_W/CELL_H in layout.ts (300 × 180, anisotropic).
+    const NODE_CELL_W = (180 + 80) / 300;
+    const NODE_CELL_H = (160 + 80) / 180;
     const minEdgeTarget =
       Math.sqrt(NODE_CELL_W * NODE_CELL_W + NODE_CELL_H * NODE_CELL_H) * 1.2;
 
@@ -1043,130 +1216,16 @@ export async function planarLayout(
     }
   }
 
-  // Step 7: Place leaf nodes — inside parent's face if parent is interior,
-  // outside (widest gap) if parent is on outer contour
-  placeLeaves(positions, leaves, realAdj, outerContour);
-
-  // Step 8: Expand cramped faces — one face at a time, most cramped first.
-  // Checks ALL vertex pairs within each face (not just inner nodes).
-  {
-    const NODE_MARGIN = Math.sqrt(((180 + 40) / 240) ** 2 + ((160 + 40) / 200) ** 2) * 0.8;
-    const allFacesToCheck = [...new Set([...originalFaces, ...preTrFaces].map((f) => [...f].sort().join(",")))]
-      .map((key) => {
-        const sorted = key.split(",");
-        // Find the original face with these vertices
-        return [...originalFaces, ...preTrFaces].find((f) => [...f].sort().join(",") === key) ?? sorted;
-      });
-
-    function pip(px: number, py: number, verts: { col: number; row: number }[]): boolean {
-      let inside = false;
-      for (let i = 0, j = verts.length - 1; i < verts.length; j = i++) {
-        const xi = verts[i].col, yi = verts[i].row, xj = verts[j].col, yj = verts[j].row;
-        if ((yi > py) !== (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi) inside = !inside;
-      }
-      return inside;
-    }
-
-    // Repeat: find the single most cramped face, expand it, stop.
-    for (let round = 0; round < 5; round++) {
-      let worstFace: string[] | null = null;
-      let worstMinDist = Infinity;
-      let worstAllNodes: string[] = [];
-
-      // Find the outer face (largest) to skip — it's the unbounded region
-      const outerFaceKey = preTrOuter.length > 0 ? [...preTrOuter].sort().join(",") : "";
-
-      for (const face of allFacesToCheck) {
-        if (face.length < 3) continue;
-        // Skip the outer face — it's unbounded, expanding it blows up the graph
-        if ([...face].sort().join(",") === outerFaceKey) continue;
-        const faceVerts = face.map((v) => positions.get(v)).filter((p): p is { col: number; row: number } => !!p);
-        if (faceVerts.length < 3) continue;
-        const faceSet = new Set(face);
-
-        // Collect face vertices + any nodes inside the face (leaves, etc.)
-        const allNodes = [...face.filter((v) => positions.has(v))];
-        for (const [id, p] of positions) {
-          if (faceSet.has(id)) continue;
-          if (pip(p.col, p.row, faceVerts)) allNodes.push(id);
-        }
-        if (allNodes.length < 2) continue;
-
-        let minDist = Infinity;
-        for (let i = 0; i < allNodes.length; i++) {
-          const pi = positions.get(allNodes[i])!;
-          for (let j = i + 1; j < allNodes.length; j++) {
-            const pj = positions.get(allNodes[j])!;
-            const d = Math.sqrt((pi.col - pj.col) ** 2 + (pi.row - pj.row) ** 2);
-            if (d > 0.001) minDist = Math.min(minDist, d);
-          }
-        }
-
-        if (minDist < NODE_MARGIN && minDist < worstMinDist) {
-          worstFace = face;
-          worstMinDist = minDist;
-          worstAllNodes = allNodes;
-        }
-      }
-
-      if (!worstFace) break;
-
-      // Expand this one face: push vertices outward from centroid, 10% at a time
-      const face = worstFace;
-      const faceSet = new Set(face);
-
-      // Build super-nodes
-      const superNodes = new Map<string, Set<string>>();
-      for (const v of face) {
-        const sn = new Set<string>([v]);
-        const queue = [v];
-        while (queue.length > 0) {
-          const u = queue.shift()!;
-          for (const nbr of realAdj.get(u) ?? []) {
-            if (sn.has(nbr) || faceSet.has(nbr)) continue;
-            if (!positions.has(nbr)) continue;
-            sn.add(nbr);
-            queue.push(nbr);
-          }
-          for (const leaf of leaves) {
-            if (leaf.parent === u && !sn.has(leaf.id)) sn.add(leaf.id);
-          }
-        }
-        superNodes.set(v, sn);
-      }
-
-      for (let step = 0; step < 10; step++) {
-        // Recheck min distance between all nodes in this face
-        let curMin = Infinity;
-        for (let i = 0; i < worstAllNodes.length; i++) {
-          const pi = positions.get(worstAllNodes[i])!;
-          for (let j = i + 1; j < worstAllNodes.length; j++) {
-            const pj = positions.get(worstAllNodes[j])!;
-            const d = Math.sqrt((pi.col - pj.col) ** 2 + (pi.row - pj.row) ** 2);
-            if (d > 0.001) curMin = Math.min(curMin, d);
-          }
-        }
-        if (curMin >= NODE_MARGIN) break;
-
-        // Push 10% outward from centroid
-        const fps = face.map((v) => positions.get(v)).filter((p): p is { col: number; row: number } => !!p);
-        let fcx = 0, fcy = 0;
-        for (const p of fps) { fcx += p.col; fcy += p.row; }
-        fcx /= fps.length; fcy /= fps.length;
-
-        for (const v of face) {
-          const p = positions.get(v);
-          if (!p) continue;
-          const dx = (p.col - fcx) * 0.1;
-          const dy = (p.row - fcy) * 0.1;
-          for (const id of superNodes.get(v) ?? []) {
-            const sp = positions.get(id);
-            if (sp) { sp.col += dx; sp.row += dy; }
-          }
-        }
-      }
-    }
-  }
+  // Step 7: assign leaves → balloon-relax cramped faces → position leaves.
+  // Balloon uses only the real (non-dummy) planar edges for its springs.
+  placeLeaves(
+    positions,
+    leaves,
+    originalFaces,
+    preTrOuter,
+    outerContour,
+    coreClassification.planarEdges,
+  );
 
   return {
     positions,

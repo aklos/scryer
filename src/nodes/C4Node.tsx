@@ -14,7 +14,7 @@ import { ContractBadge } from "./ContractBadge";
 import { STATUS_COLORS, statusHex } from "../statusColors";
 import { getThemedHex, ThemeContext } from "../theme";
 import { DescriptionText } from "../DescriptionText";
-import { Code, Workflow, Table, Layers, RefreshCw } from "lucide-react";
+import { Code, Workflow, Table, Layers, RefreshCw, Boxes } from "lucide-react";
 
 /** Whether this kind can be drilled into */
 function isExpandable(kind: C4NodeData["kind"]): boolean {
@@ -404,7 +404,7 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
     );
   }
 
-  const groupHighlight = (data as Record<string, unknown>)._groupHighlight;
+  const groupName = (data as Record<string, unknown>)._groupName as string | undefined;
   const changed = (data as Record<string, unknown>)._changed;
   const drifted = (data as Record<string, unknown>)._drifted;
 
@@ -430,16 +430,12 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
             selected
               ? "stroke-[var(--text)]"
               : statusColor
-                ? groupHighlight
-                  ? statusColor.strokeClass
-                  : statusColor.dimStrokeClass
-                : groupHighlight
-                  ? "stroke-[var(--text-muted)]"
-                  : isExternal
-                    ? "stroke-[var(--scryer-outline-stroke)]"
-                    : "stroke-[var(--border)]"
+                ? statusColor.dimStrokeClass
+                : isExternal
+                  ? "stroke-[var(--scryer-outline-stroke)]"
+                  : "stroke-[var(--border)]"
           }
-          strokeWidth={selected ? 2.5 : groupHighlight || statusColor ? 2 : 1}
+          strokeWidth={selected ? 2.5 : statusColor ? 2 : 1}
           strokeDasharray={isExternal ? "6 3" : undefined}
           kind={data.kind}
           external={!!isExternal}
@@ -463,10 +459,17 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
           </div>
         )}
 
-        {/* Drift indicator — bottom left */}
-        {!!drifted && (
-          <div className="absolute bottom-2 left-2.5 z-10 pointer-events-none">
-            <RefreshCw size={12} strokeWidth={2} className="text-indigo-500 dark:text-indigo-400" />
+        {/* Drift + group indicators — bottom left */}
+        {(!!drifted || !!groupName) && (
+          <div className="absolute bottom-2 left-2.5 z-10 flex items-center gap-1 pointer-events-none">
+            {!!drifted && (
+              <RefreshCw size={12} strokeWidth={2} className="text-indigo-500 dark:text-indigo-400" />
+            )}
+            {!!groupName && (
+              <span title={`group: ${groupName}`} className="text-slate-500 dark:text-slate-400">
+                <Boxes size={12} strokeWidth={2} />
+              </span>
+            )}
           </div>
         )}
 

@@ -4,7 +4,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Minus, Square, X, Settings, Keyboard, FolderX, Menu, FolderOpen, Save } from "lucide-react";
 import type { C4Kind, AiToolsState } from "./types";
-import type { RackDependency } from "./CodeLevelRack";
 
 interface TopBarProps {
   currentModel: string | null;
@@ -20,8 +19,6 @@ interface TopBarProps {
   navigateToBreadcrumb: (targetId: string | null) => void;
   activeFlowId: string | null;
   activeFlowName: string | null;
-  dependencies?: RackDependency[];
-  onNavigateToNode?: (id: string) => void;
 
   projectPath?: string;
   aiTools: AiToolsState;
@@ -247,7 +244,6 @@ export function TopBar({
   currentModel, onOpenPalette, onNavigateToRoot, onOpenSettings, onCloseModel, onSaveAs, hasModel,
   breadcrumbs, currentParentKind, navigateToBreadcrumb,
   activeFlowId, activeFlowName,
-  dependencies = [], onNavigateToNode,
   projectPath, aiTools, onAiToolsChange, onSetProjectPath,
 }: TopBarProps) {
   const isFlow = !!activeFlowId;
@@ -350,43 +346,6 @@ export function TopBar({
                 : currentParentKind === "system" ? "Containers"
                 : "System context"}
             </span>
-            {dependencies.length > 0 && (
-              <>
-                <span className="text-[var(--text-ghost)] mx-0.5">&middot;</span>
-                {dependencies.filter((d) => d.direction === "out").length > 0 && (
-                  <>
-                    <span className="text-[10px] text-[var(--text-muted)] shrink-0">depends on</span>
-                    {dependencies.filter((d) => d.direction === "out").map((d) => (
-                      <button
-                        key={d.id}
-                        type="button"
-                        className="rounded px-1.5 py-0.5 text-[10px] text-[var(--text-tertiary)] bg-[var(--surface-tint)] hover:bg-[var(--surface-active)] cursor-pointer transition-colors truncate max-w-[140px]"
-                        onClick={() => onNavigateToNode?.(d.id)}
-                        title={`${d.label || "depends on"} ${d.name}`}
-                      >
-                        {d.name}
-                      </button>
-                    ))}
-                  </>
-                )}
-                {dependencies.filter((d) => d.direction === "in").length > 0 && (
-                  <>
-                    <span className="text-[10px] text-[var(--text-muted)] shrink-0">used by</span>
-                    {dependencies.filter((d) => d.direction === "in").map((d) => (
-                      <button
-                        key={d.id}
-                        type="button"
-                        className="rounded px-1.5 py-0.5 text-[10px] text-[var(--text-tertiary)] bg-[var(--surface-tint)] hover:bg-[var(--surface-active)] cursor-pointer transition-colors truncate max-w-[140px]"
-                        onClick={() => onNavigateToNode?.(d.id)}
-                        title={`${d.label || "used by"} ${d.name}`}
-                      >
-                        {d.name}
-                      </button>
-                    ))}
-                  </>
-                )}
-              </>
-            )}
           </div>
         )}
         {hasModel && isFlow && activeFlowName && (

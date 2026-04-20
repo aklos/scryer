@@ -45,22 +45,9 @@ function detectLevel(parentKind: C4Kind | undefined): Level | null {
   return null;
 }
 
-/** Check if a node is connected to anything (edges to any node, or via its group). */
-function isNodeConnected(
-  nodeId: string,
-  allEdges: C4Edge[],
-  groupBoxNodes: C4Node[],
-): boolean {
-  // Direct edge to/from this node
-  if (allEdges.some((e) => e.source === nodeId || e.target === nodeId)) return true;
-  // Node is in a group — check if the group box itself has edges
-  for (const gb of groupBoxNodes) {
-    const memberIds = (gb.data._memberIds as string[] | undefined) ?? [];
-    if (memberIds.includes(nodeId)) {
-      if (allEdges.some((e) => e.source === gb.id || e.target === gb.id)) return true;
-    }
-  }
-  return false;
+/** Check if a node is connected to anything (any direct edge). */
+function isNodeConnected(nodeId: string, allEdges: C4Edge[]): boolean {
+  return allEdges.some((e) => e.source === nodeId || e.target === nodeId);
 }
 
 function computeChecklist(
@@ -69,8 +56,6 @@ function computeChecklist(
   levelEdges: C4Edge[],
   refNodes: C4Node[],
   allEdges: C4Edge[],
-  groupBoxIds: Set<string>,
-  groupBoxNodes: C4Node[],
 ): CheckItem[] {
   const items: CheckItem[] = [];
 
@@ -93,14 +78,12 @@ function computeChecklist(
         items.push({ label: "Technology on every container", done: everyTech });
       }
       if (containers.length >= 2) {
-        const allConnected = containers.every((n) => isNodeConnected(n.id, allEdges, groupBoxNodes));
+        const allConnected = containers.every((n) => isNodeConnected(n.id, allEdges));
         items.push({ label: "Containers connected", done: allConnected });
       }
       if (refNodes.length > 0) {
         const childIds = new Set(childNodes.map((n) => n.id));
-        // Also treat group box nodes as valid endpoints — edges to/from a group
-        // represent connections to/from the group's members (which are children)
-        const localIds = new Set([...childIds, ...groupBoxIds]);
+        const localIds = childIds;
         for (const ref of refNodes) {
           const name = ref.data.name ?? ref.id;
           const rels = ref.data._relationships ?? [];
@@ -132,12 +115,12 @@ function computeChecklist(
       const components = childNodes.filter((n) => n.data.kind === "component");
       items.push({ label: "At least 1 component", done: components.length >= 1 });
       if (components.length >= 2) {
-        const allConnected = components.every((n) => isNodeConnected(n.id, allEdges, groupBoxNodes));
+        const allConnected = components.every((n) => isNodeConnected(n.id, allEdges));
         items.push({ label: "Components connected", done: allConnected });
       }
       if (refNodes.length > 0) {
         const childIds = new Set(childNodes.map((n) => n.id));
-        const localIds = new Set([...childIds, ...groupBoxIds]);
+        const localIds = childIds;
         for (const ref of refNodes) {
           const name = ref.data.name ?? ref.id;
           const rels = ref.data._relationships ?? [];
@@ -225,24 +208,20 @@ export function GuidePanel({ nodes, edges, visibleNodes, currentParentId, parent
 
   const level = detectLevel(parentKind);
 
-  const { childNodes, levelEdges, refNodes, groupBoxIds, groupBoxNodes } = useMemo(() => {
+  const { childNodes, levelEdges, refNodes } = useMemo(() => {
     const children = nodes.filter(
       (n) => (n.parentId ?? undefined) === currentParentId,
     );
     const childIds = new Set(children.map((n) => n.id));
     const le = edges.filter((e) => childIds.has(e.source) && childIds.has(e.target));
-    // Reference nodes: synthetic nodes with _reference flag on the visible canvas
     const refs = visibleNodes.filter((n) => n.data._reference);
-    // Group box nodes: synthetic groupBox nodes visible on the canvas
-    const gbNodes = visibleNodes.filter((n) => n.type === "groupBox");
-    const gbIds = new Set(gbNodes.map((n) => n.id));
-    return { childNodes: children, levelEdges: le, refNodes: refs, groupBoxIds: gbIds, groupBoxNodes: gbNodes };
+    return { childNodes: children, levelEdges: le, refNodes: refs };
   }, [nodes, edges, currentParentId, visibleNodes]);
 
   const checklist = useMemo(() => {
     if (!level) return [];
-    return computeChecklist(level, childNodes, levelEdges, refNodes, edges, groupBoxIds, groupBoxNodes);
-  }, [level, childNodes, levelEdges, refNodes, edges, groupBoxIds, groupBoxNodes]);
+    return computeChecklist(level, childNodes, levelEdges, refNodes, edges);
+  }, [level, childNodes, levelEdges, refNodes, edges]);
 
   if (nodes.length === 0 || !level) return null;
 

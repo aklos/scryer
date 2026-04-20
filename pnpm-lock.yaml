@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@dnd-kit/core':
+        specifier: ^6.3.1
+        version: 6.3.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@fontsource-variable/space-grotesk':
         specifier: ^5.2.10
         version: 5.2.10
@@ -26,6 +29,9 @@ importers:
       '@xyflow/react':
         specifier: ^12.10.0
         version: 12.10.0(@types/react@19.2.10)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      bubblesets-js:
+        specifier: ^3.0.1
+        version: 3.0.1
       d3-force:
         specifier: ^3.0.0
         version: 3.0.0
@@ -148,6 +154,22 @@ packages:
   '@babel/types@7.29.0':
     resolution: {integrity: sha512-LwdZHpScM4Qz8Xw2iKSzS+cfglZzJGvofQICy7W7v4caru4EaAmyUuO6BGrbyQ2mYV11W0U8j5mBhd14dd3B0A==}
     engines: {node: '>=6.9.0'}
+
+  '@dnd-kit/accessibility@3.1.1':
+    resolution: {integrity: sha512-2P+YgaXF+gRsIihwwY1gCsQSYnu9Zyj2py8kY5fFvUM1qm2WA2u639R6YNVfU4GWr+ZM5mqEsfHZZLoRONbemw==}
+    peerDependencies:
+      react: '>=16.8.0'
+
+  '@dnd-kit/core@6.3.1':
+    resolution: {integrity: sha512-xkGBRQQab4RLwgXxoqETICr6S5JlogafbhNsidmrkVv2YRs5MLwpjoF2qpiGjQt8S9AoxtIV603s0GIUpY5eYQ==}
+    peerDependencies:
+      react: '>=16.8.0'
+      react-dom: '>=16.8.0'
+
+  '@dnd-kit/utilities@3.2.2':
+    resolution: {integrity: sha512-+MKAJEOfaBe5SmV6t34p80MMKhjvUz0vRrvVJbPT0WElzaOJ/1xs+D+KDv+tD/NE5ujfrChEcshd4fLn0wpiqg==}
+    peerDependencies:
+      react: '>=16.8.0'
 
   '@esbuild/aix-ppc64@0.27.2':
     resolution: {integrity: sha512-GZMB+a0mOMZs4MpDbj8RJp4cw+w1WV5NYD6xzgvzUJ5Ek2jerwfO2eADyI6ExDSUED+1X8aMbegahsJi+8mgpw==}
@@ -690,6 +712,9 @@ packages:
     engines: {node: ^6 || ^7 || ^8 || ^9 || ^10 || ^11 || ^12 || >=13.7}
     hasBin: true
 
+  bubblesets-js@3.0.1:
+    resolution: {integrity: sha512-EKPfysvIU5+u5RLW3mOr94wxzA3nKzqMBX0F95L95BPBDZPVgLBUnT0kJNz4UK/TXbGs8G7yEgl5MvibRBCQoQ==}
+
   caniuse-lite@1.0.30001767:
     resolution: {integrity: sha512-34+zUAMhSH+r+9eKmYG+k2Rpt8XttfE4yXAjoZvkAPs15xcYQhyBYdalJ65BzivAvGRMViEjy6oKr/S91loekQ==}
 
@@ -958,6 +983,9 @@ packages:
     resolution: {integrity: sha512-j2Zq4NyQYG5XMST4cbs02Ak8iJUdxRM0XI5QyxXuZOzKOINmWurp3smXu3y5wDcJrptwpSjgXHzIQxR0omXljQ==}
     engines: {node: '>=12.0.0'}
 
+  tslib@2.8.1:
+    resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
+
   typescript@5.8.3:
     resolution: {integrity: sha512-p1diW6TqL9L07nNxvRMM7hMMw4c5XOo/1ibL4aAIGmSAt9slTE1Xgw5KWuof2uTOvCg9BY7ZRi+GaF+7sfgPeQ==}
     engines: {node: '>=14.17'}
@@ -1145,6 +1173,24 @@ snapshots:
     dependencies:
       '@babel/helper-string-parser': 7.27.1
       '@babel/helper-validator-identifier': 7.28.5
+
+  '@dnd-kit/accessibility@3.1.1(react@19.2.4)':
+    dependencies:
+      react: 19.2.4
+      tslib: 2.8.1
+
+  '@dnd-kit/core@6.3.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+    dependencies:
+      '@dnd-kit/accessibility': 3.1.1(react@19.2.4)
+      '@dnd-kit/utilities': 3.2.2(react@19.2.4)
+      react: 19.2.4
+      react-dom: 19.2.4(react@19.2.4)
+      tslib: 2.8.1
+
+  '@dnd-kit/utilities@3.2.2(react@19.2.4)':
+    dependencies:
+      react: 19.2.4
+      tslib: 2.8.1
 
   '@esbuild/aix-ppc64@0.27.2':
     optional: true
@@ -1546,6 +1592,8 @@ snapshots:
       node-releases: 2.0.27
       update-browserslist-db: 1.2.3(browserslist@4.28.1)
 
+  bubblesets-js@3.0.1: {}
+
   caniuse-lite@1.0.30001767: {}
 
   classcat@5.0.5: {}
@@ -1792,6 +1840,8 @@ snapshots:
     dependencies:
       fdir: 6.5.0(picomatch@4.0.3)
       picomatch: 4.0.3
+
+  tslib@2.8.1: {}
 
   typescript@5.8.3: {}
 

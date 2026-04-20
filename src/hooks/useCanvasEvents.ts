@@ -7,7 +7,6 @@ interface UseCanvasEventsParams {
   setEdges: React.Dispatch<React.SetStateAction<import("../types").C4Edge[]>>;
   screenToFlowPosition: (position: { x: number; y: number }) => { x: number; y: number };
   nodes: C4Node[];
-  setSelectedGroupId: React.Dispatch<React.SetStateAction<string | null>>;
   fitView: (opts?: { nodes?: { id: string }[]; padding?: number; duration?: number }) => void;
 }
 
@@ -17,7 +16,6 @@ export function useCanvasEvents({
   setEdges,
   screenToFlowPosition,
   nodes,
-  setSelectedGroupId,
   fitView,
 }: UseCanvasEventsParams) {
   // node-expand
@@ -161,16 +159,4 @@ export function useCanvasEvents({
     window.addEventListener("add-model", handler);
     return () => window.removeEventListener("add-model", handler);
   }, [screenToFlowPosition, setNodes]);
-
-  // select-group (from GroupNode header click)
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const { id } = (e as CustomEvent).detail;
-      setSelectedGroupId((prev) => prev === id ? null : id);
-      setNodes((nds) => nds.map((n) => n.selected ? { ...n, selected: false } : n));
-      setEdges((eds) => eds.map((e) => e.selected ? { ...e, selected: false } : e));
-    };
-    window.addEventListener("select-group", handler);
-    return () => window.removeEventListener("select-group", handler);
-  }, [setSelectedGroupId, setNodes, setEdges]);
 }

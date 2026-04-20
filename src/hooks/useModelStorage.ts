@@ -109,7 +109,10 @@ export function parseModelData(raw: string): C4ModelData {
     sourceMap: data.sourceMap ?? {},
     projectPath: data.projectPath,
     refPositions: data.refPositions ?? {},
-    groups: (data.groups ?? []).map((g: Record<string, unknown>) => ({ ...g, kind: g.kind ?? "deployment" })),
+    groups: (data.groups ?? []).map((g: Record<string, unknown>) => {
+      const { kind: _ignored, ...rest } = g;
+      return rest as unknown as Group;
+    }),
     flows: (data.flows ?? data.scenarios ?? []).map((f: Record<string, unknown>) => {
       const steps = (f.steps ?? []) as FlowStep[];
       const transitions = (f.transitions ?? []) as FlowTransition[];
@@ -171,6 +174,19 @@ export function useModelStorage(
   const lastKnownDisk = useRef<string>(""); // last JSON string we wrote or loaded from disk
   const [changedNodeIds, setChangedNodeIds] = useState<Set<string>>(new Set());
   const changeClearTimer = useRef<ReturnType<typeof setTimeout>>(null);
+  // Diff tracking: when external (drift/MCP) reload changes existing nodes,
+  // store the OLD node data so the panel can show before/after. Persists until
+  // user explicitly dismisses or another reload supersedes it.
+  const [nodeDiffs, setNodeDiffs] = useState<Map<string, C4NodeData>>(new Map());
+  const clearNodeDiff = useCallback((nodeId: string) => {
+    setNodeDiffs((prev) => {
+      if (!prev.has(nodeId)) return prev;
+      const next = new Map(prev);
+      next.delete(nodeId);
+      return next;
+    });
+  }, []);
+  const clearAllNodeDiffs = useCallback(() => setNodeDiffs(new Map()), []);
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
   const edgesRef = useRef(edges);
@@ -283,12 +299,13 @@ export function useModelStorage(
       setExpandedPath([]);
       setActiveFlowId(null);
       setRefPositions(data.refPositions ?? {});
+      clearAllNodeDiffs(); // diffs from prior model are no longer relevant
       scheduleFitView();
       if (refStr !== name) refreshList(); // model moved — update list
     } catch {
       toast("Failed to load model");
     }
-  }, [applyModelData, setCurrentModel, setExpandedPath, setActiveFlowId, setRefPositions, scheduleFitView, refreshList, toast]);
+  }, [applyModelData, setCurrentModel, setExpandedPath, setActiveFlowId, setRefPositions, clearAllNodeDiffs, scheduleFitView, refreshList, toast]);
 
   const reloadModel = useCallback(async (name: string) => {
     try {
@@ -305,6 +322,8 @@ export function useModelStorage(
       // Collect parentIds of changed/added/deleted nodes
       const changedParents = new Map<string, number>();
       const changedIds = new Set<string>();
+      // Diff capture: old data per changed (not added) node
+      const newDiffs = new Map<string, C4NodeData>();
       const bumpParent = (parentId: string | undefined) => {
         const key = parentId ?? "";
         changedParents.set(key, (changedParents.get(key) ?? 0) + 1);
@@ -323,9 +342,11 @@ export function useModelStorage(
           const { _needsLayout: _b, ...newData } = n.data;
           return JSON.stringify(oldData) !== JSON.stringify(newData) || old.parentId !== n.parentId;
         })()) {
-          // Changed node
+          // Changed node — record old data for diff display
           bumpParent(n.parentId);
           changedIds.add(n.id);
+          const { _needsLayout: _strip, ...cleanOld } = old.data;
+          newDiffs.set(n.id, cleanOld as C4NodeData);
         }
       }
       for (const n of oldNodes) {
@@ -375,6 +396,18 @@ export function useModelStorage(
         setChangedNodeIds(changedIds);
         if (changeClearTimer.current) clearTimeout(changeClearTimer.current);
         changeClearTimer.current = setTimeout(() => setChangedNodeIds(new Set()), 3000);
+      }
+
+      // Merge diffs: keep older un-acknowledged baselines for nodes that changed
+      // again before the user saw the previous diff.
+      if (newDiffs.size > 0) {
+        setNodeDiffs((prev) => {
+          const merged = new Map(prev);
+          for (const [id, oldData] of newDiffs) {
+            if (!merged.has(id)) merged.set(id, oldData);
+          }
+          return merged;
+        });
       }
 
       // Auto-navigate to the changed level.
@@ -571,5 +604,8 @@ export function useModelStorage(
     followAI,
     setFollowAI,
     changedNodeIds,
+    nodeDiffs,
+    clearNodeDiff,
+    clearAllNodeDiffs,
   };
 }

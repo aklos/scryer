@@ -13,11 +13,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { TopBar } from "./TopBar";
 import { Sidebar } from "./Sidebar";
-import { PropertiesPanel } from "./PropertiesPanel";
+import { ContextPanel } from "./ContextPanel";
 import { SettingsPanel } from "./SettingsPanel";
 import { loadTheme, ThemeContext } from "./theme";
 import { CommandPalette } from "./CommandPalette";
 import { FlowScriptView } from "./FlowScriptView";
+import { GroupsDndProvider, GroupsMain } from "./GroupsView";
 import { C4Canvas } from "./C4Canvas";
 import { SyncBar } from "./SyncBar";
 import { autoLayout } from "./layout";
@@ -32,7 +33,6 @@ import { useCanvasEvents } from "./hooks/useCanvasEvents";
 import { useVisibleNodes } from "./hooks/useVisibleNodes";
 import { useNodesChange } from "./hooks/useNodesChange";
 import { NodeDataProvider } from "./NodeDataContext";
-import type { RackDependency } from "./CodeLevelRack";
 
 /** Build breadcrumb path from expandedPath node IDs */
 function buildBreadcrumbs(nodes: C4Node[], expandedPath: string[]): { id: string; name: string; kind: C4Kind }[] {
@@ -130,7 +130,16 @@ function Flow() {
   // Flows
   const [flows, setFlows] = useState<Flow[]>([]);
   const [activeFlowId, setActiveFlowId] = useState<string | null>(null);
+  const [canvasMode, setCanvasMode] = useState<"topology" | "groups">("topology");
 
+  useEffect(() => {
+    if (canvasMode !== "groups") return;
+    setNodes((nds) => nds.some((n) => n.selected) ? nds.map((n) => n.selected ? { ...n, selected: false } : n) as C4Node[] : nds);
+    setEdges((eds) => eds.some((e) => e.selected) ? eds.map((e) => e.selected ? { ...e, selected: false } : e) as C4Edge[] : eds);
+    setSelectedGroupId(null);
+    setMultiSelected([]);
+    setTotalSelected(0);
+  }, [canvasMode]);
 
   // Viewport is uncontrolled — use ReactFlow instance methods to read/set
 
@@ -363,23 +372,23 @@ function Flow() {
 
   const [nonPlanarEdgeIds, setNonPlanarEdgeIds] = useState<Set<string>>(new Set());
 
-  const { visibleNodes, visibleNodesWithHints, visibleEdges, refNodeIds, groupNodeIds } = useVisibleNodes({
+  const { visibleNodes, visibleNodesWithHints, visibleEdges, refNodeIds } = useVisibleNodes({
     nodes, edges, currentParentId, refPositions,
-    groups, selectedGroupId, setRefPositions, activeHints: advisor.hints,
+    groups, setRefPositions, activeHints: advisor.hints,
     changedNodeIds: storage.changedNodeIds,
     driftedNodeIds: driftedNodeIdSet,
     nonPlanarEdgeIds,
   });
 
   const onNodesChange = useNodesChange({
-    refNodeIds, groupNodeIds, levelPrefix,
+    refNodeIds, levelPrefix,
     setNodes, setEdges, setRefPositions, setGroups, setSelectedGroupId,
     setSourceMap,
   });
 
   useCanvasEvents({
     expandNode,
-    setNodes, setEdges, screenToFlowPosition, nodes, setSelectedGroupId, fitView,
+    setNodes, setEdges, screenToFlowPosition, nodes, fitView,
   });
 
   // --- Remaining inline logic ---
@@ -450,7 +459,7 @@ function Flow() {
 
   const onSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: { nodes: C4Node[]; edges: C4Edge[] }) => {
     const ids = selectedNodes
-      .filter((n) => !n.data._reference && n.type !== "groupBox")
+      .filter((n) => !n.data._reference)
       .map((n) => n.id);
     setMultiSelected(ids.length >= 2 ? ids : []);
     // Node-priority: when nodes are in selection, deselect edges
@@ -466,34 +475,7 @@ function Flow() {
   const canGroup = !!currentParentId && currentParentKindForGroup !== "component";
   const isCodeLevel = currentParentKindForGroup === "component";
 
-  // Compute dependencies for the TopBar when drilled into any node
-  const parentDependencies = useMemo((): RackDependency[] => {
-    if (!currentParentId) return [];
-    const parentEdges = edges.filter(
-      (e) => e.source === currentParentId || e.target === currentParentId,
-    );
-    const seen = new Set<string>();
-    const deps: RackDependency[] = [];
-    for (const edge of parentEdges) {
-      const isSource = edge.source === currentParentId;
-      const otherId = isSource ? edge.target : edge.source;
-      if (seen.has(otherId)) continue;
-      seen.add(otherId);
-      const other = nodes.find((n) => n.id === otherId);
-      if (!other) continue;
-      const od = other.data as C4NodeData;
-      deps.push({
-        id: otherId,
-        name: od.name,
-        kind: od.kind,
-        direction: isSource ? "out" : "in",
-        label: (edge.data as { label?: string })?.label ?? "",
-      });
-    }
-    return deps;
-  }, [currentParentId, edges, nodes]);
-
-  // At code level, ReactFlow isn't rendered so updateNodeData must go through setNodes directly
+// At code level, ReactFlow isn't rendered so updateNodeData must go through setNodes directly
   const codeLevelUpdateNodeData = useCallback((id: string, data: Record<string, unknown>) => {
     setNodes((nds) => nds.map((n) =>
       n.id === id ? { ...n, data: { ...n.data, ...data } } : n,
@@ -749,13 +731,11 @@ function Flow() {
 
   const onBulkDelete = useCallback(
     ({ nodes: delNodes, edges: delEdges }: { nodes: C4Node[]; edges: C4Edge[] }) => {
-      const groupIds = new Set<string>();
       const realNodeIds: string[] = [];
       const refNodeIdsToSever = new Set<string>();
 
       for (const n of delNodes) {
-        if (n.type === "groupBox") groupIds.add(n.id);
-        else if (n.data._reference) refNodeIdsToSever.add(n.id);
+        if (n.data._reference) refNodeIdsToSever.add(n.id);
         else realNodeIds.push(n.id);
       }
 
@@ -792,9 +772,6 @@ function Flow() {
         );
       }
 
-      if (groupIds.size > 0) {
-        setGroups((prev) => prev.filter((g) => !groupIds.has(g.id)));
-      }
       if (delEdges.length > 0) {
         const edgeIds = new Set(delEdges.map((e) => e.id));
         setEdges((eds) => eds.filter((e) => !edgeIds.has(e.id)));
@@ -808,24 +785,17 @@ function Flow() {
     // Code level uses rack view — no spatial layout needed
     if (currentParentKind === "component") return;
 
-    const layoutNodes = visibleNodes
-      .filter((n) => n.type !== "groupBox")
-      .map((n) => ({
-        ...n,
-        parentId: undefined,
-        extent: undefined,
-      }));
+    const layoutNodes = visibleNodes.map((n) => ({
+      ...n,
+      parentId: undefined,
+      extent: undefined,
+    }));
     const layoutIds = new Set(layoutNodes.map((n) => n.id));
     const layoutEdges = edges.filter(
       (e) => layoutIds.has(e.source) && layoutIds.has(e.target),
     );
 
-    // Filter groups to those with visible members at this level
-    const activeGroups = groups
-      .map((g) => ({ ...g, memberIds: g.memberIds.filter((id) => layoutIds.has(id)) }))
-      .filter((g) => g.memberIds.length >= 2);
-
-    const result = await autoLayout(layoutNodes, layoutEdges, activeGroups, false, true);
+    const result = await autoLayout(layoutNodes, layoutEdges, false, true);
     const posMap = new Map(result.nodes.map((n) => [n.id, n.position]));
     setNonPlanarEdgeIds(result.nonPlanarEdgeIds);
 
@@ -846,12 +816,12 @@ function Flow() {
     setRefPositions((prev) => ({ ...prev, ...refUpdates }));
 
     setTimeout(() => fitView({ padding: 0.15, duration: 300 }), 50);
-  }, [visibleNodes, edges, groups, fitView, levelPrefix, currentParentKind]);
+  }, [visibleNodes, edges, fitView, levelPrefix, currentParentKind]);
 
   // Deferred auto-layout: when visible nodes with _needsLayout get measured, run the same layout as the button
   const [layoutPending, setLayoutPending] = useState(() => nodes.some((n) => n.data._needsLayout));
   useEffect(() => {
-    const hasNeedsLayout = visibleNodes.some((n) => n.data._needsLayout && n.type !== "groupBox");
+    const hasNeedsLayout = visibleNodes.some((n) => n.data._needsLayout);
 
     // Code level uses rack view — just clear _needsLayout flags, no positioning needed
     if (currentParentKind === "component" && hasNeedsLayout) {
@@ -871,7 +841,7 @@ function Flow() {
       if (hasNeedsLayout) setLayoutPending(true);
       return;
     }
-    const pending = visibleNodes.filter((n) => n.data._needsLayout && n.type !== "groupBox");
+    const pending = visibleNodes.filter((n) => n.data._needsLayout);
     if (pending.length === 0) {
       setLayoutPending(false);
       return;
@@ -886,16 +856,11 @@ function Flow() {
       return { ...n, data: data as C4NodeData };
     }));
 
-    const layoutNodes = visibleNodes
-      .filter((n) => n.type !== "groupBox")
-      .map((n) => ({ ...n, parentId: undefined, extent: undefined }));
+    const layoutNodes = visibleNodes.map((n) => ({ ...n, parentId: undefined, extent: undefined }));
     const layoutIds = new Set(layoutNodes.map((n) => n.id));
     const layoutEdges = edges.filter((e) => layoutIds.has(e.source) && layoutIds.has(e.target));
-    const activeGroups = groups
-      .map((g) => ({ ...g, memberIds: g.memberIds.filter((id) => layoutIds.has(id)) }))
-      .filter((g) => g.memberIds.length >= 2);
 
-    autoLayout(layoutNodes, layoutEdges, activeGroups, false).then((result) => {
+    autoLayout(layoutNodes, layoutEdges, false).then((result) => {
       const posMap = new Map(result.nodes.map((n) => [n.id, n.position]));
       setNonPlanarEdgeIds(result.nonPlanarEdgeIds);
       const refIds = new Set(visibleNodes.filter((n) => n.data._reference).map((n) => n.id));
@@ -981,13 +946,18 @@ function Flow() {
         navigateToBreadcrumb={navigateToBreadcrumb}
         activeFlowId={activeFlowId}
         activeFlowName={activeFlow?.name ?? null}
-        dependencies={parentDependencies}
-        onNavigateToNode={navigateToNode}
         projectPath={projectPath}
         aiTools={aiTools}
         onAiToolsChange={setAiTools}
         onSetProjectPath={setProjectPath}
       />
+      <GroupsDndProvider
+        allNodes={nodes}
+        groups={groups}
+        onUpdateGroups={(fn) => setGroups(fn)}
+        currentParentId={currentParentId}
+        onNavigateToNode={navigateToNode}
+      >
       <div className="flex flex-1 min-h-0">
         {currentModel && <Sidebar
           nodes={nodes}
@@ -1032,8 +1002,34 @@ function Flow() {
                      }}
         />}
         <div className="flex-1 flex flex-col relative">
+          {currentModel && !activeFlow && (currentParentKind === "system" || currentParentKind === "container") && (
+            <div className="absolute top-3 right-3 z-20 flex items-center gap-0.5 rounded-lg border border-[var(--border-overlay)] bg-[var(--surface-overlay)] backdrop-blur-sm shadow-sm px-1 py-0.5">
+              <button
+                type="button"
+                className={`px-2 py-0.5 text-[10px] uppercase tracking-wider font-semibold cursor-pointer transition-colors rounded ${
+                  canvasMode === "topology"
+                    ? "text-[var(--text-secondary)] bg-[var(--surface-active)]"
+                    : "text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-tint)]"
+                }`}
+                onClick={() => setCanvasMode("topology")}
+              >
+                Topology
+              </button>
+              <button
+                type="button"
+                className={`px-2 py-0.5 text-[10px] uppercase tracking-wider font-semibold cursor-pointer transition-colors rounded ${
+                  canvasMode === "groups"
+                    ? "text-[var(--text-secondary)] bg-[var(--surface-active)]"
+                    : "text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-tint)]"
+                }`}
+                onClick={() => setCanvasMode("groups")}
+              >
+                Groups
+              </button>
+            </div>
+          )}
           {showNudge && (
-            <div className="absolute top-3 right-3 z-10 flex items-start gap-3 px-4 py-3 rounded-lg border border-zinc-200/80 bg-white/90 shadow-lg backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-800/90 max-w-[320px]">
+            <div className="absolute top-14 right-3 z-10 flex items-start gap-3 px-4 py-3 rounded-lg border border-zinc-200/80 bg-white/90 shadow-lg backdrop-blur-sm dark:border-zinc-700/80 dark:bg-zinc-800/90 max-w-[320px]">
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-1">AI tool integration</div>
                 <div className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">Set up MCP server for this project so AI tools can read and update the model.</div>
@@ -1070,6 +1066,8 @@ function Flow() {
               sourceMap={sourceMap}
               projectPath={projectPath}
             />
+          ) : canvasMode === "groups" && (currentParentKind === "system" || currentParentKind === "container") ? (
+            <GroupsMain />
           ) : (
             <C4Canvas
               currentModel={currentModel}
@@ -1102,10 +1100,9 @@ function Flow() {
               selectedEdge={selectedEdge}
               deleteNode={deleteNode}
               setEdges={setEdges}
-              setGroups={setGroups}
               onAddNode={onAddNode}
               currentParentKind={currentParentKind}
-              layoutPending={layoutPending || visibleNodes.some((n) => n.data._needsLayout && n.type !== "groupBox")}
+              layoutPending={layoutPending || visibleNodes.some((n) => n.data._needsLayout)}
               setNodes={setNodes}
               followAI={storage.followAI}
               onToggleFollowAI={() => storage.setFollowAI(!storage.followAI)}
@@ -1154,15 +1151,20 @@ function Flow() {
         </div>
         {/* Properties panel */}
         <NodeDataProvider value={isCodeLevel ? codeLevelUpdateNodeData : null}>
-        <PropertiesPanel
+        <ContextPanel
           node={selectedNode}
           edge={selectedEdge}
+          selectedGroupId={selectedGroupId}
           onUpdateEdge={updateEdgeData}
           codeLevel={!!currentParentId && (nodes.find((n) => n.id === currentParentId)?.data as C4NodeData | undefined)?.kind === "component"}
           hints={selectedNode ? advisor.hints[selectedNode.id] : undefined}
           groups={groups}
           onUpdateGroups={setGroups}
           allNodes={nodes}
+          allEdges={edges}
+          sourceMap={sourceMap}
+          nodeDiffs={storage.nodeDiffs}
+          onDismissDiff={storage.clearNodeDiff}
           onFixHint={(hint) => {
             if (hint.action?.type === "setShape") {
               setNodes((nds) => nds.map((n) =>
@@ -1175,7 +1177,6 @@ function Flow() {
             }
           }}
           onDismissHint={advisor.dismissHint}
-          sourceLocations={selectedNode ? sourceMap[selectedNode.id] ?? [] : undefined}
           projectPath={projectPath}
           onUpdateOperationData={(fnId, data) => {
             setNodes((nds) => nds.map((n) =>
@@ -1186,7 +1187,6 @@ function Flow() {
           multiSelected={multiSelected}
           totalSelected={totalSelected}
           canGroup={canGroup}
-          groupKind={currentParentKindForGroup === "container" ? "package" : "deployment"}
           onCreateGroup={(name, memberIds) => {
             const memberSet = new Set(memberIds);
             setGroups((prev) => {
@@ -1194,8 +1194,7 @@ function Flow() {
                 ...g,
                 memberIds: g.memberIds.filter((id) => !memberSet.has(id)),
               })).filter((g) => g.memberIds.length > 0);
-              const kind = currentParentKindForGroup === "container" ? "package" as const : "deployment" as const;
-              return [...cleaned, { id: crypto.randomUUID(), kind, name, memberIds }];
+              return [...cleaned, { id: crypto.randomUUID(), name, memberIds }];
             });
             setMultiSelected([]);
           }}
@@ -1211,9 +1210,11 @@ function Flow() {
             setMultiSelected([]);
           }}
           activeFlow={activeFlow}
+          groupsPaletteMode={canvasMode === "groups"}
         />
         </NodeDataProvider>
       </div>
+      </GroupsDndProvider>
     </div>
     </ThemeContext.Provider>
   );

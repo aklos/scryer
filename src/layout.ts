@@ -7,8 +7,8 @@ import {
   type SimulationNodeDatum,
   type SimulationLinkDatum,
 } from "d3-force";
-import type { C4Node, C4Edge, Group } from "./types";
-import { fullLayout } from "./layout/groups";
+import type { C4Node, C4Edge } from "./types";
+import { layoutGraph } from "./layout/planar";
 
 const NODE_W = 180;
 const NODE_H = 160;
@@ -258,7 +258,6 @@ export interface AutoLayoutResult {
 export async function autoLayout(
   nodes: C4Node[],
   edges: C4Edge[],
-  groups?: Group[],
   codeLevel?: boolean,
   fullRelayout?: boolean,
 ): Promise<AutoLayoutResult> {
@@ -269,13 +268,33 @@ export async function autoLayout(
     return { nodes: await incrementalLayout(nodes, edges), nonPlanarEdgeIds: new Set() };
   }
 
-  const result = await fullLayout(nodes, edges, groups ?? []);
+  // Full relayout: Tutte planar embedding + unit cells → pixel positions.
+  const nodeIds = nodes.map((n) => n.id);
+  const idSet = new Set(nodeIds);
+  const edgePairs: [string, string][] = edges
+    .filter((e) => idSet.has(e.source) && idSet.has(e.target))
+    .map((e) => [e.source, e.target]);
 
+  const { positions, nonPlanarEdges } = await layoutGraph(nodeIds, edgePairs);
+
+  // Cell size is anisotropic: horizontal edges need room for horizontal-text
+  // edge labels, vertical edges only need arrow clearance. Stretching the
+  // horizontal axis and compressing the vertical gives labels room without
+  // making the whole graph balloon vertically.
+  const CELL_W = 300;
+  const CELL_H = 180;
   const laid = nodes.map((n) => {
-    const pos = result.positions.get(n.id);
-    if (!pos) return n;
-    return { ...n, position: pos };
+    const p = positions.get(n.id);
+    if (!p) return n;
+    return { ...n, position: { x: p.col * CELL_W, y: p.row * CELL_H } };
   });
 
-  return { nodes: laid, nonPlanarEdgeIds: result.nonPlanarEdgeIds };
+  const nonPlanarEdgeIds = new Set<string>();
+  const pairKey = (a: string, b: string) => (a < b ? `${a}\u0000${b}` : `${b}\u0000${a}`);
+  const nonPlanarKeys = new Set(nonPlanarEdges.map(([a, b]) => pairKey(a, b)));
+  for (const e of edges) {
+    if (nonPlanarKeys.has(pairKey(e.source, e.target))) nonPlanarEdgeIds.add(e.id);
+  }
+
+  return { nodes: laid, nonPlanarEdgeIds };
 }

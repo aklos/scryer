@@ -22,7 +22,7 @@ import { CodeLevelRack } from "./CodeLevelRack";
 import { GuidePanel } from "./GuidePanels";
 import { Bot, Loader2, Trash2, Plus, Navigation, HelpCircle, Minus } from "lucide-react";
 import { Button } from "./ui";
-import type { C4Node, C4Edge, C4Kind, Group } from "./types";
+import type { C4Node, C4Edge, C4Kind } from "./types";
 
 const defaultEdgeOptions: DefaultEdgeOptions = {
   markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
@@ -61,7 +61,6 @@ interface C4CanvasProps {
   selectedEdge: C4Edge | null;
   deleteNode: (id: string) => void;
   setEdges: React.Dispatch<React.SetStateAction<C4Edge[]>>;
-  setGroups: React.Dispatch<React.SetStateAction<Group[]>>;
   onAddNode: (kindOverride?: C4Kind, screenPos?: { x: number; y: number }) => void;
   currentParentKind: C4Kind | undefined;
   layoutPending?: boolean;
@@ -101,7 +100,6 @@ export function C4Canvas({
   selectedEdge,
   deleteNode,
   setEdges,
-  setGroups,
   onAddNode,
   currentParentKind,
   layoutPending,
@@ -469,8 +467,7 @@ export function C4Canvas({
                     color="danger"
                     onClick={() => {
                       if (selectedNode) {
-                        if (selectedNode.type === "groupBox") setGroups((prev) => prev.filter((g) => g.id !== selectedNode.id));
-                        else if (selectedNode.data._reference) setEdges((eds) => eds.filter((e) => e.source !== selectedNode.id && e.target !== selectedNode.id));
+                        if (selectedNode.data._reference) setEdges((eds) => eds.filter((e) => e.source !== selectedNode.id && e.target !== selectedNode.id));
                         else deleteNode(selectedNode.id);
                       } else if (selectedEdge) {
                         setEdges((eds) => eds.filter((e) => e.id !== selectedEdge.id));
@@ -478,7 +475,7 @@ export function C4Canvas({
                     }}
                   >
                     <Trash2 className="h-3 w-3" />
-                    {selectedNode?.type === "groupBox" ? "ungroup" : selectedNode?.data._reference ? "disconnect" : "delete"}
+                    {selectedNode?.data._reference ? "disconnect" : "delete"}
                   </Button>
                 </>
               )}
