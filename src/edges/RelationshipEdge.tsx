@@ -1,5 +1,5 @@
 import { useContext } from "react";
-import { BaseEdge, EdgeLabelRenderer, getBezierPath, Position, useStore, type EdgeProps, type ReactFlowState } from "@xyflow/react";
+import { BaseEdge, EdgeLabelRenderer, Position, useStore, type EdgeProps, type ReactFlowState } from "@xyflow/react";
 import type { C4Edge, C4NodeData, Status } from "../types";
 import { statusHex } from "../statusColors";
 import { getThemedHex, ThemeContext } from "../theme";
@@ -8,6 +8,7 @@ import { StraightEdgesContext } from ".";
 const CORNER_HANDLES = new Set(["top-left", "top-right", "bottom-left", "bottom-right"]);
 const CURVE_OFFSET = 24;
 const ENDPOINT_OFFSET = 5;
+const BEZIER_CURVATURE = 0.25;
 
 const STATUS_PRIORITY: Record<Status, number> = {
   proposed: 4,
@@ -15,6 +16,20 @@ const STATUS_PRIORITY: Record<Status, number> = {
   verified: 1,
   vagrant: 2,
 };
+
+function bezierControlOffset(distance: number): number {
+  if (distance >= 0) return 0.5 * distance;
+  return BEZIER_CURVATURE * 25 * Math.sqrt(-distance);
+}
+
+function bezierControlPoint(pos: Position, x: number, y: number, otherX: number, otherY: number): [number, number] {
+  switch (pos) {
+    case Position.Left:   return [x - bezierControlOffset(x - otherX), y];
+    case Position.Right:  return [x + bezierControlOffset(otherX - x), y];
+    case Position.Top:    return [x, y - bezierControlOffset(y - otherY)];
+    case Position.Bottom: return [x, y + bezierControlOffset(otherY - y)];
+  }
+}
 
 export function RelationshipEdge({
   id,
@@ -34,14 +49,10 @@ export function RelationshipEdge({
   useContext(ThemeContext);
   const straightEdges = useContext(StraightEdgesContext);
 
-  // Check if a reverse edge exists between the same pair of nodes
   const isBiDirectional = useStore((s: ReactFlowState) =>
     s.edges.some((e) => e.source === target && e.target === source),
   );
 
-  // Infer edge status from connected node statuses (ignore the edge's own data.status).
-  // Skip person and external-system nodes — they aren't implementable artifacts.
-  // For group boxes, derive status from the worst status among member nodes.
   const inferredStatus = useStore((s: ReactFlowState) => {
     const resolveStatus = (nodeId: string): Status | undefined => {
       const node = s.nodeLookup.get(nodeId);
@@ -49,19 +60,6 @@ export function RelationshipEdge({
       if (!nd) return undefined;
       if (nd.kind === "person" || (nd.kind === "system" && nd.external)) return undefined;
       if (nd.status) return nd.status;
-      // Group box nodes carry _memberIds — derive worst status from members
-      const memberIds = (nd as Record<string, unknown>)._memberIds as string[] | undefined;
-      if (node?.type === "groupBox" && memberIds) {
-        let worst: Status | undefined;
-        for (const mid of memberIds) {
-          const member = s.nodeLookup.get(mid);
-          const ms = (member?.data as C4NodeData | undefined)?.status;
-          if (ms && (!worst || STATUS_PRIORITY[ms] > STATUS_PRIORITY[worst])) {
-            worst = ms;
-          }
-        }
-        return worst;
-      }
       return undefined;
     };
     const srcStatus = resolveStatus(source);
@@ -85,24 +83,23 @@ export function RelationshipEdge({
   let edgePath: string;
   let labelX: number;
   let labelY: number;
+  let arrowEndX: number;
+  let arrowEndY: number;
+  let arrowAngle: number;
 
-  // Orthogonal polyline route (for crossing edges rerouted by the router)
   const route = data?._route as { x: number; y: number }[] | undefined;
   if (route && route.length >= 1) {
-    // Routes only contain bend points — start/end come from handles like normal edges.
-    // Use quadratic bezier curves to round the corners.
+    // Orthogonal polyline with rounded corners
     const pts = [{ x: sourceX, y: sourceY }, ...route, { x: targetX, y: targetY }];
-    const R = 30; // corner radius in pixels
+    const R = 30;
     let d = `M ${pts[0].x} ${pts[0].y}`;
     for (let i = 1; i < pts.length - 1; i++) {
       const prev = pts[i - 1], cur = pts[i], next = pts[i + 1];
-      // Vector from corner to prev/next
       const toPrevX = prev.x - cur.x, toPrevY = prev.y - cur.y;
       const toNextX = next.x - cur.x, toNextY = next.y - cur.y;
       const lenPrev = Math.sqrt(toPrevX * toPrevX + toPrevY * toPrevY) || 1;
       const lenNext = Math.sqrt(toNextX * toNextX + toNextY * toNextY) || 1;
       const r = Math.min(R, lenPrev / 2, lenNext / 2);
-      // Points where the curve starts/ends (offset from corner toward prev/next)
       const startX = cur.x + (toPrevX / lenPrev) * r;
       const startY = cur.y + (toPrevY / lenPrev) * r;
       const endX = cur.x + (toNextX / lenNext) * r;
@@ -111,7 +108,7 @@ export function RelationshipEdge({
     }
     d += ` L ${pts[pts.length - 1].x} ${pts[pts.length - 1].y}`;
     edgePath = d;
-    // Place label at midpoint of the longest segment (not at a bend)
+
     const segs = [{ x: sourceX, y: sourceY }, ...route, { x: targetX, y: targetY }];
     let bestLen = 0, bestMidX = sourceX, bestMidY = sourceY;
     for (let i = 0; i < segs.length - 1; i++) {
@@ -124,16 +121,31 @@ export function RelationshipEdge({
     }
     labelX = bestMidX;
     labelY = bestMidY;
+
+    const lastPt = pts[pts.length - 2];
+    arrowEndX = targetX;
+    arrowEndY = targetY;
+    arrowAngle = Math.atan2(targetY - lastPt.y, targetX - lastPt.x);
+
   } else if (straightEdges && !isMention) {
+    // Straight line
     edgePath = `M ${sourceX} ${sourceY} L ${targetX} ${targetY}`;
     labelX = (sourceX + targetX) / 2;
     labelY = (sourceY + targetY) / 2;
+    arrowEndX = targetX;
+    arrowEndY = targetY;
+    arrowAngle = Math.atan2(targetY - sourceY, targetX - sourceX);
+
   } else if (isMention) {
     edgePath = `M ${sourceX} ${sourceY} L ${targetX} ${targetY}`;
     labelX = (sourceX + targetX) / 2;
     labelY = (sourceY + targetY) / 2;
+    arrowEndX = targetX;
+    arrowEndY = targetY;
+    arrowAngle = Math.atan2(targetY - sourceY, targetX - sourceX);
+
   } else if (isBiDirectional) {
-    // Cubic bezier with perpendicular offset so parallel edges never cross.
+    // Cubic bezier with perpendicular offset so parallel edges don't cross
     const canonicalDx = source < target ? targetX - sourceX : sourceX - targetX;
     const canonicalDy = source < target ? targetY - sourceY : sourceY - targetY;
     const len = Math.sqrt(canonicalDx * canonicalDx + canonicalDy * canonicalDy) || 1;
@@ -157,11 +169,15 @@ export function RelationshipEdge({
 
     edgePath = `M ${sx} ${sy} C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${tx} ${ty}`;
 
-    // Place label near the source end (t≈0.25) so bidirectional labels don't overlap
     const t = 0.25;
     const u = 1 - t;
     labelX = u*u*u*sx + 3*u*u*t*cp1x + 3*u*t*t*cp2x + t*t*t*tx;
     labelY = u*u*u*sy + 3*u*u*t*cp1y + 3*u*t*t*cp2y + t*t*t*ty;
+
+    arrowEndX = tx;
+    arrowEndY = ty;
+    arrowAngle = Math.atan2(ty - cp2y, tx - cp2x);
+
   } else if (CORNER_HANDLES.has(sourceHandleId ?? "") || CORNER_HANDLES.has(targetHandleId ?? "")) {
     // Corner handles — cubic bezier where each end leaves at 45 degrees
     const dist = Math.sqrt((targetX - sourceX) ** 2 + (targetY - sourceY) ** 2) || 1;
@@ -212,44 +228,30 @@ export function RelationshipEdge({
     edgePath = `M ${sourceX} ${sourceY} C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${targetX} ${targetY}`;
     labelX = 0.125 * sourceX + 0.375 * cp1x + 0.375 * cp2x + 0.125 * targetX;
     labelY = 0.125 * sourceY + 0.375 * cp1y + 0.375 * cp2y + 0.125 * targetY;
+
+    arrowEndX = targetX;
+    arrowEndY = targetY;
+    arrowAngle = Math.atan2(targetY - cp2y, targetX - cp2x);
+
   } else {
-    // Single edge — bezier through cardinal handle positions
-    [edgePath, labelX, labelY] = getBezierPath({
-      sourceX, sourceY, sourcePosition,
-      targetX, targetY, targetPosition,
-    });
+    // Standard single bezier — compute control points explicitly
+    const [cp1x, cp1y] = bezierControlPoint(sourcePosition, sourceX, sourceY, targetX, targetY);
+    const [cp2x, cp2y] = bezierControlPoint(targetPosition, targetX, targetY, sourceX, sourceY);
+    edgePath = `M ${sourceX},${sourceY} C ${cp1x},${cp1y} ${cp2x},${cp2y} ${targetX},${targetY}`;
+    labelX = 0.125 * sourceX + 0.375 * cp1x + 0.375 * cp2x + 0.125 * targetX;
+    labelY = 0.125 * sourceY + 0.375 * cp1y + 0.375 * cp2y + 0.125 * targetY;
+
+    arrowEndX = targetX;
+    arrowEndY = targetY;
+    arrowAngle = Math.atan2(targetY - cp2y, targetX - cp2x);
   }
 
-  // Compute arrowhead at the end of the path using the SVG path's actual endpoint and tangent.
-  // Parse the last two points from the path to get the true tangent direction.
+  // Arrowhead polygon from explicit geometry
   const arrowSize = 8;
-  let endX: number, endY: number, angle: number;
-
-  {
-    // Extract all numbers from the SVG path
-    const nums = edgePath.match(/-?[\d.]+/g)?.map(Number) ?? [];
-    // Last two numbers are the endpoint
-    endX = nums[nums.length - 2] ?? targetX;
-    endY = nums[nums.length - 1] ?? targetY;
-    // For cubic bezier (C command), the second control point is 4 numbers before the end
-    // For line (L command) or simple path, use the previous point
-    let prevX: number, prevY: number;
-    if (nums.length >= 8) {
-      // Cubic bezier: second control point is at [-4, -3]
-      prevX = nums[nums.length - 4];
-      prevY = nums[nums.length - 3];
-    } else {
-      prevX = nums[0] ?? sourceX;
-      prevY = nums[1] ?? sourceY;
-    }
-    angle = Math.atan2(endY - prevY, endX - prevX);
-  }
-
-  // Arrowhead base corners
-  const ax1 = endX - arrowSize * Math.cos(angle - Math.PI / 6);
-  const ay1 = endY - arrowSize * Math.sin(angle - Math.PI / 6);
-  const ax2 = endX - arrowSize * Math.cos(angle + Math.PI / 6);
-  const ay2 = endY - arrowSize * Math.sin(angle + Math.PI / 6);
+  const ax1 = arrowEndX - arrowSize * Math.cos(arrowAngle - Math.PI / 6);
+  const ay1 = arrowEndY - arrowSize * Math.sin(arrowAngle - Math.PI / 6);
+  const ax2 = arrowEndX - arrowSize * Math.cos(arrowAngle + Math.PI / 6);
+  const ay2 = arrowEndY - arrowSize * Math.sin(arrowAngle + Math.PI / 6);
 
   const clipId = `clip-${id}`;
   const edgeOpacity = isMention
@@ -259,18 +261,15 @@ export function RelationshipEdge({
   return (
     <>
       <defs>
-        {/* Clip: cut off everything past the arrowhead base line so the dashed line stops cleanly */}
         <clipPath id={clipId}>
           {(() => {
-            // Half-plane: everything on the source side of the arrowhead base
-            const perpXDir = -Math.sin(angle);
-            const perpYDir = Math.cos(angle);
+            const perpXDir = -Math.sin(arrowAngle);
+            const perpYDir = Math.cos(arrowAngle);
             const bx = (ax1 + ax2) / 2;
             const by = (ay1 + ay2) / 2;
             const far = 10000;
-            // Four corners of a huge rect on the source side of the base line
             return (
-              <path d={`M ${bx + perpXDir * far} ${by + perpYDir * far} L ${bx - perpXDir * far} ${by - perpYDir * far} L ${bx - perpXDir * far - Math.cos(angle) * far} ${by - perpYDir * far - Math.sin(angle) * far} L ${bx + perpXDir * far - Math.cos(angle) * far} ${by + perpYDir * far - Math.sin(angle) * far} Z`} />
+              <path d={`M ${bx + perpXDir * far} ${by + perpYDir * far} L ${bx - perpXDir * far} ${by - perpYDir * far} L ${bx - perpXDir * far - Math.cos(arrowAngle) * far} ${by - perpYDir * far - Math.sin(arrowAngle) * far} L ${bx + perpXDir * far - Math.cos(arrowAngle) * far} ${by + perpYDir * far - Math.sin(arrowAngle) * far} Z`} />
             );
           })()}
         </clipPath>
@@ -296,10 +295,9 @@ export function RelationshipEdge({
             }}
           />
         </g>
-        {/* Solid arrowhead — skip for mention edges */}
         {!isMention && (
           <polygon
-            points={`${endX},${endY} ${ax1},${ay1} ${ax2},${ay2}`}
+            points={`${arrowEndX},${arrowEndY} ${ax1},${ay1} ${ax2},${ay2}`}
             fill={edgeColor}
           />
         )}
