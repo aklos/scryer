@@ -664,7 +664,7 @@ pub fn write_model_raw_at(r: &ModelRef, data: &str) -> Result<(), String> {
         ModelRef::Global(name) => format!(".{}.scry.tmp", name),
         ModelRef::ProjectLocal(_) => ".tmp.model.scry".to_string(),
     };
-    let tmp = dir.join(tmp_name);
+    let tmp = dir.join(&tmp_name);
     fs::write(&tmp, data).map_err(|e| e.to_string())?;
     fs::rename(&tmp, &model_path).map_err(|e| e.to_string())
 }

@@ -279,10 +279,20 @@ function Flow() {
         if (currentModel) {
           invoke("mark_synced", { modelName: currentModel }).catch(() => {});
         }
-        setSyncStatus("idle");
-            setDriftedNodes([]);
-        setStructureChanged(false);
-        checkDrift(); // re-check against new baseline
+        // Reload model from disk before clearing syncing — this ensures the
+        // agent's writes are loaded even if the file watcher missed events,
+        // and prevents auto-save from overwriting with stale (empty) state.
+        const postSync = () => {
+          setSyncStatus("idle");
+          setDriftedNodes([]);
+          setStructureChanged(false);
+          checkDrift();
+        };
+        if (currentModel) {
+          storage.reloadModel(currentModel).then(postSync);
+        } else {
+          postSync();
+        }
         if (kind === "completed" && currentModel) {
           invoke<string>("sync_diff", { modelName: currentModel })
             .then((summary) => setSyncMessage(summary))
@@ -294,7 +304,7 @@ function Flow() {
           }
     });
     return () => { unlisten.then((f) => f()); };
-  }, [checkDrift, currentModel, nodes]);
+  }, [checkDrift, currentModel, nodes, storage.reloadModel]);
 
   const handleToggleLock = useCallback(async () => {
     if (!currentModel) return;
@@ -860,7 +870,8 @@ function Flow() {
     const layoutIds = new Set(layoutNodes.map((n) => n.id));
     const layoutEdges = edges.filter((e) => layoutIds.has(e.source) && layoutIds.has(e.target));
 
-    autoLayout(layoutNodes, layoutEdges, false).then((result) => {
+    const allNeedLayout = layoutNodes.filter((n) => !n.data._reference).every((n) => n.data._needsLayout);
+    autoLayout(layoutNodes, layoutEdges, false, allNeedLayout).then((result) => {
       const posMap = new Map(result.nodes.map((n) => [n.id, n.position]));
       setNonPlanarEdgeIds(result.nonPlanarEdgeIds);
       const refIds = new Set(visibleNodes.filter((n) => n.data._reference).map((n) => n.id));

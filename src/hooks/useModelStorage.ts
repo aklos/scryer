@@ -230,13 +230,18 @@ export function useModelStorage(
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       saveTimer.current = null;
+      // Read current state via refs — the closure-captured values may be stale
+      // (e.g. when syncing transitions to false before the file-watcher reload
+      // has populated nodes, the closure still holds the empty array).
+      const currentNodes = nodesRef.current;
+      const currentEdges = edgesRef.current;
       // Strip transient _needsLayout flag before persisting
-      const cleanNodes = nodes.map((n) => {
+      const cleanNodes = currentNodes.map((n) => {
         if (!n.data._needsLayout) return n;
         const { _needsLayout, ...data } = n.data;
         return { ...n, data };
       });
-      const data: C4ModelData = { nodes: cleanNodes as C4Node[], edges, startingLevel, sourceMap, projectPath, refPositions, groups, flows };
+      const data: C4ModelData = { nodes: cleanNodes as C4Node[], edges: currentEdges, startingLevel, sourceMap, projectPath, refPositions, groups, flows };
       const json = JSON.stringify(data);
       lastKnownDisk.current = json;
       invoke("write_model", { name: currentModel, data: json }).catch(() => toast("Failed to save model"));
@@ -269,6 +274,12 @@ export function useModelStorage(
             if (n.data._needsLayout && !existing.data._needsLayout) {
               const { _needsLayout, ...data } = n.data;
               return { ...n, position: existing.position, selected: existing.selected, measured: existing.measured, data: data as C4NodeData };
+            }
+            // In-memory node still needs layout but disk lost the flag (e.g.
+            // stale auto-save wrote {x:0,y:0} as a "real" position). Preserve
+            // the pending layout flag so auto-layout runs when this level is viewed.
+            if (existing.data._needsLayout && !n.data._needsLayout) {
+              return { ...n, selected: existing.selected, measured: existing.measured, data: { ...n.data, _needsLayout: true } as C4NodeData };
             }
             return { ...n, selected: existing.selected, measured: existing.measured };
           }
@@ -310,7 +321,7 @@ export function useModelStorage(
   const reloadModel = useCallback(async (name: string) => {
     try {
       const raw = await invoke<string>("read_model", { name });
-      if (raw === lastKnownDisk.current) return; // our own write — skip
+      if (raw === lastKnownDisk.current) return;
       lastKnownDisk.current = raw;
       const data = parseModelData(raw);
 
