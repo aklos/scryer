@@ -268,19 +268,53 @@ export async function autoLayout(
     return { nodes: await incrementalLayout(nodes, edges), nonPlanarEdgeIds: new Set() };
   }
 
-  // Full relayout: Tutte planar embedding + unit cells → pixel positions.
+  // Full relayout: separate isolated nodes, layout connected graph, pack isolates.
   const nodeIds = nodes.map((n) => n.id);
   const idSet = new Set(nodeIds);
   const edgePairs: [string, string][] = edges
     .filter((e) => idSet.has(e.source) && idSet.has(e.target))
     .map((e) => [e.source, e.target]);
 
-  const { positions, nonPlanarEdges } = await layoutGraph(nodeIds, edgePairs);
+  const connectedIds = new Set<string>();
+  for (const [u, v] of edgePairs) {
+    connectedIds.add(u);
+    connectedIds.add(v);
+  }
+  const graphNodeIds = nodeIds.filter((id) => connectedIds.has(id));
+  const isolatedIds = new Set(nodeIds.filter((id) => !connectedIds.has(id)));
 
-  // Cell size is anisotropic: horizontal edges need room for horizontal-text
-  // edge labels, vertical edges only need arrow clearance. Stretching the
-  // horizontal axis and compressing the vertical gives labels room without
-  // making the whole graph balloon vertically.
+  let positions: Map<string, { col: number; row: number }>;
+  let nonPlanarEdges: [string, string][];
+
+  if (graphNodeIds.length > 0) {
+    const result = await layoutGraph(graphNodeIds, edgePairs);
+    positions = result.positions;
+    nonPlanarEdges = result.nonPlanarEdges;
+  } else {
+    positions = new Map();
+    nonPlanarEdges = [];
+  }
+
+  if (isolatedIds.size > 0) {
+    let maxRow = -1;
+    let maxCol = 0;
+    for (const [, pos] of positions) {
+      maxRow = Math.max(maxRow, pos.row);
+      maxCol = Math.max(maxCol, pos.col);
+    }
+
+    const isolatedArr = nodeIds.filter((id) => isolatedIds.has(id));
+    const cols = Math.max(1, Math.min(maxCol + 1 || 3, Math.ceil(Math.sqrt(isolatedArr.length))));
+    const startRow = maxRow + 2;
+
+    for (let i = 0; i < isolatedArr.length; i++) {
+      positions.set(isolatedArr[i], {
+        col: i % cols,
+        row: startRow + Math.floor(i / cols) * 2,
+      });
+    }
+  }
+
   const CELL_W = 300;
   const CELL_H = 180;
   const laid = nodes.map((n) => {

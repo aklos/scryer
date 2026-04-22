@@ -1,14 +1,8 @@
 import { useContext } from "react";
-import { BaseEdge, EdgeLabelRenderer, Position, useStore, type EdgeProps, type ReactFlowState } from "@xyflow/react";
+import { BaseEdge, EdgeLabelRenderer, useStore, type EdgeProps, type ReactFlowState } from "@xyflow/react";
 import type { C4Edge, C4NodeData, Status } from "../types";
 import { statusHex } from "../statusColors";
 import { getThemedHex, ThemeContext } from "../theme";
-import { StraightEdgesContext } from ".";
-
-const CORNER_HANDLES = new Set(["top-left", "top-right", "bottom-left", "bottom-right"]);
-const CURVE_OFFSET = 24;
-const ENDPOINT_OFFSET = 5;
-const BEZIER_CURVATURE = 0.25;
 
 const STATUS_PRIORITY: Record<Status, number> = {
   proposed: 4,
@@ -16,20 +10,6 @@ const STATUS_PRIORITY: Record<Status, number> = {
   verified: 1,
   vagrant: 2,
 };
-
-function bezierControlOffset(distance: number): number {
-  if (distance >= 0) return 0.5 * distance;
-  return BEZIER_CURVATURE * 25 * Math.sqrt(-distance);
-}
-
-function bezierControlPoint(pos: Position, x: number, y: number, otherX: number, otherY: number): [number, number] {
-  switch (pos) {
-    case Position.Left:   return [x - bezierControlOffset(x - otherX), y];
-    case Position.Right:  return [x + bezierControlOffset(otherX - x), y];
-    case Position.Top:    return [x, y - bezierControlOffset(y - otherY)];
-    case Position.Bottom: return [x, y + bezierControlOffset(otherY - y)];
-  }
-}
 
 export function RelationshipEdge({
   id,
@@ -39,19 +19,10 @@ export function RelationshipEdge({
   sourceY,
   targetX,
   targetY,
-  sourcePosition,
-  targetPosition,
-  sourceHandleId,
-  targetHandleId,
   data,
   selected,
 }: EdgeProps<C4Edge>) {
   useContext(ThemeContext);
-  const straightEdges = useContext(StraightEdgesContext);
-
-  const isBiDirectional = useStore((s: ReactFlowState) =>
-    s.edges.some((e) => e.source === target && e.target === source),
-  );
 
   const inferredStatus = useStore((s: ReactFlowState) => {
     const resolveStatus = (nodeId: string): Status | undefined => {
@@ -127,123 +98,13 @@ export function RelationshipEdge({
     arrowEndY = targetY;
     arrowAngle = Math.atan2(targetY - lastPt.y, targetX - lastPt.x);
 
-  } else if (straightEdges && !isMention) {
-    // Straight line
-    edgePath = `M ${sourceX} ${sourceY} L ${targetX} ${targetY}`;
-    labelX = (sourceX + targetX) / 2;
-    labelY = (sourceY + targetY) / 2;
-    arrowEndX = targetX;
-    arrowEndY = targetY;
-    arrowAngle = Math.atan2(targetY - sourceY, targetX - sourceX);
-
-  } else if (isMention) {
-    edgePath = `M ${sourceX} ${sourceY} L ${targetX} ${targetY}`;
-    labelX = (sourceX + targetX) / 2;
-    labelY = (sourceY + targetY) / 2;
-    arrowEndX = targetX;
-    arrowEndY = targetY;
-    arrowAngle = Math.atan2(targetY - sourceY, targetX - sourceX);
-
-  } else if (isBiDirectional) {
-    // Cubic bezier with perpendicular offset so parallel edges don't cross
-    const canonicalDx = source < target ? targetX - sourceX : sourceX - targetX;
-    const canonicalDy = source < target ? targetY - sourceY : sourceY - targetY;
-    const len = Math.sqrt(canonicalDx * canonicalDx + canonicalDy * canonicalDy) || 1;
-    const perpX = -canonicalDy / len;
-    const perpY = canonicalDx / len;
-    const sign = source < target ? 1 : -1;
-
-    const dx = targetX - sourceX;
-    const dy = targetY - sourceY;
-
-    const sx = sourceX + perpX * ENDPOINT_OFFSET * sign;
-    const sy = sourceY + perpY * ENDPOINT_OFFSET * sign;
-    const tx = targetX + perpX * ENDPOINT_OFFSET * sign;
-    const ty = targetY + perpY * ENDPOINT_OFFSET * sign;
-
-    const tangentLen = len * 0.3;
-    const cp1x = sx + (dx / len) * tangentLen + perpX * CURVE_OFFSET * sign;
-    const cp1y = sy + (dy / len) * tangentLen + perpY * CURVE_OFFSET * sign;
-    const cp2x = tx - (dx / len) * tangentLen + perpX * CURVE_OFFSET * sign;
-    const cp2y = ty - (dy / len) * tangentLen + perpY * CURVE_OFFSET * sign;
-
-    edgePath = `M ${sx} ${sy} C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${tx} ${ty}`;
-
-    const t = 0.25;
-    const u = 1 - t;
-    labelX = u*u*u*sx + 3*u*u*t*cp1x + 3*u*t*t*cp2x + t*t*t*tx;
-    labelY = u*u*u*sy + 3*u*u*t*cp1y + 3*u*t*t*cp2y + t*t*t*ty;
-
-    arrowEndX = tx;
-    arrowEndY = ty;
-    arrowAngle = Math.atan2(ty - cp2y, tx - cp2x);
-
-  } else if (CORNER_HANDLES.has(sourceHandleId ?? "") || CORNER_HANDLES.has(targetHandleId ?? "")) {
-    // Corner handles — cubic bezier where each end leaves at 45 degrees
-    const dist = Math.sqrt((targetX - sourceX) ** 2 + (targetY - sourceY) ** 2) || 1;
-    const cpLen = dist * 0.4;
-
-    const cornerDir = (handleId: string | null | undefined): [number, number] => {
-      switch (handleId) {
-        case "top-left":     return [-1, -1];
-        case "top-right":    return [ 1, -1];
-        case "bottom-left":  return [-1,  1];
-        case "bottom-right": return [ 1,  1];
-        default:             return [0, 0];
-      }
-    };
-    const INV_SQRT2 = 1 / Math.sqrt(2);
-
-    const positionOffset = (p: Position): [number, number] => {
-      switch (p) {
-        case Position.Top:    return [0, -1];
-        case Position.Bottom: return [0,  1];
-        case Position.Left:   return [-1, 0];
-        case Position.Right:  return [ 1, 0];
-      }
-    };
-
-    let cp1x: number, cp1y: number;
-    const [sdx, sdy] = cornerDir(sourceHandleId);
-    if (sdx !== 0) {
-      cp1x = sourceX + sdx * INV_SQRT2 * cpLen;
-      cp1y = sourceY + sdy * INV_SQRT2 * cpLen;
-    } else {
-      const [ox, oy] = positionOffset(sourcePosition);
-      cp1x = sourceX + ox * cpLen;
-      cp1y = sourceY + oy * cpLen;
-    }
-
-    let cp2x: number, cp2y: number;
-    const [tdx, tdy] = cornerDir(targetHandleId);
-    if (tdx !== 0) {
-      cp2x = targetX + tdx * INV_SQRT2 * cpLen;
-      cp2y = targetY + tdy * INV_SQRT2 * cpLen;
-    } else {
-      const [ox, oy] = positionOffset(targetPosition);
-      cp2x = targetX + ox * cpLen;
-      cp2y = targetY + oy * cpLen;
-    }
-
-    edgePath = `M ${sourceX} ${sourceY} C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${targetX} ${targetY}`;
-    labelX = 0.125 * sourceX + 0.375 * cp1x + 0.375 * cp2x + 0.125 * targetX;
-    labelY = 0.125 * sourceY + 0.375 * cp1y + 0.375 * cp2y + 0.125 * targetY;
-
-    arrowEndX = targetX;
-    arrowEndY = targetY;
-    arrowAngle = Math.atan2(targetY - cp2y, targetX - cp2x);
-
   } else {
-    // Standard single bezier — compute control points explicitly
-    const [cp1x, cp1y] = bezierControlPoint(sourcePosition, sourceX, sourceY, targetX, targetY);
-    const [cp2x, cp2y] = bezierControlPoint(targetPosition, targetX, targetY, sourceX, sourceY);
-    edgePath = `M ${sourceX},${sourceY} C ${cp1x},${cp1y} ${cp2x},${cp2y} ${targetX},${targetY}`;
-    labelX = 0.125 * sourceX + 0.375 * cp1x + 0.375 * cp2x + 0.125 * targetX;
-    labelY = 0.125 * sourceY + 0.375 * cp1y + 0.375 * cp2y + 0.125 * targetY;
-
+    edgePath = `M ${sourceX} ${sourceY} L ${targetX} ${targetY}`;
+    labelX = (sourceX + targetX) / 2;
+    labelY = (sourceY + targetY) / 2;
     arrowEndX = targetX;
     arrowEndY = targetY;
-    arrowAngle = Math.atan2(targetY - cp2y, targetX - cp2x);
+    arrowAngle = Math.atan2(targetY - sourceY, targetX - sourceX);
   }
 
   // Arrowhead polygon from explicit geometry
