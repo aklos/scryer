@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import type { C4Node, C4NodeData, C4Edge, Group, Hint, Status } from "../types";
 import { assignAllHandles } from "../edgeRouting";
+import { computeEdgeBundles } from "../edgeBundling";
 
 const NODE_W = 180;
 const NODE_H = 160;
@@ -300,15 +301,26 @@ export function useVisibleNodes({
       return true;
     });
     const handleMap = assignAllHandles(visibleNodes, filtered);
+    const bundles = computeEdgeBundles(filtered, visibleNodes);
 
     return filtered.map((e) => {
       const handles = handleMap.get(e.id);
       const connected = selIds.size > 0 && (selIds.has(e.source) || selIds.has(e.target));
       const dimmed = selIds.size > 0 && !connected;
+      const bundle = bundles.get(e.id);
+
+      // Force the hub-side handle to the magnet's cardinal direction
+      let sourceHandle = handles?.sourceHandle;
+      let targetHandle = handles?.targetHandle;
+      if (bundle) {
+        if (bundle.hubIsSource) sourceHandle = bundle.hubHandle;
+        else targetHandle = bundle.hubHandle;
+      }
+
       return {
         ...e,
-        ...(handles ?? {}),
-        ...(e.data ? { data: { ...e.data, ...(connected ? { _highlighted: true } : {}), ...(dimmed ? { _dimmed: true } : {}) } } : {}),
+        ...(sourceHandle || targetHandle ? { sourceHandle, targetHandle } : {}),
+        ...(e.data ? { data: { ...e.data, ...(bundle && !e.data._route ? { _route: bundle.route } : {}), ...(connected ? { _highlighted: true } : {}), ...(dimmed ? { _dimmed: true } : {}) } } : {}),
       };
     });
   }, [edges, visibleNodes, currentParentId, nodes, nonPlanarEdgeIds]);

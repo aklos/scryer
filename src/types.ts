@@ -59,6 +59,7 @@ export type C4EdgeData = {
   label: string;
   method?: string;
   _route?: { x: number; y: number }[];
+  _bundleAngle?: number;
   [key: string]: unknown;
 };
 

@@ -445,6 +445,30 @@ function triangulate(embedding: Embedding): EdgePair[] {
   return dummyEdges;
 }
 
+// ── Leaf direction classification ─────────────────────────────────────
+
+type LeafDirection = "in" | "out" | "both";
+
+function buildLeafDirections(
+  leaves: { id: string; parent: string }[],
+  directedEdges: EdgePair[],
+): Map<string, LeafDirection> {
+  const dirs = new Map<string, LeafDirection>();
+  for (const leaf of leaves) {
+    let hasIn = false,
+      hasOut = false;
+    for (const [src, tgt] of directedEdges) {
+      if (src === leaf.id && tgt === leaf.parent) hasIn = true;
+      if (src === leaf.parent && tgt === leaf.id) hasOut = true;
+    }
+    dirs.set(
+      leaf.id,
+      hasIn && hasOut ? "both" : hasIn ? "in" : "out",
+    );
+  }
+  return dirs;
+}
+
 // ── Face-aware leaf placement ─────────────────────────────────────────
 
 /**
@@ -463,11 +487,12 @@ function placeLeaves(
   outerFace: string[],
   outerContour: Set<string>,
   coreEdges: EdgePair[],
+  leafDirections?: Map<string, LeafDirection>,
 ): Map<string, number> {
   if (leaves.length === 0) return new Map();
   const assignments = assignLeavesToFaces(leaves, faces, outerFace, outerContour);
   balloonRelax(positions, coreEdges, faces, assignments, leaves);
-  positionLeaves(positions, leaves, faces, assignments);
+  positionLeaves(positions, leaves, faces, assignments, coreEdges, leafDirections);
   return assignments;
 }
 
@@ -660,12 +685,88 @@ function balloonRelax(
   }
 }
 
+const DIR_ORDER: Record<string, number> = { in: 0, both: 1, out: 2 };
+
+function directionSort<T extends { id: string }>(
+  leaves: T[],
+  leafDirections?: Map<string, LeafDirection>,
+): T[] {
+  if (!leafDirections || leaves.length <= 2) return leaves;
+  return [...leaves].sort(
+    (a, b) =>
+      (DIR_ORDER[leafDirections.get(a.id) ?? "out"] ?? 2) -
+      (DIR_ORDER[leafDirections.get(b.id) ?? "out"] ?? 2),
+  );
+}
+
+/**
+ * Sector-based placement for star graphs (hub at centroid, full circle).
+ * Groups leaves by edge direction (in/out/both), places each group in its
+ * own angular sector with gaps between sectors.
+ * Returns true if placement was done, false to fall back to even distribution.
+ */
+function sectorPlace(
+  positions: Map<string, { col: number; row: number }>,
+  hub: { col: number; row: number },
+  leaves: { id: string; parent: string }[],
+  N: number,
+  leafDirections?: Map<string, LeafDirection>,
+): boolean {
+  if (!leafDirections || N <= 2) return false;
+
+  const sorted = directionSort(leaves, leafDirections);
+
+  // Count distinct direction groups in the circular arrangement
+  const groups = new Set<string>();
+  for (const l of sorted) groups.add(leafDirections.get(l.id) ?? "out");
+  if (groups.size <= 1) return false;
+
+  // In a circle of N items with G groups, there are G direction boundaries
+  // (including the wrap-around between last and first).
+  const numGaps = groups.size;
+  const GAP_SLOTS = 2;
+  const s = (2 * Math.PI) / (N + numGaps * GAP_SLOTS);
+  const MIN_CHORD = 1.4;
+  const dist = Math.max(1.8, MIN_CHORD / (2 * Math.sin(s / 2)));
+
+  // Center the first direction group at its preferred angle
+  const SECTOR_CENTERS: Record<string, number> = {
+    in: -Math.PI / 2,
+    both: 0,
+    out: Math.PI / 2,
+  };
+  const firstDir = leafDirections.get(sorted[0].id) ?? "out";
+  let firstGroupSize = 0;
+  for (const l of sorted) {
+    if ((leafDirections.get(l.id) ?? "out") === firstDir) firstGroupSize++;
+    else break;
+  }
+  let angle =
+    (SECTOR_CENTERS[firstDir] ?? -Math.PI / 2) -
+    ((firstGroupSize - 1) * s) / 2;
+
+  for (let i = 0; i < sorted.length; i++) {
+    positions.set(sorted[i].id, {
+      col: hub.col + dist * Math.cos(angle),
+      row: hub.row + dist * Math.sin(angle),
+    });
+    if (i < sorted.length - 1) {
+      const curDir = leafDirections.get(sorted[i].id) ?? "out";
+      const nextDir = leafDirections.get(sorted[i + 1].id) ?? "out";
+      angle += s * (curDir !== nextDir ? 1 + GAP_SLOTS : 1);
+    }
+  }
+  return true;
+}
+
 /** Final leaf positioning, after any face expansion. */
 function positionLeaves(
   positions: Map<string, { col: number; row: number }>,
   leaves: { id: string; parent: string }[],
   faces: string[][],
   assignments: Map<string, number>,
+  coreEdges: EdgePair[],
+  leafDirections?: Map<string, LeafDirection>,
 ): void {
   const byParent = new Map<string, { id: string; parent: string }[]>();
   for (const leaf of leaves) {
@@ -701,21 +802,98 @@ function positionLeaves(
       const dist = Math.max(1.8, MIN_CHORD / (2 * Math.sin(angGap / 2)));
 
       if (isFullCircle) {
-        for (let i = 0; i < N; i++) {
-          const angle = (2 * Math.PI * i) / N - Math.PI / 2;
-          positions.set(parentLeaves[i].id, {
-            col: pp.col + dist * Math.cos(angle),
-            row: pp.row + dist * Math.sin(angle),
-          });
+        if (sectorPlace(positions, pp, parentLeaves, N, leafDirections)) {
+          // placed by sector logic
+        } else {
+          for (let i = 0; i < N; i++) {
+            const angle = (2 * Math.PI * i) / N - Math.PI / 2;
+            positions.set(parentLeaves[i].id, {
+              col: pp.col + dist * Math.cos(angle),
+              row: pp.row + dist * Math.sin(angle),
+            });
+          }
         }
       } else {
+        const ordered = directionSort(parentLeaves, leafDirections);
         const baseAngle = Math.atan2(outDy, outDx);
-        for (let i = 0; i < N; i++) {
-          const t = N === 1 ? 0 : (i / (N - 1) - 0.5) * fanSpread;
-          positions.set(parentLeaves[i].id, {
-            col: pp.col + dist * Math.cos(baseAngle + t),
-            row: pp.row + dist * Math.sin(baseAngle + t),
-          });
+
+        let placed = false;
+        if (N >= 3 && coreEdges.length > 0) {
+          const coreNeighborIds: string[] = [];
+          for (const [u, v] of coreEdges) {
+            if (u === parentId) coreNeighborIds.push(v);
+            else if (v === parentId) coreNeighborIds.push(u);
+          }
+
+          const neighborAngles = coreNeighborIds
+            .map((nid) => {
+              const np = positions.get(nid);
+              if (!np) return null;
+              return Math.atan2(np.row - pp.row, np.col - pp.col);
+            })
+            .filter((a): a is number => a !== null)
+            .sort((a, b) => a - b);
+
+          if (neighborAngles.length >= 2) {
+            let maxGap = 0;
+            let gapStart = 0;
+            for (let i = 0; i < neighborAngles.length; i++) {
+              const next = (i + 1) % neighborAngles.length;
+              let gap = neighborAngles[next] - neighborAngles[i];
+              if (next === 0) gap += 2 * Math.PI;
+              if (gap > maxGap) {
+                maxGap = gap;
+                gapStart = neighborAngles[i];
+              }
+            }
+
+            const MARGIN = Math.PI / 12;
+            const safeArc = Math.min(Math.PI, Math.max(maxGap - 2 * MARGIN, Math.PI / 6));
+            const safeMid = gapStart + maxGap / 2;
+            const arcGap = N > 1 ? safeArc / (N - 1) : 0;
+
+            let clearDist = 1.8;
+            const arcHalf = safeArc / 2;
+            for (const [nid, np] of positions) {
+              if (nid === parentId) continue;
+              const dx = np.col - pp.col;
+              const dy = np.row - pp.row;
+              let angleDiff = Math.atan2(dy, dx) - safeMid;
+              while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+              while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+              if (Math.abs(angleDiff) < arcHalf + MARGIN) {
+                clearDist = Math.max(clearDist, Math.hypot(dx, dy) + 1.5);
+              }
+            }
+            const arcDist = Math.max(
+              clearDist,
+              MIN_CHORD / (2 * Math.sin(Math.min(arcGap, Math.PI) / 2)),
+            );
+
+            for (let i = 0; i < N; i++) {
+              const t = N === 1 ? 0 : (i / (N - 1) - 0.5) * safeArc;
+              positions.set(ordered[i].id, {
+                col: pp.col + arcDist * Math.cos(safeMid + t),
+                row: pp.row + arcDist * Math.sin(safeMid + t),
+              });
+            }
+            placed = true;
+          }
+        }
+
+        if (!placed) {
+          const arcGap = N > 1 ? fanSpread / (N - 1) : Math.PI / 2;
+          const arcDist = Math.max(
+            1.8,
+            MIN_CHORD / (2 * Math.sin(Math.min(arcGap, Math.PI) / 2)),
+          );
+          for (let i = 0; i < N; i++) {
+            const t = N === 1 ? 0 : (i / (N - 1) - 0.5) * fanSpread;
+            positions.set(ordered[i].id, {
+              col: pp.col + arcDist * Math.cos(baseAngle + t),
+              row: pp.row + arcDist * Math.sin(baseAngle + t),
+            });
+          }
         }
       }
       continue;
@@ -1123,6 +1301,7 @@ export async function planarLayout(
   const coreEdges = dedupedEdges.filter(
     ([u, v]) => coreSet.has(u) && coreSet.has(v),
   );
+  const leafDirections = buildLeafDirections(leaves, edges);
 
   // Step 3: If core is too small (e.g. star graph), use KK directly
   if (coreIds.length <= 2) {
@@ -1131,7 +1310,7 @@ export async function planarLayout(
     positions.set(hub, { col: 0, row: 0 });
     if (coreIds[1]) positions.set(coreIds[1], { col: 2, row: 0 });
     kamadaKawai(positions, coreIds.length > 0 ? coreIds : [hub], coreEdges);
-    placeLeaves(positions, leaves, [], [], new Set(coreIds), []);
+    placeLeaves(positions, leaves, [], [], new Set(coreIds), coreEdges, leafDirections);
     return { positions, nonPlanarEdges: [] };
   }
 
@@ -1149,7 +1328,7 @@ export async function planarLayout(
       positions.set(coreIds[i], { col: R * Math.cos(angle), row: R * Math.sin(angle) });
     }
     kamadaKawai(positions, coreIds, coreEdges);
-    placeLeaves(positions, leaves, [], [], new Set(coreIds), []);
+    placeLeaves(positions, leaves, [], [], new Set(coreIds), coreEdges, leafDirections);
     return { positions, nonPlanarEdges: coreClassification.nonPlanarEdges };
   }
 
@@ -1225,6 +1404,7 @@ export async function planarLayout(
     preTrOuter,
     outerContour,
     coreClassification.planarEdges,
+    leafDirections,
   );
 
   return {
@@ -1248,7 +1428,7 @@ export async function layoutGraph(
   const components = connectedComponents(nodeIds, dedupedEdges);
 
   if (components.length === 1) {
-    return await planarLayout(nodeIds, dedupedEdges);
+    return await planarLayout(nodeIds, edges);
   }
 
   // Layout each component separately
@@ -1258,7 +1438,7 @@ export async function layoutGraph(
 
   for (const comp of components) {
     const compSet = new Set(comp);
-    const compEdges = dedupedEdges.filter(
+    const compEdges = edges.filter(
       ([u, v]) => compSet.has(u) && compSet.has(v),
     );
     const result = await planarLayout(comp, compEdges);
