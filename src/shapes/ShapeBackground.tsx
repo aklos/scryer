@@ -44,7 +44,7 @@ export function ShapeBackground({
       viewBox={`0 0 ${W} ${H}`}
       style={opacity != null && opacity < 1 ? { opacity, isolation: "isolate" } : undefined}
     >
-      {kind === "component" && shape === "rectangle" && (
+      {kind === "container" && shape === "rectangle" && (
         <path
           d={`M0,0 V-9 Q0,-12 3,-12 H39 Q42,-12 44,-9 L45,0`}
           className={`${fillClass} ${strokeClass ?? ""}`}
@@ -71,13 +71,15 @@ export function ShapeBackground({
           strokeDasharray={external ? "6 3" : undefined}
         />
       )}
-      {kind === "container" && shape === "rectangle" && (
-        <path
-          d={`M0,0 V-10 H${W} V0`}
-          className={`${fillClass} ${strokeClass ?? ""}`}
-          strokeWidth={strokeWidth}
-          strokeDasharray={strokeDasharray}
-        />
+      {kind === "component" && shape === "rectangle" && (
+        <>
+          <rect x={-8} y={47} width={12} height={20} rx={2}
+            className={`${fillClass} ${strokeClass ?? ""}`}
+            strokeWidth={strokeWidth} strokeDasharray={strokeDasharray} />
+          <rect x={-8} y={93} width={12} height={20} rx={2}
+            className={`${fillClass} ${strokeClass ?? ""}`}
+            strokeWidth={strokeWidth} strokeDasharray={strokeDasharray} />
+        </>
       )}
       {changed && (
         <GlowOverlay shape={shape} kind={kind} />
@@ -122,11 +124,14 @@ function GlowOverlay({ shape, kind }: { shape: C4Shape; kind?: C4Kind }) {
   return (
     <g className="scryer-changed-glow">
       {paths}
-      {kind === "component" && shape === "rectangle" && (
+      {kind === "container" && shape === "rectangle" && (
         <path d={`M0,0 V-9 Q0,-12 3,-12 H39 Q42,-12 44,-9 L45,0`} {...glowProps} />
       )}
-      {kind === "container" && shape === "rectangle" && (
-        <path d={`M0,0 V-10 H${W} V0`} {...glowProps} />
+      {kind === "component" && shape === "rectangle" && (
+        <>
+          <rect x={-8} y={47} width={12} height={20} rx={2} {...glowProps} />
+          <rect x={-8} y={93} width={12} height={20} rx={2} {...glowProps} />
+        </>
       )}
       {kind === "system" && shape === "rectangle" && (
         <rect x={-6} y={-6} width={W + 12} height={H + 12} rx={6} {...glowProps} strokeWidth={2} />

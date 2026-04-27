@@ -500,17 +500,31 @@ function placeLeaves(
 function assignLeavesToFaces(
   leaves: { id: string; parent: string }[],
   faces: string[][],
-  outerFace: string[],
-  outerContour: Set<string>,
+  _outerFace: string[],
+  _outerContour: Set<string>,
 ): Map<string, number> {
   const assignments = new Map<string, number>();
 
-  const outerKey = [...outerFace].sort().join(",");
+  // The outer face is the largest face in the original (pre-augmentation)
+  // embedding. We can't reuse the outerContour from Tutte: that's the
+  // post-augmentation simple cycle, which excludes vertices that sit on
+  // cut-vertex boundary walks (the augmentation "internalises" them, even
+  // though topologically they're still on the outer boundary). Detecting
+  // the outer face here from `faces` directly handles both cases.
+  let outerFi = -1;
+  for (let i = 0; i < faces.length; i++) {
+    if (faces[i].length < 3) continue;
+    if (outerFi === -1 || faces[i].length > faces[outerFi].length) outerFi = i;
+  }
+  const outerVertices = outerFi >= 0
+    ? new Set(faces[outerFi])
+    : new Set<string>();
+
   const parentFaces = new Map<string, number[]>();
   for (let fi = 0; fi < faces.length; fi++) {
+    if (fi === outerFi) continue;
     const f = faces[fi];
     if (f.length < 3) continue;
-    if ([...f].sort().join(",") === outerKey) continue;
     for (const v of f) {
       if (!parentFaces.has(v)) parentFaces.set(v, []);
       parentFaces.get(v)!.push(fi);
@@ -524,7 +538,7 @@ function assignLeavesToFaces(
   }
 
   for (const [parentId, parentLeaves] of byParent) {
-    const parentOnOuter = outerContour.has(parentId);
+    const parentOnOuter = outerVertices.has(parentId);
     const available = parentOnOuter ? [] : (parentFaces.get(parentId) ?? []);
     if (available.length === 0) {
       for (const leaf of parentLeaves) assignments.set(leaf.id, -1);
@@ -779,6 +793,12 @@ function positionLeaves(
   for (const p of positions.values()) { gcx += p.col; gcy += p.row; gcN++; }
   if (gcN > 0) { gcx /= gcN; gcy /= gcN; }
 
+  // Star / non-planar paths pass `faces=[]`; Tutte passes the actual face list.
+  // The sector/neighbor-gap fan heuristics ignore faces, so on Tutte graphs they
+  // can place leaves through interior faces and cause crossings. Restrict them
+  // to star mode and fall back to a plain outward fan for Tutte.
+  const isStarMode = faces.length === 0;
+
   for (const [parentId, parentLeaves] of byParent) {
     const pp = positions.get(parentId);
     if (!pp) {
@@ -802,7 +822,7 @@ function positionLeaves(
       const dist = Math.max(1.8, MIN_CHORD / (2 * Math.sin(angGap / 2)));
 
       if (isFullCircle) {
-        if (sectorPlace(positions, pp, parentLeaves, N, leafDirections)) {
+        if (isStarMode && sectorPlace(positions, pp, parentLeaves, N, leafDirections)) {
           // placed by sector logic
         } else {
           for (let i = 0; i < N; i++) {
@@ -818,7 +838,7 @@ function positionLeaves(
         const baseAngle = Math.atan2(outDy, outDx);
 
         let placed = false;
-        if (N >= 3 && coreEdges.length > 0) {
+        if (isStarMode && N >= 3 && coreEdges.length > 0) {
           const coreNeighborIds: string[] = [];
           for (const [u, v] of coreEdges) {
             if (u === parentId) coreNeighborIds.push(v);
@@ -882,16 +902,87 @@ function positionLeaves(
         }
 
         if (!placed) {
-          const arcGap = N > 1 ? fanSpread / (N - 1) : Math.PI / 2;
-          const arcDist = Math.max(
-            1.8,
-            MIN_CHORD / (2 * Math.sin(Math.min(arcGap, Math.PI) / 2)),
-          );
+          // Within the outward semicircle (baseAngle ± π/2 — anything wider
+          // would wrap back into the graph interior), find the angular sub-arc
+          // with the most clearance from existing nodes and centre the fan
+          // there. Just walking toward baseAngle would push leaves through
+          // any node that happens to lie radially outward; rotating around it
+          // keeps the leaf edge from crossing existing geometry.
+          const HALF_RANGE = Math.PI / 2;
+          const MARGIN = Math.PI / 12;
+          const blocked: [number, number][] = [];
+          for (const [nid, np] of positions) {
+            if (nid === parentId) continue;
+            let rel = Math.atan2(np.row - pp.row, np.col - pp.col) - baseAngle;
+            while (rel > Math.PI) rel -= 2 * Math.PI;
+            while (rel < -Math.PI) rel += 2 * Math.PI;
+            const lo = Math.max(-HALF_RANGE, rel - MARGIN);
+            const hi = Math.min(HALF_RANGE, rel + MARGIN);
+            if (lo < hi) blocked.push([lo, hi]);
+          }
+          blocked.sort((a, b) => a[0] - b[0]);
+          // Merge overlapping blocked intervals
+          const merged: [number, number][] = [];
+          for (const iv of blocked) {
+            const last = merged[merged.length - 1];
+            if (last && iv[0] <= last[1]) last[1] = Math.max(last[1], iv[1]);
+            else merged.push([iv[0], iv[1]]);
+          }
+          // Find the largest gap between -HALF_RANGE and HALF_RANGE
+          let bestLo = -HALF_RANGE;
+          let bestHi = HALF_RANGE;
+          let bestSize = 2 * HALF_RANGE;
+          let cursor = -HALF_RANGE;
+          for (const [lo, hi] of merged) {
+            if (lo > cursor) {
+              const size = lo - cursor;
+              if (size > bestSize || bestSize === 2 * HALF_RANGE) {
+                bestSize = size;
+                bestLo = cursor;
+                bestHi = lo;
+              }
+            }
+            cursor = Math.max(cursor, hi);
+          }
+          if (HALF_RANGE > cursor) {
+            const size = HALF_RANGE - cursor;
+            if (size > bestSize || bestSize === 2 * HALF_RANGE) {
+              bestSize = size;
+              bestLo = cursor;
+              bestHi = HALF_RANGE;
+            }
+          }
+          // If nothing was blocked, bestSize stayed at 2*HALF_RANGE; that's
+          // fine — the whole semicircle is open and bestLo/bestHi already
+          // span it. Otherwise bestLo/bestHi describe the chosen sub-arc.
+          if (merged.length === 0) {
+            bestLo = -HALF_RANGE;
+            bestHi = HALF_RANGE;
+            bestSize = 2 * HALF_RANGE;
+          }
+          const fanCenter = baseAngle + (bestLo + bestHi) / 2;
+
+          const TARGET_DIST = 1.8;
+          let arcDist = TARGET_DIST;
+          let arc = 0;
+          if (N > 1) {
+            const minArc = 2 * (N - 1) * Math.asin(
+              Math.min(0.9, MIN_CHORD / (2 * TARGET_DIST)),
+            );
+            arc = Math.min(bestSize, Math.max(fanSpread, minArc));
+            if (arc > 0) {
+              const arcGap = arc / (N - 1);
+              arcDist = Math.max(
+                TARGET_DIST,
+                MIN_CHORD / (2 * Math.sin(Math.min(arcGap, Math.PI) / 2)),
+              );
+            }
+          }
           for (let i = 0; i < N; i++) {
-            const t = N === 1 ? 0 : (i / (N - 1) - 0.5) * fanSpread;
+            const t = N === 1 ? 0 : (i / (N - 1) - 0.5) * arc;
             positions.set(ordered[i].id, {
-              col: pp.col + arcDist * Math.cos(baseAngle + t),
-              row: pp.row + arcDist * Math.sin(baseAngle + t),
+              col: pp.col + arcDist * Math.cos(fanCenter + t),
+              row: pp.row + arcDist * Math.sin(fanCenter + t),
             });
           }
         }

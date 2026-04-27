@@ -42,12 +42,18 @@ function nodeCenter(n: BundleNode): { x: number; y: number } {
   return { x: n.position.x + w / 2, y: n.position.y + h / 2 };
 }
 
-// 0=top, 1=right, 2=bottom, 3=left
+// 0=top, 1=right, 2=bottom, 3=left, -1=no magnet (in diagonal gap)
+// Windows are 60° wide centered on each cardinal direction. Edges whose
+// angle falls in the 30° gaps between windows route naturally without
+// bundling, preventing off-axis edges from being forced through a
+// nearby cardinal magnet (which cramps adjacent nodes).
 function magnetIndex(angle: number): number {
-  if (angle >= (-3 * Math.PI) / 4 && angle < -Math.PI / 4) return 0;
-  if (angle >= -Math.PI / 4 && angle < Math.PI / 4) return 1;
-  if (angle >= Math.PI / 4 && angle < (3 * Math.PI) / 4) return 2;
-  return 3;
+  const deg = (angle * 180) / Math.PI;
+  if (deg >= -120 && deg < -60) return 0;  // top
+  if (deg >= -30 && deg < 30) return 1;    // right
+  if (deg >= 60 && deg < 120) return 2;    // bottom
+  if (deg >= 150 || deg < -150) return 3;  // left
+  return -1;
 }
 
 const MAGNET_DIR: { dx: number; dy: number }[] = [
@@ -98,7 +104,8 @@ export function computeEdgeBundles(
       if (!other) continue;
       const oc = nodeCenter(other);
       const angle = Math.atan2(oc.y - hc.y, oc.x - hc.x);
-      buckets[magnetIndex(angle)].push({ edge: e, hubIsSource });
+      const mi = magnetIndex(angle);
+      if (mi >= 0) buckets[mi].push({ edge: e, hubIsSource });
     }
 
     for (let mi = 0; mi < 4; mi++) {

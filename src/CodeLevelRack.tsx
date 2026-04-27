@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { Code, Workflow, Table, Plus, Trash2, ChevronRight, ChevronDown } from "lucide-react";
+import { Code, Workflow, Table, Plus, Trash2, ChevronRight, ChevronDown, Bot } from "lucide-react";
 import { DescriptionText, type MentionNodeInfo } from "./DescriptionText";
 import { STATUS_COLORS } from "./statusColors";
 import { Button } from "./ui";
@@ -18,6 +18,8 @@ interface CodeLevelRackProps {
   currentParentId: string;
   onAddNode: (kind?: C4Kind) => void;
   onDeleteNode: (id: string) => void;
+  onFillNode?: (nodeId: string) => void;
+  hasAgent?: boolean;
 }
 
 const COLUMN_CONFIG = [
@@ -200,8 +202,11 @@ export function CodeLevelRack({
   nodes,
   onSelectNode,
   selectedNodeId,
+  currentParentId,
   onAddNode,
   onDeleteNode,
+  onFillNode,
+  hasAgent,
 }: CodeLevelRackProps) {
   // Track previous selection so we can pick a neighbor after delete
   const prevSelectedId = useRef(selectedNodeId);
@@ -303,8 +308,10 @@ export function CodeLevelRack({
     return () => observer.disconnect();
   }, [checkWidth]);
 
+  const isEmpty = nodes.length === 0;
+
   return (
-    <div ref={containerRef} className="flex-1 flex flex-col overflow-hidden">
+    <div ref={containerRef} className="flex-1 flex flex-col overflow-hidden relative">
       <div className={`flex-1 overflow-hidden ${stacked ? "flex flex-col" : "flex"}`}>
         {COLUMN_CONFIG.map(({ kind, title, icon }) => (
           <RackColumn
@@ -322,6 +329,21 @@ export function CodeLevelRack({
           />
         ))}
       </div>
+      {isEmpty && hasAgent && onFillNode && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
+          <button
+            type="button"
+            className="pointer-events-auto flex items-center gap-2 rounded-lg border border-[var(--border)] px-4 py-2.5 hover:bg-[var(--surface-tint)] cursor-pointer transition-colors bg-[var(--surface)]"
+            onClick={() => onFillNode(currentParentId)}
+          >
+            <Bot className="h-4 w-4 text-violet-500" />
+            <div className="text-left">
+              <div className="text-sm font-medium text-[var(--text)]">Fill with AI</div>
+              <div className="text-[11px] text-[var(--text-muted)]">Scan the codebase and add operations, processes, and models</div>
+            </div>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

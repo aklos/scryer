@@ -51,6 +51,20 @@ export function RelationshipEdge({
   const mentionColor = getThemedHex("zinc", "400");
   const edgeColor = selected ? selColor : isMention ? mentionColor : baseColor;
 
+  const PAIR_SHIFT = 4;
+  const biPair = data?._biPair;
+  let ox = 0, oy = 0;
+  if (biPair) {
+    const dx = targetX - sourceX;
+    const dy = targetY - sourceY;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    ox = (-dy / len) * PAIR_SHIFT;
+    oy = (dx / len) * PAIR_SHIFT;
+  }
+
+  const sx = sourceX + ox, sy = sourceY + oy;
+  const tx = targetX + ox, ty = targetY + oy;
+
   let edgePath: string;
   let labelX: number;
   let labelY: number;
@@ -60,8 +74,7 @@ export function RelationshipEdge({
 
   const route = data?._route as { x: number; y: number }[] | undefined;
   if (route && route.length >= 1) {
-    // Orthogonal polyline with rounded corners
-    const pts = [{ x: sourceX, y: sourceY }, ...route, { x: targetX, y: targetY }];
+    const pts = [{ x: sx, y: sy }, ...route.map(p => ({ x: p.x + ox, y: p.y + oy })), { x: tx, y: ty }];
     const R = 30;
     let d = `M ${pts[0].x} ${pts[0].y}`;
     for (let i = 1; i < pts.length - 1; i++) {
@@ -80,10 +93,9 @@ export function RelationshipEdge({
     d += ` L ${pts[pts.length - 1].x} ${pts[pts.length - 1].y}`;
     edgePath = d;
 
-    const segs = [{ x: sourceX, y: sourceY }, ...route, { x: targetX, y: targetY }];
-    let bestLen = 0, bestMidX = sourceX, bestMidY = sourceY;
-    for (let i = 0; i < segs.length - 1; i++) {
-      const segLen = Math.sqrt((segs[i+1].x - segs[i].x) ** 2 + (segs[i+1].y - segs[i].y) ** 2);
+    let bestLen = 0, bestMidX = sx, bestMidY = sy;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const segLen = Math.sqrt((pts[i+1].x - pts[i].x) ** 2 + (pts[i+1].y - pts[i].y) ** 2);
       if (segLen > bestLen) {
         bestLen = segLen;
         bestMidX = (pts[i].x + pts[i+1].x) / 2;
@@ -94,17 +106,17 @@ export function RelationshipEdge({
     labelY = bestMidY;
 
     const lastPt = pts[pts.length - 2];
-    arrowEndX = targetX;
-    arrowEndY = targetY;
-    arrowAngle = Math.atan2(targetY - lastPt.y, targetX - lastPt.x);
+    arrowEndX = tx;
+    arrowEndY = ty;
+    arrowAngle = Math.atan2(ty - lastPt.y, tx - lastPt.x);
 
   } else {
-    edgePath = `M ${sourceX} ${sourceY} L ${targetX} ${targetY}`;
-    labelX = (sourceX + targetX) / 2;
-    labelY = (sourceY + targetY) / 2;
-    arrowEndX = targetX;
-    arrowEndY = targetY;
-    arrowAngle = Math.atan2(targetY - sourceY, targetX - sourceX);
+    edgePath = `M ${sx} ${sy} L ${tx} ${ty}`;
+    labelX = (sx + tx) / 2;
+    labelY = (sy + ty) / 2;
+    arrowEndX = tx;
+    arrowEndY = ty;
+    arrowAngle = Math.atan2(ty - sy, tx - sx);
   }
 
   // Arrowhead polygon from explicit geometry
@@ -176,7 +188,7 @@ export function RelationshipEdge({
           <div
             style={{
               position: "absolute",
-              transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+              transform: `translate(-50%, -50%) translate(${biPair ? labelX + ox * 2.5 : labelX}px,${biPair ? labelY + oy * 2.5 : labelY}px)`,
               zIndex: 1,
               pointerEvents: "all",
               ...(dimmed ? { opacity: 0.25 } : {}),

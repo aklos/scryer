@@ -302,12 +302,14 @@ export function useVisibleNodes({
     });
     const handleMap = assignAllHandles(visibleNodes, filtered);
     const bundles = computeEdgeBundles(filtered, visibleNodes);
+    const dirSet = new Set(filtered.map(e => `${e.source}::${e.target}`));
 
     return filtered.map((e) => {
       const handles = handleMap.get(e.id);
       const connected = selIds.size > 0 && (selIds.has(e.source) || selIds.has(e.target));
       const dimmed = selIds.size > 0 && !connected;
       const bundle = bundles.get(e.id);
+      const biPair = dirSet.has(`${e.target}::${e.source}`);
 
       // Force the hub-side handle to the magnet's cardinal direction
       let sourceHandle = handles?.sourceHandle;
@@ -320,7 +322,7 @@ export function useVisibleNodes({
       return {
         ...e,
         ...(sourceHandle || targetHandle ? { sourceHandle, targetHandle } : {}),
-        ...(e.data ? { data: { ...e.data, ...(bundle && !e.data._route ? { _route: bundle.route } : {}), ...(connected ? { _highlighted: true } : {}), ...(dimmed ? { _dimmed: true } : {}) } } : {}),
+        ...(e.data ? { data: { ...e.data, ...(bundle && !e.data._route ? { _route: bundle.route } : {}), ...(connected ? { _highlighted: true } : {}), ...(dimmed ? { _dimmed: true } : {}), ...(biPair ? { _biPair: true } : {}) } } : {}),
       };
     });
   }, [edges, visibleNodes, currentParentId, nodes, nonPlanarEdgeIds]);

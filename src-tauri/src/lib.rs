@@ -848,6 +848,66 @@ async fn start_initial_model_session(
 }
 
 #[tauri::command]
+async fn start_node_fill_session(
+    cwd: String,
+    model_name: String,
+    node_id: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AcpState>,
+) -> Result<String, String> {
+    let mcp_binary = find_scryer_mcp()
+        .ok_or("scryer-mcp binary not found")?;
+
+    let launch = scryer_acp::detect_available_agent()
+        .ok_or("No AI agent found. Install Claude Code or Codex first.")?;
+
+    let model_ref = scryer_core::ModelRef::parse(&model_name);
+    let model = scryer_core::read_model_at(&model_ref)?;
+    let node = model.nodes.iter().find(|n| n.id == node_id)
+        .ok_or_else(|| format!("Node '{}' not found in model", node_id))?;
+    let node_name = node.data.name.clone();
+    let node_kind = serde_json::to_value(&node.data.kind)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default();
+
+    let model_json = scryer_acp::prompt::serialize_model_for_prompt(&model);
+    let prompt = scryer_acp::prompt::node_fill_prompt(
+        &model_name, &cwd, &node_id, &node_name, &node_kind, &model_json,
+    );
+
+    let runtime = {
+        let mut rt = state.0.lock().unwrap();
+        if rt.is_none() {
+            *rt = Some(scryer_acp::AcpRuntime::new());
+        }
+        rt.clone().unwrap()
+    };
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let handle = app.clone();
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            let _ = handle.emit("agent-event", &event);
+        }
+    });
+
+    let (agent_binary, mode) = match launch {
+        scryer_acp::AgentLaunch::Cli { binary, kind } => {
+            (binary, scryer_acp::runtime::LaunchMode::Cli { kind })
+        }
+        scryer_acp::AgentLaunch::Acp { binary } => {
+            (binary, scryer_acp::runtime::LaunchMode::Acp)
+        }
+    };
+
+    runtime
+        .start_session(agent_binary, mode, cwd, model_name, mcp_binary, prompt, event_tx)
+        .await
+}
+
+#[tauri::command]
 async fn cancel_agent_session(
     model_name: String,
     state: tauri::State<'_, AcpState>,
@@ -1039,6 +1099,7 @@ pub fn run() {
             start_agent_session,
             create_blank_model,
             start_initial_model_session,
+            start_node_fill_session,
             cancel_agent_session,
             sync_diff,
         ])

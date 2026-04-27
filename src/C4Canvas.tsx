@@ -67,6 +67,8 @@ interface C4CanvasProps {
   setNodes: React.Dispatch<React.SetStateAction<C4Node[]>>;
   followAI: boolean;
   onToggleFollowAI: () => void;
+  onFillNode?: (nodeId: string) => void;
+  hasAgent: boolean;
 }
 
 export function C4Canvas({
@@ -106,6 +108,8 @@ export function C4Canvas({
   setNodes,
   followAI,
   onToggleFollowAI,
+  onFillNode,
+  hasAgent,
 }: C4CanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const selectionStartPos = useRef<{ x: number; y: number } | null>(null);
@@ -389,6 +393,8 @@ export function C4Canvas({
           currentParentId={currentParentId!}
           onAddNode={handleRackAdd}
           onDeleteNode={deleteNode}
+          onFillNode={onFillNode}
+          hasAgent={hasAgent && !!projectPath}
         />
         {/* Bottom-right AI + version */}
         <div className="absolute bottom-2 right-2 z-10 flex items-center gap-2">
@@ -649,6 +655,29 @@ export function C4Canvas({
                 </div>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {/* Inside an empty node with a project linked — offer to fill with AI */}
+      {currentParentId && projectPath && !syncing && visibleNodesWithHints.every((n) => n.data._reference) && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
+          <div className="pointer-events-auto flex flex-col items-center gap-3 text-center">
+            <p className="text-sm text-[var(--text-muted)]">
+              No {parentKind === "system" ? "containers" : parentKind === "container" ? "components" : "children"} yet
+            </p>
+            {hasAgent && onFillNode && (
+              <button
+                type="button"
+                className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-4 py-2.5 text-left hover:bg-[var(--surface-tint)] cursor-pointer transition-colors bg-[var(--surface)]"
+                onClick={() => onFillNode(currentParentId)}
+              >
+                <Bot className="h-4 w-4 text-violet-500" />
+                <div>
+                  <div className="text-sm font-medium text-[var(--text)]">Fill with AI</div>
+                  <div className="text-[11px] text-[var(--text-muted)]">Scan the codebase and add {parentKind === "system" ? "containers" : parentKind === "container" ? "components" : "children"}</div>
+                </div>
+              </button>
+            )}
           </div>
         </div>
       )}

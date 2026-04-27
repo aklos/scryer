@@ -60,6 +60,66 @@ Be thorough — identify all deployable units, data stores, external integration
     )
 }
 
+/// Build a prompt for filling out the children of a specific node from existing code.
+/// The agent reads the codebase and populates the next C4 level down.
+pub fn node_fill_prompt(
+    model_name: &str,
+    cwd: &str,
+    node_id: &str,
+    node_name: &str,
+    node_kind: &str,
+    model_json: &str,
+) -> String {
+    let child_kind = match node_kind {
+        "system" => "containers (applications, services, data stores)",
+        "container" => "components (logical modules within the container)",
+        "component" => "operations (functions/methods), processes (multi-step flows), and models (data types)",
+        _ => "child nodes",
+    };
+
+    let extra_instructions = match node_kind {
+        "system" => r#"
+   - Add all containers: APIs, web apps, workers, databases, message queues, caches.
+   - Set `technology` on every container (e.g. "Next.js", "PostgreSQL", "Redis").
+   - Add edges between containers showing data flow and dependencies.
+   - Group containers that deploy together using `set_groups`."#,
+        "container" => r#"
+   - Identify logical components by reading the source directories mapped to this container.
+   - Components should represent cohesive modules — not one per file, but logical groupings.
+   - Add edges between components showing internal dependencies.
+   - Set `technology` where relevant (framework, library)."#,
+        "component" => r#"
+   - Read the source files for this component to identify functions, methods, and data types.
+   - Operations = individual functions or handlers (name must be a valid identifier, match the language convention).
+   - Processes = multi-step workflows that orchestrate multiple operations.
+   - Models = data types with properties (name should be PascalCase).
+   - Add descriptions explaining what each operation/process/model does."#,
+        _ => "",
+    };
+
+    format!(
+        r#"You have access to the scryer MCP server. Fill out the internals of the "{node_name}" node in model "{model_name}" from the codebase at {cwd}.
+
+## Current model state
+
+Do NOT call `get_model` — the current state is provided here:
+
+{model_json}
+
+## Instructions
+
+1. Call `get_rules` to load the C4 modeling rules.
+2. Call `get_node` with id "{node_id}" to see this node's full context (description, contract, source mappings, existing edges).
+3. Use `get_structure` with path "{cwd}" and read relevant source files to understand what {child_kind} belong inside "{node_name}".
+4. Add {child_kind} using `set_node` on "{node_id}" — include both child nodes and edges between them.{extra_instructions}
+5. Set `status: "implemented"` on nodes that already exist in the codebase. Leave new/proposed items as `status: "proposed"`.
+6. Update source mappings for new nodes using `update_source_map` with glob patterns.
+7. Call `get_changes` to produce a summary.
+
+Focus only on "{node_name}" — do not modify nodes outside this scope. Be thorough — identify all {child_kind} from the actual code, not just the obvious ones."#
+    )
+}
+
 /// Build a focused sync prompt listing nodes whose source files changed.
 /// Includes the full model JSON so the agent can skip calling `get_model`.
 pub fn sync_prompt(

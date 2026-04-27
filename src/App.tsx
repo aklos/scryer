@@ -709,6 +709,24 @@ function Flow() {
     }
   }, [currentModel, projectPath]);
 
+  const handleFillNode = useCallback(async (nodeId: string) => {
+    if (!currentModel || !projectPath || syncStatus === "running") return;
+    setSyncStatus("running");
+    setSyncMessage(null);
+    setSyncLog([]);
+    try {
+      await invoke<string>("start_node_fill_session", {
+        cwd: projectPath,
+        modelName: currentModel,
+        nodeId,
+      });
+    } catch (e) {
+      const msg = typeof e === "string" ? e : (e as Error)?.message ?? "Unknown error";
+      setSyncMessage(msg);
+      setSyncStatus("error");
+    }
+  }, [currentModel, projectPath, syncStatus]);
+
   const deleteNode = useCallback(
     (id: string) => {
       const toDelete = new Set<string>([id]);
@@ -1117,6 +1135,8 @@ function Flow() {
               setNodes={setNodes}
               followAI={storage.followAI}
               onToggleFollowAI={() => storage.setFollowAI(!storage.followAI)}
+              onFillNode={handleFillNode}
+              hasAgent={aiTools.claude || aiTools.codex}
             />
           )}
           {currentModel && (
