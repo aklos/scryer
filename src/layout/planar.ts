@@ -400,6 +400,90 @@ function augmentBiconnected(
   return { edges: allEdges, dummyEdges };
 }
 
+// ── Biconnected component decomposition ───────────────────────────────
+
+interface Block {
+  nodes: string[];
+  edges: EdgePair[];
+}
+
+/**
+ * Decompose a connected graph into biconnected components ("blocks") via
+ * Tarjan's algorithm with an edge stack. Each block is a maximal subgraph
+ * with no internal articulation point. Blocks are joined through cut
+ * vertices (graph-wide articulation points), and each cut vertex appears
+ * in every block that touches it.
+ *
+ * Used to detect pendant subgraphs hanging off cut vertices so they can be
+ * laid out and stitched independently — without that, augmentation forces
+ * pendant blocks into the main planar embedding, bloating the outer face.
+ */
+function biconnectedComponents(
+  nodeIds: string[],
+  edges: EdgePair[],
+): { blocks: Block[]; articulationPoints: Set<string> } {
+  const adj = buildAdj(nodeIds, edges);
+  const disc = new Map<string, number>();
+  const low = new Map<string, number>();
+  const aps = new Set<string>();
+  const blocks: Block[] = [];
+  const stack: EdgePair[] = [];
+  let timer = 0;
+
+  const popBlockTo = (u: string, v: string): void => {
+    const blockEdges: EdgePair[] = [];
+    while (stack.length > 0) {
+      const e = stack.pop()!;
+      blockEdges.push(e);
+      if ((e[0] === u && e[1] === v) || (e[0] === v && e[1] === u)) break;
+    }
+    if (blockEdges.length > 0) {
+      blocks.push({ nodes: [...new Set(blockEdges.flat())], edges: blockEdges });
+    }
+  };
+
+  const popRest = (): void => {
+    if (stack.length === 0) return;
+    const blockEdges = stack.splice(0);
+    blocks.push({ nodes: [...new Set(blockEdges.flat())], edges: blockEdges });
+  };
+
+  const visit = (u: string, par: string | null): void => {
+    disc.set(u, timer);
+    low.set(u, timer);
+    timer++;
+    let children = 0;
+
+    for (const v of adj.get(u) ?? []) {
+      if (!disc.has(v)) {
+        children++;
+        stack.push([u, v]);
+        visit(v, u);
+        low.set(u, Math.min(low.get(u)!, low.get(v)!));
+
+        const isRoot = par === null;
+        const isCut = !isRoot && low.get(v)! >= disc.get(u)!;
+        if (isCut || (isRoot && children > 1)) {
+          aps.add(u);
+          popBlockTo(u, v);
+        }
+      } else if (v !== par && disc.get(v)! < disc.get(u)!) {
+        stack.push([u, v]);
+        low.set(u, Math.min(low.get(u)!, disc.get(v)!));
+      }
+    }
+  };
+
+  for (const id of nodeIds) {
+    if (!disc.has(id)) {
+      visit(id, null);
+      popRest();
+    }
+  }
+
+  return { blocks, articulationPoints: aps };
+}
+
 // ── Triangulation ──────────────────────────────────────────────────────
 
 /**
@@ -903,11 +987,11 @@ function positionLeaves(
 
         if (!placed) {
           // Within the outward semicircle (baseAngle ± π/2 — anything wider
-          // would wrap back into the graph interior), find the angular sub-arc
-          // with the most clearance from existing nodes and centre the fan
-          // there. Just walking toward baseAngle would push leaves through
-          // any node that happens to lie radially outward; rotating around it
-          // keeps the leaf edge from crossing existing geometry.
+          // would wrap back into the graph interior), enumerate unblocked
+          // sub-arcs. Distribute leaves across all gaps proportional to gap
+          // size — picking only the single largest gap forces every leaf
+          // through one side of an obstacle, which blows up the leaf
+          // distance when the obstacle sits near baseAngle.
           const HALF_RANGE = Math.PI / 2;
           const MARGIN = Math.PI / 12;
           const blocked: [number, number][] = [];
@@ -921,69 +1005,78 @@ function positionLeaves(
             if (lo < hi) blocked.push([lo, hi]);
           }
           blocked.sort((a, b) => a[0] - b[0]);
-          // Merge overlapping blocked intervals
           const merged: [number, number][] = [];
           for (const iv of blocked) {
             const last = merged[merged.length - 1];
             if (last && iv[0] <= last[1]) last[1] = Math.max(last[1], iv[1]);
             else merged.push([iv[0], iv[1]]);
           }
-          // Find the largest gap between -HALF_RANGE and HALF_RANGE
-          let bestLo = -HALF_RANGE;
-          let bestHi = HALF_RANGE;
-          let bestSize = 2 * HALF_RANGE;
+          const gaps: { lo: number; hi: number }[] = [];
           let cursor = -HALF_RANGE;
           for (const [lo, hi] of merged) {
-            if (lo > cursor) {
-              const size = lo - cursor;
-              if (size > bestSize || bestSize === 2 * HALF_RANGE) {
-                bestSize = size;
-                bestLo = cursor;
-                bestHi = lo;
-              }
-            }
+            if (lo > cursor) gaps.push({ lo: cursor, hi: lo });
             cursor = Math.max(cursor, hi);
           }
-          if (HALF_RANGE > cursor) {
-            const size = HALF_RANGE - cursor;
-            if (size > bestSize || bestSize === 2 * HALF_RANGE) {
-              bestSize = size;
-              bestLo = cursor;
-              bestHi = HALF_RANGE;
+          if (cursor < HALF_RANGE) gaps.push({ lo: cursor, hi: HALF_RANGE });
+
+          const totalGap = gaps.reduce((s, g) => s + (g.hi - g.lo), 0);
+
+          // Allocate leaf count per gap proportional to size, with largest
+          // remainders winning the rounding.
+          const allocations: number[] = [];
+          if (gaps.length === 0 || totalGap <= 0) {
+            // Fully blocked — fall back to placing the whole fan along
+            // baseAngle. Edges may pass close to obstacles but at least leaves
+            // don't disappear.
+            gaps.push({ lo: -HALF_RANGE, hi: HALF_RANGE });
+            allocations.push(N);
+          } else {
+            const exact = gaps.map((g) => (N * (g.hi - g.lo)) / totalGap);
+            const floored = exact.map((x) => Math.floor(x));
+            let remaining = N - floored.reduce((s, x) => s + x, 0);
+            const remainders = exact
+              .map((x, i) => ({ i, frac: x - Math.floor(x) }))
+              .sort((a, b) => b.frac - a.frac);
+            for (let k = 0; k < remainders.length && remaining > 0; k++) {
+              floored[remainders[k].i]++;
+              remaining--;
             }
+            for (const v of floored) allocations.push(v);
           }
-          // If nothing was blocked, bestSize stayed at 2*HALF_RANGE; that's
-          // fine — the whole semicircle is open and bestLo/bestHi already
-          // span it. Otherwise bestLo/bestHi describe the chosen sub-arc.
-          if (merged.length === 0) {
-            bestLo = -HALF_RANGE;
-            bestHi = HALF_RANGE;
-            bestSize = 2 * HALF_RANGE;
-          }
-          const fanCenter = baseAngle + (bestLo + bestHi) / 2;
 
           const TARGET_DIST = 1.8;
-          let arcDist = TARGET_DIST;
-          let arc = 0;
-          if (N > 1) {
-            const minArc = 2 * (N - 1) * Math.asin(
-              Math.min(0.9, MIN_CHORD / (2 * TARGET_DIST)),
-            );
-            arc = Math.min(bestSize, Math.max(fanSpread, minArc));
-            if (arc > 0) {
-              const arcGap = arc / (N - 1);
-              arcDist = Math.max(
-                TARGET_DIST,
-                MIN_CHORD / (2 * Math.sin(Math.min(arcGap, Math.PI) / 2)),
-              );
+          let placedIdx = 0;
+          for (let gi = 0; gi < gaps.length; gi++) {
+            const gapN = allocations[gi];
+            if (gapN === 0) continue;
+            const gap = gaps[gi];
+            const gapSize = gap.hi - gap.lo;
+            const gapCenter = (gap.lo + gap.hi) / 2;
+
+            // Spread the gapN leaves across this gap, capped at the gap width.
+            const minArc = gapN > 1
+              ? 2 * (gapN - 1) * Math.asin(
+                  Math.min(0.9, MIN_CHORD / (2 * TARGET_DIST)),
+                )
+              : 0;
+            const arc = gapN > 1
+              ? Math.min(gapSize, Math.max(fanSpread, minArc))
+              : 0;
+            const arcDist = gapN > 1
+              ? Math.max(
+                  TARGET_DIST,
+                  MIN_CHORD / (2 * Math.sin(Math.min(arc / (gapN - 1), Math.PI) / 2)),
+                )
+              : TARGET_DIST;
+
+            for (let i = 0; i < gapN; i++) {
+              const t = gapN === 1 ? 0 : (i / (gapN - 1) - 0.5) * arc;
+              positions.set(ordered[placedIdx + i].id, {
+                col: pp.col + arcDist * Math.cos(baseAngle + gapCenter + t),
+                row: pp.row + arcDist * Math.sin(baseAngle + gapCenter + t),
+              });
             }
-          }
-          for (let i = 0; i < N; i++) {
-            const t = N === 1 ? 0 : (i / (N - 1) - 0.5) * arc;
-            positions.set(ordered[i].id, {
-              col: pp.col + arcDist * Math.cos(fanCenter + t),
-              row: pp.row + arcDist * Math.sin(fanCenter + t),
-            });
+            placedIdx += gapN;
           }
         }
       }
@@ -1351,6 +1444,120 @@ function kamadaKawai(
  * 3. FPP shift method: crossing-free integer grid placement
  * 4. Kamada-Kawai: stress-minimize using graph distances (all edges)
  */
+/**
+ * Stitch a separately-laid-out block onto already-placed positions at a
+ * shared cut vertex. The block is rotated so its centroid points outward
+ * from the placed graph's centroid through the shared vertex, then
+ * translated so the shared vertex aligns. The shared vertex keeps the
+ * already-placed position; all other block vertices are written in.
+ */
+function stitchBlock(
+  globalPositions: Map<string, { col: number; row: number }>,
+  blockPositions: Map<string, { col: number; row: number }>,
+  sharedVertex: string,
+): void {
+  let gx = 0, gy = 0, gn = 0;
+  for (const p of globalPositions.values()) { gx += p.col; gy += p.row; gn++; }
+  if (gn > 0) { gx /= gn; gy /= gn; }
+
+  let bx = 0, by = 0, bn = 0;
+  for (const p of blockPositions.values()) { bx += p.col; by += p.row; bn++; }
+  if (bn > 0) { bx /= bn; by /= bn; }
+
+  const gp = globalPositions.get(sharedVertex);
+  const bp = blockPositions.get(sharedVertex);
+  if (!gp || !bp) return;
+
+  // Outward direction in global frame: from global centroid through the cut vertex.
+  const outAngle = Math.atan2(gp.row - gy, gp.col - gx);
+  // Block's centroid direction from the shared vertex (in local frame).
+  const localAngle = Math.atan2(by - bp.row, bx - bp.col);
+
+  const rotation = outAngle - localAngle;
+  const cosR = Math.cos(rotation);
+  const sinR = Math.sin(rotation);
+
+  for (const [v, p] of blockPositions) {
+    if (v === sharedVertex) continue;
+    const dx = p.col - bp.col;
+    const dy = p.row - bp.row;
+    const rx = dx * cosR - dy * sinR;
+    const ry = dx * sinR + dy * cosR;
+    globalPositions.set(v, { col: gp.col + rx, row: gp.row + ry });
+  }
+}
+
+/**
+ * Lay out a connected graph that decomposes into multiple biconnected
+ * blocks. Anchor = largest block (by node count); lay it out via the
+ * single-block planar pipeline. For each remaining block, lay it out
+ * independently and stitch onto the placed positions at the shared cut
+ * vertex, fanning outward from the global centroid.
+ *
+ * Leaves (degree-1 vertices stripped at the planarLayout entry) are
+ * placed at the end on the combined positions, all as outer-fan placements
+ * — pendant-block vertices sit on the periphery, so any leaves attached
+ * to them belong outside, not in some interior face that doesn't exist
+ * across blocks.
+ */
+async function layoutMultiBlock(
+  blocks: Block[],
+  articulationPoints: Set<string>,
+  leaves: { id: string; parent: string }[],
+  leafDirections: Map<string, LeafDirection>,
+): Promise<PlanarLayoutResult> {
+  let anchor = blocks[0];
+  for (const b of blocks) {
+    if (b.nodes.length > anchor.nodes.length) anchor = b;
+  }
+
+  const allPositions = new Map<string, { col: number; row: number }>();
+  const allNonPlanar: EdgePair[] = [];
+
+  const anchorResult = await planarLayout(anchor.nodes, anchor.edges);
+  for (const [id, p] of anchorResult.positions) allPositions.set(id, p);
+  allNonPlanar.push(...anchorResult.nonPlanarEdges);
+
+  // BFS through the block-cut tree, placing each non-anchor block.
+  const placed = new Set<Block>([anchor]);
+  const queue: Block[] = [anchor];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const b of blocks) {
+      if (placed.has(b)) continue;
+      const shared = b.nodes.find(
+        (n) => articulationPoints.has(n) && current.nodes.includes(n),
+      );
+      if (!shared) continue;
+
+      const result = await planarLayout(b.nodes, b.edges);
+      allNonPlanar.push(...result.nonPlanarEdges);
+      stitchBlock(allPositions, result.positions, shared);
+      placed.add(b);
+      queue.push(b);
+    }
+  }
+
+  // Place leaves on the combined layout. Pass a placeholder non-empty
+  // faces array so positionLeaves picks the Tutte-mode (gap-finding) fan
+  // rather than the star-mode sector logic; with no real face data, every
+  // parent gets assignment -1 (outer fan) which is right for a stitched
+  // multi-block layout where blocks already sit on the periphery.
+  if (leaves.length > 0) {
+    placeLeaves(
+      allPositions,
+      leaves,
+      [[]],
+      [],
+      new Set<string>(),
+      [],
+      leafDirections,
+    );
+  }
+
+  return { positions: allPositions, nonPlanarEdges: allNonPlanar };
+}
+
 export async function planarLayout(
   nodeIds: string[],
   edges: EdgePair[],
@@ -1376,23 +1583,53 @@ export async function planarLayout(
     };
   }
 
-  // Step 1: Identify leaf nodes (degree 1 in real graph) — strip before FPP
+  // Step 1: Iteratively strip degree-1 vertices. A single pass leaves
+  // tree-like chains hanging off the core (e.g. a leaf parent that itself
+  // has only one other connection) which then end up as separate "pendant
+  // blocks" in BCC and get stitched as if they were significant — the
+  // pendant placement collides with the leaf fan around the cut vertex.
+  // Iterating until fixpoint reduces tree pendants to ordinary leaves so
+  // they fan with their siblings; only genuine biconnected pendants (with
+  // at least one cycle) survive into the block decomposition step.
   const realAdj = buildAdj(nodeIds, dedupedEdges);
+  const remainingDeg = new Map<string, number>();
+  for (const id of nodeIds) remainingDeg.set(id, realAdj.get(id)?.size ?? 0);
+  const stripped = new Set<string>();
   const leaves: { id: string; parent: string }[] = [];
-  const coreIds: string[] = [];
-  for (const id of nodeIds) {
-    const deg = realAdj.get(id)?.size ?? 0;
-    if (deg === 1) {
-      leaves.push({ id, parent: [...realAdj.get(id)!][0] });
-    } else {
-      coreIds.push(id);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const id of nodeIds) {
+      if (stripped.has(id)) continue;
+      if ((remainingDeg.get(id) ?? 0) !== 1) continue;
+      const parent = [...realAdj.get(id) ?? []].find((n) => !stripped.has(n));
+      if (!parent) continue;
+      leaves.push({ id, parent });
+      stripped.add(id);
+      remainingDeg.set(parent, (remainingDeg.get(parent) ?? 1) - 1);
+      changed = true;
     }
   }
+  // Reverse so leaves stripped later (parents closer to core) are processed
+  // first by positionLeaves' byParent grouping. Otherwise a leaf whose parent
+  // is itself a leaf (a chain extending out from the core) would try to look
+  // up a parent position that hasn't been set yet.
+  leaves.reverse();
+  const coreIds = nodeIds.filter((id) => !stripped.has(id));
   const coreSet = new Set(coreIds);
   const coreEdges = dedupedEdges.filter(
     ([u, v]) => coreSet.has(u) && coreSet.has(v),
   );
   const leafDirections = buildLeafDirections(leaves, edges);
+
+  // Step 2: If the core decomposes into multiple biconnected blocks, lay
+  // each out independently and stitch them at their shared cut vertices —
+  // pendant blocks stay external to the main embedding instead of getting
+  // pulled into the augmented outer face.
+  const { blocks, articulationPoints } = biconnectedComponents(coreIds, coreEdges);
+  if (blocks.length > 1) {
+    return await layoutMultiBlock(blocks, articulationPoints, leaves, leafDirections);
+  }
 
   // Step 3: If core is too small (e.g. star graph), use KK directly
   if (coreIds.length <= 2) {
