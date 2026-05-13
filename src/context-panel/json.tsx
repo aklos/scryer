@@ -219,6 +219,157 @@ export function MultilineField({ name, value, onChange, placeholder, indent, las
   );
 }
 
+/** Parse a description string into items. Returns `{ items, wasBulleted }`.
+ *  - Lines starting with `-` or `*` (after trim) are treated as bullets.
+ *  - If any line is bulleted → bullet mode (each line is one item).
+ *  - Otherwise → prose mode (the whole string is one item). */
+function parseBullets(value: string): { items: string[]; wasBulleted: boolean } {
+  if (!value) return { items: [], wasBulleted: false };
+  const lines = value.split("\n");
+  const hasBullet = lines.some((l) => /^[\-\*]\s/.test(l.trimStart()));
+  if (!hasBullet) {
+    const trimmed = value.trim();
+    return { items: trimmed ? [trimmed] : [], wasBulleted: false };
+  }
+  const items: string[] = [];
+  for (const line of lines) {
+    const t = line.trimStart();
+    if (/^[\-\*]\s/.test(t)) items.push(t.slice(2).trim());
+    // Drop non-bullet lines once we're in bullet mode (no good way to attach them)
+  }
+  return { items, wasBulleted: true };
+}
+
+/** Serialize items back to the description string. Single item with no original bullets → prose. */
+function serializeBullets(items: string[], forceBullets: boolean): string {
+  const cleaned = items.map((s) => s.trim()).filter((s) => s.length > 0);
+  if (cleaned.length === 0) return "";
+  if (cleaned.length === 1 && !forceBullets) return cleaned[0];
+  return cleaned.map((s) => `- ${s}`).join("\n");
+}
+
+/** A list-of-bullets editor for a single description string.
+ *  Visually presents as a multiline JSON string. Each bullet is its own input.
+ *  Adding a 2nd item promotes a prose value to bulleted on save. */
+export function BulletListField({ name, value, onChange, placeholder, indent, last }: {
+  name: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  indent: number;
+  last?: boolean;
+}) {
+  const parsed = parseBullets(value);
+  // Local state lets the user edit blanks without instantly serializing them away
+  const [items, setItems] = useState<string[]>(parsed.items);
+  const [wasBulleted, setWasBulleted] = useState(parsed.wasBulleted);
+  useEffect(() => {
+    const p = parseBullets(value);
+    setItems(p.items);
+    setWasBulleted(p.wasBulleted);
+  }, [value]);
+
+  const commit = (next: string[], forceBullets = wasBulleted) => {
+    setItems(next);
+    onChange(serializeBullets(next, forceBullets));
+  };
+
+  const addItem = () => {
+    const next = [...items, ""];
+    // Adding a 2nd item promotes to bulleted shape on next commit
+    if (next.length >= 2) setWasBulleted(true);
+    setItems(next);
+  };
+
+  return (
+    <>
+      <JLine indent={indent}>
+        <K name={name} />
+        <P>: </P>
+        <span className={J_PUNCT}>"</span>
+      </JLine>
+      <div style={{ paddingLeft: `${(indent + 1)}rem` }} className="flex flex-col">
+        {items.length === 0 && (
+          <button
+            type="button"
+            className={`${J_NULL} self-start cursor-pointer rounded-sm hover:bg-[var(--surface-hover)] px-0.5 italic`}
+            onClick={addItem}
+          >
+            {placeholder ?? "(empty)"}
+          </button>
+        )}
+        {items.map((item, i) => (
+          <BulletRow
+            key={i}
+            value={item}
+            multi={items.length > 1 || wasBulleted}
+            onChange={(v) => {
+              const next = items.map((x, j) => j === i ? v : x);
+              setItems(next);
+            }}
+            onBlur={() => commit(items)}
+            onRemove={() => {
+              const next = items.filter((_, j) => j !== i);
+              // If removing brings us back to 1 item, allow prose round-trip
+              const force = next.length >= 2;
+              if (!force) setWasBulleted(false);
+              commit(next, force);
+            }}
+          />
+        ))}
+        {items.length > 0 && (
+          <button
+            type="button"
+            className={`${J_NULL} self-start cursor-pointer rounded-sm hover:bg-[var(--surface-hover)] px-0.5 mt-0.5`}
+            onClick={addItem}
+          >
+            + bullet
+          </button>
+        )}
+      </div>
+      <JLine indent={indent}>
+        <span className={J_PUNCT}>"</span>
+        {!last && <P>,</P>}
+      </JLine>
+    </>
+  );
+}
+
+function BulletRow({ value, multi, onChange, onBlur, onRemove }: {
+  value: string;
+  multi: boolean;
+  onChange: (v: string) => void;
+  onBlur: () => void;
+  onRemove: () => void;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.style.height = "0";
+      ref.current.style.height = ref.current.scrollHeight + "px";
+    }
+  }, [value]);
+  return (
+    <div className="group flex items-start gap-1">
+      {multi && <span className={`${J_PUNCT} pt-[1px] select-none`}>-</span>}
+      <textarea
+        ref={ref}
+        value={value}
+        rows={1}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
+        className={`flex-1 bg-transparent outline-none rounded-sm hover:bg-[var(--surface-hover)] focus:bg-[var(--surface-tint)] ${J_STR} font-mono text-[11px] leading-[1.35] resize-none placeholder:text-zinc-500 placeholder:italic`}
+      />
+      <button
+        type="button"
+        className="opacity-0 group-hover:opacity-100 text-[10px] text-zinc-500 hover:text-red-400 cursor-pointer pt-[1px]"
+        onClick={onRemove}
+        title="Remove bullet"
+      >×</button>
+    </div>
+  );
+}
+
 /** Enum string: looks like a string, click reveals dropdown of allowed values. */
 export function EnumEdit<T extends string>({ value, options, onChange, allowNone = false }: {
   value: T | undefined;

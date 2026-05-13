@@ -2,7 +2,7 @@ import type { C4Node, C4NodeData, Status, C4Shape, ModelProperty } from "../type
 import { useUpdateNodeData, sanitizeIdentifier, sanitizeTypeName } from "./utils";
 import { ALL_SHAPES } from "../shapes";
 import {
-  JsonRoot, JLine, P, K, S, Field, StrEdit, MultilineField, EnumEdit, BoolEdit,
+  JsonRoot, JLine, P, K, S, Field, StrEdit, BulletListField, EnumEdit, BoolEdit,
   DiffOldField, DiffOldMultiline,
   J_PUNCT, J_NULL,
 } from "./json";
@@ -128,11 +128,11 @@ export function NodeDataSection({ node, indent = 1, previousData, onDismissDiff 
     <>
       {isDiff("description") && <DiffOldMultiline name="description" indent={indent + 1} value={previousData?.description ?? ""} />}
       <div className={isDiff("description") ? "bg-emerald-500/10" : ""}>
-        <MultilineField
+        <BulletListField
           name="description"
           indent={indent + 1}
           last={last}
-          value={data.description}
+          value={data.description ?? ""}
           onChange={(v) => updateNodeData(node.id, { description: v })}
           placeholder="Describe this node..."
         />
