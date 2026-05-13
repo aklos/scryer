@@ -59,9 +59,10 @@ pub fn serialize_diagram(model: &C4ModelData) -> String {
         }
         if !d.description.is_empty() {
             out.push_str(" | \"");
-            // Truncate long descriptions
-            if d.description.len() > 80 {
-                out.push_str(&d.description[..80]);
+            // Truncate long descriptions — keep enough to evaluate prose vs bullets
+            if d.description.chars().count() > 240 {
+                let truncated: String = d.description.chars().take(240).collect();
+                out.push_str(&truncated);
                 out.push_str("...");
             } else {
                 out.push_str(&d.description);
@@ -180,7 +181,15 @@ auth mechanism modeled, APIs with no validation or error handling component, dat
 with no migration strategy, user-facing services with no rate limiting. Be specific: \
 \"This API has no authentication — add a Session Auth or JWT component\" not \"consider security\"\n\
 - Placeholder nodes — flag nodes named like \"Auth (TODO)\", \"TBD\", or with vague descriptions \
-like \"handles security\" that don't name a concrete mechanism\n\n\
+like \"handles security\" that don't name a concrete mechanism\n\
+- Prose-shaped descriptions — flag descriptions that pack multiple capabilities into a single \
+sentence with commas/and (e.g. \"REST API that ingests events, resolves identity, processes \
+via queue, and serves dashboards\"). Suggest splitting into verb-led bullets, one capability \
+per line, each prefixed with `-` and starting with a lowercase verb (`ingests events`, \
+`resolves visitor identity`). Give the rewritten bullet list in the suggestion. Do NOT flag \
+descriptions that are already bulleted (any line starts with `-` or `*`), short \
+single-capability descriptions, or single identity statements like \"Primary data store for \
+visitors\" or \"Transactional email service\" where the commas list nouns rather than verbs\n\n\
 Do NOT:\n\
 - Flag empty descriptions, missing technology fields, or unlabeled edges — \
 the UI already tracks completeness separately\n\
