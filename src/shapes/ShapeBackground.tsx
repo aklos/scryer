@@ -23,6 +23,9 @@ interface Props {
   kind?: C4Kind;
   external?: boolean;
   changed?: boolean;
+  /** When true, skip cap paths on shapes that occlude a back curve (cylinder/pipe/bucket).
+   *  Use for unfilled silhouettes — the body path already includes the back curve. */
+  hollow?: boolean;
 }
 
 export function ShapeBackground({
@@ -35,6 +38,7 @@ export function ShapeBackground({
   kind,
   external,
   changed,
+  hollow,
 }: Props) {
   return (
     <svg
@@ -59,6 +63,7 @@ export function ShapeBackground({
         strokeWidth={strokeWidth}
         strokeDasharray={external ? undefined : strokeDasharray}
         skipBaseFill={opacity != null && opacity < 1}
+        hollow={hollow}
       />
       {kind === "system" && shape === "rectangle" && (
         <rect
@@ -147,6 +152,7 @@ function ShapePaths({
   strokeWidth,
   strokeDasharray,
   skipBaseFill,
+  hollow,
 }: {
   shape: C4Shape;
   fillClass: string;
@@ -154,6 +160,7 @@ function ShapePaths({
   strokeWidth?: number;
   strokeDasharray?: string;
   skipBaseFill?: boolean;
+  hollow?: boolean;
 }) {
   // Base fill: sharp rect always covers the full content area
   // Skipped when semi-transparent to avoid overlap artifacts
@@ -179,7 +186,7 @@ function ShapePaths({
         <>
           {baseFill}
           <path d={c.bodyPath} {...outline} />
-          <path d={c.topCapPath} {...outline} />
+          {!hollow && <path d={c.topCapPath} {...outline} />}
         </>
       );
     }
@@ -190,7 +197,7 @@ function ShapePaths({
         <>
           {baseFill}
           <path d={p.bodyPath} {...outline} />
-          <path d={p.rightCapPath} {...outline} />
+          {!hollow && <path d={p.rightCapPath} {...outline} />}
         </>
       );
     }
@@ -209,7 +216,7 @@ function ShapePaths({
         <>
           {baseFill}
           <path d={b.bodyPath} {...outline} />
-          <path d={b.topCapPath} {...outline} />
+          {!hollow && <path d={b.topCapPath} {...outline} />}
         </>
       );
     }

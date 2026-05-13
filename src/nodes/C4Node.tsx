@@ -176,7 +176,6 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
   // Reference node: dimmed, non-editable, shows relationships instead of description
   if (data._reference) {
     const isRefPerson = data.kind === "person";
-    const refSilhouetteFill = "var(--scryer-person-fill)";
     return (
       <div
         className={`relative w-[180px]${dragOver ? " ring-2 ring-zinc-400 ring-dashed rounded" : ""}`}
@@ -189,7 +188,7 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
           {!isRefPerson && (
             <ShapeBackground
               shape={shape}
-              fillClass="fill-[var(--scryer-ref-bg)]"
+              fillClass="fill-none"
               strokeClass={
                 selected
                   ? "stroke-[var(--text)]"
@@ -199,6 +198,7 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
               strokeDasharray={data.external ? "6 3" : undefined}
               kind={data.kind}
               external={!!data.external}
+              hollow
             />
           )}
           {data._codeLevel ? <CenterHandle /> : <NodeHandles />}
@@ -206,7 +206,7 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
           <div
             className={`absolute flex flex-col justify-center items-center text-[var(--text-tertiary)] ${isRefPerson ? "overflow-visible" : "overflow-hidden"}`}
             style={{
-              top: isRefPerson && (data.description?.length ?? 0) > 80 ? -20 : insets.top,
+              top: insets.top,
               bottom: insets.bottom,
               left: insets.left,
               right: insets.right,
@@ -222,17 +222,6 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
               >
                 <defs>
                   <linearGradient
-                    id={`person-fade-ref-${id}`}
-                    gradientUnits="userSpaceOnUse"
-                    x1="0"
-                    y1="40"
-                    x2="0"
-                    y2="72"
-                  >
-                    <stop offset="0%" stopColor={refSilhouetteFill} stopOpacity="1" />
-                    <stop offset="100%" stopColor={refSilhouetteFill} stopOpacity="0" />
-                  </linearGradient>
-                  <linearGradient
                     id={`person-stroke-fade-ref-${id}`}
                     gradientUnits="userSpaceOnUse"
                     x1="0"
@@ -245,16 +234,6 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
                     <stop offset="100%" stopColor={selected ? "var(--scryer-select-stroke)" : "var(--scryer-outline-stroke)"} stopOpacity="0" />
                   </linearGradient>
                 </defs>
-                <path
-                  d={[
-                    "M 33,72 C 33,42 48,28 76,24",
-                    "A 22,26 0 1,1 104,24",
-                    "C 132,28 147,42 147,72",
-                    "Z",
-                  ].join(" ")}
-                  fill={`url(#person-fade-ref-${id})`}
-                  opacity="0.7"
-                />
                 <path
                   d={[
                     "M 33,72 C 33,42 48,28 76,24",
@@ -278,19 +257,6 @@ export function C4Node({ id, data, selected }: NodeProps<C4NodeType>) {
             {data.technology && (
               <div className="mt-0.5 text-center text-[10px] tracking-wider">
                 {data.technology}
-              </div>
-            )}
-
-            {data.description && (
-              <div className="mt-2 w-full text-[10px] leading-snug break-words overflow-hidden text-center">
-                <DescriptionText
-                  text={data.description}
-                  onMentionClick={(name) =>
-                    window.dispatchEvent(
-                      new CustomEvent("mention-click", { detail: { name } }),
-                    )
-                  }
-                />
               </div>
             )}
           </div>
