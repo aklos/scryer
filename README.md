@@ -40,6 +40,7 @@ Opinionated [C4](https://c4model.com/) hierarchy (system, container, component, 
 - **C4 Architecture Diagrams**
   - Drag-and-drop editor for systems, containers, components, and operations. Drill down through levels.
   - Code-level nodes (operations, processes, models) show in a compact list view.
+  - **Fill with AI** — point an agent at an empty system or container and it scans the codebase to populate the next level.
 - **Behavioral Flows**
   - Model user journeys, data pipelines, deploy sequences. Supports branching and decision points.
   - Flows serve as integration test specs — link them to test files via source mapping.
@@ -156,9 +157,10 @@ For Claude Code, you can also auto-approve Scryer's read tools so the agent does
 - `get_task` — next implementation task. When multiple containers are available, presents a choice menu with groups. Scaffold tasks fire first for deployment groups. The model is the spec — agents must build exactly what it describes and clean up anything templates add that isn't in the model
 - Add, update, and remove nodes and edges
 - Define behavioral flows with branching (`set_flows`)
-- Organize containers into groups (`set_groups`)
+- Organize systems, containers, or components into groups (`set_groups`)
 - Link nodes and flows to source code (`update_source_map`)
 - Validate the model against C4 rules (`validate_model`)
+- Pause drift detection while implementing (`set_implementing`)
 
 ## Drift detection & sync
 
@@ -175,7 +177,7 @@ For Claude Code, the MCP server config is passed inline via `--mcp-config`. For 
 
 ## Tech
 
-Scryer is a [Tauri](https://tauri.app/) desktop app. The UI is written in [React](https://react.dev/) with [TypeScript](https://www.typescriptlang.org/) and the backend is written in [Rust](https://www.rust-lang.org/). Canvas rendering uses [ReactFlow](https://reactflow.dev/) with [d3-force](https://d3js.org/d3-force) for auto-layout.
+Scryer is a [Tauri](https://tauri.app/) desktop app. The UI is written in [React](https://react.dev/) with [TypeScript](https://www.typescriptlang.org/) and the backend is written in [Rust](https://www.rust-lang.org/). Canvas rendering uses [ReactFlow](https://reactflow.dev/) with a custom planar auto-layout engine.
 
 ## Building from source
 

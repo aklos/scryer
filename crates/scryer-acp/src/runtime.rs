@@ -209,6 +209,7 @@ fn start_cli_session(
             cmd.arg("-p")
                 .arg("--output-format").arg("stream-json")
                 .arg("--verbose")
+                .arg("--effort").arg("medium")
                 .arg("--mcp-config").arg(mcp_config.to_string())
                 .arg("--allowed-tools").arg("mcp__scryer__*")
                 .arg("--no-session-persistence")
@@ -220,6 +221,7 @@ fn start_cli_session(
                 .arg("--full-auto")
                 .arg("--json")
                 .arg("--ephemeral")
+                .arg("-c").arg("model_reasoning_effort=\"medium\"")
                 .arg(&prompt);
         }
         AgentKind::Other => {

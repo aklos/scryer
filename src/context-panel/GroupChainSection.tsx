@@ -35,7 +35,6 @@ export function GroupChainSection({
         <K name="groups" />
         <P>: </P>
         <span className={J_PUNCT}>[]</span>
-        <P>,</P>
       </JLine>
     );
   }
@@ -47,7 +46,6 @@ export function GroupChainSection({
         <P>: [</P>
       </JLine>
       {chain.map((g, gi) => {
-        const last = gi === chain.length - 1;
         const contract = g.contract;
         const hasContract =
           contract &&
@@ -70,7 +68,6 @@ export function GroupChainSection({
                 </>
               )}
               {!hasContract && <P>{" }"}</P>}
-              {!hasContract && !last && <P>,</P>}
             </JLine>
             {hasContract && (
               <>
@@ -87,17 +84,10 @@ export function GroupChainSection({
                     {contract!.expect.map((item, i) => (
                       <JLine indent={indent + 4} key={`e-${i}`}>
                         <S value={contractText(item)} />
-                        {i < contract!.expect.length - 1 && <P>,</P>}
                       </JLine>
                     ))}
                     <JLine indent={indent + 3}>
-                      <P>
-                        ]
-                        {(contract!.ask?.length ?? 0) > 0 ||
-                        (contract!.never?.length ?? 0) > 0
-                          ? ","
-                          : ""}
-                      </P>
+                      <P>]</P>
                     </JLine>
                   </>
                 )}
@@ -110,11 +100,10 @@ export function GroupChainSection({
                     {contract!.ask.map((item, i) => (
                       <JLine indent={indent + 4} key={`a-${i}`}>
                         <S value={contractText(item)} />
-                        {i < contract!.ask.length - 1 && <P>,</P>}
                       </JLine>
                     ))}
                     <JLine indent={indent + 3}>
-                      <P>]{(contract!.never?.length ?? 0) > 0 ? "," : ""}</P>
+                      <P>]</P>
                     </JLine>
                   </>
                 )}
@@ -127,7 +116,6 @@ export function GroupChainSection({
                     {contract!.never.map((item, i) => (
                       <JLine indent={indent + 4} key={`n-${i}`}>
                         <S value={contractText(item)} />
-                        {i < contract!.never.length - 1 && <P>,</P>}
                       </JLine>
                     ))}
                     <JLine indent={indent + 3}>
@@ -139,7 +127,7 @@ export function GroupChainSection({
                   <P>{"}"}</P>
                 </JLine>
                 <JLine indent={indent + 1}>
-                  <P>{last ? "}" : "},"}</P>
+                  <P>{"}"}</P>
                 </JLine>
               </>
             )}
@@ -152,7 +140,7 @@ export function GroupChainSection({
         );
       })}
       <JLine indent={indent}>
-        <P>],</P>
+        <P>]</P>
       </JLine>
     </>
   );

@@ -34,18 +34,15 @@ export function SourceMapSection({ sourceMap, allNodes, projectPath, indent = 0 
       </JLine>
       {open && (
         <>
-          {entries.map(([nodeId, locs], i) => {
-            const isLast = i === entries.length - 1;
+          {entries.map(([nodeId, locs]) => {
             return (
               <div key={nodeId}>
                 <JLine indent={indent + 1}>
-                  <P>"</P>
-                  <span className="text-violet-300">{nameOf(nodeId)}</span>
-                  <P>": [</P>
+                  <K name={nameOf(nodeId)} />
+                  <P>: [</P>
                 </JLine>
                 {locs.map((loc, j) => {
                   const isGlob = /[*?{}\[\]]/.test(loc.pattern);
-                  const isLastLoc = j === locs.length - 1;
                   return (
                     <JLine indent={indent + 2} key={j}>
                       <P>{"{ "}</P>
@@ -70,11 +67,10 @@ export function SourceMapSection({ sourceMap, allNodes, projectPath, indent = 0 
                         </>
                       )}
                       <P>{" }"}</P>
-                      {!isLastLoc && <P>,</P>}
                     </JLine>
                   );
                 })}
-                <JLine indent={indent + 1}><P>]</P>{!isLast && <P>,</P>}</JLine>
+                <JLine indent={indent + 1}><P>]</P></JLine>
               </div>
             );
           })}

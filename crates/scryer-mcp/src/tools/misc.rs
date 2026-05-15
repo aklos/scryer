@@ -189,7 +189,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Create or replace one or more groups. Groups organize nodes that share something beyond topology — common uses: a deployment unit (containers that ship together), a package/module (components in the same folder/bundle), or an ownership boundary. If a group with the given ID exists, it is replaced; otherwise it is appended.\n\nGroups can be nested via `parentGroupId`. Parent and child must contain members at the same C4 level.\n\nRules:\n- A node belongs to at most one group.\n- All `memberIds` in a group must refer to nodes at the same C4 level (containers OR components — other levels not supported).\n- `parentGroupId`, if set, must reference an existing group whose members are at the same C4 level; parent chains must not cycle.\n\nWrite the intent (e.g. \"deploys to Fly.io\", \"bundled as cms module\") into the group's `name` and `description` — that's what agents read.\n\nGroup schema: {id, name, memberIds, description?, parentGroupId?, contract?}."
+        description = "Create or replace one or more groups. Groups organize nodes that share something beyond topology — common uses: a cluster of external integrations at the system level, a deployment unit (containers that ship together), a package/module (components in the same folder/bundle), or an ownership boundary. If a group with the given ID exists, it is replaced; otherwise it is appended.\n\nGroups can be nested via `parentGroupId`. Parent and child must contain members at the same C4 level.\n\nRules:\n- A node belongs to at most one group.\n- All `memberIds` in a group must refer to nodes at the same C4 level (systems, containers, OR components — person/operation/process/model nodes cannot be grouped).\n- `parentGroupId`, if set, must reference an existing group whose members are at the same C4 level; parent chains must not cycle.\n\nWrite the intent (e.g. \"third-party integrations\", \"deploys to Fly.io\", \"bundled as cms module\") into the group's `name` and `description` — that's what agents read.\n\nGroup schema: {id, name, memberIds, description?, parentGroupId?, contract?}."
     )]
     fn set_groups(
         &self,
@@ -232,17 +232,17 @@ impl ScryerServer {
         let node_kind = |id: &str| model.nodes.iter().find(|n| n.id == id).map(|n| n.data.kind);
 
         // Determine the effective C4 level of a group by scanning its members.
-        // Only containers and components may be grouped. All members in a group
-        // must share the same level.
+        // Only systems, containers, and components may be grouped. All members
+        // in a group must share the same level.
         let group_level = |g: &Group| -> Result<Option<C4Kind>, String> {
             let mut level: Option<C4Kind> = None;
             for mid in &g.member_ids {
                 let k = node_kind(mid).ok_or_else(|| {
                     format!("Member '{}' in group '{}' not found in model", mid, g.name)
                 })?;
-                if !matches!(k, C4Kind::Container | C4Kind::Component) {
+                if !matches!(k, C4Kind::System | C4Kind::Container | C4Kind::Component) {
                     return Err(format!(
-                        "Group '{}' contains a {:?} node; only containers and components can be grouped.",
+                        "Group '{}' contains a {:?} node; only systems, containers, and components can be grouped.",
                         g.name, k
                     ));
                 }

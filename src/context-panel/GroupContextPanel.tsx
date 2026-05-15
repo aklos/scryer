@@ -1,5 +1,5 @@
 import type { C4Node, C4NodeData, Contract, Group } from "../types";
-import { JsonRoot, JLine, P, K, S, Field, StrEdit, MultilineField, J_NULL, J_PUNCT } from "./json";
+import { JsonRoot, JLine, P, K, S, Field, StrEdit, MultilineField, RemoveButton, J_NULL, J_PUNCT } from "./json";
 import { ContractJson } from "./ContractSection";
 
 const EMPTY_CONTRACT: Contract = { expect: [], ask: [], never: [] };
@@ -113,22 +113,16 @@ export function GroupMembersSection({ groupId, groups, onUpdateGroups, allNodes,
       ) : (
         <>
           <JLine indent={indent + 1}><K name="members" /><P>: [</P></JLine>
-          {group.memberIds.map((memberId, i) => {
+          {group.memberIds.map((memberId) => {
             const memberNode = allNodes.find((n) => n.id === memberId);
             const data = memberNode?.data as C4NodeData | undefined;
             const name = data?.name ?? memberId;
-            const isLast = i === group.memberIds.length - 1;
             return (
               <JLine indent={indent + 2} key={memberId} className="group">
                 <S value={name} />
                 {data?.kind && <span className={`${J_NULL} ml-2`}>// {data.kind}</span>}
-                {!isLast && <P>,</P>}
-                <button
-                  type="button"
-                  className="opacity-0 group-hover:opacity-100 ml-2 text-zinc-400 hover:text-red-400 cursor-pointer"
-                  title="Remove from group"
-                  onClick={() => removeMember(memberId)}
-                >×</button>
+                <span className="flex-1" />
+                <RemoveButton onClick={() => removeMember(memberId)} title="Remove from group" />
               </JLine>
             );
           })}

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { C4Node, C4NodeData } from "../types";
-import { JLine, P, K, S, Field, StrEdit, Collapsible, J_NULL, J_PUNCT } from "./json";
+import { JLine, P, K, S, Field, StrEdit, Collapsible, AddButton, RemoveButton, J_PUNCT } from "./json";
 import { sanitizeIdentifier, sanitizeTypeName } from "./utils";
 
 /** Render the `descendants: [...]` section as JSON. For component nodes, items are inline-editable with add buttons. */
@@ -44,14 +44,14 @@ export function DescendantsSection({ node, descendants, onUpdateOperationData, i
               <DescendantRow key={d.id} node={d} indent={indent + 1} last={i === descendants.length - 1} />
             ))
           )}
-          <JLine indent={indent}><P>],</P></JLine>
+          <JLine indent={indent}><P>]</P></JLine>
         </>
       )}
     </>
   );
 }
 
-function DescendantRow({ node, indent, last }: { node: C4Node; indent: number; last?: boolean }) {
+function DescendantRow({ node, indent }: { node: C4Node; indent: number; last?: boolean }) {
   const data = node.data as C4NodeData;
   return (
     <JLine indent={indent}>
@@ -68,7 +68,6 @@ function DescendantRow({ node, indent, last }: { node: C4Node; indent: number; l
         </>
       )}
       <P>{" }"}</P>
-      {!last && <P>,</P>}
     </JLine>
   );
 }
@@ -87,9 +86,8 @@ function ComponentChildrenJson({ node, descendants, indent, onUpdate }: {
 
   return (
     <>
-      {ordered.map((d, i) => {
+      {ordered.map((d) => {
         const data = d.data as C4NodeData;
-        const isLast = i === ordered.length - 1 && true; // we still want the add row, so commas always
         const transform =
           data.kind === "model" ? sanitizeTypeName :
           data.kind === "operation" ? sanitizeIdentifier :
@@ -107,34 +105,19 @@ function ComponentChildrenJson({ node, descendants, indent, onUpdate }: {
               placeholder="name"
             />
             <P>{" }"}</P>
-            <P>,</P>
-            <button
-              type="button"
-              className="opacity-0 group-hover:opacity-100 ml-2 text-zinc-400 hover:text-red-400 cursor-pointer"
+            <span className="flex-1" />
+            <RemoveButton
               onClick={() => window.dispatchEvent(new CustomEvent("remove-node", { detail: { nodeId: d.id } }))}
               title="Remove"
-            >×</button>
-            <span className="hidden">{String(isLast)}</span>
+            />
           </JLine>
         );
       })}
-      <JLine indent={indent}>
-        <button
-          type="button"
-          className={`${J_NULL} cursor-pointer rounded-sm hover:bg-[var(--surface-hover)] px-0.5 mr-3`}
-          onClick={() => window.dispatchEvent(new CustomEvent("add-process", { detail: { componentId: node.id } }))}
-        >+ process</button>
-        <button
-          type="button"
-          className={`${J_NULL} cursor-pointer rounded-sm hover:bg-[var(--surface-hover)] px-0.5 mr-3`}
-          onClick={() => window.dispatchEvent(new CustomEvent("add-model", { detail: { componentId: node.id } }))}
-        >+ model</button>
-        <button
-          type="button"
-          className={`${J_NULL} cursor-pointer rounded-sm hover:bg-[var(--surface-hover)] px-0.5`}
-          onClick={() => window.dispatchEvent(new CustomEvent("add-operation", { detail: { componentId: node.id } }))}
-        >+ operation</button>
-      </JLine>
+      <div style={{ paddingLeft: `${indent}rem` }} className="flex gap-1.5">
+        <AddButton label="process" onClick={() => window.dispatchEvent(new CustomEvent("add-process", { detail: { componentId: node.id } }))} />
+        <AddButton label="model" onClick={() => window.dispatchEvent(new CustomEvent("add-model", { detail: { componentId: node.id } }))} />
+        <AddButton label="operation" onClick={() => window.dispatchEvent(new CustomEvent("add-operation", { detail: { componentId: node.id } }))} />
+      </div>
     </>
   );
 }

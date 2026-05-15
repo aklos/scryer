@@ -23,6 +23,7 @@ Everything the agent does through MCP shows up on your canvas in real-time. Add 
 | `get_rules` | C4 modeling rules and workflow guidance |
 | `get_changes` | Diff since the agent last read the model |
 | `get_structure` | Annotated project directory tree — manifests, infra configs, env templates |
+| `validate_model` | Check the model against C4 rules — disconnected nodes, bad edges, mentions without edges |
 
 ### Writing
 
@@ -38,9 +39,10 @@ Everything the agent does through MCP shows up on your canvas in real-time. Add 
 | `delete_edges` | Remove edges |
 | `set_flows` | Define behavioral flows with steps and branches |
 | `delete_flow` | Remove a flow |
+| `set_groups` | Organize nodes into groups (system, container, or component level) |
+| `delete_group` | Remove a group — members are ungrouped, not deleted |
 | `update_source_map` | Link nodes/flows to source files |
-| `set_groups` | Organize nodes into groups |
-| `validate_model` | Check the model against C4 rules |
+| `set_implementing` | Pause or resume drift detection while implementing |
 
 ### Implementation
 

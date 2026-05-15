@@ -2,7 +2,7 @@ import { useRef } from "react";
 import type { Contract, ContractItem, ContractImage } from "../types";
 import { contractText, contractPassed, contractUrl } from "../types";
 import { resizeImage } from "./utils";
-import { JLine, P, K, Field, StrEdit, BoolEdit, J_PUNCT, J_NULL } from "./json";
+import { JLine, P, K, Field, StrEdit, BoolEdit, AddButton, RemoveButton } from "./json";
 
 function getImage(item: ContractItem): ContractImage | undefined {
   return typeof item === "string" ? undefined : item.image;
@@ -26,7 +26,7 @@ export function ContractJson({ contract, onChange, indent }: {
   );
 }
 
-function ContractListJson({ name, items, onChange, indent, showPassed = false, last = false }: {
+function ContractListJson({ name, items, onChange, indent, showPassed = false }: {
   name: string;
   items: ContractItem[];
   onChange: (items: ContractItem[]) => void;
@@ -36,28 +36,15 @@ function ContractListJson({ name, items, onChange, indent, showPassed = false, l
 }) {
   const addItem = () => onChange([...items, { text: "" }]);
 
-  if (items.length === 0) {
-    return (
-      <Field name={name} indent={indent} last={last}>
-        <button
-          type="button"
-          className={`${J_PUNCT} cursor-pointer hover:text-[var(--text-secondary)]`}
-          onClick={addItem}
-        >[]</button>
-      </Field>
-    );
-  }
-
   return (
     <>
-      <JLine indent={indent}><K name={name} /><P>: [</P></JLine>
+      <JLine indent={indent}><K name={name} /><P>: </P></JLine>
       {items.map((item, i) => (
         <ContractItemJson
           key={i}
           item={item}
           indent={indent + 1}
           showPassed={showPassed}
-          last={i === items.length - 1}
           onPatch={(patch) => {
             const base = typeof item === "string" ? { text: item } : { ...item };
             onChange(items.map((x, j) => j === i ? { ...base, ...patch } : x));
@@ -65,21 +52,17 @@ function ContractListJson({ name, items, onChange, indent, showPassed = false, l
           onRemove={() => onChange(items.filter((_, j) => j !== i))}
         />
       ))}
-      <JLine indent={indent + 1}>
-        <button type="button" className={`${J_NULL} cursor-pointer rounded-sm hover:bg-[var(--surface-hover)] px-0.5`} onClick={addItem}>
-          + {"{...}"}
-        </button>
-      </JLine>
-      <JLine indent={indent}><P>]</P>{!last && <P>,</P>}</JLine>
+      <div style={{ paddingLeft: `${(indent + 1)}rem` }}>
+        <AddButton label="item" onClick={addItem} />
+      </div>
     </>
   );
 }
 
-function ContractItemJson({ item, indent, showPassed, last, onPatch, onRemove }: {
+function ContractItemJson({ item, indent, showPassed, onPatch, onRemove }: {
   item: ContractItem;
   indent: number;
   showPassed: boolean;
-  last: boolean;
   onPatch: (patch: Partial<{ text: string; passed: boolean | undefined; url: string | undefined; image: ContractImage | undefined }>) => void;
   onRemove: () => void;
 }) {
@@ -120,16 +103,9 @@ function ContractItemJson({ item, indent, showPassed, last, onPatch, onRemove }:
   if (image) {
     fields.push({ name: "image", render: (l) => (
       <Field name="image" indent={indent + 1} last={l}>
-        <span className="inline-flex items-center gap-1.5">
-          <span className={J_PUNCT}>"</span>
+        <span className="inline-flex items-center gap-1">
           <span className="text-emerald-400">{image.filename}</span>
-          <span className={J_PUNCT}>"</span>
-          <button
-            type="button"
-            className="ml-1 text-zinc-400 hover:text-red-400 cursor-pointer"
-            onClick={() => onPatch({ image: undefined })}
-            title="Remove image"
-          >×</button>
+          <RemoveButton onClick={() => onPatch({ image: undefined })} title="Remove image" />
         </span>
       </Field>
     )});
@@ -145,8 +121,9 @@ function ContractItemJson({ item, indent, showPassed, last, onPatch, onRemove }:
         </div>
       )}
       <JLine indent={indent}>
-        <P>{"}"}</P>{!last && <P>,</P>}
-        <span className="opacity-0 group-hover:opacity-100 ml-2 inline-flex gap-1.5">
+        <P>{"}"}</P>
+        <span className="flex-1" />
+        <span className="opacity-0 group-hover:opacity-100 inline-flex gap-1.5 items-center mr-1">
           {showPassed && (
             <button
               type="button"
@@ -169,12 +146,8 @@ function ContractItemJson({ item, indent, showPassed, last, onPatch, onRemove }:
               onClick={() => fileInputRef.current?.click()}
             >+image</button>
           )}
-          <button
-            type="button"
-            className="text-[10px] text-zinc-500 hover:text-red-400 cursor-pointer"
-            onClick={onRemove}
-          >×</button>
         </span>
+        <RemoveButton onClick={onRemove} title="Remove item" />
       </JLine>
       <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
     </div>

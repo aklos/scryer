@@ -14,6 +14,10 @@ Scryer monitors the source-mapped files in your project. It flags drift in two w
 
 When drift is detected, a **sync bar** appears at the bottom of the editor.
 
+## Implementation pauses drift
+
+While an AI agent is actively building from the model, it calls `set_implementing` to pause drift detection — otherwise every file it writes would immediately register as drift. Detection resumes automatically when the agent finishes.
+
 ## The sync bar
 
 The sync bar shows:

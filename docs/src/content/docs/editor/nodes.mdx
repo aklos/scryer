@@ -58,7 +58,7 @@ A deployable unit inside a system — a web app, API server, database, message q
   <NodeDemo kind="container" label="Message Queue" technology="RabbitMQ" shape="pipe" />
 </NodeGallery>
 
-Containers have a **technology** field — the framework, language, or platform they run on.
+Containers have a **technology** field — the framework, language, or platform they run on. On the canvas, a container is marked with a small tab at the top.
 
 ### Component
 
@@ -69,7 +69,7 @@ A logical module inside a container — an auth service, a repository, a set of 
   <NodeDemo kind="component" label="User Repository" technology="Prisma" />
 </NodeGallery>
 
-Components have a small tab decoration at the top-left. They should correspond to concrete code units — a class, module, package, or folder in your codebase.
+Components are marked with side ports along their edge, distinguishing them from containers. They should correspond to concrete code units — a class, module, package, or folder in your codebase.
 
 ## Code-level nodes
 
@@ -102,21 +102,22 @@ Common conventions:
 
 ## Creating nodes
 
-Three ways to add nodes:
+Four ways to add nodes:
 
 1. **Right-click the canvas** → Add node → pick a kind
 2. **Inside a component**, use the + buttons in the list view columns
 3. **AI agents** add nodes through the MCP server
+4. **Fill with AI** — inside an empty system or container with a linked project, click *Fill with AI* to have an agent scan your codebase and add the children
 
 ## Node properties
 
 Every node has:
 - **Name** — displayed on the node
-- **Description** — what this node *is* (max 200 characters, shown on canvas)
+- **Description** — what this node *is*, shown on canvas. Edited as a bullet list — one point per line.
 - **Notes** — implementation details, deployment context, rationale (not shown on canvas)
 
 Architecture nodes also have:
-- **Technology** — framework, language, or platform (max 28 characters)
+- **Technology** — framework, language, or platform
 - **Shape** — visual shape on canvas
 - **Status** — proposed, implemented, verified, or vagrant (see [Status Tracking](/scryer/modeling/status/))
 - **External** — for system nodes only

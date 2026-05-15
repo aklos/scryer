@@ -28,26 +28,22 @@ export function InternalEdgesSection({ edges, allNodes, indent = 0 }: { edges: C
       </JLine>
       {open && (
         <>
-          {edges.map((e, i) => {
-            const isLast = i === edges.length - 1;
-            return (
-              <JLine indent={indent + 1} key={e.id}>
-                <P>{"{ "}</P>
-                <K name="source" /><P>: </P><S value={nameOf(e.source)} />
-                <P>, </P>
-                <K name="target" /><P>: </P><S value={nameOf(e.target)} />
-                {e.data?.label && (
-                  <>
-                    <P>, </P>
-                    <K name="label" /><P>: </P><S value={e.data.label} />
-                  </>
-                )}
-                <P>{" }"}</P>
-                {!isLast && <P>,</P>}
-              </JLine>
-            );
-          })}
-          <JLine indent={indent}><P>],</P></JLine>
+          {edges.map((e) => (
+            <JLine indent={indent + 1} key={e.id}>
+              <P>{"{ "}</P>
+              <K name="source" /><P>: </P><S value={nameOf(e.source)} />
+              <P>, </P>
+              <K name="target" /><P>: </P><S value={nameOf(e.target)} />
+              {e.data?.label && (
+                <>
+                  <P>, </P>
+                  <K name="label" /><P>: </P><S value={e.data.label} />
+                </>
+              )}
+              <P>{" }"}</P>
+            </JLine>
+          ))}
+          <JLine indent={indent}><P>]</P></JLine>
         </>
       )}
     </>
@@ -74,28 +70,24 @@ export function ExternalEdgesSection({ edges, indent = 0 }: { edges: ExternalEdg
       </JLine>
       {open && (
         <>
-          {edges.map((e, i) => {
-            const isLast = i === edges.length - 1;
-            return (
-              <JLine indent={indent + 1} key={e.id}>
-                <P>{"{ "}</P>
-                <K name="direction" /><P>: </P><S value={e.direction} />
-                <P>, </P>
-                <K name="external_node_name" /><P>: </P><S value={e.externalNodeName} />
-                <P>, </P>
-                <K name="external_node_kind" /><P>: </P><S value={e.externalNodeKind} />
-                {e.data?.label && (
-                  <>
-                    <P>, </P>
-                    <K name="label" /><P>: </P><S value={e.data.label} />
-                  </>
-                )}
-                <P>{" }"}</P>
-                {!isLast && <P>,</P>}
-              </JLine>
-            );
-          })}
-          <JLine indent={indent}><P>],</P></JLine>
+          {edges.map((e) => (
+            <JLine indent={indent + 1} key={e.id}>
+              <P>{"{ "}</P>
+              <K name="direction" /><P>: </P><S value={e.direction} />
+              <P>, </P>
+              <K name="external_node_name" /><P>: </P><S value={e.externalNodeName} />
+              <P>, </P>
+              <K name="external_node_kind" /><P>: </P><S value={e.externalNodeKind} />
+              {e.data?.label && (
+                <>
+                  <P>, </P>
+                  <K name="label" /><P>: </P><S value={e.data.label} />
+                </>
+              )}
+              <P>{" }"}</P>
+            </JLine>
+          ))}
+          <JLine indent={indent}><P>]</P></JLine>
         </>
       )}
     </>

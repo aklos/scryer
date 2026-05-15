@@ -39,26 +39,14 @@ export function P({ children }: { children: ReactNode }) {
   return <span className={J_PUNCT}>{children}</span>;
 }
 
-/** A key token: `"name"` */
+/** A key token */
 export function K({ name }: { name: string }) {
-  return (
-    <>
-      <span className={J_PUNCT}>"</span>
-      <span className={J_KEY}>{name}</span>
-      <span className={J_PUNCT}>"</span>
-    </>
-  );
+  return <span className={J_KEY}>{name}</span>;
 }
 
-/** A literal string value: `"value"` */
+/** A literal string value */
 export function S({ value }: { value: string }) {
-  return (
-    <>
-      <span className={J_PUNCT}>"</span>
-      <span className={J_STR}>{value}</span>
-      <span className={J_PUNCT}>"</span>
-    </>
-  );
+  return <span className={J_STR}>{value}</span>;
 }
 
 /** A boolean value */
@@ -71,8 +59,8 @@ export function Null() {
   return <span className={J_NULL}>null</span>;
 }
 
-/** A field row: `"key": <value>,` */
-export function Field({ name, indent, last, children, tint, readOnly }: { name: string; indent: number; last?: boolean; children: ReactNode; tint?: "add" | "del"; readOnly?: boolean }) {
+/** A field row: `key: <value>` */
+export function Field({ name, indent, children, tint, readOnly }: { name: string; indent: number; last?: boolean; children: ReactNode; tint?: "add" | "del"; readOnly?: boolean }) {
   const tintClass = tint === "add"
     ? "bg-emerald-500/10"
     : tint === "del"
@@ -84,7 +72,6 @@ export function Field({ name, indent, last, children, tint, readOnly }: { name: 
       <K name={name} />
       <P>: </P>
       <span className="flex-1 min-w-0">{children}</span>
-      {!last && <P>,</P>}
     </JLine>
   );
 }
@@ -110,7 +97,6 @@ export function DiffOldField({ name, indent, value, kind = "string" }: {
       ) : (
         <S value={value} />
       )}
-      <P>,</P>
     </JLine>
   );
 }
@@ -123,14 +109,10 @@ export function DiffOldMultiline({ name, indent, value }: { name: string; indent
         <span className="text-red-400 mr-1 -ml-3">-</span>
         <K name={name} />
         <P>: </P>
-        <P>"</P>
       </JLine>
       <div style={{ paddingLeft: `${(indent + 1)}rem` }} className={`${J_STR} font-mono text-[11px] whitespace-pre-wrap`}>
         {value || "\u00a0"}
       </div>
-      <JLine indent={indent}>
-        <P>",</P>
-      </JLine>
     </div>
   );
 }
@@ -149,31 +131,27 @@ export function StrEdit({ value, onChange, placeholder, mono = true, transform, 
   const [local, setLocal] = useState(value);
   useEffect(() => { setLocal(value); }, [value]);
   return (
-    <span className="inline-flex items-baseline min-w-0 max-w-full rounded-sm hover:bg-[var(--surface-hover)] focus-within:bg-[var(--surface-tint)]">
-      <span className={J_PUNCT}>"</span>
-      <input
-        type="text"
-        value={local}
-        placeholder={placeholder}
-        onChange={(e) => {
-          const next = transform ? transform(e.target.value) : e.target.value;
-          setLocal(next);
-        }}
-        onBlur={() => { if (local !== value) onChange(local); }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-          if (e.key === "Escape") { setLocal(value); (e.target as HTMLInputElement).blur(); }
-        }}
-        size={Math.max((local.length || placeholder?.length || 1), 1)}
-        className={`bg-transparent outline-none ${J_STR} ${mono ? "font-mono" : ""} placeholder:text-zinc-500 placeholder:italic ${className}`}
-      />
-      <span className={J_PUNCT}>"</span>
-    </span>
+    <input
+      type="text"
+      value={local}
+      placeholder={placeholder}
+      onChange={(e) => {
+        const next = transform ? transform(e.target.value) : e.target.value;
+        setLocal(next);
+      }}
+      onBlur={() => { if (local !== value) onChange(local); }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        if (e.key === "Escape") { setLocal(value); (e.target as HTMLInputElement).blur(); }
+      }}
+      size={Math.max((local.length || placeholder?.length || 1), 1)}
+      className={`bg-[var(--surface-inset)] rounded px-1 outline-none ${J_STR} ${mono ? "font-mono" : ""} hover:bg-[var(--surface-hover)] focus:bg-[var(--surface-active)] placeholder:text-zinc-500 placeholder:italic ${className}`}
+    />
   );
 }
 
 /** A multiline field — key on its own line, value rendered as a growing textarea below, indented. */
-export function MultilineField({ name, value, onChange, placeholder, indent, last, trailing }: {
+export function MultilineField({ name, value, onChange, placeholder, indent, trailing }: {
   name: string;
   value: string;
   onChange: (v: string) => void;
@@ -197,7 +175,6 @@ export function MultilineField({ name, value, onChange, placeholder, indent, las
       <JLine indent={indent}>
         <K name={name} />
         <P>: </P>
-        <span className={J_PUNCT}>"</span>
         {trailing}
       </JLine>
       <div style={{ paddingLeft: `${(indent + 1)}rem` }}>
@@ -208,13 +185,9 @@ export function MultilineField({ name, value, onChange, placeholder, indent, las
           rows={1}
           onChange={(e) => setLocal(e.target.value)}
           onBlur={() => { if (local !== value) onChange(local); }}
-          className={`w-full bg-transparent outline-none rounded-sm hover:bg-[var(--surface-hover)] focus:bg-[var(--surface-tint)] ${J_STR} font-mono text-[11px] leading-[1.35] resize-none placeholder:text-zinc-500 placeholder:italic`}
+          className={`w-full bg-[var(--surface-inset)] outline-none rounded px-1 hover:bg-[var(--surface-hover)] focus:bg-[var(--surface-active)] ${J_STR} font-mono text-[11px] leading-[1.35] resize-none placeholder:text-zinc-500 placeholder:italic`}
         />
       </div>
-      <JLine indent={indent}>
-        <span className={J_PUNCT}>"</span>
-        {!last && <P>,</P>}
-      </JLine>
     </>
   );
 }
@@ -251,7 +224,7 @@ function serializeBullets(items: string[], forceBullets: boolean): string {
 /** A list-of-bullets editor for a single description string.
  *  Visually presents as a multiline JSON string. Each bullet is its own input.
  *  Adding a 2nd item promotes a prose value to bulleted on save. */
-export function BulletListField({ name, value, onChange, placeholder, indent, last }: {
+export function BulletListField({ name, value, onChange, placeholder, indent }: {
   name: string;
   value: string;
   onChange: (v: string) => void;
@@ -286,18 +259,8 @@ export function BulletListField({ name, value, onChange, placeholder, indent, la
       <JLine indent={indent}>
         <K name={name} />
         <P>: </P>
-        <span className={J_PUNCT}>"</span>
       </JLine>
       <div style={{ paddingLeft: `${(indent + 1)}rem` }} className="flex flex-col">
-        {items.length === 0 && (
-          <button
-            type="button"
-            className={`${J_NULL} self-start cursor-pointer rounded-sm hover:bg-[var(--surface-hover)] px-0.5 italic`}
-            onClick={addItem}
-          >
-            {placeholder ?? "(empty)"}
-          </button>
-        )}
         {items.map((item, i) => (
           <BulletRow
             key={i}
@@ -317,20 +280,8 @@ export function BulletListField({ name, value, onChange, placeholder, indent, la
             }}
           />
         ))}
-        {items.length > 0 && (
-          <button
-            type="button"
-            className={`${J_NULL} self-start cursor-pointer rounded-sm hover:bg-[var(--surface-hover)] px-0.5 mt-0.5`}
-            onClick={addItem}
-          >
-            + bullet
-          </button>
-        )}
+        <AddButton label={items.length === 0 ? (placeholder ?? "add") : "bullet"} onClick={addItem} />
       </div>
-      <JLine indent={indent}>
-        <span className={J_PUNCT}>"</span>
-        {!last && <P>,</P>}
-      </JLine>
     </>
   );
 }
@@ -350,23 +301,46 @@ function BulletRow({ value, multi, onChange, onBlur, onRemove }: {
     }
   }, [value]);
   return (
-    <div className="group flex items-start gap-1">
-      {multi && <span className={`${J_PUNCT} pt-[1px] select-none`}>-</span>}
+    <div className="group flex items-start gap-1 py-px">
+      {multi && <span className={`${J_PUNCT} pt-[3px] select-none`}>-</span>}
       <textarea
         ref={ref}
         value={value}
         rows={1}
         onChange={(e) => onChange(e.target.value)}
         onBlur={onBlur}
-        className={`flex-1 bg-transparent outline-none rounded-sm hover:bg-[var(--surface-hover)] focus:bg-[var(--surface-tint)] ${J_STR} font-mono text-[11px] leading-[1.35] resize-none placeholder:text-zinc-500 placeholder:italic`}
+        className={`flex-1 bg-[var(--surface-inset)] outline-none rounded px-1 hover:bg-[var(--surface-hover)] focus:bg-[var(--surface-active)] ${J_STR} font-mono text-[11px] leading-[1.35] resize-none placeholder:text-zinc-500 placeholder:italic`}
       />
-      <button
-        type="button"
-        className="opacity-0 group-hover:opacity-100 text-[10px] text-zinc-500 hover:text-red-400 cursor-pointer pt-[1px]"
-        onClick={onRemove}
-        title="Remove bullet"
-      >×</button>
+      <RemoveButton onClick={onRemove} title="Remove bullet" />
     </div>
+  );
+}
+
+/** A clearly-clickable "add item" button for list fields. */
+export function AddButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="self-start inline-flex items-center gap-1 mt-1 px-1.5 py-[3px] rounded text-[10px] font-sans text-[var(--text-tertiary)] border border-dashed border-[var(--border-strong)] hover:text-[var(--text)] hover:border-[var(--text-muted)] hover:bg-[var(--surface-hover)] cursor-pointer transition-colors"
+    >
+      <span className="text-[12px] leading-none -mt-px">+</span>
+      <span>{label}</span>
+    </button>
+  );
+}
+
+/** A clearly-clickable "remove item" button for list rows. */
+export function RemoveButton({ onClick, title = "Remove" }: { onClick: () => void; title?: string }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      className="shrink-0 inline-flex items-center justify-center w-4 h-4 rounded text-zinc-400 opacity-40 group-hover:opacity-100 hover:text-red-400 hover:bg-red-500/10 cursor-pointer transition"
+    >
+      <span className="text-[13px] leading-none">×</span>
+    </button>
   );
 }
 

@@ -279,6 +279,12 @@ pub struct Group {
     pub parent_group_id: Option<String>,
     #[serde(default, skip_serializing_if = "Contract::is_empty")]
     pub contract: Contract,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub collapsed: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

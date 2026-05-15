@@ -3,8 +3,8 @@ import { useUpdateNodeData, sanitizeIdentifier, sanitizeTypeName } from "./utils
 import { ALL_SHAPES } from "../shapes";
 import {
   JsonRoot, JLine, P, K, S, Field, StrEdit, BulletListField, EnumEdit, BoolEdit,
-  DiffOldField, DiffOldMultiline,
-  J_PUNCT, J_NULL,
+  DiffOldField, DiffOldMultiline, AddButton, RemoveButton,
+  J_NULL,
 } from "./json";
 
 const STATUS_OPTIONS: { value: Status; label: string }[] = [
@@ -205,31 +205,18 @@ function NullableStr({ placeholder, onSet }: { placeholder: string; onSet: (v: s
   );
 }
 
-function NotesField({ node, indent, last }: { node: C4Node; indent: number; last?: boolean }) {
+function NotesField({ node, indent }: { node: C4Node; indent: number; last?: boolean }) {
   const updateNodeData = useUpdateNodeData();
   const notes = node.data.notes ?? [];
 
   const update = (next: string[]) => updateNodeData(node.id, { notes: next.length ? next : undefined });
 
-  if (notes.length === 0) {
-    return (
-      <Field name="notes" indent={indent} last={last}>
-        <button
-          type="button"
-          className={`${J_PUNCT} cursor-pointer hover:text-[var(--text-secondary)]`}
-          onClick={() => update([""])}
-        >[]</button>
-      </Field>
-    );
-  }
-
   return (
     <>
-      <JLine indent={indent}><K name="notes" /><P>: [</P></JLine>
-      {notes.map((note, i) => {
-        const isLast = i === notes.length - 1;
-        return (
-          <JLine indent={indent + 1} key={i} className="group">
+      <JLine indent={indent}><K name="notes" /><P>: </P></JLine>
+      <div style={{ paddingLeft: `${(indent + 1)}rem` }} className="flex flex-col">
+        {notes.map((note, i) => (
+          <div key={i} className="group flex items-start gap-1 py-px">
             <StrEdit
               value={note}
               onChange={(v) => {
@@ -238,87 +225,52 @@ function NotesField({ node, indent, last }: { node: C4Node; indent: number; last
               }}
               placeholder="note"
             />
-            {!isLast && <P>,</P>}
-            <button
-              type="button"
-              className="opacity-0 group-hover:opacity-100 ml-2 text-zinc-400 hover:text-red-400 cursor-pointer"
-              onClick={() => update(notes.filter((_, j) => j !== i))}
-            >×</button>
-          </JLine>
-        );
-      })}
-      <JLine indent={indent + 1}>
-        <button
-          type="button"
-          className={`${J_NULL} cursor-pointer rounded-sm hover:bg-[var(--surface-hover)] px-0.5`}
-          onClick={() => update([...notes, ""])}
-        >+ "note"</button>
-      </JLine>
-      <JLine indent={indent}><P>]</P>{!last && <P>,</P>}</JLine>
+            <RemoveButton onClick={() => update(notes.filter((_, j) => j !== i))} title="Remove note" />
+          </div>
+        ))}
+        <AddButton label="note" onClick={() => update([...notes, ""])} />
+      </div>
     </>
   );
 }
 
-function PropertiesField({ node, indent, last }: { node: C4Node; indent: number; last?: boolean }) {
+function PropertiesField({ node, indent }: { node: C4Node; indent: number; last?: boolean }) {
   const updateNodeData = useUpdateNodeData();
   const props = (node.data.properties ?? []) as ModelProperty[];
 
   const update = (next: ModelProperty[]) => updateNodeData(node.id, { properties: next });
 
-  if (props.length === 0) {
-    return (
-      <Field name="properties" indent={indent} last={last}>
-        <button
-          type="button"
-          className={`${J_PUNCT} cursor-pointer hover:text-[var(--text-secondary)]`}
-          onClick={() => update([{ label: "", description: "" }])}
-        >[]</button>
-      </Field>
-    );
-  }
-
   return (
     <>
-      <JLine indent={indent}><K name="properties" /><P>: [</P></JLine>
-      {props.map((p, i) => {
-        const isLast = i === props.length - 1;
-        return (
-          <div key={i} className="group">
-            <JLine indent={indent + 1}><P>{"{"}</P></JLine>
-            <Field name="label" indent={indent + 2}>
-              <StrEdit
-                value={p.label}
-                onChange={(v) => update(props.map((x, j) => j === i ? { ...x, label: v } : x))}
-                transform={sanitizeIdentifier}
-                placeholder="propertyName"
-              />
-            </Field>
-            <Field name="description" indent={indent + 2} last>
-              <StrEdit
-                value={p.description}
-                onChange={(v) => update(props.map((x, j) => j === i ? { ...x, description: v } : x))}
-                placeholder="description"
-              />
-            </Field>
-            <JLine indent={indent + 1}>
-              <P>{"}"}</P>{!isLast && <P>,</P>}
-              <button
-                type="button"
-                className="opacity-0 group-hover:opacity-100 ml-2 text-zinc-400 hover:text-red-400 cursor-pointer"
-                onClick={() => update(props.filter((_, j) => j !== i))}
-              >×</button>
-            </JLine>
-          </div>
-        );
-      })}
-      <JLine indent={indent + 1}>
-        <button
-          type="button"
-          className={`${J_NULL} cursor-pointer rounded-sm hover:bg-[var(--surface-hover)] px-0.5`}
-          onClick={() => update([...props, { label: "", description: "" }])}
-        >+ {"{...}"}</button>
-      </JLine>
-      <JLine indent={indent}><P>]</P>{!last && <P>,</P>}</JLine>
+      <JLine indent={indent}><K name="properties" /><P>: </P></JLine>
+      {props.map((p, i) => (
+        <div key={i} className="group">
+          <JLine indent={indent + 1}>
+            <P>{"{"}</P>
+            <span className="flex-1" />
+            <RemoveButton onClick={() => update(props.filter((_, j) => j !== i))} title="Remove property" />
+          </JLine>
+          <Field name="label" indent={indent + 2}>
+            <StrEdit
+              value={p.label}
+              onChange={(v) => update(props.map((x, j) => j === i ? { ...x, label: v } : x))}
+              transform={sanitizeIdentifier}
+              placeholder="propertyName"
+            />
+          </Field>
+          <Field name="description" indent={indent + 2}>
+            <StrEdit
+              value={p.description}
+              onChange={(v) => update(props.map((x, j) => j === i ? { ...x, description: v } : x))}
+              placeholder="description"
+            />
+          </Field>
+          <JLine indent={indent + 1}><P>{"}"}</P></JLine>
+        </div>
+      ))}
+      <div style={{ paddingLeft: `${(indent + 1)}rem` }}>
+        <AddButton label="property" onClick={() => update([...props, { label: "", description: "" }])} />
+      </div>
     </>
   );
 }

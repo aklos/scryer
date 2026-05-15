@@ -1,9 +1,9 @@
 ---
 title: Groups
-description: Organize containers and components into deployment units, packages, or logical groupings.
+description: Organize systems, containers, and components into deployment units, packages, or logical groupings.
 ---
 
-Groups let you bundle related nodes together — containers that deploy as a single unit, components that belong to the same package, or any logical grouping that makes sense for your project.
+Groups let you bundle related nodes together — containers that deploy as a single unit, components that belong to the same package, external systems that form an integration cluster, or any logical grouping that makes sense for your project.
 
 ## Creating a group
 
@@ -33,7 +33,7 @@ Any semantic grouping — "payment subsystem", "user-facing services", "internal
 
 - A node can belong to **at most one group**
 - Groups have their own **contracts** — expect/ask/never rules that apply to all members
-- Groups live at one level of the hierarchy (container groups at container level, component groups at component level)
+- Groups live at one level of the hierarchy — system, container, or component groups, each bundling nodes at that level
 
 ## Groups and the task system
 

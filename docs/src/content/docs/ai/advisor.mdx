@@ -9,12 +9,12 @@ The AI Advisor is an optional feature that reviews your diagrams and suggests im
 
 The advisor evaluates your model against C4 best practices:
 
-- **Missing edges** — nodes that should be connected but aren't
-- **Incorrect shapes** — a database container with the default rectangle instead of a cylinder
-- **External system flags** — third-party services that should be marked external
-- **Description quality** — vague or missing descriptions
-- **Flow coverage** — steps without linked processes, or processes not covered by any flow
-- **Structural issues** — frontend-to-database shortcuts, duplicate nodes, unclear boundaries
+- **Relationships** — missing, misleading, or wrong-direction edges
+- **Node naming** — technology-stuffed names that should describe a role instead
+- **Description quality** — vague or placeholder descriptions, and prose-shaped descriptions that should be rewritten as verb-led bullets
+- **Structural issues** — client-side apps talking directly to a database, missing queues between async services, unclear boundaries
+- **Missing infrastructure** — no auth, validation, rate limiting, or migrations where production code would need them
+- **Flow step granularity** — steps that describe UI gestures instead of system interactions
 
 ## How hints appear
 
@@ -23,7 +23,7 @@ When the advisor finds something, a colored dot appears on the affected node:
 - 🟠 **Orange dot** — a warning that likely needs attention
 - 🟢 **Teal dot** — informational suggestion
 
-Select the node to see the hint message in the Properties panel. Some hints have **actions** — like "Set shape to cylinder" or "Mark as external" — that you can apply with one click.
+Select the node to see the hint message in the Properties panel. Some hints come with a one-click fix you can apply right from there.
 
 ## Dismissing hints
 
