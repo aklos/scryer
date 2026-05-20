@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use notify::{recommended_watcher, EventKind, RecursiveMode, Watcher};
 use tauri::{Emitter, Manager, path::BaseDirectory};
@@ -40,14 +40,8 @@ fn ensure_full_path() {
     });
 }
 
-/// Managed state wrapping the AI settings.
-struct SettingsState(Arc<Mutex<scryer_core::AiSettings>>);
-
 /// Managed state for the ACP runtime (agent orchestration).
 struct AcpState(Mutex<Option<scryer_acp::AcpRuntime>>);
-
-/// Pre-sync model snapshot for diffing after agent completes.
-struct SyncSnapshot(Mutex<Option<scryer_core::C4ModelData>>);
 
 /// Managed state for the file watcher — global watcher is always on,
 /// project watcher is swapped when the active model changes.
@@ -255,59 +249,6 @@ fn load_template(app: tauri::AppHandle, name: String) -> Result<String, String> 
     let path = app.path().resolve(format!("templates/{}.scry", name), BaseDirectory::Resource)
         .map_err(|e| e.to_string())?;
     std::fs::read_to_string(&path).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn get_ai_settings(state: tauri::State<'_, SettingsState>) -> Result<serde_json::Value, String> {
-    let settings = state.0.lock().unwrap().clone();
-    let configured = scryer_core::ai_configured(&settings);
-    // Mask API key — only send whether it's set
-    Ok(serde_json::json!({
-        "provider": settings.provider,
-        "model": settings.model,
-        "hasKey": !settings.api_key.is_empty(),
-        "configured": configured,
-    }))
-}
-
-#[tauri::command]
-fn save_ai_settings(
-    provider: String,
-    api_key: String,
-    model: String,
-    state: tauri::State<'_, SettingsState>,
-) -> Result<(), String> {
-    let mut settings = state.0.lock().unwrap();
-    settings.provider = provider;
-    settings.model = model;
-    // Empty key means "keep existing"
-    if !api_key.is_empty() {
-        settings.api_key = api_key;
-    }
-    scryer_core::write_settings(&settings)
-}
-
-#[tauri::command]
-async fn fetch_models(provider: String, api_key: Option<String>, state: tauri::State<'_, SettingsState>) -> Result<Vec<String>, String> {
-    let key = match api_key {
-        Some(k) if !k.is_empty() => k,
-        _ => state.0.lock().unwrap().api_key.clone(),
-    };
-    scryer_suggest::models::fetch_models(&provider, &key).await
-}
-
-#[tauri::command]
-async fn get_hints(data: String, state: tauri::State<'_, SettingsState>) -> Result<String, String> {
-    let settings = state.0.lock().unwrap().clone();
-    if !scryer_core::ai_configured(&settings) {
-        return Ok("[]".to_string());
-    }
-
-    let model: scryer_core::C4ModelData =
-        serde_json::from_str(&data).map_err(|e| e.to_string())?;
-
-    let hints = scryer_suggest::get_hints(&model, &settings).await;
-    serde_json::to_string(&hints).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -605,94 +546,6 @@ fn setup_mcp_integration(
     }
 }
 
-fn sync_marker_path(model_ref: &scryer_core::ModelRef) -> PathBuf {
-    match model_ref {
-        scryer_core::ModelRef::Global(name) => {
-            scryer_core::models_dir().join(format!(".sync-{}", name))
-        }
-        scryer_core::ModelRef::ProjectLocal(path) => {
-            path.join(".scryer").join(".sync")
-        }
-    }
-}
-
-/// Get the drift baseline for a model. Reads a stored timestamp from the sync
-/// marker file. If no marker exists, initializes it from the .scry file's
-/// current mtime. This avoids using the .scry mtime directly, which changes
-/// on every auto-save and would falsely clear detected drift.
-fn drift_baseline(model_ref: &scryer_core::ModelRef) -> Result<std::time::SystemTime, String> {
-    let marker = sync_marker_path(model_ref);
-    if let Ok(contents) = std::fs::read_to_string(&marker) {
-        if let Ok(nanos) = contents.trim().parse::<u128>() {
-            let duration = std::time::Duration::from_nanos(nanos as u64);
-            return Ok(std::time::UNIX_EPOCH + duration);
-        }
-        // Legacy empty marker — fall back to its mtime
-        if let Ok(meta) = std::fs::metadata(&marker) {
-            return meta.modified().map_err(|e| e.to_string());
-        }
-    }
-    // No sync marker yet — initialize from model file mtime
-    let scry_path = model_ref.model_path();
-    let model_mtime = std::fs::metadata(&scry_path)
-        .and_then(|m| m.modified())
-        .map_err(|e| e.to_string())?;
-    write_sync_marker(&marker, model_mtime)?;
-    Ok(model_mtime)
-}
-
-fn write_sync_marker(path: &std::path::Path, time: std::time::SystemTime) -> Result<(), String> {
-    let nanos = time.duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_nanos();
-    std::fs::write(path, nanos.to_string()).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn check_drift(model_name: String) -> Result<serde_json::Value, String> {
-    let model_ref = scryer_core::ModelRef::parse(&model_name);
-    // If an agent is actively implementing, suppress drift detection
-    let implementing = scryer_core::is_implementing_at(&model_ref);
-
-    let model = scryer_core::read_model_at(&model_ref)?;
-    let project_path = model.project_path.as_deref()
-        .ok_or("Model has no project path set")?;
-
-    let baseline = drift_baseline(&model_ref)?;
-
-    let report = scryer_core::drift::check_drift(&model, baseline, std::path::Path::new(project_path));
-
-    Ok(serde_json::json!({
-        "nodes": if implementing { vec![] } else {
-            report.nodes.iter().map(|d| {
-                serde_json::json!({
-                    "nodeId": d.node_id,
-                    "nodeName": d.node_name,
-                    "patterns": d.patterns,
-                })
-            }).collect::<Vec<_>>()
-        },
-        "structureChanged": if implementing { false } else { report.structure_changed },
-        "implementing": implementing,
-    }))
-}
-
-/// Record the current time as the drift baseline (drift was addressed).
-#[tauri::command]
-fn mark_synced(model_name: String) -> Result<(), String> {
-    let model_ref = scryer_core::ModelRef::parse(&model_name);
-    let path = sync_marker_path(&model_ref);
-    write_sync_marker(&path, std::time::SystemTime::now())
-}
-
-#[tauri::command]
-fn toggle_drift_lock(model_name: String) -> Result<bool, String> {
-    let model_ref = scryer_core::ModelRef::parse(&model_name);
-    let active = scryer_core::is_implementing_at(&model_ref);
-    scryer_core::set_implementing_at(&model_ref, !active)?;
-    Ok(!active)
-}
-
 #[tauri::command]
 fn get_active_agent() -> Result<serde_json::Value, String> {
     let client = scryer_acp::active_client()
@@ -704,72 +557,6 @@ fn get_active_agent() -> Result<serde_json::Value, String> {
         "available": launch.is_some(),
         "launch": launch,
     }))
-}
-
-#[tauri::command]
-async fn start_agent_session(
-    cwd: String,
-    model_name: String,
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AcpState>,
-    snapshot_state: tauri::State<'_, SyncSnapshot>,
-) -> Result<String, String> {
-    let mcp_binary = find_scryer_mcp()
-        .ok_or("scryer-mcp binary not found — cannot provide MCP server to agent")?;
-
-    // Compute drifted nodes to pass to the agent
-    let model_ref = scryer_core::ModelRef::parse(&model_name);
-    let model = scryer_core::read_model_at(&model_ref)?;
-
-    // Snapshot the model before sync so we can diff after completion
-    *snapshot_state.0.lock().unwrap() = Some(model.clone());
-    let project_path = model.project_path.as_deref()
-        .ok_or("Model has no project path set")?;
-    let baseline = drift_baseline(&model_ref)?;
-    let report = scryer_core::drift::check_drift(&model, baseline, std::path::Path::new(project_path));
-    let drifted = report.nodes;
-
-    // Pre-serialize model and build the sync prompt
-    let model_json = scryer_acp::prompt::serialize_model_for_prompt(&model);
-    let prompt = scryer_acp::prompt::sync_prompt(&model_name, &cwd, &drifted, report.structure_changed, &model_json);
-
-    // Resolve agent from the last MCP client that connected
-    let client = scryer_acp::active_client()
-        .ok_or("No agent has connected via MCP yet — open scryer in an AI tool first")?;
-    let launch = scryer_acp::resolve_agent_binary(&client.name)
-        .ok_or_else(|| format!("Agent '{}' not found on PATH", client.name))?;
-
-    // Ensure runtime exists and clone it out of the mutex
-    let runtime = {
-        let mut rt = state.0.lock().unwrap();
-        if rt.is_none() {
-            *rt = Some(scryer_acp::AcpRuntime::new());
-        }
-        rt.clone().unwrap()
-    };
-
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
-
-    // Forward agent events to the frontend
-    let handle = app.clone();
-    tokio::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            let _ = handle.emit("agent-event", &event);
-        }
-    });
-
-    let (agent_binary, mode) = match launch {
-        scryer_acp::AgentLaunch::Cli { binary, kind } => {
-            (binary, scryer_acp::runtime::LaunchMode::Cli { kind })
-        }
-        scryer_acp::AgentLaunch::Acp { binary } => {
-            (binary, scryer_acp::runtime::LaunchMode::Acp)
-        }
-    };
-
-    runtime
-        .start_session(agent_binary, mode, cwd, model_name, mcp_binary, prompt, event_tx)
-        .await
 }
 
 /// Create a blank model. If `project_path` is provided, creates a project-local
@@ -909,88 +696,14 @@ async fn start_node_fill_session(
 
 #[tauri::command]
 async fn cancel_agent_session(
-    model_name: String,
     state: tauri::State<'_, AcpState>,
-    snapshot_state: tauri::State<'_, SyncSnapshot>,
 ) -> Result<(), String> {
     let runtime = {
         let rt = state.0.lock().unwrap();
         rt.clone().ok_or("ACP runtime not initialized")?
     };
     runtime.cancel().await?;
-
-    // Restore the model to its pre-sync state
-    let snapshot = snapshot_state.0.lock().unwrap().take();
-    if let Some(data) = snapshot {
-        let model_ref = scryer_core::ModelRef::parse(&model_name);
-        let json = serde_json::to_string(&data).map_err(|e| e.to_string())?;
-        scryer_core::write_model_raw_at(&model_ref, &json)?;
-    }
     Ok(())
-}
-
-/// Diff the pre-sync snapshot against the current model on disk.
-/// Returns a summary like "Updated: API Server, Auth Service. Added: Logger."
-/// or "No changes" if the model is identical.
-#[tauri::command]
-fn sync_diff(
-    model_name: String,
-    snapshot_state: tauri::State<'_, SyncSnapshot>,
-) -> Result<String, String> {
-    let baseline = snapshot_state.0.lock().unwrap().take()
-        .ok_or("No sync snapshot available")?;
-    let model_ref = scryer_core::ModelRef::parse(&model_name);
-    let current = scryer_core::read_model_at(&model_ref)?;
-
-    use std::collections::HashMap;
-    let base_nodes: HashMap<&str, &scryer_core::C4Node> =
-        baseline.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-    let curr_nodes: HashMap<&str, &scryer_core::C4Node> =
-        current.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-
-    let mut added: Vec<&str> = Vec::new();
-    let mut removed: Vec<&str> = Vec::new();
-    let mut modified: Vec<&str> = Vec::new();
-
-    for n in &current.nodes {
-        match base_nodes.get(n.id.as_str()) {
-            None => added.push(&n.data.name),
-            Some(base) => {
-                if base.data.name != n.data.name
-                    || base.data.description != n.data.description
-                    || base.data.kind != n.data.kind
-                    || base.data.technology != n.data.technology
-                    || base.data.status != n.data.status
-                    || base.data.contract != n.data.contract
-                    || base.parent_id != n.parent_id
-                {
-                    modified.push(&n.data.name);
-                }
-            }
-        }
-    }
-    for n in &baseline.nodes {
-        if !curr_nodes.contains_key(n.id.as_str()) {
-            removed.push(&n.data.name);
-        }
-    }
-
-    let mut parts: Vec<String> = Vec::new();
-    if !modified.is_empty() {
-        parts.push(format!("Updated: {}", modified.join(", ")));
-    }
-    if !added.is_empty() {
-        parts.push(format!("Added: {}", added.join(", ")));
-    }
-    if !removed.is_empty() {
-        parts.push(format!("Removed: {}", removed.join(", ")));
-    }
-
-    if parts.is_empty() {
-        Ok("Model is up to date".to_string())
-    } else {
-        Ok(parts.join(". "))
-    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -998,15 +711,10 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     ensure_full_path();
 
-    let settings = scryer_core::read_settings();
-    let settings_state = Arc::new(Mutex::new(settings));
-
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(SettingsState(settings_state))
         .manage(AcpState(Mutex::new(None)))
-        .manage(SyncSnapshot(Mutex::new(None)))
         .setup(move |app| {
             let handle = app.handle().clone();
             let dir = scryer_core::models_dir();
@@ -1083,25 +791,16 @@ pub fn run() {
             read_model,
             write_model,
             delete_model,
-            get_hints,
-            fetch_models,
             list_templates,
             load_template,
-            get_ai_settings,
-            save_ai_settings,
             open_in_editor,
             detect_ai_tools,
             setup_mcp_integration,
-            check_drift,
-            mark_synced,
-            toggle_drift_lock,
             get_active_agent,
-            start_agent_session,
             create_blank_model,
             start_initial_model_session,
             start_node_fill_session,
             cancel_agent_session,
-            sync_diff,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

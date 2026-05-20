@@ -1,4 +1,3 @@
-pub mod drift;
 pub mod rules;
 pub mod scan;
 
@@ -575,44 +574,6 @@ pub fn read_baseline(name: &str) -> Option<C4ModelData> {
     let path = models_dir().join(format!("{}.baseline.scry", name));
     let raw = fs::read_to_string(&path).ok()?;
     serde_json::from_str(&raw).ok()
-}
-
-// --- AI Settings ---
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct AiSettings {
-    pub provider: String,
-    pub api_key: String,
-    pub model: String,
-}
-
-fn settings_path() -> PathBuf {
-    models_dir().join("settings.json")
-}
-
-pub fn read_settings() -> AiSettings {
-    let path = settings_path();
-    if !path.exists() {
-        return AiSettings::default();
-    }
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-pub fn write_settings(settings: &AiSettings) -> Result<(), String> {
-    let dir = models_dir();
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-    fs::write(settings_path(), json).map_err(|e| e.to_string())
-}
-
-pub fn ai_configured(settings: &AiSettings) -> bool {
-    !settings.provider.is_empty()
-        && !settings.model.is_empty()
-        && (settings.provider == "ollama" || !settings.api_key.is_empty())
 }
 
 /// Delete a model by name.

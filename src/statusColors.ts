@@ -1,65 +1,80 @@
-import type { Status } from "./types";
-import { getThemedHex } from "./theme";
-import type { PaletteRole, Shade } from "./theme";
+/**
+ * Status model — one combined enum across both layers.
+ *
+ *  planned     — in the model, not in the code yet
+ *  placeholder — a hollow stub exists in the code
+ *  implemented — real code, does the thing, not yet checked
+ *  verified    — real code, confirmed conformant
+ *  removing    — slated for removal/relocation, still in the code
+ *  vagrant     — in the code, NOT in the model (observation-layer only)
+ */
 
-export const STATUS_COLORS: Record<Status, {
-  strokeClass: string;
-  dimStrokeClass: string;
-  /** Use statusHex() instead for runtime-resolved themed color. */
-  hex: string;
-  label: string;
-  dotClass: string;
-  pillClass: string;
-  pillHoverClass: string;
-}> = {
-  proposed: {
-    strokeClass: "stroke-blue-500 dark:stroke-blue-400",
-    dimStrokeClass: "stroke-blue-500/70 dark:stroke-blue-400/40",
-    hex: "#3b82f6",
-    label: "Proposed",
-    dotClass: "bg-blue-500 dark:bg-blue-400",
-    pillClass: "bg-blue-100 dark:bg-blue-900/50 text-blue-800 dark:text-blue-200",
-    pillHoverClass: "hover:bg-blue-200 dark:hover:bg-blue-800/50",
+export type Status =
+  | "planned"
+  | "placeholder"
+  | "implemented"
+  | "verified"
+  | "removing"
+  | "vagrant";
+
+export const STATUS_COLORS: Record<
+  Status,
+  { icon: string; dot: string; badge: string; label: string }
+> = {
+  planned: {
+    icon: "text-blue-500 dark:text-blue-400",
+    dot: "bg-blue-500 dark:bg-blue-400",
+    badge: "text-blue-950 dark:text-blue-950",
+    label: "Planned",
+  },
+  placeholder: {
+    icon: "text-violet-500 dark:text-violet-400",
+    dot: "bg-violet-500 dark:bg-violet-400",
+    badge: "text-violet-950 dark:text-violet-950",
+    label: "Placeholder",
   },
   implemented: {
-    strokeClass: "stroke-amber-500 dark:stroke-amber-400",
-    dimStrokeClass: "stroke-amber-500/70 dark:stroke-amber-400/40",
-    hex: "#f59e0b",
+    icon: "text-amber-500 dark:text-amber-400",
+    dot: "bg-amber-500 dark:bg-amber-400",
+    badge: "text-amber-950 dark:text-amber-950",
     label: "Implemented",
-    dotClass: "bg-amber-500 dark:bg-amber-400",
-    pillClass: "bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200",
-    pillHoverClass: "hover:bg-amber-200 dark:hover:bg-amber-800/50",
   },
   verified: {
-    strokeClass: "stroke-emerald-500 dark:stroke-emerald-400",
-    dimStrokeClass: "stroke-emerald-500/70 dark:stroke-emerald-400/40",
-    hex: "#10b981",
+    icon: "text-emerald-500 dark:text-emerald-400",
+    dot: "bg-emerald-500 dark:bg-emerald-400",
+    badge: "text-emerald-950 dark:text-emerald-950",
     label: "Verified",
-    dotClass: "bg-emerald-500 dark:bg-emerald-400",
-    pillClass: "bg-emerald-100 dark:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200",
-    pillHoverClass: "hover:bg-emerald-200 dark:hover:bg-emerald-800/50",
+  },
+  removing: {
+    icon: "text-zinc-400 dark:text-zinc-500",
+    dot: "bg-zinc-400 dark:bg-zinc-500",
+    badge: "text-zinc-950 dark:text-zinc-950",
+    label: "Removing",
   },
   vagrant: {
-    strokeClass: "stroke-rose-500 dark:stroke-rose-400",
-    dimStrokeClass: "stroke-rose-500/70 dark:stroke-rose-400/40",
-    hex: "#f43f5e",
+    icon: "text-red-500 dark:text-red-400",
+    dot: "bg-red-500 dark:bg-red-400",
+    badge: "text-red-950 dark:text-red-950",
     label: "Vagrant",
-    dotClass: "bg-rose-500 dark:bg-rose-400",
-    pillClass: "bg-rose-100 dark:bg-rose-900/50 text-rose-800 dark:text-rose-200",
-    pillHoverClass: "hover:bg-rose-200 dark:hover:bg-rose-800/50",
   },
 };
 
-/** Map status → Tailwind color family used in the theme. */
-const STATUS_FAMILY: Record<Status, PaletteRole> = {
-  proposed: "blue",
-  implemented: "amber",
-  verified: "emerald",
-  vagrant: "red",
+const LIFE_RANK: Record<string, number> = {
+  planned: 0,
+  placeholder: 1,
+  implemented: 2,
+  verified: 3,
 };
 
-/** Get the themed hex color for a status, resolving the current theme palette.
- *  Use this instead of STATUS_COLORS[s].hex for inline styles. */
-export function statusHex(status: Status, shade: Shade = "500"): string {
-  return getThemedHex(STATUS_FAMILY[status], shade);
+/**
+ * Roll a set of responsibility statuses up to one card status. A card is only
+ * as done as its weakest responsibility; `vagrant` and an all-`removing` card
+ * are special cases that win outright.
+ */
+export function rollupStatus(statuses: Status[]): Status {
+  if (statuses.length === 0) return "planned";
+  if (statuses.some((s) => s === "vagrant")) return "vagrant";
+  if (statuses.every((s) => s === "removing")) return "removing";
+  const life = statuses.filter((s) => s !== "removing");
+  return life.reduce((worst, s) => (LIFE_RANK[s] < LIFE_RANK[worst] ? s : worst));
 }

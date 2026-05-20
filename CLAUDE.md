@@ -38,6 +38,22 @@ The sidecar (`scryer-mcp`) is built automatically by `pnpm tauri dev` and `pnpm 
 
 No test runner or linter is configured yet.
 
+## Canvas UI scaling — must follow
+
+Anything rendered inside the `PanZoom` tree (cards, perimeter shapes, ring overlay, grid cells, held-clone portals, hover highlights) **must** scale by `useZoom()` inline:
+
+```tsx
+const zoom = useZoom();
+<div style={{ padding: 12 * zoom, fontSize: 13 * zoom, borderRadius: 8 * zoom }}>
+```
+
+Do **not** use:
+- Tailwind classes with literal px for sized elements (`text-[13px]`, `px-3.5`, `h-4`, `w-4`) — they don't pick up zoom.
+- `transform: scale(zoom)` — blurs text on zoom-in.
+- CSS `zoom: N` — reflows content (wrap points shift per zoom level).
+
+The PanZoom container only `translate`s; everything else multiplies dimensions by zoom so text re-renders crisply at every level *without* reflow. Layout math (`CELL_W`, span calculations, placement) stays in logical units — only visual rendering scales.
+
 ## Architecture
 
 **Local Tauri desktop app** that serves two interfaces:

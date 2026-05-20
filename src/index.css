@@ -1,11 +1,12 @@
 @import "tailwindcss";
-@import "@xyflow/react/dist/style.css";
 @import "@fontsource-variable/space-grotesk";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
   --grid-color: #d4d4d8;
+  --grid-line: rgba(0, 0, 0, 0.03);
+  --grid-line-major: rgba(0, 0, 0, 0.07);
   --xy-background-color: #f8f8fa;
   --selection-color: #18181b;
   --surface-canvas: #f4f4f5;
@@ -31,6 +32,8 @@
   --xy-background-color: #18181b;
   --selection-color: #d4d4d8;
   --grid-color: #2a2a2e;
+  --grid-line: rgba(255, 255, 255, 0.02);
+  --grid-line-major: rgba(255, 255, 255, 0.045);
   --surface-canvas: #18181b;
   --surface: #18181b;
   --surface-raised: #27272a;
@@ -151,4 +154,10 @@
 /* Thin scrollbars */
 * {
   scrollbar-width: thin;
+}
+
+/* Kill text selection while dragging items on the grid */
+body.dragging {
+  user-select: none;
+  -webkit-user-select: none;
 }

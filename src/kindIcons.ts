@@ -1,7 +1,15 @@
 import type { ComponentType } from "react";
 import type { LucideProps } from "lucide-react";
 import { User, Globe, Package, Puzzle, Code, Workflow, Table } from "lucide-react";
-import type { C4Kind } from "./types";
+
+export type C4Kind =
+  | "person"
+  | "system"
+  | "container"
+  | "component"
+  | "operation"
+  | "process"
+  | "model";
 
 const kindColor = "text-[var(--text-muted)]";
 
