@@ -1,16 +1,17 @@
 /**
- * The whole surface map, in context — so a card can compute its effective
- * status by looking into the child surfaces that fulfill its responsibilities
- * (see rollup.ts). Provided by App.
+ * The whole ScryModel, in context — so a card can resolve cross-surface
+ * references (e.g. mention pills pointing at nodes that aren't visible at
+ * this depth). Provided by App.
  */
 
 import { createContext } from "react";
-import type { Surface } from "./viewmodel";
+import type { ScryModel } from "./viewmodel";
+import { emptyModel } from "./viewmodel";
 
-export const ModelContext = createContext<Record<string, Surface>>({});
+export const ModelContext = createContext<ScryModel>(emptyModel());
 
 /**
- * The set of entry ids visible on the *current* surface — own grid entries
+ * The set of node ids visible on the *current* surface — own grid entries
  * plus everything in its perimeter (persons, externals, refs). Provided by
  * Surface. Used to scope incoming-link pills so a card doesn't show
  * relationships originating from cards that aren't even on this view.

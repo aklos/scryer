@@ -20,7 +20,7 @@ import {
   useState,
 } from "react";
 import type { ReactNode, WheelEvent, PointerEvent } from "react";
-import { CELL_W, GROUP_SNAP } from "./pack";
+import { CELL_W, CELL_H, GROUP_SNAP_W } from "./pack";
 
 const MIN_ZOOM = 0.3;
 const MAX_ZOOM = 2.5;
@@ -152,8 +152,8 @@ export function PanZoom({
   // Grid geometry — viewport-level SVG keeps lines at constant screen-pixel width.
   // gridOrigin is already screen-pixel offset within transformRef; the actual
   // grid cell on screen is CELL_W * zoom because PackBox scales its template.
-  const cellPx = CELL_W * view.zoom;
-  const majorPx = CELL_W * GROUP_SNAP * view.zoom;
+  const cellPx = CELL_H * view.zoom;
+  const majorPx = CELL_W * GROUP_SNAP_W * view.zoom;
   const sOx = view.x + gridOrigin.x;
   const sOy = view.y + gridOrigin.y;
   const gxMin = wrapMod(sOx, cellPx);
@@ -173,7 +173,7 @@ export function PanZoom({
       onPointerMove={onPointerMove}
       onPointerUp={endPan}
       onPointerCancel={endPan}
-      className="relative h-full w-full overflow-hidden bg-[var(--surface-canvas)] cursor-grab active:cursor-grabbing"
+      className="relative h-full w-full overflow-hidden bg-[var(--surface-canvas)] cursor-grab active:cursor-grabbing select-none"
     >
       <svg
         aria-hidden

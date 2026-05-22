@@ -6,14 +6,6 @@ pub mod runtime;
 pub use events::AgentEvent;
 pub use runtime::AcpRuntime;
 
-/// Read the active MCP client identity written by scryer-mcp on connection.
-/// Returns (name, version) if available.
-pub fn active_client() -> Option<ActiveClient> {
-    let path = scryer_core::models_dir().join("active-client.json");
-    let contents = std::fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&contents).ok()
-}
-
 /// Which agent harness we're dealing with.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

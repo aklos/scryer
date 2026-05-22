@@ -43,57 +43,53 @@ fn ensure_full_path() {
 /// Managed state for the ACP runtime (agent orchestration).
 struct AcpState(Mutex<Option<scryer_acp::AcpRuntime>>);
 
-/// Managed state for the file watcher — global watcher is always on,
-/// project watcher is swapped when the active model changes.
+/// Managed state for the file watcher — only the active project is watched.
 struct WatcherState {
-    _global: notify::RecommendedWatcher,
     project: Option<(PathBuf, notify::RecommendedWatcher)>,
 }
 
-
+/// True if the given path contains a recognizable codebase (has a manifest/etc).
 #[tauri::command]
-fn list_models() -> Result<serde_json::Value, String> {
-    let entries = scryer_core::list_all_models()?;
-    serde_json::to_value(entries).map_err(|e| e.to_string())
+fn is_codebase(path: String) -> bool {
+    scryer_core::scan::is_codebase(std::path::Path::new(&path))
 }
 
-/// Start watching a project-local .scryer/ directory for model changes.
-/// Call when the active model changes. Stops watching any previous project dir.
+/// True if the given project has a `.scryer/model.scry` whose version is not
+/// the current v0.3 schema. Frontend uses this to surface a clear error.
+#[tauri::command]
+fn is_legacy_model(project_path: String) -> bool {
+    scryer_core::is_legacy_model(std::path::Path::new(&project_path))
+}
+
+/// Watch `{project}/.scryer/` for model changes. Replaces any previous watcher.
 #[tauri::command]
 fn watch_project(
     ref_str: String,
     app: tauri::AppHandle,
     watcher_state: tauri::State<'_, Mutex<WatcherState>>,
 ) -> Result<(), String> {
-    let model_ref = scryer_core::ModelRef::parse(&ref_str);
+    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
     let mut state = watcher_state.lock().unwrap();
 
-    // Only project-local models need a project watcher
     let target_dir = match &model_ref {
-        scryer_core::ModelRef::ProjectLocal(path) => Some(path.join(".scryer")),
-        scryer_core::ModelRef::Global(_) => None,
+        scryer_core::ModelRef::ProjectLocal(path) => path.join(".scryer"),
     };
 
-    // If already watching this dir, nothing to do
-    if let (Some(ref target), Some((ref current, _))) = (&target_dir, &state.project) {
-        if target == current {
+    if let Some((ref current, _)) = &state.project {
+        if *current == target_dir {
             return Ok(());
         }
     }
 
-    // Drop old project watcher (stops watching automatically)
     state.project = None;
 
-    if let Some(dir) = target_dir {
-        let _ = std::fs::create_dir_all(&dir);
-        let handle = app.clone();
-        let ref_string = ref_str.clone();
-        let mut watcher = recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+    let _ = std::fs::create_dir_all(&target_dir);
+    let handle = app.clone();
+    let ref_string = ref_str.clone();
+    let mut watcher =
+        recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
             let Ok(event) = res else { return };
-            if !matches!(
-                event.kind,
-                EventKind::Create(_) | EventKind::Modify(_)
-            ) {
+            if !matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
                 return;
             }
             for path in &event.paths {
@@ -106,122 +102,34 @@ fn watch_project(
                 if stem.ends_with(".baseline") || stem.starts_with(".tmp") {
                     continue;
                 }
-                // Emit the ref string so the frontend can match against currentModel
                 let _ = handle.emit("model-changed", ref_string.clone());
             }
         })
         .map_err(|e| e.to_string())?;
 
-        watcher
-            .watch(&dir, RecursiveMode::NonRecursive)
-            .map_err(|e| e.to_string())?;
+    watcher
+        .watch(&target_dir, RecursiveMode::NonRecursive)
+        .map_err(|e| e.to_string())?;
 
-        state.project = Some((dir, watcher));
-    }
-
-    Ok(())
-}
-
-/// Auto-migrate a global model to project-local if it has a valid project_path.
-/// Returns the (possibly new) ref string. Call before read_model when loading.
-#[tauri::command]
-fn try_migrate_model(name: String) -> Result<String, String> {
-    let model_ref = scryer_core::ModelRef::parse(&name);
-    if let scryer_core::ModelRef::Global(ref global_name) = model_ref {
-        if let Ok(model) = scryer_core::read_model_at(&model_ref) {
-            if let Some(ref pp) = model.project_path {
-                let project = std::path::Path::new(pp);
-                if project.exists() && project.is_dir() {
-                    match scryer_core::migrate_to_local(global_name) {
-                        Ok(new_ref) => return Ok(new_ref.to_ref_string()),
-                        Err(_) => {} // migration failed, continue with global
-                    }
-                }
-            }
-        }
-    }
-    Ok(model_ref.to_ref_string())
-}
-
-#[tauri::command]
-fn is_codebase(path: String) -> bool {
-    scryer_core::scan::is_codebase(std::path::Path::new(&path))
-}
-
-/// Rename a global template (not project-local models).
-#[tauri::command]
-fn rename_template(old_name: String, new_name: String) -> Result<(), String> {
-    let new_name = new_name.trim().to_lowercase().replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "-");
-    if new_name.is_empty() {
-        return Err("Name cannot be empty".to_string());
-    }
-    let dir = scryer_core::models_dir();
-    let old_path = dir.join(format!("{}.scry", old_name));
-    let new_path = dir.join(format!("{}.scry", new_name));
-    if !old_path.exists() {
-        return Err(format!("Template '{}' not found", old_name));
-    }
-    if new_path.exists() {
-        return Err(format!("Template '{}' already exists", new_name));
-    }
-    std::fs::rename(&old_path, &new_path).map_err(|e| e.to_string())?;
-    // Rename baseline too if it exists
-    let old_baseline = dir.join(format!("{}.baseline.scry", old_name));
-    let new_baseline = dir.join(format!("{}.baseline.scry", new_name));
-    if old_baseline.exists() {
-        let _ = std::fs::rename(&old_baseline, &new_baseline);
-    }
+    state.project = Some((target_dir, watcher));
     Ok(())
 }
 
 #[tauri::command]
-fn read_model(name: String) -> Result<String, String> {
-    let model_ref = scryer_core::ModelRef::parse(&name);
-    let raw = scryer_core::read_model_raw_at(&model_ref)?;
-    // Migrate old kind values ("function", "unit", "member") → "operation"
-    // and ensure operation nodes have type "operation" (was "c4")
-    let mut val: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    let mut migrated = false;
-    if let Some(nodes) = val.get_mut("nodes").and_then(|n| n.as_array_mut()) {
-        for node in nodes {
-            if let Some(kind_val) = node.pointer_mut("/data/kind") {
-                if let Some(kind_str) = kind_val.as_str() {
-                    if kind_str == "function" || kind_str == "unit" || kind_str == "member" {
-                        *kind_val = serde_json::Value::String("operation".to_string());
-                        migrated = true;
-                    }
-                }
-            }
-            // Migrate node type for operation nodes
-            let is_op = node.pointer("/data/kind").and_then(|k| k.as_str()) == Some("operation");
-            if is_op {
-                if let Some(type_val) = node.get_mut("type") {
-                    if type_val.as_str() != Some("operation") {
-                        *type_val = serde_json::Value::String("operation".to_string());
-                        migrated = true;
-                    }
-                }
-            }
-        }
-    }
-    if migrated {
-        let updated = serde_json::to_string_pretty(&val).map_err(|e| e.to_string())?;
-        scryer_core::write_model_raw_at(&model_ref, &updated)?;
-        Ok(updated)
-    } else {
-        Ok(raw)
-    }
+fn read_model(ref_str: String) -> Result<String, String> {
+    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
+    scryer_core::read_model_raw_at(&model_ref)
 }
 
 #[tauri::command]
-fn write_model(name: String, data: String) -> Result<(), String> {
-    let model_ref = scryer_core::ModelRef::parse(&name);
+fn write_model(ref_str: String, data: String) -> Result<(), String> {
+    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
     scryer_core::write_model_raw_at(&model_ref, &data)
 }
 
 #[tauri::command]
-fn delete_model(name: String) -> Result<(), String> {
-    let model_ref = scryer_core::ModelRef::parse(&name);
+fn delete_model(ref_str: String) -> Result<(), String> {
+    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
     scryer_core::delete_model_at(&model_ref)
 }
 
@@ -548,49 +456,44 @@ fn setup_mcp_integration(
 
 #[tauri::command]
 fn get_active_agent() -> Result<serde_json::Value, String> {
-    let client = scryer_acp::active_client()
-        .ok_or("No agent has connected via MCP yet")?;
-    let launch = scryer_acp::resolve_agent_binary(&client.name);
+    let launch = scryer_acp::detect_available_agent()
+        .ok_or("No AI agent found. Install Claude Code or Codex.")?;
+    let name = match &launch {
+        scryer_acp::AgentLaunch::Cli { kind, .. } => match kind {
+            scryer_acp::AgentKind::ClaudeCode => "claude-code",
+            scryer_acp::AgentKind::Codex => "codex",
+            scryer_acp::AgentKind::Other => "other",
+        },
+        scryer_acp::AgentLaunch::Acp { .. } => "acp",
+    };
     Ok(serde_json::json!({
-        "name": client.name,
-        "version": client.version,
-        "available": launch.is_some(),
+        "name": name,
+        "available": true,
         "launch": launch,
     }))
 }
 
-/// Create a blank model. If `project_path` is provided, creates a project-local
-/// model at `{project_path}/.scryer/model.scry` and returns the ref string.
-/// Otherwise creates a global model at `~/.scryer/{name}.scry`.
+/// Create a blank project-local model at `{project_path}/.scryer/model.scry`.
+/// Returns the ModelRef string.
 #[tauri::command]
-fn create_blank_model(name: String, project_path: String) -> Result<String, String> {
+fn create_blank_model(project_path: String) -> Result<String, String> {
     let project = std::path::Path::new(&project_path);
-    let model_ref = if project.exists() && project.is_dir() {
-        scryer_core::ModelRef::ProjectLocal(project.to_path_buf())
-    } else {
-        scryer_core::ModelRef::Global(name)
-    };
-    let data = scryer_core::C4ModelData {
-        nodes: vec![],
-        edges: vec![],
-        starting_level: None,
-        source_map: Default::default(),
-        project_path: Some(project_path),
-        ref_positions: Default::default(),
-        groups: vec![],
-        flows: vec![],
-    };
-    scryer_core::write_model_at(&model_ref, &data)?;
-    if let scryer_core::ModelRef::ProjectLocal(ref path) = model_ref {
-        let _ = scryer_core::register_project(path);
+    if !project.exists() || !project.is_dir() {
+        return Err(format!(
+            "Project path does not exist or is not a directory: {}",
+            project_path
+        ));
     }
+    let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
+    let model = scryer_core::ScryModel::new();
+    scryer_core::write_model_at(&model_ref, &model)?;
     Ok(model_ref.to_ref_string())
 }
 
 #[tauri::command]
 async fn start_initial_model_session(
     cwd: String,
-    model_name: String,
+    model_ref: String,
     app: tauri::AppHandle,
     state: tauri::State<'_, AcpState>,
 ) -> Result<String, String> {
@@ -601,7 +504,7 @@ async fn start_initial_model_session(
     let launch = scryer_acp::detect_available_agent()
         .ok_or("No AI agent found. Install Claude Code or Codex first.")?;
 
-    let prompt = scryer_acp::prompt::initial_model_prompt(&model_name, &cwd);
+    let prompt = scryer_acp::prompt::initial_model_prompt(&cwd);
 
     let runtime = {
         let mut rt = state.0.lock().unwrap();
@@ -630,14 +533,14 @@ async fn start_initial_model_session(
     };
 
     runtime
-        .start_session(agent_binary, mode, cwd, model_name, mcp_binary, prompt, event_tx)
+        .start_session(agent_binary, mode, cwd, model_ref, mcp_binary, prompt, event_tx)
         .await
 }
 
 #[tauri::command]
 async fn start_node_fill_session(
     cwd: String,
-    model_name: String,
+    model_ref: String,
     node_id: String,
     app: tauri::AppHandle,
     state: tauri::State<'_, AcpState>,
@@ -648,19 +551,22 @@ async fn start_node_fill_session(
     let launch = scryer_acp::detect_available_agent()
         .ok_or("No AI agent found. Install Claude Code or Codex first.")?;
 
-    let model_ref = scryer_core::ModelRef::parse(&model_name);
-    let model = scryer_core::read_model_at(&model_ref)?;
-    let node = model.nodes.iter().find(|n| n.id == node_id)
+    let parsed_ref = scryer_core::ModelRef::parse(&model_ref)?;
+    let model = scryer_core::read_model_at(&parsed_ref)?;
+    let node = model
+        .nodes
+        .iter()
+        .find(|n| n.id == node_id)
         .ok_or_else(|| format!("Node '{}' not found in model", node_id))?;
-    let node_name = node.data.name.clone();
-    let node_kind = serde_json::to_value(&node.data.kind)
+    let node_name = node.name.clone();
+    let node_kind = serde_json::to_value(node.kind)
         .ok()
         .and_then(|v| v.as_str().map(String::from))
         .unwrap_or_default();
 
     let model_json = scryer_acp::prompt::serialize_model_for_prompt(&model);
     let prompt = scryer_acp::prompt::node_fill_prompt(
-        &model_name, &cwd, &node_id, &node_name, &node_kind, &model_json,
+        &cwd, &node_id, &node_name, &node_kind, &model_json,
     );
 
     let runtime = {
@@ -690,7 +596,7 @@ async fn start_node_fill_session(
     };
 
     runtime
-        .start_session(agent_binary, mode, cwd, model_name, mcp_binary, prompt, event_tx)
+        .start_session(agent_binary, mode, cwd, model_ref, mcp_binary, prompt, event_tx)
         .await
 }
 
@@ -716,78 +622,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AcpState(Mutex::new(None)))
         .setup(move |app| {
-            let handle = app.handle().clone();
-            let dir = scryer_core::models_dir();
-            let _ = std::fs::create_dir_all(&dir);
-
-            // Track known model names so we can detect genuinely new models.
-            // On Windows, atomic rename (temp + rename) fires Remove + Create instead
-            // of Modify. We intentionally keep names in the set on Remove so that a
-            // subsequent Create from an atomic rename is treated as a change, not a
-            // new model. True deletions are handled by list refresh in the frontend.
-            let mut known_models: HashSet<String> = std::fs::read_dir(&dir)
-                .into_iter()
-                .flatten()
-                .filter_map(|e| e.ok())
-                .filter_map(|e| {
-                    let p = e.path();
-                    if p.extension().map_or(true, |x| x != "scry") { return None; }
-                    let stem = p.file_stem()?.to_str()?;
-                    if stem.ends_with(".baseline") { return None; }
-                    Some(stem.to_string())
-                })
-                .collect();
-
-            let mut global_watcher = recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
-                let Ok(event) = res else { return };
-                if !matches!(
-                    event.kind,
-                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-                ) {
-                    return;
-                }
-                for path in &event.paths {
-                    if path.extension().map_or(true, |e| e != "scry") {
-                        continue;
-                    }
-                    let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
-                        continue;
-                    };
-                    if name.ends_with(".baseline") {
-                        continue;
-                    }
-                    // Skip Remove events — don't clear from known_models so that
-                    // Windows atomic rename (Remove + Create) won't falsely emit
-                    // model-created. The frontend refreshes the list to detect
-                    // true deletions.
-                    if matches!(event.kind, EventKind::Remove(_)) {
-                        continue;
-                    }
-                    if known_models.insert(name.to_string()) {
-                        let _ = handle.emit("model-created", name.to_string());
-                    }
-                    let _ = handle.emit("model-changed", name.to_string());
-                }
-            })
-            .map_err(|e| e.to_string())?;
-
-            global_watcher
-                .watch(&dir, RecursiveMode::NonRecursive)
-                .map_err(|e| e.to_string())?;
-
-            app.manage(Mutex::new(WatcherState {
-                _global: global_watcher,
-                project: None,
-            }));
-
+            app.manage(Mutex::new(WatcherState { project: None }));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            list_models,
             watch_project,
-            try_migrate_model,
             is_codebase,
-            rename_template,
+            is_legacy_model,
             read_model,
             write_model,
             delete_model,

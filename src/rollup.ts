@@ -1,57 +1,31 @@
 /**
- * Effective status — the conformance roll-up across surfaces.
+ * Effective status — roll a node's responsibility statuses up to one card status.
  *
- * A leaf card's responsibilities carry their own status. A card with a child
- * surface gets each responsibility's status rolled up from the inner cards
- * that fulfill it (`entry.fulfills === responsibility.id`); recurse, and the
- * whole tree's status is grounded in its leaves.
+ * v0.3 simplification: roll-up is local to the node (its own responsibilities).
+ * The "fulfills" cross-surface mechanism from the prototype is gone — child
+ * decomposition implicitly discharges parent responsibilities, but there's no
+ * explicit mapping between them yet.
  *
  * Externals are out of scope: their work isn't ours to ship. They don't
- * contribute to a parent's roll-up and their own status is undefined.
- * Responsibilities on externals (read as expectations of what we'll get from
- * them) have no status either.
+ * carry status; callers should render them in a neutral hue.
  */
 
-import type { Surface, Entry, Responsibility } from "./viewmodel";
+import type { Node } from "./viewmodel";
 import type { Status } from "./statusColors";
 import { rollupStatus } from "./statusColors";
 
-type Surfaces = Record<string, Surface>;
+const UNSET: Status = "proposed";
 
-/** Every card on a surface (flat list — no group recursion needed). */
-export function allCards(surface: Surface): Entry[] {
-  return surface.entries;
+export function effectiveNodeStatus(node: Node): Status | null {
+  if (node.external) return null;
+  const responsibilities = node.responsibilities ?? [];
+  if (responsibilities.length === 0) return UNSET;
+  return rollupStatus(responsibilities.map((r) => r.status ?? UNSET));
 }
-
-/** A status fallback for in-scope entries whose status couldn't be derived. */
-const UNSET: Status = "planned";
 
 export function effectiveRespStatus(
-  surfaces: Surfaces,
-  entry: Entry,
-  resp: Responsibility,
+  _node: Node,
+  resp: { status?: Status },
 ): Status {
-  const own = resp.status ?? UNSET;
-  if (!entry.childSurfaceId) return own;
-  const child = surfaces[entry.childSurfaceId];
-  if (!child) return own;
-  const fulfillers = allCards(child).filter(
-    (c) => c.fulfills === resp.id && !c.external,
-  );
-  if (fulfillers.length === 0) return own;
-  return rollupStatus(fulfillers.map((c) => effectiveEntryStatus(surfaces, c) ?? UNSET));
-}
-
-/**
- * Roll a card up to a single status. Returns `null` for externals — they
- * don't carry status, and callers should render them in a neutral hue.
- */
-export function effectiveEntryStatus(
-  surfaces: Surfaces,
-  entry: Entry,
-): Status | null {
-  if (entry.external) return null;
-  return rollupStatus(
-    entry.responsibilities.map((r) => effectiveRespStatus(surfaces, entry, r)),
-  );
+  return resp.status ?? UNSET;
 }

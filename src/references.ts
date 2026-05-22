@@ -1,11 +1,9 @@
 /**
- * Reference resolution — the C4 "context" elements that surround the current
- * surface. A reference is a card link-connected to something inside this
+ * Reference resolution — the "context" elements that surround the current
+ * surface. A reference is a node link-connected to something inside this
  * surface's subtree but living outside it.
  *
- * The result is classified by role so the surface can route each bucket to
- * its own visual slot:
- *
+ * Buckets:
  *   - `persons`     — actors (perimeter, top)
  *   - `externals`   — out-of-scope systems/containers (grid, dashed styling)
  *   - `refs`        — in-scope siblings/ancestors (perimeter, sides, dimmed)
@@ -15,25 +13,18 @@
  * only on the system surface.
  */
 
-import type { Altitude, Surface, Entry } from "./viewmodel";
-import { allCards } from "./rollup";
+import type {
+  Altitude,
+  Kind,
+  Link,
+  Node,
+  ScryModel,
+} from "./viewmodel";
 
-type Surfaces = Record<string, Surface>;
-
-/**
- * A perimeter context entry, tagged with:
- *   - `altitude`: the level of its home surface (drives which ring band it
- *     lives in).
- *   - `direction`: how it relates to our in-scope content — `incoming` if it
- *     calls into us, `outgoing` if we call out to it, `both` if both.
- *
- * The renderer uses these to place each entry: altitude picks the band,
- * direction picks the side within the band (left = incoming, right = outgoing).
- */
 export type LinkDirection = "incoming" | "outgoing" | "both";
 
 export interface ContextEntry {
-  entry: Entry;
+  node: Node;
   altitude: Altitude;
   direction: LinkDirection;
 }
@@ -44,189 +35,157 @@ export interface SurfaceContext {
   refs: ContextEntry[];
 }
 
-/** A link pointing *into* a target entry — used for rendering incoming pills
- * on cards whose source can't render its own (e.g. persons). */
+/** A link pointing into a target node — used for rendering incoming pills. */
 export interface IncomingLink {
-  from: Entry;
+  from: Node;
   label: string;
+  method?: string;
 }
 
-/** Find a card by id anywhere in the model. */
-export function findCard(surfaces: Surfaces, id: string): Entry | null {
-  for (const s of Object.values(surfaces)) {
-    const c = allCards(s).find((c) => c.id === id);
-    if (c) return c;
-  }
-  return null;
+export function findNode(model: ScryModel, id: string): Node | null {
+  return model.nodes.find((n) => n.id === id) ?? null;
 }
 
-/**
- * Every card in `surface`'s subtree — the surface itself plus every surface
- * reachable through `childSurfaceId`.
- */
-function subtreeCardIds(surfaces: Surfaces, surface: Surface): Set<string> {
+/** Ids of `nodeId` plus every descendant. */
+function subtreeIds(model: ScryModel, nodeId: string | null): Set<string> {
   const ids = new Set<string>();
-  const visited = new Set<string>([surface.id]);
-  const stack: Surface[] = [surface];
+  const stack: (string | null)[] = [nodeId];
   while (stack.length) {
-    const s = stack.pop()!;
-    for (const c of allCards(s)) {
-      ids.add(c.id);
-      if (c.childSurfaceId && !visited.has(c.childSurfaceId)) {
-        const child = surfaces[c.childSurfaceId];
-        if (child) {
-          visited.add(c.childSurfaceId);
-          stack.push(child);
-        }
+    const id = stack.pop();
+    for (const n of model.nodes) {
+      if ((n.parentId ?? null) === id) {
+        if (ids.has(n.id)) continue;
+        ids.add(n.id);
+        stack.push(n.id);
       }
     }
   }
   return ids;
 }
 
-/**
- * Every ancestor card of `surface` — i.e. every card whose `childSurfaceId`
- * chain leads to this surface. Used so context propagates down: anything
- * linking to a parent system still surrounds the containers / components
- * inside that system.
- */
-function ancestorCardIds(surfaces: Surfaces, surface: Surface): Set<string> {
+/** Ids of every ancestor of `nodeId` (root-most last). Empty when at top. */
+function ancestorIds(model: ScryModel, nodeId: string | null): Set<string> {
   const ids = new Set<string>();
-  let currentSurfaceId: string | null = surface.id;
-  // Guard against pathological cycles.
-  const visited = new Set<string>([surface.id]);
-  while (currentSurfaceId) {
-    let parentCardId: string | null = null;
-    let parentSurfaceId: string | null = null;
-    outer: for (const s of Object.values(surfaces)) {
-      for (const c of allCards(s)) {
-        if (c.childSurfaceId === currentSurfaceId) {
-          parentCardId = c.id;
-          parentSurfaceId = s.id;
-          break outer;
-        }
-      }
-    }
-    if (!parentCardId || !parentSurfaceId) break;
-    ids.add(parentCardId);
-    if (visited.has(parentSurfaceId)) break;
-    visited.add(parentSurfaceId);
-    currentSurfaceId = parentSurfaceId;
+  let current = nodeId;
+  while (current) {
+    ids.add(current);
+    const node = model.nodes.find((n) => n.id === current);
+    current = node?.parentId ?? null;
   }
+  if (nodeId) ids.delete(nodeId);
   return ids;
 }
 
-/**
- * Classify a referenced entry. External flag wins over kind — an external
- * system reads as an external in every context.
- */
-function bucketFor(entry: Entry): keyof SurfaceContext {
-  if (entry.kind === "person") return "persons";
-  if (entry.external) return "externals";
+function bucketFor(node: Node): keyof SurfaceContext {
+  if (node.kind === "person") return "persons";
+  if (node.external) return "externals";
   return "refs";
 }
 
-/** Altitude of the surface where `entryId` lives. */
-function homeAltitude(surfaces: Surfaces, entryId: string): Altitude {
-  for (const s of Object.values(surfaces)) {
-    if (s.entries.some((e) => e.id === entryId)) return s.altitude;
-  }
-  return "system";
+/** Altitude where `nodeId` lives, based on its own kind. */
+function homeAltitude(model: ScryModel, nodeId: string): Altitude {
+  const node = model.nodes.find((n) => n.id === nodeId);
+  return altitudeForKind(node?.kind ?? "system");
 }
 
-/** Every link in the model that points at `entryId`. */
-export function incomingLinks(
-  surfaces: Surfaces,
-  entryId: string,
-): IncomingLink[] {
+function altitudeForKind(kind: Kind): Altitude {
+  switch (kind) {
+    case "system":
+    case "person":
+      return "system";
+    case "container":
+      return "container";
+    case "component":
+      return "component";
+    case "operation":
+    case "model":
+      return "code";
+  }
+}
+
+/** Every link pointing at `nodeId`. */
+export function incomingLinks(model: ScryModel, nodeId: string): IncomingLink[] {
   const out: IncomingLink[] = [];
-  for (const s of Object.values(surfaces)) {
-    for (const c of allCards(s)) {
-      if (c.id === entryId) continue;
-      for (const l of c.links ?? []) {
-        if (l.to === entryId) out.push({ from: c, label: l.label });
-      }
-    }
+  for (const l of model.links) {
+    if (l.dst !== nodeId) continue;
+    const from = findNode(model, l.src);
+    if (!from) continue;
+    out.push({ from, label: l.label, method: l.method });
   }
   return out;
 }
 
+/** Outgoing links from `nodeId`. */
+function outgoingLinks(model: ScryModel, nodeId: string): Link[] {
+  return model.links.filter((l) => l.src === nodeId);
+}
+
 /**
- * Resolve everything outside `surface`'s subtree that is link-connected to
- * something inside it, classified by role.
+ * Resolve everything outside the subtree of `parentId` that is link-connected
+ * to something inside it, classified by role.
+ *
+ * `parentId === null` means the root surface — the in-scope subtree is the
+ * entire model, so there's nothing "outside" to put on the perimeter.
  */
 export function surfaceContext(
-  surfaces: Surfaces,
-  surface: Surface,
+  model: ScryModel,
+  parentId: string | null,
 ): SurfaceContext {
-  const subtree = subtreeCardIds(surfaces, surface);
-  const onSurface = new Set(allCards(surface).map((c) => c.id));
-  const ancestors = ancestorCardIds(surfaces, surface);
-  // A link counts as "pointing into our scope" if it targets a card on the
-  // surface OR any ancestor card. The ancestor case is how perimeter context
-  // propagates down: a person who uses the system also uses its containers.
-  const inScope = new Set<string>([...onSurface, ...ancestors]);
-  const refIds = new Set<string>();
-
-  // Outgoing links — anything in our scope (surface entries OR ancestor
-  // cards) that points outside our scope is a ref. Walking ancestors too is
-  // how a deeper-level view picks up the parent's external dependencies
-  // (e.g. inside a component, we see the parent container's calls to a DB).
-  const scopeOutboundSources: Entry[] = [...allCards(surface)];
-  for (const aid of ancestors) {
-    const c = findCard(surfaces, aid);
-    if (c) scopeOutboundSources.push(c);
-  }
-  for (const c of scopeOutboundSources) {
-    for (const l of c.links ?? []) {
-      if (!subtree.has(l.to) && !ancestors.has(l.to)) refIds.add(l.to);
-    }
-  }
-  // Incoming links — cards outside our scope whose links point at a card on
-  // the surface or at any ancestor.
-  for (const s of Object.values(surfaces)) {
-    for (const c of allCards(s)) {
-      if (subtree.has(c.id) || ancestors.has(c.id)) continue;
-      for (const l of c.links ?? []) if (inScope.has(l.to)) refIds.add(c.id);
-    }
-  }
-
-  // Determine direction for each ref: does it link INTO our scope (incoming)
-  // or do we link OUT to it (outgoing), or both? "Our scope" includes the
-  // surface entries plus ancestor cards, so context propagation reflects all
-  // levels properly.
   const out: SurfaceContext = { persons: [], externals: [], refs: [] };
+  if (parentId === null) return out;
+
+  const subtree = subtreeIds(model, parentId);
+  // Treat the parent node itself as in-scope so links to/from it count.
+  subtree.add(parentId);
+  const ancestors = ancestorIds(model, parentId);
+  // "In our scope" = subtree + ancestors. Ancestor inclusion is how a deeper
+  // view inherits the perimeter of its parent (a person who uses the parent
+  // system still surrounds the inner container view).
+  const inScope = new Set<string>([...subtree, ...ancestors]);
+
+  const refIds = new Set<string>();
+  // Outgoing from inScope → outside-of-scope = a ref
+  for (const sid of inScope) {
+    for (const l of outgoingLinks(model, sid)) {
+      if (!subtree.has(l.dst) && !ancestors.has(l.dst)) refIds.add(l.dst);
+    }
+  }
+  // Incoming from outside-of-scope → inScope = a ref
+  for (const l of model.links) {
+    if (subtree.has(l.src) || ancestors.has(l.src)) continue;
+    if (inScope.has(l.dst)) refIds.add(l.src);
+  }
+
   for (const id of refIds) {
-    const card = findCard(surfaces, id);
-    if (!card) continue;
+    const node = findNode(model, id);
+    if (!node) continue;
     let hasIncoming = false;
     let hasOutgoing = false;
-    // outgoing FROM card into our scope = incoming for us
-    for (const l of card.links ?? []) {
-      if (inScope.has(l.to)) {
+    for (const l of outgoingLinks(model, id)) {
+      if (inScope.has(l.dst)) {
         hasIncoming = true;
         break;
       }
     }
-    // outgoing FROM our scope to card = outgoing for us
     outer: for (const sid of inScope) {
-      const c = findCard(surfaces, sid);
-      if (!c) continue;
-      for (const l of c.links ?? []) {
-        if (l.to === id) {
+      for (const l of outgoingLinks(model, sid)) {
+        if (l.dst === id) {
           hasOutgoing = true;
           break outer;
         }
       }
     }
     const direction: LinkDirection =
-      hasIncoming && hasOutgoing ? "both" : hasIncoming ? "incoming" : "outgoing";
-    const ce: ContextEntry = {
-      entry: card,
-      altitude: homeAltitude(surfaces, id),
+      hasIncoming && hasOutgoing
+        ? "both"
+        : hasIncoming
+          ? "incoming"
+          : "outgoing";
+    out[bucketFor(node)].push({
+      node,
+      altitude: homeAltitude(model, id),
       direction,
-    };
-    out[bucketFor(card)].push(ce);
+    });
   }
   return out;
 }

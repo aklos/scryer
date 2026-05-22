@@ -3,13 +3,12 @@
  * around the inner grid. All dimensions scale by `useZoom()` (figma-style).
  */
 
-import { useContext, useId } from "react";
+import { useId } from "react";
 import type { ReactNode } from "react";
-import type { Entry } from "./viewmodel";
+import type { Node } from "./viewmodel";
 import { personPath, PERSON_VIEWBOX } from "./shapes";
-import { ModelContext } from "./modelcontext";
 import { useZoom } from "./PanZoom";
-import { effectiveEntryStatus } from "./rollup";
+import { effectiveNodeStatus } from "./rollup";
 import { STATUS_COLORS } from "./statusColors";
 import { tokenIcon } from "./tokens";
 
@@ -78,14 +77,13 @@ function PersonShape({ children }: { children: ReactNode }) {
 export type PerimeterVariant = "person" | "external" | "reference";
 
 export function PerimeterNode({
-  entry,
+  node,
   variant,
 }: {
-  entry: Entry;
+  node: Node;
   variant: PerimeterVariant;
 }) {
   const zoom = useZoom();
-  const surfaces = useContext(ModelContext);
 
   if (variant === "person") {
     return (
@@ -94,25 +92,22 @@ export function PerimeterNode({
           className="truncate font-semibold text-[var(--text-secondary)]"
           style={{ fontSize: 13 * zoom }}
         >
-          {entry.title}
+          {node.name}
         </div>
-        {entry.description && (
+        {node.description && (
           <div
             className="leading-snug text-[var(--text-muted)]"
             style={{ marginTop: 2 * zoom, fontSize: 11 * zoom }}
           >
-            {entry.description}
+            {node.description}
           </div>
         )}
       </PersonShape>
     );
   }
 
-  // External or in-scope reference — a quiet card: solid border, icon +
-  // title + description. No tech label and no "REFERENCE" tag — the level
-  // band already tells you what they are.
-  const Icon = tokenIcon(entry.id);
-  const eff = effectiveEntryStatus(surfaces, entry);
+  const Icon = tokenIcon(node.id);
+  const eff = effectiveNodeStatus(node);
   const iconColor =
     variant === "external" || !eff
       ? "text-[var(--text-muted)]"
@@ -126,6 +121,7 @@ export function PerimeterNode({
         padding: `${12 * zoom}px ${14 * zoom}px`,
         borderRadius: 12 * zoom,
         borderWidth: zoom,
+        fontSize: 13 * zoom,
       }}
     >
       <div className="flex items-center" style={{ gap: 8 * zoom }}>
@@ -137,15 +133,15 @@ export function PerimeterNode({
           className="flex-1 truncate font-semibold text-[var(--text-secondary)]"
           style={{ fontSize: 13 * zoom }}
         >
-          {entry.title}
+          {node.name}
         </span>
       </div>
-      {entry.description && (
+      {node.description && (
         <div
           className="leading-snug text-[var(--text-muted)]"
           style={{ marginTop: 4 * zoom, fontSize: 11 * zoom }}
         >
-          {entry.description}
+          {node.description}
         </div>
       )}
     </div>

@@ -1,19 +1,18 @@
 /**
- * A navigable surface — one flat inventory grid, ringed by perimeter
- * collaborators (people, external systems, and reference context).
+ * Navigable surface — one flat inventory grid, ringed by perimeter
+ * collaborators (people, externals, refs).
  *
- * Move an entry by dragging it: press a card to drag, or click to pick it onto
- * the cursor then click again to place. Press Esc or right-click to cancel.
- * The canvas pans from empty background. Nothing is ever pushed or reflowed —
- * an occupied drop is simply refused.
- *
- * Groups are auto-fit overlays — their region derives from the bounding box of
- * their member entries. Drag a group's label to move all members together.
+ * Receives a *derived* SurfaceView (computed by App from the model) plus
+ * intent callbacks. Mutations don't happen here: we ask App to place a node,
+ * move a group, or resize a group; App applies the change to the model and
+ * the next render gives us a fresh view.
  */
 
-import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { Surface as SurfaceModel, Entry } from "./viewmodel";
+import type { Cell, Kind, NodeView, SurfaceView } from "./viewmodel";
+import type { AgentSession } from "./hooks/useAgentSession";
+import { childKindFor } from "./viewmodel";
 import { EntryCard, EntryCardView } from "./EntryCard";
 import { PackBox, LABEL_H } from "./PackBox";
 import { GridContext } from "./gridcontext";
@@ -25,34 +24,38 @@ import {
   CELL_W,
   CELL_H,
   ITEM_INSET,
-  GROUP_SNAP,
+  GROUP_SNAP_W,
+  GROUP_SNAP_H,
   cardSpan,
   groupRect,
   groupAtCell,
   canDrop,
-  placeEntry,
-  moveGroup,
-  resizeGroup,
+  canMoveGroup,
+  clampGroupSize,
   type Rect,
+  type Span,
 } from "./pack";
+import { ContextMenu } from "./ContextMenu";
+import type { Editor } from "./editor";
 
-const ALTITUDE_LABEL: Record<SurfaceModel["altitude"], string> = {
+const ALTITUDE_LABEL: Record<SurfaceView["altitude"], string> = {
   system: "System Context",
   container: "Container View",
   component: "Component View",
+  code: "Code",
 };
 
 const CLICK_SLOP = 5;
 const EDGE_BAND = 64;
 const EDGE_SPEED = 16;
 
-/** Find an entry on this surface by id. */
-function locate(surface: SurfaceModel, id: string): Entry | null {
-  return surface.entries.find((e) => e.id === id) ?? null;
+/** Find a node on this surface by id. */
+function locate(view: SurfaceView, id: string): NodeView | null {
+  return view.entries.find((n) => n.id === id) ?? null;
 }
 
-/** The pickable entry card directly under a point. */
-function pickableAt(surface: SurfaceModel, x: number, y: number): Entry | null {
+/** The pickable node card directly under a point. */
+function pickableAt(view: SurfaceView, x: number, y: number): NodeView | null {
   const els = document.elementsFromPoint(x, y);
   if ((els[0] as HTMLElement | undefined)?.closest("[data-no-pickup]")) {
     return null;
@@ -62,47 +65,44 @@ function pickableAt(surface: SurfaceModel, x: number, y: number): Entry | null {
     | undefined;
   if (!el) return null;
   const id = el.getAttribute("data-pickup")!;
-  // If it's a group label, return null (group dragging handled separately)
   if (el.hasAttribute("data-group-pickup")) return null;
-  return locate(surface, id);
+  return locate(view, id);
 }
 
-/**
- * The footprint a held entry would occupy on the flat grid, whether the drop
- * is legal, and which group (if any) the entry would join.
- */
-function hoverFor(
-  surface: SurfaceModel,
-  entry: Entry,
+function hoverForNode(
+  view: SurfaceView,
+  node: NodeView,
   zoom: number,
   x: number,
   y: number,
+  measured?: ReadonlyMap<string, Span>,
 ): HoverState | null {
   const gridEl = document.querySelector("[data-grid]") as HTMLElement | null;
   if (!gridEl) return null;
   const gr = gridEl.getBoundingClientRect();
-  const sp = cardSpan(entry);
+  const sp = measured?.get(node.id) ?? cardSpan(node);
   const col = Math.round((x - gr.left) / (CELL_W * zoom) - sp.w / 2);
   const row = Math.round((y - gr.top) / (CELL_H * zoom) - sp.h / 2);
   const rect: Rect = { row, col, w: sp.w, h: sp.h };
-  const targetGroup = groupAtCell(surface, { row, col });
+  const targetGroup = groupAtCell(view, { row, col });
   const targetGroupId = targetGroup?.id;
-  const valid = canDrop(surface, rect, entry.id, targetGroupId);
+  const valid = canDrop(view, rect, node.id, targetGroupId, measured);
   return { rect, valid, targetGroupId };
 }
 
 function hoverForGroup(
-  surface: SurfaceModel,
+  view: SurfaceView,
   groupId: string,
   anchorRow: number,
   anchorCol: number,
   zoom: number,
   x: number,
   y: number,
+  measured?: ReadonlyMap<string, Span>,
 ): HoverState | null {
   const gridEl = document.querySelector("[data-grid]") as HTMLElement | null;
   if (!gridEl) return null;
-  const group = surface.groups.find((g) => g.id === groupId);
+  const group = view.groups.find((g) => g.id === groupId);
   if (!group) return null;
   const gr = gridEl.getBoundingClientRect();
   const region = groupRect(group);
@@ -116,48 +116,169 @@ function hoverForGroup(
     w: region.w,
     h: region.h,
   };
-  const valid = moveGroup(surface, groupId, dRow, dCol) !== null;
+  const valid = canMoveGroup(view, groupId, dRow, dCol, measured) !== undefined;
   return { rect, valid };
 }
 
-// --- held state: either an entry or a group being dragged --------------------
-
 type HeldItem =
-  | { kind: "entry"; entry: Entry }
+  | { kind: "node"; node: NodeView }
   | { kind: "group"; groupId: string; anchorRow: number; anchorCol: number };
 
+function EmptyLevelCta({
+  parentNodeId,
+  projectPath,
+  modelRef,
+  zoom,
+  agent,
+}: {
+  parentNodeId: string;
+  projectPath: string;
+  modelRef: string;
+  zoom: number;
+  agent: AgentSession;
+}) {
+  const model = useContext(ModelContext);
+  const parentNode = useMemo(
+    () => model.nodes.find((n) => n.id === parentNodeId),
+    [model, parentNodeId],
+  );
+
+  if (!parentNode) return null;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 8 * zoom,
+        padding: `${16 * zoom}px ${24 * zoom}px`,
+        textAlign: "center",
+      }}
+    >
+      <span
+        style={{
+          fontSize: 11 * zoom,
+          color: "var(--text-ghost)",
+        }}
+      >
+        No children yet
+      </span>
+      <button
+        type="button"
+        onClick={() =>
+          agent.startFill(
+            projectPath,
+            modelRef,
+            parentNodeId,
+            parentNode.name || "node",
+          )
+        }
+        disabled={agent.running}
+        style={{
+          padding: `${6 * zoom}px ${16 * zoom}px`,
+          borderRadius: 6 * zoom,
+          border: "none",
+          backgroundColor: agent.running
+            ? "var(--color-blue-800)"
+            : "var(--color-blue-600)",
+          fontSize: 11 * zoom,
+          fontWeight: 500,
+          color: "#fff",
+          cursor: agent.running ? "default" : "pointer",
+          opacity: agent.running ? 0.5 : 1,
+        }}
+      >
+        Fill with AI
+      </button>
+      <span
+        style={{
+          fontSize: 10 * zoom,
+          color: "var(--text-ghost)",
+        }}
+      >
+        or right-click to add manually
+      </span>
+    </div>
+  );
+}
+
 export function Surface({
-  surface,
+  view,
+  parentNodeId,
   ancestorAltitudes = [],
-  onChange,
+  editor,
   onNavigate,
   onBack,
+  onPlaceNode,
+  onMoveGroup,
+  onResizeGroup,
+  onFixOverlaps,
+  projectPath,
+  modelRef: modelRefStr,
+  agent,
 }: {
-  surface: SurfaceModel;
-  ancestorAltitudes?: SurfaceModel["altitude"][];
-  onChange: (next: SurfaceModel) => void;
-  onNavigate: (childSurfaceId: string) => void;
+  view: SurfaceView;
+  parentNodeId: string | null;
+  ancestorAltitudes?: SurfaceView["altitude"][];
+  editor?: Editor;
+  onNavigate: (nodeId: string) => void;
   onBack?: (ancestorIndex: number) => void;
+  onPlaceNode: (
+    nodeId: string,
+    cell: Cell,
+    newGroupId: string | null | undefined,
+    measured: ReadonlyMap<string, Span>,
+  ) => void;
+  onMoveGroup: (
+    groupId: string,
+    dRow: number,
+    dCol: number,
+    measured: ReadonlyMap<string, Span>,
+  ) => void;
+  onResizeGroup: (
+    groupId: string,
+    size: { cols: number; rows: number },
+    measured: ReadonlyMap<string, Span>,
+  ) => void;
+  onFixOverlaps?: (measuredSpans: ReadonlyMap<string, Span>) => void;
+  projectPath?: string | null;
+  modelRef?: string | null;
+  agent?: AgentSession;
 }) {
   const zoom = useZoom();
   const panBy = usePan();
-  const surfaces = useContext(ModelContext);
-  const context = surfaceContext(surfaces, surface);
+  const model = useContext(ModelContext);
+  const context = surfaceContext(model, view.parentId);
+
+  const [measuredSpans, setMeasuredSpans] = useState<ReadonlyMap<string, Span>>(
+    () => new Map(),
+  );
+  const measuredRef = useRef(measuredSpans);
+  measuredRef.current = measuredSpans;
 
   const [held, setHeld] = useState<HeldItem | null>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
   const [resizingId, setResizingId] = useState<string | null>(null);
-  const [resizeRejected, setResizeRejected] = useState<{ right: boolean; bottom: boolean } | null>(null);
+  const [resizeRejected, setResizeRejected] = useState<{
+    right: boolean;
+    bottom: boolean;
+  } | null>(null);
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    cell: Cell;
+    groupId?: string;
+  } | null>(null);
   const rejectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const heldRef = useRef(held);
-  const surfaceRef = useRef(surface);
+  const viewRef = useRef(view);
   const zoomRef = useRef(zoom);
-  const onChangeRef = useRef(onChange);
   const downRef = useRef<{
     x: number;
     y: number;
-    candidateEntry: Entry | null;
+    candidateNode: NodeView | null;
     candidateGroupId: string | null;
   } | null>(null);
   const pointerRef = useRef({ x: 0, y: 0 });
@@ -168,9 +289,8 @@ export function Surface({
     sy: number;
   } | null>(null);
   heldRef.current = held;
-  surfaceRef.current = surface;
+  viewRef.current = view;
   zoomRef.current = zoom;
-  onChangeRef.current = onChange;
 
   const endHold = useCallback(() => {
     heldRef.current = null;
@@ -183,14 +303,14 @@ export function Surface({
     endHold();
   }, [endHold]);
 
-  const startHoldEntry = useCallback(
-    (entry: Entry, x: number, y: number) => {
+  const startHoldNode = useCallback(
+    (node: NodeView, x: number, y: number) => {
       document.body.classList.add("dragging");
-      const h: HeldItem = { kind: "entry", entry };
+      const h: HeldItem = { kind: "node", node };
       heldRef.current = h;
       pointerRef.current = { x, y };
       setHeld(h);
-      setHover(hoverFor(surfaceRef.current, entry, zoomRef.current, x, y));
+      setHover(hoverForNode(viewRef.current, node, zoomRef.current, x, y, measuredRef.current));
     },
     [],
   );
@@ -207,51 +327,73 @@ export function Surface({
       heldRef.current = h;
       pointerRef.current = { x, y };
       setHeld(h);
-      setHover(hoverForGroup(surfaceRef.current, groupId, anchorRow, anchorCol, zoomRef.current, x, y));
+      setHover(
+        hoverForGroup(
+          viewRef.current,
+          groupId,
+          anchorRow,
+          anchorCol,
+          zoomRef.current,
+          x,
+          y,
+          measuredRef.current,
+        ),
+      );
     },
     [],
   );
 
-  const tryPlaceEntry = useCallback(
-    (entry: Entry, x: number, y: number): boolean => {
-      const hv = hoverFor(surfaceRef.current, entry, zoomRef.current, x, y);
+  const tryPlaceNode = useCallback(
+    (node: NodeView, x: number, y: number): boolean => {
+      const ms = measuredRef.current;
+      const hv = hoverForNode(viewRef.current, node, zoomRef.current, x, y, ms);
       if (hv?.valid) {
-        const ns = placeEntry(
-          surfaceRef.current,
-          entry.id,
+        onPlaceNode(
+          node.id,
           { row: hv.rect.row, col: hv.rect.col },
           hv.targetGroupId ?? null,
+          ms,
         );
-        if (ns) onChangeRef.current(ns);
         return true;
       }
       return false;
     },
-    [],
+    [onPlaceNode],
   );
 
   const tryPlaceGroup = useCallback(
-    (groupId: string, anchorRow: number, anchorCol: number, x: number, y: number): boolean => {
-      const hv = hoverForGroup(surfaceRef.current, groupId, anchorRow, anchorCol, zoomRef.current, x, y);
+    (
+      groupId: string,
+      anchorRow: number,
+      anchorCol: number,
+      x: number,
+      y: number,
+    ): boolean => {
+      const hv = hoverForGroup(
+        viewRef.current,
+        groupId,
+        anchorRow,
+        anchorCol,
+        zoomRef.current,
+        x,
+        y,
+        measuredRef.current,
+      );
       if (!hv?.valid) return false;
-      const group = surfaceRef.current.groups.find((g) => g.id === groupId);
+      const group = viewRef.current.groups.find((g) => g.id === groupId);
       if (!group) return false;
       const dRow = hv.rect.row - group.cell.row;
       const dCol = hv.rect.col - group.cell.col;
       if (dRow === 0 && dCol === 0) return true;
-      const ns = moveGroup(surfaceRef.current, groupId, dRow, dCol);
-      if (ns) {
-        onChangeRef.current(ns);
-        return true;
-      }
-      return false;
+      onMoveGroup(groupId, dRow, dCol, measuredRef.current);
+      return true;
     },
-    [],
+    [onMoveGroup],
   );
 
   const beginResize = useCallback(
     (groupId: string, e: { clientX: number; clientY: number }) => {
-      const group = surfaceRef.current.groups.find((g) => g.id === groupId);
+      const group = viewRef.current.groups.find((g) => g.id === groupId);
       if (!group) return;
       document.body.classList.add("dragging");
       resizeRef.current = {
@@ -271,7 +413,7 @@ export function Surface({
       downRef.current = {
         x: e.clientX,
         y: e.clientY,
-        candidateEntry: null,
+        candidateNode: null,
         candidateGroupId: groupId,
       };
     },
@@ -282,13 +424,13 @@ export function Surface({
     const onDown = (e: PointerEvent) => {
       if (heldRef.current || resizeRef.current) return;
       if ((e.target as Element).closest("[data-no-pickup]")) return;
-      const entry = pickableAt(surfaceRef.current, e.clientX, e.clientY);
-      if (!entry) return;
+      const node = pickableAt(viewRef.current, e.clientX, e.clientY);
+      if (!node) return;
       document.body.classList.add("dragging");
       downRef.current = {
         x: e.clientX,
         y: e.clientY,
-        candidateEntry: entry,
+        candidateNode: node,
         candidateGroupId: null,
       };
     };
@@ -296,25 +438,28 @@ export function Surface({
     const onMove = (e: PointerEvent) => {
       pointerRef.current = { x: e.clientX, y: e.clientY };
 
-      // Handle group resize
       const resize = resizeRef.current;
       if (resize) {
         const z = zoomRef.current;
-        const groupPx = CELL_W * GROUP_SNAP;
-        const groupPy = CELL_H * GROUP_SNAP;
+        const groupPx = CELL_W * GROUP_SNAP_W;
+        const groupPy = CELL_H * GROUP_SNAP_H;
         const desired = {
           cols:
             resize.startSize.cols +
-            Math.round((e.clientX - resize.sx) / (groupPx * z)) * GROUP_SNAP,
+            Math.round((e.clientX - resize.sx) / (groupPx * z)) * GROUP_SNAP_W,
           rows:
             resize.startSize.rows +
-            Math.round((e.clientY - resize.sy) / (groupPy * z)) * GROUP_SNAP,
+            Math.round((e.clientY - resize.sy) / (groupPy * z)) * GROUP_SNAP_H,
         };
-        const clamped = { cols: Math.max(GROUP_SNAP, desired.cols), rows: Math.max(GROUP_SNAP, desired.rows) };
-        const cur = surfaceRef.current;
-        const ns = resizeGroup(cur, resize.groupId, clamped);
-        if (ns) {
-          onChangeRef.current(ns);
+        const clamped = {
+          cols: Math.max(GROUP_SNAP_W, desired.cols),
+          rows: Math.max(GROUP_SNAP_H, desired.rows),
+        };
+        const cur = viewRef.current;
+        const ms = measuredRef.current;
+        const snapped = clampGroupSize(cur, resize.groupId, clamped, ms);
+        if (snapped) {
+          onResizeGroup(resize.groupId, snapped, ms);
           if (resizeRejected) setResizeRejected(null);
         } else {
           const group = cur.groups.find((g) => g.id === resize.groupId);
@@ -322,11 +467,27 @@ export function Surface({
             const colsChanged = clamped.cols !== group.size.cols;
             const rowsChanged = clamped.rows !== group.size.rows;
             if (colsChanged || rowsChanged) {
-              const rightBlocked = colsChanged && !resizeGroup(cur, resize.groupId, { cols: clamped.cols, rows: group.size.rows });
-              const bottomBlocked = rowsChanged && !resizeGroup(cur, resize.groupId, { cols: group.size.cols, rows: clamped.rows });
-              setResizeRejected({ right: !!rightBlocked, bottom: !!bottomBlocked });
+              const rightBlocked =
+                colsChanged &&
+                !clampGroupSize(cur, resize.groupId, {
+                  cols: clamped.cols,
+                  rows: group.size.rows,
+                }, ms);
+              const bottomBlocked =
+                rowsChanged &&
+                !clampGroupSize(cur, resize.groupId, {
+                  cols: group.size.cols,
+                  rows: clamped.rows,
+                }, ms);
+              setResizeRejected({
+                right: !!rightBlocked,
+                bottom: !!bottomBlocked,
+              });
               clearTimeout(rejectTimer.current);
-              rejectTimer.current = setTimeout(() => setResizeRejected(null), 400);
+              rejectTimer.current = setTimeout(
+                () => setResizeRejected(null),
+                400,
+              );
             }
           }
         }
@@ -335,26 +496,22 @@ export function Surface({
 
       const h = heldRef.current;
       if (h) {
-        if (h.kind === "entry") {
+        const ms = measuredRef.current;
+        if (h.kind === "node") {
           setHover(
-            hoverFor(
-              surfaceRef.current,
-              h.entry,
-              zoomRef.current,
-              e.clientX,
-              e.clientY,
-            ),
+            hoverForNode(viewRef.current, h.node, zoomRef.current, e.clientX, e.clientY, ms),
           );
         } else if (h.kind === "group") {
           setHover(
             hoverForGroup(
-              surfaceRef.current,
+              viewRef.current,
               h.groupId,
               h.anchorRow,
               h.anchorCol,
               zoomRef.current,
               e.clientX,
               e.clientY,
+              ms,
             ),
           );
         }
@@ -365,8 +522,8 @@ export function Surface({
       if (!down) return;
       const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
       if (moved >= CLICK_SLOP) {
-        if (down.candidateEntry) {
-          startHoldEntry(down.candidateEntry, e.clientX, e.clientY);
+        if (down.candidateNode) {
+          startHoldNode(down.candidateNode, e.clientX, e.clientY);
         } else if (down.candidateGroupId) {
           startHoldGroup(down.candidateGroupId, e.clientX, e.clientY);
         }
@@ -387,9 +544,8 @@ export function Surface({
         document.body.classList.remove("dragging");
         return;
       }
-
-      if (h.kind === "entry") {
-        tryPlaceEntry(h.entry, e.clientX, e.clientY);
+      if (h.kind === "node") {
+        tryPlaceNode(h.node, e.clientX, e.clientY);
       } else {
         tryPlaceGroup(h.groupId, h.anchorRow, h.anchorCol, e.clientX, e.clientY);
       }
@@ -403,7 +559,33 @@ export function Surface({
       if (heldRef.current) {
         e.preventDefault();
         cancelHeld();
+        return;
       }
+      const tgt = e.target as Element | null;
+      if (!tgt) return;
+      if (tgt.closest("[data-pickup]")) return;
+      // Accept right-click anywhere on the canvas surface, not just inside
+      // the grid. If the click didn't land directly on [data-grid], look it
+      // up from the DOM so we can still compute a cell position.
+      const vp = tgt.closest("#panzoom-viewport");
+      if (!vp) return;
+      const grid = (tgt.closest("[data-grid]") ??
+        document.querySelector("[data-grid]")) as HTMLElement | null;
+      if (!grid) return;
+      e.preventDefault();
+      const rect = grid.getBoundingClientRect();
+      const z = zoomRef.current;
+      const cell: Cell = {
+        col: Math.floor((e.clientX - rect.left) / (CELL_W * z)),
+        row: Math.floor((e.clientY - rect.top) / (CELL_H * z)),
+      };
+      const containingGroup = groupAtCell(viewRef.current, cell);
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        cell,
+        groupId: containingGroup?.id,
+      });
     };
 
     window.addEventListener("pointerdown", onDown);
@@ -421,10 +603,12 @@ export function Surface({
   }, [
     cancelHeld,
     endHold,
-    startHoldEntry,
+    onResizeGroup,
+    resizeRejected,
     startHoldGroup,
-    tryPlaceEntry,
+    startHoldNode,
     tryPlaceGroup,
+    tryPlaceNode,
   ]);
 
   // Auto-pan while carrying
@@ -445,13 +629,23 @@ export function Surface({
         else if (p.y > vp.bottom - EDGE_BAND) dy = -EDGE_SPEED;
         if (dx || dy) {
           panBy(dx, dy);
-          if (held.kind === "entry") {
+          const ms = measuredRef.current;
+          if (held.kind === "node") {
             setHover(
-              hoverFor(surfaceRef.current, held.entry, zoomRef.current, p.x, p.y),
+              hoverForNode(viewRef.current, held.node, zoomRef.current, p.x, p.y, ms),
             );
           } else if (held.kind === "group") {
             setHover(
-              hoverForGroup(surfaceRef.current, held.groupId, held.anchorRow, held.anchorCol, zoomRef.current, p.x, p.y),
+              hoverForGroup(
+                viewRef.current,
+                held.groupId,
+                held.anchorRow,
+                held.anchorCol,
+                zoomRef.current,
+                p.x,
+                p.y,
+                ms,
+              ),
             );
           }
         }
@@ -462,154 +656,258 @@ export function Surface({
     return () => cancelAnimationFrame(raf);
   }, [held, panBy]);
 
-  const handleLinkClick = useCallback((partnerId: string) => {
-    const vp = document.getElementById("panzoom-viewport");
-    const target = vp?.querySelector(`[data-pickup="${partnerId}"]`) as HTMLElement | null;
-    if (!vp || !target) return;
-    const vr = vp.getBoundingClientRect();
-    const tr = target.getBoundingClientRect();
-    panBy(
-      vr.left + vr.width / 2 - (tr.left + tr.width / 2),
-      vr.top + vr.height / 2 - (tr.top + tr.height / 2),
-    );
-  }, [panBy]);
+  const handleLinkClick = useCallback(
+    (partnerId: string) => {
+      const vp = document.getElementById("panzoom-viewport");
+      const target = vp?.querySelector(
+        `[data-pickup="${partnerId}"]`,
+      ) as HTMLElement | null;
+      if (!vp || !target) return;
+      const vr = vp.getBoundingClientRect();
+      const tr = target.getBoundingClientRect();
+      panBy(
+        vr.left + vr.width / 2 - (tr.left + tr.width / 2),
+        vr.top + vr.height / 2 - (tr.top + tr.height / 2),
+      );
+    },
+    [panBy],
+  );
 
-  // Everything visible on this surface — own entries + perimeter context.
-  // Incoming-link pills filter to this scope so deeper-down sources don't
-  // bleed through (e.g. a container's link to an external shouldn't show as
-  // an incoming pill on that external at the system context level).
   const visibleScope = new Set<string>([
-    ...surface.entries.map((e) => e.id),
-    ...context.persons.map((p) => p.entry.id),
-    ...context.externals.map((x) => x.entry.id),
-    ...context.refs.map((r) => r.entry.id),
+    ...view.entries.map((n) => n.id),
+    ...context.persons.map((p) => p.node.id),
+    ...context.externals.map((x) => x.node.id),
+    ...context.refs.map((r) => r.node.id),
   ]);
 
-  const heldEntry = held?.kind === "entry" ? held.entry : null;
-  const heldSpan = heldEntry ? cardSpan(heldEntry) : null;
-  const boardHighlight = hover && held
-    ? { rect: hover.rect, valid: hover.valid, inset: held.kind === "entry" }
+  const heldNode = held?.kind === "node" ? held.node : null;
+  const heldSpan = heldNode
+    ? (measuredSpans.get(heldNode.id) ?? cardSpan(heldNode))
     : null;
+  const boardHighlight =
+    hover && held
+      ? { rect: hover.rect, valid: hover.valid, inset: held.kind === "node" }
+      : null;
 
   const heldId =
-    held?.kind === "entry"
-      ? held.entry.id
+    held?.kind === "node"
+      ? held.node.id
       : held?.kind === "group"
         ? held.groupId
         : null;
 
-  // Level metadata for ring rendering — outer-most first. Each level carries
-  // its altitude (so PackBox can place context entries by origin altitude)
-  // and a human label.
   const levels = [
     ...ancestorAltitudes.map((a) => ({ altitude: a, label: ALTITUDE_LABEL[a] })),
-    { altitude: surface.altitude, label: ALTITUDE_LABEL[surface.altitude] },
+    { altitude: view.altitude, label: ALTITUDE_LABEL[view.altitude] },
   ];
 
   return (
-    <GridContext.Provider value={{ beginResize, beginGroupDrag, heldId, resizingId, resizeRejected, hover }}>
+    <GridContext.Provider
+      value={{
+        beginResize,
+        beginGroupDrag,
+        heldId,
+        resizingId,
+        resizeRejected,
+        hover,
+      }}
+    >
       <VisibleScopeContext.Provider value={visibleScope}>
-      <div style={{ margin: 80 * zoom, position: "relative" }}>
-        <PackBox
-          surface={surface}
-          highlight={boardHighlight}
-          levels={levels}
-          context={context}
-          onRingClick={onBack}
-          renderEntry={(entry) => (
-            <EntryCard entry={entry} onNavigate={onNavigate} onLinkClick={handleLinkClick} />
-          )}
-        />
-      </div>
+        <div style={{ margin: 80 * zoom, position: "relative" }}>
+          <PackBox
+            view={view}
+            highlight={boardHighlight}
+            levels={levels}
+            context={context}
+            onRingClick={onBack}
+            editor={editor}
+            measuredSpans={measuredSpans}
+            onMeasure={setMeasuredSpans}
+            onFixOverlaps={onFixOverlaps}
+            renderEntry={(node) => (
+              <EntryCard
+                node={node}
+                onNavigate={onNavigate}
+                onLinkClick={handleLinkClick}
+                editor={editor}
+              />
+            )}
+            emptyContent={
+              parentNodeId && projectPath && modelRefStr && agent && !agent.running ? (
+                <EmptyLevelCta
+                  parentNodeId={parentNodeId}
+                  projectPath={projectPath}
+                  modelRef={modelRefStr}
+                  zoom={zoom}
+                  agent={agent}
+                />
+              ) : undefined
+            }
+          />
+        </div>
 
-      {/* Held entry clone — snapped to the highlight rect so the silhouette
-          always overlays the drop indicator (no cursor-vs-snap desync). The
-          clone uses screen-pixel sizes (logical × zoom) and EntryCardView
-          reads zoom from context, so the clone is crisp at every zoom. */}
-      {heldEntry &&
-        heldSpan &&
-        hover &&
-        (() => {
-          const gridEl = document.querySelector("[data-grid]") as HTMLElement | null;
-          if (!gridEl) return null;
-          const gr = gridEl.getBoundingClientRect();
-          return createPortal(
-            <div
-              style={{
-                position: "fixed",
-                left: gr.left + (hover.rect.col * CELL_W + ITEM_INSET) * zoom,
-                top: gr.top + (hover.rect.row * CELL_H + ITEM_INSET) * zoom,
-                width: (heldSpan.w * CELL_W - ITEM_INSET * 2) * zoom,
-                height: (heldSpan.h * CELL_H - ITEM_INSET * 2) * zoom,
-                pointerEvents: "none",
-                opacity: 0.85,
-                zIndex: 1000,
-              }}
-            >
-              <EntryCardView entry={heldEntry} span={heldSpan} lifted />
-            </div>,
-            document.body,
-          );
-        })()}
-
-      {/* Held group clone — snapped to the highlight rect for the same reason */}
-      {held?.kind === "group" && hover && (() => {
-        const g = surface.groups.find((x) => x.id === held.groupId);
-        if (!g) return null;
-        const gridEl = document.querySelector("[data-grid]") as HTMLElement | null;
-        if (!gridEl) return null;
-        const gr = gridEl.getBoundingClientRect();
-        const w = g.size.cols * CELL_W * zoom;
-        const h = g.size.rows * CELL_H * zoom;
-        const labelH = LABEL_H * zoom;
-        return createPortal(
-          <div
-            style={{
-              position: "fixed",
-              left: gr.left + hover.rect.col * CELL_W * zoom,
-              top: gr.top + hover.rect.row * CELL_H * zoom,
-              width: w,
-              height: h,
-              pointerEvents: "none",
-              zIndex: 1000,
-            }}
-          >
-            <div
-              style={{
-                position: "absolute",
-                inset: 0,
-                border: `${zoom}px solid var(--border)`,
-                backgroundColor: "color-mix(in srgb, black 3%, transparent)",
-                borderRadius: 12 * zoom,
-                opacity: 0.55,
-                boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
-              }}
-            />
-            <div
-              className="flex items-center"
-              style={{
-                position: "absolute",
-                left: 8 * zoom,
-                top: -labelH / 2,
-                height: labelH,
-                padding: `0 ${8 * zoom}px`,
-                backgroundColor: "var(--surface-canvas)",
-                borderRadius: 5 * zoom,
-                border: `${zoom}px solid var(--border)`,
-              }}
-            >
-              <span
-                className="font-bold uppercase text-[var(--text-ghost)]"
-                style={{ fontSize: 10 * zoom, letterSpacing: 0.12 * zoom + "em" }}
+        {heldNode &&
+          heldSpan &&
+          hover &&
+          (() => {
+            const gridEl = document.querySelector("[data-grid]") as HTMLElement | null;
+            if (!gridEl) return null;
+            const gr = gridEl.getBoundingClientRect();
+            return createPortal(
+              <div
+                style={{
+                  position: "fixed",
+                  left:
+                    gr.left + (hover.rect.col * CELL_W + ITEM_INSET) * zoom,
+                  top: gr.top + (hover.rect.row * CELL_H + ITEM_INSET) * zoom,
+                  width: (heldSpan.w * CELL_W - ITEM_INSET * 2) * zoom,
+                  height: (heldSpan.h * CELL_H - ITEM_INSET * 2) * zoom,
+                  pointerEvents: "none",
+                  opacity: 0.85,
+                  zIndex: 1000,
+                }}
               >
-                {g.name}
-              </span>
-            </div>
-          </div>,
-          document.body,
-        );
-      })()}
+                <EntryCardView node={heldNode} span={heldSpan} lifted />
+              </div>,
+              document.body,
+            );
+          })()}
+
+        {held?.kind === "group" &&
+          hover &&
+          (() => {
+            const g = view.groups.find((x) => x.id === held.groupId);
+            if (!g) return null;
+            const gridEl = document.querySelector("[data-grid]") as HTMLElement | null;
+            if (!gridEl) return null;
+            const gr = gridEl.getBoundingClientRect();
+            const w = g.size.cols * CELL_W * zoom;
+            const h = g.size.rows * CELL_H * zoom;
+            const labelH = LABEL_H * zoom;
+            return createPortal(
+              <div
+                style={{
+                  position: "fixed",
+                  left: gr.left + hover.rect.col * CELL_W * zoom,
+                  top: gr.top + hover.rect.row * CELL_H * zoom,
+                  width: w,
+                  height: h,
+                  pointerEvents: "none",
+                  zIndex: 1000,
+                }}
+              >
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    border: `${zoom}px solid var(--border)`,
+                    backgroundColor:
+                      "color-mix(in srgb, black 3%, transparent)",
+                    borderRadius: 12 * zoom,
+                    opacity: 0.55,
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+                  }}
+                />
+                <div
+                  className="flex items-center"
+                  style={{
+                    position: "absolute",
+                    left: 8 * zoom,
+                    top: -labelH / 2,
+                    height: labelH,
+                    padding: `0 ${8 * zoom}px`,
+                    backgroundColor: "var(--surface-canvas)",
+                    borderRadius: 5 * zoom,
+                    border: `${zoom}px solid var(--border)`,
+                  }}
+                >
+                  <span
+                    className="font-bold uppercase text-[var(--text-ghost)]"
+                    style={{
+                      fontSize: 10 * zoom,
+                      letterSpacing: 0.12 * zoom + "em",
+                    }}
+                  >
+                    {g.name || "Untitled"}
+                  </span>
+                </div>
+              </div>,
+              document.body,
+            );
+          })()}
+        {menu && editor &&
+          (() => {
+            // Kinds valid as children at this altitude. The root surface
+            // (parentNodeId === null) allows person + system; below that the
+            // C4 ladder applies. Groups are always offerable.
+            const kinds: Kind[] =
+              parentNodeId === null
+                ? ["person", "system"]
+                : view.altitude === "code"
+                  ? ["operation", "model"]
+                  : [childKindFor(parentInferKind(view.altitude))];
+            return (
+              <ContextMenu
+                x={menu.x}
+                y={menu.y}
+                items={[
+                  ...kinds.map((k) => ({
+                    id: `add-${k}`,
+                    label: `Add ${capitalize(k)}`,
+                    onSelect: () => {
+                      const id = editor.addNode({
+                        kind: k,
+                        parentId: parentNodeId ?? undefined,
+                        cell: menu.cell,
+                        groupId: menu.groupId,
+                      });
+                      // The new card mounts with `name` empty → InlineText
+                      // displays its placeholder; clicking begins inline edit.
+                      void id;
+                    },
+                  })),
+                  {
+                    id: "add-group",
+                    label: "Add Group",
+                    onSelect: () => {
+                      editor.addGroup({
+                        parentNodeId,
+                        cell: menu.cell,
+                      });
+                    },
+                  },
+                ]}
+                onClose={() => setMenu(null)}
+              />
+            );
+          })()}
       </VisibleScopeContext.Provider>
     </GridContext.Provider>
   );
+}
+
+function capitalize(s: string): string {
+  return s.length > 0 ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
+/**
+ * Given a SurfaceView's altitude, return the parent's *kind* so that
+ * `childKindFor()` produces the correct child kind for this surface.
+ *
+ *  surface altitude = "container"  → parent is a system     → child = container
+ *  surface altitude = "component"  → parent is a container  → child = component
+ *  surface altitude = "code"       → parent is a component  → child = operation
+ *  surface altitude = "system"     → root surface           → child = system
+ */
+function parentInferKind(altitude: SurfaceView["altitude"]): Kind | "root" {
+  switch (altitude) {
+    case "system":
+      return "root";
+    case "container":
+      return "system";
+    case "component":
+      return "container";
+    case "code":
+      return "component";
+  }
 }

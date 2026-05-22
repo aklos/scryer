@@ -1,246 +1,209 @@
-use scryer_core::{Contract, ModelProperty, SourceLocation};
+use scryer_core::{ModelProperty, Responsibility, Source, SourceLocation};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct GetModelRequest {
-    /// Name of the model to retrieve. If omitted, resolves the model linked to the current working directory.
-    #[serde(alias = "model")]
-    pub name: Option<String>,
+    /// Absolute path to the project root. If omitted, uses the current working directory.
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct GetNodeRequest {
-    /// Name of the model. If omitted, resolves from the current working directory.
-    #[serde(alias = "model")]
-    pub name: Option<String>,
-    /// ID of the node to inspect (e.g. "node-3"). Returns this node, all its descendants, edges between them, and edges connecting them to external nodes (with external node names for context).
+    /// Absolute path to the project root. If omitted, uses the current working directory.
+    pub project: Option<String>,
+    /// ID of the node to inspect (e.g. "node-3"). Returns this node, all its descendants, links between them,
+    /// and links connecting them to external nodes (with external node names + kinds for context).
     pub node_id: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct GetChangesRequest {
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct GetStructureRequest {
+    /// Absolute path to the project directory to scan.
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ValidateModelRequest {
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SetModelRequest {
-    /// Name of the model to create or overwrite. If omitted, writes to the project-local model in the current working directory.
-    #[serde(alias = "model")]
-    pub name: Option<String>,
-    /// The complete model as a JSON string. Must be a valid C4ModelData object with nodes, edges, and optional startingLevel. See get_model output for the exact schema.
+    pub project: Option<String>,
+    /// The complete model as a JSON string. Must be a valid ScryModel object with version, nodes, links, groups.
+    /// See get_model output for the exact schema.
     pub data: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct AddNodeItem {
-    /// Display name for the node
+    /// Display name for the node.
     pub name: String,
-    /// Description of what this node does or represents (max 200 characters, no limit for operation/process/model nodes)
-    pub description: String,
-    /// Node kind: "person", "system", "container", "component", "operation", "process", or "model"
+    /// Short description of what this node IS — its identity, not its responsibilities. Optional.
+    pub description: Option<String>,
+    /// Node kind: "person", "system", "container", "component", "operation", or "model".
     pub kind: String,
-    /// ID of the parent node. Required for container (parent=system), component (parent=container), operation (parent=component). Omit for person/system.
+    /// ID of the parent node. Required for container/component/operation/model; omit for person/system.
     pub parent_id: Option<String>,
-    /// Technology label (containers and components only, max 28 characters), e.g. "REST API", "PostgreSQL"
+    /// Technology label — what the node IS as software (e.g. "Payload 3.0", "PostgreSQL 16"). Not for persons.
     pub technology: Option<String>,
-    /// Whether this is an external system (systems only)
+    /// Whether this is an external system (systems/containers only).
     pub external: Option<bool>,
-    /// Visual shape override: "rectangle", "cylinder", "pipe", "trapezoid", "bucket", "hexagon"
-    pub shape: Option<String>,
-    /// Source file locations as JSON array of {"pattern": "glob", "comment": "description"} objects. Pattern is a file glob (e.g. "src/auth/**/*.rs"), comment describes what those files do.
-    pub sources: Option<Vec<scryer_core::Reference>>,
-    /// Status: "proposed", "implemented", "verified", or "vagrant"
-    pub status: Option<String>,
-    /// Implementation contract: expect/ask/never rules
-    pub contract: Option<Contract>,
-    /// Freeform notes (array of strings): conventions, context, rationale. Inherited by descendants via get_task.
-    pub notes: Option<Vec<String>>,
-    /// Properties (model-kind nodes only): label/description pairs
+    /// Source-file globs attached to this node.
+    pub sources: Option<Vec<Source>>,
+    /// Pure business-responsibility statements. No mechanism vocabulary in the text.
+    pub responsibilities: Option<Vec<Responsibility>>,
+    /// Properties (model-kind nodes only).
     pub properties: Option<Vec<ModelProperty>>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct AddNodeRequest {
-    /// Name of the model. If omitted, resolves from the current working directory.
-    pub model: Option<String>,
-    /// Array of nodes to add
+    pub project: Option<String>,
+    /// Array of nodes to add.
     pub nodes: Vec<AddNodeItem>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct UpdateNodeItem {
-    /// ID of the node to update (e.g. "node-3")
+    /// ID of the node to update.
     pub node_id: String,
-    /// New display name
     pub name: Option<String>,
-    /// New description (max 200 characters)
     pub description: Option<String>,
-    /// New technology label (max 28 characters)
     pub technology: Option<String>,
-    /// New external flag
     pub external: Option<bool>,
-    /// New shape
-    pub shape: Option<String>,
-    /// New source file locations as JSON array of {"pattern": "glob", "comment": "description"} objects
-    pub sources: Option<Vec<scryer_core::Reference>>,
-    /// New status: "proposed", "implemented", "verified", or "vagrant". "verified" requires all inherited expect contract items to have passed: true.
-    pub status: Option<String>,
-    /// Required when changing status. State what's still missing or what was just completed — e.g. "Needs auth middleware and rate limiting", "Missing error handling". For verified: "All contract items pass". Keep it short and factual.
-    pub reason: Option<String>,
-    /// Updated implementation contract
-    pub contract: Option<Contract>,
-    /// Updated notes (array of strings): conventions, context, rationale
-    pub notes: Option<Vec<String>>,
-    /// Updated properties (model-kind nodes only)
+    pub sources: Option<Vec<Source>>,
+    /// Full replacement of responsibilities. Pass an empty array to clear.
+    pub responsibilities: Option<Vec<Responsibility>>,
+    /// Full replacement of properties (model-kind nodes only).
     pub properties: Option<Vec<ModelProperty>>,
-    /// Source code location(s) for this node. Sets the source map entry.
-    /// Example: [{"pattern": "src/auth/handler.ts", "line": 15, "endLine": 42}]
-    /// For containers/components, a glob: [{"pattern": "src/auth/**/*.ts"}]
-    /// Pass an empty array to clear.
+    /// Source-map locations for this node (line-precise). Pass an empty array to clear.
+    /// Glob-style source pointers go in `sources` instead.
     pub source: Option<Vec<SourceLocation>>,
+    /// Mark node as planned for removal. Set true to deprecate, false to clear.
+    pub deprecated: Option<bool>,
+    /// Mark node as reparented (code needs to move). Set true to flag, false to clear.
+    pub relocated: Option<bool>,
+    /// New parent node ID. Changes the node's parent (reparent operation).
+    pub parent_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct MoveResponsibilityItem {
+    /// ID of the responsibility to move.
+    pub responsibility_id: String,
+    /// Node ID to move the responsibility from.
+    pub from_node_id: String,
+    /// Node ID to move the responsibility to.
+    pub to_node_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct MoveResponsibilitiesRequest {
+    pub project: Option<String>,
+    /// Array of moves to perform.
+    pub moves: Vec<MoveResponsibilityItem>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct UpdateNodeRequest {
-    /// Name of the model. If omitted, resolves from the current working directory.
-    pub model: Option<String>,
-    /// Array of node updates to apply
+    pub project: Option<String>,
     pub nodes: Vec<UpdateNodeItem>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SetNodeRequest {
-    /// Name of the model. If omitted, resolves from the current working directory.
-    pub model: Option<String>,
-    /// ID of the existing node to populate. All existing descendants are replaced.
+    pub project: Option<String>,
+    /// ID of the existing node whose subtree is being replaced.
     pub node_id: String,
-    /// JSON object with "nodes" (array of descendant nodes to place inside node_id) and "edges" (array of edges). Every node must have a parentId chain leading to node_id. Node "type" defaults to "c4" and "position" is auto-laid out if omitted. See set_model for the node/edge JSON format.
+    /// JSON object with "nodes" (array of descendants, all rooted at node_id) and "links" (array of links
+    /// between any of those nodes or to nodes outside the subtree). All previously-existing descendants
+    /// of node_id are removed before the new ones are inserted.
     pub data: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct DeleteNodeRequest {
-    /// Name of the model. If omitted, resolves from the current working directory.
-    pub model: Option<String>,
-    /// IDs of nodes to delete. Each node's descendants and connected edges are also removed.
+    pub project: Option<String>,
+    /// IDs of nodes to delete. Descendants and connected links are also removed.
     pub node_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct AddEdgeItem {
-    /// Source node ID
-    pub source: String,
-    /// Target node ID
-    pub target: String,
-    /// Short relationship label (max 30 characters), e.g. "reads from", "sends events"
+pub(crate) struct AddLinkItem {
+    /// Source node ID.
+    pub src: String,
+    /// Destination node ID.
+    pub dst: String,
+    /// Short relationship label (max 30 characters), e.g. "reads from", "sends events".
     pub label: String,
-    /// Method/protocol, e.g. "REST/JSON", "gRPC"
+    /// Method/protocol annotation, e.g. "REST/JSON", "gRPC".
     pub method: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct AddEdgeRequest {
-    /// Name of the model. If omitted, resolves from the current working directory.
-    pub model: Option<String>,
-    /// Array of edges to add
-    pub edges: Vec<AddEdgeItem>,
+pub(crate) struct AddLinkRequest {
+    pub project: Option<String>,
+    pub links: Vec<AddLinkItem>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct UpdateEdgeItem {
-    /// ID of the edge to update
-    pub edge_id: String,
-    /// New label
+pub(crate) struct UpdateLinkItem {
+    /// ID of the link to update.
+    pub link_id: String,
     pub label: Option<String>,
-    /// New method
     pub method: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct UpdateEdgeRequest {
-    /// Name of the model. If omitted, resolves from the current working directory.
-    pub model: Option<String>,
-    /// Array of edge updates to apply
-    pub edges: Vec<UpdateEdgeItem>,
+pub(crate) struct UpdateLinkRequest {
+    pub project: Option<String>,
+    pub links: Vec<UpdateLinkItem>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct DeleteEdgeRequest {
-    /// Name of the model. If omitted, resolves from the current working directory.
-    pub model: Option<String>,
-    /// IDs of edges to delete
-    pub edge_ids: Vec<String>,
+pub(crate) struct DeleteLinkRequest {
+    pub project: Option<String>,
+    pub link_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SourceMapEntry {
-    /// ID of the node or flow to set source locations for
+    /// ID of the node to set source locations for.
     pub node_id: String,
-    /// Array of source locations. Each has "pattern" (glob), optional "line", optional "endLine". Empty array clears.
+    /// Source locations. Empty array clears the entry.
     pub locations: Vec<SourceLocation>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct UpdateSourceMapRequest {
-    /// Name of the model. If omitted, resolves from the current working directory.
-    pub model: Option<String>,
-    /// Array of source map entries to set
+    pub project: Option<String>,
     pub entries: Vec<SourceMapEntry>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct GetChangesRequest {
-    /// Name of the model to check for changes. If omitted, resolves from the current working directory.
-    #[serde(alias = "model")]
-    pub name: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct GetTaskRequest {
-    /// Name of the model to derive tasks from. If omitted, resolves from the current working directory.
-    #[serde(alias = "model")]
-    pub name: Option<String>,
-    /// Optional node ID to scope tasks to a subtree. If omitted, derives tasks for the entire model.
-    pub node_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct SetFlowRequest {
-    /// Name of the model. If omitted, resolves from the current working directory.
-    pub model: Option<String>,
-    /// One or more flows as a JSON string. Pass a single flow object or an array of flows. Each must have id, name, steps[]. Step IDs must be unique within each flow. Steps can have branches[] for decision points. Transition source/target must reference existing step IDs.
-    pub data: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct DeleteFlowRequest {
-    /// Name of the model. If omitted, resolves from the current working directory.
-    pub model: Option<String>,
-    /// ID of the flow to delete
-    pub flow_id: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SetGroupsRequest {
-    /// Name of the model. If omitted, resolves from the current working directory.
-    pub model: Option<String>,
-    /// JSON string: a single group object or array of groups. Each group has: id, kind ("deployment" or "package"), name, memberIds (array of node IDs). Optional: description, contract (same format as node contracts: {expect, ask, never}).
+    pub project: Option<String>,
+    /// JSON: a single group object or an array of groups. Each group has id, name, memberIds.
+    /// Optional: description, parentGroupId, responsibilities, cell, size.
     pub data: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct DeleteGroupRequest {
-    /// Name of the model. If omitted, resolves from the current working directory.
-    pub model: Option<String>,
-    /// ID of the group to delete
+    pub project: Option<String>,
     pub group_id: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct GetStructureRequest {
-    /// Absolute path to the project directory to scan
-    pub path: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SetImplementingRequest {
-    /// Name of the model. If omitted, resolves from the current working directory.
-    pub model: Option<String>,
-    /// true to suppress drift detection, false to resume it
+    pub project: Option<String>,
+    /// true to suppress drift detection while implementing, false to resume.
     pub active: bool,
 }
+

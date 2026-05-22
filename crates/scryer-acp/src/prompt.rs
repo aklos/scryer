@@ -1,21 +1,16 @@
-use scryer_core::C4ModelData;
+use scryer_core::ScryModel;
 
-/// Serialize a model for embedding in the sync prompt.
-/// Strips UI-only fields (position, type, refPositions) and compact-strips
-/// empty values — same as what `get_model` returns to agents.
-pub fn serialize_model_for_prompt(model: &C4ModelData) -> String {
-    let mut val = serde_json::to_value(model).unwrap();
+/// Serialize a ScryModel as compact JSON for embedding in an agent prompt.
+/// Strips empty arrays / null fields so the agent context isn't bloated.
+pub fn serialize_model_for_prompt(model: &ScryModel) -> String {
+    let mut val = serde_json::to_value(model).unwrap_or(serde_json::Value::Null);
     strip_compact(&mut val);
-    serde_json::to_string(&val).unwrap()
+    serde_json::to_string_pretty(&val).unwrap_or_else(|_| "{}".to_string())
 }
 
 fn strip_compact(val: &mut serde_json::Value) {
     match val {
         serde_json::Value::Object(map) => {
-            map.remove("position");
-            map.remove("type");
-            map.remove("refPositions");
-            map.remove("notes");
             map.retain(|_, v| {
                 !matches!(v, serde_json::Value::String(s) if s.is_empty())
                     && !v.is_null()
@@ -35,86 +30,105 @@ fn strip_compact(val: &mut serde_json::Value) {
     }
 }
 
-/// Build a prompt for initial model creation from a codebase.
-/// Guides the agent to scan the project and build system + container levels only.
-pub fn initial_model_prompt(model_name: &str, cwd: &str) -> String {
+/// Prompt for initial model creation from a codebase. Builds the system + container levels.
+pub fn initial_model_prompt(project_path: &str) -> String {
     format!(
-        r#"You have access to the scryer MCP server. Build a C4 architecture model named "{model_name}" from the codebase at {cwd}.
+        r#"You have access to the scryer MCP server (schema v0.3). Build the architecture model for the project at {project_path}.
 
-## Instructions
+## Core principles
 
-1. Call `get_rules` to load the full modeling workflow and C4 rules.
-2. Call `get_structure` with path "{cwd}" to get the annotated directory tree.
-3. Read the manifests that `get_structure` surfaces (package.json, Cargo.toml, go.mod, etc.) to identify runtime dependencies, external services, databases, and frameworks.
-4. Build the model level by level — follow the workflow from `get_rules`:
-   - First: `set_model` with persons, the system, external systems, and system-level edges only. Fix any warnings before proceeding.
-   - Second: `set_node` on the system to add all containers plus container-level edges (Person→Container, Container→Container, Container→ExternalSystem). Fix any warnings.
-   - Group containers that deploy together using `set_groups`.
-5. **Stop at the container level.** Do NOT add components or operations.
-6. Set `status: "implemented"` on all nodes that already exist in the codebase. Do NOT use "verified" — that requires contract items to be checked and passed.
-7. Set source mappings for containers using `update_source_map` — use glob patterns pointing to each container's directory.
-8. Call `get_changes` to produce a summary of what was modeled.
+- **The codebase is evidence, not the source of truth.** You read code to elicit responsibilities the system already holds — not to transcribe the file tree into nodes.
+- **Responsibilities are pure business statements.** A responsibility says what a node is accountable for in business terms, never how. "restricts access to private content" — yes. "restricts access via JWT" — no, the "via JWT" is mechanism. Implementation detail goes in the responsibility's `implementationRules` field, never in the statement.
+- **Every node justifies its existence through responsibilities.** A child node exists to discharge a subset of its parent's responsibilities. A node with no responsibility — or whose responsibilities serve no ancestor commitment — is structurally vagrant.
 
-Be thorough — identify all deployable units, data stores, external integrations, background workers, and user-facing surfaces. Model for production, not for demos. Name nodes by their role, not their technology."#
+## Procedure
+
+1. Call `get_rules` to load the modeling rules.
+2. Call `get_structure` with path "{project_path}" to get the annotated directory tree. Read the manifests it surfaces (package.json, Cargo.toml, fly.toml, Dockerfile, .env.example, etc.) to identify deployable units, data stores, external services, and frameworks.
+3. **Build the system level.** Call `set_model` with the persons (real users / actors), the system itself, and external systems (third-party services the system depends on — Stripe, S3, Resend, etc.; mark these `external: true`). Add system-level links between them. For each node, write 1–4 responsibilities. Set responsibility status to `implemented` on responsibilities derived from existing code, `proposed` on anything speculative.
+4. **Add containers.** Call `set_node` on the system id with a payload containing the containers (web apps, APIs, workers, databases, message queues, file stores). For each container:
+   - Set `kind: "container"`, `name` describes the role ("Website", "Worker", "CMS"), `technology` describes what it IS as software ("Next.js 14", "PostgreSQL 16", "S3 Bucket").
+   - Write 2–6 responsibilities — pure business statements about what the container is accountable for. No technology words in the statement.
+   - Include container-level links (Person→Container, Container→Container, Container→External).
+5. **Group containers.** Call `set_groups` to create deployment-unit groups for containers that ship together (e.g. multiple containers running inside one Next.js app, multiple AWS resources provisioned by one Terraform module). A group can carry its own deployment-shaped responsibilities ("deploys atomically", "must fit in 256 MB").
+6. **Stop here.** Do not add components or code-level nodes. The user requests component detail explicitly.
+7. Call `update_source_map` to attach a directory glob to each container that has code (`pattern: "apps/web/**/*"`).
+8. Call `get_changes` to summarize what was modeled.
+
+## Don'ts
+
+- Don't add responsibilities the codebase doesn't already evidence. If the codebase doesn't handle a concern, the model shouldn't claim it does.
+- Don't put technology vocabulary inside responsibility statements. `technology` and `implementationRules` are the places for that.
+- Don't model framework internals (e.g. ORM layers, admin panels that come with a CMS) as separate containers unless they have a distinct user-facing surface that warrants its own tour.
+- Don't draw a separate edge for each interaction between two nodes — one link per relationship.
+"#
     )
 }
 
-/// Build a prompt for filling out the children of a specific node from existing code.
-/// The agent reads the codebase and populates the next C4 level down.
+/// Prompt for filling out the children of an existing node from the codebase.
+/// `node_kind` is one of "system", "container", "component".
 pub fn node_fill_prompt(
-    model_name: &str,
-    cwd: &str,
+    project_path: &str,
     node_id: &str,
     node_name: &str,
     node_kind: &str,
     model_json: &str,
 ) -> String {
-    let child_kind = match node_kind {
-        "system" => "containers (applications, services, data stores)",
-        "container" => "components (logical modules within the container)",
-        "component" => "operations (functions/methods), processes (multi-step flows), and models (data types)",
-        _ => "child nodes",
-    };
-
-    let extra_instructions = match node_kind {
-        "system" => r#"
-   - Add all containers: APIs, web apps, workers, databases, message queues, caches.
-   - Set `technology` on every container (e.g. "Next.js", "PostgreSQL", "Redis").
-   - Add edges between containers showing data flow and dependencies.
+    let (child_kind_label, child_guidance) = match node_kind {
+        "system" => (
+            "containers (web apps, APIs, workers, data stores, queues)",
+            r#"   - Each container's `name` describes the role; `technology` says what it IS as software.
+   - Write 2–6 pure business responsibilities per container. No mechanism vocabulary in the statement.
+   - Add container-level links between the containers and to externals.
    - Group containers that deploy together using `set_groups`."#,
-        "container" => r#"
-   - Identify logical components by reading the source directories mapped to this container.
-   - Components should represent cohesive modules — not one per file, but logical groupings.
-   - Add edges between components showing internal dependencies.
-   - Set `technology` where relevant (framework, library)."#,
-        "component" => r#"
-   - Read the source files for this component to identify functions, methods, and data types.
-   - Operations = individual functions or handlers (name must be a valid identifier, match the language convention).
-   - Processes = multi-step workflows that orchestrate multiple operations.
-   - Models = data types with properties (name should be PascalCase).
-   - Add descriptions explaining what each operation/process/model does."#,
-        _ => "",
+        ),
+        "container" => (
+            "components (logical code modules inside the container)",
+            r#"   - Identify cohesive modules from the source directories. Components are logical groupings, not one-per-file.
+   - Write 2–5 pure business responsibilities per component.
+   - Add component-level links between components and to other containers / externals.
+   - Optionally group components into modules (`set_groups`); nested groups can mirror directory organization."#,
+        ),
+        "component" => (
+            "operations (leaf behaviors) and models (data types)",
+            r#"   - Operation: the smallest behavioral unit inside a component — a function, handler, hook, or UI sub-component (e.g. a React component that lives inside one module). Name must be a valid identifier in the codebase's language (snake_case for Rust/Python/Ruby/Go; camelCase for JS/TS/Java). Each operation gets 1–3 business responsibilities.
+   - Model: a data type (struct, class, interface). Name is a valid type name (PascalCase typical). Models carry `properties` (label/description pairs), NOT responsibilities.
+   - **Scoping**: determine parentage from the import/usage graph, not from file co-location. A code-level node belongs to whichever component actually owns/defines it. If sibling components import the same code, parent it to its owner and add links from the consumers — the cross-boundary dependency is valuable signal the user needs to see. Don't restructure to hide it.
+   - Add links between operations and to other components / containers / externals as needed.
+   - The code level uses only `operation` and `model` — no `process` kind exists."#,
+        ),
+        _ => ("child nodes", ""),
     };
 
     format!(
-        r#"You have access to the scryer MCP server. Fill out the internals of the "{node_name}" node in model "{model_name}" from the codebase at {cwd}.
+        r#"You have access to the scryer MCP server (schema v0.3). Fill out the internals of node "{node_name}" (id {node_id}) at {project_path}.
 
 ## Current model state
 
-Do NOT call `get_model` — the current state is provided here:
+The model is provided here so you can avoid calling `get_model`:
 
+```json
 {model_json}
+```
 
-## Instructions
+## Core principles
 
-1. Call `get_rules` to load the C4 modeling rules.
-2. Call `get_node` with id "{node_id}" to see this node's full context (description, contract, source mappings, existing edges).
-3. Use `get_structure` with path "{cwd}" and read relevant source files to understand what {child_kind} belong inside "{node_name}".
-4. Add {child_kind} using `set_node` on "{node_id}" — include both child nodes and edges between them.{extra_instructions}
-5. Set `status: "implemented"` on nodes that already exist in the codebase. Leave new/proposed items as `status: "proposed"`.
-6. Update source mappings for new nodes using `update_source_map` with glob patterns.
-7. Call `get_changes` to produce a summary.
+- **The codebase is evidence, not source of truth.** Read code to elicit responsibilities; don't transcribe.
+- **Responsibilities are pure business statements.** No mechanism vocabulary, no technology names, no specific protocols. Implementation detail goes in `implementationRules`.
+- **Each child discharges a subset of "{node_name}"'s responsibilities.** Verify after writing: every child node's responsibilities map back to something its parent is accountable for. If a child's responsibilities don't ladder up, it's vagrant.
 
-Focus only on "{node_name}" — do not modify nodes outside this scope. Be thorough — identify all {child_kind} from the actual code, not just the obvious ones."#
+## Procedure
+
+1. Call `get_rules` to load the modeling rules.
+2. Call `get_node` with id "{node_id}" to see this node's full context (description, responsibilities, sources, existing links).
+3. Use `get_structure` with path "{project_path}" if you need to inspect source files. Open relevant files to identify {child_kind_label}.
+4. Call `set_node` on "{node_id}" with the new subtree (nodes + links). Add only nodes whose responsibilities ladder up to "{node_name}".
+{child_guidance}
+5. Set responsibility status to `implemented` on responsibilities derived from existing code; `proposed` on speculative ones.
+6. Call `update_source_map` to attach glob/file patterns to nodes that map to code.
+7. Call `get_changes` to summarize what was added.
+
+Stay within the "{node_name}" subtree. Do not modify nodes outside this scope.
+"#
     )
 }
