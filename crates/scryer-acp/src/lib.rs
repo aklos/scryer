@@ -61,22 +61,35 @@ pub fn resolve_agent_binary(client_name: &str) -> Option<AgentLaunch> {
     None
 }
 
+fn claude_launch() -> Option<AgentLaunch> {
+    which::which("claude").ok().map(|path| AgentLaunch::Cli {
+        binary: path.to_string_lossy().to_string(),
+        kind: AgentKind::ClaudeCode,
+    })
+}
+
+fn codex_launch() -> Option<AgentLaunch> {
+    which::which("codex").ok().map(|path| AgentLaunch::Cli {
+        binary: path.to_string_lossy().to_string(),
+        kind: AgentKind::Codex,
+    })
+}
+
 /// Detect an available agent from PATH without requiring a prior MCP connection.
 /// Prefers Claude Code, then Codex.
 pub fn detect_available_agent() -> Option<AgentLaunch> {
-    if let Ok(path) = which::which("claude") {
-        return Some(AgentLaunch::Cli {
-            binary: path.to_string_lossy().to_string(),
-            kind: AgentKind::ClaudeCode,
-        });
+    detect_available_agent_pref("auto")
+}
+
+/// Detect an available agent honoring a user preference. The preferred agent is
+/// tried first; if it isn't on PATH we fall back to the other so a fill still
+/// runs. `pref` is "auto" | "claudeCode" | "codex".
+pub fn detect_available_agent_pref(pref: &str) -> Option<AgentLaunch> {
+    match pref {
+        "codex" => codex_launch().or_else(claude_launch),
+        "claudeCode" => claude_launch().or_else(codex_launch),
+        _ => claude_launch().or_else(codex_launch),
     }
-    if let Ok(path) = which::which("codex") {
-        return Some(AgentLaunch::Cli {
-            binary: path.to_string_lossy().to_string(),
-            kind: AgentKind::Codex,
-        });
-    }
-    None
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

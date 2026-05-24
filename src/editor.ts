@@ -4,7 +4,7 @@
  * viewmodel.ts.
  */
 
-import type { Cell, Kind, ModelProperty, Responsibility } from "./viewmodel";
+import type { Cell, Kind, SchemaProperty, Responsibility } from "./viewmodel";
 
 export interface Editor {
   // --- nodes ---
@@ -19,7 +19,7 @@ export interface Editor {
       deprecated?: boolean;
       relocated?: boolean;
       responsibilities?: Responsibility[];
-      properties?: ModelProperty[];
+      properties?: SchemaProperty[];
     },
   ) => void;
   deleteNode: (nodeId: string) => void;
@@ -67,12 +67,12 @@ export interface Editor {
     respId: string,
   ) => void;
 
-  // --- properties (model-kind nodes only) ---
+  // --- properties (schema-kind nodes only) ---
   addProperty: (nodeId: string) => void;
   updateProperty: (
     nodeId: string,
     index: number,
-    patch: Partial<ModelProperty>,
+    patch: Partial<SchemaProperty>,
   ) => void;
   removeProperty: (nodeId: string, index: number) => void;
 }

@@ -37,6 +37,7 @@ import {
 } from "./pack";
 import { ContextMenu } from "./ContextMenu";
 import type { Editor } from "./editor";
+import type { Selection } from "./selection";
 
 const ALTITUDE_LABEL: Record<SurfaceView["altitude"], string> = {
   system: "System Context",
@@ -208,12 +209,16 @@ export function Surface({
   parentNodeId,
   ancestorAltitudes = [],
   editor,
+  selection,
+  onSelectNode,
+  onSelectResponsibility,
+  onClearSelection,
   onNavigate,
   onBack,
   onPlaceNode,
   onMoveGroup,
   onResizeGroup,
-  onFixOverlaps,
+  onAutoLayout,
   projectPath,
   modelRef: modelRefStr,
   agent,
@@ -222,6 +227,10 @@ export function Surface({
   parentNodeId: string | null;
   ancestorAltitudes?: SurfaceView["altitude"][];
   editor?: Editor;
+  selection?: Selection;
+  onSelectNode?: (nodeId: string) => void;
+  onSelectResponsibility?: (nodeId: string, respId: string) => void;
+  onClearSelection?: () => void;
   onNavigate: (nodeId: string) => void;
   onBack?: (ancestorIndex: number) => void;
   onPlaceNode: (
@@ -241,7 +250,7 @@ export function Surface({
     size: { cols: number; rows: number },
     measured: ReadonlyMap<string, Span>,
   ) => void;
-  onFixOverlaps?: (measuredSpans: ReadonlyMap<string, Span>) => void;
+  onAutoLayout?: (measured: ReadonlyMap<string, Span>) => void;
   projectPath?: string | null;
   modelRef?: string | null;
   agent?: AgentSession;
@@ -280,6 +289,8 @@ export function Surface({
     y: number;
     candidateNode: NodeView | null;
     candidateGroupId: string | null;
+    selectNodeId: string | null;
+    selectRespId: string | null;
   } | null>(null);
   const pointerRef = useRef({ x: 0, y: 0 });
   const resizeRef = useRef<{
@@ -415,6 +426,8 @@ export function Surface({
         y: e.clientY,
         candidateNode: null,
         candidateGroupId: groupId,
+        selectNodeId: null,
+        selectRespId: null,
       };
     },
     [],
@@ -423,15 +436,22 @@ export function Surface({
   useEffect(() => {
     const onDown = (e: PointerEvent) => {
       if (heldRef.current || resizeRef.current) return;
-      if ((e.target as Element).closest("[data-no-pickup]")) return;
+      const tgt = e.target as Element;
+      if (tgt.closest("[data-no-pickup]")) return;
+      // Group drag / resize handles manage their own down-tracking.
+      if (tgt.closest("[data-group-pickup],[data-resize]")) return;
       const node = pickableAt(viewRef.current, e.clientX, e.clientY);
-      if (!node) return;
-      document.body.classList.add("dragging");
+      const respEl = tgt.closest("[data-select-resp]");
+      const cardEl = tgt.closest("[data-select-node]");
+      if (node) document.body.classList.add("dragging");
       downRef.current = {
         x: e.clientX,
         y: e.clientY,
         candidateNode: node,
         candidateGroupId: null,
+        selectNodeId:
+          node?.id ?? cardEl?.getAttribute("data-select-node") ?? null,
+        selectRespId: respEl?.getAttribute("data-select-resp") ?? null,
       };
     };
 
@@ -538,22 +558,37 @@ export function Surface({
         document.body.classList.remove("dragging");
         return;
       }
+      const down = downRef.current;
       downRef.current = null;
       const h = heldRef.current;
-      if (!h) {
-        document.body.classList.remove("dragging");
+      if (h) {
+        if (h.kind === "node") {
+          tryPlaceNode(h.node, e.clientX, e.clientY);
+        } else {
+          tryPlaceGroup(h.groupId, h.anchorRow, h.anchorCol, e.clientX, e.clientY);
+        }
+        endHold();
         return;
       }
-      if (h.kind === "node") {
-        tryPlaceNode(h.node, e.clientX, e.clientY);
+      document.body.classList.remove("dragging");
+      // No drag occurred → treat as a click and resolve selection.
+      if (!down) return;
+      const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
+      if (moved >= CLICK_SLOP) return;
+      if (down.selectRespId && down.selectNodeId) {
+        onSelectResponsibility?.(down.selectNodeId, down.selectRespId);
+      } else if (down.selectNodeId) {
+        onSelectNode?.(down.selectNodeId);
       } else {
-        tryPlaceGroup(h.groupId, h.anchorRow, h.anchorCol, e.clientX, e.clientY);
+        onClearSelection?.();
       }
-      endHold();
     };
 
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") cancelHeld();
+      if (e.key === "Escape") {
+        if (heldRef.current) cancelHeld();
+        else onClearSelection?.();
+      }
     };
     const onCtx = (e: MouseEvent) => {
       if (heldRef.current) {
@@ -604,6 +639,9 @@ export function Surface({
     cancelHeld,
     endHold,
     onResizeGroup,
+    onSelectNode,
+    onSelectResponsibility,
+    onClearSelection,
     resizeRejected,
     startHoldGroup,
     startHoldNode,
@@ -723,13 +761,20 @@ export function Surface({
             editor={editor}
             measuredSpans={measuredSpans}
             onMeasure={setMeasuredSpans}
-            onFixOverlaps={onFixOverlaps}
+            onAutoLayout={onAutoLayout}
             renderEntry={(node) => (
               <EntryCard
                 node={node}
                 onNavigate={onNavigate}
                 onLinkClick={handleLinkClick}
                 editor={editor}
+                cardSelected={selection?.nodeId === node.id}
+                selectedRespId={
+                  selection?.kind === "responsibility" &&
+                  selection.nodeId === node.id
+                    ? selection.respId
+                    : null
+                }
               />
             )}
             emptyContent={
@@ -844,7 +889,7 @@ export function Surface({
               parentNodeId === null
                 ? ["person", "system"]
                 : view.altitude === "code"
-                  ? ["operation", "model"]
+                  ? ["symbol", "schema"]
                   : [childKindFor(parentInferKind(view.altitude))];
             return (
               <ContextMenu

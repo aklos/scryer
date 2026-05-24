@@ -45,6 +45,7 @@ impl ScryerServer {
             "links": model.links,
             "groups": model.groups,
             "sourceMap": model.source_map,
+            "boundaries": model.boundaries,
         });
         strip_fields_compact(&mut payload);
         Ok(CallToolResult::success(vec![Content::text(
@@ -53,7 +54,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Read one node and its subtree. Returns the target node, all its descendants, internal links among them, and external links to nodes outside the subtree (with the external nodes' names + kinds for context). Source-map entries are included for any node in the subtree."
+        description = "Read one node and its subtree. Returns the target node, all its descendants, internal links among them, and external links to nodes outside the subtree (with the external nodes' names + kinds for context). Includes the code-side mapping for the subtree: `sourceMap` (line-precise locations keyed by responsibility id, plus schema-node declaration locations keyed by node id) and `boundaries` (globs keyed by node id)."
     )]
     fn get_node(
         &self,
@@ -135,8 +136,26 @@ impl ScryerServer {
             })
             .collect();
 
+        // Source map is keyed by responsibility id (include entries for any
+        // responsibility owned by a node in the subtree) or by a schema node id
+        // (include entries for any schema node in the subtree).
+        let subtree_resp_ids: HashSet<&str> = subtree_nodes
+            .iter()
+            .flat_map(|n| n.responsibilities.iter())
+            .map(|r| r.id.as_str())
+            .collect();
         let source_map: serde_json::Map<String, serde_json::Value> = model
             .source_map
+            .iter()
+            .filter(|(k, _)| {
+                subtree_resp_ids.contains(k.as_str()) || subtree_ids.contains(k.as_str())
+            })
+            .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap_or(serde_json::Value::Null)))
+            .collect();
+
+        // Boundaries are keyed by node id.
+        let boundaries: serde_json::Map<String, serde_json::Value> = model
+            .boundaries
             .iter()
             .filter(|(k, _)| subtree_ids.contains(k.as_str()))
             .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap_or(serde_json::Value::Null)))
@@ -149,6 +168,7 @@ impl ScryerServer {
             "externalLinks": external_links,
             "contextNodes": context_nodes,
             "sourceMap": source_map,
+            "boundaries": boundaries,
         });
         strip_fields_compact(&mut payload);
         Ok(CallToolResult::success(vec![Content::text(
@@ -212,7 +232,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Run the structural validator. Returns a list of warnings: parent-kind mismatches, unknown link endpoints, group members at mixed levels, properties on non-model nodes, responsibilities on model nodes. An empty list means the model is structurally clean (does NOT check responsibility quality)."
+        description = "Run the structural validator. Returns a list of warnings: parent-kind mismatches, unknown link endpoints, group members at mixed levels, properties on non-schema nodes, responsibilities on schema nodes. An empty list means the model is structurally clean (does NOT check responsibility quality)."
     )]
     fn validate_model(
         &self,

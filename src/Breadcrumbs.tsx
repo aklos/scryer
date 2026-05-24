@@ -10,15 +10,25 @@ export function Breadcrumbs({
   model,
   path,
   onJump,
+  projectPath,
 }: {
   model: ScryModel;
   /** Stack of node ids, root-most first. `[]` is the root surface. */
   path: string[];
   /** Navigate to depth `index + 1` (use -1 to return to the root). */
   onJump: (index: number) => void;
+  projectPath: string | null;
 }) {
   return (
     <nav className="flex shrink-0 items-center gap-0.5 border-b border-[var(--border)] bg-[var(--surface-overlay)] px-3 py-2 backdrop-blur-md">
+      {projectPath && (
+        <>
+          <span className="text-xs text-[var(--text-muted)] truncate max-w-[300px] px-1.5 py-0.5">
+            {projectPath.replace(/^\/home\/[^/]+/, "~")}
+          </span>
+          <ChevronRight className="h-3.5 w-3.5 text-[var(--text-ghost)]" />
+        </>
+      )}
       <Crumb
         label="System"
         active={path.length === 0}

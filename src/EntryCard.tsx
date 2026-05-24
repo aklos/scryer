@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import type {
   Kind,
-  ModelProperty,
+  SchemaProperty,
   NodeView,
   Responsibility,
 } from "./viewmodel";
@@ -120,6 +120,8 @@ export function EntryCardView(props: {
   ghost?: boolean;
   lifted?: boolean;
   editor?: Editor;
+  cardSelected?: boolean;
+  selectedRespId?: string | null;
 }) {
   const zoom = useZoom();
   const [editing, setEditing] = useState(false);
@@ -169,6 +171,8 @@ function ViewCard({
   lifted = false,
   onStartEdit,
   cardRef,
+  cardSelected = false,
+  selectedRespId = null,
 }: {
   node: NodeView;
   span: Span;
@@ -180,12 +184,14 @@ function ViewCard({
   editor?: Editor;
   onStartEdit?: () => void;
   cardRef?: React.Ref<HTMLDivElement>;
+  cardSelected?: boolean;
+  selectedRespId?: string | null;
 }) {
   const zoom = useZoom();
   const isPerson = node.kind === "person";
   const isExternal = node.external === true;
-  const isCodeKind = node.kind === "operation" || node.kind === "model";
-  const isModelKind = node.kind === "model";
+  const isCodeKind = node.kind === "symbol" || node.kind === "schema";
+  const isSchemaKind = node.kind === "schema";
   const navigable = node.kind !== "person" && !isCodeKind && !isExternal;
 
   const isDeprecated = node.deprecated === true;
@@ -206,7 +212,7 @@ function ViewCard({
   const incoming = node._incomingLinks;
   const outgoing = node._outgoingLinks;
   const hasLinks =
-    outgoing.length > 0 || (!isModelKind && incoming.length > 0);
+    outgoing.length > 0 || (!isSchemaKind && incoming.length > 0);
   const nameClass = isCodeKind
     ? "font-mono font-semibold text-[var(--text)]"
     : "font-semibold text-[var(--text)]";
@@ -230,12 +236,16 @@ function ViewCard({
   return (
     <div
       ref={cardRef}
+      data-select-node={!lifted && !ghost ? node.id : undefined}
       className={`group/card relative flex h-full w-full flex-col overflow-hidden bg-[var(--surface-raised)] ${shellBase}`}
       style={{
         borderRadius: 12 * zoom,
         borderWidth: (ghost ? 2 : 1) * zoom,
         fontSize: 12 * zoom,
         opacity: isDeprecated && !lifted && !ghost ? 0.55 : undefined,
+        boxShadow: cardSelected
+          ? `0 0 0 ${2 * zoom}px var(--color-blue-500)`
+          : undefined,
       }}
       onDoubleClick={handleDoubleClick}
     >
@@ -271,9 +281,9 @@ function ViewCard({
             {isPerson ? "Person" : "External"}
           </span>
         )}
-        <span className="flex-1 truncate" style={{ fontSize: 13 * zoom }}>
+        <span className="flex-1 truncate text-[var(--text-muted)]" style={{ fontSize: 13 * zoom }}>
           <span className={nameClass}>{node.name || "Untitled"}</span>
-          {node.kind === "operation" && <span className={nameClass}>()</span>}
+          {node.kind === "symbol" && <span className={nameClass}>()</span>}
           {!isCodeKind && node.technology && (
             <span
               className="italic text-[var(--text-muted)]"
@@ -303,17 +313,6 @@ function ViewCard({
             }}
           >
             Relocated
-          </span>
-        )}
-        {isExternal && !isDeprecated && !isRelocated && (
-          <span
-            className="shrink-0 font-semibold uppercase text-[var(--text-ghost)]"
-            style={{
-              fontSize: 9.5 * zoom,
-              letterSpacing: 0.14 * zoom + "em",
-            }}
-          >
-            External
           </span>
         )}
         {onStartEdit && (
@@ -368,41 +367,54 @@ function ViewCard({
         </div>
       )}
 
-      {/* model properties */}
-      {isModelKind && properties.length > 0 && (
+      {/* schema properties */}
+      {isSchemaKind && properties.length > 0 && (
         <div
           className="border-t border-[var(--border-subtle)]"
           style={{ padding: `${(RESP_PAD / 2) * zoom}px ${12 * zoom}px` }}
         >
-          {properties.map((p, i) => (
-            <div
-              key={i}
-              style={{ minHeight: RESP_LINE_H * zoom, lineHeight: `${16 * zoom}px`, paddingTop: 4 * zoom, paddingBottom: 4 * zoom }}
-            >
-              <span
-                className="font-mono font-medium text-[var(--text-secondary)]"
-                style={{ fontSize: 12 * zoom }}
+          {properties.map((p, i) => {
+            const eff = p.status ?? "proposed";
+            const colors = STATUS_COLORS[eff] ?? null;
+            return (
+              <div
+                key={i}
+                className="flex items-start"
+                style={{ gap: 8 * zoom, minHeight: RESP_LINE_H * zoom, lineHeight: `${16 * zoom}px`, paddingTop: 4 * zoom, paddingBottom: 4 * zoom }}
               >
-                {p.label}
-              </span>
-              {p.description && (
-                <>
-                  {" "}
+                <span
+                  className={`shrink-0 rounded-full ${colors ? colors.dot : "bg-[var(--text-ghost)]"}`}
+                  style={{ width: 6 * zoom, height: 6 * zoom, marginTop: 5 * zoom }}
+                  title={colors?.label}
+                  aria-label={colors?.label}
+                />
+                <div className="flex-1" style={{ minWidth: 0 }}>
                   <span
-                    className="text-[var(--text-muted)]"
-                    style={{ fontSize: 11 * zoom }}
+                    className="font-mono font-medium text-[var(--text-secondary)]"
+                    style={{ fontSize: 12 * zoom }}
                   >
-                    {p.description}
+                    {p.label}
                   </span>
-                </>
-              )}
-            </div>
-          ))}
+                  {p.description && (
+                    <>
+                      {" "}
+                      <span
+                        className="text-[var(--text-muted)]"
+                        style={{ fontSize: 11 * zoom }}
+                      >
+                        {p.description}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
       {/* responsibilities */}
-      {!isModelKind && responsibilities.length > 0 && (
+      {!isSchemaKind && responsibilities.length > 0 && (
         <div
           className="border-t border-[var(--border-subtle)]"
           style={{ padding: `${(RESP_PAD / 2) * zoom}px ${12 * zoom}px` }}
@@ -410,12 +422,27 @@ function ViewCard({
           {responsibilities.map((r) => {
             const eff = isExternal || isPerson ? undefined : effectiveRespStatus(node, r);
             const colors = eff ? STATUS_COLORS[eff] : null;
-            const rules = r.implementationRules ?? [];
+            const rules = r.directives ?? [];
+            const respSelected = selectedRespId === r.id;
             return (
               <div
                 key={r.id}
-                className="flex items-start"
-                style={{ gap: 8 * zoom, minHeight: RESP_LINE_H * zoom }}
+                data-select-resp={!lifted && !ghost ? r.id : undefined}
+                className={`flex items-start ${
+                  !lifted && !ghost ? "cursor-pointer" : ""
+                }`}
+                style={{
+                  gap: 8 * zoom,
+                  minHeight: RESP_LINE_H * zoom,
+                  borderRadius: 4 * zoom,
+                  paddingLeft: 4 * zoom,
+                  paddingRight: 4 * zoom,
+                  marginLeft: -4 * zoom,
+                  marginRight: -4 * zoom,
+                  backgroundColor: respSelected
+                    ? "color-mix(in srgb, var(--color-blue-500) 18%, transparent)"
+                    : undefined,
+                }}
               >
                 <span
                   className={`shrink-0 rounded-full ${
@@ -474,7 +501,7 @@ function ViewCard({
               }))}
             />
           )}
-          {!isModelKind && incoming.length > 0 && (
+          {!isSchemaKind && incoming.length > 0 && (
             <LinkLine
               direction="in"
               links={incoming.map((l) => ({
@@ -505,7 +532,7 @@ interface Draft {
   deprecated: boolean;
   relocated: boolean;
   responsibilities: Responsibility[];
-  properties: ModelProperty[];
+  properties: SchemaProperty[];
 }
 
 function initialDraft(node: NodeView): Draft {
@@ -558,23 +585,22 @@ function EditModal({
   const deleteBtnRef = useRef<HTMLButtonElement | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
 
-  const isCodeKind = draft.kind === "operation" || draft.kind === "model";
-  const isModelKind = draft.kind === "model";
+  const isCodeKind = draft.kind === "symbol" || draft.kind === "schema";
+  const isSchemaKind = draft.kind === "schema";
   const isPerson = draft.kind === "person";
 
   const OverrideIcon = lookupIcon(draft.icon);
   const Icon = OverrideIcon ?? tokenIcon(node.id);
 
   const validKinds: Kind[] = node.parentId
-    ? node.kind === "operation" || node.kind === "model"
-      ? ["operation", "model"]
+    ? node.kind === "symbol" || node.kind === "schema"
+      ? ["symbol", "schema"]
       : [node.kind]
     : ["person", "system"];
 
   const commitDraft = () => {
-    editor.updateNode(node.id, {
+    const patch: Parameters<typeof editor.updateNode>[1] = {
       name: draft.name.trim(),
-      kind: draft.kind !== node.kind ? draft.kind : undefined,
       description: draft.description.trim() || undefined,
       technology: !isCodeKind
         ? draft.technology.trim() || undefined
@@ -582,9 +608,13 @@ function EditModal({
       icon: draft.icon,
       deprecated: draft.deprecated || undefined,
       relocated: draft.relocated || undefined,
-      responsibilities: isModelKind ? undefined : draft.responsibilities,
-      properties: isModelKind ? draft.properties : undefined,
-    });
+      responsibilities: isSchemaKind ? undefined : draft.responsibilities,
+      properties: isSchemaKind ? draft.properties : undefined,
+    };
+    // Only include `kind` when it actually changed — `kind` is required, and
+    // spreading `kind: undefined` into the node would clobber it.
+    if (draft.kind !== node.kind) patch.kind = draft.kind;
+    editor.updateNode(node.id, patch);
   };
 
   // FLIP open: position modal at sourceRect synchronously before paint so
@@ -875,10 +905,10 @@ function EditModal({
 
           <FieldGroup>
             <label className={LABEL_CLASS}>
-              {isModelKind ? "Properties" : "Responsibilities"}
+              {isSchemaKind ? "Properties" : "Responsibilities"}
             </label>
             <div style={{ marginTop: 6 }}>
-              {isModelKind ? (
+              {isSchemaKind ? (
                 <PropertiesEditor
                   value={draft.properties}
                   onChange={(properties) => setDraft({ ...draft, properties })}
@@ -1125,7 +1155,7 @@ function StatusPicker({
   );
 }
 
-function ImplRulesEditor({
+function DirectivesEditor({
   value,
   onChange,
 }: {
@@ -1357,7 +1387,7 @@ export function ResponsibilitiesEditor({
       const next = { ...r, ...patch };
       if (
         !patch.status &&
-        (patch.statement !== undefined || patch.implementationRules !== undefined) &&
+        (patch.statement !== undefined || patch.directives !== undefined) &&
         (r.status === "implemented" || r.status === "verified")
       ) {
         next.status = "changed";
@@ -1393,7 +1423,7 @@ export function ResponsibilitiesEditor({
         const colors = hideStatus ? null : (r.status ? STATUS_COLORS[r.status] : null);
         const isLocked = r.locked === true;
         const hasTransitions = !hideStatus && !isLocked && manualStatusOptions(r.status).length > 0;
-        const hasRules = (r.implementationRules?.length ?? 0) > 0;
+        const hasRules = (r.directives?.length ?? 0) > 0;
         const expanded = expandedSet.has(r.id);
         return (
           <div key={r.id} className="flex flex-col" style={{ gap: 4, opacity: isLocked ? 0.5 : undefined }}>
@@ -1493,10 +1523,10 @@ export function ResponsibilitiesEditor({
               )}
             </div>
             {expanded && !isLocked && (
-              <ImplRulesEditor
-                value={r.implementationRules ?? []}
+              <DirectivesEditor
+                value={r.directives ?? []}
                 onChange={(rules) =>
-                  update(i, { implementationRules: rules.length > 0 ? rules : undefined })
+                  update(i, { directives: rules.length > 0 ? rules : undefined })
                 }
               />
             )}
@@ -1543,23 +1573,61 @@ function PropertiesEditor({
   onChange,
   onCommit,
 }: {
-  value: ModelProperty[];
-  onChange: (next: ModelProperty[]) => void;
+  value: SchemaProperty[];
+  onChange: (next: SchemaProperty[]) => void;
   onCommit: () => void;
 }) {
-  const update = (idx: number, patch: Partial<ModelProperty>) =>
-    onChange(value.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
+  const update = (idx: number, patch: Partial<SchemaProperty>) =>
+    onChange(value.map((p, i) => {
+      if (i !== idx) return p;
+      const next = { ...p, ...patch };
+      if (
+        !patch.status &&
+        (patch.label !== undefined || patch.description !== undefined) &&
+        (p.status === "implemented" || p.status === "verified")
+      ) {
+        next.status = "changed";
+      }
+      return next;
+    }));
   const remove = (idx: number) => onChange(value.filter((_, i) => i !== idx));
   const add = () => onChange([...value, { label: "", description: "" }]);
 
+  const [pickerFor, setPickerFor] = useState<{ idx: number; rect: DOMRect } | null>(null);
+
   return (
     <div className="flex flex-col" style={{ gap: 6 }}>
-      {value.map((p, i) => (
+      {value.map((p, i) => {
+        const colors = p.status ? STATUS_COLORS[p.status] : null;
+        const hasTransitions = manualStatusOptions(p.status).length > 0;
+        return (
         <div
           key={i}
           className="group/propedit flex items-center"
           style={{ gap: 8 }}
         >
+          {hasTransitions ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                setPickerFor({ idx: i, rect });
+              }}
+              className="shrink-0"
+              title={colors?.label ?? "proposed"}
+            >
+              <span
+                className={`block rounded-full ${colors ? colors.dot : "bg-[var(--text-ghost)]"} cursor-pointer hover:ring-2 hover:ring-[var(--border)]`}
+                style={{ width: 8, height: 8 }}
+              />
+            </button>
+          ) : (
+            <span
+              className={`shrink-0 block rounded-full ${colors ? colors.dot : "bg-[var(--text-ghost)]"}`}
+              style={{ width: 8, height: 8 }}
+              title={colors?.label ?? "proposed"}
+            />
+          )}
           <input
             type="text"
             value={p.label}
@@ -1601,7 +1669,8 @@ function PropertiesEditor({
             <X style={{ width: 14, height: 14 }} />
           </button>
         </div>
-      ))}
+        );
+      })}
       <button
         type="button"
         onClick={add}
@@ -1617,6 +1686,14 @@ function PropertiesEditor({
         <Plus style={{ width: 12, height: 12 }} />
         Add property
       </button>
+      {pickerFor && (
+        <StatusPicker
+          anchorRect={pickerFor.rect}
+          current={value[pickerFor.idx]?.status ?? "proposed"}
+          onPick={(s) => update(pickerFor.idx, { status: s })}
+          onClose={() => setPickerFor(null)}
+        />
+      )}
     </div>
   );
 }
@@ -1630,11 +1707,15 @@ export function EntryCard({
   onNavigate,
   onLinkClick,
   editor,
+  cardSelected,
+  selectedRespId,
 }: {
   node: NodeView;
   onNavigate?: (nodeId: string) => void;
   onLinkClick?: (partnerId: string) => void;
   editor?: Editor;
+  cardSelected?: boolean;
+  selectedRespId?: string | null;
 }) {
   const { heldId } = useContext(GridContext);
   return (
@@ -1646,6 +1727,8 @@ export function EntryCard({
       pickupId={node.id}
       ghost={heldId === node.id}
       editor={editor}
+      cardSelected={cardSelected}
+      selectedRespId={selectedRespId}
     />
   );
 }

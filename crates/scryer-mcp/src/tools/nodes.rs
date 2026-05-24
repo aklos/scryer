@@ -10,6 +10,24 @@ use rmcp::{
 use scryer_core::{Kind, Link, Node, ScryModel};
 use std::collections::HashSet;
 
+/// Remove code-side mapping for a set of nodes about to be deleted: their
+/// boundary globs (keyed by node id) and the source-map locations of every
+/// responsibility they own (keyed by responsibility id). Call before the nodes
+/// are retained out of the model, since it reads their responsibilities.
+fn prune_code_map(model: &mut ScryModel, removed_node_ids: &HashSet<String>) {
+    let removed_resp_ids: HashSet<String> = model
+        .nodes
+        .iter()
+        .filter(|n| removed_node_ids.contains(&n.id))
+        .flat_map(|n| n.responsibilities.iter().map(|r| r.id.clone()))
+        .collect();
+    // source_map keys are responsibility ids or schema node ids — drop both.
+    model
+        .source_map
+        .retain(|k, _| !removed_resp_ids.contains(k) && !removed_node_ids.contains(k));
+    model.boundaries.retain(|k, _| !removed_node_ids.contains(k));
+}
+
 #[tool_router(router = tool_router_nodes, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
@@ -22,7 +40,7 @@ impl ScryerServer {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
         *self.active_model.lock().unwrap() = Some(model_ref.clone());
 
-        let model: ScryModel = match serde_json::from_str(&req.data) {
+        let mut model: ScryModel = match serde_json::from_str(&req.data) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -31,6 +49,13 @@ impl ScryerServer {
                 ))]));
             }
         };
+        if let Ok(prior) = scryer_core::read_model_at(&model_ref) {
+            enforce_readonly_directives(&mut model, &prior);
+            enforce_readonly_layout(&mut model, &prior);
+        } else {
+            enforce_readonly_directives(&mut model, &ScryModel::default());
+            enforce_readonly_layout(&mut model, &ScryModel::default());
+        }
         if model.version != scryer_core::SCRY_VERSION {
             return Ok(CallToolResult::error(vec![Content::text(format!(
                 "Model version '{}' does not match expected '{}'",
@@ -79,6 +104,7 @@ impl ScryerServer {
             }
         };
 
+        let prior = model.clone();
         let mut added_ids: Vec<String> = Vec::new();
         for item in &req.nodes {
             let kind = parse_kind(&item.kind)?;
@@ -93,7 +119,6 @@ impl ScryerServer {
                 description: item.description.clone(),
                 responsibilities: item.responsibilities.clone().unwrap_or_default(),
                 properties: item.properties.clone().unwrap_or_default(),
-                sources: item.sources.clone().unwrap_or_default(),
                 cell: None,
                 icon: None,
                 deprecated: None,
@@ -105,6 +130,8 @@ impl ScryerServer {
             model.nodes.push(node);
             added_ids.push(id);
         }
+        enforce_readonly_directives(&mut model, &prior);
+        enforce_readonly_layout(&mut model, &prior);
 
         if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
@@ -119,7 +146,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Patch one or more existing nodes by id. Only fields present in each item are changed. Pass `responsibilities` or `properties` to replace the whole array (pass an empty array to clear). When changing `status`, pass `reason` with a short factual explanation. `source` (line-precise locations) writes into the model's source_map for that node id."
+        description = "Patch one or more existing nodes by id. Only fields present in each item are changed. Pass `responsibilities` or `properties` to replace the whole array (pass an empty array to clear). When changing `status`, pass `reason` with a short factual explanation. Code-side mapping (line-precise locations per responsibility, and boundary globs per node) is written separately via `update_source_map`."
     )]
     fn update_nodes(
         &self,
@@ -136,6 +163,7 @@ impl ScryerServer {
             }
         };
 
+        let prior = model.clone();
         let mut updated = 0usize;
         for u in &req.nodes {
             let Some(n) = model.nodes.iter_mut().find(|n| n.id == u.node_id) else {
@@ -145,6 +173,9 @@ impl ScryerServer {
                 ))]));
             };
 
+            if let Some(v) = &u.kind {
+                n.kind = parse_kind(v)?;
+            }
             if let Some(v) = &u.name {
                 n.name = v.clone();
             }
@@ -156,9 +187,6 @@ impl ScryerServer {
             }
             if let Some(v) = u.external {
                 n.external = Some(v);
-            }
-            if let Some(v) = &u.sources {
-                n.sources = v.clone();
             }
             if let Some(v) = &u.responsibilities {
                 n.responsibilities = v.clone();
@@ -176,15 +204,9 @@ impl ScryerServer {
                 n.parent_id = Some(v.clone());
             }
             updated += 1;
-
-            if let Some(locs) = &u.source {
-                if locs.is_empty() {
-                    model.source_map.remove(&u.node_id);
-                } else {
-                    model.source_map.insert(u.node_id.clone(), locs.clone());
-                }
-            }
         }
+        enforce_readonly_directives(&mut model, &prior);
+        enforce_readonly_layout(&mut model, &prior);
 
         if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
@@ -221,6 +243,7 @@ impl ScryerServer {
                 req.node_id
             ))]));
         }
+        let prior = model.clone();
 
         #[derive(serde::Deserialize)]
         struct SubtreePayload {
@@ -249,14 +272,12 @@ impl ScryerServer {
             }
         }
 
-        // Drop descendants + their links
+        // Drop descendants + their links + their code-side mapping
+        prune_code_map(&mut model, &to_remove);
         model.nodes.retain(|n| !to_remove.contains(&n.id));
         model
             .links
             .retain(|l| !to_remove.contains(&l.src) && !to_remove.contains(&l.dst));
-        for id in &to_remove {
-            model.source_map.remove(id);
-        }
 
         // Append new subtree nodes (skip node_id itself if accidentally included)
         for n in payload.nodes {
@@ -272,6 +293,8 @@ impl ScryerServer {
                 model.links.push(l);
             }
         }
+        enforce_readonly_directives(&mut model, &prior);
+        enforce_readonly_layout(&mut model, &prior);
 
         if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
@@ -319,13 +342,11 @@ impl ScryerServer {
         }
 
         let before = model.nodes.len();
+        prune_code_map(&mut model, &to_remove);
         model.nodes.retain(|n| !to_remove.contains(&n.id));
         model
             .links
             .retain(|l| !to_remove.contains(&l.src) && !to_remove.contains(&l.dst));
-        for id in &to_remove {
-            model.source_map.remove(id);
-        }
         // Prune dead group memberships
         for g in model.groups.iter_mut() {
             g.member_ids.retain(|m| !to_remove.contains(m));
@@ -428,7 +449,7 @@ impl ScryerServer {
                     locked: None,
                     relocated_to: None,
                     relocated_from: Some(mv.from_node_id.clone()),
-                    implementation_rules: resp.implementation_rules.clone(),
+                    directives: resp.directives.clone(),
                 };
                 let to = model.nodes.iter_mut().find(|n| n.id == mv.to_node_id).unwrap();
                 to.responsibilities.push(dest_resp);
@@ -444,7 +465,7 @@ impl ScryerServer {
                     locked: None,
                     relocated_to: None,
                     relocated_from: None,
-                    implementation_rules: resp.implementation_rules.clone(),
+                    directives: resp.directives.clone(),
                 };
                 let to = model.nodes.iter_mut().find(|n| n.id == mv.to_node_id).unwrap();
                 to.responsibilities.push(dest_resp);

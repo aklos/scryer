@@ -97,8 +97,8 @@ function altitudeForKind(kind: Kind): Altitude {
       return "container";
     case "component":
       return "component";
-    case "operation":
-    case "model":
+    case "symbol":
+    case "schema":
       return "code";
   }
 }

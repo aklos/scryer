@@ -32,8 +32,10 @@ arrive as `relocated` at the destination. Vagrant and locked responsibilities ca
 responsibilities) represent cross-cutting concerns like deployment boundaries — responsibilities describe what the \
 *grouping relationship* enforces, not what members do. If members only make sense as parts of the group, it should be \
 a parent node with children instead.\n\
-- `update_source_map` — map nodes to file locations. Containers/components get directory globs; operations get precise \
-file+line locations.\n\
+- `update_source_map` — write the code-side mapping. `boundaries` attach directory globs to nodes (containers/components \
+— the code region a node owns); `entries` attach precise file+line locations to responsibilities (where reality \
+discharges them); `schemas` attach a schema node's type-declaration location (keyed by node id — schemas have \
+properties, not responsibilities, so they map by node).\n\
 - `set_implementing {active}` — pause/resume drift detection while you implement. Call with active=true before writing \
 code; active=false after.\n\
 \n\

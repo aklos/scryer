@@ -2,7 +2,7 @@
  * On-disk schema (v0.3) + derived view types.
  *
  * `ScryModel`, `Node`, `Link`, `Group`, `Responsibility`, `Source`,
- * `ModelProperty`, `Kind`, `Status` mirror the Rust types in
+ * `SchemaProperty`, `Kind`, `Status` mirror the Rust types in
  * `crates/scryer-core/src/lib.rs` exactly — what gets read from
  * `{project}/.scryer/model.scry` IS the in-memory model.
  *
@@ -23,8 +23,8 @@ export type Kind =
   | "system"
   | "container"
   | "component"
-  | "operation"
-  | "model";
+  | "symbol"
+  | "schema";
 
 export type Altitude = "system" | "container" | "component" | "code";
 
@@ -52,13 +52,14 @@ export interface Responsibility {
   relocatedTo?: string;
   /** Destination side: node ID the responsibility came from. */
   relocatedFrom?: string;
-  /** Optional informational "how" — not part of conformance. */
-  implementationRules?: string[];
+  /** Optional prescriptive HOW-constraints ("must"/"never" rules) — not part of conformance. */
+  directives?: string[];
 }
 
-export interface ModelProperty {
+export interface SchemaProperty {
   label: string;
   description?: string;
+  status?: Status;
 }
 
 export interface Source {
@@ -68,6 +69,8 @@ export interface Source {
 
 export interface SourceLocation {
   pattern: string;
+  /** Durable anchor: identifier resolved to a line range on demand. */
+  symbol?: string;
   line?: number;
   endLine?: number;
   command?: string;
@@ -87,8 +90,7 @@ export interface Node {
   description?: string;
   responsibilities?: Responsibility[];
   /** Model-kind nodes only. */
-  properties?: ModelProperty[];
-  sources?: Source[];
+  properties?: SchemaProperty[];
   cell?: Cell;
   /** Optional lucide-react icon name override (frontend-only). */
   icon?: string;
@@ -126,7 +128,12 @@ export interface ScryModel {
   nodes: Node[];
   links: Link[];
   groups: Group[];
+  /** Keyed by **responsibility id** → line-precise locations (conformance
+   *  numerator). Agent-produced and regenerable; never hand-authored. */
   sourceMap?: Record<string, SourceLocation[]>;
+  /** Keyed by **node id** → boundary globs (coverage denominator + extraction
+   *  scope). Agent-produced and regenerable; never hand-authored. */
+  boundaries?: Record<string, Source[]>;
 }
 
 export function emptyModel(): ScryModel {
@@ -136,6 +143,7 @@ export function emptyModel(): ScryModel {
     links: [],
     groups: [],
     sourceMap: {},
+    boundaries: {},
   };
 }
 
@@ -178,10 +186,10 @@ const ALTITUDE_FOR_PARENT: Record<Kind | "root", Altitude> = {
   system: "container",
   container: "component",
   component: "code",
-  // operation / model don't have children — no SurfaceView altitude.
+  // symbol / schema don't have children — no SurfaceView altitude.
   person: "system",
-  operation: "code",
-  model: "code",
+  symbol: "code",
+  schema: "code",
 };
 
 export function altitudeFor(parentKind: Kind | "root"): Altitude {
@@ -198,7 +206,7 @@ export function childKindFor(parentKind: Kind | "root"): Kind {
     case "container":
       return "component";
     case "component":
-      return "operation";
+      return "symbol";
     default:
       return "component";
   }
@@ -426,7 +434,6 @@ export function addNode(
     cell: init.cell,
     responsibilities: [],
     properties: [],
-    sources: [],
   };
   let next: ScryModel = { ...model, nodes: [...model.nodes, node] };
   if (init.groupId) next = setNodeGroup(next, id, init.groupId);
@@ -447,8 +454,20 @@ export function removeNode(model: ScryModel, nodeId: string): ScryModel {
       }
     }
   }
+  // source_map is keyed by responsibility id or schema node id: drop entries
+  // for every responsibility owned by a removed node, and for the removed nodes
+  // themselves (schema declaration locations). boundaries are keyed by node id.
+  const removedRespIds = new Set<string>();
+  for (const n of model.nodes) {
+    if (remove.has(n.id)) {
+      for (const r of n.responsibilities ?? []) removedRespIds.add(r.id);
+    }
+  }
   const sourceMap = { ...(model.sourceMap ?? {}) };
+  for (const id of removedRespIds) delete sourceMap[id];
   for (const id of remove) delete sourceMap[id];
+  const boundaries = { ...(model.boundaries ?? {}) };
+  for (const id of remove) delete boundaries[id];
   return {
     ...model,
     nodes: model.nodes.filter((n) => !remove.has(n.id)),
@@ -460,6 +479,7 @@ export function removeNode(model: ScryModel, nodeId: string): ScryModel {
       memberIds: g.memberIds.filter((m) => !remove.has(m)),
     })),
     sourceMap,
+    boundaries,
   };
 }
 
@@ -717,7 +737,7 @@ export function updateProperty(
   model: ScryModel,
   nodeId: string,
   index: number,
-  patch: Partial<ModelProperty>,
+  patch: Partial<SchemaProperty>,
 ): ScryModel {
   return {
     ...model,

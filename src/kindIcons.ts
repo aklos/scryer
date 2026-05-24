@@ -13,6 +13,6 @@ export const KIND_ICON: Record<
   system:    { Icon: Globe,   color: kindColor, label: "System" },
   container: { Icon: Package, color: kindColor, label: "Container" },
   component: { Icon: Puzzle,  color: kindColor, label: "Component" },
-  operation: { Icon: Code,    color: kindColor, label: "Operation" },
-  model:     { Icon: Table,   color: kindColor, label: "Model" },
+  symbol:    { Icon: Code,    color: kindColor, label: "Symbol" },
+  schema:    { Icon: Table,   color: kindColor, label: "Schema" },
 };

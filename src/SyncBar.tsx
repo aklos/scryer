@@ -1,14 +1,14 @@
-import { Loader2, X, Check } from "lucide-react";
+import { Loader2, X, Check, Settings2 } from "lucide-react";
 import type { AgentSession } from "./hooks/useAgentSession";
 import type { ScryModel } from "./viewmodel";
 
 interface SyncBarProps {
   model: ScryModel;
   agent: AgentSession;
-  projectPath: string | null;
+  onOpenSettings: () => void;
 }
 
-export function SyncBar({ model, agent, projectPath }: SyncBarProps) {
+export function SyncBar({ model, agent, onOpenSettings }: SyncBarProps) {
   return (
     <div className="shrink-0 border-t border-[var(--border)] bg-[var(--surface)] select-none">
       {agent.running && (
@@ -25,17 +25,13 @@ export function SyncBar({ model, agent, projectPath }: SyncBarProps) {
               <span className="text-[var(--text-tertiary)] font-medium">Agent</span>
             </div>
             <div className="w-px h-3 bg-[var(--border)]" />
-            <button
-              type="button"
-              className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 cursor-pointer hover:text-amber-500 transition-colors"
-              onClick={agent.cancel}
-            >
-              <Loader2 className="h-3 w-3 animate-spin" />
-              <span>
-                Filling {agent.label}
-                {agent.lastTool ? ` · ${agent.lastTool}` : "…"}
+            <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 min-w-0">
+              <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+              <span className="shrink-0">Filling {agent.label}</span>
+              <span className="truncate text-[var(--text-muted)]">
+                {agent.activity ? `· ${agent.activity}` : "…"}
               </span>
-            </button>
+            </div>
             <div className="flex-1" />
             <button
               type="button"
@@ -66,11 +62,15 @@ export function SyncBar({ model, agent, projectPath }: SyncBarProps) {
             <div className="flex-1" />
           </>
         )}
-        {projectPath && (
-          <span className="text-[var(--text-muted)] shrink-0 truncate max-w-[300px]">
-            {projectPath.replace(/^\/home\/[^/]+/, "~")}
-          </span>
-        )}
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className="flex items-center rounded p-0.5 text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-hover)] cursor-pointer transition-colors shrink-0"
+          aria-label="Subagent settings"
+          title="Subagent settings"
+        >
+          <Settings2 className="h-3.5 w-3.5" />
+        </button>
       </div>
     </div>
   );

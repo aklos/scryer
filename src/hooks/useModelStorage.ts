@@ -14,7 +14,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { ScryModel } from "../viewmodel";
-import { hydrateCells } from "../pack";
 
 const RECENT_KEY = "scryer:recent-projects";
 const RECENT_CAP = 8;
@@ -83,7 +82,11 @@ export function useModelStorage(): ModelStorage {
   const [recentProjects, setRecentProjects] = useState<string[]>(() => readRecent());
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingWrites = useRef(0);
+  // Exact bytes of our last write. A `model-changed` event whose file content
+  // matches this is our own echo and is ignored; anything else (an agent via
+  // MCP) is a real external change and gets loaded. Content-based rather than a
+  // write counter so inotify event coalescing can't make us miss reloads.
+  const lastWrittenRaw = useRef<string | null>(null);
 
   // File-watcher subscription — re-read model from disk on external writes.
   useEffect(() => {
@@ -98,28 +101,14 @@ export function useModelStorage(): ModelStorage {
       }
       const off = await listen<string>("model-changed", async (event) => {
         if (event.payload !== modelRef) return;
-        if (pendingWrites.current > 0) {
-          pendingWrites.current -= 1;
-          return;
-        }
         try {
           const raw = await invoke<string>("read_model", { refStr: modelRef });
           if (!active) return;
+          if (raw === lastWrittenRaw.current) return; // our own write echoed back
           const loaded = JSON.parse(raw) as ScryModel;
-          const hydrated = hydrateCells(loaded);
-          if (hydrated !== loaded) {
-            // Persist the new positions so they survive a reload. The
-            // watcher will fire one extra "model-changed"; bump the pending
-            // counter so we ignore it.
-            pendingWrites.current += 1;
-            invoke("write_model", {
-              refStr: modelRef,
-              data: JSON.stringify(hydrated, null, 2),
-            }).catch(() => {
-              pendingWrites.current = Math.max(0, pendingWrites.current - 1);
-            });
-          }
-          setModel(hydrated);
+          // Positions are seeded client-side after card measurement
+          // (see autoLayout), not here — we have no DOM to measure against.
+          setModel(loaded);
         } catch {
           /* transient — ignore */
         }
@@ -154,24 +143,13 @@ export function useModelStorage(): ModelStorage {
       try {
         const raw = await invoke<string>("read_model", { refStr: ref });
         const loaded = JSON.parse(raw) as ScryModel;
-        const hydrated = hydrateCells(loaded);
-        if (hydrated !== loaded) {
-          // Persist seeded positions back so the layout is stable across
-          // sessions. The watcher fire that follows is suppressed by the
-          // pendingWrites counter.
-          pendingWrites.current += 1;
-          invoke("write_model", {
-            refStr: ref,
-            data: JSON.stringify(hydrated, null, 2),
-          }).catch(() => {
-            pendingWrites.current = Math.max(0, pendingWrites.current - 1);
-          });
-        }
+        // Positions are seeded client-side after card measurement
+        // (see autoLayout), not here — we have no DOM to measure against.
         const next = bumpRecent(path);
         writeRecent(next);
         setRecentProjects(next);
         setModelRef(ref);
-        setModel(hydrated);
+        setModel(loaded);
         setStatus("ready");
       } catch {
         // No model yet — caller can choose to create blank or generate.
@@ -226,14 +204,10 @@ export function useModelStorage(): ModelStorage {
         if (next === cur) return cur;
         if (saveTimer.current) clearTimeout(saveTimer.current);
         const ref = modelRef;
+        const serialized = JSON.stringify(next, null, 2);
         saveTimer.current = setTimeout(() => {
-          pendingWrites.current += 1;
-          invoke("write_model", {
-            refStr: ref,
-            data: JSON.stringify(next, null, 2),
-          }).catch(() => {
-            pendingWrites.current = Math.max(0, pendingWrites.current - 1);
-          });
+          lastWrittenRaw.current = serialized;
+          invoke("write_model", { refStr: ref, data: serialized }).catch(() => {});
         }, SAVE_DEBOUNCE_MS);
         return next;
       });

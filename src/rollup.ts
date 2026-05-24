@@ -18,6 +18,11 @@ const UNSET: Status = "proposed";
 
 export function effectiveNodeStatus(node: Node): Status | null {
   if (node.external) return null;
+  if (node.kind === "schema") {
+    const properties = node.properties ?? [];
+    if (properties.length === 0) return UNSET;
+    return rollupStatus(properties.map((p) => p.status ?? UNSET));
+  }
   const responsibilities = node.responsibilities ?? [];
   if (responsibilities.length === 0) return UNSET;
   return rollupStatus(responsibilities.map((r) => r.status ?? UNSET));

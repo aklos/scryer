@@ -18,6 +18,16 @@ export function ProjectPicker({ storage }: { storage: ModelStorage }) {
   const [phase, setPhase] = useState<Phase>("picker");
   const [generationLog, setGenerationLog] = useState<string[]>([]);
   const agentUnlisten = useRef<(() => void) | null>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+  // Stick to the bottom as lines stream in, unless the user has scrolled up.
+  const pinnedToBottom = useRef(true);
+
+  useEffect(() => {
+    const el = logRef.current;
+    if (el && pinnedToBottom.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [generationLog]);
 
   useEffect(() => {
     if (storage.status === "needs-model") {
@@ -121,7 +131,6 @@ export function ProjectPicker({ storage }: { storage: ModelStorage }) {
       // termination.
       await invoke<string>("start_initial_model_session", {
         cwd: path,
-        modelRef: `project:${path}`,
       });
     } catch (e) {
       stopAgentListener();
@@ -182,7 +191,15 @@ export function ProjectPicker({ storage }: { storage: ModelStorage }) {
             The agent is reading {storage.projectPath} and writing the model via MCP.
             This can take a few minutes.
           </p>
-          <div className="w-full max-h-64 overflow-y-auto rounded border border-[var(--border)] bg-[var(--surface-canvas)] p-3 font-mono text-[11px] text-[var(--text-tertiary)]">
+          <div
+            ref={logRef}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              pinnedToBottom.current =
+                el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+            }}
+            className="w-full max-h-64 overflow-y-auto rounded border border-[var(--border)] bg-[var(--surface-canvas)] p-3 font-mono text-[11px] text-[var(--text-tertiary)]"
+          >
             {generationLog.length === 0 ? (
               <span className="text-[var(--text-ghost)]">starting…</span>
             ) : (

@@ -11,7 +11,8 @@
  *
  * The surface grid auto-grows: rendered size = content bbox + `MARGIN` ring.
  *
- * `hydrateCells` seeds a model that has no node cells.
+ * `autoLayout` seeds positions for a surface using measured card spans; it runs
+ * after the renderer measures the DOM, so layout matches what's painted.
  */
 
 import {
@@ -92,7 +93,7 @@ export function cardHeightPx(node: NodeView, cardW = 2): number {
   const n = nodeRespCount(node);
   const respCpl = Math.max(1, Math.floor((innerW - 14) / CHAR_W));
   let bodyLines = 0;
-  if (node.kind === "model") {
+  if (node.kind === "schema") {
     for (const p of node.properties ?? []) {
       const text = p.description ? `${p.label} ${p.description}` : p.label;
       bodyLines += Math.max(1, Math.ceil(text.length / respCpl));
@@ -100,7 +101,7 @@ export function cardHeightPx(node: NodeView, cardW = 2): number {
   } else {
     for (const r of node.responsibilities ?? []) {
       bodyLines += Math.max(1, Math.ceil((r.statement?.length || 1) / respCpl));
-      for (const rule of r.implementationRules ?? []) {
+      for (const rule of r.directives ?? []) {
         bodyLines += Math.max(1, Math.ceil(rule.length / respCpl)) * (IMPL_LINE_H / RESP_LINE_H);
       }
     }
@@ -111,7 +112,7 @@ export function cardHeightPx(node: NodeView, cardW = 2): number {
   const linksPerRow = Math.max(1, Math.floor(innerW / 70));
   const outRows = outgoing > 0 ? Math.ceil(outgoing / linksPerRow) : 0;
   const inRows =
-    node.kind === "model" || incoming === 0
+    node.kind === "schema" || incoming === 0
       ? 0
       : Math.ceil(incoming / linksPerRow);
   const linkRows = outRows + inRows;
@@ -125,12 +126,12 @@ export function cardHeightPx(node: NodeView, cardW = 2): number {
 }
 
 export function cardWidthCells(node: NodeView): number {
-  if (node.kind === "operation" || node.kind === "model") return 2;
+  if (node.kind === "symbol" || node.kind === "schema") return 2;
   return Math.min(MAX_CARD_W, Math.max(2, (nodeRespCount(node) >= 3 ? 2 : 1) * 2));
 }
 
-/** Heuristic span — used for initial placement (hydrateCells), collision
- *  detection, and drag previews where no DOM is available. */
+/** Heuristic span — fallback for collision detection and drag previews where
+ *  no DOM measurement is available yet. */
 export function cardSpan(node: NodeView): Span {
   const w = cardWidthCells(node);
   const h = Math.ceil(
@@ -505,225 +506,273 @@ function colCapFor(items: PackItem[]): number {
 }
 
 /**
- * Seed cells (+ group cell/size) for any node or group that lacks them.
- * Existing positions are immutable — they're treated as occupied space that
- * new placements must avoid. Idempotent: a model whose nodes/groups all carry
- * cells is returned unchanged (by reference).
+ * Place every node/group on `parentId`'s surface that still lacks a position,
+ * using **measured** card spans (logical px → cell spans, from DOM measurement).
+ * Already-placed nodes and groups whose stored geometry already encloses their
+ * members are immovable obstacles. Idempotent: when there's nothing to place
+ * and every group already wraps its members, the input model is returned by
+ * reference (so the storage layer's `next === cur` short-circuit holds).
  *
- * Algorithm:
- *  for each parent surface:
- *    occupied = rects of every already-positioned node + every already-sized group
- *    new groups:
- *      pack their unpositioned members internally with first-fit (largest first)
- *      bbox(snapped to GROUP_SNAP) becomes the group's size
- *      first-fit a slot for the group rect on the parent surface
- *      members' final cells = group anchor + local cell
- *    new ungrouped nodes:
- *      first-fit one at a time (largest first), pushing each into occupied
+ * Groups whose stored rectangle does NOT enclose its members (e.g. an agent set
+ * `memberIds` without sensible geometry) are re-laid-out: ALL their members are
+ * re-packed inside a freshly-sized group rectangle. This clusters scattered
+ * members rather than stretching the group across them.
+ *
+ * Algorithm (single parent surface):
+ *   occupied = placed ungrouped nodes + healthy group rects
+ *   re-layout groups: pack ALL members internally (first-fit, largest first);
+ *     bbox + header → group size; first-fit the group rect into `occupied`;
+ *     member cells = group anchor + local cell
+ *   unplaced ungrouped nodes: first-fit one at a time (largest first)
  */
-export function hydrateCells(model: ScryModel): ScryModel {
-  const nodeCells = new Map<string, Cell>();
-  const groupGeom = new Map<string, { cell: Cell; size: GroupSize }>();
+export function autoLayout(
+  model: ScryModel,
+  parentId: string | null,
+  measured: ReadonlyMap<string, Span>,
+): ScryModel {
+  const siblings = model.nodes.filter(
+    (n) =>
+      (n.parentId ?? null) === parentId &&
+      (n.kind !== "person" || parentId === null),
+  );
+  if (siblings.length === 0) return model;
 
-  // Map node id → group id (inverse of Group.memberIds)
-  const nodeGroup = new Map<string, string>();
-  for (const g of model.groups) {
-    for (const m of g.memberIds) nodeGroup.set(m, g.id);
-  }
-
-  // Precompute outgoing/incoming link maps so hydration spans match render.
+  // Link maps power the heuristic span fallback (used only when a card hasn't
+  // been measured yet — on the current surface every card is measured).
   const outLinks = new Map<string, Link[]>();
   const incLinks = new Map<string, Link[]>();
   for (const l of model.links) {
     (outLinks.get(l.src) ?? outLinks.set(l.src, []).get(l.src)!).push(l);
     (incLinks.get(l.dst) ?? incLinks.set(l.dst, []).get(l.dst)!).push(l);
   }
-
-  const parents = new Set<string | null>();
-  for (const n of model.nodes) parents.add(n.parentId ?? null);
-
-  for (const parentId of parents) {
-    const siblings = model.nodes.filter(
-      (n) =>
-        (n.parentId ?? null) === parentId &&
-        (n.kind !== "person" || parentId === null),
+  const spanOf = (n: Node): Span =>
+    measured.get(n.id) ??
+    cardSpan(
+      makeNodeViewForHydration(
+        n,
+        outLinks.get(n.id) ?? [],
+        incLinks.get(n.id) ?? [],
+      ),
     );
-    if (siblings.length === 0) continue;
 
-    // ---- seed `occupied` with existing positions ----
-    const occupied: Rect[] = [];
-    const siblingSpan = new Map<string, Span>();
-    for (const n of siblings) {
-      const span = cardSpan(
-        makeNodeViewForHydration(
-          n,
-          outLinks.get(n.id) ?? [],
-          incLinks.get(n.id) ?? [],
-        ),
-      );
-      siblingSpan.set(n.id, span);
-      if (n.cell) {
-        occupied.push({
-          row: n.cell.row,
-          col: n.cell.col,
-          w: span.w,
-          h: span.h,
-        });
-      }
+  const nodeGroup = new Map<string, string>();
+  for (const g of model.groups) for (const m of g.memberIds) nodeGroup.set(m, g.id);
+
+  const groupsHere = model.groups.filter(
+    (g) =>
+      g.memberIds.some((m) => siblings.some((s) => s.id === m)) ||
+      (g.memberIds.length === 0 && (g.parentNodeId ?? null) === parentId),
+  );
+  const membersOf = (g: Group): Node[] =>
+    siblings.filter((s) => g.memberIds.includes(s.id));
+
+  // A group is "healthy" when its stored rect's content area (below the header)
+  // contains every member's footprint. Unhealthy groups get re-laid-out.
+  const groupHealthy = (g: Group): boolean => {
+    if (!g.cell || !g.size) return false;
+    const members = membersOf(g);
+    if (members.length === 0) return true;
+    const hdr = groupHeaderRows(g);
+    if (g.size.rows - hdr <= 0) return false;
+    const content: Rect = {
+      row: g.cell.row + hdr,
+      col: g.cell.col,
+      w: g.size.cols,
+      h: g.size.rows - hdr,
+    };
+    for (const m of members) {
+      if (!m.cell) return false;
+      const sp = spanOf(m);
+      const r: Rect = { row: m.cell.row, col: m.cell.col, w: sp.w, h: sp.h };
+      if (!rectContains(content, r)) return false;
     }
-    // Groups whose members live at this depth.
-    const groupsHere = model.groups.filter((g) =>
-      g.memberIds.some((m) => siblings.some((s) => s.id === m)),
-    );
-    for (const g of groupsHere) {
-      if (g.cell && g.size) {
-        occupied.push({
-          row: g.cell.row,
-          col: g.cell.col,
-          w: g.size.cols,
-          h: g.size.rows,
-        });
-      }
+    return true;
+  };
+
+  const relayoutGroups = groupsHere.filter((g) => !groupHealthy(g));
+  const healthyGroups = groupsHere.filter((g) => groupHealthy(g));
+
+  // ---- seed `occupied` and decide which placed nodes to keep ----
+  // Healthy group rectangles are always immovable obstacles. Among ungrouped
+  // placed nodes, keep a maximal non-overlapping set (read order: top-left
+  // first) as anchors; the rest are "displaced" and re-flowed below. A valid
+  // user drag never overlaps (the drop is collision-checked), so this only
+  // re-flows positions an agent guessed without knowing real card sizes.
+  const occupied: Rect[] = [];
+  for (const g of healthyGroups) {
+    occupied.push({
+      row: g.cell!.row,
+      col: g.cell!.col,
+      w: g.size!.cols,
+      h: g.size!.rows,
+    });
+  }
+
+  const displaced: Node[] = [];
+  const placedUngrouped = siblings
+    .filter((n) => n.cell && !nodeGroup.has(n.id))
+    .map((n) => ({ n, rect: { row: n.cell!.row, col: n.cell!.col, ...spanOf(n) } as Rect }))
+    .sort((a, b) => a.rect.row - b.rect.row || a.rect.col - b.rect.col);
+  for (const { n, rect } of placedUngrouped) {
+    if (occupied.some((o) => rectsOverlap(rect, o))) displaced.push(n);
+    else occupied.push(rect);
+  }
+
+  const nodeCells = new Map<string, Cell>();
+  const groupGeom = new Map<string, { cell: Cell; size: GroupSize }>();
+
+  // ---- pack each re-layout group's members internally ----
+  interface BuiltGroup {
+    id: string;
+    size: GroupSize;
+    internalCells: Map<string, Cell>;
+    area: number;
+  }
+  const builtGroups: BuiltGroup[] = [];
+  for (const g of relayoutGroups) {
+    const members = membersOf(g);
+    const hdrRows = groupHeaderRows(g);
+    if (members.length === 0) {
+      const size: GroupSize = { cols: Math.max(GROUP_SNAP_W, 2), rows: hdrRows + 1 };
+      builtGroups.push({ id: g.id, size, internalCells: new Map(), area: size.cols * size.rows });
+      continue;
     }
-
-    // ---- place new groups ----
-    // Compute each group's would-be size (from member spans) so we can sort
-    // by area before placing.
-    const newGroups: Array<{
-      id: string;
-      memberIds: string[];
-      size: GroupSize;
-      internalCells: Map<string, Cell>;
-      area: number;
-    }> = [];
-    for (const g of groupsHere) {
-      if (g.cell && g.size) continue;
-      const newMembers = siblings.filter(
-        (s) => g.memberIds.includes(s.id) && !s.cell,
-      );
-      if (newMembers.length === 0) {
-        // Group has no unpositioned members; give it a minimum footprint so
-        // the user has something to drag/resize. Still sort by area.
-        const size: GroupSize = { cols: GROUP_SNAP_W, rows: GROUP_SNAP_H };
-        newGroups.push({
-          id: g.id,
-          memberIds: g.memberIds,
-          size,
-          internalCells: new Map(),
-          area: size.cols * size.rows,
-        });
-        continue;
-      }
-      // Pack members internally — largest first, row-major first-fit.
-      const memberItems: PackItem[] = newMembers.map((n) => {
-        const span = siblingSpan.get(n.id)!;
-        return { id: n.id, span, area: span.w * span.h };
-      });
-      memberItems.sort((a, b) => b.area - a.area);
-      const hdrRows = groupHeaderRows(g);
-      const memberCap = colCapFor(memberItems);
-      const localOccupied: Rect[] = [
-        { row: 0, col: 0, w: 9999, h: hdrRows },
-      ];
-      const internalCells = new Map<string, Cell>();
-      let bboxW = 1;
-      let bboxH = hdrRows;
-      for (const item of memberItems) {
-        const at = firstFit(localOccupied, item.span, memberCap);
-        internalCells.set(item.id, at);
-        localOccupied.push({
-          row: at.row,
-          col: at.col,
-          w: item.span.w,
-          h: item.span.h,
-        });
-        bboxW = Math.max(bboxW, at.col + item.span.w);
-        bboxH = Math.max(bboxH, at.row + item.span.h);
-      }
-      const size: GroupSize = {
-        cols: Math.ceil(bboxW / GROUP_SNAP_W) * GROUP_SNAP_W,
-        rows: Math.ceil(bboxH / GROUP_SNAP_H) * GROUP_SNAP_H,
-      };
-      newGroups.push({
-        id: g.id,
-        memberIds: g.memberIds,
-        size,
-        internalCells,
-        area: size.cols * size.rows,
-      });
+    const memberItems: PackItem[] = members.map((n) => {
+      const span = spanOf(n);
+      return { id: n.id, span, area: span.w * span.h };
+    });
+    memberItems.sort((a, b) => b.area - a.area);
+    const memberCap = colCapFor(memberItems);
+    const localOccupied: Rect[] = [{ row: 0, col: 0, w: 9999, h: hdrRows }];
+    const internalCells = new Map<string, Cell>();
+    let bboxW = 1;
+    let bboxH = hdrRows;
+    for (const item of memberItems) {
+      const at = firstFit(localOccupied, item.span, memberCap);
+      internalCells.set(item.id, at);
+      localOccupied.push({ row: at.row, col: at.col, w: item.span.w, h: item.span.h });
+      bboxW = Math.max(bboxW, at.col + item.span.w);
+      bboxH = Math.max(bboxH, at.row + item.span.h);
     }
+    const size: GroupSize = {
+      cols: Math.ceil(bboxW / GROUP_SNAP_W) * GROUP_SNAP_W,
+      rows: Math.ceil(bboxH / GROUP_SNAP_H) * GROUP_SNAP_H,
+    };
+    builtGroups.push({ id: g.id, size, internalCells, area: size.cols * size.rows });
+  }
 
-    // ---- new ungrouped nodes ----
-    const newUngrouped: PackItem[] = siblings
-      .filter((n) => !n.cell && !nodeGroup.has(n.id))
-      .map((n) => {
-        const span = siblingSpan.get(n.id)!;
-        return { id: n.id, span, area: span.w * span.h };
-      });
+  // ---- nodes to place: never-placed ungrouped nodes + displaced ones ----
+  const toPlace: PackItem[] = [
+    ...siblings.filter((n) => !n.cell && !nodeGroup.has(n.id)),
+    ...displaced,
+  ].map((n) => {
+    const span = spanOf(n);
+    return { id: n.id, span, area: span.w * span.h };
+  });
 
-    if (newGroups.length === 0 && newUngrouped.length === 0) continue;
+  if (builtGroups.length === 0 && toPlace.length === 0) return model;
 
-    // ---- merge groups + ungrouped, sort by area desc, place on parent ----
-    type TopItem =
-      | { kind: "group"; id: string; span: Span; area: number }
-      | { kind: "node"; id: string; span: Span; area: number };
-    const topItems: TopItem[] = [
-      ...newGroups.map<TopItem>((g) => ({
-        kind: "group",
-        id: g.id,
-        span: { w: g.size.cols, h: g.size.rows },
-        area: g.area,
-      })),
-      ...newUngrouped.map<TopItem>((it) => ({
-        kind: "node",
-        id: it.id,
-        span: it.span,
-        area: it.area,
-      })),
-    ];
-    topItems.sort((a, b) => b.area - a.area);
-    const topCap = colCapFor(topItems);
+  // ---- merge groups + unplaced nodes, sort by area desc, place on surface ----
+  type TopItem = { kind: "group" | "node"; id: string; span: Span; area: number };
+  const topItems: TopItem[] = [
+    ...builtGroups.map<TopItem>((g) => ({
+      kind: "group",
+      id: g.id,
+      span: { w: g.size.cols, h: g.size.rows },
+      area: g.area,
+    })),
+    ...toPlace.map<TopItem>((it) => ({
+      kind: "node",
+      id: it.id,
+      span: it.span,
+      area: it.area,
+    })),
+  ];
+  topItems.sort((a, b) => b.area - a.area);
+  const topCap = colCapFor(topItems);
 
-    for (const item of topItems) {
-      const at = firstFit(occupied, item.span, topCap);
-      occupied.push({ row: at.row, col: at.col, w: item.span.w, h: item.span.h });
-      if (item.kind === "node") {
-        nodeCells.set(item.id, at);
-      } else {
-        const g = newGroups.find((x) => x.id === item.id)!;
-        groupGeom.set(g.id, { cell: at, size: g.size });
-        for (const [nid, local] of g.internalCells) {
-          nodeCells.set(nid, {
-            row: at.row + local.row,
-            col: at.col + local.col,
-          });
-        }
+  for (const item of topItems) {
+    const at = firstFit(occupied, item.span, topCap);
+    occupied.push({ row: at.row, col: at.col, w: item.span.w, h: item.span.h });
+    if (item.kind === "node") {
+      nodeCells.set(item.id, at);
+    } else {
+      const g = builtGroups.find((x) => x.id === item.id)!;
+      groupGeom.set(g.id, { cell: at, size: g.size });
+      for (const [nid, local] of g.internalCells) {
+        nodeCells.set(nid, { row: at.row + local.row, col: at.col + local.col });
       }
     }
   }
 
-  // ---- assemble output ----
-  if (nodeCells.size === 0 && groupGeom.size === 0) return model;
-
   return {
     ...model,
-    nodes: model.nodes.map((n) =>
-      n.cell || !nodeCells.has(n.id) ? n : { ...n, cell: nodeCells.get(n.id) },
-    ),
+    nodes: model.nodes.map((n) => {
+      const c = nodeCells.get(n.id);
+      return c ? { ...n, cell: c } : n;
+    }),
     groups: model.groups.map((g) => {
       const geom = groupGeom.get(g.id);
-      if (!geom) return g;
-      return {
-        ...g,
-        cell: g.cell ?? geom.cell,
-        size: g.size ?? geom.size,
-      };
+      return geom ? { ...g, cell: geom.cell, size: geom.size } : g;
     }),
   };
 }
 
-// Helper used only by hydration — wraps a Node in a NodeView-shaped object so
-// the shared span-calculation functions work without a full SurfaceView.
+/**
+ * Cheap predicate: does this surface have anything for `autoLayout` to do?
+ * Mirrors `autoLayout`'s notion of "done" so a layout pass converges in one or
+ * two iterations rather than looping. Operates on the derived view (which the
+ * renderer already has) so PackBox can gate the post-measure layout call.
+ */
+export function surfaceNeedsLayout(
+  view: SurfaceView,
+  measured: ReadonlyMap<string, Span>,
+): boolean {
+  const entries = view.entries.filter(
+    (n) => n.kind !== "person" || view.altitude === "system",
+  );
+  const spanOf = (n: NodeView): Span => measured.get(n.id) ?? cardSpan(n);
+
+  for (const n of entries) if (!n.cell) return true;
+
+  for (const g of view.groups) {
+    const members = entries.filter((n) => n._groupId === g.id);
+    if (members.length === 0) continue;
+    const hdr = groupHeaderRows(g);
+    if (g.size.rows - hdr <= 0) return true;
+    const content: Rect = {
+      row: g.cell.row + hdr,
+      col: g.cell.col,
+      w: g.size.cols,
+      h: g.size.rows - hdr,
+    };
+    for (const m of members) {
+      const sp = spanOf(m);
+      const r: Rect = { row: m.cell!.row, col: m.cell!.col, w: sp.w, h: sp.h };
+      if (!rectContains(content, r)) return true;
+    }
+  }
+
+  // Ungrouped placed nodes must not overlap each other or any group rect.
+  const groupRects = view.groups.map((g) => groupRect(g));
+  const rects = entries
+    .filter((n) => n.cell && !n._groupId)
+    .map((n) => {
+      const sp = spanOf(n);
+      return { row: n.cell!.row, col: n.cell!.col, w: sp.w, h: sp.h } as Rect;
+    });
+  for (let i = 0; i < rects.length; i++) {
+    for (const gr of groupRects) if (rectsOverlap(rects[i], gr)) return true;
+    for (let j = i + 1; j < rects.length; j++) {
+      if (rectsOverlap(rects[i], rects[j])) return true;
+    }
+  }
+  return false;
+}
+
+// Wraps a plain Node in a NodeView-shaped object so the shared
+// span-calculation functions work without a full SurfaceView (used by
+// autoLayout's heuristic span fallback).
 function makeNodeViewForHydration(
   n: Node,
   outgoing: Link[],
@@ -736,99 +785,6 @@ function makeNodeViewForHydration(
     _incomingLinks: incoming,
     _childCount: 0,
     links: outgoing,
-  };
-}
-
-// --- overlap correction ------------------------------------------------------
-
-/**
- * Detect and fix overlapping cards within each parentId surface. Uses the
- * provided span map (typically from DOM measurement) to compute footprints.
- * Cards that overlap are pushed down to the first non-colliding row.
- *
- * Returns the input model unchanged (by reference) when nothing moved.
- */
-export function resolveOverlaps(
-  model: ScryModel,
-  measuredSpans: ReadonlyMap<string, Span>,
-): ScryModel {
-  const corrections = new Map<string, Cell>();
-
-  const parents = new Set<string | null>();
-  for (const n of model.nodes) parents.add(n.parentId ?? null);
-
-  // Precompute links for NodeView construction.
-  const outLinks = new Map<string, Link[]>();
-  const incLinks = new Map<string, Link[]>();
-  for (const l of model.links) {
-    (outLinks.get(l.src) ?? outLinks.set(l.src, []).get(l.src)!).push(l);
-    (incLinks.get(l.dst) ?? incLinks.set(l.dst, []).get(l.dst)!).push(l);
-  }
-
-  for (const parentId of parents) {
-    const siblings = model.nodes.filter(
-      (n) => (n.parentId ?? null) === parentId && n.kind !== "person" && n.cell,
-    );
-    if (siblings.length < 2) continue;
-
-    // Build rects using measured spans when available, heuristic otherwise.
-    const rects: Array<{ id: string; rect: Rect }> = [];
-    for (const n of siblings) {
-      const nv = makeNodeViewForHydration(
-        n,
-        outLinks.get(n.id) ?? [],
-        incLinks.get(n.id) ?? [],
-      );
-      const span = measuredSpans.get(n.id) ?? cardSpan(nv);
-      rects.push({
-        id: n.id,
-        rect: { row: n.cell!.row, col: n.cell!.col, w: span.w, h: span.h },
-      });
-    }
-
-    // Quick check: any overlaps at all?
-    let hasOverlap = false;
-    outer: for (let i = 0; i < rects.length; i++) {
-      for (let j = i + 1; j < rects.length; j++) {
-        if (rectsOverlap(rects[i].rect, rects[j].rect)) {
-          hasOverlap = true;
-          break outer;
-        }
-      }
-    }
-    if (!hasOverlap) continue;
-
-    // Re-seat overlapping cards. Sort by (row, col) so earlier cards keep
-    // their positions; later cards get pushed down.
-    rects.sort((a, b) => a.rect.row - b.rect.row || a.rect.col - b.rect.col);
-    const occupied: Rect[] = [];
-    for (const entry of rects) {
-      const cand = entry.rect;
-      if (!occupied.some((o) => rectsOverlap(cand, o))) {
-        occupied.push(cand);
-        continue;
-      }
-      // Find first non-overlapping row at same column.
-      let row = cand.row;
-      while (true) {
-        row++;
-        const moved = { ...cand, row };
-        if (!occupied.some((o) => rectsOverlap(moved, o))) {
-          occupied.push(moved);
-          corrections.set(entry.id, { row, col: cand.col });
-          break;
-        }
-      }
-    }
-  }
-
-  if (corrections.size === 0) return model;
-  return {
-    ...model,
-    nodes: model.nodes.map((n) => {
-      const cell = corrections.get(n.id);
-      return cell ? { ...n, cell } : n;
-    }),
   };
 }
 

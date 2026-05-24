@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { useToast } from "../Toast";
 
 type AgentEvent =
   | { kind: "message"; text: string }
@@ -16,14 +17,19 @@ export interface AgentSession {
   running: boolean;
   label: string;
   lastTool: string | null;
+  /** Most recent human-readable line from the agent stream (tool calls,
+   *  message snippets, status) — drives the live activity readout. */
+  activity: string | null;
   startFill: (cwd: string, modelRef: string, nodeId: string, nodeName: string) => void;
   cancel: () => void;
 }
 
 export function useAgentSession(): AgentSession {
+  const { toast } = useToast();
   const [running, setRunning] = useState(false);
   const [label, setLabel] = useState("");
   const [lastTool, setLastTool] = useState<string | null>(null);
+  const [activity, setActivity] = useState<string | null>(null);
   const unlisten = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -38,6 +44,7 @@ export function useAgentSession(): AgentSession {
       setRunning(true);
       setLabel(nodeName || "node");
       setLastTool(null);
+      setActivity("starting…");
 
       (async () => {
         const off = await listen<AgentEvent>("agent-event", (event) => {
@@ -45,13 +52,31 @@ export function useAgentSession(): AgentSession {
           switch (p.kind) {
             case "toolCall":
               setLastTool(p.name);
+              setActivity(`→ ${p.name}`);
+              break;
+            case "message":
+            case "thought":
+              if (p.text.trim()) setActivity(p.text.trim());
+              break;
+            case "plan":
+              setActivity("planning…");
+              break;
+            case "activity":
+              setActivity((a) => a ?? "working…");
+              break;
+            case "failed":
+              toast(`Fill failed: ${p.error}`, "error");
+              unlisten.current?.();
+              unlisten.current = null;
+              setRunning(false);
+              setActivity(null);
               break;
             case "completed":
-            case "failed":
             case "cancelled":
               unlisten.current?.();
               unlisten.current = null;
               setRunning(false);
+              setActivity(null);
               break;
           }
         });
@@ -63,14 +88,16 @@ export function useAgentSession(): AgentSession {
             modelRef,
             nodeId,
           });
-        } catch {
+        } catch (e) {
+          toast(`Fill failed to start: ${String(e)}`, "error");
           unlisten.current?.();
           unlisten.current = null;
           setRunning(false);
+          setActivity(null);
         }
       })();
     },
-    [running],
+    [running, toast],
   );
 
   const cancel = useCallback(async () => {
@@ -81,5 +108,5 @@ export function useAgentSession(): AgentSession {
     }
   }, []);
 
-  return { running, label, lastTool, startFill, cancel };
+  return { running, label, lastTool, activity, startFill, cancel };
 }

@@ -23,7 +23,7 @@ function PersonShape({ children }: { children: ReactNode }) {
   const w = PERSON_W * zoom;
   const h = PERSON_SVG_H * zoom;
   return (
-    <div className="flex flex-col items-center" style={{ width: w }}>
+    <div className="flex flex-col items-center" style={{ width: w, minHeight: h }}>
       <svg
         width={w}
         height={h}

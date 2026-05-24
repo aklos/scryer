@@ -1,3 +1,6 @@
+mod highlight;
+mod symbols;
+
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -271,6 +274,165 @@ fn open_in_editor(file: String, line: Option<u32>, project_path: Option<String>)
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceSpan {
+    /// Path actually read, relative form echoed back for display.
+    file: String,
+    /// 1-based line number of the first returned line (includes context).
+    start_line: u32,
+    /// The mapped span (for highlighting), 1-based inclusive.
+    focus_start: u32,
+    focus_end: u32,
+    /// Lines from `start_line` onward (context + focus), each a list of
+    /// syntax-highlighted segments that concatenate back to the line.
+    lines: Vec<Vec<highlight::Segment>>,
+}
+
+/// Language-agnostic fallback when no bundled grammar covers the file (or the
+/// grammar misses the symbol): the first line that defines `symbol` (word-
+/// boundary match next to a definition cue or an assignment/open-paren).
+/// Returns the 1-based line.
+fn text_search_symbol(lines: &[&str], symbol: &str) -> Option<u32> {
+    let cues = [
+        "fn ", "function", "def ", "class ", "struct ", "interface ", "enum ",
+        "impl", "type ", "const ", "let ", "var ", "func ", "public", "private",
+        "export", "module", "trait ", "object ", "sub ", "proc ",
+    ];
+    for (i, raw) in lines.iter().enumerate() {
+        // word-boundary occurrence of the symbol
+        let Some(pos) = raw.find(symbol) else { continue };
+        let before_ok = pos == 0
+            || !raw.as_bytes()[pos - 1].is_ascii_alphanumeric() && raw.as_bytes()[pos - 1] != b'_';
+        let after_idx = pos + symbol.len();
+        let after_ok = after_idx >= raw.len()
+            || (!raw.as_bytes()[after_idx].is_ascii_alphanumeric() && raw.as_bytes()[after_idx] != b'_');
+        if !(before_ok && after_ok) {
+            continue;
+        }
+        let trimmed = raw.trim_start();
+        let after = raw[after_idx..].trim_start();
+        let looks_def = cues.iter().any(|c| trimmed.starts_with(c) || raw.contains(c))
+            || after.starts_with('(')
+            || after.starts_with('=')
+            || after.starts_with(':')
+            || after.starts_with('<');
+        if looks_def {
+            return Some(i as u32 + 1);
+        }
+    }
+    None
+}
+
+/// Read a span of a source file for the inspector's code view.
+///
+/// `file` is the `SourceLocation.pattern`. The responsibility's *focus* is the
+/// explicit `line`/`end_line` range — the statements that do its work. `symbol`
+/// names the enclosing definition: it's the durable anchor (so the focus can be
+/// shown even as line numbers drift) and bounds the surrounding context, so the
+/// focus is rendered in-situ inside its function rather than the whole file.
+/// When only `symbol` is given, the whole definition is the focus. Reads are
+/// constrained to within `project_path`.
+#[tauri::command]
+fn read_source_span(
+    project_path: String,
+    file: String,
+    symbol: Option<String>,
+    line: Option<u32>,
+    end_line: Option<u32>,
+) -> Result<SourceSpan, String> {
+    const PAD: u32 = 4; // context lines around the focus
+    const NO_LINE_LIMIT: u32 = 40;
+    const DEFAULT_SPAN: u32 = 30;
+    const MAX_LINES: u32 = 80; // guard against whole-symbol dumps
+
+    let base = PathBuf::from(&project_path);
+    let path = base.join(&file);
+
+    // Constrain to the project directory (reject path traversal / absolutes).
+    let canon_base = base.canonicalize().map_err(|e| e.to_string())?;
+    let canon = path
+        .canonicalize()
+        .map_err(|e| format!("{}: {}", file, e))?;
+    if !canon.starts_with(&canon_base) {
+        return Err(format!("{} is outside the project", file));
+    }
+
+    let contents = std::fs::read_to_string(&canon).map_err(|e| format!("{}: {}", file, e))?;
+    let all: Vec<&str> = contents.lines().collect();
+    let total = all.len() as u32;
+    if total == 0 {
+        return Ok(SourceSpan {
+            file,
+            start_line: 1,
+            focus_start: 1,
+            focus_end: 1,
+            lines: Vec::new(),
+        });
+    }
+
+    // Enclosing symbol span: tree-sitter first (exact body), then a
+    // language-agnostic text search (start line + a default window).
+    let sym_range: Option<(u32, u32)> =
+        symbol.as_deref().filter(|s| !s.is_empty()).and_then(|s| {
+            symbols::resolve(&canon, &contents, s, line)
+                .or_else(|| text_search_symbol(&all, s).map(|st| (st, (st + DEFAULT_SPAN).min(total))))
+        });
+
+    // Focus: the responsibility's specific lines if given, else the whole
+    // enclosing symbol, else the file head.
+    let (focus_start, focus_end) = match line {
+        Some(l) => {
+            let fs = l.clamp(1, total);
+            (fs, end_line.unwrap_or(fs).clamp(fs, total))
+        }
+        None => match sym_range {
+            Some((s, e)) => (s, e),
+            None => (1, NO_LINE_LIMIT.min(total)),
+        },
+    };
+
+    // Context window: a few lines around the focus, clamped to the enclosing
+    // symbol so we never spill into neighbouring code, and capped so a whole-
+    // symbol focus can't dump hundreds of lines.
+    let mut start = focus_start.saturating_sub(PAD).max(1);
+    let mut end = (focus_end + PAD).min(total);
+    if let Some((ss, se)) = sym_range {
+        start = start.max(ss);
+        end = end.min(se).max(focus_end.min(total));
+    }
+    if end.saturating_sub(start) + 1 > MAX_LINES {
+        end = (start + MAX_LINES - 1).min(total);
+    }
+
+    // Syntax-highlight the whole file (line N → index N-1), falling back to
+    // plain default-coloured segments for languages without a grammar, then
+    // slice out the context window.
+    let highlighted = highlight::highlight_lines(&canon, &contents).unwrap_or_else(|| {
+        all.iter()
+            .map(|l| {
+                vec![highlight::Segment {
+                    text: l.to_string(),
+                    kind: String::new(),
+                }]
+            })
+            .collect()
+    });
+    let lines: Vec<Vec<highlight::Segment>> = highlighted
+        .into_iter()
+        .skip(start as usize - 1)
+        .take((end - start + 1) as usize)
+        .collect();
+
+    Ok(SourceSpan {
+        file,
+        start_line: start,
+        focus_start,
+        focus_end,
+        lines,
+    })
+}
+
 #[tauri::command]
 /// Check if a project has .mcp.json with a scryer entry.
 fn check_mcp_json(project_path: &str) -> bool {
@@ -491,20 +653,51 @@ fn create_blank_model(project_path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn get_subagent_settings() -> scryer_core::SubagentSettings {
+    scryer_core::read_subagent_settings()
+}
+
+#[tauri::command]
+fn set_subagent_settings(settings: scryer_core::SubagentSettings) -> Result<(), String> {
+    scryer_core::write_subagent_settings(&settings)
+}
+
+/// Resolve (model, effort) for the agent kind we're about to launch from its
+/// per-agent settings. An empty model means "use the agent CLI's own default".
+fn config_for_launch(
+    s: &scryer_core::SubagentSettings,
+    launch: &scryer_acp::AgentLaunch,
+) -> (String, String) {
+    match launch {
+        scryer_acp::AgentLaunch::Cli {
+            kind: scryer_acp::AgentKind::ClaudeCode,
+            ..
+        } => (s.claude.model.clone(), s.claude.effort.clone()),
+        scryer_acp::AgentLaunch::Cli {
+            kind: scryer_acp::AgentKind::Codex,
+            ..
+        } => (s.codex.model.clone(), s.codex.effort.clone()),
+        _ => (String::new(), "medium".to_string()),
+    }
+}
+
+#[tauri::command]
 async fn start_initial_model_session(
     cwd: String,
-    model_ref: String,
     app: tauri::AppHandle,
     state: tauri::State<'_, AcpState>,
 ) -> Result<String, String> {
     let mcp_binary = find_scryer_mcp()
         .ok_or("scryer-mcp binary not found")?;
 
-    // Detect an available agent from PATH (no MCP connection needed)
-    let launch = scryer_acp::detect_available_agent()
+    // Detect an available agent from PATH (no MCP connection needed),
+    // honoring the saved agent preference.
+    let settings = scryer_core::read_subagent_settings();
+    let launch = scryer_acp::detect_available_agent_pref(&settings.agent)
         .ok_or("No AI agent found. Install Claude Code or Codex first.")?;
 
     let prompt = scryer_acp::prompt::initial_model_prompt(&cwd);
+    let (model_name, effort) = config_for_launch(&settings, &launch);
 
     let runtime = {
         let mut rt = state.0.lock().unwrap();
@@ -533,7 +726,7 @@ async fn start_initial_model_session(
     };
 
     runtime
-        .start_session(agent_binary, mode, cwd, model_ref, mcp_binary, prompt, event_tx)
+        .start_session(agent_binary, mode, cwd, model_name, effort, mcp_binary, prompt, event_tx)
         .await
 }
 
@@ -548,7 +741,8 @@ async fn start_node_fill_session(
     let mcp_binary = find_scryer_mcp()
         .ok_or("scryer-mcp binary not found")?;
 
-    let launch = scryer_acp::detect_available_agent()
+    let settings = scryer_core::read_subagent_settings();
+    let launch = scryer_acp::detect_available_agent_pref(&settings.agent)
         .ok_or("No AI agent found. Install Claude Code or Codex first.")?;
 
     let parsed_ref = scryer_core::ModelRef::parse(&model_ref)?;
@@ -568,6 +762,7 @@ async fn start_node_fill_session(
     let prompt = scryer_acp::prompt::node_fill_prompt(
         &cwd, &node_id, &node_name, &node_kind, &model_json,
     );
+    let (model_name, effort) = config_for_launch(&settings, &launch);
 
     let runtime = {
         let mut rt = state.0.lock().unwrap();
@@ -596,7 +791,7 @@ async fn start_node_fill_session(
     };
 
     runtime
-        .start_session(agent_binary, mode, cwd, model_ref, mcp_binary, prompt, event_tx)
+        .start_session(agent_binary, mode, cwd, model_name, effort, mcp_binary, prompt, event_tx)
         .await
 }
 
@@ -635,10 +830,13 @@ pub fn run() {
             list_templates,
             load_template,
             open_in_editor,
+            read_source_span,
             detect_ai_tools,
             setup_mcp_integration,
             get_active_agent,
             create_blank_model,
+            get_subagent_settings,
+            set_subagent_settings,
             start_initial_model_session,
             start_node_fill_session,
             cancel_agent_session,

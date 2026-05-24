@@ -1,5 +1,5 @@
 use rmcp::ErrorData as McpError;
-use scryer_core::{Group, Kind, Link, ModelRef, Node, Responsibility, ScryModel};
+use scryer_core::{Cell, Group, GroupSize, Kind, Link, ModelRef, Node, Responsibility, ScryModel};
 use std::collections::HashMap;
 
 /// Strip empty values from a JSON tree to keep MCP responses compact.
@@ -29,11 +29,11 @@ pub(crate) fn parse_kind(s: &str) -> Result<Kind, McpError> {
         "system" => Ok(Kind::System),
         "container" => Ok(Kind::Container),
         "component" => Ok(Kind::Component),
-        "operation" => Ok(Kind::Operation),
-        "model" => Ok(Kind::Model),
+        "symbol" => Ok(Kind::Symbol),
+        "schema" => Ok(Kind::Schema),
         _ => Err(McpError::invalid_params(
             format!(
-                "Invalid kind '{}'. Must be: person, system, container, component, operation, model",
+                "Invalid kind '{}'. Must be: person, system, container, component, symbol, schema",
                 s
             ),
             None,
@@ -47,8 +47,8 @@ pub(crate) fn kind_str(k: &Kind) -> &'static str {
         Kind::System => "system",
         Kind::Container => "container",
         Kind::Component => "component",
-        Kind::Operation => "operation",
-        Kind::Model => "model",
+        Kind::Symbol => "symbol",
+        Kind::Schema => "schema",
     }
 }
 
@@ -361,6 +361,64 @@ pub(crate) fn compute_diff(baseline: &ScryModel, current: &ScryModel) -> String 
     }
 }
 
+/// Directives are user-authored and read-only to the AI. Before committing any
+/// AI write, force every responsibility's `directives` back to whatever the
+/// prior on-disk model held for that responsibility id; ids with no prior entry
+/// get none. This lets the AI create, edit, and move responsibilities while
+/// leaving directives entirely under the user's control. Not applied to
+/// `move_responsibilities`, which preserves directives across a deliberate
+/// responsibility-id rename.
+pub(crate) fn enforce_readonly_directives(model: &mut ScryModel, prior: &ScryModel) {
+    let prior_resps = prior
+        .nodes
+        .iter()
+        .flat_map(|n| n.responsibilities.iter())
+        .chain(prior.groups.iter().flat_map(|g| g.responsibilities.iter()));
+    let prior_dir: HashMap<&str, &Vec<String>> = prior_resps
+        .map(|r| (r.id.as_str(), &r.directives))
+        .collect();
+    let restore = |r: &mut Responsibility| {
+        r.directives = prior_dir
+            .get(r.id.as_str())
+            .map(|d| (*d).clone())
+            .unwrap_or_default();
+    };
+    for n in &mut model.nodes {
+        n.responsibilities.iter_mut().for_each(&restore);
+    }
+    for g in &mut model.groups {
+        g.responsibilities.iter_mut().for_each(&restore);
+    }
+}
+
+/// Layout is frontend-owned. Node `cell` and group `cell`/`size` exist only so
+/// the visual canvas can persist hand-arranged positions; correct placement
+/// needs DOM measurement the AI doesn't have, so the AI must not place anything.
+/// Before committing any AI write, force every node's `cell` and every group's
+/// `cell`/`size` back to whatever the prior on-disk model held for that id; ids
+/// with no prior entry get none, so newly added nodes/groups are left unplaced
+/// for the canvas to lay out after it measures them.
+pub(crate) fn enforce_readonly_layout(model: &mut ScryModel, prior: &ScryModel) {
+    let prior_cell: HashMap<&str, Option<Cell>> =
+        prior.nodes.iter().map(|n| (n.id.as_str(), n.cell)).collect();
+    for n in &mut model.nodes {
+        n.cell = prior_cell.get(n.id.as_str()).copied().flatten();
+    }
+    let prior_geom: HashMap<&str, (Option<Cell>, Option<GroupSize>)> = prior
+        .groups
+        .iter()
+        .map(|g| (g.id.as_str(), (g.cell, g.size)))
+        .collect();
+    for g in &mut model.groups {
+        let (cell, size) = prior_geom
+            .get(g.id.as_str())
+            .copied()
+            .unwrap_or((None, None));
+        g.cell = cell;
+        g.size = size;
+    }
+}
+
 fn responsibilities_changed(a: &[Responsibility], b: &[Responsibility]) -> bool {
     if a.len() != b.len() {
         return true;
@@ -370,7 +428,7 @@ fn responsibilities_changed(a: &[Responsibility], b: &[Responsibility]) -> bool 
             || ra.statement != rb.statement
             || ra.status != rb.status
             || ra.vagrant != rb.vagrant
-            || ra.implementation_rules != rb.implementation_rules
+            || ra.directives != rb.directives
         {
             return true;
         }

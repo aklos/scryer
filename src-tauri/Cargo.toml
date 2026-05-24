@@ -31,3 +31,19 @@ dirs = "6.0.0"
 toml_edit = "0.22"
 tauri-plugin-dialog = "2"
 
+# In-process symbol resolution + syntax highlighting for the code inspector.
+# Grammars are compiled into the app — no external binary required.
+tree-sitter = "0.26"
+tree-sitter-highlight = "0.26"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-go = "0.25"
+tree-sitter-java = "0.23"
+tree-sitter-ruby = "0.23"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-php = "0.24"
+

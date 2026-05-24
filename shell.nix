@@ -18,6 +18,7 @@ pkgs.mkShell {
     # Tauri system deps
     pkg-config
     openssl
+    zlib
     glib
     gtk3
     libsoup_3

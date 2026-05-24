@@ -18,8 +18,10 @@ pub enum Kind {
     System,
     Container,
     Component,
-    Operation,
-    Model,
+    /// A single addressable code definition — function, method, handler, hook,
+    /// React component, class. One leaf = one symbol.
+    Symbol,
+    Schema,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
@@ -49,7 +51,7 @@ pub struct GroupSize {
 // --- Responsibility ---
 
 /// A pure business-responsibility statement. The `statement` field is the spec;
-/// `implementationRules` is optional informational "how" metadata and has no
+/// `directives` are optional prescriptive HOW-constraints and have no
 /// conformance role.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -69,19 +71,25 @@ pub struct Responsibility {
     /// Destination side: node ID the responsibility came from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relocated_from: Option<String>,
-    /// Optional informational "how" — implementation-detail notes that sit
-    /// beside the responsibility. Not part of conformance.
+    /// Optional prescriptive HOW-constraints — verb-led "must"/"never" rules
+    /// the implementation has to satisfy. User-authored: read-only to the agent,
+    /// so hidden from write-tool input schemas (`schemars(skip)`) while still
+    /// serialized for storage and surfaced on read. Not part of conformance.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub implementation_rules: Vec<String>,
+    #[schemars(skip)]
+    pub directives: Vec<String>,
 }
 
 // --- Code-level data ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
-pub struct ModelProperty {
+#[serde(rename_all = "camelCase")]
+pub struct SchemaProperty {
     pub label: String,
     #[serde(default)]
     pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<Status>,
 }
 
 /// A source-file pointer attached to a node. Wide glob + optional comment;
@@ -97,7 +105,13 @@ pub struct Source {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceLocation {
+    /// File path (relative to the project) the responsibility maps into.
     pub pattern: String,
+    /// Durable anchor: the identifier (function/handler/type/component name)
+    /// that discharges the responsibility. The exact line range is resolved
+    /// from this on demand, so it survives edits that shift line numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -124,11 +138,9 @@ pub struct Node {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub responsibilities: Vec<Responsibility>,
-    /// Properties for `Model`-kind nodes.
+    /// Properties for `Schema`-kind nodes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub properties: Vec<ModelProperty>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sources: Vec<Source>,
+    pub properties: Vec<SchemaProperty>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cell: Option<Cell>,
     /// Optional lucide-react icon name override. Falls back to a deterministic
@@ -195,8 +207,17 @@ pub struct ScryModel {
     pub links: Vec<Link>,
     #[serde(default)]
     pub groups: Vec<Group>,
+    /// Maps **responsibility id** → line-precise source locations (where reality
+    /// discharges that responsibility — the conformance numerator), or **schema
+    /// node id** → that type's declaration location. Agent-produced and
+    /// regenerable; never hand-authored.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub source_map: HashMap<String, Vec<SourceLocation>>,
+    /// Maps **node id** → boundary globs: the region of code a node owns (the
+    /// coverage denominator + extraction scope). A child's boundary should sit
+    /// within its parent's. Agent-produced and regenerable; never hand-authored.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub boundaries: HashMap<String, Vec<Source>>,
 }
 
 impl ScryModel {
@@ -207,6 +228,7 @@ impl ScryModel {
             links: Vec::new(),
             groups: Vec::new(),
             source_map: HashMap::new(),
+            boundaries: HashMap::new(),
         }
     }
 }
@@ -469,4 +491,90 @@ pub fn next_responsibility_id(existing: &[Responsibility]) -> String {
         .max()
         .unwrap_or(0);
     format!("resp-{}", max + 1)
+}
+
+// --- Subagent settings (global, ~/.scryer/settings.json) ---
+
+/// Global scryer config directory (`~/.scryer`). Distinct from each project's
+/// own `.scryer/` directory, which holds that project's `model.scry`.
+pub fn global_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".scryer")
+}
+
+/// Per-agent model + reasoning effort. An empty model means "use the agent
+/// CLI's own default". Effort values are agent-specific (Claude accepts
+/// low/medium/high/xhigh/max; Codex accepts minimal/low/medium/high).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSettings {
+    #[serde(default)]
+    pub model: String,
+    #[serde(default = "default_effort")]
+    pub effort: String,
+}
+
+impl Default for AgentSettings {
+    fn default() -> Self {
+        Self {
+            model: String::new(),
+            effort: default_effort(),
+        }
+    }
+}
+
+/// Agent preference + each agent's own settings, applied to spawned fill
+/// sessions. Field-level serde defaults keep older/partial settings.json files
+/// loadable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentSettings {
+    /// Which agent to launch: "auto" | "claudeCode" | "codex".
+    #[serde(default = "default_agent")]
+    pub agent: String,
+    #[serde(default)]
+    pub claude: AgentSettings,
+    #[serde(default)]
+    pub codex: AgentSettings,
+}
+
+impl Default for SubagentSettings {
+    fn default() -> Self {
+        Self {
+            agent: default_agent(),
+            claude: AgentSettings::default(),
+            codex: AgentSettings::default(),
+        }
+    }
+}
+
+fn default_agent() -> String {
+    "auto".to_string()
+}
+
+fn default_effort() -> String {
+    "medium".to_string()
+}
+
+fn settings_path() -> PathBuf {
+    global_dir().join("settings.json")
+}
+
+pub fn read_subagent_settings() -> SubagentSettings {
+    let path = settings_path();
+    if !path.exists() {
+        return SubagentSettings::default();
+    }
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+pub fn write_subagent_settings(settings: &SubagentSettings) -> Result<(), String> {
+    let dir = global_dir();
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    fs::write(settings_path(), json).map_err(|e| e.to_string())
 }

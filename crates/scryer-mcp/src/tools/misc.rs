@@ -12,7 +12,7 @@ use std::collections::HashSet;
 #[tool_router(router = tool_router_misc, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "Set source-map locations (line-precise) for one or more nodes. Pass an empty `locations` array to clear an entry. Use for operations (file + line range) and tests; for wider directory globs attached to containers/components use `sources` on the node itself via `update_nodes`."
+        description = "Write the code-side mapping (agent-produced, regenerable). `entries` set source locations keyed by responsibility id — the conformance numerator (where reality discharges a responsibility). Each location is the SPECIFIC line range that does the work: `pattern` = file, `line`/`endLine` = the range, `symbol` = the enclosing definition (anchor + context). Map the lines that implement the responsibility, not the whole symbol. `schemas` set the declaration location of a schema-kind node (which has properties, not responsibilities) — keyed by node id, normally one location: `pattern` = file, `symbol` = the type name, `line`/`endLine` = the declaration range. `boundaries` set directory globs keyed by node id — the coverage denominator (the code region a node owns); use for containers/components, keeping a child's boundary within its parent's. Pass an empty `locations`/`sources` array to clear an entry."
     )]
     fn update_source_map(
         &self,
@@ -29,20 +29,67 @@ impl ScryerServer {
             }
         };
 
+        let resp_ids: HashSet<&str> = model
+            .nodes
+            .iter()
+            .flat_map(|n| n.responsibilities.iter())
+            .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
+            .map(|r| r.id.as_str())
+            .collect();
         for entry in &req.entries {
-            if !model.nodes.iter().any(|n| n.id == entry.node_id) {
+            if !resp_ids.contains(entry.responsibility_id.as_str()) {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Node '{}' not found",
-                    entry.node_id
+                    "Responsibility '{}' not found",
+                    entry.responsibility_id
                 ))]));
             }
         }
-        let count = req.entries.len();
+        for s in &req.schemas {
+            match model.nodes.iter().find(|n| n.id == s.node_id) {
+                None => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Node '{}' not found",
+                        s.node_id
+                    ))]));
+                }
+                Some(n) if n.kind != scryer_core::Kind::Schema => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Node '{}' is {:?}, not a schema — only schema nodes take a `schemas` entry; use `entries` (responsibilities) for other kinds",
+                        s.node_id, n.kind
+                    ))]));
+                }
+                _ => {}
+            }
+        }
+        for b in &req.boundaries {
+            if !model.nodes.iter().any(|n| n.id == b.node_id) {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Node '{}' not found",
+                    b.node_id
+                ))]));
+            }
+        }
+
+        let count = req.entries.len() + req.schemas.len() + req.boundaries.len();
         for entry in req.entries {
             if entry.locations.is_empty() {
-                model.source_map.remove(&entry.node_id);
+                model.source_map.remove(&entry.responsibility_id);
             } else {
-                model.source_map.insert(entry.node_id, entry.locations);
+                model.source_map.insert(entry.responsibility_id, entry.locations);
+            }
+        }
+        for s in req.schemas {
+            if s.locations.is_empty() {
+                model.source_map.remove(&s.node_id);
+            } else {
+                model.source_map.insert(s.node_id, s.locations);
+            }
+        }
+        for b in req.boundaries {
+            if b.sources.is_empty() {
+                model.boundaries.remove(&b.node_id);
+            } else {
+                model.boundaries.insert(b.node_id, b.sources);
             }
         }
 
@@ -51,7 +98,7 @@ impl ScryerServer {
         }
         let _ = scryer_core::save_baseline_at(&model_ref, &model);
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Updated source map for {} node(s)",
+            "Updated code-side mapping ({} entr(ies))",
             count
         ))]))
     }
@@ -74,6 +121,7 @@ impl ScryerServer {
             }
         };
 
+        let prior = model.clone();
         let groups: Vec<Group> = match serde_json::from_str::<Vec<Group>>(&req.data) {
             Ok(arr) => arr,
             Err(_) => match serde_json::from_str::<Group>(&req.data) {
@@ -126,6 +174,8 @@ impl ScryerServer {
                 model.groups.push(g);
             }
         }
+        enforce_readonly_directives(&mut model, &prior);
+        enforce_readonly_layout(&mut model, &prior);
 
         if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));

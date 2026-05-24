@@ -32,7 +32,7 @@ import {
   cardSpan,
   cardWidthCells,
   spanFromMeasuredHeight,
-  rectsOverlap,
+  surfaceNeedsLayout,
   groupRect,
   groupDepth,
   type Rect,
@@ -721,7 +721,7 @@ export function PackBox({
   emptyContent,
   measuredSpans,
   onMeasure,
-  onFixOverlaps,
+  onAutoLayout,
 }: {
   view: SurfaceView;
   highlight?: GridHighlight | null;
@@ -734,7 +734,7 @@ export function PackBox({
   emptyContent?: ReactNode;
   measuredSpans: ReadonlyMap<string, Span>;
   onMeasure?: (spans: Map<string, Span>) => void;
-  onFixOverlaps?: (measuredSpans: ReadonlyMap<string, Span>) => void;
+  onAutoLayout?: (measured: ReadonlyMap<string, Span>) => void;
 }) {
   const zoom = useZoom();
   const cellW = CELL_W * zoom;
@@ -751,6 +751,14 @@ export function PackBox({
   // useLayoutEffect blocks paint, the user never sees the measuring frame.
   const wrapperRefs = useRef(new Map<string, HTMLDivElement>());
 
+  // Perimeter ref bands stack vertically and are centered in a band whose
+  // height tracks the inner grid. When the inner surface is short (e.g. an
+  // empty level), the bands can hold more refs than the grid is tall and they
+  // spill out of the ring. We measure each band's stacked content and floor
+  // the content rows so the rings grow to contain their refs.
+  const bandRefs = useRef(new Map<string, HTMLDivElement>());
+  const [minContentRows, setMinContentRows] = useState(0);
+
   const getSpan = (node: NodeView): Span =>
     measuredSpans.get(node.id) ?? cardSpan(node);
 
@@ -760,7 +768,38 @@ export function PackBox({
     cell: node.cell ?? { row: 0, col: 0 },
   }));
 
+  // Measure-after-render, then seed/repair layout — all inside one layout
+  // effect so React flushes the model update before paint (no flicker frame
+  // of unplaced cards). `onAutoLayout` places anything lacking a position and
+  // repairs detached groups using the freshly measured spans; it's a no-op
+  // (reference-equal model) once the surface is laid out, so this converges.
+  const autoLayoutRef = useRef(onAutoLayout);
+  autoLayoutRef.current = onAutoLayout;
+  // Spans are logical (zoom-invariant), so re-measuring just because zoom
+  // changed is wrong: text re-wraps at sub-pixel-rounded widths, the measured
+  // height crosses a CELL_H boundary, the span changes, and the grid reflows —
+  // cards visibly resize and shove neighbours as you zoom. Gate the pass on a
+  // signature of everything that actually affects measurement/layout (content
+  // + positions + group geometry) and skip when only zoom changed.
+  const measureSigRef = useRef<string | null>(null);
   useLayoutEffect(() => {
+    const sig = [
+      ...entries.map((n) => {
+        const resp = (n.responsibilities ?? [])
+          .map((r) => `${r.statement}|${(r.directives ?? []).join(",")}`)
+          .join(";");
+        const props = (n.properties ?? [])
+          .map((p) => `${p.label}:${p.description ?? ""}`)
+          .join(";");
+        return `${n.id}~${n.kind}~${cardWidthCells(n)}~${n.cell?.row ?? "?"},${n.cell?.col ?? "?"}~${n.description ?? ""}~${resp}~${props}~${n._outgoingLinks.length}~${n._incomingLinks.length}`;
+      }),
+      ...view.groups.map(
+        (g) =>
+          `G${g.id}~${g.cell.row},${g.cell.col}~${g.size.rows}x${g.size.cols}~${groupHeaderRows(g)}~${g.memberIds.join(",")}`,
+      ),
+    ].join("\n");
+    if (sig === measureSigRef.current) return;
+
     const cards: [string, HTMLElement, number][] = [];
     for (const node of entries) {
       const wrapper = wrapperRefs.current.get(node.id);
@@ -768,6 +807,7 @@ export function PackBox({
       if (card) cards.push([node.id, card, cardWidthCells(node)]);
     }
     if (cards.length === 0) return;
+    measureSigRef.current = sig;
 
     for (const [, card] of cards) card.style.height = "auto";
 
@@ -786,31 +826,11 @@ export function PackBox({
       }
     }
     if (changed) onMeasure?.(next);
-  });
 
-  // After measurement, check if any cards now overlap and notify the parent.
-  const entriesRef = useRef(entries);
-  entriesRef.current = entries;
-  const fixOverlapsRef = useRef(onFixOverlaps);
-  fixOverlapsRef.current = onFixOverlaps;
-  useEffect(() => {
-    if (measuredSpans.size === 0 || !fixOverlapsRef.current) return;
-    const cur = entriesRef.current;
-    const items = cur
-      .filter((n) => n.cell)
-      .map((n) => {
-        const span = measuredSpans.get(n.id) ?? cardSpan(n);
-        return { row: n.cell!.row, col: n.cell!.col, w: span.w, h: span.h };
-      });
-    for (let i = 0; i < items.length; i++) {
-      for (let j = i + 1; j < items.length; j++) {
-        if (rectsOverlap(items[i], items[j])) {
-          fixOverlapsRef.current(measuredSpans);
-          return;
-        }
-      }
+    if (autoLayoutRef.current && surfaceNeedsLayout(view, next)) {
+      autoLayoutRef.current(next);
     }
-  }, [measuredSpans]);
+  });
 
   const sortedGroups = [...view.groups].sort(
     (a, b) => groupDepth(view, a) - groupDepth(view, b),
@@ -827,6 +847,8 @@ export function PackBox({
     contentCols = Math.max(contentCols, g.cell.col + g.size.cols);
     contentRows = Math.max(contentRows, g.cell.row + g.size.rows);
   }
+  // Grow the grid so the perimeter ref bands (measured below) fit vertically.
+  contentRows = Math.max(contentRows, minContentRows);
 
   let cols = contentCols,
     rows = contentRows;
@@ -889,6 +911,29 @@ export function PackBox({
   const marginRight = outerPad.right * zoom + 8 * zoom;
   const marginBottom = outerPad.bottom * zoom + 8 * zoom;
   const marginLeft = outerPad.left * zoom + 8 * zoom;
+
+  // Measure each ref band's stacked height and floor the content rows so the
+  // rings are tall enough to contain their refs (centered bands otherwise
+  // overflow when the inner grid is shorter than its surrounding refs).
+  useLayoutEffect(() => {
+    let required = 0;
+    for (let i = 0; i < levels.length; i++) {
+      const depth = levels.length - 1 - i;
+      if (depth === 0) continue;
+      const inner = ringPads[depth - 1] ?? { top: 0, right: 0, bottom: 0, left: 0 };
+      const innerOffset = (inner.top + inner.bottom) * zoom;
+      for (const lane of ["left", "right"] as const) {
+        const band = bandRefs.current.get(`${i}-${lane}`);
+        const kids = band?.children;
+        if (!kids || kids.length === 0) continue;
+        let stack = REF_GAP * zoom * (kids.length - 1);
+        for (const kid of Array.from(kids)) stack += (kid as HTMLElement).offsetHeight;
+        required = Math.max(required, stack - innerOffset);
+      }
+    }
+    const reqRows = required > 0 ? Math.ceil(required / cellH) : 0;
+    setMinContentRows((prev) => (prev === reqRows ? prev : reqRows));
+  });
 
   return (
     <div
@@ -976,6 +1021,10 @@ export function PackBox({
             {/* left lane — incoming refs (callers) */}
             {!isInnermost && slot.left.length > 0 && (
               <div
+                ref={(el) => {
+                  if (el) bandRefs.current.set(`${i}-left`, el);
+                  else bandRefs.current.delete(`${i}-left`);
+                }}
                 style={{
                   position: "absolute",
                   top: innerTop,
@@ -996,6 +1045,10 @@ export function PackBox({
             {/* right lane — outgoing refs (callees) */}
             {!isInnermost && slot.right.length > 0 && (
               <div
+                ref={(el) => {
+                  if (el) bandRefs.current.set(`${i}-right`, el);
+                  else bandRefs.current.delete(`${i}-right`);
+                }}
                 style={{
                   position: "absolute",
                   top: innerTop,

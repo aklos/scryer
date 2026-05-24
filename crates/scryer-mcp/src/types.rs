@@ -1,4 +1,4 @@
-use scryer_core::{ModelProperty, Responsibility, Source, SourceLocation};
+use scryer_core::{Responsibility, SchemaProperty, Source, SourceLocation};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -44,22 +44,22 @@ pub(crate) struct SetModelRequest {
 pub(crate) struct AddNodeItem {
     /// Display name for the node.
     pub name: String,
-    /// Short description of what this node IS — its identity, not its responsibilities. Optional.
+    /// The node's identity in a few words — what it IS as software, NOT a summary of its responsibilities (those are a
+    /// separate field). If it reads as a comma-list of the responsibilities, omit it. Optional.
     pub description: Option<String>,
-    /// Node kind: "person", "system", "container", "component", "operation", or "model".
+    /// Node kind: "person", "system", "container", "component", "symbol", or "schema".
     pub kind: String,
-    /// ID of the parent node. Required for container/component/operation/model; omit for person/system.
+    /// ID of the parent node. Required for container/component/symbol/schema; omit for person/system.
     pub parent_id: Option<String>,
     /// Technology label — what the node IS as software (e.g. "Payload 3.0", "PostgreSQL 16"). Not for persons.
     pub technology: Option<String>,
     /// Whether this is an external system (systems/containers only).
     pub external: Option<bool>,
-    /// Source-file globs attached to this node.
-    pub sources: Option<Vec<Source>>,
-    /// Pure business-responsibility statements. No mechanism vocabulary in the text.
+    /// Pure business-responsibility statements — one terse verb-led clause each. Lead with the distinguishing verb + object,
+    /// then stop: no mechanism vocabulary, no trailing "by/where/so that" tails, no repeating the obvious domain on every line.
     pub responsibilities: Option<Vec<Responsibility>>,
-    /// Properties (model-kind nodes only).
-    pub properties: Option<Vec<ModelProperty>>,
+    /// Properties (schema-kind nodes only).
+    pub properties: Option<Vec<SchemaProperty>>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -73,18 +73,16 @@ pub(crate) struct AddNodeRequest {
 pub(crate) struct UpdateNodeItem {
     /// ID of the node to update.
     pub node_id: String,
+    /// Node kind: "person", "system", "container", "component", "symbol", or "schema".
+    pub kind: Option<String>,
     pub name: Option<String>,
     pub description: Option<String>,
     pub technology: Option<String>,
     pub external: Option<bool>,
-    pub sources: Option<Vec<Source>>,
     /// Full replacement of responsibilities. Pass an empty array to clear.
     pub responsibilities: Option<Vec<Responsibility>>,
-    /// Full replacement of properties (model-kind nodes only).
-    pub properties: Option<Vec<ModelProperty>>,
-    /// Source-map locations for this node (line-precise). Pass an empty array to clear.
-    /// Glob-style source pointers go in `sources` instead.
-    pub source: Option<Vec<SourceLocation>>,
+    /// Full replacement of properties (schema-kind nodes only).
+    pub properties: Option<Vec<SchemaProperty>>,
     /// Mark node as planned for removal. Set true to deprecate, false to clear.
     pub deprecated: Option<bool>,
     /// Mark node as reparented (code needs to move). Set true to flag, false to clear.
@@ -174,16 +172,42 @@ pub(crate) struct DeleteLinkRequest {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SourceMapEntry {
-    /// ID of the node to set source locations for.
-    pub node_id: String,
+    /// ID of the responsibility to set line-precise source locations for.
+    pub responsibility_id: String,
     /// Source locations. Empty array clears the entry.
+    pub locations: Vec<SourceLocation>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct BoundaryEntry {
+    /// ID of the node to set boundary globs for.
+    pub node_id: String,
+    /// Boundary globs (the code region this node owns). Empty array clears it.
+    pub sources: Vec<Source>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SchemaSourceEntry {
+    /// ID of the schema-kind node to set its declaration location for.
+    pub node_id: String,
+    /// Where the type is declared — normally one location: `pattern` = file,
+    /// `symbol` = the type name, `line`/`endLine` = the declaration range. Empty
+    /// array clears the entry.
     pub locations: Vec<SourceLocation>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct UpdateSourceMapRequest {
     pub project: Option<String>,
+    /// Line-precise locations keyed by responsibility id.
+    #[serde(default)]
     pub entries: Vec<SourceMapEntry>,
+    /// Declaration locations keyed by schema node id.
+    #[serde(default)]
+    pub schemas: Vec<SchemaSourceEntry>,
+    /// Boundary globs keyed by node id.
+    #[serde(default)]
+    pub boundaries: Vec<BoundaryEntry>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

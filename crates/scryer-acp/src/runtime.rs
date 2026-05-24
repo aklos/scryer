@@ -28,6 +28,7 @@ enum RuntimeCommand {
         mode: LaunchMode,
         cwd: String,
         model_name: String,
+        effort: String,
         mcp_binary: String,
         prompt: String,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
@@ -70,6 +71,7 @@ impl AcpRuntime {
         mode: LaunchMode,
         cwd: String,
         model_name: String,
+        effort: String,
         mcp_binary: String,
         prompt: String,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
@@ -81,6 +83,7 @@ impl AcpRuntime {
                 mode,
                 cwd,
                 model_name,
+                effort,
                 mcp_binary,
                 prompt,
                 event_tx,
@@ -122,6 +125,7 @@ fn runtime_thread(
                     mode,
                     cwd,
                     model_name,
+                    effort,
                     mcp_binary,
                     prompt,
                     event_tx,
@@ -144,7 +148,7 @@ fn runtime_thread(
 
                     let result = match mode {
                         LaunchMode::Cli { kind } => start_cli_session(
-                            &agent_binary, &kind, &cwd, &model_name, &mcp_binary,
+                            &agent_binary, &kind, &cwd, &model_name, &effort, &mcp_binary,
                             &prompt, event_tx, done_tx.clone(),
                         ),
                         LaunchMode::Acp => start_acp_session(
@@ -187,7 +191,8 @@ fn start_cli_session(
     agent_binary: &str,
     kind: &AgentKind,
     cwd: &str,
-    _model_name: &str,
+    model_name: &str,
+    effort: &str,
     mcp_binary: &str,
     prompt: &str,
     event_tx: mpsc::UnboundedSender<AgentEvent>,
@@ -209,8 +214,11 @@ fn start_cli_session(
             cmd.arg("-p")
                 .arg("--output-format").arg("stream-json")
                 .arg("--verbose")
-                .arg("--effort").arg("medium")
-                .arg("--mcp-config").arg(mcp_config.to_string())
+                .arg("--effort").arg(effort);
+            if !model_name.is_empty() {
+                cmd.arg("--model").arg(model_name);
+            }
+            cmd.arg("--mcp-config").arg(mcp_config.to_string())
                 .arg("--allowed-tools").arg("mcp__scryer__*")
                 .arg("--no-session-persistence")
                 .arg(&prompt);
@@ -221,8 +229,11 @@ fn start_cli_session(
                 .arg("--full-auto")
                 .arg("--json")
                 .arg("--ephemeral")
-                .arg("-c").arg("model_reasoning_effort=\"medium\"")
-                .arg(&prompt);
+                .arg("-c").arg(format!("model_reasoning_effort=\"{}\"", effort));
+            if !model_name.is_empty() {
+                cmd.arg("-c").arg(format!("model=\"{}\"", model_name));
+            }
+            cmd.arg(&prompt);
         }
         AgentKind::Other => {
             // Best-effort: pass prompt as last arg
@@ -293,9 +304,19 @@ fn start_cli_session(
                 }
             };
 
-            tokio::join!(stdout_task, stderr_task);
-            // streams closed — process has exited or is about to
-            let status = child.wait().await;
+            // Drive completion off the process exit, not stream EOF. A
+            // grandchild (notably the MCP server the agent spawns) can inherit
+            // our stdout/stderr pipe and keep it open after the agent itself
+            // exits — so waiting for the streams to close can hang forever.
+            // Read the streams concurrently, but stop as soon as the child exits.
+            let streams = async { tokio::join!(stdout_task, stderr_task); };
+            tokio::pin!(streams);
+            let waiter = child.wait();
+            tokio::pin!(waiter);
+            let status = tokio::select! {
+                s = &mut waiter => s,
+                _ = &mut streams => (&mut waiter).await,
+            };
             (status, last_stderr)
         };
 
@@ -339,6 +360,44 @@ fn start_cli_session(
     Ok(cancel_tx)
 }
 
+/// Drop the `mcp__<server>__` prefix from MCP tool names for display.
+fn short_tool(name: &str) -> &str {
+    name.rsplit("__").next().unwrap_or(name)
+}
+
+/// Last two path segments, e.g. "/home/alex/p/src/App.tsx" -> "src/App.tsx".
+fn short_path(p: &str) -> String {
+    let parts: Vec<&str> = p.trim_end_matches('/').split('/').filter(|s| !s.is_empty()).collect();
+    match parts.as_slice() {
+        [.., a, b] => format!("{}/{}", a, b),
+        _ => p.to_string(),
+    }
+}
+
+/// Pull a short, human-meaningful argument out of a tool_use input so the
+/// activity readout shows *what* the tool is acting on (which file, which node).
+fn tool_detail(input: &serde_json::Value) -> Option<String> {
+    let obj = input.as_object()?;
+    if let Some(p) = obj.get("file_path").or_else(|| obj.get("path")).and_then(|v| v.as_str()) {
+        if !p.is_empty() {
+            return Some(short_path(p));
+        }
+    }
+    for key in ["pattern", "node_id", "nodeId", "query", "command", "url"] {
+        if let Some(v) = obj.get(key).and_then(|v| v.as_str()) {
+            if !v.is_empty() {
+                let v = if v.chars().count() > 60 {
+                    format!("{}…", v.chars().take(60).collect::<String>())
+                } else {
+                    v.to_string()
+                };
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
 /// Extract a readable one-liner from a Claude Code stream-json event.
 fn summarize_event(line: &str) -> Option<String> {
     let val: serde_json::Value = serde_json::from_str(line).ok()?;
@@ -349,8 +408,11 @@ fn summarize_event(line: &str) -> Option<String> {
             let content = val.pointer("/message/content")?.as_array()?;
             for block in content {
                 if block.get("type")?.as_str()? == "tool_use" {
-                    let name = block.get("name")?.as_str()?;
-                    return Some(format!("-> {}", name));
+                    let name = short_tool(block.get("name")?.as_str()?);
+                    return Some(match block.get("input").and_then(tool_detail) {
+                        Some(d) => format!("-> {} {}", name, d),
+                        None => format!("-> {}", name),
+                    });
                 }
                 if block.get("type")?.as_str()? == "text" {
                     let text = block.get("text")?.as_str()?;
@@ -364,8 +426,11 @@ fn summarize_event(line: &str) -> Option<String> {
             None
         }
         "tool_result" | "tool_use" => {
-            let name = val.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
-            Some(format!("-> {}", name))
+            let name = short_tool(val.get("name").and_then(|v| v.as_str()).unwrap_or("tool"));
+            Some(match val.get("input").and_then(tool_detail) {
+                Some(d) => format!("-> {} {}", name, d),
+                None => format!("-> {}", name),
+            })
         }
         "result" => {
             let subtype = val.get("subtype").and_then(|v| v.as_str()).unwrap_or("");

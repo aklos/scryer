@@ -6,7 +6,8 @@
  * (model, currentNodeId). Mutations come back from Surface as Editor intents.
  */
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ToastProvider } from "./Toast";
 import { Breadcrumbs } from "./Breadcrumbs";
@@ -15,6 +16,8 @@ import { Surface } from "./Surface";
 import { ModelContext } from "./modelcontext";
 import { ProjectPicker } from "./ProjectPicker";
 import { SyncBar } from "./SyncBar";
+import { SettingsPanel } from "./SettingsPanel";
+import { InspectorPanel } from "./InspectorPanel";
 import { useModelStorage } from "./hooks/useModelStorage";
 import { useAgentSession } from "./hooks/useAgentSession";
 import {
@@ -39,15 +42,24 @@ import {
   type ScryModel,
 } from "./viewmodel";
 import {
+  autoLayout,
   moveGroupInModel,
   placeNodeInModel,
   resizeGroupInModel,
-  resolveOverlaps,
   type Span,
 } from "./pack";
 import type { Editor } from "./editor";
+import type { Selection } from "./selection";
 
 export default function App() {
+  useEffect(() => {
+    // A dev refresh reloads the webview but not the Rust backend, leaving any
+    // in-flight agent session (and its child process) alive and still editing
+    // the model. Cancel it on load so a refresh doesn't leave orphans. No-op on
+    // a cold start (no session → the error is ignored).
+    void invoke("cancel_agent_session").catch(() => {});
+  }, []);
+
   return (
     <ErrorBoundary>
       <ToastProvider>
@@ -87,6 +99,8 @@ function Canvas({
 }) {
   const agent = useAgentSession();
   const [path, setPath] = useState<string[]>([]);
+  const [selection, setSelection] = useState<Selection>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const currentNodeId: string | null =
     path.length > 0 ? path[path.length - 1] : null;
   const surfaceView = useMemo(
@@ -109,13 +123,26 @@ function Canvas({
   const handleNavigate = useCallback((nodeId: string) => {
     const node = modelRef.current.nodes.find((n) => n.id === nodeId);
     if (!node) return;
-    if (node.kind === "operation" || node.kind === "model" || node.kind === "person") return;
+    if (node.kind === "symbol" || node.kind === "schema" || node.kind === "person") return;
+    setSelection(null);
     setPath((p) => (p[p.length - 1] === nodeId ? p : [...p, nodeId]));
   }, []);
 
   const handleJump = useCallback((index: number) => {
+    setSelection(null);
     setPath((p) => (index < 0 ? [] : p.slice(0, index + 1)));
   }, []);
+
+  const selectNode = useCallback((nodeId: string) => {
+    setSelection({ kind: "node", nodeId });
+  }, []);
+  const selectResponsibility = useCallback(
+    (nodeId: string, respId: string) => {
+      setSelection({ kind: "responsibility", nodeId, respId });
+    },
+    [],
+  );
+  const clearSelection = useCallback(() => setSelection(null), []);
 
   // --- canvas layout intents ---
 
@@ -137,11 +164,14 @@ function Canvas({
     },
     [updateModel],
   );
-  const handleFixOverlaps = useCallback(
-    (measuredSpans: ReadonlyMap<string, { w: number; h: number }>) => {
-      updateModel((m) => resolveOverlaps(m, measuredSpans));
+  // Seed positions for unplaced nodes/groups, re-flow overlapping placements,
+  // and repair detached groups — all using the measured card spans. Runs after
+  // PackBox measures the current surface.
+  const handleAutoLayout = useCallback(
+    (measured: ReadonlyMap<string, Span>) => {
+      updateModel((m) => autoLayout(m, currentNodeId, measured));
     },
-    [updateModel],
+    [updateModel, currentNodeId],
   );
 
   // --- editor intents ---
@@ -233,8 +263,9 @@ function Canvas({
   return (
     <ModelContext.Provider value={model}>
       <div className="flex h-screen w-screen flex-col bg-[var(--surface-canvas)]">
-        <Breadcrumbs model={model} path={path} onJump={handleJump} />
-        <div className="relative flex-1">
+        <Breadcrumbs model={model} path={path} onJump={handleJump} projectPath={projectPath} />
+        <div className="relative flex flex-1 min-h-0">
+          <div className="relative min-w-0 flex-1">
           {agent.running && (
             <div className="absolute top-0 inset-x-0 z-10 flex items-center justify-center pointer-events-none py-2">
               <span className="text-[11px] text-amber-400/70">
@@ -248,19 +279,39 @@ function Canvas({
               parentNodeId={currentNodeId}
               ancestorAltitudes={ancestorAltitudes}
               editor={agent.running ? undefined : editor}
+              selection={selection}
+              onSelectNode={selectNode}
+              onSelectResponsibility={selectResponsibility}
+              onClearSelection={clearSelection}
               onNavigate={handleNavigate}
               onBack={handleJump}
               onPlaceNode={handlePlaceNode}
               onMoveGroup={handleMoveGroup}
               onResizeGroup={handleResizeGroup}
-              onFixOverlaps={handleFixOverlaps}
+              onAutoLayout={handleAutoLayout}
               projectPath={projectPath}
               modelRef={modelRefStr}
               agent={agent}
             />
           </PanZoom>
+          </div>
+          {selection && (
+            <InspectorPanel
+              model={model}
+              selection={selection}
+              projectPath={projectPath}
+              onSelectNode={selectNode}
+              onSelectResponsibility={selectResponsibility}
+              onClose={clearSelection}
+            />
+          )}
         </div>
-        <SyncBar model={model} agent={agent} projectPath={projectPath} />
+        <SyncBar
+          model={model}
+          agent={agent}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+        {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
       </div>
     </ModelContext.Provider>
   );

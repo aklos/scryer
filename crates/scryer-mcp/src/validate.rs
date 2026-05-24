@@ -28,8 +28,8 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
                         (parent.kind, n.kind),
                         (Kind::System, Kind::Container)
                             | (Kind::Container, Kind::Component)
-                            | (Kind::Component, Kind::Operation)
-                            | (Kind::Component, Kind::Model)
+                            | (Kind::Component, Kind::Symbol)
+                            | (Kind::Component, Kind::Schema)
                     );
                     if !valid {
                         warnings.push(format!(
@@ -62,16 +62,16 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
             ));
         }
 
-        if !n.properties.is_empty() && n.kind != Kind::Model {
+        if !n.properties.is_empty() && n.kind != Kind::Schema {
             warnings.push(format!(
-                "Node {} (\"{}\") has properties but kind is {:?} — properties are only valid on model",
+                "Node {} (\"{}\") has properties but kind is {:?} — properties are only valid on schema",
                 n.id, n.name, n.kind
             ));
         }
 
-        if !n.responsibilities.is_empty() && n.kind == Kind::Model {
+        if !n.responsibilities.is_empty() && n.kind == Kind::Schema {
             warnings.push(format!(
-                "Node {} (\"{}\") is a model kind but carries responsibilities — models carry properties, not responsibilities",
+                "Node {} (\"{}\") is a schema kind but carries responsibilities — schemas carry properties, not responsibilities",
                 n.id, n.name
             ));
         }
@@ -101,15 +101,15 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
             }
         }
 
-        if n.kind == Kind::Operation && !is_valid_identifier(&n.name, false) {
+        if n.kind == Kind::Symbol && !is_valid_identifier(&n.name, false) {
             warnings.push(format!(
-                "Operation node {} (\"{}\") name should be a valid identifier (lowercase start)",
+                "Symbol node {} (\"{}\") name should be a valid identifier",
                 n.id, n.name
             ));
         }
-        if n.kind == Kind::Model && !is_valid_identifier(&n.name, true) {
+        if n.kind == Kind::Schema && !is_valid_identifier(&n.name, true) {
             warnings.push(format!(
-                "Model node {} (\"{}\") name should be a valid type name (letter start, [a-zA-Z0-9_])",
+                "Schema node {} (\"{}\") name should be a valid type name (letter start, [a-zA-Z0-9_])",
                 n.id, n.name
             ));
         }
@@ -193,11 +193,169 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
         }
     }
 
-    // --- Source map keys ---
+    // --- Code-side mapping keys ---
+    // source_map is keyed by responsibility id, or by a schema node id (a
+    // schema's declaration site); boundaries by node id.
+    let resp_ids: HashSet<&str> = model
+        .nodes
+        .iter()
+        .flat_map(|n| n.responsibilities.iter())
+        .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
+        .map(|r| r.id.as_str())
+        .collect();
+    let schema_node_ids: HashSet<&str> = model
+        .nodes
+        .iter()
+        .filter(|n| n.kind == Kind::Schema)
+        .map(|n| n.id.as_str())
+        .collect();
     for id in model.source_map.keys() {
-        if !node_ids.contains(id.as_str()) {
-            warnings.push(format!("Source map references unknown node '{}'", id));
+        if !resp_ids.contains(id.as_str()) && !schema_node_ids.contains(id.as_str()) {
+            warnings.push(format!(
+                "Source map references unknown responsibility or schema node '{}'",
+                id
+            ));
         }
+    }
+    for id in model.boundaries.keys() {
+        if !node_ids.contains(id.as_str()) {
+            warnings.push(format!("Boundary references unknown node '{}'", id));
+        }
+    }
+
+    warnings.extend(check_disconnected(model));
+
+    warnings
+}
+
+/// Per-level connectivity (the C4 "same level of abstraction" rule). Each C4
+/// diagram is one level: the system context shows persons + systems; a system's
+/// container view shows its containers plus reference nodes linked into it; a
+/// container's component view shows its components plus references; likewise for
+/// the code level. A relationship is only meaningful where both endpoints are
+/// visible at that level. This flags:
+///   - an owned node that connects to nothing visible at its own level
+///     (e.g. an actor that links only to containers, never to the system, so
+///     the system context diagram has no relationship for it);
+///   - a reference node linked to a parent but to none of its children, so it
+///     appears disconnected when you drill in.
+fn check_disconnected(model: &ScryModel) -> Vec<String> {
+    let mut warnings: Vec<String> = Vec::new();
+    let by_id: HashMap<&str, &scryer_core::Node> =
+        model.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+
+    // Does any link connect two nodes both present in `visible`? Mark endpoints.
+    let connected_within = |visible: &HashSet<&str>| -> HashSet<&str> {
+        let mut connected: HashSet<&str> = HashSet::new();
+        for l in &model.links {
+            if visible.contains(l.src.as_str()) && visible.contains(l.dst.as_str()) {
+                connected.insert(l.src.as_str());
+                connected.insert(l.dst.as_str());
+            }
+        }
+        connected
+    };
+    let has_any_link = |id: &str| model.links.iter().any(|l| l.src == id || l.dst == id);
+
+    let check_level = |owned: &HashSet<&str>,
+                       refs: &HashSet<&str>,
+                       view: &str,
+                       parent_name: Option<&str>,
+                       warnings: &mut Vec<String>| {
+        let visible: HashSet<&str> = owned.union(refs).copied().collect();
+        let connected = connected_within(&visible);
+        for oid in owned {
+            if connected.contains(oid) {
+                continue;
+            }
+            let n = by_id[oid];
+            if has_any_link(oid) {
+                warnings.push(format!(
+                    "'{}' ({}) has links but none at this level — it will appear disconnected in the {}",
+                    n.name, kind_name(&n.kind), view
+                ));
+            } else if owned.len() > 1 {
+                warnings.push(format!(
+                    "'{}' ({}) has no links — it will appear disconnected",
+                    n.name, kind_name(&n.kind)
+                ));
+            }
+        }
+        for rid in refs {
+            if connected.contains(rid) {
+                continue;
+            }
+            let n = by_id[rid];
+            if let Some(pname) = parent_name {
+                warnings.push(format!(
+                    "'{}' ({}) links to '{}' but not to any of its children — it will appear disconnected in the {}. Add a link from the relevant child to '{}'",
+                    n.name, kind_name(&n.kind), pname, view, n.name
+                ));
+            }
+        }
+    };
+
+    // System context: persons + systems.
+    let system_level: HashSet<&str> = model
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.kind, Kind::Person | Kind::System))
+        .map(|n| n.id.as_str())
+        .collect();
+    let empty: HashSet<&str> = HashSet::new();
+    check_level(&system_level, &empty, "system context", None, &mut warnings);
+
+    // For each non-external parent, the view of its direct children (one C4
+    // level down): owned = children; refs = any outside node linked to the
+    // parent or to a child, minus the parent's own ancestors and same-level
+    // siblings of the children.
+    for parent in &model.nodes {
+        if parent.external == Some(true) {
+            continue;
+        }
+        let child_kind = match parent.kind {
+            Kind::System => Kind::Container,
+            Kind::Container => Kind::Component,
+            Kind::Component => Kind::Symbol, // code level (symbol + schema)
+            _ => continue,
+        };
+        let owned: HashSet<&str> = model
+            .nodes
+            .iter()
+            .filter(|n| {
+                n.parent_id.as_deref() == Some(parent.id.as_str())
+                    && (n.kind == child_kind
+                        || (child_kind == Kind::Symbol && n.kind == Kind::Schema))
+            })
+            .map(|n| n.id.as_str())
+            .collect();
+        if owned.is_empty() {
+            continue;
+        }
+        // Reference nodes: outside the owned set, linked to the parent or a
+        // child, excluding the parent itself and the parent's parent.
+        let mut refs: HashSet<&str> = HashSet::new();
+        for l in &model.links {
+            let touches_parent = l.src == parent.id || l.dst == parent.id;
+            let touches_child =
+                owned.contains(l.src.as_str()) || owned.contains(l.dst.as_str());
+            if !(touches_parent || touches_child) {
+                continue;
+            }
+            for end in [l.src.as_str(), l.dst.as_str()] {
+                if end == parent.id || owned.contains(end) {
+                    continue;
+                }
+                if Some(end) == parent.parent_id.as_deref() {
+                    continue;
+                }
+                if by_id.contains_key(end) {
+                    refs.insert(end);
+                }
+            }
+        }
+        let view = format!("{} view of '{}'", kind_name(&child_kind), parent.name);
+        check_level(&owned, &refs, &view, Some(&parent.name), &mut warnings);
     }
 
     warnings
@@ -209,8 +367,8 @@ fn kind_name(k: &Kind) -> &'static str {
         Kind::System => "system",
         Kind::Container => "container",
         Kind::Component => "component",
-        Kind::Operation => "operation",
-        Kind::Model => "model",
+        Kind::Symbol => "symbol",
+        Kind::Schema => "schema",
     }
 }
 
@@ -222,15 +380,16 @@ pub fn validate_coverage(model: &ScryModel, project_path: &Path) -> Vec<String> 
 
     let manifest_dirs = scryer_core::scan::manifest_dirs(project_path);
 
-    // Collect every source pattern from the source map and from node.sources
+    // Collect every source pattern from the source map (line-precise) and the
+    // boundary globs.
     let mut all_patterns: Vec<&str> = Vec::new();
     for locs in model.source_map.values() {
         for loc in locs {
             all_patterns.push(&loc.pattern);
         }
     }
-    for n in &model.nodes {
-        for s in &n.sources {
+    for sources in model.boundaries.values() {
+        for s in sources {
             all_patterns.push(&s.pattern);
         }
     }
@@ -297,14 +456,28 @@ pub fn validate_coverage(model: &ScryModel, project_path: &Path) -> Vec<String> 
         }
     };
 
-    for (node_id, locs) in &model.source_map {
-        for loc in locs {
-            record_pattern(&loc.pattern, node_id);
+    // source_map is keyed by responsibility id (resolve to its owning node) or
+    // by a schema node id directly — either way attribute the pattern to a node.
+    let resp_to_node: HashMap<&str, &str> = model
+        .nodes
+        .iter()
+        .flat_map(|n| n.responsibilities.iter().map(move |r| (r.id.as_str(), n.id.as_str())))
+        .collect();
+    let node_ids_set: HashSet<&str> = model.nodes.iter().map(|n| n.id.as_str()).collect();
+    for (key, locs) in &model.source_map {
+        let owner = resp_to_node
+            .get(key.as_str())
+            .copied()
+            .or_else(|| node_ids_set.get(key.as_str()).copied());
+        if let Some(node_id) = owner {
+            for loc in locs {
+                record_pattern(&loc.pattern, node_id);
+            }
         }
     }
-    for n in &model.nodes {
-        for s in &n.sources {
-            record_pattern(&s.pattern, &n.id);
+    for (node_id, sources) in &model.boundaries {
+        for s in sources {
+            record_pattern(&s.pattern, node_id);
         }
     }
 
