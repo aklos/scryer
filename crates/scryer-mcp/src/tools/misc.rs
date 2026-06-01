@@ -52,10 +52,10 @@ impl ScryerServer {
                         s.node_id
                     ))]));
                 }
-                Some(n) if n.kind != scryer_core::Kind::Schema => {
+                Some(n) if n.properties.is_empty() => {
                     return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Node '{}' is {:?}, not a schema — only schema nodes take a `schemas` entry; use `entries` (responsibilities) for other kinds",
-                        s.node_id, n.kind
+                        "Node '{}' declares no properties — a `schemas` entry maps a data shape's declaration location; use `entries` (responsibilities) for behavior",
+                        s.node_id
                     ))]));
                 }
                 _ => {}
@@ -104,7 +104,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Create or replace one or more groups. Pass a single group object or an array of groups in `data`. Groups are organizational: at container level they represent deployment units, at component level they represent modules. Members must all be at the same C4 level. Groups can carry their own responsibilities."
+        description = "Create or replace one or more groups. Pass a single group object or an array of groups in `data`. Groups are organizational: at container level they represent deployment units, at component level they represent modules. Each group MUST list its `memberIds` and set `parentNodeId` to the node whose children those members are — parentNodeId anchors the group to that node's level so it renders inside that node's diagram (a memberless or parentNodeId-less group renders empty at the top level). Members must all be at the same C4 level. Groups can carry their own responsibilities."
     )]
     fn set_groups(
         &self,

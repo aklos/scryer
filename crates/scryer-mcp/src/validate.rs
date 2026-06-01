@@ -29,7 +29,6 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
                         (Kind::System, Kind::Container)
                             | (Kind::Container, Kind::Component)
                             | (Kind::Component, Kind::Symbol)
-                            | (Kind::Component, Kind::Schema)
                     );
                     if !valid {
                         warnings.push(format!(
@@ -62,20 +61,6 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
             ));
         }
 
-        if !n.properties.is_empty() && n.kind != Kind::Schema {
-            warnings.push(format!(
-                "Node {} (\"{}\") has properties but kind is {:?} — properties are only valid on schema",
-                n.id, n.name, n.kind
-            ));
-        }
-
-        if !n.responsibilities.is_empty() && n.kind == Kind::Schema {
-            warnings.push(format!(
-                "Node {} (\"{}\") is a schema kind but carries responsibilities — schemas carry properties, not responsibilities",
-                n.id, n.name
-            ));
-        }
-
         let mut resp_ids: HashSet<&str> = HashSet::new();
         for r in &n.responsibilities {
             if !resp_ids.insert(r.id.as_str()) {
@@ -104,12 +89,6 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
         if n.kind == Kind::Symbol && !is_valid_identifier(&n.name, false) {
             warnings.push(format!(
                 "Symbol node {} (\"{}\") name should be a valid identifier",
-                n.id, n.name
-            ));
-        }
-        if n.kind == Kind::Schema && !is_valid_identifier(&n.name, true) {
-            warnings.push(format!(
-                "Schema node {} (\"{}\") name should be a valid type name (letter start, [a-zA-Z0-9_])",
                 n.id, n.name
             ));
         }
@@ -148,6 +127,40 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
                     g.id, pgid
                 ));
             }
+        }
+        if g.member_ids.is_empty() {
+            warnings.push(format!(
+                "Group {} (\"{}\") has no members — set memberIds to the node ids it groups, or delete it",
+                g.id, g.name
+            ));
+        }
+        match &g.parent_node_id {
+            None => {
+                if g.parent_group_id.is_none() {
+                    warnings.push(format!(
+                        "Group {} (\"{}\") has no parentNodeId — it renders at the top level instead of inside its parent node's diagram; set parentNodeId to the node whose children it groups",
+                        g.id, g.name
+                    ));
+                }
+            }
+            Some(pnid) => match model.nodes.iter().find(|n| n.id == *pnid) {
+                None => warnings.push(format!(
+                    "Group {} has parentNodeId '{}' that doesn't exist",
+                    g.id, pnid
+                )),
+                Some(_) => {
+                    for mid in &g.member_ids {
+                        if let Some(member) = model.nodes.iter().find(|n| n.id == *mid) {
+                            if member.parent_id.as_deref() != Some(pnid.as_str()) {
+                                warnings.push(format!(
+                                    "Group {} member '{}' is not a child of parentNodeId '{}' — group members must be children of the node the group is anchored to",
+                                    g.id, mid, pnid
+                                ));
+                            }
+                        }
+                    }
+                }
+            },
         }
         if let Some(desc) = &g.description {
             if desc.len() > 200 {
@@ -203,16 +216,17 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
         .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
         .map(|r| r.id.as_str())
         .collect();
-    let schema_node_ids: HashSet<&str> = model
+    // Symbols that declare a data shape map their declaration location by node id.
+    let property_node_ids: HashSet<&str> = model
         .nodes
         .iter()
-        .filter(|n| n.kind == Kind::Schema)
+        .filter(|n| !n.properties.is_empty())
         .map(|n| n.id.as_str())
         .collect();
     for id in model.source_map.keys() {
-        if !resp_ids.contains(id.as_str()) && !schema_node_ids.contains(id.as_str()) {
+        if !resp_ids.contains(id.as_str()) && !property_node_ids.contains(id.as_str()) {
             warnings.push(format!(
-                "Source map references unknown responsibility or schema node '{}'",
+                "Source map references unknown responsibility or property-bearing node '{}'",
                 id
             ));
         }
@@ -316,7 +330,7 @@ fn check_disconnected(model: &ScryModel) -> Vec<String> {
         let child_kind = match parent.kind {
             Kind::System => Kind::Container,
             Kind::Container => Kind::Component,
-            Kind::Component => Kind::Symbol, // code level (symbol + schema)
+            Kind::Component => Kind::Symbol, // code level
             _ => continue,
         };
         let owned: HashSet<&str> = model
@@ -324,8 +338,7 @@ fn check_disconnected(model: &ScryModel) -> Vec<String> {
             .iter()
             .filter(|n| {
                 n.parent_id.as_deref() == Some(parent.id.as_str())
-                    && (n.kind == child_kind
-                        || (child_kind == Kind::Symbol && n.kind == Kind::Schema))
+                    && n.kind == child_kind
             })
             .map(|n| n.id.as_str())
             .collect();
@@ -368,7 +381,6 @@ fn kind_name(k: &Kind) -> &'static str {
         Kind::Container => "container",
         Kind::Component => "component",
         Kind::Symbol => "symbol",
-        Kind::Schema => "schema",
     }
 }
 

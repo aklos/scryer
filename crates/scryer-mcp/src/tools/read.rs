@@ -232,7 +232,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Run the structural validator. Returns a list of warnings: parent-kind mismatches, unknown link endpoints, group members at mixed levels, properties on non-schema nodes, responsibilities on schema nodes. An empty list means the model is structurally clean (does NOT check responsibility quality)."
+        description = "Run the structural validator. Returns a list of warnings: parent-kind mismatches, unknown link endpoints, group members at mixed levels, and source-map entries that reference unknown ids. An empty list means the model is structurally clean (does NOT check responsibility quality)."
     )]
     fn validate_model(
         &self,

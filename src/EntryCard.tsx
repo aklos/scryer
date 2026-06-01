@@ -16,6 +16,7 @@ import type {
   NodeView,
   Responsibility,
 } from "./viewmodel";
+import { isDataShape } from "./viewmodel";
 import type { Span } from "./pack";
 import {
   cardSpan,
@@ -190,8 +191,8 @@ function ViewCard({
   const zoom = useZoom();
   const isPerson = node.kind === "person";
   const isExternal = node.external === true;
-  const isCodeKind = node.kind === "symbol" || node.kind === "schema";
-  const isSchemaKind = node.kind === "schema";
+  const isCodeKind = node.kind === "symbol";
+  const dataShape = isDataShape(node);
   const navigable = node.kind !== "person" && !isCodeKind && !isExternal;
 
   const isDeprecated = node.deprecated === true;
@@ -212,7 +213,7 @@ function ViewCard({
   const incoming = node._incomingLinks;
   const outgoing = node._outgoingLinks;
   const hasLinks =
-    outgoing.length > 0 || (!isSchemaKind && incoming.length > 0);
+    outgoing.length > 0 || (!dataShape && incoming.length > 0);
   const nameClass = isCodeKind
     ? "font-mono font-semibold text-[var(--text)]"
     : "font-semibold text-[var(--text)]";
@@ -221,7 +222,7 @@ function ViewCard({
   const Icon = OverrideIcon ?? tokenIcon(node.id);
 
   const properties = node.properties ?? [];
-  const responsibilities = node.responsibilities;
+  const responsibilities = node.responsibilities ?? [];
 
   // Double-click the body to enter edit mode (matches the user's "no
   // interaction with the card except drag" preference — clicks do nothing,
@@ -367,8 +368,8 @@ function ViewCard({
         </div>
       )}
 
-      {/* schema properties */}
-      {isSchemaKind && properties.length > 0 && (
+      {/* data-shape properties */}
+      {properties.length > 0 && (
         <div
           className="border-t border-[var(--border-subtle)]"
           style={{ padding: `${(RESP_PAD / 2) * zoom}px ${12 * zoom}px` }}
@@ -414,7 +415,7 @@ function ViewCard({
       )}
 
       {/* responsibilities */}
-      {!isSchemaKind && responsibilities.length > 0 && (
+      {responsibilities.length > 0 && (
         <div
           className="border-t border-[var(--border-subtle)]"
           style={{ padding: `${(RESP_PAD / 2) * zoom}px ${12 * zoom}px` }}
@@ -501,7 +502,7 @@ function ViewCard({
               }))}
             />
           )}
-          {!isSchemaKind && incoming.length > 0 && (
+          {!dataShape && incoming.length > 0 && (
             <LinkLine
               direction="in"
               links={incoming.map((l) => ({
@@ -585,16 +586,15 @@ function EditModal({
   const deleteBtnRef = useRef<HTMLButtonElement | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
 
-  const isCodeKind = draft.kind === "symbol" || draft.kind === "schema";
-  const isSchemaKind = draft.kind === "schema";
+  const isCodeKind = draft.kind === "symbol";
   const isPerson = draft.kind === "person";
 
   const OverrideIcon = lookupIcon(draft.icon);
   const Icon = OverrideIcon ?? tokenIcon(node.id);
 
   const validKinds: Kind[] = node.parentId
-    ? node.kind === "symbol" || node.kind === "schema"
-      ? ["symbol", "schema"]
+    ? node.kind === "symbol"
+      ? ["symbol"]
       : [node.kind]
     : ["person", "system"];
 
@@ -608,8 +608,8 @@ function EditModal({
       icon: draft.icon,
       deprecated: draft.deprecated || undefined,
       relocated: draft.relocated || undefined,
-      responsibilities: isSchemaKind ? undefined : draft.responsibilities,
-      properties: isSchemaKind ? draft.properties : undefined,
+      responsibilities: draft.responsibilities,
+      properties: isCodeKind ? draft.properties : undefined,
     };
     // Only include `kind` when it actually changed — `kind` is required, and
     // spreading `kind: undefined` into the node would clobber it.
@@ -903,33 +903,36 @@ function EditModal({
             </div>
           </FieldGroup>
 
-          <FieldGroup>
-            <label className={LABEL_CLASS}>
-              {isSchemaKind ? "Properties" : "Responsibilities"}
-            </label>
-            <div style={{ marginTop: 6 }}>
-              {isSchemaKind ? (
+          {isCodeKind && (
+            <FieldGroup>
+              <label className={LABEL_CLASS}>Properties</label>
+              <div style={{ marginTop: 6 }}>
                 <PropertiesEditor
                   value={draft.properties}
                   onChange={(properties) => setDraft({ ...draft, properties })}
                   onCommit={confirm}
                 />
-              ) : (
-                <ResponsibilitiesEditor
-                  value={draft.responsibilities}
-                  onChange={(responsibilities) =>
-                    setDraft({ ...draft, responsibilities })
-                  }
-                  onCommit={confirm}
-                  nodeId={node.id}
-                  nodeKind={node.kind}
-                  onMoveFrom={(fromNodeId, respId) => {
-                    commitDraft();
-                    editor.moveResponsibility(fromNodeId, node.id, respId);
-                    onExit();
-                  }}
-                />
-              )}
+              </div>
+            </FieldGroup>
+          )}
+
+          <FieldGroup>
+            <label className={LABEL_CLASS}>Responsibilities</label>
+            <div style={{ marginTop: 6 }}>
+              <ResponsibilitiesEditor
+                value={draft.responsibilities}
+                onChange={(responsibilities) =>
+                  setDraft({ ...draft, responsibilities })
+                }
+                onCommit={confirm}
+                nodeId={node.id}
+                nodeKind={node.kind}
+                onMoveFrom={(fromNodeId, respId) => {
+                  commitDraft();
+                  editor.moveResponsibility(fromNodeId, node.id, respId);
+                  onExit();
+                }}
+              />
             </div>
           </FieldGroup>
 

@@ -47,9 +47,9 @@ pub(crate) struct AddNodeItem {
     /// The node's identity in a few words — what it IS as software, NOT a summary of its responsibilities (those are a
     /// separate field). If it reads as a comma-list of the responsibilities, omit it. Optional.
     pub description: Option<String>,
-    /// Node kind: "person", "system", "container", "component", "symbol", or "schema".
+    /// Node kind: "person", "system", "container", "component", or "symbol".
     pub kind: String,
-    /// ID of the parent node. Required for container/component/symbol/schema; omit for person/system.
+    /// ID of the parent node. Required for container/component/symbol; omit for person/system.
     pub parent_id: Option<String>,
     /// Technology label — what the node IS as software (e.g. "Payload 3.0", "PostgreSQL 16"). Not for persons.
     pub technology: Option<String>,
@@ -58,7 +58,8 @@ pub(crate) struct AddNodeItem {
     /// Pure business-responsibility statements — one terse verb-led clause each. Lead with the distinguishing verb + object,
     /// then stop: no mechanism vocabulary, no trailing "by/where/so that" tails, no repeating the obvious domain on every line.
     pub responsibilities: Option<Vec<Responsibility>>,
-    /// Properties (schema-kind nodes only).
+    /// Field declarations, when this symbol defines a data shape (struct, class,
+    /// interface, type). A symbol may carry both responsibilities and properties.
     pub properties: Option<Vec<SchemaProperty>>,
 }
 
@@ -73,7 +74,7 @@ pub(crate) struct AddNodeRequest {
 pub(crate) struct UpdateNodeItem {
     /// ID of the node to update.
     pub node_id: String,
-    /// Node kind: "person", "system", "container", "component", "symbol", or "schema".
+    /// Node kind: "person", "system", "container", "component", or "symbol".
     pub kind: Option<String>,
     pub name: Option<String>,
     pub description: Option<String>,
@@ -81,7 +82,7 @@ pub(crate) struct UpdateNodeItem {
     pub external: Option<bool>,
     /// Full replacement of responsibilities. Pass an empty array to clear.
     pub responsibilities: Option<Vec<Responsibility>>,
-    /// Full replacement of properties (schema-kind nodes only).
+    /// Full replacement of field declarations for a data-shape symbol. Pass an empty array to clear.
     pub properties: Option<Vec<SchemaProperty>>,
     /// Mark node as planned for removal. Set true to deprecate, false to clear.
     pub deprecated: Option<bool>,
@@ -213,8 +214,11 @@ pub(crate) struct UpdateSourceMapRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SetGroupsRequest {
     pub project: Option<String>,
-    /// JSON: a single group object or an array of groups. Each group has id, name, memberIds.
-    /// Optional: description, parentGroupId, responsibilities, cell, size.
+    /// JSON: a single group object or an array of groups. Each group has id, name, and memberIds
+    /// (the node ids it groups — never leave empty). Set `parentNodeId` to the node whose children
+    /// the members are: it anchors the group to that node's level so it renders inside that node's
+    /// diagram (e.g. a deployment group over containers needs parentNodeId set to their parent system).
+    /// Optional: description, parentGroupId (to nest under another group), responsibilities, cell, size.
     pub data: String,
 }
 

@@ -889,7 +889,7 @@ export function Surface({
               parentNodeId === null
                 ? ["person", "system"]
                 : view.altitude === "code"
-                  ? ["symbol", "schema"]
+                  ? ["symbol"]
                   : [childKindFor(parentInferKind(view.altitude))];
             return (
               <ContextMenu

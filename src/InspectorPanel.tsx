@@ -19,10 +19,11 @@ import {
   CircleSlash,
 } from "lucide-react";
 import type { ScryModel, Node, Link, Responsibility } from "./viewmodel";
+import { isDataShape } from "./viewmodel";
 import type { Selection } from "./selection";
 import { STATUS_COLORS } from "./statusColors";
 import { effectiveRespStatus } from "./rollup";
-import { KIND_ICON } from "./kindIcons";
+import { DATA_SHAPE_ICON, KIND_ICON } from "./kindIcons";
 
 interface Segment {
   text: string;
@@ -222,15 +223,16 @@ function NodeInspector({
   onSelectResponsibility: (nodeId: string, respId: string) => void;
   onClose: () => void;
 }) {
-  const Icon = KIND_ICON[node.kind]?.Icon;
   const boundary = model.boundaries?.[node.id] ?? [];
   const responsibilities = node.responsibilities ?? [];
   const sourceMap = model.sourceMap ?? {};
-  const isSchema = node.kind === "schema";
-  // Schema nodes carry properties, not responsibilities; their source mapping
-  // is the type's declaration location, keyed by node id.
-  const definition = isSchema ? sourceMap[node.id] ?? [] : [];
   const properties = node.properties ?? [];
+  const dataShape = isDataShape(node);
+  const eyebrow = dataShape ? DATA_SHAPE_ICON : KIND_ICON[node.kind];
+  const Icon = eyebrow?.Icon;
+  // A symbol that declares a data shape maps its declaration location by node
+  // id (rather than per-responsibility); show it as the type's definition.
+  const definition = properties.length > 0 ? sourceMap[node.id] ?? [] : [];
   const outgoing = model.links.filter((l) => l.src === node.id);
   const incoming = model.links.filter((l) => l.dst === node.id);
   const nameOf = (id: string) => model.nodes.find((n) => n.id === id)?.name ?? id;
@@ -241,7 +243,7 @@ function NodeInspector({
         <div className="min-w-0 flex-1">
           <Eyebrow>
             {Icon && <Icon className="h-3 w-3" />}
-            {node.kind}
+            {dataShape ? "data type" : node.kind}
           </Eyebrow>
           <h2 className="mt-1 truncate text-[15px] font-semibold leading-tight text-[var(--text)]">
             {node.name || "Untitled"}
@@ -262,7 +264,7 @@ function NodeInspector({
           </p>
         )}
 
-        {isSchema && (
+        {properties.length > 0 && (
           <>
             <Group label="Properties" count={properties.length}>
               {properties.length === 0 ? (
@@ -318,7 +320,7 @@ function NodeInspector({
           </>
         )}
 
-        {!isSchema && (
+        {!dataShape && (
         <>
         <Group label="Responsibilities" count={responsibilities.length}>
           {responsibilities.length === 0 ? (

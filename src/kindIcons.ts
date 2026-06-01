@@ -14,5 +14,16 @@ export const KIND_ICON: Record<
   container: { Icon: Package, color: kindColor, label: "Container" },
   component: { Icon: Puzzle,  color: kindColor, label: "Component" },
   symbol:    { Icon: Code,    color: kindColor, label: "Symbol" },
-  schema:    { Icon: Table,   color: kindColor, label: "Schema" },
+};
+
+/**
+ * Visual affordance for a symbol that defines a data shape (carries properties,
+ * no responsibilities). There is no `schema` kind anymore — the distinction is
+ * derived from the node's shape — but a data type still reads better with the
+ * table icon than the generic code glyph.
+ */
+export const DATA_SHAPE_ICON = {
+  Icon: Table,
+  color: kindColor,
+  label: "Data type",
 };

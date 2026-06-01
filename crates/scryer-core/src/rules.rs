@@ -25,14 +25,23 @@ pair of nodes are valid only when they represent independent relationships.\n\
 component of the host container. Group containers that deploy together.\n\
 7. Components map to code structures (classes, modules, packages, folders). Third-party libraries are not components — they're \
 implementation details mentioned in `technology`.\n\
-8. Code level uses only `symbol` and `schema` kinds. A `symbol` is exactly one addressable code definition — a function, \
-method, handler, hook, React component, or class. One symbol node = one definition in the source; its name must be the \
-identifier as it appears in the code. Give each symbol the responsibilities that *that one definition* discharges, and \
-map each responsibility to the specific LINE RANGE that does its work (with the enclosing `symbol` named as anchor and \
-context) — not to the whole symbol. Responsibilities may share an enclosing symbol but point at different line ranges; \
-if two point at the identical range they are one responsibility. Symbols carry no boundary glob (that is a \
-container/component concept). Schema nodes carry `properties` (field \
-declarations) instead of `responsibilities`. **Scoping**: determine parentage from the import/usage graph, not from file co-location. A code-level \
+8. Code level uses only the `symbol` kind. A `symbol` is exactly one addressable code definition — a function, \
+method, handler, hook, React component, class, struct, interface, type, or config object. One symbol node = one \
+definition in the source; its name must be the identifier as it appears in the code. A symbol has two independent \
+facets; most carry one, some carry both:\n\
+   - **responsibilities** — the behavior the definition discharges. Map each to the specific LINE RANGE that does its \
+work (with the enclosing `symbol` named as anchor and context) — not to the whole symbol. Two responsibilities sharing \
+an enclosing symbol must point at different line ranges; if they point at the identical range they are one \
+responsibility.\n\
+   - **properties** — when the definition DECLARES A DATA SHAPE (a struct/class/interface/type, or a config object \
+that defines a field schema), list its fields here: one property per field, each with a status. Map the declaration to \
+the symbol's node id via the `schemas` source array (not `entries`).\n\
+   NEVER describe a data shape in a responsibility statement. \"Defines the lead record schema with status, qualification, \
+and booking fields\" is WRONG — that prose belongs nowhere; enumerate `status`, `qualification`, `booking`, … as actual \
+`properties`. A config object that both wires behavior and declares fields (e.g. an ORM/CMS collection that registers \
+admin UI and lifecycle hooks AND defines the record's fields) gets BOTH facets: behavioral responsibilities for the \
+hooks/UI, and a property per declared field. A pure data type carries only properties. Symbols carry no boundary glob \
+(that is a container/component concept). **Scoping**: determine parentage from the import/usage graph, not from file co-location. A code-level \
 node belongs to whichever component actually consumes it. If multiple components import the same code, parent it to the \
 one that owns/defines it and add links from the others — the cross-boundary dependency is valuable signal.\n\
 9. External systems (`external: true`) are opaque, no children. Any responsibilities listed on an external are read \
@@ -43,11 +52,11 @@ as expectations of that external, not commitments by your system.\n\
 12. `technology` is node identity (\"Payload 3.0\", \"PostgreSQL 16\", \"S3 Bucket\"). Separate from `directives` on \
 responsibilities, which are user-authored constraints prescribing how a responsibility must be discharged — never set by the \
 agent. Do not put technology vocabulary inside responsibility statements.\n\
-13. Status lives on responsibilities (and on schema `properties`), not nodes. Values: `proposed` (planned, no code yet), `implemented` (code exists), \
+13. Status lives on responsibilities and on `properties`, not nodes. Values: `proposed` (planned, no code yet), `implemented` (code exists), \
 `verified` (production-ready, checked against code), `changed` (spec was modified after implementation — needs re-implementation). \
 Lifecycle: proposed → implemented → verified. Editing a responsibility's statement or directives while status is \
 `implemented` or `verified` flips it to `changed`. After re-implementation, `changed` returns to `implemented`. \
-A node's lifecycle is the aggregate of its responsibilities — or, for a schema node, of its properties. Always set status explicitly on each responsibility and each property.\n\
+A node's lifecycle is the aggregate of its responsibilities and properties. Always set status explicitly on each responsibility and each property.\n\
 14. The `vagrant` flag (separate from status) marks responsibilities discovered in code that no upstream commitment justifies. \
 A vagrant responsibility is always added by automation with `status: implemented, vagrant: true`. The user adopts it (clear \
 the flag) or rejects it (delete it, signaling the agent to remove the code).\n\

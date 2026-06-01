@@ -98,7 +98,6 @@ function altitudeForKind(kind: Kind): Altitude {
     case "component":
       return "component";
     case "symbol":
-    case "schema":
       return "code";
   }
 }

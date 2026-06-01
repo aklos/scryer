@@ -83,7 +83,7 @@ export interface ThemeConfig {
   blue: PaletteName;
   /** Implemented status, process kind, success toast (default: emerald) */
   emerald: PaletteName;
-  /** Changed status, schema kind, warning (default: amber) */
+  /** Changed status, warning (default: amber) */
   amber: PaletteName;
   /** Deprecated status, danger, error (default: red) */
   red: PaletteName;
@@ -117,7 +117,7 @@ export const THEME_ROLES: { key: PaletteRole; label: string; description: string
   { key: "slate",   label: "Structural",  description: "System kind, edges",                        palettes: ALL_PALETTE_NAMES },
   { key: "blue",    label: "Accent",      description: "Buttons, selection, proposed status",        palettes: CHROMATIC_PALETTES },
   { key: "emerald", label: "Success",     description: "Implemented status, process kind",           palettes: CHROMATIC_PALETTES },
-  { key: "amber",   label: "Warning",     description: "Changed status, schema kind",                palettes: CHROMATIC_PALETTES },
+  { key: "amber",   label: "Warning",     description: "Changed status",                             palettes: CHROMATIC_PALETTES },
   { key: "red",     label: "Danger",      description: "Deprecated status, errors",                  palettes: CHROMATIC_PALETTES },
   { key: "violet",  label: "Secondary",   description: "Component kind, accent alt",                 palettes: CHROMATIC_PALETTES },
   { key: "indigo",  label: "Tertiary",    description: "Secondary buttons, focus rings",             palettes: CHROMATIC_PALETTES },

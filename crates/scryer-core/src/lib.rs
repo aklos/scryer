@@ -19,9 +19,12 @@ pub enum Kind {
     Container,
     Component,
     /// A single addressable code definition — function, method, handler, hook,
-    /// React component, class. One leaf = one symbol.
+    /// React component, class, struct, interface, or type. One leaf = one
+    /// symbol. A symbol may discharge responsibilities, declare a data shape
+    /// (via `properties`), or both. A pure data type is a symbol that carries
+    /// only properties.
+    #[serde(alias = "schema")]
     Symbol,
-    Schema,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
@@ -138,7 +141,8 @@ pub struct Node {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub responsibilities: Vec<Responsibility>,
-    /// Properties for `Schema`-kind nodes.
+    /// Field declarations, when this symbol defines a data shape (struct,
+    /// class, interface, type). Empty for behavior-only symbols.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<SchemaProperty>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -577,4 +581,45 @@ pub fn write_subagent_settings(settings: &SubagentSettings) -> Result<(), String
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
     fs::write(settings_path(), json).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Legacy `.scry` files written before the schema/symbol merge stored data
+    /// shapes as `"kind":"schema"`. The serde alias must load them as symbols
+    /// with their properties intact — there is no migration step.
+    #[test]
+    fn legacy_schema_kind_loads_as_symbol() {
+        let json = r#"{
+            "id": "n1",
+            "kind": "schema",
+            "name": "LeadData",
+            "properties": [{ "label": "phone", "status": "implemented" }]
+        }"#;
+        let node: Node = serde_json::from_str(json).unwrap();
+        assert_eq!(node.kind, Kind::Symbol);
+        assert_eq!(node.properties.len(), 1);
+        assert_eq!(node.properties[0].label, "phone");
+        // And it re-serializes under the canonical name.
+        let out = serde_json::to_string(&node).unwrap();
+        assert!(out.contains("\"kind\":\"symbol\""));
+        assert!(!out.contains("schema"));
+    }
+
+    #[test]
+    fn symbol_carries_both_responsibilities_and_properties() {
+        let json = r#"{
+            "id": "n2",
+            "kind": "symbol",
+            "name": "Projects",
+            "responsibilities": [{ "id": "r1", "statement": "configures projects" }],
+            "properties": [{ "label": "odooMapping" }]
+        }"#;
+        let node: Node = serde_json::from_str(json).unwrap();
+        assert_eq!(node.kind, Kind::Symbol);
+        assert_eq!(node.responsibilities.len(), 1);
+        assert_eq!(node.properties.len(), 1);
+    }
 }

@@ -25,6 +25,7 @@ import {
   type NodeView,
   type ScryModel,
   type SurfaceView,
+  isDataShape,
 } from "./viewmodel";
 
 export const CELL_W = 160;
@@ -93,26 +94,24 @@ export function cardHeightPx(node: NodeView, cardW = 2): number {
   const n = nodeRespCount(node);
   const respCpl = Math.max(1, Math.floor((innerW - 14) / CHAR_W));
   let bodyLines = 0;
-  if (node.kind === "schema") {
-    for (const p of node.properties ?? []) {
-      const text = p.description ? `${p.label} ${p.description}` : p.label;
-      bodyLines += Math.max(1, Math.ceil(text.length / respCpl));
-    }
-  } else {
-    for (const r of node.responsibilities ?? []) {
-      bodyLines += Math.max(1, Math.ceil((r.statement?.length || 1) / respCpl));
-      for (const rule of r.directives ?? []) {
-        bodyLines += Math.max(1, Math.ceil(rule.length / respCpl)) * (IMPL_LINE_H / RESP_LINE_H);
-      }
-    }
-    if (n > 0 && bodyLines === 0) bodyLines = 1;
+  // Properties and responsibilities can coexist on one symbol; both contribute.
+  for (const p of node.properties ?? []) {
+    const text = p.description ? `${p.label} ${p.description}` : p.label;
+    bodyLines += Math.max(1, Math.ceil(text.length / respCpl));
   }
+  for (const r of node.responsibilities ?? []) {
+    bodyLines += Math.max(1, Math.ceil((r.statement?.length || 1) / respCpl));
+    for (const rule of r.directives ?? []) {
+      bodyLines += Math.max(1, Math.ceil(rule.length / respCpl)) * (IMPL_LINE_H / RESP_LINE_H);
+    }
+  }
+  if (n > 0 && bodyLines === 0) bodyLines = 1;
   const outgoing = nodeOutgoingCount(node);
   const incoming = node._incomingLinks.length;
   const linksPerRow = Math.max(1, Math.floor(innerW / 70));
   const outRows = outgoing > 0 ? Math.ceil(outgoing / linksPerRow) : 0;
   const inRows =
-    node.kind === "schema" || incoming === 0
+    isDataShape(node) || incoming === 0
       ? 0
       : Math.ceil(incoming / linksPerRow);
   const linkRows = outRows + inRows;
@@ -126,7 +125,7 @@ export function cardHeightPx(node: NodeView, cardW = 2): number {
 }
 
 export function cardWidthCells(node: NodeView): number {
-  if (node.kind === "symbol" || node.kind === "schema") return 2;
+  if (node.kind === "symbol") return 2;
   return Math.min(MAX_CARD_W, Math.max(2, (nodeRespCount(node) >= 3 ? 2 : 1) * 2));
 }
 

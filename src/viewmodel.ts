@@ -23,8 +23,7 @@ export type Kind =
   | "system"
   | "container"
   | "component"
-  | "symbol"
-  | "schema";
+  | "symbol";
 
 export type Altitude = "system" | "container" | "component" | "code";
 
@@ -89,7 +88,7 @@ export interface Node {
   /** 1–2 sentence prose about what this node is. */
   description?: string;
   responsibilities?: Responsibility[];
-  /** Model-kind nodes only. */
+  /** Field declarations, when this symbol defines a data shape. */
   properties?: SchemaProperty[];
   cell?: Cell;
   /** Optional lucide-react icon name override (frontend-only). */
@@ -186,11 +185,27 @@ const ALTITUDE_FOR_PARENT: Record<Kind | "root", Altitude> = {
   system: "container",
   container: "component",
   component: "code",
-  // symbol / schema don't have children — no SurfaceView altitude.
+  // symbols don't have children — no SurfaceView altitude.
   person: "system",
   symbol: "code",
-  schema: "code",
 };
+
+/**
+ * A symbol that defines a data type — it declares fields and discharges no
+ * behavior. Renders with the table affordance and (like the former `schema`
+ * kind) hides its incoming links, which are typically too numerous to be
+ * useful. A symbol carrying both properties and responsibilities is not a pure
+ * data shape and renders as a normal code node.
+ */
+export function isDataShape(node: {
+  properties?: SchemaProperty[];
+  responsibilities?: Responsibility[];
+}): boolean {
+  return (
+    (node.properties?.length ?? 0) > 0 &&
+    (node.responsibilities?.length ?? 0) === 0
+  );
+}
 
 export function altitudeFor(parentKind: Kind | "root"): Altitude {
   return ALTITUDE_FOR_PARENT[parentKind];

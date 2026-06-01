@@ -29,11 +29,11 @@ pub(crate) fn parse_kind(s: &str) -> Result<Kind, McpError> {
         "system" => Ok(Kind::System),
         "container" => Ok(Kind::Container),
         "component" => Ok(Kind::Component),
-        "symbol" => Ok(Kind::Symbol),
-        "schema" => Ok(Kind::Schema),
+        // "schema" is the legacy name for a symbol that carries only properties.
+        "symbol" | "schema" => Ok(Kind::Symbol),
         _ => Err(McpError::invalid_params(
             format!(
-                "Invalid kind '{}'. Must be: person, system, container, component, symbol, schema",
+                "Invalid kind '{}'. Must be: person, system, container, component, symbol",
                 s
             ),
             None,
@@ -48,7 +48,6 @@ pub(crate) fn kind_str(k: &Kind) -> &'static str {
         Kind::Container => "container",
         Kind::Component => "component",
         Kind::Symbol => "symbol",
-        Kind::Schema => "schema",
     }
 }
 

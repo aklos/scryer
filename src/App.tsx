@@ -123,7 +123,7 @@ function Canvas({
   const handleNavigate = useCallback((nodeId: string) => {
     const node = modelRef.current.nodes.find((n) => n.id === nodeId);
     if (!node) return;
-    if (node.kind === "symbol" || node.kind === "schema" || node.kind === "person") return;
+    if (node.kind === "symbol" || node.kind === "person") return;
     setSelection(null);
     setPath((p) => (p[p.length - 1] === nodeId ? p : [...p, nodeId]));
   }, []);
