@@ -54,7 +54,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Read one node and its subtree. Returns the target node, all its descendants, internal links among them, and external links to nodes outside the subtree (with the external nodes' names + kinds for context). Includes the code-side mapping for the subtree: `sourceMap` (line-precise locations keyed by responsibility id, plus schema-node declaration locations keyed by node id) and `boundaries` (globs keyed by node id)."
+        description = "Read one node and its subtree. Returns the target node, all its descendants, internal links among them, and external links to nodes outside the subtree (with the external nodes' names + kinds for context). `referencesForChildren` lists the partners of THIS node's own links — the only nodes its children may link to, since relationships connect nodes at the same level (a child links to an external/sibling only if this node already does). Includes the code-side mapping for the subtree: `sourceMap` (line-precise locations keyed by responsibility id, plus schema-node declaration locations keyed by node id) and `boundaries` (globs keyed by node id)."
     )]
     fn get_node(
         &self,
@@ -161,12 +161,39 @@ impl ScryerServer {
             .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap_or(serde_json::Value::Null)))
             .collect();
 
+        // References available to this node's children: the partners of the
+        // node's OWN links. Because links are same-level, a child may only link
+        // to a node this node already links to — these are exactly that set, so
+        // the agent knows what its components/containers are allowed to wire to.
+        let references_for_children: Vec<serde_json::Value> = model
+            .links
+            .iter()
+            .filter_map(|l| {
+                let (other, direction) = if l.src == req.node_id {
+                    (&l.dst, "outgoing")
+                } else if l.dst == req.node_id {
+                    (&l.src, "incoming")
+                } else {
+                    return None;
+                };
+                let n = model.nodes.iter().find(|n| &n.id == other)?;
+                Some(serde_json::json!({
+                    "id": n.id,
+                    "name": n.name,
+                    "kind": kind_str(&n.kind),
+                    "direction": direction,
+                    "label": l.label,
+                }))
+            })
+            .collect();
+
         let mut payload = serde_json::json!({
             "node": subtree_nodes.iter().find(|n| n.id == req.node_id),
             "descendants": subtree_nodes.iter().filter(|n| n.id != req.node_id).collect::<Vec<_>>(),
             "internalLinks": internal_links,
             "externalLinks": external_links,
             "contextNodes": context_nodes,
+            "referencesForChildren": references_for_children,
             "sourceMap": source_map,
             "boundaries": boundaries,
         });

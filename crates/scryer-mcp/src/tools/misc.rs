@@ -19,6 +19,10 @@ impl ScryerServer {
         Parameters(req): Parameters<UpdateSourceMapRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
         let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
@@ -111,6 +115,10 @@ impl ScryerServer {
         Parameters(req): Parameters<SetGroupsRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
         let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
@@ -193,6 +201,10 @@ impl ScryerServer {
         Parameters(req): Parameters<DeleteGroupRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
         let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {

@@ -12,13 +12,17 @@ use std::collections::HashSet;
 #[tool_router(router = tool_router_links, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "Add one or more links between nodes. Direction is from initiator/requester (src) to provider/dependency (dst). Returns the assigned link IDs. Rejects links with missing endpoints or self-loops."
+        description = "Add one or more links between nodes. Direction is from initiator/requester (src) to provider/dependency (dst). Returns the assigned link IDs. Relationships connect nodes at the SAME C4 level: src and dst must be siblings (same parent), or the deeper node's parent must already link to the other node (so it shows as a reference on that surface) — otherwise the link is rejected with guidance. The whole batch is rejected if any link is illegal, so order parent-level links before the child-level links that depend on them. Also rejects missing endpoints, self-loops, and links between an ancestor and its descendant."
     )]
     fn add_links(
         &self,
         Parameters(req): Parameters<AddLinkRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
         let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
@@ -63,6 +67,26 @@ impl ScryerServer {
             added.push(id);
         }
 
+        // Enforce the same-level / reference rule with every new link present,
+        // so a batch may add a parent-level link and the child-level link that
+        // depends on it together (order within the batch doesn't matter). Any
+        // illegal link rejects the whole batch — nothing is written.
+        let violations: Vec<String> = req
+            .links
+            .iter()
+            .filter_map(|item| {
+                scryer_core::validate::link_violation(&model, &item.src, &item.dst)
+                    .map(|v| scryer_core::validate::describe_violation(&model, &item.src, &item.dst, &v))
+            })
+            .collect();
+        if !violations.is_empty() {
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "No links added — {} rejected:\n{}",
+                violations.len(),
+                violations.join("\n")
+            ))]));
+        }
+
         if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
@@ -83,6 +107,10 @@ impl ScryerServer {
         Parameters(req): Parameters<UpdateLinkRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
         let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
@@ -129,6 +157,10 @@ impl ScryerServer {
         Parameters(req): Parameters<DeleteLinkRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
         let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {

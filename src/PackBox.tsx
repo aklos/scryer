@@ -116,8 +116,8 @@ function GroupOverlay({
           left, top, width, height,
           zIndex: resizing ? 10 : depth,
           opacity,
-          border: `${1.5 * zoom}px solid ${resizing ? "var(--text-secondary)" : "var(--text-muted)"}`,
-          backgroundColor: `color-mix(in srgb, black ${14 + depth * 8}%, transparent)`,
+          border: `${1.5 * zoom}px solid ${resizing ? "var(--text-secondary)" : "var(--text-tertiary)"}`,
+          backgroundColor: `rgba(var(--group-fill), calc(var(--group-fill-a) * ${1 + depth * 1.5}))`,
           borderRadius: 12 * zoom,
           pointerEvents: "none",
           transition: "border-color 0.15s",
@@ -141,7 +141,7 @@ function GroupOverlay({
           borderRadius: `${12 * zoom}px ${12 * zoom}px 0 0`,
           overflow: "hidden",
           fontSize: 12 * zoom,
-          backgroundColor: `color-mix(in srgb, black ${10 + depth * 6}%, transparent)`,
+          backgroundColor: `rgba(var(--group-fill), calc(var(--group-fill-a) * ${1.4 + depth}))`,
           borderBottom: `${1 * zoom}px solid color-mix(in srgb, var(--text-muted) 25%, transparent)`,
         }}
       >
@@ -276,7 +276,7 @@ function GroupOverlay({
             height,
             zIndex: 10,
             borderRadius: `0 ${12 * zoom}px ${12 * zoom}px 0`,
-            backgroundColor: "var(--color-red-500)",
+            backgroundColor: "var(--accent-red)",
             opacity: 0.7,
             pointerEvents: "none",
             transition: "opacity 0.15s",
@@ -294,7 +294,7 @@ function GroupOverlay({
             height: 3 * zoom,
             zIndex: 10,
             borderRadius: `0 0 ${12 * zoom}px ${12 * zoom}px`,
-            backgroundColor: "var(--color-red-500)",
+            backgroundColor: "var(--accent-red)",
             opacity: 0.7,
             pointerEvents: "none",
             transition: "opacity 0.15s",
@@ -489,8 +489,7 @@ function EditGroupModal({
             opacity: backdropOn ? 0.55 : 0,
             transition: `opacity ${FLIP_MS}ms ease-out`,
             borderRadius: `${12 * sourceZoom}px ${12 * sourceZoom}px 0 0`,
-            boxShadow:
-              "0 0 0 2px var(--text-secondary), 0 0 0 6px rgba(255,255,255,0.05), 0 0 36px 4px rgba(255,255,255,0.12)",
+            boxShadow: `0 0 0 ${2 * sourceZoom}px var(--text-secondary), 0 ${8 * sourceZoom}px ${24 * sourceZoom}px rgba(var(--focus-halo), var(--focus-halo-a))`,
           }}
         />
       )}
@@ -722,6 +721,8 @@ export function PackBox({
   measuredSpans,
   onMeasure,
   onAutoLayout,
+  generating = false,
+  selectedNodeId = null,
 }: {
   view: SurfaceView;
   highlight?: GridHighlight | null;
@@ -735,6 +736,10 @@ export function PackBox({
   measuredSpans: ReadonlyMap<string, Span>;
   onMeasure?: (spans: Map<string, Span>) => void;
   onAutoLayout?: (measured: ReadonlyMap<string, Span>) => void;
+  /** The AI is generating this level's contents — pulse the innermost ring. */
+  generating?: boolean;
+  /** Selected node id — perimeter refs highlight when they're the selection. */
+  selectedNodeId?: string | null;
 }) {
   const zoom = useZoom();
   const cellW = CELL_W * zoom;
@@ -974,6 +979,7 @@ export function PackBox({
           <PerimeterNode
             key={ce.node.id}
             node={ce.node}
+            selected={ce.node.id === selectedNodeId}
             variant={
               ce.node.kind === "person"
                 ? "person"
@@ -986,6 +992,7 @@ export function PackBox({
         return (
           <div
             key={`ring-${i}`}
+            className={isInnermost && generating ? "scryer-building" : undefined}
             style={{
               position: "absolute",
               left: -padLeft,
@@ -996,8 +1003,15 @@ export function PackBox({
               border: `${zoom}px ${isInnermost ? "solid" : "dashed"} ${
                 isInnermost ? "var(--border)" : "var(--border-subtle)"
               }`,
+              // Width for the `scryer-building` pulsing ring (scales with zoom).
+              ["--ring-w" as string]: `${2.5 * zoom}px`,
+              // The frame itself never intercepts (pointer-events:none); the ref
+              // lanes inside re-enable pointer-events. Kept at z:0 (not -1) so the
+              // lanes sit ABOVE the full-width wrapper div and are clickable —
+              // a negative-z descendant renders behind its own ancestor's box,
+              // which was swallowing every ref click in the side bands.
               pointerEvents: "none",
-              zIndex: -1,
+              zIndex: 0,
             }}
           >
             <span
@@ -1127,11 +1141,11 @@ export function PackBox({
               pointerEvents: "none",
               zIndex: 20,
               border: `${2 * zoom}px solid ${
-                highlight.valid ? "rgb(52 211 153)" : "rgb(248 113 113)"
+                highlight.valid ? "var(--accent-emerald)" : "var(--accent-red)"
               }`,
               background: highlight.valid
-                ? "rgb(52 211 153 / 0.15)"
-                : "rgb(248 113 113 / 0.15)",
+                ? "color-mix(in srgb, var(--accent-emerald) 15%, transparent)"
+                : "color-mix(in srgb, var(--accent-red) 15%, transparent)",
             }}
           />
         );

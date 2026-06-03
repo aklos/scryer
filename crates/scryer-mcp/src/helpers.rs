@@ -1,6 +1,18 @@
+use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
-use scryer_core::{Cell, Group, GroupSize, Kind, Link, ModelRef, Node, Responsibility, ScryModel};
+use scryer_core::{
+    Cell, Group, GroupSize, Kind, Link, ModelLock, ModelRef, Node, Responsibility, SchemaProperty,
+    ScryModel,
+};
 use std::collections::HashMap;
+
+/// Acquire the exclusive model write lock, or return an error result to surface
+/// to the agent. Hold the returned guard for the whole read-modify-write of a
+/// write tool so concurrent writers (parallel sessions, the canvas) serialize.
+pub(crate) fn lock_or_err(model_ref: &ModelRef) -> Result<ModelLock, CallToolResult> {
+    scryer_core::lock_model(model_ref)
+        .map_err(|e| CallToolResult::error(vec![Content::text(e)]))
+}
 
 /// Strip empty values from a JSON tree to keep MCP responses compact.
 pub(crate) fn strip_fields_compact(val: &mut serde_json::Value) {
@@ -193,7 +205,7 @@ pub(crate) fn compute_diff(baseline: &ScryModel, current: &ScryModel) -> String 
                     curr.responsibilities.len()
                 ));
             }
-            if base.properties != curr.properties {
+            if properties_changed(&base.properties, &curr.properties) {
                 changes.push(format!(
                     "properties {} -> {}",
                     base.properties.len(),
@@ -418,6 +430,18 @@ pub(crate) fn enforce_readonly_layout(model: &mut ScryModel, prior: &ScryModel) 
     }
 }
 
+/// Truth-only property comparison for the diff: ignores `last_touched_at` (the
+/// fossilization clock) so a re-dated-but-unchanged property never reads as a
+/// content change.
+fn properties_changed(a: &[SchemaProperty], b: &[SchemaProperty]) -> bool {
+    if a.len() != b.len() {
+        return true;
+    }
+    a.iter().zip(b.iter()).any(|(pa, pb)| {
+        pa.label != pb.label || pa.description != pb.description || pa.status != pb.status
+    })
+}
+
 fn responsibilities_changed(a: &[Responsibility], b: &[Responsibility]) -> bool {
     if a.len() != b.len() {
         return true;
@@ -427,6 +451,9 @@ fn responsibilities_changed(a: &[Responsibility], b: &[Responsibility]) -> bool 
             || ra.statement != rb.statement
             || ra.status != rb.status
             || ra.vagrant != rb.vagrant
+            || ra.locked != rb.locked
+            || ra.relocated_to != rb.relocated_to
+            || ra.relocated_from != rb.relocated_from
             || ra.directives != rb.directives
         {
             return true;

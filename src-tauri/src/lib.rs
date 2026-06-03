@@ -44,7 +44,17 @@ fn ensure_full_path() {
 }
 
 /// Managed state for the ACP runtime (agent orchestration).
-struct AcpState(Mutex<Option<scryer_acp::AcpRuntime>>);
+///
+/// The `AtomicBool` is a build-scoped cancel flag set DIRECTLY by
+/// `cancel_agent_session` (not only via the runtime). Orchestrators reset it at
+/// start and check it at every wave/scope boundary, so a "stop" pressed in a
+/// no-session gap — or just before a queued parallel session starts — is still
+/// honored. Without it, cancellation is edge-triggered on live sessions and gets
+/// silently lost in those gaps.
+struct AcpState(
+    Mutex<Option<scryer_acp::AcpRuntime>>,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+);
 
 /// Managed state for the file watcher — only the active project is watched.
 struct WatcherState {
@@ -127,6 +137,9 @@ fn read_model(ref_str: String) -> Result<String, String> {
 #[tauri::command]
 fn write_model(ref_str: String, data: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
+    // Serialize against agent (MCP) writes so a canvas save and a concurrent
+    // model edit can't clobber each other mid read-modify-write.
+    let _lock = scryer_core::lock_model(&model_ref)?;
     scryer_core::write_model_raw_at(&model_ref, &data)
 }
 
@@ -647,9 +660,29 @@ fn create_blank_model(project_path: String) -> Result<String, String> {
         ));
     }
     let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
+    let _lock = scryer_core::lock_model(&model_ref)?;
     let model = scryer_core::ScryModel::new();
     scryer_core::write_model_at(&model_ref, &model)?;
     Ok(model_ref.to_ref_string())
+}
+
+/// Run the deterministic, parser-only extractor over the codebase and return
+/// its CONTEXT map (containers + per-file symbol index + dependency graph). No
+/// AI agent is involved and NOTHING is persisted — this is the map the modeling
+/// orchestrator slices per scope and hands to each subagent, never a model on
+/// disk. The first write to `model.scry` is the agent's first enriched node.
+#[tauri::command]
+fn get_codebase_context(
+    project_path: String,
+) -> Result<scryer_extract::ProjectContext, String> {
+    let project = std::path::Path::new(&project_path);
+    if !project.is_dir() {
+        return Err(format!(
+            "Project path does not exist or is not a directory: {}",
+            project_path
+        ));
+    }
+    scryer_extract::extract_context(project)
 }
 
 #[tauri::command]
@@ -795,16 +828,781 @@ async fn start_node_fill_session(
         .await
 }
 
+/// Fast semantic pass: enrich an already-structured subtree (the deterministic
+/// extractor built the structure; this adds the meaning). Mirrors
+/// `start_node_fill_session` but uses the enrich-only prompt.
+#[tauri::command]
+async fn start_enrich_session(
+    cwd: String,
+    model_ref: String,
+    node_id: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AcpState>,
+) -> Result<String, String> {
+    let mcp_binary = find_scryer_mcp()
+        .ok_or("scryer-mcp binary not found")?;
+
+    let settings = scryer_core::read_subagent_settings();
+    let launch = scryer_acp::detect_available_agent_pref(&settings.agent)
+        .ok_or("No AI agent found. Install Claude Code or Codex first.")?;
+
+    let parsed_ref = scryer_core::ModelRef::parse(&model_ref)?;
+    let model = scryer_core::read_model_at(&parsed_ref)?;
+    let node = model
+        .nodes
+        .iter()
+        .find(|n| n.id == node_id)
+        .ok_or_else(|| format!("Node '{}' not found in model", node_id))?;
+    let node_name = node.name.clone();
+    let node_kind = serde_json::to_value(node.kind)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default();
+
+    let model_json = scryer_acp::prompt::serialize_model_for_prompt(&model);
+    let prompt = scryer_acp::prompt::enrich_subtree_prompt(
+        &cwd, &node_id, &node_name, &node_kind, &model_json,
+    );
+    let (model_name, effort) = config_for_launch(&settings, &launch);
+
+    let runtime = {
+        let mut rt = state.0.lock().unwrap();
+        if rt.is_none() {
+            *rt = Some(scryer_acp::AcpRuntime::new());
+        }
+        rt.clone().unwrap()
+    };
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let handle = app.clone();
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            let _ = handle.emit("agent-event", &event);
+        }
+    });
+
+    let (agent_binary, mode) = match launch {
+        scryer_acp::AgentLaunch::Cli { binary, kind } => {
+            (binary, scryer_acp::runtime::LaunchMode::Cli { kind })
+        }
+        scryer_acp::AgentLaunch::Acp { binary } => {
+            (binary, scryer_acp::runtime::LaunchMode::Acp)
+        }
+    };
+
+    runtime
+        .start_session(agent_binary, mode, cwd, model_name, effort, mcp_binary, prompt, event_tx)
+        .await
+}
+
 #[tauri::command]
 async fn cancel_agent_session(
     state: tauri::State<'_, AcpState>,
 ) -> Result<(), String> {
+    // Set the durable cancel flag FIRST so orchestrators stop launching new
+    // sessions even if the runtime currently has none (a wave gap) or a queued
+    // session is about to start. Then best-effort kill any live sessions.
+    state.1.store(true, std::sync::atomic::Ordering::SeqCst);
     let runtime = {
         let rt = state.0.lock().unwrap();
-        rt.clone().ok_or("ACP runtime not initialized")?
+        rt.clone()
     };
-    runtime.cancel().await?;
+    if let Some(runtime) = runtime {
+        let _ = runtime.cancel().await;
+    }
     Ok(())
+}
+
+/// Map a Container node back to the project-relative directory it owns, so its
+/// per-container code context can be sliced. Prefers the boundary glob the agent
+/// set from `boundaryDir` (validated against the real container dirs), and falls
+/// back to matching the node name against the context's container facts (which
+/// covers the root container, whose empty dir carries no boundary glob).
+fn derive_container_dir(
+    node: &scryer_core::Node,
+    model: &scryer_core::ScryModel,
+    ctx: &scryer_extract::ProjectContext,
+) -> Option<String> {
+    if let Some(sources) = model.boundaries.get(&node.id) {
+        if let Some(s) = sources.first() {
+            let dir = s
+                .pattern
+                .trim_end_matches("/**/*")
+                .trim_end_matches("/**")
+                .trim_end_matches("/*")
+                .to_string();
+            if ctx.containers.iter().any(|c| c.dir == dir) {
+                return Some(dir);
+            }
+        }
+    }
+    ctx.containers
+        .iter()
+        .find(|c| c.name == node.name)
+        .map(|c| c.dir.clone())
+}
+
+/// Pair every deterministic-context container that actually has code to the
+/// model Container node the agent created for it, so Wave 2 covers all of them.
+///
+/// The fragile case is the project ROOT unit (empty `dir`): [`add_container`]
+/// only records a boundary glob for non-empty dirs, so the root node has no glob
+/// to round-trip and `name`-matching is unreliable (it often collides with the
+/// system's name). So: non-empty dirs match by glob (then exact name) and are
+/// CONSUMED — even code-less units like a DB image — and the single empty-dir
+/// root then claims whatever model container is left unmatched. Returns the
+/// `(node_id, name, dir)` triples to model, plus the labels of any codeful
+/// container that could NOT be paired, so the caller surfaces them rather than
+/// silently dropping coverage.
+fn map_codeful_containers(
+    model: &scryer_core::ScryModel,
+    ctx: &scryer_extract::ProjectContext,
+) -> (Vec<(String, String, String)>, Vec<String>) {
+    use std::collections::HashSet;
+    let nodes: Vec<&scryer_core::Node> = model
+        .nodes
+        .iter()
+        .filter(|n| n.kind == scryer_core::Kind::Container && n.external != Some(true))
+        .collect();
+
+    // The boundary-glob directory a node round-trips to, if it carries one.
+    let node_dir = |n: &scryer_core::Node| -> Option<String> {
+        model.boundaries.get(&n.id).and_then(|s| s.first()).map(|s| {
+            s.pattern
+                .trim_end_matches("/**/*")
+                .trim_end_matches("/**")
+                .trim_end_matches("/*")
+                .to_string()
+        })
+    };
+
+    let mut used: HashSet<String> = HashSet::new();
+    let mut by_dir: Vec<(String, String)> = Vec::new(); // (dir, node_id)
+
+    // 1. Non-empty dirs: glob match, then exact-name fallback. Consume the node
+    //    even for code-less units so they can't be mistaken for the root below.
+    for c in ctx.containers.iter().filter(|c| !c.dir.is_empty()) {
+        let pick = nodes
+            .iter()
+            .find(|n| !used.contains(&n.id) && node_dir(n).as_deref() == Some(c.dir.as_str()))
+            .or_else(|| nodes.iter().find(|n| !used.contains(&n.id) && n.name == c.name));
+        if let Some(n) = pick {
+            used.insert(n.id.clone());
+            by_dir.push((c.dir.clone(), n.id.clone()));
+        }
+    }
+
+    // 2. The root unit (empty dir) carries no glob — give it the one model
+    //    container still unclaimed, when exactly one remains (unambiguous).
+    if ctx.containers.iter().any(|c| c.dir.is_empty()) {
+        let remaining: Vec<&scryer_core::Node> =
+            nodes.iter().copied().filter(|n| !used.contains(&n.id)).collect();
+        if let [only] = remaining.as_slice() {
+            used.insert(only.id.clone());
+            by_dir.push((String::new(), only.id.clone()));
+        }
+    }
+
+    // 3. Emit the modeling list for containers that actually have code; report
+    //    any codeful container we couldn't pair.
+    let mut mapped = Vec::new();
+    let mut unmapped = Vec::new();
+    for c in &ctx.containers {
+        if scryer_extract::slice_container(ctx, &c.dir).files.is_empty() {
+            continue; // nothing to model (e.g. a database image)
+        }
+        match by_dir.iter().find(|(d, _)| d == &c.dir) {
+            Some((_, node_id)) => {
+                let name = nodes
+                    .iter()
+                    .find(|n| &n.id == node_id)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_default();
+                mapped.push((node_id.clone(), name, c.dir.clone()));
+            }
+            None => unmapped.push(if c.name.is_empty() {
+                format!("'{}'", c.dir)
+            } else {
+                c.name.clone()
+            }),
+        }
+    }
+    (mapped, unmapped)
+}
+
+/// Render token usage for a one-line debug log. Leads with the "fresh" tokens
+/// (input + output + cache-write) and breaks out cache-read separately — a flat
+/// sum is avoided on purpose: cache-read is re-read every turn and bills at 0.1×,
+/// so it dwarfs the other buckets in raw count while costing almost nothing.
+///
+/// The dollar figure is shown ONLY as an "API-equiv" aside. It is `total_cost_usd`
+/// straight from the CLI, which is the public pay-as-you-go list price for these
+/// tokens — NOT what a subscription (Max/Pro) draws. On a subscription nothing is
+/// billed per build; real usage is metered server-side as the session/weekly %
+/// the account dashboard shows, and that number is not available here. The
+/// list-price figure is still useful: it moves proportionally with the
+/// subscription draw, so it's a relative gauge between builds — just not dollars.
+fn fmt_usage(u: &scryer_acp::Usage) -> String {
+    let fresh = u.input_tokens + u.output_tokens + u.cache_creation_input_tokens;
+    let breakdown = format!(
+        "in {} / out {} / cache-write {} / cache-read {}",
+        u.input_tokens, u.output_tokens, u.cache_creation_input_tokens, u.cache_read_input_tokens,
+    );
+    if u.cost_usd > 0.0 {
+        format!("{fresh} fresh tokens ({breakdown}) · ≈${:.4} API-equiv", u.cost_usd)
+    } else {
+        // Codex reports no cost — just the token counts.
+        format!("{fresh} fresh tokens ({breakdown})")
+    }
+}
+
+/// How a single agent session ended. `Failed` is carried as the `Err` arm of
+/// [`run_wave`]'s result, so this only distinguishes the two non-error endings.
+enum WaveOutcome {
+    /// The session finished its turn — the orchestrator moves to the next wave.
+    Completed,
+    /// The user cancelled — the orchestrator must abort the whole build.
+    Cancelled,
+}
+
+/// Run one modeling agent session to completion. Forwards only the session's
+/// *progress* events (messages, tool calls, activity) to the frontend and
+/// translates its terminal event into a [`WaveOutcome`]/`Err`.
+///
+/// Crucially, per-session terminal events (`Completed`/`Cancelled`/`Failed`) are
+/// NOT emitted to the frontend: a build is many sessions, and the frontend tears
+/// the canvas down — re-enabling write-back — on the first terminal it sees. The
+/// orchestrator owns the single terminal event for the whole build; until then
+/// write-back must stay suppressed or later sessions' writes get clobbered.
+///
+/// Sessions can run concurrently (the runtime tracks one cancel handle per
+/// session); Wave 2 starts several of these at once, bounded by the orchestrator.
+///
+/// Returns the session's outcome alongside the token usage it reported (CLI
+/// agents report a turn total; ACP mode reports none, so usage stays zero). The
+/// caller sums usage across the build's many sessions to log a grand total.
+#[allow(clippy::too_many_arguments)]
+async fn run_wave(
+    runtime: &scryer_acp::AcpRuntime,
+    agent_binary: &str,
+    mode: &scryer_acp::runtime::LaunchMode,
+    cwd: &str,
+    model_name: &str,
+    effort: &str,
+    mcp_binary: &str,
+    prompt: String,
+    app: &tauri::AppHandle,
+) -> Result<(WaveOutcome, scryer_acp::Usage), String> {
+    let (tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    runtime
+        .start_session(
+            agent_binary.to_string(),
+            mode.clone(),
+            cwd.to_string(),
+            model_name.to_string(),
+            effort.to_string(),
+            mcp_binary.to_string(),
+            prompt,
+            tx,
+        )
+        .await?;
+
+    // The agent reports its turn total once (Claude's `result` event); keep the
+    // last value seen rather than summing, so a cumulative reporter (Codex) can't
+    // be double-counted within a single session.
+    let mut usage = scryer_acp::Usage::default();
+    while let Some(ev) = event_rx.recv().await {
+        match &ev {
+            scryer_acp::AgentEvent::Completed { .. } => return Ok((WaveOutcome::Completed, usage)),
+            scryer_acp::AgentEvent::Cancelled => return Ok((WaveOutcome::Cancelled, usage)),
+            scryer_acp::AgentEvent::Failed { error } => return Err(error.clone()),
+            // Token totals are for the orchestrator's log, not the canvas — keep
+            // them out of the forwarded stream.
+            scryer_acp::AgentEvent::Usage { usage: u } => usage = *u,
+            // Progress only — forward so the activity readout stays live.
+            _ => {
+                let _ = app.emit("agent-event", &ev);
+            }
+        }
+    }
+    // Stream closed without an explicit terminal — treat as a clean finish.
+    Ok((WaveOutcome::Completed, usage))
+}
+
+/// Orchestrate a full auto-context model build with zero per-level clicking:
+/// extract the deterministic codebase context, then drive top-down modeling
+/// sessions — Wave 1 builds the system + containers (fed the container facts),
+/// then a serial Wave 2 models each container's components + symbols (each fed
+/// its sliced code context). Returns immediately; progress streams via
+/// "agent-event" and nodes stream onto the canvas as the agent writes them.
+#[tauri::command]
+async fn start_model_build(
+    cwd: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AcpState>,
+) -> Result<String, String> {
+    let project = std::path::Path::new(&cwd);
+
+    // 1. Deterministic context — instant, in-memory, never persisted as a model.
+    let ctx = scryer_extract::extract_context(project)?;
+    let containers_json = serde_json::to_string(&ctx.containers).map_err(|e| e.to_string())?;
+
+    // 2. Ensure a model exists so the intent tools have something to read; a
+    //    blank one if absent (the agent's writes become the first real content).
+    let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
+    {
+        let _lock = scryer_core::lock_model(&model_ref)?;
+        if scryer_core::read_model_at(&model_ref).is_err() {
+            scryer_core::write_model_at(&model_ref, &scryer_core::ScryModel::new())?;
+        }
+    }
+
+    // 3. Resolve the agent + its launch config.
+    let mcp_binary = find_scryer_mcp().ok_or("scryer-mcp binary not found")?;
+    let settings = scryer_core::read_subagent_settings();
+    let launch = scryer_acp::detect_available_agent_pref(&settings.agent)
+        .ok_or("No AI agent found. Install Claude Code or Codex first.")?;
+    let (model_name, effort) = config_for_launch(&settings, &launch);
+    let (agent_binary, mode) = match launch {
+        scryer_acp::AgentLaunch::Cli { binary, kind } => {
+            (binary, scryer_acp::runtime::LaunchMode::Cli { kind })
+        }
+        scryer_acp::AgentLaunch::Acp { binary } => {
+            (binary, scryer_acp::runtime::LaunchMode::Acp)
+        }
+    };
+
+    let runtime = {
+        let mut rt = state.0.lock().unwrap();
+        if rt.is_none() {
+            *rt = Some(scryer_acp::AcpRuntime::new());
+        }
+        rt.clone().unwrap()
+    };
+
+    // Build-scoped cancel flag: clear it for this fresh build. The orchestrator
+    // checks it at the wave boundary and every parallel task re-checks it after
+    // acquiring its slot, so a "stop" set by `cancel_agent_session` stops new
+    // sessions even in a no-session gap or just before a queued session starts.
+    let cancel_flag = state.1.clone();
+    cancel_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+
+    // 4. Background orchestrator: Wave 1, then a bounded-parallel Wave 2.
+    tokio::spawn(async move {
+        let emit_msg = |text: String| {
+            let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Message { text });
+        };
+
+        // Debug instrumentation: wall-clock for the whole build and a running
+        // token total summed across every session (Wave 1 + each Wave 2
+        // container). Token counts come from CLI agents (Claude Code / Codex);
+        // ACP-mode agents report none, so they stay zero.
+        let build_start = std::time::Instant::now();
+        let mut total_usage = scryer_acp::Usage::default();
+        eprintln!("[build] start: {cwd}");
+
+        // Wave 1 — system + containers.
+        emit_msg("▶ Building system and containers…".into());
+        let w1 = scryer_acp::prompt::build_system_prompt(&cwd, &containers_json);
+        let w1_start = std::time::Instant::now();
+        match run_wave(
+            &runtime, &agent_binary, &mode, &cwd, &model_name, &effort, &mcp_binary, w1, &app,
+        )
+        .await
+        {
+            Ok((WaveOutcome::Completed, usage)) => {
+                total_usage.add(&usage);
+                eprintln!(
+                    "[build] Wave 1 (system + containers): {:.1}s, {}",
+                    w1_start.elapsed().as_secs_f64(),
+                    fmt_usage(&usage),
+                );
+            }
+            Ok((WaveOutcome::Cancelled, _)) => {
+                let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Cancelled);
+                return;
+            }
+            Err(e) => {
+                let _ = app.emit(
+                    "agent-event",
+                    &scryer_acp::AgentEvent::Failed {
+                        error: format!("System/container pass failed: {e}"),
+                    },
+                );
+                return;
+            }
+        }
+
+        // Determine each container's scope from the model + the context.
+        let model = match scryer_core::read_model_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                let _ = app.emit(
+                    "agent-event",
+                    &scryer_acp::AgentEvent::Failed {
+                        error: format!("Could not read model after the container pass: {e}"),
+                    },
+                );
+                return;
+            }
+        };
+        let (containers, unmapped) = map_codeful_containers(&model, &ctx);
+        if !unmapped.is_empty() {
+            // Never drop coverage silently — tell the user which units the agent
+            // didn't create a container for (so Wave 2 can't model them).
+            emit_msg(format!(
+                "⚠ No container node for {} — not modeled. Re-run, or add the container by hand.",
+                unmapped.join(", ")
+            ));
+        }
+
+        // Wave 2 — components + symbols. Up to WAVE2_POOL containers are modeled
+        // at once: each is an independent agent session (its code scope is sliced
+        // independently and the model-write lock serializes their commits), so
+        // they're safe to run concurrently. The pool bounds how many of the
+        // user's own agent processes run at once against their subscription.
+        const WAVE2_POOL: usize = 3;
+
+        // Slice each codeful container's scope up front; skip source-less units
+        // (e.g. a database image) — nothing to model there.
+        let mut jobs: Vec<(String, String, String)> = Vec::new();
+        for (id, name, dir) in containers {
+            let scope = scryer_extract::slice_container(&ctx, &dir);
+            if scope.files.is_empty() {
+                continue;
+            }
+            if let Ok(scope_json) = serde_json::to_string(&scope) {
+                jobs.push((id, name, scope_json));
+            }
+        }
+
+        // Honor a stop pressed during the Wave 1→2 setup (read model + slice
+        // every container): no session is live here, so the runtime cancel was a
+        // no-op — this flag is the only signal that survives the gap.
+        if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Cancelled);
+            return;
+        }
+
+        emit_msg("▶ Modeling components and symbols…".into());
+
+        // Shared across the parallel container tasks: the live active-node set
+        // (drives the canvas rings — several can be amber at once), a cancel
+        // flag, and a failure log we surface after the pool drains.
+        let active: std::sync::Arc<tokio::sync::Mutex<std::collections::BTreeSet<String>>> =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::BTreeSet::new()));
+        let failures: std::sync::Arc<tokio::sync::Mutex<Vec<String>>> =
+            std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        // Tokens summed across the parallel container sessions (debug log).
+        let wave2_usage: std::sync::Arc<tokio::sync::Mutex<scryer_acp::Usage>> =
+            std::sync::Arc::new(tokio::sync::Mutex::new(scryer_acp::Usage::default()));
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(WAVE2_POOL));
+
+        let mut handles = Vec::with_capacity(jobs.len());
+        for (id, name, scope_json) in jobs {
+            let sem = sem.clone();
+            let active = active.clone();
+            let cancelled = cancel_flag.clone();
+            let failures = failures.clone();
+            let wave2_usage = wave2_usage.clone();
+            let runtime = runtime.clone();
+            let agent_binary = agent_binary.clone();
+            let mode = mode.clone();
+            let cwd = cwd.clone();
+            let model_name = model_name.clone();
+            let effort = effort.clone();
+            let mcp_binary = mcp_binary.clone();
+            let app = app.clone();
+            handles.push(tokio::spawn(async move {
+                // Bound how many sessions run at once.
+                let _permit = match sem.acquire().await {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                if cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                {
+                    let mut a = active.lock().await;
+                    a.insert(id.clone());
+                    let _ = app.emit(
+                        "build-active-node",
+                        a.iter().cloned().collect::<Vec<String>>(),
+                    );
+                }
+                // Re-check right before launching: closes the window between the
+                // post-acquire check and the session actually starting, so a
+                // cancel during the brief setup above doesn't spawn a new agent.
+                let c_start = std::time::Instant::now();
+                let outcome = if cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+                    Ok((WaveOutcome::Cancelled, scryer_acp::Usage::default()))
+                } else {
+                    let _ = app.emit(
+                        "agent-event",
+                        &scryer_acp::AgentEvent::Message {
+                            text: format!("Modeling container: {name}…"),
+                        },
+                    );
+                    let w2 =
+                        scryer_acp::prompt::build_container_prompt(&cwd, &name, &id, &scope_json);
+                    run_wave(
+                        &runtime, &agent_binary, &mode, &cwd, &model_name, &effort, &mcp_binary,
+                        w2, &app,
+                    )
+                    .await
+                };
+                {
+                    let mut a = active.lock().await;
+                    a.remove(&id);
+                    let _ = app.emit(
+                        "build-active-node",
+                        a.iter().cloned().collect::<Vec<String>>(),
+                    );
+                }
+                match outcome {
+                    Ok((WaveOutcome::Completed, usage)) => {
+                        wave2_usage.lock().await.add(&usage);
+                        eprintln!(
+                            "[build] Wave 2 container '{name}': {:.1}s, {}",
+                            c_start.elapsed().as_secs_f64(),
+                            fmt_usage(&usage),
+                        );
+                    }
+                    Ok((WaveOutcome::Cancelled, _)) => {
+                        cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    // One container failing shouldn't abort the rest of the build.
+                    Err(e) => failures
+                        .lock()
+                        .await
+                        .push(format!("Container '{name}' modeling failed: {e}")),
+                }
+            }));
+        }
+
+        for h in handles {
+            let _ = h.await;
+        }
+
+        for f in failures.lock().await.iter() {
+            emit_msg(f.clone());
+        }
+
+        total_usage.add(&*wave2_usage.lock().await);
+
+        if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            eprintln!(
+                "[build] cancelled after {:.1}s, {} (partial)",
+                build_start.elapsed().as_secs_f64(),
+                fmt_usage(&total_usage),
+            );
+            let _ = app.emit("build-active-node", Vec::<String>::new());
+            let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Cancelled);
+            return;
+        }
+
+        // Anchor the reconcile point so the first drift check only examines
+        // changes made AFTER the build, not the whole repo.
+        let _ = scryer_core::write_sync_state(
+            &model_ref,
+            &scryer_core::drift::SyncState {
+                reconciled_at: scryer_core::drift::now_secs(),
+                commit: scryer_core::drift::head_commit(std::path::Path::new(&cwd)),
+            },
+        );
+
+        let elapsed = build_start.elapsed().as_secs_f64();
+        eprintln!(
+            "[build] complete: {:.1}s total, {}",
+            elapsed,
+            fmt_usage(&total_usage),
+        );
+
+        let _ = app.emit("build-active-node", Vec::<String>::new());
+        let fresh = total_usage.input_tokens
+            + total_usage.output_tokens
+            + total_usage.cache_creation_input_tokens;
+        emit_msg(format!(
+            "✓ Model build complete — {elapsed:.0}s, {fresh} tokens.",
+        ));
+        let _ = app.emit(
+            "agent-event",
+            &scryer_acp::AgentEvent::Completed {
+                stop_reason: "build_complete".into(),
+            },
+        );
+    });
+
+    Ok("started".to_string())
+}
+
+/// Cheap, agent-free drift status: which boundary-owning nodes have code changes
+/// since the last reconcile. Used to nudge the user to run a semantic check on
+/// open — it never decides the model drifted, only where to look.
+#[tauri::command]
+fn get_drift_status(cwd: String) -> Result<Vec<scryer_core::drift::DriftScope>, String> {
+    let project = std::path::Path::new(&cwd);
+    let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
+    let model = scryer_core::read_model_at(&model_ref).map_err(|e| e.to_string())?;
+
+    // A model that has never been reconciled has no `.sync` anchor, so the
+    // baseline defaults to epoch 0 and *every* file reads as "changed since
+    // reconcile" — flagging every boundary-owning node as drift, forever. There
+    // is no baseline to diff against, so that verdict is pure noise. Seed the
+    // anchor to the current commit/time (treat the model as in-sync as of now)
+    // and report nothing; real drift then surfaces once code changes after this
+    // point. Models built through the MCP tools land here, since only the in-app
+    // build and drift-check completion write the anchor.
+    if !model_ref.sync_path().exists() {
+        let _ = scryer_core::write_sync_state(
+            &model_ref,
+            &scryer_core::drift::SyncState {
+                reconciled_at: scryer_core::drift::now_secs(),
+                commit: scryer_core::drift::head_commit(project),
+            },
+        );
+        return Ok(Vec::new());
+    }
+
+    let sync = scryer_core::read_sync_state(&model_ref);
+    Ok(scryer_core::drift::drifted_scopes(&model, project, &sync))
+}
+
+/// Run a semantic drift check: find the boundary-owning nodes whose code changed
+/// since the last reconcile, then for each, an agent compares what the code DOES
+/// against the node's responsibilities and records findings via `flag_drift`
+/// (undescribed behaviour → vagrant responsibilities; stale claims → `changed`).
+/// Returns immediately; progress + findings stream via "agent-event". The
+/// reconcile anchor advances when the check finishes so the next run sees only
+/// newer changes.
+#[tauri::command]
+async fn start_drift_check(
+    cwd: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AcpState>,
+) -> Result<String, String> {
+    let project = std::path::Path::new(&cwd);
+    let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
+    let model = scryer_core::read_model_at(&model_ref)
+        .map_err(|e| format!("No model to check for drift: {e}"))?;
+    let sync = scryer_core::read_sync_state(&model_ref);
+    let scopes = scryer_core::drift::drifted_scopes(&model, project, &sync);
+
+    let mcp_binary = find_scryer_mcp().ok_or("scryer-mcp binary not found")?;
+    let settings = scryer_core::read_subagent_settings();
+    let launch = scryer_acp::detect_available_agent_pref(&settings.agent)
+        .ok_or("No AI agent found. Install Claude Code or Codex first.")?;
+    let (model_name, effort) = config_for_launch(&settings, &launch);
+    let (agent_binary, mode) = match launch {
+        scryer_acp::AgentLaunch::Cli { binary, kind } => {
+            (binary, scryer_acp::runtime::LaunchMode::Cli { kind })
+        }
+        scryer_acp::AgentLaunch::Acp { binary } => {
+            (binary, scryer_acp::runtime::LaunchMode::Acp)
+        }
+    };
+    let runtime = {
+        let mut rt = state.0.lock().unwrap();
+        if rt.is_none() {
+            *rt = Some(scryer_acp::AcpRuntime::new());
+        }
+        rt.clone().unwrap()
+    };
+
+    let ctx = scryer_extract::extract_context(project)?;
+
+    let cancel_flag = state.1.clone();
+    cancel_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+
+    tokio::spawn(async move {
+        let emit_msg = |text: String| {
+            let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Message { text });
+        };
+
+        let write_anchor = || {
+            let _ = scryer_core::write_sync_state(
+                &model_ref,
+                &scryer_core::drift::SyncState {
+                    reconciled_at: scryer_core::drift::now_secs(),
+                    commit: scryer_core::drift::head_commit(std::path::Path::new(&cwd)),
+                },
+            );
+        };
+
+        if scopes.is_empty() {
+            emit_msg("✓ Model is in sync with the code — nothing changed.".into());
+            write_anchor();
+            let _ = app.emit(
+                "agent-event",
+                &scryer_acp::AgentEvent::Completed {
+                    stop_reason: "in_sync".into(),
+                },
+            );
+            return;
+        }
+
+        emit_msg(format!(
+            "▶ Checking {} changed scope(s) for drift…",
+            scopes.len()
+        ));
+        for scope in &scopes {
+            // Honor a stop pressed between scopes (the gap where no session is
+            // live, so the runtime cancel is a no-op).
+            if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                let _ = app.emit("build-active-node", Vec::<String>::new());
+                let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Cancelled);
+                return;
+            }
+            let dir = model
+                .nodes
+                .iter()
+                .find(|n| n.id == scope.node_id)
+                .and_then(|n| derive_container_dir(n, &model, &ctx))
+                .unwrap_or_default();
+            let slice = scryer_extract::slice_container(&ctx, &dir);
+            let scope_json = serde_json::to_string(&slice).unwrap_or_default();
+            let changed_json = serde_json::to_string(&scope.changed_files).unwrap_or_default();
+            // Feed only this node's subtree (its claims), not the whole model.
+            let subtree_json =
+                scryer_acp::prompt::serialize_subtree_for_prompt(&model, &scope.node_id);
+            let _ = app.emit("build-active-node", vec![scope.node_id.clone()]);
+            emit_msg(format!("▶ Drift check: {}…", scope.node_name));
+            let prompt = scryer_acp::prompt::drift_check_prompt(
+                &cwd,
+                &scope.node_name,
+                &scope.node_id,
+                &subtree_json,
+                &scope_json,
+                &changed_json,
+            );
+            match run_wave(
+                &runtime, &agent_binary, &mode, &cwd, &model_name, &effort, &mcp_binary, prompt,
+                &app,
+            )
+            .await
+            {
+                Ok((WaveOutcome::Completed, _)) => {}
+                Ok((WaveOutcome::Cancelled, _)) => {
+                    let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Cancelled);
+                    return;
+                }
+                Err(e) => emit_msg(format!("Drift check for '{}' failed: {e}", scope.node_name)),
+            }
+        }
+
+        write_anchor();
+        let _ = app.emit("build-active-node", Vec::<String>::new());
+        emit_msg("✓ Drift check complete — review any flagged items.".into());
+        let _ = app.emit(
+            "agent-event",
+            &scryer_acp::AgentEvent::Completed {
+                stop_reason: "drift_check_complete".into(),
+            },
+        );
+    });
+
+    Ok("started".to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -815,7 +1613,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(AcpState(Mutex::new(None)))
+        .manage(AcpState(
+            Mutex::new(None),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        ))
         .setup(move |app| {
             app.manage(Mutex::new(WatcherState { project: None }));
             Ok(())
@@ -835,10 +1636,15 @@ pub fn run() {
             setup_mcp_integration,
             get_active_agent,
             create_blank_model,
+            get_codebase_context,
             get_subagent_settings,
             set_subagent_settings,
             start_initial_model_session,
             start_node_fill_session,
+            start_enrich_session,
+            start_model_build,
+            start_drift_check,
+            get_drift_status,
             cancel_agent_session,
         ])
         .run(tauri::generate_context!())

@@ -3536,6 +3536,7 @@ dependencies = [
  "notify",
  "scryer-acp",
  "scryer-core",
+ "scryer-extract",
  "serde",
  "serde_json",
  "tauri",
@@ -3585,6 +3586,30 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "scryer-extract"
+version = "0.2.5"
+dependencies = [
+ "ignore",
+ "scryer-core",
+ "serde",
+ "serde_json",
+ "toml 0.8.23",
+ "tree-sitter",
+ "tree-sitter-c",
+ "tree-sitter-c-sharp",
+ "tree-sitter-cpp",
+ "tree-sitter-go",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-php",
+ "tree-sitter-python",
+ "tree-sitter-ruby",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
 ]
 
 [[package]]
@@ -3598,6 +3623,7 @@ dependencies = [
  "scryer-core",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "toml_edit 0.22.27",
 ]

@@ -20,7 +20,8 @@ impl ScryerServer {
             tool_router: Self::tool_router_read()
                 + Self::tool_router_nodes()
                 + Self::tool_router_links()
-                + Self::tool_router_misc(),
+                + Self::tool_router_misc()
+                + Self::tool_router_intent(),
             active_model: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }

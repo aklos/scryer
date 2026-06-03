@@ -17,6 +17,16 @@ directories from `get_structure` against the source map — flags compilation un
 shared source directories mapped across container boundaries. Run after building the source map.\n\
 \n\
 ## Writing\n\
+\n\
+### Building from intent (preferred)\n\
+When modeling from a codebase, build the tree with the intent tools — they construct the nodes for you, so you never assemble JSON or mint ids. Each takes plain responsibility statements (one terse verb-led business clause each, at the node's own altitude — what the node is accountable for, not what its children do to discharge it) and sets ids + status (`implemented`) for you; each returns the node(s) it created so you have their ids for the next level.\n\
+- `add_person` / `add_system` — top-level actors and systems (set `external: true` for third-party systems). Persons and externals link to the system.\n\
+- `add_container {parentId, name, technology, boundaryDir?}` — a container under a system. Pass `boundaryDir` (the container's directory) and its boundary glob is set for you.\n\
+- `add_component {parentId, name}` — a component under a container. Cluster components from code cohesion + the dependency graph you were given — NOT one per file.\n\
+- `add_symbol {parentId, name, sourceFile, line?, endLine?, properties?}` — one PUBLIC code definition under a component. The source map is anchored to the file + symbol name for you; give `properties` when it declares a data shape — and for a framework registration object (CMS collection / ORM model) those are the declared FIELDS (the record's columns), never the config wrapper keys (slug/admin/hooks/access). One symbol per real definition: fold generated mirror types (`*-types`, `*.d.ts`) into the source-of-truth symbol and leave private helper methods out. No separate `update_source_map` call needed.\n\
+- `add_group {parentId, name, memberIds}` — OPTIONAL secondary axis: enclose sibling nodes that ship/package together (containers under a system, or components under a container). 2+ members, all children of `parentId`. The group id + layout are set for you. Skip when siblings are independent — it never replaces decomposition.\n\
+Use `add_links` to connect nodes — but relationships connect nodes at the SAME level: src and dst must be siblings, or the deeper node's parent must already link to the other node (which makes it a reference on that surface). So a deep node reaches an external only when the link exists at every level above it (system→external, then container→external, …); `add_links` rejects links that skip a level. When you drill into a node, `get_node` returns `referencesForChildren` — exactly the nodes its children are allowed to link to. The tools below remain for whole-model edits and refinement.\n\
+\n\
 - `set_model` — replace the entire model. Use for initial creation.\n\
 - `add_nodes` / `update_nodes` / `delete_nodes` — node operations. Responsibilities, properties, and sources are \
 fields on the node; pass them in the same call.\n\

@@ -3,7 +3,11 @@ mod instructions;
 mod server;
 mod tools;
 mod types;
-mod validate;
+
+// Validation lives in scryer-core so the deterministic extractor and any
+// orchestrator share one definition of "valid". Re-exported here as
+// `crate::validate` so the tool handlers' `use crate::validate;` stays put.
+pub use scryer_core::validate;
 
 use rmcp::ServiceExt;
 use server::ScryerServer;

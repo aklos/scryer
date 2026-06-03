@@ -25,7 +25,6 @@ import {
   type NodeView,
   type ScryModel,
   type SurfaceView,
-  isDataShape,
 } from "./viewmodel";
 
 export const CELL_W = 160;
@@ -39,14 +38,17 @@ export const MAX_CARD_H = 16;
 export const GROUP_SNAP_W = 1;
 export const GROUP_SNAP_H = 1;
 
-export const CARD_HEADER_H = 30;
+// Two-line title bar (name + type-tag) — heuristic fallback only; the real
+// layout measures `card.offsetHeight` (see PackBox).
+export const CARD_HEADER_H = 46;
 export const CARD_META_H = 16;
 export const DESC_PAD = 12;
 export const RESP_LINE_H = 24;
 export const IMPL_LINE_H = 18;
+/** Per-tile vertical chrome (padding + border + inter-tile gutter) added on top
+ *  of a responsibility/property's text lines in the height heuristic. */
+export const TILE_CHROME = 18;
 export const RESP_PAD = 16;
-export const LINK_ROW_H = 24;
-export const LINK_PAD = 10;
 const CHAR_W = 6;
 
 export const GROUP_LABEL_H = 28;
@@ -81,10 +83,6 @@ function nodeRespCount(node: Pick<Node, "responsibilities">): number {
   return node.responsibilities?.length ?? 0;
 }
 
-function nodeOutgoingCount(node: NodeView): number {
-  return node._outgoingLinks.length;
-}
-
 export function cardHeightPx(node: NodeView, cardW = 2): number {
   const innerW = cardW * CELL_W - ITEM_INSET * 2 - 24;
   const descCpl = Math.max(1, Math.floor(innerW / (CHAR_W * 11 / 12)));
@@ -106,21 +104,17 @@ export function cardHeightPx(node: NodeView, cardW = 2): number {
     }
   }
   if (n > 0 && bodyLines === 0) bodyLines = 1;
-  const outgoing = nodeOutgoingCount(node);
-  const incoming = node._incomingLinks.length;
-  const linksPerRow = Math.max(1, Math.floor(innerW / 70));
-  const outRows = outgoing > 0 ? Math.ceil(outgoing / linksPerRow) : 0;
-  const inRows =
-    isDataShape(node) || incoming === 0
-      ? 0
-      : Math.ceil(incoming / linksPerRow);
-  const linkRows = outRows + inRows;
-  const bodyH = bodyLines > 0 ? RESP_PAD + bodyLines * RESP_LINE_H : 0;
+  // Each responsibility/property renders as a seated tile (own padding, border,
+  // and inter-tile gutter) — add that per-item chrome on top of its text lines.
+  const tileCount = (node.properties?.length ?? 0) + n;
+  const bodyH =
+    bodyLines > 0 ? RESP_PAD + bodyLines * RESP_LINE_H + tileCount * TILE_CHROME : 0;
+  // Connections draw on select (the overlay), not as a footer — no link-row
+  // height is reserved.
   return (
     CARD_HEADER_H +
     (descLines > 0 ? DESC_PAD + descLines * CARD_META_H : 0) +
-    bodyH +
-    (linkRows > 0 ? linkRows * LINK_ROW_H + LINK_PAD : 0)
+    bodyH
   );
 }
 
@@ -512,17 +506,24 @@ function colCapFor(items: PackItem[]): number {
  * and every group already wraps its members, the input model is returned by
  * reference (so the storage layer's `next === cur` short-circuit holds).
  *
- * Groups whose stored rectangle does NOT enclose its members (e.g. an agent set
- * `memberIds` without sensible geometry) are re-laid-out: ALL their members are
- * re-packed inside a freshly-sized group rectangle. This clusters scattered
- * members rather than stretching the group across them.
+ * Group-structure changes trigger a FULL repack. If any group on the surface
+ * needs layout — a new group with no geometry, or a stored rect that no longer
+ * encloses its members (e.g. an agent set `memberIds` without sensible geometry)
+ * — the whole surface is re-packed from scratch: every group is rebuilt and
+ * every ungrouped node is re-flowed. This closes the holes left when nodes are
+ * pulled into a group, instead of leaving the rest of the level strewn around
+ * stale positions. With no such group the pass is incremental: already-placed
+ * nodes and healthy group rects stay put and only unplaced/overlapping nodes
+ * move (normal editing must not reshuffle the board).
  *
  * Algorithm (single parent surface):
- *   occupied = placed ungrouped nodes + healthy group rects
+ *   full repack: occupied = ∅; re-layout = every group; re-flow = every ungrouped node
+ *   incremental: occupied = placed ungrouped nodes + healthy group rects;
+ *                re-flow = only unplaced/overlapping ungrouped nodes
  *   re-layout groups: pack ALL members internally (first-fit, largest first);
  *     bbox + header → group size; first-fit the group rect into `occupied`;
  *     member cells = group anchor + local cell
- *   unplaced ungrouped nodes: first-fit one at a time (largest first)
+ *   place items: first-fit one at a time (largest first)
  */
 export function autoLayout(
   model: ScryModel,
@@ -588,15 +589,15 @@ export function autoLayout(
     return true;
   };
 
-  const relayoutGroups = groupsHere.filter((g) => !groupHealthy(g));
-  const healthyGroups = groupsHere.filter((g) => groupHealthy(g));
+  // A group needing layout means the surface's structure just changed — repack
+  // the WHOLE surface (rebuild every group, re-flow every ungrouped node) so the
+  // holes left by nodes pulled into groups close up. With none, stay incremental.
+  const fullRepack = groupsHere.some((g) => !groupHealthy(g));
+  const relayoutGroups = fullRepack ? groupsHere : [];
+  const healthyGroups = fullRepack ? [] : groupsHere;
 
-  // ---- seed `occupied` and decide which placed nodes to keep ----
-  // Healthy group rectangles are always immovable obstacles. Among ungrouped
-  // placed nodes, keep a maximal non-overlapping set (read order: top-left
-  // first) as anchors; the rest are "displaced" and re-flowed below. A valid
-  // user drag never overlaps (the drop is collision-checked), so this only
-  // re-flows positions an agent guessed without knowing real card sizes.
+  // ---- seed `occupied` (incremental anchors) ----
+  // Healthy group rectangles are immovable obstacles (none on a full repack).
   const occupied: Rect[] = [];
   for (const g of healthyGroups) {
     occupied.push({
@@ -607,14 +608,21 @@ export function autoLayout(
     });
   }
 
+  // Incremental pass only: keep a maximal non-overlapping set of placed ungrouped
+  // nodes as anchors (read order: top-left first); the rest are "displaced" and
+  // re-flowed below. A valid user drag never overlaps (the drop is collision-
+  // checked), so this only re-flows positions an agent guessed without knowing
+  // real card sizes. A full repack re-flows every ungrouped node via `toPlace`.
   const displaced: Node[] = [];
-  const placedUngrouped = siblings
-    .filter((n) => n.cell && !nodeGroup.has(n.id))
-    .map((n) => ({ n, rect: { row: n.cell!.row, col: n.cell!.col, ...spanOf(n) } as Rect }))
-    .sort((a, b) => a.rect.row - b.rect.row || a.rect.col - b.rect.col);
-  for (const { n, rect } of placedUngrouped) {
-    if (occupied.some((o) => rectsOverlap(rect, o))) displaced.push(n);
-    else occupied.push(rect);
+  if (!fullRepack) {
+    const placedUngrouped = siblings
+      .filter((n) => n.cell && !nodeGroup.has(n.id))
+      .map((n) => ({ n, rect: { row: n.cell!.row, col: n.cell!.col, ...spanOf(n) } as Rect }))
+      .sort((a, b) => a.rect.row - b.rect.row || a.rect.col - b.rect.col);
+    for (const { n, rect } of placedUngrouped) {
+      if (occupied.some((o) => rectsOverlap(rect, o))) displaced.push(n);
+      else occupied.push(rect);
+    }
   }
 
   const nodeCells = new Map<string, Cell>();
@@ -660,9 +668,10 @@ export function autoLayout(
     builtGroups.push({ id: g.id, size, internalCells, area: size.cols * size.rows });
   }
 
-  // ---- nodes to place: never-placed ungrouped nodes + displaced ones ----
+  // ---- nodes to place: every ungrouped node (full repack) or just the
+  // never-placed + displaced ones (incremental) ----
   const toPlace: PackItem[] = [
-    ...siblings.filter((n) => !n.cell && !nodeGroup.has(n.id)),
+    ...siblings.filter((n) => !nodeGroup.has(n.id) && (fullRepack || !n.cell)),
     ...displaced,
   ].map((n) => {
     const span = spanOf(n);

@@ -3,7 +3,7 @@ pub mod events;
 pub mod prompt;
 pub mod runtime;
 
-pub use events::AgentEvent;
+pub use events::{AgentEvent, Usage};
 pub use runtime::AcpRuntime;
 
 /// Which agent harness we're dealing with.

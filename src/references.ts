@@ -16,7 +16,6 @@
 import type {
   Altitude,
   Kind,
-  Link,
   Node,
   ScryModel,
 } from "./viewmodel";
@@ -63,19 +62,6 @@ function subtreeIds(model: ScryModel, nodeId: string | null): Set<string> {
   return ids;
 }
 
-/** Ids of every ancestor of `nodeId` (root-most last). Empty when at top. */
-function ancestorIds(model: ScryModel, nodeId: string | null): Set<string> {
-  const ids = new Set<string>();
-  let current = nodeId;
-  while (current) {
-    ids.add(current);
-    const node = model.nodes.find((n) => n.id === current);
-    current = node?.parentId ?? null;
-  }
-  if (nodeId) ids.delete(nodeId);
-  return ids;
-}
-
 function bucketFor(node: Node): keyof SurfaceContext {
   if (node.kind === "person") return "persons";
   if (node.external) return "externals";
@@ -114,17 +100,21 @@ export function incomingLinks(model: ScryModel, nodeId: string): IncomingLink[] 
   return out;
 }
 
-/** Outgoing links from `nodeId`. */
-function outgoingLinks(model: ScryModel, nodeId: string): Link[] {
-  return model.links.filter((l) => l.src === nodeId);
-}
-
 /**
- * Resolve everything outside the subtree of `parentId` that is link-connected
- * to something inside it, classified by role.
+ * The reference cards surrounding the view of `parentId`'s children: every node
+ * OUTSIDE this subtree that a *direct child* links to, in either direction,
+ * classified by role.
  *
- * `parentId === null` means the root surface — the in-scope subtree is the
- * entire model, so there's nothing "outside" to put on the perimeter.
+ * A reference earns its place here only by connecting to a node visible AT THIS
+ * LEVEL — a direct child. The parent's own links, or an ancestor's, do NOT
+ * surface a reference here: that relationship lives at the higher level where it
+ * actually connects. A reference that appears on a level it doesn't connect to
+ * is an invalid model, never something to render — so this projection cannot
+ * produce one, and `validate_model` flags the underlying gap (a relationship
+ * stated at one level but never traced down to the child that realizes it).
+ *
+ * `parentId === null` is the root surface — every node is in scope, so there is
+ * nothing outside to put on the perimeter.
  */
 export function surfaceContext(
   model: ScryModel,
@@ -134,52 +124,33 @@ export function surfaceContext(
   if (parentId === null) return out;
 
   const subtree = subtreeIds(model, parentId);
-  // Treat the parent node itself as in-scope so links to/from it count.
   subtree.add(parentId);
-  const ancestors = ancestorIds(model, parentId);
-  // "In our scope" = subtree + ancestors. Ancestor inclusion is how a deeper
-  // view inherits the perimeter of its parent (a person who uses the parent
-  // system still surrounds the inner container view).
-  const inScope = new Set<string>([...subtree, ...ancestors]);
+  // Visible at THIS level = the parent's direct children. Only their links pull
+  // a reference onto this surface.
+  const owned = new Set<string>(
+    model.nodes
+      .filter((n) => (n.parentId ?? null) === parentId)
+      .map((n) => n.id),
+  );
 
-  const refIds = new Set<string>();
-  // Outgoing from inScope → outside-of-scope = a ref
-  for (const sid of inScope) {
-    for (const l of outgoingLinks(model, sid)) {
-      if (!subtree.has(l.dst) && !ancestors.has(l.dst)) refIds.add(l.dst);
-    }
-  }
-  // Incoming from outside-of-scope → inScope = a ref
+  // Direction is from the surface's point of view: a child→ref link is the
+  // surface reaching OUT (outgoing); ref→child is the ref reaching IN (incoming).
+  const dir = new Map<string, { in: boolean; out: boolean }>();
+  const mark = (id: string, key: "in" | "out") => {
+    const e = dir.get(id) ?? { in: false, out: false };
+    e[key] = true;
+    dir.set(id, e);
+  };
   for (const l of model.links) {
-    if (subtree.has(l.src) || ancestors.has(l.src)) continue;
-    if (inScope.has(l.dst)) refIds.add(l.src);
+    if (owned.has(l.src) && !subtree.has(l.dst)) mark(l.dst, "out");
+    if (owned.has(l.dst) && !subtree.has(l.src)) mark(l.src, "in");
   }
 
-  for (const id of refIds) {
+  for (const [id, e] of dir) {
     const node = findNode(model, id);
     if (!node) continue;
-    let hasIncoming = false;
-    let hasOutgoing = false;
-    for (const l of outgoingLinks(model, id)) {
-      if (inScope.has(l.dst)) {
-        hasIncoming = true;
-        break;
-      }
-    }
-    outer: for (const sid of inScope) {
-      for (const l of outgoingLinks(model, sid)) {
-        if (l.dst === id) {
-          hasOutgoing = true;
-          break outer;
-        }
-      }
-    }
     const direction: LinkDirection =
-      hasIncoming && hasOutgoing
-        ? "both"
-        : hasIncoming
-          ? "incoming"
-          : "outgoing";
+      e.in && e.out ? "both" : e.in ? "incoming" : "outgoing";
     out[bucketFor(node)].push({
       node,
       altitude: homeAltitude(model, id),

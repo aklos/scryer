@@ -1,51 +1,32 @@
 /**
  * Empty-state screen: choose a project to open, or generate a model from a
- * codebase via the configured AI agent.
+ * codebase via the configured AI agent. Generation itself is driven by
+ * `useModelBuild` (lifted to the app shell) so it streams onto the canvas — the
+ * picker just triggers it and gets out of the way.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { useCallback, useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, Sparkles, X, AlertTriangle } from "lucide-react";
 import type { ModelStorage } from "./hooks/useModelStorage";
-import { useToast } from "./Toast";
+import type { ModelBuild } from "./hooks/useModelBuild";
 
-type Phase = "picker" | "needs-model" | "generating";
+type Phase = "picker" | "needs-model";
 
-export function ProjectPicker({ storage }: { storage: ModelStorage }) {
-  const { toast } = useToast();
+export function ProjectPicker({
+  storage,
+  build,
+}: {
+  storage: ModelStorage;
+  build: ModelBuild;
+}) {
   const [phase, setPhase] = useState<Phase>("picker");
-  const [generationLog, setGenerationLog] = useState<string[]>([]);
-  const agentUnlisten = useRef<(() => void) | null>(null);
-  const logRef = useRef<HTMLDivElement>(null);
-  // Stick to the bottom as lines stream in, unless the user has scrolled up.
-  const pinnedToBottom = useRef(true);
-
-  useEffect(() => {
-    const el = logRef.current;
-    if (el && pinnedToBottom.current) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [generationLog]);
 
   useEffect(() => {
     if (storage.status === "needs-model") {
-      setPhase((prev) => (prev === "generating" ? prev : "needs-model"));
-    }
-    if (storage.status === "ready") {
-      stopAgentListener();
+      setPhase("needs-model");
     }
   }, [storage.status]);
-
-  useEffect(() => {
-    return () => stopAgentListener();
-  }, []);
-
-  const stopAgentListener = () => {
-    agentUnlisten.current?.();
-    agentUnlisten.current = null;
-  };
 
   const pickFolder = useCallback(async () => {
     const dir = await openDialog({ directory: true, multiple: false });
@@ -59,95 +40,12 @@ export function ProjectPicker({ storage }: { storage: ModelStorage }) {
     await storage.createBlankModel(storage.projectPath);
   }, [storage]);
 
-  const onGenerate = useCallback(async () => {
+  const onGenerate = useCallback(() => {
     if (!storage.projectPath) return;
-    const path = storage.projectPath;
-    setPhase("generating");
-    setGenerationLog([]);
-
-    // Subscribe BEFORE invoking — the runtime emits events as soon as the
-    // session starts, and we'd miss them otherwise. The `start_initial_model
-    // _session` invoke returns when the agent has spawned (not when it
-    // finishes); the actual end-of-session signal is an `agent-event` with
-    // kind = "completed" | "failed" | "cancelled".
-    type AgentEvent =
-      | { kind: "message"; text: string }
-      | { kind: "thought"; text: string }
-      | { kind: "toolCall"; id: string; name: string; status: string }
-      | { kind: "plan"; content: string }
-      | { kind: "activity" }
-      | { kind: "completed"; stopReason: string }
-      | { kind: "failed"; error: string }
-      | { kind: "cancelled" };
-
-    const off = await listen<AgentEvent>("agent-event", async (event) => {
-      const payload = event.payload;
-      // Append a one-line summary to the live log.
-      const summary = (() => {
-        switch (payload.kind) {
-          case "message":
-          case "thought":
-            return payload.text;
-          case "toolCall":
-            return `[${payload.status}] ${payload.name}`;
-          case "plan":
-            return `(plan) ${payload.content}`;
-          case "activity":
-            return null;
-          case "completed":
-            return `completed (${payload.stopReason})`;
-          case "failed":
-            return `failed: ${payload.error}`;
-          case "cancelled":
-            return "cancelled";
-        }
-      })();
-      if (summary !== null) {
-        setGenerationLog((log) => [...log.slice(-400), summary]);
-      }
-
-      // Terminal events: tear down and route based on outcome.
-      if (
-        payload.kind === "completed" ||
-        payload.kind === "failed" ||
-        payload.kind === "cancelled"
-      ) {
-        stopAgentListener();
-        if (payload.kind === "completed") {
-          await storage.openProject(path);
-        } else if (payload.kind === "failed") {
-          toast(`Generation failed: ${payload.error}`, "error");
-          setPhase("needs-model");
-        } else {
-          setPhase("needs-model");
-        }
-      }
-    });
-    agentUnlisten.current = off;
-
-    try {
-      // Resolves when the agent has *started* (returns a session id), not
-      // when the session ends. We rely on the `agent-event` stream above for
-      // termination.
-      await invoke<string>("start_initial_model_session", {
-        cwd: path,
-      });
-    } catch (e) {
-      stopAgentListener();
-      toast(`Generation failed: ${String(e)}`, "error");
-      setPhase("needs-model");
-    }
-  }, [storage, toast]);
-
-  const onCancelGeneration = useCallback(async () => {
-    try {
-      await invoke("cancel_agent_session");
-    } catch {
-      /* cancel is best-effort */
-    }
-    // Don't tear down the listener yet — the runtime will emit a `cancelled`
-    // event which our handler uses to transition phase back to needs-model.
-  }, []);
+    // Kick off the orchestrated build; it creates the model, opens the canvas,
+    // and streams nodes in. The picker unmounts as soon as the model loads.
+    void build.start(storage.projectPath);
+  }, [storage.projectPath, build]);
 
   const onOpenRecent = useCallback(
     async (path: string) => {
@@ -171,51 +69,6 @@ export function ProjectPicker({ storage }: { storage: ModelStorage }) {
             onClick={storage.closeProject}
           >
             Pick another project
-          </button>
-        </div>
-      </Centered>
-    );
-  }
-
-  if (phase === "generating") {
-    return (
-      <Centered>
-        <div className="flex flex-col items-center gap-4 max-w-2xl w-full">
-          <div className="flex items-center gap-2 text-[var(--text)]">
-            <Sparkles className="h-5 w-5 text-amber-400" />
-            <h2 className="text-base font-semibold">
-              Generating model from codebase
-            </h2>
-          </div>
-          <p className="text-sm text-[var(--text-muted)] text-center">
-            The agent is reading {storage.projectPath} and writing the model via MCP.
-            This can take a few minutes.
-          </p>
-          <div
-            ref={logRef}
-            onScroll={(e) => {
-              const el = e.currentTarget;
-              pinnedToBottom.current =
-                el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-            }}
-            className="w-full max-h-64 overflow-y-auto rounded border border-[var(--border)] bg-[var(--surface-canvas)] p-3 font-mono text-[11px] text-[var(--text-tertiary)]"
-          >
-            {generationLog.length === 0 ? (
-              <span className="text-[var(--text-ghost)]">starting…</span>
-            ) : (
-              generationLog.map((line, i) => (
-                <div key={i} className="whitespace-pre-wrap break-words">
-                  {line}
-                </div>
-              ))
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={onCancelGeneration}
-            className="text-xs text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
-          >
-            Cancel
           </button>
         </div>
       </Centered>

@@ -39,6 +39,10 @@ impl ScryerServer {
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
         *self.active_model.lock().unwrap() = Some(model_ref.clone());
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
 
         let mut model: ScryModel = match serde_json::from_str(&req.data) {
             Ok(m) => m,
@@ -94,6 +98,10 @@ impl ScryerServer {
         Parameters(req): Parameters<AddNodeRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
         let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
@@ -153,6 +161,10 @@ impl ScryerServer {
         Parameters(req): Parameters<UpdateNodeRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
         let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
@@ -227,6 +239,10 @@ impl ScryerServer {
         Parameters(req): Parameters<SetNodeRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
         let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
@@ -320,6 +336,10 @@ impl ScryerServer {
         Parameters(req): Parameters<DeleteNodeRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
         let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
@@ -371,6 +391,10 @@ impl ScryerServer {
         Parameters(req): Parameters<MoveResponsibilitiesRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
         let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
@@ -450,6 +474,7 @@ impl ScryerServer {
                     relocated_to: None,
                     relocated_from: Some(mv.from_node_id.clone()),
                     directives: resp.directives.clone(),
+                    last_touched_at: None,
                 };
                 let to = model.nodes.iter_mut().find(|n| n.id == mv.to_node_id).unwrap();
                 to.responsibilities.push(dest_resp);
@@ -466,6 +491,7 @@ impl ScryerServer {
                     relocated_to: None,
                     relocated_from: None,
                     directives: resp.directives.clone(),
+                    last_touched_at: None,
                 };
                 let to = model.nodes.iter_mut().find(|n| n.id == mv.to_node_id).unwrap();
                 to.responsibilities.push(dest_resp);

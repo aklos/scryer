@@ -24,8 +24,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 scryer-core = { path = "../crates/scryer-core" }
 scryer-acp = { path = "../crates/scryer-acp" }
+scryer-extract = { path = "../crates/scryer-extract" }
 notify = "6"
-tokio = { version = "1", features = ["rt-multi-thread", "process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "process", "sync", "time"] }
 which = "7"
 dirs = "6.0.0"
 toml_edit = "0.22"

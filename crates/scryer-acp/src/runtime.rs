@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::client::ScryerClient;
-use crate::events::AgentEvent;
+use crate::events::{AgentEvent, Usage};
 use crate::AgentKind;
 
 /// How the agent should be launched.
@@ -37,8 +37,8 @@ enum RuntimeCommand {
     Cancel {
         result_tx: oneshot::Sender<Result<(), String>>,
     },
-    /// Internal: session finished naturally.
-    Done,
+    /// Internal: the session with this id finished naturally.
+    Done { id: u64 },
 }
 
 /// Manages agent sync sessions.
@@ -93,7 +93,8 @@ impl AcpRuntime {
         result_rx.await.map_err(|_| "Runtime dropped".to_string())?
     }
 
-    /// Cancel the active session.
+    /// Cancel every active session (used for the user's single "stop" / a build
+    /// of many parallel container sessions / orphan cleanup on dev refresh).
     pub async fn cancel(&self) -> Result<(), String> {
         let (result_tx, result_rx) = oneshot::channel();
         self.cmd_tx
@@ -115,8 +116,13 @@ fn runtime_thread(
     let local = tokio::task::LocalSet::new();
 
     local.block_on(&rt, async move {
-        // Cancel sender for the active session (works for both modes)
-        let mut cancel_tx: Option<oneshot::Sender<()>> = None;
+        // Cancel sender per in-flight session, keyed by a monotonic id. Many
+        // sessions can run at once — they multiplex on this one LocalSet (each
+        // is mostly waiting on its agent subprocess), so a parallel Wave 2 just
+        // means several entries here. The orchestrator bounds how many start.
+        let mut sessions: std::collections::HashMap<u64, oneshot::Sender<()>> =
+            std::collections::HashMap::new();
+        let mut next_id: u64 = 0;
 
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
@@ -131,13 +137,10 @@ fn runtime_thread(
                     event_tx,
                     result_tx,
                 } => {
-                    if cancel_tx.is_some() {
-                        let _ = result_tx.send(Err(
-                            "A sync session is already running.".into(),
-                        ));
-                        continue;
-                    }
-
+                    let id = next_id;
+                    next_id += 1;
+                    // External session id stays timestamp-based (unchanged for
+                    // callers); the numeric `id` only routes Done/Cancel here.
                     let session_id = format!(
                         "sync-{}",
                         std::time::SystemTime::now()
@@ -149,17 +152,17 @@ fn runtime_thread(
                     let result = match mode {
                         LaunchMode::Cli { kind } => start_cli_session(
                             &agent_binary, &kind, &cwd, &model_name, &effort, &mcp_binary,
-                            &prompt, event_tx, done_tx.clone(),
+                            &prompt, id, event_tx, done_tx.clone(),
                         ),
                         LaunchMode::Acp => start_acp_session(
                             &agent_binary, &cwd, &model_name, &mcp_binary,
-                            &prompt, event_tx, done_tx.clone(),
+                            &prompt, id, event_tx, done_tx.clone(),
                         ).await,
                     };
 
                     match result {
                         Ok(tx) => {
-                            cancel_tx = Some(tx);
+                            sessions.insert(id, tx);
                             let _ = result_tx.send(Ok(session_id));
                         }
                         Err(e) => {
@@ -168,15 +171,19 @@ fn runtime_thread(
                     }
                 }
                 RuntimeCommand::Cancel { result_tx } => {
-                    if let Some(tx) = cancel_tx.take() {
-                        let _ = tx.send(());
-                        let _ = result_tx.send(Ok(()));
-                    } else {
+                    if sessions.is_empty() {
                         let _ = result_tx.send(Err("No active session".into()));
+                    } else {
+                        // Cancel every in-flight session — a build is many
+                        // sessions and the user's "stop" means stop all of them.
+                        for (_, tx) in sessions.drain() {
+                            let _ = tx.send(());
+                        }
+                        let _ = result_tx.send(Ok(()));
                     }
                 }
-                RuntimeCommand::Done => {
-                    cancel_tx = None;
+                RuntimeCommand::Done { id } => {
+                    sessions.remove(&id);
                 }
             }
         }
@@ -195,6 +202,7 @@ fn start_cli_session(
     effort: &str,
     mcp_binary: &str,
     prompt: &str,
+    id: u64,
     event_tx: mpsc::UnboundedSender<AgentEvent>,
     done_tx: mpsc::UnboundedSender<RuntimeCommand>,
 ) -> Result<oneshot::Sender<()>, String> {
@@ -283,6 +291,9 @@ fn start_cli_session(
                     let reader = BufReader::new(stdout);
                     let mut lines = reader.lines();
                     while let Ok(Some(line)) = lines.next_line().await {
+                        if let Some(usage) = extract_usage(&line) {
+                            let _ = event_tx_stdout.send(AgentEvent::Usage { usage });
+                        }
                         if let Some(msg) = summarize_event(&line) {
                             let _ = event_tx_stdout.send(AgentEvent::Message { text: msg });
                         }
@@ -354,7 +365,7 @@ fn start_cli_session(
                 let _ = event_tx.send(AgentEvent::Cancelled);
             }
         }
-        let _ = done_tx.send(RuntimeCommand::Done);
+        let _ = done_tx.send(RuntimeCommand::Done { id });
     });
 
     Ok(cancel_tx)
@@ -396,6 +407,40 @@ fn tool_detail(input: &serde_json::Value) -> Option<String> {
         }
     }
     None
+}
+
+/// Pull end-of-turn token usage out of one agent stream-json line. Returns
+/// `Some` only for a line that actually reports a turn total — Claude Code's
+/// `result` event (top-level `usage` + `total_cost_usd`) or Codex's token-count
+/// event (nested under `info.total_token_usage`). Per-chunk `assistant` events
+/// carry their partial usage under `message.usage`, which this deliberately does
+/// NOT match, so we report the final total once, not every streamed delta.
+fn extract_usage(line: &str) -> Option<Usage> {
+    let val: serde_json::Value = serde_json::from_str(line).ok()?;
+    let usage_obj = val
+        .pointer("/usage")
+        .or_else(|| val.pointer("/token_usage"))
+        .or_else(|| val.pointer("/info/total_token_usage"))
+        .or_else(|| val.pointer("/msg/info/total_token_usage"))?;
+
+    let n = |key: &str| usage_obj.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+    Some(Usage {
+        input_tokens: n("input_tokens"),
+        output_tokens: n("output_tokens"),
+        cache_creation_input_tokens: n("cache_creation_input_tokens"),
+        // Claude calls the cache-hit bucket `cache_read_input_tokens`; Codex
+        // calls it `cached_input_tokens`. Accept whichever is present.
+        cache_read_input_tokens: if usage_obj.get("cache_read_input_tokens").is_some() {
+            n("cache_read_input_tokens")
+        } else {
+            n("cached_input_tokens")
+        },
+        // Cost is Claude-only; Codex omits it (left at 0.0).
+        cost_usd: val
+            .pointer("/total_cost_usd")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0),
+    })
 }
 
 /// Extract a readable one-liner from a Claude Code stream-json event.
@@ -450,6 +495,7 @@ async fn start_acp_session(
     _model_name: &str,
     mcp_binary: &str,
     prompt: &str,
+    id: u64,
     event_tx: mpsc::UnboundedSender<AgentEvent>,
     done_tx: mpsc::UnboundedSender<RuntimeCommand>,
 ) -> Result<oneshot::Sender<()>, String> {
@@ -530,7 +576,7 @@ async fn start_acp_session(
                 let _ = event_tx.send(AgentEvent::Cancelled);
             }
         }
-        let _ = done_tx.send(RuntimeCommand::Done);
+        let _ = done_tx.send(RuntimeCommand::Done { id });
     });
 
     Ok(cancel_tx)

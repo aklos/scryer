@@ -12,8 +12,10 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "r
 import { createPortal } from "react-dom";
 import type { Cell, Kind, NodeView, SurfaceView } from "./viewmodel";
 import type { AgentSession } from "./hooks/useAgentSession";
-import { childKindFor } from "./viewmodel";
+import { childKindFor, isDataShape } from "./viewmodel";
 import { EntryCard, EntryCardView } from "./EntryCard";
+import { ConnectionsOverlay } from "./ConnectionsOverlay";
+import type { ConnLink } from "./ConnectionsOverlay";
 import { PackBox, LABEL_H } from "./PackBox";
 import { GridContext } from "./gridcontext";
 import type { HoverState } from "./gridcontext";
@@ -49,6 +51,9 @@ const ALTITUDE_LABEL: Record<SurfaceView["altitude"], string> = {
 const CLICK_SLOP = 5;
 const EDGE_BAND = 64;
 const EDGE_SPEED = 16;
+
+/** Stable empty set for the highlight props' defaults (referential stability). */
+const EMPTY_SET: ReadonlySet<string> = new Set();
 
 /** Find a node on this surface by id. */
 function locate(view: SurfaceView, id: string): NodeView | null {
@@ -131,12 +136,14 @@ function EmptyLevelCta({
   modelRef,
   zoom,
   agent,
+  busy,
 }: {
   parentNodeId: string;
   projectPath: string;
   modelRef: string;
   zoom: number;
   agent: AgentSession;
+  busy: boolean;
 }) {
   const model = useContext(ModelContext);
   const parentNode = useMemo(
@@ -175,19 +182,19 @@ function EmptyLevelCta({
             parentNode.name || "node",
           )
         }
-        disabled={agent.running}
+        disabled={busy}
         style={{
           padding: `${6 * zoom}px ${16 * zoom}px`,
           borderRadius: 6 * zoom,
           border: "none",
-          backgroundColor: agent.running
+          backgroundColor: busy
             ? "var(--color-blue-800)"
             : "var(--color-blue-600)",
           fontSize: 11 * zoom,
           fontWeight: 500,
           color: "#fff",
-          cursor: agent.running ? "default" : "pointer",
-          opacity: agent.running ? 0.5 : 1,
+          cursor: busy ? "default" : "pointer",
+          opacity: busy ? 0.5 : 1,
         }}
       >
         Fill with AI
@@ -222,6 +229,11 @@ export function Surface({
   projectPath,
   modelRef: modelRefStr,
   agent,
+  busy = false,
+  activeNodeIds = EMPTY_SET,
+  newNodeIds = EMPTY_SET,
+  newRespIds = EMPTY_SET,
+  generating = false,
 }: {
   view: SurfaceView;
   parentNodeId: string | null;
@@ -254,6 +266,16 @@ export function Surface({
   projectPath?: string | null;
   modelRef?: string | null;
   agent?: AgentSession;
+  /** A build/drift run (or per-node fill) owns the runtime — disable Fill. */
+  busy?: boolean;
+  /** Nodes the AI is generating right now — each card gets a pulsing ring. */
+  activeNodeIds?: ReadonlySet<string>;
+  /** Node ids the agent just created — emerald "new, unreviewed" ring until selected. */
+  newNodeIds?: ReadonlySet<string>;
+  /** Responsibility ids the agent just created — emerald row tint until selected. */
+  newRespIds?: ReadonlySet<string>;
+  /** The current level's contents are being generated — pulse the wrapper ring. */
+  generating?: boolean;
 }) {
   const zoom = useZoom();
   const panBy = usePan();
@@ -718,6 +740,61 @@ export function Surface({
     ...context.refs.map((r) => r.node.id),
   ]);
 
+  // Connection tracing: selecting a node draws its on-surface links (verb +
+  // direction) and fades the rest of the surface (focus + context). Links are
+  // node-level; selecting a responsibility traces its parent node's links.
+  const focusId = selection?.nodeId ?? null;
+  const focusNode = focusId ? model.nodes.find((n) => n.id === focusId) : null;
+  // Mirror the resting degree chip: a data shape hides its (typically numerous)
+  // incoming links, so when one is focused we trace only its outgoing links.
+  const focusIsData = focusNode ? isDataShape(focusNode) : false;
+  // The current surface's ancestor chain = the boundary it sits inside. A ref's
+  // link to an ancestor (e.g. a person → the system you've drilled into) has no
+  // on-surface partner card, so it's drawn to the surface boundary instead.
+  const boundaryIds = new Set<string>();
+  if (focusId !== null) {
+    let cur = view.parentId;
+    while (cur) {
+      boundaryIds.add(cur);
+      cur = model.nodes.find((n) => n.id === cur)?.parentId ?? null;
+    }
+  }
+  const surfaceLinks: ConnLink[] =
+    focusId === null
+      ? []
+      : model.links.flatMap((l) => {
+          if (l.src === l.dst) return [];
+          const isOut = l.src === focusId;
+          const isIn = l.dst === focusId && !focusIsData;
+          if (!isOut && !isIn) return [];
+          const other = isOut ? l.dst : l.src;
+          const onSurface = visibleScope.has(other);
+          if (!onSurface && !boundaryIds.has(other)) return [];
+          return [{ from: l.src, to: l.dst, verb: l.label, boundary: !onSurface }];
+        });
+  // Dim the rest only when there are on-surface partners to focus on; a link
+  // that only reaches the boundary (a person → the whole system) shouldn't
+  // fade every card on the surface.
+  const onSurfacePartners = surfaceLinks
+    .filter((l) => !l.boundary)
+    .map((l) => (l.from === focusId ? l.to : l.from));
+  const traceEgo =
+    focusId === null || onSurfacePartners.length === 0
+      ? null
+      : new Set<string>([focusId, ...onSurfacePartners]);
+  // Signature of the traced nodes' positions/sizes — lets the overlay re-track
+  // lines when a card is moved/resized (pan is free; it's in the transform).
+  const traceLayoutKey =
+    traceEgo === null
+      ? ""
+      : [...traceEgo]
+          .map((id) => {
+            const n = model.nodes.find((x) => x.id === id);
+            const sp = measuredSpans.get(id);
+            return `${id}:${n?.cell?.row ?? ""},${n?.cell?.col ?? ""}:${sp ? `${sp.w}x${sp.h}` : ""}`;
+          })
+          .join("|");
+
   const heldNode = held?.kind === "node" ? held.node : null;
   const heldSpan = heldNode
     ? (measuredSpans.get(heldNode.id) ?? cardSpan(heldNode))
@@ -762,12 +839,17 @@ export function Surface({
             measuredSpans={measuredSpans}
             onMeasure={setMeasuredSpans}
             onAutoLayout={onAutoLayout}
+            generating={generating}
+            selectedNodeId={focusId}
             renderEntry={(node) => (
               <EntryCard
                 node={node}
                 onNavigate={onNavigate}
                 onLinkClick={handleLinkClick}
                 editor={editor}
+                buildActive={activeNodeIds.has(node.id)}
+                cardNew={newNodeIds.has(node.id)}
+                newRespIds={newRespIds}
                 cardSelected={selection?.nodeId === node.id}
                 selectedRespId={
                   selection?.kind === "responsibility" &&
@@ -775,19 +857,27 @@ export function Surface({
                     ? selection.respId
                     : null
                 }
+                dimmed={traceEgo ? !traceEgo.has(node.id) : false}
               />
             )}
             emptyContent={
-              parentNodeId && projectPath && modelRefStr && agent && !agent.running ? (
+              parentNodeId && projectPath && modelRefStr && agent && !busy ? (
                 <EmptyLevelCta
                   parentNodeId={parentNodeId}
                   projectPath={projectPath}
                   modelRef={modelRefStr}
                   zoom={zoom}
                   agent={agent}
+                  busy={busy}
                 />
               ) : undefined
             }
+          />
+          <ConnectionsOverlay
+            focusId={focusId}
+            links={surfaceLinks}
+            layoutKey={traceLayoutKey}
+            onNavigate={handleLinkClick}
           />
         </div>
 
@@ -847,10 +937,10 @@ export function Surface({
                     inset: 0,
                     border: `${zoom}px solid var(--border)`,
                     backgroundColor:
-                      "color-mix(in srgb, black 3%, transparent)",
+                      "rgba(var(--group-fill), calc(var(--group-fill-a) * 1.5))",
                     borderRadius: 12 * zoom,
                     opacity: 0.55,
-                    boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+                    boxShadow: `0 ${8 * zoom}px ${24 * zoom}px rgba(var(--card-shadow), calc(var(--card-shadow-a) * 1.8))`,
                   }}
                 />
                 <div

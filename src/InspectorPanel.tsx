@@ -17,6 +17,7 @@ import {
   ExternalLink,
   FileCode2,
   CircleSlash,
+  Flag,
 } from "lucide-react";
 import type { ScryModel, Node, Link, Responsibility } from "./viewmodel";
 import { isDataShape } from "./viewmodel";
@@ -63,6 +64,8 @@ export function InspectorPanel({
   projectPath,
   onSelectNode,
   onSelectResponsibility,
+  onAdoptResponsibility,
+  onRejectResponsibility,
   onClose,
 }: {
   model: ScryModel;
@@ -70,6 +73,10 @@ export function InspectorPanel({
   projectPath: string | null;
   onSelectNode: (nodeId: string) => void;
   onSelectResponsibility: (nodeId: string, respId: string) => void;
+  /** Clear a vagrant responsibility's drift flag (keep it as authored spec). */
+  onAdoptResponsibility?: (nodeId: string, respId: string) => void;
+  /** Delete a vagrant responsibility (the code shouldn't do this). */
+  onRejectResponsibility?: (nodeId: string, respId: string) => void;
   onClose: () => void;
 }) {
   const node = model.nodes.find((n) => n.id === selection.nodeId);
@@ -118,6 +125,8 @@ export function InspectorPanel({
           node={node}
           projectPath={projectPath}
           onSelectResponsibility={onSelectResponsibility}
+          onAdoptResponsibility={onAdoptResponsibility}
+          onRejectResponsibility={onRejectResponsibility}
           onClose={onClose}
         />
       ) : (
@@ -215,12 +224,16 @@ function NodeInspector({
   node,
   projectPath,
   onSelectResponsibility,
+  onAdoptResponsibility,
+  onRejectResponsibility,
   onClose,
 }: {
   model: ScryModel;
   node: Node;
   projectPath: string | null;
   onSelectResponsibility: (nodeId: string, respId: string) => void;
+  onAdoptResponsibility?: (nodeId: string, respId: string) => void;
+  onRejectResponsibility?: (nodeId: string, respId: string) => void;
   onClose: () => void;
 }) {
   const boundary = model.boundaries?.[node.id] ?? [];
@@ -331,12 +344,17 @@ function NodeInspector({
                 const mapped = sourceMap[r.id]?.length ?? 0;
                 const status = effectiveRespStatus(node, r);
                 const colors = STATUS_COLORS[status] ?? null;
+                const reviewable =
+                  r.vagrant && onAdoptResponsibility && onRejectResponsibility;
                 return (
-                  <li key={r.id}>
+                  <li
+                    key={r.id}
+                    className="group/r flex items-start rounded-md transition-colors hover:bg-[var(--surface-hover)]"
+                  >
                     <button
                       type="button"
                       onClick={() => onSelectResponsibility(node.id, r.id)}
-                      className="group/r flex w-full items-start gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--surface-hover)] cursor-pointer"
+                      className="flex min-w-0 flex-1 items-start gap-2.5 px-2 py-1.5 text-left cursor-pointer"
                     >
                       <span
                         className={`mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full ${
@@ -346,25 +364,55 @@ function NodeInspector({
                       />
                       <span className="flex-1 text-[12.5px] leading-snug text-[var(--text-secondary)] group-hover/r:text-[var(--text)]">
                         {r.statement}
-                      </span>
-                      <span
-                        className={`mt-px inline-flex shrink-0 items-center gap-1 text-[10px] tabular-nums ${
-                          mapped > 0
-                            ? "text-[var(--text-muted)]"
-                            : "text-[var(--text-ghost)]"
-                        }`}
-                        title={mapped > 0 ? `${mapped} mapped span(s)` : "unmapped"}
-                      >
-                        {mapped > 0 ? (
-                          <>
-                            <FileCode2 className="h-3 w-3" />
-                            {mapped}
-                          </>
-                        ) : (
-                          <CircleSlash className="h-3 w-3" />
+                        {r.vagrant && (
+                          <span
+                            className="ml-1.5 inline-flex items-center gap-0.5 rounded bg-amber-500/15 px-1 align-middle text-[9px] font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400"
+                            title="Discovered in code — adopt to keep, reject to remove"
+                          >
+                            <Flag className="h-2.5 w-2.5" /> drift
+                          </span>
                         )}
                       </span>
+                      {!reviewable && (
+                        <span
+                          className={`mt-px inline-flex shrink-0 items-center gap-1 text-[10px] tabular-nums ${
+                            mapped > 0
+                              ? "text-[var(--text-muted)]"
+                              : "text-[var(--text-ghost)]"
+                          }`}
+                          title={mapped > 0 ? `${mapped} mapped span(s)` : "unmapped"}
+                        >
+                          {mapped > 0 ? (
+                            <>
+                              <FileCode2 className="h-3 w-3" />
+                              {mapped}
+                            </>
+                          ) : (
+                            <CircleSlash className="h-3 w-3" />
+                          )}
+                        </span>
+                      )}
                     </button>
+                    {reviewable && (
+                      <span className="flex shrink-0 items-center gap-1 pr-1.5 pt-1.5">
+                        <button
+                          type="button"
+                          title="Adopt — keep this as a real responsibility"
+                          onClick={() => onAdoptResponsibility(node.id, r.id)}
+                          className="rounded px-1 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400 hover:bg-[var(--surface-inset)] cursor-pointer"
+                        >
+                          Adopt
+                        </button>
+                        <button
+                          type="button"
+                          title="Reject — the code shouldn't do this"
+                          onClick={() => onRejectResponsibility(node.id, r.id)}
+                          className="rounded px-1 py-0.5 text-[10px] font-medium text-[var(--text-tertiary)] hover:bg-[var(--surface-inset)] cursor-pointer"
+                        >
+                          Reject
+                        </button>
+                      </span>
+                    )}
                   </li>
                 );
               })}

@@ -10,12 +10,20 @@ import { personPath, PERSON_VIEWBOX } from "./shapes";
 import { useZoom } from "./PanZoom";
 import { effectiveNodeStatus } from "./rollup";
 import { STATUS_COLORS } from "./statusColors";
-import { tokenIcon } from "./tokens";
+import { kindIcon } from "./kindIcon";
 
 export const PERSON_W = 190;
 export const PERSON_SVG_H = (PERSON_VIEWBOX.h / PERSON_VIEWBOX.w) * PERSON_W;
 
-function PersonShape({ children }: { children: ReactNode }) {
+function PersonShape({
+  children,
+  nodeId,
+  selected,
+}: {
+  children: ReactNode;
+  nodeId?: string;
+  selected?: boolean;
+}) {
   const zoom = useZoom();
   const uid = useId();
   const fillId = `person-fill-${uid}`;
@@ -23,7 +31,13 @@ function PersonShape({ children }: { children: ReactNode }) {
   const w = PERSON_W * zoom;
   const h = PERSON_SVG_H * zoom;
   return (
-    <div className="flex flex-col items-center" style={{ width: w, minHeight: h }}>
+    <div
+      data-conn-node={nodeId}
+      data-select-node={nodeId}
+      data-pickup={nodeId}
+      className="flex flex-col items-center"
+      style={{ width: w, minHeight: h }}
+    >
       <svg
         width={w}
         height={h}
@@ -60,8 +74,8 @@ function PersonShape({ children }: { children: ReactNode }) {
         <path
           d={personPath(false)}
           fill="none"
-          stroke={`url(#${strokeId})`}
-          strokeWidth={1.5}
+          stroke={selected ? "var(--accent-blue)" : `url(#${strokeId})`}
+          strokeWidth={selected ? 2.5 : 1.5}
         />
       </svg>
       <div
@@ -79,15 +93,17 @@ export type PerimeterVariant = "person" | "external" | "reference";
 export function PerimeterNode({
   node,
   variant,
+  selected = false,
 }: {
   node: Node;
   variant: PerimeterVariant;
+  selected?: boolean;
 }) {
   const zoom = useZoom();
 
   if (variant === "person") {
     return (
-      <PersonShape>
+      <PersonShape nodeId={node.id} selected={selected}>
         <div
           className="truncate font-semibold text-[var(--text-secondary)]"
           style={{ fontSize: 13 * zoom }}
@@ -106,7 +122,7 @@ export function PerimeterNode({
     );
   }
 
-  const Icon = tokenIcon(node.id);
+  const Icon = kindIcon(node);
   const eff = effectiveNodeStatus(node);
   const iconColor =
     variant === "external" || !eff
@@ -115,12 +131,18 @@ export function PerimeterNode({
 
   return (
     <div
-      className="border border-[var(--border)] bg-[var(--surface-canvas)] opacity-70"
+      data-conn-node={node.id}
+      data-select-node={node.id}
+      data-pickup={node.id}
+      className="border bg-[var(--surface-canvas)]"
       style={{
         width: PERSON_W * zoom,
         padding: `${12 * zoom}px ${14 * zoom}px`,
         borderRadius: 12 * zoom,
         borderWidth: zoom,
+        borderColor: selected ? "var(--accent-blue)" : "var(--border)",
+        opacity: selected ? 1 : 0.7,
+        boxShadow: selected ? `0 0 0 ${2 * zoom}px var(--accent-blue)` : undefined,
         fontSize: 13 * zoom,
       }}
     >

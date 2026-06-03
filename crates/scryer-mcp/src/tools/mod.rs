@@ -1,3 +1,4 @@
+mod intent;
 mod links;
 mod misc;
 mod nodes;

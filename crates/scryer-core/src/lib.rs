@@ -1,5 +1,7 @@
+pub mod drift;
 pub mod rules;
 pub mod scan;
+pub mod validate;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -81,6 +83,15 @@ pub struct Responsibility {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(skip)]
     pub directives: Vec<String>,
+    /// Unix seconds of the last truth-bearing edit (statement / status / flags /
+    /// directives). Drives the canvas "fossilization" patina: a fresh edit
+    /// glistens, long-untouched code-backed responsibilities weather to stone.
+    /// Stamped automatically by the write path (agent edits) and the canvas
+    /// mutation helpers (user edits) — never hand-authored, so it's hidden from
+    /// the agent's write-tool input schemas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub last_touched_at: Option<u64>,
 }
 
 // --- Code-level data ---
@@ -93,6 +104,12 @@ pub struct SchemaProperty {
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<Status>,
+    /// Unix seconds of the last truth-bearing edit (label / description /
+    /// status). Drives the fossilization patina, exactly like
+    /// [`Responsibility::last_touched_at`]; stamped automatically, never authored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub last_touched_at: Option<u64>,
 }
 
 /// A source-file pointer attached to a node. Wide glob + optional comment;
@@ -295,6 +312,18 @@ impl ModelRef {
         }
     }
 
+    pub fn lock_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".lock"),
+        }
+    }
+
+    pub fn sync_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".sync"),
+        }
+    }
+
     pub fn dir(&self) -> PathBuf {
         match self {
             ModelRef::ProjectLocal(path) => path.join(".scryer"),
@@ -324,7 +353,7 @@ fn ensure_project_gitignore(scryer_dir: &Path) -> Result<(), String> {
     if !gitignore.exists() {
         fs::write(
             &gitignore,
-            "*.baseline.scry\n.implementing\n.sync\n.tmp.*\n",
+            "*.baseline.scry\n.implementing\n.sync\n.tmp.*\n.lock\n",
         )
         .map_err(|e| format!("Failed to create .gitignore: {}", e))?;
     }
@@ -356,6 +385,37 @@ pub fn read_model_at(r: &ModelRef) -> Result<ScryModel, String> {
     serde_json::from_value(v).map_err(|e| e.to_string())
 }
 
+/// RAII guard holding the exclusive write lock for a model. The lock is an
+/// advisory OS file lock on `.scryer/.lock`; it is released when this guard is
+/// dropped (or the process exits, so a crash never strands it).
+///
+/// Hold it across the WHOLE read-modify-write cycle of a model edit. That
+/// serializes concurrent writers — parallel agent sessions (each its own MCP
+/// process) and the canvas — so they can't clobber each other, and it makes the
+/// `max+1` id minters correct (the read and the write are atomic together, so
+/// two writers can never observe the same max).
+#[must_use = "the lock is released as soon as the guard is dropped"]
+pub struct ModelLock {
+    _file: fs::File,
+}
+
+/// Acquire the exclusive write lock for a model, blocking until it is available.
+/// Creates the `.scryer` directory and lock file if absent.
+pub fn lock_model(r: &ModelRef) -> Result<ModelLock, String> {
+    let dir = r.dir();
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(r.lock_path())
+        .map_err(|e| format!("Failed to open model lock: {}", e))?;
+    file.lock()
+        .map_err(|e| format!("Failed to acquire model lock: {}", e))?;
+    Ok(ModelLock { _file: file })
+}
+
 /// Write raw JSON to the model path. Uses an atomic temp-file + rename so the
 /// frontend file watcher sees a single inotify event.
 pub fn write_model_raw_at(r: &ModelRef, data: &str) -> Result<(), String> {
@@ -369,8 +429,109 @@ pub fn write_model_raw_at(r: &ModelRef, data: &str) -> Result<(), String> {
 }
 
 pub fn write_model_at(r: &ModelRef, model: &ScryModel) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(model).map_err(|e| e.to_string())?;
+    // Date each responsibility/property against the version currently on disk
+    // (the prior, read under the same lock the caller holds), then write. This
+    // is the agent-side fossilization clock; the canvas stamps its own edits in
+    // the frontend mutation helpers before it writes raw JSON.
+    let prior = read_model_at(r).ok();
+    let mut stamped = model.clone();
+    stamp_touches(&mut stamped, prior.as_ref(), drift::now_secs());
+    let json = serde_json::to_string_pretty(&stamped).map_err(|e| e.to_string())?;
     write_model_raw_at(r, &json)
+}
+
+/// Whether two responsibilities differ in any *truth-bearing* field — the spec
+/// statement, status, refactoring flags, or directives. Excludes `last_touched_at`
+/// itself (that's the output) so an unchanged responsibility keeps its date.
+fn resp_truth_changed(a: &Responsibility, b: &Responsibility) -> bool {
+    a.statement != b.statement
+        || a.status != b.status
+        || a.vagrant != b.vagrant
+        || a.locked != b.locked
+        || a.relocated_to != b.relocated_to
+        || a.relocated_from != b.relocated_from
+        || a.directives != b.directives
+}
+
+/// Whether two properties differ in any truth-bearing field (label / description
+/// / status). Excludes `last_touched_at`.
+fn prop_truth_changed(a: &SchemaProperty, b: &SchemaProperty) -> bool {
+    a.label != b.label || a.description != b.description || a.status != b.status
+}
+
+/// Stamp `last_touched_at = now` on every responsibility/property whose
+/// truth-bearing content is new or changed relative to `prior`; carry the prior
+/// date forward when the content is unchanged. With no prior (the very first
+/// write of a model file) everything is stamped. Responsibilities are matched
+/// per host (node/group) by id — ids are only unique within a host — and
+/// properties per node by label. No layout lives on a responsibility/property,
+/// so a pure position change can't reach here and won't re-date anything.
+fn stamp_touches(model: &mut ScryModel, prior: Option<&ScryModel>, now: u64) {
+    let node_resps: HashMap<&str, HashMap<&str, &Responsibility>> = prior
+        .map(|p| {
+            p.nodes
+                .iter()
+                .map(|n| {
+                    let m: HashMap<&str, &Responsibility> =
+                        n.responsibilities.iter().map(|r| (r.id.as_str(), r)).collect();
+                    (n.id.as_str(), m)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let node_props: HashMap<&str, HashMap<&str, &SchemaProperty>> = prior
+        .map(|p| {
+            p.nodes
+                .iter()
+                .map(|n| {
+                    let m: HashMap<&str, &SchemaProperty> =
+                        n.properties.iter().map(|pr| (pr.label.as_str(), pr)).collect();
+                    (n.id.as_str(), m)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let group_resps: HashMap<&str, HashMap<&str, &Responsibility>> = prior
+        .map(|p| {
+            p.groups
+                .iter()
+                .map(|g| {
+                    let m: HashMap<&str, &Responsibility> =
+                        g.responsibilities.iter().map(|r| (r.id.as_str(), r)).collect();
+                    (g.id.as_str(), m)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let date_resp = |r: &mut Responsibility, host: Option<&HashMap<&str, &Responsibility>>| {
+        let prev = host.and_then(|m| m.get(r.id.as_str()).copied());
+        r.last_touched_at = match prev {
+            Some(pv) if !resp_truth_changed(pv, r) => pv.last_touched_at,
+            _ => Some(now),
+        };
+    };
+
+    for n in &mut model.nodes {
+        let hr = node_resps.get(n.id.as_str());
+        for r in &mut n.responsibilities {
+            date_resp(r, hr);
+        }
+        let hp = node_props.get(n.id.as_str());
+        for pr in &mut n.properties {
+            let prev = hp.and_then(|m| m.get(pr.label.as_str()).copied());
+            pr.last_touched_at = match prev {
+                Some(pv) if !prop_truth_changed(pv, pr) => pv.last_touched_at,
+                _ => Some(now),
+            };
+        }
+    }
+    for g in &mut model.groups {
+        let hr = group_resps.get(g.id.as_str());
+        for r in &mut g.responsibilities {
+            date_resp(r, hr);
+        }
+    }
 }
 
 // --- Baseline snapshots (for MCP diff) ---
@@ -380,6 +541,26 @@ pub fn save_baseline_at(r: &ModelRef, model: &ScryModel) -> Result<(), String> {
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let json = serde_json::to_string_pretty(model).map_err(|e| e.to_string())?;
     fs::write(&r.baseline_path(), json).map_err(|e| e.to_string())
+}
+
+// --- Reconcile (drift) sync anchor ---
+
+/// Read the drift reconcile anchor (`.scryer/.sync`). Returns the default
+/// (epoch 0, no commit) when absent or unparseable — which makes a first drift
+/// check examine everything.
+pub fn read_sync_state(r: &ModelRef) -> drift::SyncState {
+    fs::read_to_string(r.sync_path())
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Write the drift reconcile anchor. Best-effort, non-atomic (like the baseline).
+pub fn write_sync_state(r: &ModelRef, state: &drift::SyncState) -> Result<(), String> {
+    let dir = r.dir();
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(state).map_err(|e| e.to_string())?;
+    fs::write(r.sync_path(), json).map_err(|e| e.to_string())
 }
 
 /// Read the baseline snapshot. Returns None if absent or version-mismatched.
@@ -423,6 +604,10 @@ pub fn delete_model_at(r: &ModelRef) -> Result<(), String> {
     let imp = r.implementing_path();
     if imp.exists() {
         let _ = fs::remove_file(&imp);
+    }
+    let sync = r.sync_path();
+    if sync.exists() {
+        let _ = fs::remove_file(&sync);
     }
     Ok(())
 }
@@ -621,5 +806,154 @@ mod tests {
         assert_eq!(node.kind, Kind::Symbol);
         assert_eq!(node.responsibilities.len(), 1);
         assert_eq!(node.properties.len(), 1);
+    }
+
+    fn one_resp_model(statement: &str) -> ScryModel {
+        let mut m = ScryModel::new();
+        m.nodes.push(Node {
+            id: "n1".into(),
+            kind: Kind::Component,
+            name: "C".into(),
+            parent_id: None,
+            external: None,
+            technology: None,
+            description: None,
+            responsibilities: vec![Responsibility {
+                id: "r1".into(),
+                statement: statement.into(),
+                status: Some(Status::Implemented),
+                vagrant: None,
+                locked: None,
+                relocated_to: None,
+                relocated_from: None,
+                directives: Vec::new(),
+                last_touched_at: None,
+            }],
+            properties: Vec::new(),
+            cell: None,
+            icon: None,
+            deprecated: None,
+            relocated: None,
+            locked: None,
+            relocated_to: None,
+            relocated_from: None,
+        });
+        m
+    }
+
+    /// The fossilization clock: a responsibility is dated when first written and
+    /// when its truth changes, but a pure layout move carries the date forward.
+    #[test]
+    fn stamp_touches_dates_only_truth_changes() {
+        // First write (no prior): the responsibility gets dated.
+        let mut m = one_resp_model("does X");
+        stamp_touches(&mut m, None, 100);
+        assert_eq!(m.nodes[0].responsibilities[0].last_touched_at, Some(100));
+
+        // Re-write with identical truth but a moved card: the date is carried
+        // forward, not bumped — moving a node is not a touch.
+        let prior = m.clone();
+        let mut moved = m.clone();
+        moved.nodes[0].cell = Some(Cell { row: 3, col: 4 });
+        stamp_touches(&mut moved, Some(&prior), 200);
+        assert_eq!(
+            moved.nodes[0].responsibilities[0].last_touched_at,
+            Some(100),
+            "layout-only change must not re-date the responsibility"
+        );
+
+        // Edit the statement: the responsibility is re-dated to now.
+        let prior = moved.clone();
+        let mut edited = one_resp_model("does Y");
+        edited.nodes[0].cell = Some(Cell { row: 3, col: 4 });
+        stamp_touches(&mut edited, Some(&prior), 300);
+        assert_eq!(
+            edited.nodes[0].responsibilities[0].last_touched_at,
+            Some(300),
+            "a changed statement re-dates the responsibility"
+        );
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    fn temp_ref() -> (tempfile::TempDir, ModelRef) {
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        (dir, r)
+    }
+
+    /// A second independent handle must fail to take the lock while a guard is
+    /// held, and succeed once it is released.
+    #[test]
+    fn lock_is_exclusive_across_handles() {
+        let (_dir, r) = temp_ref();
+        let guard = lock_model(&r).unwrap();
+        let other = fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(r.lock_path())
+            .unwrap();
+        assert!(
+            other.try_lock().is_err(),
+            "a second handle must not acquire the lock while it is held"
+        );
+        drop(guard);
+        assert!(
+            other.try_lock().is_ok(),
+            "the lock is free once the guard is dropped"
+        );
+    }
+
+    /// Concurrent read-modify-write under the lock never loses an update: N
+    /// writers each add one node, and all N land with unique ids — exactly the
+    /// parallel-agent-writes case that clobbered without the lock (two writers
+    /// reading the same model would both mint the same `next_node_id`).
+    #[test]
+    fn concurrent_writes_do_not_clobber() {
+        let (_dir, r) = temp_ref();
+        write_model_at(&r, &ScryModel::new()).unwrap();
+
+        const N: usize = 12;
+        std::thread::scope(|s| {
+            for i in 0..N {
+                let r = r.clone();
+                s.spawn(move || {
+                    let _lock = lock_model(&r).unwrap();
+                    let mut m = read_model_at(&r).unwrap();
+                    let id = next_node_id(&m);
+                    let node = Node {
+                        id,
+                        kind: Kind::System,
+                        name: format!("n{i}"),
+                        parent_id: None,
+                        external: None,
+                        technology: None,
+                        description: None,
+                        responsibilities: Vec::new(),
+                        properties: Vec::new(),
+                        cell: None,
+                        icon: None,
+                        deprecated: None,
+                        relocated: None,
+                        locked: None,
+                        relocated_to: None,
+                        relocated_from: None,
+                    };
+                    m.nodes.push(node);
+                    write_model_at(&r, &m).unwrap();
+                });
+            }
+        });
+
+        let m = read_model_at(&r).unwrap();
+        assert_eq!(m.nodes.len(), N, "every concurrent write landed (no lost updates)");
+        let ids: std::collections::HashSet<&str> =
+            m.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids.len(), N, "all minted ids are unique (no collision)");
     }
 }

@@ -16,6 +16,16 @@ export type { Status };
 
 export const SCRY_VERSION = "0.3" as const;
 
+/** One boundary-owning node whose code changed since the last reconcile, as
+ *  returned by the `get_drift_status` Tauri command (mirrors the Rust
+ *  `scryer_core::drift::DriftScope`). Drives the SyncBar drift panel. */
+export interface DriftScope {
+  nodeId: string;
+  nodeName: string;
+  /** Project-relative files under this node's boundary that changed. */
+  changedFiles: string[];
+}
+
 // --- Core enums --------------------------------------------------------------
 
 export type Kind =
@@ -47,18 +57,28 @@ export interface Responsibility {
   statement: string;
   status?: Status;
   locked?: boolean;
+  /** Discovered in code with no upstream commitment (drift). The user adopts
+   *  it (clear the flag) or rejects it (delete it). */
+  vagrant?: boolean;
   /** Source side: node ID the responsibility was moved to. */
   relocatedTo?: string;
   /** Destination side: node ID the responsibility came from. */
   relocatedFrom?: string;
   /** Optional prescriptive HOW-constraints ("must"/"never" rules) — not part of conformance. */
   directives?: string[];
+  /** Unix seconds of the last truth-bearing edit. Drives the canvas
+   *  fossilization patina (fresh → settled → stone). Stamped automatically by
+   *  the Rust write path (agent edits) and the mutation helpers below (canvas
+   *  edits); never hand-authored. */
+  lastTouchedAt?: number;
 }
 
 export interface SchemaProperty {
   label: string;
   description?: string;
   status?: Status;
+  /** Unix seconds of the last truth-bearing edit — see {@link Responsibility.lastTouchedAt}. */
+  lastTouchedAt?: number;
 }
 
 export interface Source {
@@ -332,6 +352,95 @@ function deriveGroupView(group: Group, visibleNodes: Node[]): GroupView {
 }
 
 // --- Model mutation helpers --------------------------------------------------
+
+/** Unix seconds — the canvas-side fossilization clock. Mirrors Rust's
+ *  `drift::now_secs()`. */
+function nowSecs(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+function sameDirectives(a?: string[], b?: string[]): boolean {
+  const x = a ?? [];
+  const y = b ?? [];
+  if (x.length !== y.length) return false;
+  for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+  return true;
+}
+
+function respTruthChanged(a: Responsibility, b: Responsibility): boolean {
+  return (
+    a.statement !== b.statement ||
+    a.status !== b.status ||
+    a.vagrant !== b.vagrant ||
+    a.locked !== b.locked ||
+    a.relocatedTo !== b.relocatedTo ||
+    a.relocatedFrom !== b.relocatedFrom ||
+    !sameDirectives(a.directives, b.directives)
+  );
+}
+
+function propTruthChanged(a: SchemaProperty, b: SchemaProperty): boolean {
+  return (
+    a.label !== b.label || a.description !== b.description || a.status !== b.status
+  );
+}
+
+/**
+ * Stamp `lastTouchedAt` on every responsibility/property whose truth-bearing
+ * content is new or changed relative to `prev`, carrying the prior date forward
+ * otherwise. The canvas-side mirror of Rust's `stamp_touches`: it runs at the
+ * single write chokepoint (`updateModel`) so EVERY canvas edit — granular,
+ * EditModal bulk-commit, or the auto-"changed" transition — is dated, while a
+ * layout-only change (a card drag, a group resize) re-dates nothing because no
+ * truth field moves. Responsibilities are matched per host by id, properties per
+ * node by label, exactly like the Rust side.
+ */
+export function stampTouches(prev: ScryModel, next: ScryModel): ScryModel {
+  const now = nowSecs();
+  const priorNodeResp = new Map<string, Map<string, Responsibility>>();
+  const priorNodeProp = new Map<string, Map<string, SchemaProperty>>();
+  for (const n of prev.nodes) {
+    priorNodeResp.set(n.id, new Map((n.responsibilities ?? []).map((r) => [r.id, r])));
+    priorNodeProp.set(n.id, new Map((n.properties ?? []).map((p) => [p.label, p])));
+  }
+  const priorGroupResp = new Map<string, Map<string, Responsibility>>();
+  for (const g of prev.groups)
+    priorGroupResp.set(g.id, new Map((g.responsibilities ?? []).map((r) => [r.id, r])));
+
+  const dateResp = (
+    r: Responsibility,
+    host: Map<string, Responsibility> | undefined,
+  ): Responsibility => {
+    const pv = host?.get(r.id);
+    const lastTouchedAt = pv && !respTruthChanged(pv, r) ? pv.lastTouchedAt : now;
+    return r.lastTouchedAt === lastTouchedAt ? r : { ...r, lastTouchedAt };
+  };
+  const dateProp = (
+    p: SchemaProperty,
+    host: Map<string, SchemaProperty> | undefined,
+  ): SchemaProperty => {
+    const pv = host?.get(p.label);
+    const lastTouchedAt = pv && !propTruthChanged(pv, p) ? pv.lastTouchedAt : now;
+    return p.lastTouchedAt === lastTouchedAt ? p : { ...p, lastTouchedAt };
+  };
+
+  return {
+    ...next,
+    nodes: next.nodes.map((n) => {
+      const hr = priorNodeResp.get(n.id);
+      const hp = priorNodeProp.get(n.id);
+      return {
+        ...n,
+        responsibilities: n.responsibilities?.map((r) => dateResp(r, hr)),
+        properties: n.properties?.map((p) => dateProp(p, hp)),
+      };
+    }),
+    groups: next.groups.map((g) => {
+      const hr = priorGroupResp.get(g.id);
+      return { ...g, responsibilities: g.responsibilities?.map((r) => dateResp(r, hr)) };
+    }),
+  };
+}
 
 export function updateNode(
   model: ScryModel,

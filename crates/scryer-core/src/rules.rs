@@ -10,8 +10,13 @@ discharges a responsibility belongs in the source map, not in directives.\n\
 2. Every node justifies its existence through responsibilities it serves. A child node exists to discharge a subset of its \
 parent's responsibilities. A node with no responsibility, or whose responsibilities serve no ancestor commitment, is \
 structurally vagrant — prune it or restate its purpose.\n\
-3. Decompose for checkability. If a responsibility is too coarse to verify at the parent's altitude, add child nodes whose \
-responsibilities together discharge it. The node tree IS the responsibility tree, refined downward.\n\
+3. Decompose for checkability — and keep each node's responsibilities at its OWN altitude. A responsibility names one accountability \
+the node holds, never the handler that discharges it; the handlers are the children one level down (a container's components, a \
+component's symbols). So a parent's responsibilities are FEWER and BROADER than the union of its children's — never a per-child \
+enumeration of what each child does. Test each line: if it reads as describing a single child, it is one altitude too low — lift it \
+to the accountability those children collectively serve, or push it down onto the child. If a responsibility is too coarse to verify \
+at the parent's altitude, add child nodes whose responsibilities together discharge it. The node tree IS the responsibility tree, \
+refined downward.\n\
 4. Groups organize peers along a secondary axis — they never substitute for parent/child decomposition. If the members only \
 make sense as parts of the group, not as independent entities, the group is a missing parent node — promote it and make the \
 members children. Two flavors: **Logical** (no responsibilities) — organizational signal like team ownership, feature areas, \
@@ -67,11 +72,16 @@ about \"the architecture model\", so naming it adds nothing — and cut trailing
 visual architecture editor where users arrange nodes, links, and groups on a canvas\" — no. A `description` is the node's \
 IDENTITY in a few words (what it IS as software), never a summary of the responsibilities listed beneath it; if it reads as \
 a comma-list of those responsibilities, drop it.\n\
-16. Relationships connect nodes at the same C4 level — each diagram tells one level of the story. At system context, persons \
-and external systems relate to the SYSTEM, not to its internal containers; finer-grained relationships (person→container, \
-container→container) belong to the container view, where those nodes are visible. A reference node (anything linked in from \
-outside a subtree) propagates down only while it keeps connecting to nodes at each level. Consequence: every node needs at \
-least one relationship visible at its OWN level. A node linked only across levels — an actor wired straight to a container \
-but never to the system — appears disconnected on its own diagram. Run `validate_model` and fix every \"appears \
-disconnected\" warning before finishing.\n\
+16. Relationships connect nodes at the same C4 level — each diagram tells one level of the story, and `add_links` ENFORCES \
+this (an illegal link is rejected, not saved). A link is legal only when src and dst are siblings (same parent), OR the \
+deeper node's parent already links to the other node — which makes that node a *reference* on the deeper node's surface. \
+References thus propagate DOWN from higher-level links: at system context a person/external links to the SYSTEM; to also wire \
+it to a specific container or component, the relationship must exist at every level in between. So when an external is used \
+deep inside your system, add the link at EACH level: system→external, then container→external, then component→external — each \
+one authorizes the next. Two consequences: (a) you cannot link a deep node straight to a top-level external without the \
+intervening links — add them parent-first (a single `add_links` batch may include all the levels at once); (b) every node \
+still needs a relationship at its OWN level, or it appears disconnected on its own diagram. You may model a relationship only \
+as deep as it is useful — a `container → external` link need not be refined to the component that calls it; the external simply \
+won't appear inside the container view until a component links to it, and that is fine. Never link a node to its own \
+ancestor/descendant — nesting already expresses containment. Run `validate_model` and fix every warning before finishing.\n\
 ";

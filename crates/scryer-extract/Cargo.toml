@@ -1,0 +1,28 @@
+[package]
+name = "scryer-extract"
+version = "0.2.5"
+edition = "2021"
+description = "Deterministic, parser-only first-pass C4 model extraction for Scryer"
+authors = ["Alexander Klos"]
+
+[dependencies]
+scryer-core = { path = "../scryer-core" }
+ignore = "0.4"
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Grammars compiled into the binary. Versions MUST match src-tauri/Cargo.toml so
+# Cargo unifies a single copy across the workspace (a mismatch fails the build).
+tree-sitter = "0.26"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-go = "0.25"
+tree-sitter-java = "0.23"
+tree-sitter-ruby = "0.23"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-php = "0.24"

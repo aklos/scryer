@@ -1,4 +1,4 @@
-use scryer_core::{Kind, ScryModel};
+use crate::{Kind, ScryModel};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -86,7 +86,11 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
             }
         }
 
-        if n.kind == Kind::Symbol && !is_valid_identifier(&n.name, false) {
+        // Symbol names are source identifiers. Types, classes, interfaces, and
+        // React components legitimately start uppercase, so an uppercase start
+        // is allowed — we only reject names that aren't identifier-shaped at all
+        // (spaces, punctuation, leading digits).
+        if n.kind == Kind::Symbol && !is_valid_identifier(&n.name, true) {
             warnings.push(format!(
                 "Symbol node {} (\"{}\") name should be a valid identifier",
                 n.id, n.name
@@ -111,6 +115,8 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
                 "Link {} has src == dst ({}) — self-links are invalid",
                 l.id, l.src
             ));
+        } else if let Some(v) = link_violation(model, &l.src, &l.dst) {
+            warnings.push(describe_violation(model, &l.src, &l.dst, &v));
         }
     }
 
@@ -247,15 +253,15 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
 /// container view shows its containers plus reference nodes linked into it; a
 /// container's component view shows its components plus references; likewise for
 /// the code level. A relationship is only meaningful where both endpoints are
-/// visible at that level. This flags:
-///   - an owned node that connects to nothing visible at its own level
-///     (e.g. an actor that links only to containers, never to the system, so
-///     the system context diagram has no relationship for it);
-///   - a reference node linked to a parent but to none of its children, so it
-///     appears disconnected when you drill in.
+/// visible at that level. This flags an owned node that connects to nothing
+/// visible at its own level — e.g. an actor that links only to containers,
+/// never to the system, so the system context diagram has no relationship for
+/// it. A relationship modeled only at a coarser level (parent→X with no child
+/// linking to X) is NOT flagged: X simply isn't surfaced on the inner view,
+/// which is legal — relationships may be modeled only as deep as they're useful.
 fn check_disconnected(model: &ScryModel) -> Vec<String> {
     let mut warnings: Vec<String> = Vec::new();
-    let by_id: HashMap<&str, &scryer_core::Node> =
+    let by_id: HashMap<&str, &crate::Node> =
         model.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
     // Does any link connect two nodes both present in `visible`? Mark endpoints.
@@ -274,7 +280,6 @@ fn check_disconnected(model: &ScryModel) -> Vec<String> {
     let check_level = |owned: &HashSet<&str>,
                        refs: &HashSet<&str>,
                        view: &str,
-                       parent_name: Option<&str>,
                        warnings: &mut Vec<String>| {
         let visible: HashSet<&str> = owned.union(refs).copied().collect();
         let connected = connected_within(&visible);
@@ -295,18 +300,6 @@ fn check_disconnected(model: &ScryModel) -> Vec<String> {
                 ));
             }
         }
-        for rid in refs {
-            if connected.contains(rid) {
-                continue;
-            }
-            let n = by_id[rid];
-            if let Some(pname) = parent_name {
-                warnings.push(format!(
-                    "'{}' ({}) links to '{}' but not to any of its children — it will appear disconnected in the {}. Add a link from the relevant child to '{}'",
-                    n.name, kind_name(&n.kind), pname, view, n.name
-                ));
-            }
-        }
     };
 
     // System context: persons + systems.
@@ -317,12 +310,14 @@ fn check_disconnected(model: &ScryModel) -> Vec<String> {
         .map(|n| n.id.as_str())
         .collect();
     let empty: HashSet<&str> = HashSet::new();
-    check_level(&system_level, &empty, "system context", None, &mut warnings);
+    check_level(&system_level, &empty, "system context", &mut warnings);
 
     // For each non-external parent, the view of its direct children (one C4
-    // level down): owned = children; refs = any outside node linked to the
-    // parent or to a child, minus the parent's own ancestors and same-level
-    // siblings of the children.
+    // level down): owned = children; refs = the references actually surfaced on
+    // that view — outside nodes linked to a direct child (not merely to the
+    // parent), matching the canvas projection. A relationship modeled only at
+    // the parent level (parent→X with no child link) is not surfaced here and
+    // is not flagged: it is a legal coarser-grained relationship.
     for parent in &model.nodes {
         if parent.external == Some(true) {
             continue;
@@ -345,14 +340,14 @@ fn check_disconnected(model: &ScryModel) -> Vec<String> {
         if owned.is_empty() {
             continue;
         }
-        // Reference nodes: outside the owned set, linked to the parent or a
-        // child, excluding the parent itself and the parent's parent.
+        // Reference nodes: outside the owned set, linked to a direct child
+        // (this is what the canvas surfaces on the view), excluding the parent
+        // itself and the parent's parent.
         let mut refs: HashSet<&str> = HashSet::new();
         for l in &model.links {
-            let touches_parent = l.src == parent.id || l.dst == parent.id;
             let touches_child =
                 owned.contains(l.src.as_str()) || owned.contains(l.dst.as_str());
-            if !(touches_parent || touches_child) {
+            if !touches_child {
                 continue;
             }
             for end in [l.src.as_str(), l.dst.as_str()] {
@@ -368,10 +363,215 @@ fn check_disconnected(model: &ScryModel) -> Vec<String> {
             }
         }
         let view = format!("{} view of '{}'", kind_name(&child_kind), parent.name);
-        check_level(&owned, &refs, &view, Some(&parent.name), &mut warnings);
+        check_level(&owned, &refs, &view, &mut warnings);
     }
 
     warnings
+}
+
+// --- Link legality: the same-level / reference-propagation rule -------------
+//
+// Relationships connect nodes that share a diagram. Two nodes share a diagram
+// when they have the same parent (true siblings). A deeper node may also link
+// to a node from outside its surface ONLY when that node is a *reference* on
+// the surface — and a reference exists only because the parent (one level up)
+// links to it. So a cross-level link is legal iff the parent of the deeper
+// endpoint also links to the shallower endpoint, recursively up to a level
+// where both are siblings. This is the single source of truth for the rule;
+// `add_links` calls it to reject illegal links, and `validate` calls it to
+// flag pre-existing ones.
+
+/// Why a link is illegal. Carries node ids; resolve names via `describe_violation`.
+pub enum LinkViolation {
+    /// One endpoint is an ancestor of the other — containment, not a relationship.
+    Containment { ancestor: String, descendant: String },
+    /// Same depth, different parents — the two never share a diagram.
+    SameLevelDifferentParent,
+    /// A deeper→shallower link with no authorizing link from the deeper node's
+    /// parent to the shallower endpoint, so the shallower node isn't a reference
+    /// on the deeper node's surface.
+    UnauthorizedCrossLevel {
+        deeper: String,
+        other: String,
+        parent: String,
+    },
+}
+
+fn parent_of<'a>(model: &'a ScryModel, id: &str) -> Option<&'a str> {
+    model
+        .nodes
+        .iter()
+        .find(|n| n.id == id)
+        .and_then(|n| n.parent_id.as_deref())
+}
+
+fn depth(model: &ScryModel, id: &str) -> usize {
+    let mut d = 0usize;
+    let mut cur = id.to_string();
+    while let Some(p) = parent_of(model, &cur) {
+        d += 1;
+        cur = p.to_string();
+    }
+    d
+}
+
+fn is_ancestor(model: &ScryModel, anc: &str, desc: &str) -> bool {
+    let mut cur = parent_of(model, desc).map(str::to_string);
+    while let Some(p) = cur {
+        if p == anc {
+            return true;
+        }
+        cur = parent_of(model, &p).map(str::to_string);
+    }
+    false
+}
+
+fn linked_either(model: &ScryModel, x: &str, y: &str) -> bool {
+    model
+        .links
+        .iter()
+        .any(|l| (l.src == x && l.dst == y) || (l.src == y && l.dst == x))
+}
+
+fn name_of<'a>(model: &'a ScryModel, id: &'a str) -> &'a str {
+    model
+        .nodes
+        .iter()
+        .find(|n| n.id == id)
+        .map(|n| n.name.as_str())
+        .unwrap_or(id)
+}
+
+/// Check a (prospective or existing) link against the same-level rule. Returns
+/// `None` when the link is legal. Self-links are caller-handled (returns `None`).
+pub fn link_violation(model: &ScryModel, src: &str, dst: &str) -> Option<LinkViolation> {
+    if src == dst {
+        return None;
+    }
+    if is_ancestor(model, src, dst) {
+        return Some(LinkViolation::Containment {
+            ancestor: src.to_string(),
+            descendant: dst.to_string(),
+        });
+    }
+    if is_ancestor(model, dst, src) {
+        return Some(LinkViolation::Containment {
+            ancestor: dst.to_string(),
+            descendant: src.to_string(),
+        });
+    }
+    // Same parent (including both top-level) → true siblings, always legal.
+    if parent_of(model, src) == parent_of(model, dst) {
+        return None;
+    }
+    let (dsrc, ddst) = (depth(model, src), depth(model, dst));
+    if dsrc == ddst {
+        return Some(LinkViolation::SameLevelDifferentParent);
+    }
+    let (deeper, other) = if dsrc > ddst { (src, dst) } else { (dst, src) };
+    // `deeper` is strictly deeper than `other`, so it has a parent.
+    let parent = match parent_of(model, deeper) {
+        Some(p) => p.to_string(),
+        None => return None,
+    };
+    if !linked_either(model, &parent, other) {
+        return Some(LinkViolation::UnauthorizedCrossLevel {
+            deeper: deeper.to_string(),
+            other: other.to_string(),
+            parent,
+        });
+    }
+    // The authorizing higher-level link must itself be legal.
+    link_violation(model, &parent, other)
+}
+
+/// Node ids that `id` may legally link to on its own surface: its siblings plus
+/// the references inherited from its parent's links. Used to suggest valid
+/// targets in a rejection message.
+pub fn link_targets_for(model: &ScryModel, id: &str) -> Vec<String> {
+    let parent = parent_of(model, id);
+    let mut out: Vec<String> = Vec::new();
+    for n in &model.nodes {
+        if n.id != id && n.parent_id.as_deref() == parent {
+            out.push(n.id.clone());
+        }
+    }
+    if let Some(pp) = parent {
+        for l in &model.links {
+            let other = if l.src == pp {
+                Some(&l.dst)
+            } else if l.dst == pp {
+                Some(&l.src)
+            } else {
+                None
+            };
+            if let Some(o) = other {
+                if o.as_str() != id
+                    && !is_ancestor(model, o, id)
+                    && !is_ancestor(model, id, o)
+                    && !out.contains(o)
+                {
+                    out.push(o.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Human-readable, corrective explanation of a `LinkViolation`. Shared by
+/// `add_links` (rejection) and `validate` (warning).
+pub fn describe_violation(
+    model: &ScryModel,
+    src: &str,
+    dst: &str,
+    v: &LinkViolation,
+) -> String {
+    match v {
+        LinkViolation::Containment {
+            ancestor,
+            descendant,
+        } => format!(
+            "Link {src}→{dst} rejected: '{}' contains '{}' (it is an ancestor in the tree). \
+             Containment is expressed by nesting, not by a link — drop this relationship.",
+            name_of(model, ancestor),
+            name_of(model, descendant)
+        ),
+        LinkViolation::SameLevelDifferentParent => format!(
+            "Link {src}→{dst} rejected: '{}' and '{}' sit at the same level under different \
+             parents, so they never share a diagram. Model the relationship between their \
+             parents instead — it surfaces as a reference when you drill in.",
+            name_of(model, src),
+            name_of(model, dst)
+        ),
+        LinkViolation::UnauthorizedCrossLevel {
+            deeper,
+            other,
+            parent,
+        } => {
+            let targets = link_targets_for(model, deeper);
+            let avail = if targets.is_empty() {
+                "(none yet)".to_string()
+            } else {
+                targets
+                    .iter()
+                    .map(|t| format!("'{}'", name_of(model, t)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            format!(
+                "Link {src}→{dst} rejected: relationships connect nodes at the same level, and \
+                 '{other_name}' is not visible on the surface where '{deeper_name}' lives. First \
+                 add a link between '{parent_name}' and '{other_name}' (one level up) — that makes \
+                 '{other_name}' a reference on '{deeper_name}'s surface — then '{deeper_name}' may \
+                 link to it. Otherwise link '{deeper_name}' to one of the nodes already on its \
+                 surface: {avail}.",
+                other_name = name_of(model, other),
+                deeper_name = name_of(model, deeper),
+                parent_name = name_of(model, parent),
+            )
+        }
+    }
 }
 
 fn kind_name(k: &Kind) -> &'static str {
@@ -390,7 +590,7 @@ fn kind_name(k: &Kind) -> &'static str {
 pub fn validate_coverage(model: &ScryModel, project_path: &Path) -> Vec<String> {
     let mut warnings: Vec<String> = Vec::new();
 
-    let manifest_dirs = scryer_core::scan::manifest_dirs(project_path);
+    let manifest_dirs = crate::scan::manifest_dirs(project_path);
 
     // Collect every source pattern from the source map (line-precise) and the
     // boundary globs.
@@ -421,7 +621,7 @@ pub fn validate_coverage(model: &ScryModel, project_path: &Path) -> Vec<String> 
 
     // Check B: cross-container source overlap
     // Build node → container ancestor lookup
-    let node_map: HashMap<&str, &scryer_core::Node> =
+    let node_map: HashMap<&str, &crate::Node> =
         model.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
     let mut container_of: HashMap<&str, &str> = HashMap::new();

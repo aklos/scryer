@@ -235,3 +235,201 @@ pub(crate) struct SetImplementingRequest {
     pub active: bool,
 }
 
+// --- Intent write tools ---
+//
+// These build nodes from INTENT: the agent supplies meaning (name, plain
+// responsibility statements, the source location it already has from the
+// codebase context), and the tool mints the node id + responsibility ids,
+// fixes the kind from the parent, defaults status to `implemented`, and (for
+// symbols) writes the source map. The agent never constructs the JSON shape.
+
+/// Person/actor to add at the top level.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct PersonItem {
+    /// Display name of the person/actor.
+    pub name: String,
+    /// Their identity in a few words (what they ARE), not a re-list of responsibilities. Optional.
+    pub description: Option<String>,
+    /// Pure business-responsibility statements — one terse verb-led clause each, no mechanism vocabulary. Status defaults to implemented.
+    #[serde(default)]
+    pub responsibilities: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct AddPersonRequest {
+    pub project: Option<String>,
+    /// One or more persons to add.
+    pub items: Vec<PersonItem>,
+}
+
+/// System to add at the top level — either the system being modeled or an
+/// external third-party system it depends on.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SystemItem {
+    pub name: String,
+    /// Identity in a few words (what it IS). Optional.
+    pub description: Option<String>,
+    /// Technology identity, mainly for externals (e.g. "Stripe", "S3"). Omit for the system you are modeling.
+    pub technology: Option<String>,
+    /// true for a third-party system your system depends on; omit for the system being modeled.
+    #[serde(default)]
+    pub external: bool,
+    /// Pure business-responsibility statements. On an external, these read as expectations OF that external.
+    #[serde(default)]
+    pub responsibilities: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct AddSystemRequest {
+    pub project: Option<String>,
+    /// One or more systems to add.
+    pub items: Vec<SystemItem>,
+}
+
+/// Container to add under a system.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ContainerItem {
+    /// ID of the parent system (must be a system node).
+    pub parent_id: String,
+    pub name: String,
+    /// What it IS as software (e.g. "Next.js 14", "PostgreSQL 16", "S3 Bucket"). No mechanism vocabulary in responsibilities — put it here.
+    pub technology: Option<String>,
+    pub description: Option<String>,
+    /// true for an external/third-party container.
+    #[serde(default)]
+    pub external: bool,
+    /// Pure business-responsibility statements. Status defaults to implemented.
+    #[serde(default)]
+    pub responsibilities: Vec<String>,
+    /// Project-relative directory this container owns (from the codebase context). Sets a boundary glob "{dir}/**/*" automatically — no separate update_source_map call needed.
+    pub boundary_dir: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct AddContainerRequest {
+    pub project: Option<String>,
+    /// One or more containers to add.
+    pub items: Vec<ContainerItem>,
+}
+
+/// Component to add under a container. Cluster components from code cohesion +
+/// the dependency graph — NOT one-per-file.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ComponentItem {
+    /// ID of the parent container (must be a container node).
+    pub parent_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// Pure business-responsibility statements. Status defaults to implemented.
+    #[serde(default)]
+    pub responsibilities: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct AddComponentRequest {
+    pub project: Option<String>,
+    /// One or more components to add.
+    pub items: Vec<ComponentItem>,
+}
+
+/// A group: sibling nodes that ship or package together — a SECONDARY axis,
+/// never a substitute for decomposition.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct GroupItem {
+    /// ID of the node whose children are being grouped (the system for a group
+    /// of containers; a container for a group of components).
+    pub parent_id: String,
+    /// Name of the deployment/package unit (e.g. "Integrations", "CMS").
+    pub name: String,
+    /// Identity in a few words. Optional.
+    pub description: Option<String>,
+    /// Node ids to enclose — all must be children of `parent_id`, same level. 2+ members.
+    #[serde(default)]
+    pub member_ids: Vec<String>,
+    /// Optional unit-level responsibility statements (e.g. "deploys atomically"). Status defaults to implemented.
+    #[serde(default)]
+    pub responsibilities: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct AddGroupRequest {
+    pub project: Option<String>,
+    /// One or more groups to create.
+    pub items: Vec<GroupItem>,
+}
+
+/// One declared field of a data-shape symbol.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct PropertyInput {
+    /// Field/variant name as it appears in the declaration.
+    pub label: String,
+    /// What the field holds, in business terms. Optional.
+    #[serde(default)]
+    pub description: String,
+}
+
+/// Symbol (one code definition) to add under a component.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SymbolItem {
+    /// ID of the parent component (must be a component node).
+    pub parent_id: String,
+    /// The identifier exactly as it appears in the source.
+    pub name: String,
+    /// Project-relative file the symbol is defined in (from the codebase context). The source map is anchored to this file + symbol name automatically.
+    pub source_file: String,
+    /// 1-based start line of the definition (from the codebase context). Used for the data-shape declaration anchor.
+    pub line: Option<u32>,
+    /// 1-based end line of the definition.
+    pub end_line: Option<u32>,
+    /// Pure business-responsibility statements (the behavior this definition discharges). Status defaults to implemented. Omit for a pure data type.
+    #[serde(default)]
+    pub responsibilities: Vec<String>,
+    /// Field declarations when this symbol declares a data shape (struct/class/interface/type/config object). One per field. Status defaults to implemented.
+    #[serde(default)]
+    pub properties: Vec<PropertyInput>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct AddSymbolRequest {
+    pub project: Option<String>,
+    /// One or more symbols to add.
+    pub items: Vec<SymbolItem>,
+}
+
+/// A behaviour the code has that no responsibility describes — semantic drift.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct UndescribedItem {
+    /// Terse business statement of what the code does that the model omits.
+    pub statement: String,
+    /// File the behaviour lives in (project-relative).
+    pub source_file: String,
+    /// Enclosing definition name, if any (durable source anchor).
+    pub symbol: Option<String>,
+}
+
+/// An existing responsibility whose code no longer discharges it.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct StaleResponsibility {
+    /// ID of the responsibility that no longer matches its code.
+    pub responsibility_id: String,
+    /// Short factual note on how the code diverged (for the review queue).
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct FlagDriftRequest {
+    pub project: Option<String>,
+    /// The node whose boundary the drift was found in.
+    pub node_id: String,
+    /// Behaviours present in the code that NO responsibility describes — each is
+    /// recorded as a vagrant responsibility on the node for the user to adopt or
+    /// reject. Do NOT include mere code changes that still satisfy an existing
+    /// responsibility.
+    #[serde(default)]
+    pub undescribed: Vec<UndescribedItem>,
+    /// Existing responsibilities whose code no longer discharges them — marked
+    /// `changed` for review.
+    #[serde(default)]
+    pub stale: Vec<StaleResponsibility>,
+}
+

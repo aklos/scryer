@@ -1,12 +1,12 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  ArrowRight,
   ArrowLeft,
   ChevronDown,
   ChevronRight,
   Pencil,
   Plus,
+  Share2,
   Trash2,
   X,
 } from "lucide-react";
@@ -18,95 +18,18 @@ import type {
 } from "./viewmodel";
 import { isDataShape } from "./viewmodel";
 import type { Span } from "./pack";
-import {
-  cardSpan,
-  CARD_HEADER_H,
-  RESP_LINE_H,
-  RESP_PAD,
-  LINK_ROW_H,
-  LINK_PAD,
-} from "./pack";
+import { cardSpan } from "./pack";
 import { STATUS_COLORS } from "./statusColors";
 import type { Status } from "./statusColors";
 import { GridContext } from "./gridcontext";
-import { ModelContext } from "./modelcontext";
+import { ModelContext, VisibleScopeContext } from "./modelcontext";
 import { useZoom, ZoomContext } from "./PanZoom";
-import { findNode } from "./references";
 import { effectiveRespStatus } from "./rollup";
-import { tokenIcon } from "./tokens";
+import { rowSkin } from "./fossil";
+import { kindIcon, typeTag } from "./kindIcon";
 import { ConfirmPopover } from "./ConfirmPopover";
 import { IconPicker, lookupIcon } from "./IconPicker";
 import type { Editor } from "./editor";
-
-function LinkLine({
-  direction,
-  links,
-  onLinkClick,
-}: {
-  direction: "out" | "in";
-  links: { partnerId: string; label: string; method?: string }[];
-  onLinkClick?: (partnerId: string) => void;
-}) {
-  const model = useContext(ModelContext);
-  const zoom = useZoom();
-  const Arrow = direction === "out" ? ArrowRight : ArrowLeft;
-  return (
-    <div
-      className="flex items-center flex-wrap"
-      style={{
-        gap: 6 * zoom,
-        minHeight: LINK_ROW_H * zoom,
-        fontSize: 10 * zoom,
-        lineHeight: `${15 * zoom}px`,
-      }}
-    >
-      <Arrow
-        className="shrink-0 text-[var(--text-ghost)]"
-        style={{ width: 10 * zoom, height: 10 * zoom }}
-      />
-      {links.map((l, i) => {
-        const partner = findNode(model, l.partnerId);
-        const name = partner?.name ?? l.partnerId;
-        return (
-          <span key={l.partnerId} className="inline shrink-0">
-            {i > 0 && (
-              <span
-                className="text-[var(--text-ghost)]"
-                style={{ marginRight: 4 * zoom }}
-              >
-                ·
-              </span>
-            )}
-            <span
-              data-no-pickup={onLinkClick ? "" : undefined}
-              role={onLinkClick ? "button" : undefined}
-              tabIndex={onLinkClick ? 0 : undefined}
-              title={(() => {
-                const parts: string[] = [name];
-                if (l.label) parts.push(l.label);
-                if (l.method) parts.push(`[${l.method}]`);
-                return parts.join(" — ");
-              })()}
-              onClick={
-                onLinkClick
-                  ? (e) => {
-                      e.stopPropagation();
-                      onLinkClick(l.partnerId);
-                    }
-                  : undefined
-              }
-              className={`font-medium text-[var(--text-secondary)] ${
-                onLinkClick ? "cursor-pointer hover:text-[var(--text)] hover:underline" : ""
-              }`}
-            >
-              {name}
-            </span>
-          </span>
-        );
-      })}
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Top-level card: view rendering in the grid + a modal portal for editing.
@@ -123,6 +46,10 @@ export function EntryCardView(props: {
   editor?: Editor;
   cardSelected?: boolean;
   selectedRespId?: string | null;
+  buildActive?: boolean;
+  cardNew?: boolean;
+  newRespIds?: ReadonlySet<string>;
+  dimmed?: boolean;
 }) {
   const zoom = useZoom();
   const [editing, setEditing] = useState(false);
@@ -174,6 +101,10 @@ function ViewCard({
   cardRef,
   cardSelected = false,
   selectedRespId = null,
+  buildActive = false,
+  cardNew = false,
+  newRespIds,
+  dimmed = false,
 }: {
   node: NodeView;
   span: Span;
@@ -187,39 +118,85 @@ function ViewCard({
   cardRef?: React.Ref<HTMLDivElement>;
   cardSelected?: boolean;
   selectedRespId?: string | null;
+  buildActive?: boolean;
+  cardNew?: boolean;
+  newRespIds?: ReadonlySet<string>;
+  /** Pushed back (faded) because another node's connections are being traced. */
+  dimmed?: boolean;
 }) {
   const zoom = useZoom();
   const isPerson = node.kind === "person";
   const isExternal = node.external === true;
   const isCodeKind = node.kind === "symbol";
   const dataShape = isDataShape(node);
+  // Boundary IS the recede axis: persons + externals are "the world" and sit
+  // back on a duller surface; everything in-scope reads at full strength.
+  const isWorld = isPerson || isExternal;
   const navigable = node.kind !== "person" && !isCodeKind && !isExternal;
 
   const isDeprecated = node.deprecated === true;
   const isRelocated = node.relocated === true;
 
+  // The card is a NEUTRAL container — it frames the metadata and holds the
+  // responsibility tiles, but carries no lifecycle/age material itself. The
+  // geology (lifecycle edge + age patina) lives entirely on the tiles below
+  // (`rowSkin`). `now` is shared so every tile ages on one clock; Date.now() at
+  // render is intentional — the patina deepens over real calendar time.
+  const now = Math.floor(Date.now() / 1000);
+
+  // Resting material of the card as a raised "act-on" object: a 1px top-lit
+  // bevel + (in-scope only) a soft contact shadow; the drag clone lifts higher.
+  // The interaction ring (selected blue / AI-new indigo) layers on top.
+  const ringLayer = cardSelected
+    ? `0 0 0 ${2 * zoom}px var(--accent-blue)`
+    : cardNew
+      ? `0 0 0 ${2 * zoom}px var(--accent-indigo)`
+      : null;
+  const restShadow = lifted
+    ? `inset 0 ${zoom}px 0 0 var(--bevel-hi), 0 ${10 * zoom}px ${30 * zoom}px ${-8 * zoom}px rgba(var(--card-shadow), 0.5)`
+    : isWorld
+      ? `inset 0 ${zoom}px 0 0 var(--bevel-hi)`
+      : `inset 0 ${zoom}px 0 0 var(--bevel-hi), 0 ${zoom}px ${2 * zoom}px rgba(var(--card-shadow), var(--card-shadow-a))`;
+  const composedBoxShadow =
+    [ringLayer, restShadow].filter(Boolean).join(", ") || undefined;
+
+  // Shell = border + surface. Refactor flags keep their dashed accent border;
+  // otherwise the border is solid and the *surface* (raised vs receded) tells
+  // in-scope from world apart — not a dashed edge.
   const shellBase = lifted
-    ? "shadow-2xl border-solid border-[var(--border-strong)]"
+    ? "border-solid border-[var(--border-strong)]"
     : ghost
-      ? "opacity-40 border-dashed border-blue-400"
+      ? "opacity-40 border-dashed border-[color:var(--accent-blue)]"
       : isDeprecated
-        ? "shadow-sm border-dashed border-red-400/60"
+        ? "border-dashed border-[color:var(--accent-red)]"
         : isRelocated
-          ? "shadow-sm border-dashed border-violet-400/60"
-          : isExternal
-            ? "shadow-sm border-dashed border-[var(--border-strong)]"
-            : "shadow-md border-solid border-[var(--border)]";
+          ? "border-dashed border-[color:var(--accent-violet)]"
+          : isWorld
+            ? "border-solid border-[var(--border-subtle)]"
+            : "border-solid border-[var(--border)]";
+  const cardBg = isWorld ? "var(--surface-world)" : "var(--surface-raised)";
 
   const incoming = node._incomingLinks;
   const outgoing = node._outgoingLinks;
-  const hasLinks =
-    outgoing.length > 0 || (!dataShape && incoming.length > 0);
+  // Resting connection scent: one aggregated degree, shown as a header chip.
+  // The relationships themselves draw on demand (ConnectionsOverlay on select).
+  // Count only partners present on THIS surface (the same `visibleScope` the
+  // overlay draws against) — a link whose other end lives a level away has no
+  // line here, so counting it would promise a connection the surface can't show.
+  // Self-loops excluded, matching the overlay.
+  const visibleScope = useContext(VisibleScopeContext);
+  const onSurface = (partner: string) =>
+    partner !== node.id && (!visibleScope || visibleScope.has(partner));
+  const degree =
+    outgoing.filter((l) => onSurface(l.dst)).length +
+    (dataShape ? 0 : incoming.filter((l) => onSurface(l.src)).length);
   const nameClass = isCodeKind
     ? "font-mono font-semibold text-[var(--text)]"
     : "font-semibold text-[var(--text)]";
 
+  const tag = typeTag(node);
   const OverrideIcon = lookupIcon(node.icon);
-  const Icon = OverrideIcon ?? tokenIcon(node.id);
+  const Icon = OverrideIcon ?? kindIcon(node);
 
   const properties = node.properties ?? [];
   const responsibilities = node.responsibilities ?? [];
@@ -238,19 +215,30 @@ function ViewCard({
     <div
       ref={cardRef}
       data-select-node={!lifted && !ghost ? node.id : undefined}
-      className={`group/card relative flex h-full w-full flex-col overflow-hidden bg-[var(--surface-raised)] ${shellBase}`}
+      data-conn-node={!lifted && !ghost ? node.id : undefined}
+      className={`group/card relative flex h-full w-full flex-col overflow-hidden ${shellBase} ${buildActive ? "scryer-building" : ""}`}
       style={{
+        backgroundColor: cardBg,
         borderRadius: 12 * zoom,
         borderWidth: (ghost ? 2 : 1) * zoom,
         fontSize: 12 * zoom,
-        opacity: isDeprecated && !lifted && !ghost ? 0.55 : undefined,
-        boxShadow: cardSelected
-          ? `0 0 0 ${2 * zoom}px var(--color-blue-500)`
-          : undefined,
+        transition: "opacity 0.16s ease, filter 0.16s ease",
+        filter: dimmed ? "saturate(0.2)" : undefined,
+        opacity: dimmed
+          ? 0.32
+          : isDeprecated && !lifted && !ghost
+            ? 0.55
+            : undefined,
+        // `scryer-building` animates box-shadow off this width; it overrides the
+        // box-shadow below while the AI is generating this node. The neutral
+        // container only carries the interaction ring (selected blue / AI-new
+        // indigo); the shell class supplies the resting shadow/border otherwise.
+        ["--ring-w" as string]: `${2.5 * zoom}px`,
+        boxShadow: composedBoxShadow,
       }}
       onDoubleClick={handleDoubleClick}
     >
-      {/* identity row */}
+      {/* identity row — a lidded title bar: kind stamp, name, type-tag, count + drill */}
       <div
         data-pickup={pickupId}
         className={`flex shrink-0 items-center border-b border-[var(--border-subtle)] ${
@@ -259,59 +247,52 @@ function ViewCard({
             : ""
         }`}
         style={{
-          gap: 8 * zoom,
-          height: CARD_HEADER_H * zoom,
-          padding: `0 ${12 * zoom}px`,
+          gap: 9 * zoom,
+          padding: `${10 * zoom}px ${11 * zoom}px`,
         }}
       >
-        <Icon
-          className="shrink-0 text-[var(--text-muted)]"
-          style={{ width: 14 * zoom, height: 14 * zoom }}
-        />
-        {(isPerson || isExternal) && (
+        {/* kind stamp — type read as a silhouette, not a label */}
+        <span
+          className="flex shrink-0 items-center justify-center text-[var(--text-secondary)]"
+          style={{
+            width: 26 * zoom,
+            height: 26 * zoom,
+            borderRadius: 7 * zoom,
+            backgroundColor: "var(--surface-hover)",
+            boxShadow: `inset 0 0 0 ${zoom}px var(--border-subtle)`,
+          }}
+        >
+          <Icon style={{ width: 15 * zoom, height: 15 * zoom }} />
+        </span>
+        {/* name + type-tag (the textual fallback for the silhouette) */}
+        <span className="min-w-0 flex-1">
           <span
-            className="shrink-0 font-semibold uppercase text-[var(--text-ghost)]"
-            style={{
-              fontSize: 9 * zoom,
-              letterSpacing: 0.08 * zoom + "em",
-              padding: `${1 * zoom}px ${5 * zoom}px`,
-              border: `${zoom}px solid var(--border-subtle)`,
-              borderRadius: 4 * zoom,
-            }}
+            className={`block truncate ${nameClass}`}
+            style={{ fontSize: 14.5 * zoom, lineHeight: 1.2 }}
           >
-            {isPerson ? "Person" : "External"}
+            {node.name || "Untitled"}
+            {node.kind === "symbol" && "()"}
           </span>
-        )}
-        <span className="flex-1 truncate text-[var(--text-muted)]" style={{ fontSize: 13 * zoom }}>
-          <span className={nameClass}>{node.name || "Untitled"}</span>
-          {node.kind === "symbol" && <span className={nameClass}>()</span>}
-          {!isCodeKind && node.technology && (
-            <span
-              className="italic text-[var(--text-muted)]"
-              style={{ fontSize: 11 * zoom, marginLeft: 6 * zoom }}
-            >
-              {node.technology}
-            </span>
-          )}
+          <span
+            className="block truncate"
+            style={{ fontSize: 11 * zoom, marginTop: 1 * zoom }}
+          >
+            <span className="font-medium text-[var(--text-secondary)]">{tag.type}</span>
+            {tag.tech && <span className="text-[var(--text-muted)]"> · {tag.tech}</span>}
+          </span>
         </span>
         {isDeprecated && (
           <span
-            className="shrink-0 font-semibold uppercase text-red-400/80"
-            style={{
-              fontSize: 9.5 * zoom,
-              letterSpacing: 0.14 * zoom + "em",
-            }}
+            className="shrink-0 font-semibold uppercase text-[color:var(--accent-red)]"
+            style={{ fontSize: 9.5 * zoom, letterSpacing: 0.14 * zoom + "em" }}
           >
             Deprecated
           </span>
         )}
         {isRelocated && (
           <span
-            className="shrink-0 font-semibold uppercase text-violet-400/80"
-            style={{
-              fontSize: 9.5 * zoom,
-              letterSpacing: 0.14 * zoom + "em",
-            }}
+            className="shrink-0 font-semibold uppercase text-[color:var(--accent-violet)]"
+            style={{ fontSize: 9.5 * zoom, letterSpacing: 0.14 * zoom + "em" }}
           >
             Relocated
           </span>
@@ -330,6 +311,18 @@ function ViewCard({
           >
             <Pencil style={{ width: 12 * zoom, height: 12 * zoom }} />
           </button>
+        )}
+        {/* resting connection scent — one aggregated degree in a fixed slot */}
+        {degree > 0 && (
+          <span
+            className="flex shrink-0 items-center font-semibold text-[var(--text-muted)]"
+            style={{ gap: 4 * zoom, fontSize: 11 * zoom }}
+            title={`${degree} connection${degree === 1 ? "" : "s"}`}
+            aria-label={`${degree} connections`}
+          >
+            <Share2 style={{ width: 12 * zoom, height: 12 * zoom }} />
+            {degree}
+          </span>
         )}
         {navigable && (
           <button
@@ -357,127 +350,139 @@ function ViewCard({
       {/* description */}
       {node.description && (
         <div
-          className="shrink-0 text-[var(--text-muted)]"
+          className="shrink-0 text-[var(--text-secondary)]"
           style={{
-            padding: `${6 * zoom}px ${12 * zoom}px`,
-            fontSize: 11 * zoom,
-            lineHeight: `${16 * zoom}px`,
+            padding: `${8 * zoom}px ${12 * zoom}px ${3 * zoom}px`,
+            fontSize: 12 * zoom,
+            lineHeight: `${17 * zoom}px`,
           }}
         >
           {node.description}
         </div>
       )}
 
-      {/* data-shape properties */}
+      {/* data-shape properties — seated in a sunken read-well; status = the lip */}
       {properties.length > 0 && (
         <div
-          className="border-t border-[var(--border-subtle)]"
-          style={{ padding: `${(RESP_PAD / 2) * zoom}px ${12 * zoom}px` }}
+          className="flex flex-col"
+          style={{
+            margin: `0 ${7 * zoom}px ${8 * zoom}px`,
+            marginTop: node.description ? 6 * zoom : 8 * zoom,
+            padding: 3 * zoom,
+            borderRadius: 7 * zoom,
+            backgroundColor: "var(--well)",
+            boxShadow: `inset 0 ${zoom}px ${2 * zoom}px rgba(0,0,0,0.18), inset 0 0 0 ${zoom}px rgba(0,0,0,0.1)`,
+          }}
         >
           {properties.map((p, i) => {
             const eff = p.status ?? "proposed";
-            const colors = STATUS_COLORS[eff] ?? null;
+            const psk = rowSkin(eff, p.lastTouchedAt, false, now, zoom);
+            // Hairline floored at 1 device px so the divider doesn't vanish to
+            // sub-pixel when zoomed out (it still scales up past 1× when zoomed in).
+            const sep = i > 0 ? `inset 0 ${Math.max(1, zoom)}px 0 0 var(--row-sep)` : null;
             return (
               <div
                 key={i}
-                className="flex items-start"
-                style={{ gap: 8 * zoom, minHeight: RESP_LINE_H * zoom, lineHeight: `${16 * zoom}px`, paddingTop: 4 * zoom, paddingBottom: 4 * zoom }}
+                style={{
+                  padding: `${7 * zoom}px ${10 * zoom}px ${7 * zoom}px ${11 * zoom}px`,
+                  borderRadius: 5 * zoom,
+                  lineHeight: `${17 * zoom}px`,
+                  boxShadow: [psk.edge, sep].filter(Boolean).join(", ") || undefined,
+                }}
               >
                 <span
-                  className={`shrink-0 rounded-full ${colors ? colors.dot : "bg-[var(--text-ghost)]"}`}
-                  style={{ width: 6 * zoom, height: 6 * zoom, marginTop: 5 * zoom }}
-                  title={colors?.label}
-                  aria-label={colors?.label}
-                />
-                <div className="flex-1" style={{ minWidth: 0 }}>
-                  <span
-                    className="font-mono font-medium text-[var(--text-secondary)]"
-                    style={{ fontSize: 12 * zoom }}
-                  >
-                    {p.label}
+                  className="font-mono font-medium"
+                  style={{ fontSize: 12 * zoom, color: psk.color, fontStyle: psk.italic ? "italic" : undefined }}
+                >
+                  {p.label}
+                </span>
+                {p.description && (
+                  <span className="text-[var(--text-muted)]" style={{ fontSize: 11 * zoom }}>
+                    {" "}
+                    {p.description}
                   </span>
-                  {p.description && (
-                    <>
-                      {" "}
-                      <span
-                        className="text-[var(--text-muted)]"
-                        style={{ fontSize: 11 * zoom }}
-                      >
-                        {p.description}
-                      </span>
-                    </>
-                  )}
-                </div>
+                )}
               </div>
             );
           })}
         </div>
       )}
 
-      {/* responsibilities */}
+      {/* responsibilities — the hero, seated in a sunken read-well */}
       {responsibilities.length > 0 && (
         <div
-          className="border-t border-[var(--border-subtle)]"
-          style={{ padding: `${(RESP_PAD / 2) * zoom}px ${12 * zoom}px` }}
+          className="flex flex-col"
+          style={{
+            margin: `0 ${7 * zoom}px ${8 * zoom}px`,
+            marginTop:
+              node.description || properties.length > 0 ? 6 * zoom : 8 * zoom,
+            padding: 3 * zoom,
+            borderRadius: 7 * zoom,
+            backgroundColor: "var(--well)",
+            boxShadow: `inset 0 ${zoom}px ${2 * zoom}px rgba(0,0,0,0.18), inset 0 0 0 ${zoom}px rgba(0,0,0,0.1)`,
+          }}
         >
-          {responsibilities.map((r) => {
-            const eff = isExternal || isPerson ? undefined : effectiveRespStatus(node, r);
-            const colors = eff ? STATUS_COLORS[eff] : null;
-            const rules = r.directives ?? [];
+          {responsibilities.map((r, i) => {
+            // Person/external lines carry no truth-state → neutral; in-scope rows
+            // wear the geology (lifecycle lip + age patina) via `rowSkin`.
+            const eff = isWorld ? undefined : effectiveRespStatus(node, r);
             const respSelected = selectedRespId === r.id;
+            // Per-row "new" tint. newRespIds is filtered at ingestion to exclude
+            // rows on a still-new node (the card's ring already covers those), so
+            // this fires only for rows added to an already-reviewed card. The
+            // !cardNew guard is a defensive backstop for that invariant.
+            const respNew =
+              !respSelected && !cardNew && (newRespIds?.has(r.id) ?? false);
+            const rsk = isWorld
+              ? null
+              : rowSkin(eff, r.lastTouchedAt, r.vagrant === true, now, zoom);
+            const rules = r.directives ?? [];
+            // Hairline floored at 1 device px so the divider doesn't vanish to
+            // sub-pixel when zoomed out (it still scales up past 1× when zoomed in).
+            const sep = i > 0 ? `inset 0 ${Math.max(1, zoom)}px 0 0 var(--row-sep)` : null;
             return (
               <div
                 key={r.id}
                 data-select-resp={!lifted && !ghost ? r.id : undefined}
-                className={`flex items-start ${
-                  !lifted && !ghost ? "cursor-pointer" : ""
-                }`}
+                className={`flex items-start ${!lifted && !ghost ? "cursor-pointer" : ""}`}
                 style={{
                   gap: 8 * zoom,
-                  minHeight: RESP_LINE_H * zoom,
-                  borderRadius: 4 * zoom,
-                  paddingLeft: 4 * zoom,
-                  paddingRight: 4 * zoom,
-                  marginLeft: -4 * zoom,
-                  marginRight: -4 * zoom,
+                  padding: `${7 * zoom}px ${10 * zoom}px ${7 * zoom}px ${11 * zoom}px`,
+                  borderRadius: 5 * zoom,
                   backgroundColor: respSelected
-                    ? "color-mix(in srgb, var(--color-blue-500) 18%, transparent)"
-                    : undefined,
+                    ? "color-mix(in srgb, var(--accent-blue) 18%, transparent)"
+                    : respNew
+                      ? "color-mix(in srgb, var(--accent-indigo) 15%, transparent)"
+                      : undefined,
+                  boxShadow: [rsk?.edge, sep].filter(Boolean).join(", ") || undefined,
                 }}
               >
+                {/* list bullet — neutral marker; status stays on the left lip */}
                 <span
-                  className={`shrink-0 rounded-full ${
-                    colors ? colors.dot : "bg-[var(--text-ghost)]"
-                  }`}
-                  style={{
-                    width: 6 * zoom,
-                    height: 6 * zoom,
-                    marginTop: 5 * zoom,
-                  }}
-                  title={colors?.label}
-                  aria-label={colors?.label}
+                  aria-hidden
+                  className="shrink-0 rounded-full bg-[var(--text-muted)]"
+                  style={{ width: 4 * zoom, height: 4 * zoom, marginTop: 6.5 * zoom }}
                 />
-                <div className="flex-1" style={{ minWidth: 0 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
                   <span
-                    className="text-[var(--text-secondary)]"
                     style={{
-                      fontSize: 11 * zoom,
-                      lineHeight: `${16 * zoom}px`,
+                      display: "block",
+                      color: isWorld ? "var(--text-secondary)" : rsk?.color ?? "var(--text)",
+                      fontStyle: rsk?.italic ? "italic" : undefined,
+                      fontSize: 13 * zoom,
+                      lineHeight: `${17 * zoom}px`,
                     }}
                   >
                     {r.statement}
                   </span>
                   {rules.map((rule, ri) => (
-                    <div
+                    <span
                       key={ri}
-                      className="text-[var(--text-ghost)]"
-                      style={{
-                        fontSize: 10 * zoom,
-                        lineHeight: `${14 * zoom}px`,
-                      }}
+                      className="block text-[var(--text-muted)]"
+                      style={{ fontSize: 10.5 * zoom, lineHeight: `${14 * zoom}px` }}
                     >
                       {rule}
-                    </div>
+                    </span>
                   ))}
                 </div>
               </div>
@@ -486,34 +491,6 @@ function ViewCard({
         </div>
       )}
 
-      {/* links */}
-      {hasLinks && (
-        <div
-          className="shrink-0 border-t border-[var(--border-subtle)]"
-          style={{ padding: `${(LINK_PAD / 2) * zoom}px ${12 * zoom}px` }}
-        >
-          {outgoing.length > 0 && (
-            <LinkLine
-              direction="out"
-              links={outgoing.map((l) => ({
-                partnerId: l.dst,
-                label: l.label,
-                method: l.method,
-              }))}
-            />
-          )}
-          {!dataShape && incoming.length > 0 && (
-            <LinkLine
-              direction="in"
-              links={incoming.map((l) => ({
-                partnerId: l.src,
-                label: l.label,
-                method: l.method,
-              }))}
-            />
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -590,7 +567,7 @@ function EditModal({
   const isPerson = draft.kind === "person";
 
   const OverrideIcon = lookupIcon(draft.icon);
-  const Icon = OverrideIcon ?? tokenIcon(node.id);
+  const Icon = OverrideIcon ?? kindIcon(node);
 
   const validKinds: Kind[] = node.parentId
     ? node.kind === "symbol"
@@ -736,8 +713,7 @@ function EditModal({
             opacity: backdropOn ? 0.55 : 0,
             transition: `opacity ${FLIP_MS}ms ease-out`,
             borderRadius: 12 * sourceZoom,
-            boxShadow:
-              "0 0 0 2px var(--text-secondary), 0 0 0 6px rgba(255,255,255,0.05), 0 0 36px 4px rgba(255,255,255,0.12)",
+            boxShadow: `0 0 0 ${2 * sourceZoom}px var(--text-secondary), 0 ${8 * sourceZoom}px ${24 * sourceZoom}px rgba(var(--focus-halo), var(--focus-halo-a))`,
           }}
         >
           <ZoomContext.Provider value={sourceZoom}>
@@ -1712,6 +1688,10 @@ export function EntryCard({
   editor,
   cardSelected,
   selectedRespId,
+  buildActive,
+  cardNew,
+  newRespIds,
+  dimmed,
 }: {
   node: NodeView;
   onNavigate?: (nodeId: string) => void;
@@ -1719,6 +1699,10 @@ export function EntryCard({
   editor?: Editor;
   cardSelected?: boolean;
   selectedRespId?: string | null;
+  buildActive?: boolean;
+  cardNew?: boolean;
+  newRespIds?: ReadonlySet<string>;
+  dimmed?: boolean;
 }) {
   const { heldId } = useContext(GridContext);
   return (
@@ -1732,6 +1716,10 @@ export function EntryCard({
       editor={editor}
       cardSelected={cardSelected}
       selectedRespId={selectedRespId}
+      buildActive={buildActive}
+      cardNew={cardNew}
+      newRespIds={newRespIds}
+      dimmed={dimmed}
     />
   );
 }
