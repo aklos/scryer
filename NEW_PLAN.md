@@ -1,175 +1,245 @@
-# NEW_PLAN — Drop the canvas; make scryer a wiki for your architecture
+# NEW_PLAN — scryer becomes a planning surface, not a visualization tool
 
-## Premise
+## The problem
 
-The canvas was the wrong primitive. It spent enormous incidental complexity
-(pan/zoom, the zoom-scaling discipline, packing, perimeter nodes, group boxes)
-to arrange *boxes of text* on a grid — and it never delivered the one thing it
-promised, **seeing** the thing. Click a symbol like `GroupOverlay` today and you
-get a 540px side panel with a title, a list of responsibilities, and a lazy
-one-span code teaser. A box around cards never told you what a node *is*.
+Two problems, actually.
 
-The thing we've actually been missing is **observability of a node — especially
-a symbol — itself.** Not a summary. The real code, the real status, the real
-responsibilities and properties and connections, shown properly, on a page that
-belongs to that node.
+**"Visualize your codebase" is useless.** Nobody needs boxes on a grid. The
+canvas ate months on layout algorithms, zoom scaling, collision detection, and
+drag-and-drop — all to render text inside rectangles that told you nothing you
+didn't already know.
 
-So: kill the canvas. scryer becomes a **wiki over the C4 model**.
+**Prose descriptions of code are useless for planning.** A responsibility like
+"renders a thing that nodes go into" is strictly less useful than both the source
+code AND the rendered output. You can't plan against it because it doesn't show
+you the thing you're actually trying to change. You look at GroupOverlay in the
+model, you see a card with two vague sentences. You look at GroupOverlay in the
+app and you see it looks like shit — but you can't describe how to fix it in
+words, and even if you could, the description would be too lossy for an agent to
+act on precisely.
 
-- **Left:** the C4 model as a navigation tree — whole-architecture visibility.
-- **Main:** the selected node *is the current page* — the full observability and
-  planning surface for that node.
+## The core insight
 
-The model on disk (`.scryer/model.scry`) stays the source of truth, unchanged.
-This is a **view-layer pivot**, not a schema rewrite.
+**The right representation for planning depends on what you're looking at.**
 
-## Principles (non-negotiable)
+- For a **handler or service** — a list of responsibilities IS the right
+  abstraction. "Authenticates the user, updates the record, returns X." You can
+  read that, decide what to change, add implementation directives ("auth using
+  JWTs"), and see the exact source lines each responsibility maps to. That's a
+  useful planning surface.
+- For a **visual component** — responsibilities are useless for planning. You
+  need to **see the rendered thing.** The planning primitive is the live preview,
+  and changes are planned visually (prompt → variations → pick), not through
+  prose.
+- For a **data type** — the properties list (type fields, their shapes) is the
+  right representation. Responsibilities don't make sense for a type.
 
-1. **scryer never writes code.** It is the model — the planning and
-   observability layer over your codebase. Your agent implements.
-2. **Editing the page = proposing.** Add a responsibility (or property, or
-   directive, or visual change) on a node's page and it lands as `proposed`.
-   When you ask your agent, it reads the model and knows what to implement.
-3. **Obs and planning are the same surface.** You propose in the same place you
-   verify: the page's code visibility + status + drift is how you *see* whether
-   the agent built what you specified.
+scryer's node page adapts its primary representation based on what the node
+actually is. Source code is always visible as reference material, but it's not
+the planning primitive — the semantic representation is.
 
-## The shape
+## What scryer becomes
 
-### Left — the navigation tree
+A planning and reconciliation surface. Two panels:
 
-The `parentId` containment hierarchy, rendered as a tree: system → container →
-component → symbol, navigable **all the way down to symbols**. (Today
-`handleNavigate` explicitly refuses to descend into `symbol`/`person` — that
-rule is exactly what made symbols second-class, and it goes away. Every node is
-reachable and has a page.)
+### Left panel — the model tree (definition surface)
 
-Groups appear in the tree as **folders** (see below). Breadcrumbs stay as the
-secondary "where am I" affordance.
+The C4 hierarchy rendered as an IDE-style tree explorer. This is where you
+**define** the model — create systems, containers, components, symbols, groups.
+Add, rename, move, delete, reorganize. Same role a file tree plays in a code
+editor: the structural definition of what exists and where it lives.
 
-### Main — the node page
+Every node is reachable and first-class. No more `handleNavigate` refusing to
+descend into symbols. Symbols are the things you actually want to look at.
 
-The heart of the build. For **every** node kind, a page that actually shows the
-node:
+Groups appear as folders wrapping their members. A group is just a folder — the
+tree represents nesting natively, no spatial enclosures needed.
 
-- **Header** — name, kind, technology, status (rolled up from responsibilities).
-- **Description** — the prose about what this node is.
-- **Responsibilities** — editable in place. Add one → it's `proposed`. Each row
-  shows its effective status and its mapped code. This is the planning surface.
-- **Properties** — for symbols that declare a data shape; same proposable edit
-  model.
-- **Code visibility** — *proper*, not a teaser. The node's mapped source shown
-  full and line-anchored, reusing the existing `CodeBlock` / `read_source_span`
-  machinery the inspector already has — promoted from a cramped panel to a
-  first-class region of the page.
-- **Connections** — incoming/outgoing links as a panel (the existing `ConnRow`),
-  each partner clickable to navigate. This is how the relationship graph
-  survives without drawn lines: you walk it page to page.
-- **Boundary** — the node's code boundary globs, when mapped.
+Node status (rolled up from responsibilities) is reflected directly in the tree
+as colored dots/icons, giving an at-a-glance health view of the whole model
+without opening any pages.
 
-The data for all of this already exists in the model and is already computed by
-`InspectorPanel`. The work is presentation: give it a page's worth of room and
-make the code the hero, not a 1-span afterthought.
+### Main panel — node pages (adaptive representation)
 
-### Visual component pages (the one genuinely new tool)
+Click a node in the tree → its page opens. Wikipedia-style layout:
 
-If a symbol is a visual component, **render it right there.** A node can be
-marked as visual and pointed at its Storybook story; its page embeds the live
-story so you see the real component, not a label.
+- **Page header** — node name, kind badge, rolled-up status. Page-level action
+  tabs/controls along the top: trigger render (visual components), run drift
+  check, start agent fill, view change history.
+- **Main content area** (center) — the adaptive representation. Scrollable,
+  section-based. Each section header has an `[edit]` link — click it and that
+  section swaps to edit mode in place (no modals, no separate forms, you edit
+  where you read). Adding/editing anything defaults to `proposed`.
+- **Infobox** (right sidebar) — structured at-a-glance metadata: technology,
+  status, connections as wiki links, boundary globs. Always visible, not mixed
+  into the main content flow.
 
-Visual changes are proposed the same way responsibilities are: prompt a change →
-get ~3 variations to choose between → pick one with a comment. The variations are
-**ephemeral planning renders** (Storybook sandbox); nothing lands in the
-codebase. What persists is a **decision artifact** on the node — the chosen
-direction (screenshot + comment, optionally a reference sketch) in `proposed`
-state. Your agent reads it and implements.
+The main content area **leads with whatever representation actually lets you
+understand and plan changes to this specific kind of thing.**
 
-This is the riskiest, least-proven piece (how variations get generated/rendered
-without writing code is unvalidated), so it is **spiked and built last**, in
-isolation, after the wiki + page + obs surface is working. The durable contract
-is the decision artifact; the generation mechanism is the spike.
+#### Handlers, services, process logic → responsibilities
 
-### Groups — folders with metadata
+Responsibilities are the hero. Each one is a contract item, editable in place.
+Add one → it lands as `proposed`. Each shows:
 
-A group is anchored to one surface (`parentNodeId`) and its members are children
-of that same parent, so a group is a **sub-partition of one node's children** —
-unambiguous in a tree.
+- Its status (proposed / implemented / verified / vagrant).
+- **The exact source lines it maps to** — the specific lines this responsibility
+  touches, rendered with syntax highlighting. Not a file-head teaser. If a
+  responsibility says "validate input schema" you see the validation function.
+- Implementation directives — how the agent should implement or change this.
+  The responsibility says *what*, the directive says *how* ("use JSON web
+  tokens"), the agent reads both.
 
-- **In the tree:** an expandable folder under its parent node, wrapping its
-  member children. Grouped nodes nest under the folder (each node appears once);
-  ungrouped siblings sit directly under the parent. `parentGroupId` nesting is
-  just nested folders.
-- **As a page:** clicking the folder opens the group's page — finally a real home
-  for it. It shows the group's `description`, its **own `responsibilities`**
-  (the deployment/package unit's accountabilities — proposable like any node's),
-  its member roster (each linking to its page), and **rolled-up observability**
-  (aggregate status and drift across members — "is this unit healthy?", which a
-  box could never answer).
-- A group has no code of its own, so no code panel. (A future extension could
-  map a package/deployment unit to a directory boundary; not now.)
+This is the reconciliation surface for backend/process work: you propose, the
+agent implements, you verify on the same page by checking status + reading the
+mapped code.
 
-## What gets removed
+#### Visual components → live rendered preview
 
-The entire spatial-canvas layer and its supporting machinery — the card
-renderers, the pan/zoom container and its scaling discipline, the packing/layout
-engine, the perimeter and connection overlays, and the canvas-only derived view
-types. `cell`/`size` on nodes and groups become vestigial on-disk fields (left in
-place for now; removed in a later schema cleanup).
+The live rendered component is the hero — the actual running component embedded
+on the page, interactive (hover, click, resize, test states). Not a screenshot,
+not a description.
 
-## What stays and gets reused
+**Rendering mechanism:** the agent (via MCP/ACP) generates a render harness for
+the component — entry point, provider wrapping, fixture props — inside
+`.scryer/preview/` in the target project. A minimal Vite config there resolves
+dependencies from the target project's own `node_modules`. The agent runs the
+build into `.scryer/preview/dist/`, and scryer loads the output in an iframe on
+the node page. All preview artifacts stay scoped to `.scryer/`, gitignored. The
+agent handles everything that requires understanding the codebase (dependency
+resolution, context providers, sensible props); scryer just loads and displays.
 
-- The on-disk schema in full: nodes, links, groups, responsibilities,
-  properties, `sourceMap`, `boundaries`, status.
-- All model-mutation intents (the `editor` object: update/add/move
-  responsibilities, properties, nodes, etc.). These edits now happen on the page
-  instead of on cards.
-- The code-rendering path (`CodeBlock`, `read_source_span`, syntax tokenizing) —
-  promoted into the page.
-- `SyncBar`, drift detection, the build flow, the agent session, project
-  picking, the `proposed/implemented/verified/vagrant` status model and its
-  `lastTouchedAt` stamping (the age signal stays useful as obs even though the
-  canvas patina is gone).
+During model generation, the agent flags visual components with a `visual`
+marker on the node. Rendering is **user-initiated**: you open a visual symbol's
+page and trigger the render yourself. The visual representation persists in the
+model so it's there next time you open the page.
 
-## Schema impact
+**Planning visual changes:**
+
+1. **Prompt** — describe what you want ("make the header sticky, reduce padding,
+   swap the icon set").
+2. **Receive variations** — ~3 live rendered alternatives. Ephemeral sandbox
+   renders — interactive, not screenshots.
+3. **Iterate** — pick one, keep prompting refinements. This is all ephemeral,
+   just a back-and-forth in the sandbox.
+4. **Accept** — once you're happy with the full change set, it writes to the
+   model: the node's visual representation updates and the node gets marked
+   proposed/changed. One write, at the end.
+
+Responsibilities may still exist on visual components ("supports drag resize,"
+"renders group boundary") but they're secondary — useful for tracking behavioral
+contracts, not for planning visual changes.
+
+This is the riskiest piece (the rendering + variation mechanism is unvalidated),
+so it's spiked and built last.
+
+#### Data types → properties
+
+The properties list is the hero — type fields, their shapes, their status. Same
+proposable edit model as responsibilities. Responsibilities don't apply here.
+
+### Common page elements (all node kinds)
+
+- **Header** — name, kind, technology, rolled-up status.
+- **Description** — what this node is.
+- **Connections** — incoming/outgoing links as wiki-style links. Click →
+  navigate to that node's page.
+- **Source code** — always visible as reference. The mapped source rendered with
+  syntax highlighting. Engineers need to see the code, but it's reference
+  material, not the planning primitive.
+- **Boundary** — code boundary globs, when mapped.
+
+### Groups — folders with their own pages
+
+A group is just a folder under its parent, wrapping its member nodes. The tree
+represents nesting natively — no spatial enclosures, no collision detection, no
+resize handles.
+
+- **In the tree:** an expandable folder. Create it, drag members into it.
+- **As a page:** the group's own description, its responsibilities (proposable
+  like any node's), member roster (each linking to its page), and rolled-up
+  status across members.
+
+## What gets deleted
+
+The entire spatial layer: Surface, PackBox, PanZoom, EntryCard grid rendering,
+ConnectionsOverlay, PerimeterNode, pack.ts (collision/layout), gridcontext,
+dndTransform, the drag-and-drop system, the zoom-scaling discipline, the
+auto-layout engine. ~5,000 lines of code that existed to arrange rectangles.
+
+`cell`/`size` on nodes and groups become vestigial on-disk fields (cleaned up in
+a later schema pass).
+
+## What stays
+
+- The on-disk schema: nodes, links, groups, responsibilities, properties,
+  sourceMap, boundaries, status.
+- All model-mutation intents (the `editor` object). Edits happen on pages
+  instead of cards.
+- The code-rendering path (CodeBlock, read_source_span, syntax tokenizing) —
+  promoted from a cramped panel to a first-class region of every page.
+- SyncBar, drift detection, build flow, agent session, project picker.
+- The proposed/implemented/verified/vagrant status model and lastTouchedAt
+  stamping.
+- Model generation via MCP/ACP — unchanged. The agent generates the same model
+  (responsibilities, source mapping, properties, links), just without spatial
+  positioning. It additionally flags visual components with a `visual` marker.
+
+## Schema changes
 
 Minimal and additive:
 
 - `cell` / `size` → vestigial (defer removal).
-- A way to mark a node as a visual component and reference its Storybook story
-  (additive optional field).
-- A decision-artifact shape for visual proposals (additive; defined during the
-  visual spike).
+- Implementation directives field on responsibilities (additive).
+- `visual` flag on nodes — marks visual components (set by agent during model
+  generation, used by the page to determine representation).
+- Visual representation field on nodes — persists the rendered state (written
+  on user-initiated render or after accepting visual changes).
 
-No changes to the load-bearing truth (nodes/responsibilities/links/groups/
-sourceMap/boundaries). The Rust `scryer-core` types and the MCP tools keep
-working as-is.
+No changes to the load-bearing schema. Rust types and MCP tools keep working.
 
-## Order of work
+## Build order
 
-1. **Tree + page shell.** Replace the canvas surface with the left tree (full
-   containment, symbols included) + a main pane that routes the selected node to
-   a page. Breadcrumbs + SyncBar stay.
-2. **The node page — real observability.** Build the page properly: status
-   header, description, responsibilities (in-place proposable), properties,
-   first-class code visibility, connections, boundary. This is where most of the
-   value lands.
-3. **Editing = proposing.** Wire in-place page edits to the existing mutation
-   intents, defaulting new items to `proposed`; surface status/drift on the page
-   so build-vs-spec is visible.
-4. **Groups as folders + group page.** Tree folders wrapping members; group page
-   with description, own responsibilities, member roster, rolled-up status/drift.
-5. **Remove the dead canvas layer.** Delete the spatial machinery once nothing
-   routes to it.
-6. **Visual component pages (spiked separately).** Storybook embed for visual
-   symbols, then the prompt → variations → pick+comment decision artifact.
+1. **Tree + page shell.** Replace the canvas with the left tree (full hierarchy,
+   symbols included, status dots) + a main pane routing the selected node to a
+   page. Breadcrumbs + SyncBar stay.
+2. **Node pages — adaptive representation.** Build the page framework with the
+   common elements (header, description, connections, source, boundary). Then
+   the kind-specific heroes: responsibilities for handlers/services, properties
+   for data types. Each responsibility shows its exact mapped source lines.
+3. **Editing as contracts.** Wire in-place edits to existing mutation intents.
+   Add implementation directives field. New items default to `proposed`. Status +
+   drift visible on the page.
+4. **Groups as folders + group pages.** Tree folders, group page with
+   description, own responsibilities, member roster, rolled-up status.
+5. **Delete the canvas.** Remove the spatial layer once nothing routes to it.
+6. **Visual component rendering (spiked separately).** Agent generates render
+   harnesses + minimal Vite config in `.scryer/preview/`, builds into dist,
+   scryer loads in iframe. User-initiated on visual symbol pages.
+7. **Visual change planning.** The prompt → variations → iterate → accept
+   workflow. This is where scryer becomes genuinely better than prompting for
+   UI work.
 
-## Open risks
+## Graph view (secondary, deferred)
 
-- **Visual variation generation** — the one real unknown. Resolved by a spike
-  before committing to a mechanism; the persisted decision artifact is the stable
-  contract regardless of how variations are produced.
-- **Whole-system graph** — the canvas's one real loss is the at-a-glance
-  cross-cutting graph. The bet is that architecture is verified node-by-node via
-  the connections panel + navigation, not by staring at a wire diagram. If that
-  bet is wrong, a dedicated relationship view becomes its own page type later.
-</content>
+If wiki-style connection links aren't enough for navigating relationships, add a
+graph view as a secondary panel — not the primary surface, just an optional way
+to see and click through the connection topology.
+
+The legacy codebase on `main` has working ReactFlow graph rendering that can be
+pulled in if needed. This is a "pull from the shelf" option, not a build
+commitment.
+
+## Risks
+
+- **Visual component rendering** — the agent generates harnesses in
+  `.scryer/preview/` and builds via Vite against the target project's
+  `node_modules`. The agent-side is the hard part (correct provider wrapping,
+  fixture props, dependency resolution). Spike before committing.
+- **Graph view might never be needed** — the legacy rendering code is there if
+  wiki linking falls short, but it might not. Don't build it preemptively.
+- **Determining node kind automatically** — the agent flags visual components
+  during model generation (inferrable from the code). For higher-level nodes
+  the page representation is determined by what content the node has
+  (responsibilities → responsibility view, properties → property view, visual
+  flag → rendered preview).
