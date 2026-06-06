@@ -67,8 +67,10 @@ export function InlineText({
 
   const commit = useCallback(() => {
     setEditing(false);
-    if (draft !== value) onCommit(draft);
-  }, [draft, value, onCommit]);
+    // An auto-edit field opened empty still commits on blur even when left empty,
+    // so the parent can drop a never-filled placeholder (e.g. a blank directive).
+    if (draft !== value || (autoEdit && value === "")) onCommit(draft);
+  }, [draft, value, onCommit, autoEdit]);
 
   const cancel = useCallback(() => {
     setDraft(value);

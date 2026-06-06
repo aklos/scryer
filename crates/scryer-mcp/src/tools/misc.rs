@@ -183,7 +183,6 @@ impl ScryerServer {
             }
         }
         enforce_readonly_directives(&mut model, &prior);
-        enforce_readonly_layout(&mut model, &prior);
 
         if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));

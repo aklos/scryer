@@ -39,20 +39,6 @@ pub enum Status {
     Relocated,
 }
 
-// --- Layout ---
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, schemars::JsonSchema)]
-pub struct Cell {
-    pub row: i32,
-    pub col: i32,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, schemars::JsonSchema)]
-pub struct GroupSize {
-    pub cols: u32,
-    pub rows: u32,
-}
-
 // --- Responsibility ---
 
 /// A pure business-responsibility statement. The `statement` field is the spec;
@@ -140,6 +126,29 @@ pub struct SourceLocation {
     pub command: Option<String>,
 }
 
+// --- Appearance (the look of a UI component) ---
+
+/// What a UI component is accountable for in how it LOOKS — a status-bearing
+/// contract alongside `responsibilities` (behavior) and `properties` (data).
+/// Same lifecycle: `implemented` when synced from code, `proposed` when
+/// planned, `changed` when the code drifts from the modeled look. Carries the
+/// built render artifact (`dist_path` + `source_hash`) used to detect that drift.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Appearance {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<Status>,
+    /// Project-relative path to the built render output directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dist_path: Option<String>,
+    /// Unix seconds when the render was last built.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub built_at: Option<u64>,
+    /// Hash of the source at render time — used to detect drift from the look.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_hash: Option<String>,
+}
+
 // --- Nodes, links, groups ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -162,13 +171,21 @@ pub struct Node {
     /// class, interface, type). Empty for behavior-only symbols.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<SchemaProperty>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cell: Option<Cell>,
     /// Optional lucide-react icon name override. Falls back to a deterministic
     /// icon picked from `id` when unset. Frontend-only meaning; backend just
     /// passes the string through.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// Marks this node as a visual component (React component, UI element):
+    /// the flag that says "this node has a look the render tool can build."
+    /// Set by the agent during model generation or toggled by the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visual: Option<bool>,
+    /// What the component is accountable for in how it LOOKS — a status-bearing
+    /// contract like a responsibility, but visual instead of textual. (Formerly
+    /// `preview`; the alias keeps older `.scry` files loading.)
+    #[serde(default, alias = "preview", skip_serializing_if = "Option::is_none")]
+    pub appearance: Option<Appearance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deprecated: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -209,10 +226,6 @@ pub struct Group {
     pub parent_node_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub responsibilities: Vec<Responsibility>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cell: Option<Cell>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub size: Option<GroupSize>,
     /// Optional lucide-react icon name override. Frontend-only meaning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
@@ -353,7 +366,7 @@ fn ensure_project_gitignore(scryer_dir: &Path) -> Result<(), String> {
     if !gitignore.exists() {
         fs::write(
             &gitignore,
-            "*.baseline.scry\n.implementing\n.sync\n.tmp.*\n.lock\n",
+            "*.baseline.scry\n.implementing\n.sync\n.tmp.*\n.lock\npreview/\n",
         )
         .map_err(|e| format!("Failed to create .gitignore: {}", e))?;
     }
@@ -830,8 +843,9 @@ mod tests {
                 last_touched_at: None,
             }],
             properties: Vec::new(),
-            cell: None,
             icon: None,
+            visual: None,
+            appearance: None,
             deprecated: None,
             relocated: None,
             locked: None,
@@ -842,7 +856,7 @@ mod tests {
     }
 
     /// The fossilization clock: a responsibility is dated when first written and
-    /// when its truth changes, but a pure layout move carries the date forward.
+    /// when its truth changes, but a cosmetic edit carries the date forward.
     #[test]
     fn stamp_touches_dates_only_truth_changes() {
         // First write (no prior): the responsibility gets dated.
@@ -850,22 +864,21 @@ mod tests {
         stamp_touches(&mut m, None, 100);
         assert_eq!(m.nodes[0].responsibilities[0].last_touched_at, Some(100));
 
-        // Re-write with identical truth but a moved card: the date is carried
-        // forward, not bumped — moving a node is not a touch.
+        // Re-write with identical truth but a cosmetic change (icon): the date is
+        // carried forward, not bumped — a non-truth edit is not a touch.
         let prior = m.clone();
         let mut moved = m.clone();
-        moved.nodes[0].cell = Some(Cell { row: 3, col: 4 });
+        moved.nodes[0].icon = Some("Box".into());
         stamp_touches(&mut moved, Some(&prior), 200);
         assert_eq!(
             moved.nodes[0].responsibilities[0].last_touched_at,
             Some(100),
-            "layout-only change must not re-date the responsibility"
+            "a cosmetic-only change must not re-date the responsibility"
         );
 
         // Edit the statement: the responsibility is re-dated to now.
         let prior = moved.clone();
         let mut edited = one_resp_model("does Y");
-        edited.nodes[0].cell = Some(Cell { row: 3, col: 4 });
         stamp_touches(&mut edited, Some(&prior), 300);
         assert_eq!(
             edited.nodes[0].responsibilities[0].last_touched_at,
@@ -936,8 +949,9 @@ mod lock_tests {
                         description: None,
                         responsibilities: Vec::new(),
                         properties: Vec::new(),
-                        cell: None,
                         icon: None,
+                        visual: None,
+                        appearance: None,
                         deprecated: None,
                         relocated: None,
                         locked: None,

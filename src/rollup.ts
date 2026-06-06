@@ -18,12 +18,13 @@ const UNSET: Status = "proposed";
 
 export function effectiveNodeStatus(node: Node): Status | null {
   if (node.external) return null;
-  // A symbol may carry responsibilities, properties (a data shape), or both.
-  // Status rolls up over whatever it carries.
+  // A symbol may carry responsibilities, properties (a data shape), a visual
+  // preview, or any combination. Status rolls up over whatever it carries.
   const statuses: Status[] = [
     ...(node.responsibilities ?? []).map((r) => r.status ?? UNSET),
     ...(node.properties ?? []).map((p) => p.status ?? UNSET),
   ];
+  if (node.appearance?.status) statuses.push(node.appearance.status);
   if (statuses.length === 0) return UNSET;
   return rollupStatus(statuses);
 }

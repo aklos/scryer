@@ -5,9 +5,6 @@
  * `SchemaProperty`, `Kind`, `Status` mirror the Rust types in
  * `crates/scryer-core/src/lib.rs` exactly — what gets read from
  * `{project}/.scryer/model.scry` IS the in-memory model.
- *
- * `SurfaceView`, `NodeView`, `GroupView` are computed on the fly from
- * `(model, parentNodeId)` for rendering. They are not persisted.
  */
 
 import type { Status } from "./statusColors";
@@ -34,20 +31,6 @@ export type Kind =
   | "container"
   | "component"
   | "symbol";
-
-export type Altitude = "system" | "container" | "component" | "code";
-
-// --- Layout ------------------------------------------------------------------
-
-export interface Cell {
-  row: number;
-  col: number;
-}
-
-export interface GroupSize {
-  cols: number;
-  rows: number;
-}
 
 // --- Responsibilities & code-level data --------------------------------------
 
@@ -95,6 +78,15 @@ export interface SourceLocation {
   command?: string;
 }
 
+// --- Appearance (the look of a UI component) ---------------------------------
+
+export interface Appearance {
+  status?: Status;
+  distPath?: string;
+  builtAt?: number;
+  sourceHash?: string;
+}
+
 // --- Nodes & links -----------------------------------------------------------
 
 export interface Node {
@@ -110,9 +102,10 @@ export interface Node {
   responsibilities?: Responsibility[];
   /** Field declarations, when this symbol defines a data shape. */
   properties?: SchemaProperty[];
-  cell?: Cell;
   /** Optional lucide-react icon name override (frontend-only). */
   icon?: string;
+  visual?: boolean;
+  appearance?: Appearance;
   deprecated?: boolean;
   relocated?: boolean;
   locked?: boolean;
@@ -136,8 +129,6 @@ export interface Group {
   parentGroupId?: string;
   parentNodeId?: string | null;
   responsibilities?: Responsibility[];
-  cell?: Cell;
-  size?: GroupSize;
   /** Optional lucide-react icon name override (frontend-only). */
   icon?: string;
 }
@@ -166,50 +157,6 @@ export function emptyModel(): ScryModel {
   };
 }
 
-// --- Derived view types (NOT persisted) --------------------------------------
-
-/**
- * A Node enriched with rendering metadata. `_groupId`, `_outgoingLinks`,
- * `_incomingLinks` are derived from the model on every view computation.
- */
-export interface NodeView extends Node {
-  _groupId?: string;
-  _outgoingLinks: Link[];
-  _incomingLinks: Link[];
-  _childCount: number;
-  /** Convenience alias for legacy renderers that read `links` (= outgoing). */
-  readonly links: Link[];
-  /** Required form of `responsibilities` for renderers. */
-  responsibilities: Responsibility[];
-}
-
-/** A Group enriched with required layout fields (defaulted if absent on disk). */
-export interface GroupView extends Group {
-  cell: Cell;
-  size: GroupSize;
-}
-
-/** The set of nodes + groups visible at one navigation depth. */
-export interface SurfaceView {
-  /** Parent node id, or `null` at the root (top-level systems / persons). */
-  parentId: string | null;
-  altitude: Altitude;
-  entries: NodeView[];
-  groups: GroupView[];
-}
-
-// --- View derivation ---------------------------------------------------------
-
-const ALTITUDE_FOR_PARENT: Record<Kind | "root", Altitude> = {
-  root: "system",
-  system: "container",
-  container: "component",
-  component: "code",
-  // symbols don't have children — no SurfaceView altitude.
-  person: "system",
-  symbol: "code",
-};
-
 /**
  * A symbol that defines a data type — it declares fields and discharges no
  * behavior. Renders with the table affordance and (like the former `schema`
@@ -227,10 +174,6 @@ export function isDataShape(node: {
   );
 }
 
-export function altitudeFor(parentKind: Kind | "root"): Altitude {
-  return ALTITUDE_FOR_PARENT[parentKind];
-}
-
 /** Child kind for a parent kind (used when adding a new node). */
 export function childKindFor(parentKind: Kind | "root"): Kind {
   switch (parentKind) {
@@ -245,110 +188,6 @@ export function childKindFor(parentKind: Kind | "root"): Kind {
     default:
       return "component";
   }
-}
-
-/** Build a SurfaceView for the children of `parentId` (or top-level if null). */
-export function deriveSurfaceView(
-  model: ScryModel,
-  parentId: string | null,
-): SurfaceView {
-  const parentKind: Kind | "root" = parentId
-    ? (model.nodes.find((n) => n.id === parentId)?.kind ?? "root")
-    : "root";
-
-  const visibleNodes = model.nodes.filter(
-    (n) => (n.parentId ?? null) === parentId,
-  );
-
-  // Inverse of Group.memberIds → group id by node id
-  const nodeGroup = new Map<string, string>();
-  for (const g of model.groups) {
-    for (const m of g.memberIds) nodeGroup.set(m, g.id);
-  }
-
-  // Precompute incoming/outgoing by node id (cheap for moderate models)
-  const out = new Map<string, Link[]>();
-  const inc = new Map<string, Link[]>();
-  for (const l of model.links) {
-    (out.get(l.src) ?? out.set(l.src, []).get(l.src)!).push(l);
-    (inc.get(l.dst) ?? inc.set(l.dst, []).get(l.dst)!).push(l);
-  }
-
-  // Precompute direct child count per node
-  const childCount = new Map<string, number>();
-  for (const n of model.nodes) {
-    if (n.parentId) {
-      childCount.set(n.parentId, (childCount.get(n.parentId) ?? 0) + 1);
-    }
-  }
-
-  const entries: NodeView[] = visibleNodes.map((n) => {
-    const outgoing = out.get(n.id) ?? [];
-    const incoming = inc.get(n.id) ?? [];
-    return {
-      ...n,
-      responsibilities: n.responsibilities ?? [],
-      _groupId: nodeGroup.get(n.id),
-      _outgoingLinks: outgoing,
-      _incomingLinks: incoming,
-      _childCount: childCount.get(n.id) ?? 0,
-      links: outgoing,
-    };
-  });
-
-  // Groups visible here = groups with members at this depth, or empty groups
-  // explicitly placed on this surface via parentNodeId.
-  const visibleNodeIds = new Set(visibleNodes.map((n) => n.id));
-  const groups: GroupView[] = model.groups
-    .filter(
-      (g) =>
-        g.memberIds.some((m) => visibleNodeIds.has(m)) ||
-        (g.memberIds.length === 0 &&
-          (g.parentNodeId ?? null) === parentId),
-    )
-    .map((g) => deriveGroupView(g, visibleNodes));
-
-  return {
-    parentId,
-    altitude: altitudeFor(parentKind),
-    entries,
-    groups,
-  };
-}
-
-/**
- * A Group on disk may have no `cell`/`size`. For rendering, default both from
- * the bounding box of its current members; if members lack positions, anchor
- * at (0,0) with a 1×1 size and let the renderer auto-grow.
- */
-function deriveGroupView(group: Group, visibleNodes: Node[]): GroupView {
-  if (group.cell && group.size) {
-    return { ...group, cell: group.cell, size: group.size };
-  }
-  const members = visibleNodes.filter((n) => group.memberIds.includes(n.id));
-  let minRow = Infinity,
-    minCol = Infinity,
-    maxRow = -Infinity,
-    maxCol = -Infinity;
-  for (const n of members) {
-    if (!n.cell) continue;
-    minRow = Math.min(minRow, n.cell.row);
-    minCol = Math.min(minCol, n.cell.col);
-    maxRow = Math.max(maxRow, n.cell.row + 1);
-    maxCol = Math.max(maxCol, n.cell.col + 1);
-  }
-  if (!Number.isFinite(minRow)) {
-    return {
-      ...group,
-      cell: group.cell ?? { row: 0, col: 0 },
-      size: group.size ?? { cols: 1, rows: 1 },
-    };
-  }
-  return {
-    ...group,
-    cell: { row: minRow, col: minCol },
-    size: { cols: maxCol - minCol, rows: maxRow - minRow },
-  };
 }
 
 // --- Model mutation helpers --------------------------------------------------
@@ -453,14 +292,6 @@ export function updateNode(
   };
 }
 
-export function setNodeCell(
-  model: ScryModel,
-  nodeId: string,
-  cell: Cell,
-): ScryModel {
-  return updateNode(model, nodeId, { cell });
-}
-
 /** Move a node into a group (or out of any group when `groupId` is null). */
 export function setNodeGroup(
   model: ScryModel,
@@ -537,16 +368,15 @@ export function nextLinkId(model: ScryModel): string {
 
 // --- Add / remove nodes ------------------------------------------------------
 
-/** Add a new node. Returns `{model, id}`. The cell is left unset; the caller
- *  (or the layout pass) decides where to place it. */
+/** Add a new node. Returns `{model, id}`. */
 export function addNode(
   model: ScryModel,
   init: {
     kind: Kind;
     name: string;
     parentId?: string;
-    cell?: Cell;
     groupId?: string;
+    external?: boolean;
   },
 ): { model: ScryModel; id: string } {
   const id = nextNodeId(model);
@@ -555,7 +385,7 @@ export function addNode(
     kind: init.kind,
     name: init.name,
     parentId: init.parentId,
-    cell: init.cell,
+    external: init.external || undefined,
     responsibilities: [],
     properties: [],
   };
@@ -609,13 +439,11 @@ export function removeNode(model: ScryModel, nodeId: string): ScryModel {
 
 // --- Add / remove groups -----------------------------------------------------
 
-/** Add a new group at the given size (defaults to 2×2). Members start empty. */
+/** Add a new group. Members start empty. */
 export function addGroup(
   model: ScryModel,
   init: {
     name: string;
-    cell?: Cell;
-    size?: GroupSize;
     memberIds?: string[];
     parentNodeId?: string | null;
   },
@@ -626,8 +454,6 @@ export function addGroup(
     name: init.name,
     memberIds: init.memberIds ?? [],
     parentNodeId: init.parentNodeId,
-    cell: init.cell,
-    size: init.size ?? { cols: 2, rows: 2 },
   };
   return { model: { ...model, groups: [...model.groups, group] }, id };
 }
@@ -694,7 +520,8 @@ export function addResponsibility(
 ): { model: ScryModel; id: string } {
   const existing = getResponsibilities(model, host, hostId);
   const id = nextResponsibilityId(existing);
-  const resp: Responsibility = { id, statement };
+  // New items land as proposed — they're a plan until code backs them.
+  const resp: Responsibility = { id, statement, status: "proposed" };
   return {
     model: setResponsibilities(model, host, hostId, [...existing, resp]),
     id,
@@ -851,7 +678,10 @@ export function addProperty(
       const existing = n.properties ?? [];
       return {
         ...n,
-        properties: [...existing, { label, description: description ?? "" }],
+        properties: [
+          ...existing,
+          { label, description: description ?? "", status: "proposed" },
+        ],
       };
     }),
   };

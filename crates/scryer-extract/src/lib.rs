@@ -63,6 +63,12 @@ pub fn extract_context(project: &Path) -> Result<ProjectContext, String> {
             continue;
         };
         let rel_path = rel.to_string_lossy().replace('\\', "/");
+        // Gate: non-product files mint symbol nodes for code that carries no
+        // architecture. Excluded deterministically here (structural, by
+        // path/extension) so they never reach a modeling agent.
+        if !is_modelable_file(&rel_path) {
+            continue;
+        }
         let Ok(source) = std::fs::read_to_string(path) else {
             continue;
         };
@@ -87,10 +93,49 @@ pub fn extract_context(project: &Path) -> Result<ProjectContext, String> {
     Ok(build_context(&project_name, &containers, &files))
 }
 
+/// Deterministic exclusion of non-product source files — code that exists but
+/// carries no architecture, so modeling it only inflates the node graph:
+/// TypeScript declaration/mirror files (`*.d.ts`), test doubles in a `stubs/`
+/// directory, and generated sources. Structural only (path + extension); the
+/// significance of a *real* definition is the modeling agent's semantic call,
+/// never decided here. NOTE: config files are deliberately NOT excluded — a
+/// CMS/ORM collection config (e.g. Payload, Drizzle) declares the real data
+/// model, so whether a config earns a symbol stays the agent's judgment.
+fn is_modelable_file(rel_path: &str) -> bool {
+    if rel_path.ends_with(".d.ts") {
+        return false;
+    }
+    let mut segs = rel_path.split('/');
+    if segs
+        .any(|s| s == "stubs" || s == "generated" || s == "__generated__")
+    {
+        return false;
+    }
+    let file = rel_path.rsplit('/').next().unwrap_or(rel_path);
+    if file.contains(".generated.") || file.contains(".gen.") {
+        return false;
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn excludes_non_product_files() {
+        assert!(!is_modelable_file("docs/src/stubs/tauri.ts"));
+        assert!(!is_modelable_file("src/types/api.d.ts"));
+        assert!(!is_modelable_file("src/schema.generated.ts"));
+        assert!(!is_modelable_file("app/__generated__/gql.ts"));
+        // real product code stays
+        assert!(is_modelable_file("crates/scryer-extract/src/manifest.rs"));
+        assert!(is_modelable_file("src/App.tsx"));
+        // config is NOT excluded — may declare a real data model
+        assert!(is_modelable_file("docs/src/content.config.ts"));
+        assert!(is_modelable_file("src/collections/Users.ts"));
+    }
 
     /// Ad-hoc: dump the container/file/symbol/edge summary for an arbitrary repo.
     /// `REPO=/path cargo test -p scryer-extract dump_external -- --ignored --nocapture`

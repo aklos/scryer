@@ -1,9 +1,6 @@
 use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
-use scryer_core::{
-    Cell, Group, GroupSize, Kind, Link, ModelLock, ModelRef, Node, Responsibility, SchemaProperty,
-    ScryModel,
-};
+use scryer_core::{Kind, ModelLock, ModelRef, Node, Responsibility, ScryModel};
 use std::collections::HashMap;
 
 /// Acquire the exclusive model write lock, or return an error result to surface
@@ -63,10 +60,6 @@ pub(crate) fn kind_str(k: &Kind) -> &'static str {
     }
 }
 
-pub(crate) fn opt_str(s: &Option<String>) -> &str {
-    s.as_deref().unwrap_or("none")
-}
-
 /// Build a denormalized graph view of a node for MCP responses:
 /// adds `childIds`, `incomingLinks`, `outgoingLinks` to the node JSON.
 pub(crate) fn denormalize_node(node: &Node, model: &ScryModel) -> serde_json::Value {
@@ -97,279 +90,70 @@ pub(crate) fn denormalize_node(node: &Node, model: &ScryModel) -> serde_json::Va
     val
 }
 
-/// Compute a human-readable diff between baseline and current.
-pub(crate) fn compute_diff(baseline: &ScryModel, current: &ScryModel) -> String {
-    let base_nodes: HashMap<&str, &Node> =
-        baseline.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-    let curr_nodes: HashMap<&str, &Node> =
-        current.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-    let base_links: HashMap<&str, &Link> =
-        baseline.links.iter().map(|l| (l.id.as_str(), l)).collect();
-    let curr_links: HashMap<&str, &Link> =
-        current.links.iter().map(|l| (l.id.as_str(), l)).collect();
-    let base_groups: HashMap<&str, &Group> =
-        baseline.groups.iter().map(|g| (g.id.as_str(), g)).collect();
-    let curr_groups: HashMap<&str, &Group> =
-        current.groups.iter().map(|g| (g.id.as_str(), g)).collect();
-
-    let mut sections: Vec<String> = Vec::new();
-
-    // Nodes added
-    let added: Vec<_> = current
-        .nodes
-        .iter()
-        .filter(|n| !base_nodes.contains_key(n.id.as_str()))
-        .collect();
-    if !added.is_empty() {
-        let mut lines = vec![format!("Nodes added ({}):", added.len())];
-        for n in &added {
-            let mut detail = format!("  - {} \"{}\" ({})", n.id, n.name, kind_str(&n.kind));
-            if let Some(pid) = &n.parent_id {
-                detail.push_str(&format!(", parent={}", pid));
-            }
-            if let Some(tech) = &n.technology {
-                detail.push_str(&format!(", technology={}", tech));
-            }
-            if !n.responsibilities.is_empty() {
-                detail.push_str(&format!(
-                    ", responsibilities={}",
-                    n.responsibilities.len()
-                ));
-            }
-            lines.push(detail);
+/// Build a compact outline tree of the model: each node carries its id, name,
+/// kind, a one-line description, and responsibility/property COUNTS (not
+/// bodies), plus its children nested under it. Lets an agent grasp a model's
+/// shape without materializing every responsibility, property, link, and
+/// source-map entry. Roots are nodes with no parent. When `include_symbols` is
+/// false the code level is omitted — the architecture overview (drill into a
+/// component with `read_model {node}` to see its symbols).
+pub(crate) fn outline_tree(model: &ScryModel, include_symbols: bool) -> Vec<serde_json::Value> {
+    let mut children_of: HashMap<Option<&str>, Vec<&Node>> = HashMap::new();
+    for n in &model.nodes {
+        if !include_symbols && n.kind == Kind::Symbol {
+            continue;
         }
-        sections.push(lines.join("\n"));
+        children_of
+            .entry(n.parent_id.as_deref())
+            .or_default()
+            .push(n);
     }
 
-    // Nodes removed
-    let removed: Vec<_> = baseline
-        .nodes
-        .iter()
-        .filter(|n| !curr_nodes.contains_key(n.id.as_str()))
-        .collect();
-    if !removed.is_empty() {
-        let mut lines = vec![format!("Nodes removed ({}):", removed.len())];
-        for n in &removed {
-            lines.push(format!(
-                "  - {} \"{}\" ({})",
-                n.id,
-                n.name,
-                kind_str(&n.kind)
-            ));
-        }
-        sections.push(lines.join("\n"));
+    fn build(
+        node: &Node,
+        children_of: &HashMap<Option<&str>, Vec<&Node>>,
+    ) -> serde_json::Value {
+        let kids: Vec<serde_json::Value> = children_of
+            .get(&Some(node.id.as_str()))
+            .map(|cs| cs.iter().map(|c| build(c, children_of)).collect())
+            .unwrap_or_default();
+        let mut v = serde_json::json!({
+            "id": node.id,
+            "name": node.name,
+            "kind": kind_str(&node.kind),
+            "description": node.description,
+            "nResp": node.responsibilities.len(),
+            "nProps": node.properties.len(),
+            "children": kids,
+        });
+        strip_fields_compact(&mut v);
+        v
     }
 
-    // Nodes modified
-    let mut mod_lines: Vec<String> = Vec::new();
-    for (id, curr) in &curr_nodes {
-        if let Some(base) = base_nodes.get(id) {
-            let mut changes: Vec<String> = Vec::new();
-            if base.name != curr.name {
-                changes.push(format!("name \"{}\" -> \"{}\"", base.name, curr.name));
-            }
-            if base.description != curr.description {
-                changes.push("description changed".to_string());
-            }
-            if base.kind != curr.kind {
-                changes.push(format!(
-                    "kind {} -> {}",
-                    kind_str(&base.kind),
-                    kind_str(&curr.kind)
-                ));
-            }
-            if base.technology != curr.technology {
-                changes.push(format!(
-                    "technology {} -> {}",
-                    opt_str(&base.technology),
-                    opt_str(&curr.technology)
-                ));
-            }
-            if base.external != curr.external {
-                changes.push(format!(
-                    "external {:?} -> {:?}",
-                    base.external, curr.external
-                ));
-            }
-            if base.parent_id != curr.parent_id {
-                changes.push(format!(
-                    "parentId {} -> {}",
-                    base.parent_id.as_deref().unwrap_or("none"),
-                    curr.parent_id.as_deref().unwrap_or("none")
-                ));
-            }
-            if responsibilities_changed(&base.responsibilities, &curr.responsibilities) {
-                changes.push(format!(
-                    "responsibilities {} -> {}",
-                    base.responsibilities.len(),
-                    curr.responsibilities.len()
-                ));
-            }
-            if properties_changed(&base.properties, &curr.properties) {
-                changes.push(format!(
-                    "properties {} -> {}",
-                    base.properties.len(),
-                    curr.properties.len()
-                ));
-            }
-            if !changes.is_empty() {
-                mod_lines.push(format!(
-                    "  - {} (\"{}\"): {}",
-                    id,
-                    curr.name,
-                    changes.join(", ")
-                ));
-            }
+    children_of
+        .get(&None)
+        .map(|roots| roots.iter().map(|r| build(r, &children_of)).collect())
+        .unwrap_or_default()
+}
+
+/// Breadcrumb path from a root down to `node_id`, by node name, joined with
+/// " / ". Used to give search hits a location without the caller re-walking the
+/// tree.
+pub(crate) fn breadcrumb(model: &ScryModel, node_id: &str) -> String {
+    let by_id: HashMap<&str, &Node> = model.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let mut names = Vec::new();
+    let mut cur = by_id.get(node_id).copied();
+    let mut guard = 0;
+    while let Some(n) = cur {
+        names.push(n.name.as_str());
+        cur = n.parent_id.as_deref().and_then(|p| by_id.get(p).copied());
+        guard += 1;
+        if guard > 64 {
+            break; // cycle guard
         }
     }
-    if !mod_lines.is_empty() {
-        sections.push(format!(
-            "Nodes modified ({}):\n{}",
-            mod_lines.len(),
-            mod_lines.join("\n")
-        ));
-    }
-
-    // Links added
-    let links_added: Vec<_> = current
-        .links
-        .iter()
-        .filter(|l| !base_links.contains_key(l.id.as_str()))
-        .collect();
-    if !links_added.is_empty() {
-        let mut lines = vec![format!("Links added ({}):", links_added.len())];
-        for l in &links_added {
-            lines.push(format!(
-                "  - {}: {} -> {} \"{}\"",
-                l.id, l.src, l.dst, l.label
-            ));
-        }
-        sections.push(lines.join("\n"));
-    }
-
-    // Links removed
-    let links_removed: Vec<_> = baseline
-        .links
-        .iter()
-        .filter(|l| !curr_links.contains_key(l.id.as_str()))
-        .collect();
-    if !links_removed.is_empty() {
-        let mut lines = vec![format!("Links removed ({}):", links_removed.len())];
-        for l in &links_removed {
-            lines.push(format!(
-                "  - {}: {} -> {} \"{}\"",
-                l.id, l.src, l.dst, l.label
-            ));
-        }
-        sections.push(lines.join("\n"));
-    }
-
-    // Links modified
-    let mut link_mod_lines: Vec<String> = Vec::new();
-    for (id, curr) in &curr_links {
-        if let Some(base) = base_links.get(id) {
-            let mut changes: Vec<String> = Vec::new();
-            if base.label != curr.label {
-                changes.push(format!("label \"{}\" -> \"{}\"", base.label, curr.label));
-            }
-            if base.method != curr.method {
-                changes.push(format!(
-                    "method {} -> {}",
-                    base.method.as_deref().unwrap_or("none"),
-                    curr.method.as_deref().unwrap_or("none")
-                ));
-            }
-            if !changes.is_empty() {
-                link_mod_lines.push(format!("  - {}: {}", id, changes.join(", ")));
-            }
-        }
-    }
-    if !link_mod_lines.is_empty() {
-        sections.push(format!(
-            "Links modified ({}):\n{}",
-            link_mod_lines.len(),
-            link_mod_lines.join("\n")
-        ));
-    }
-
-    // Groups added
-    let groups_added: Vec<_> = current
-        .groups
-        .iter()
-        .filter(|g| !base_groups.contains_key(g.id.as_str()))
-        .collect();
-    if !groups_added.is_empty() {
-        let mut lines = vec![format!("Groups added ({}):", groups_added.len())];
-        for g in &groups_added {
-            lines.push(format!(
-                "  - {} \"{}\" ({} members)",
-                g.id,
-                g.name,
-                g.member_ids.len()
-            ));
-        }
-        sections.push(lines.join("\n"));
-    }
-
-    // Groups removed
-    let groups_removed: Vec<_> = baseline
-        .groups
-        .iter()
-        .filter(|g| !curr_groups.contains_key(g.id.as_str()))
-        .collect();
-    if !groups_removed.is_empty() {
-        let mut lines = vec![format!("Groups removed ({}):", groups_removed.len())];
-        for g in &groups_removed {
-            lines.push(format!("  - {} \"{}\"", g.id, g.name));
-        }
-        sections.push(lines.join("\n"));
-    }
-
-    // Groups modified
-    let mut group_mod_lines: Vec<String> = Vec::new();
-    for (id, curr) in &curr_groups {
-        if let Some(base) = base_groups.get(id) {
-            let mut changes: Vec<String> = Vec::new();
-            if base.name != curr.name {
-                changes.push(format!("name \"{}\" -> \"{}\"", base.name, curr.name));
-            }
-            if base.member_ids.len() != curr.member_ids.len() {
-                changes.push(format!(
-                    "members {} -> {}",
-                    base.member_ids.len(),
-                    curr.member_ids.len()
-                ));
-            }
-            if responsibilities_changed(&base.responsibilities, &curr.responsibilities) {
-                changes.push(format!(
-                    "responsibilities {} -> {}",
-                    base.responsibilities.len(),
-                    curr.responsibilities.len()
-                ));
-            }
-            if !changes.is_empty() {
-                group_mod_lines.push(format!(
-                    "  - {} (\"{}\"): {}",
-                    id,
-                    curr.name,
-                    changes.join(", ")
-                ));
-            }
-        }
-    }
-    if !group_mod_lines.is_empty() {
-        sections.push(format!(
-            "Groups modified ({}):\n{}",
-            group_mod_lines.len(),
-            group_mod_lines.join("\n")
-        ));
-    }
-
-    if sections.is_empty() {
-        "No changes since last seen.".to_string()
-    } else {
-        sections.join("\n\n")
-    }
+    names.reverse();
+    names.join(" / ")
 }
 
 /// Directives are user-authored and read-only to the AI. Before committing any
@@ -402,65 +186,6 @@ pub(crate) fn enforce_readonly_directives(model: &mut ScryModel, prior: &ScryMod
     }
 }
 
-/// Layout is frontend-owned. Node `cell` and group `cell`/`size` exist only so
-/// the visual canvas can persist hand-arranged positions; correct placement
-/// needs DOM measurement the AI doesn't have, so the AI must not place anything.
-/// Before committing any AI write, force every node's `cell` and every group's
-/// `cell`/`size` back to whatever the prior on-disk model held for that id; ids
-/// with no prior entry get none, so newly added nodes/groups are left unplaced
-/// for the canvas to lay out after it measures them.
-pub(crate) fn enforce_readonly_layout(model: &mut ScryModel, prior: &ScryModel) {
-    let prior_cell: HashMap<&str, Option<Cell>> =
-        prior.nodes.iter().map(|n| (n.id.as_str(), n.cell)).collect();
-    for n in &mut model.nodes {
-        n.cell = prior_cell.get(n.id.as_str()).copied().flatten();
-    }
-    let prior_geom: HashMap<&str, (Option<Cell>, Option<GroupSize>)> = prior
-        .groups
-        .iter()
-        .map(|g| (g.id.as_str(), (g.cell, g.size)))
-        .collect();
-    for g in &mut model.groups {
-        let (cell, size) = prior_geom
-            .get(g.id.as_str())
-            .copied()
-            .unwrap_or((None, None));
-        g.cell = cell;
-        g.size = size;
-    }
-}
-
-/// Truth-only property comparison for the diff: ignores `last_touched_at` (the
-/// fossilization clock) so a re-dated-but-unchanged property never reads as a
-/// content change.
-fn properties_changed(a: &[SchemaProperty], b: &[SchemaProperty]) -> bool {
-    if a.len() != b.len() {
-        return true;
-    }
-    a.iter().zip(b.iter()).any(|(pa, pb)| {
-        pa.label != pb.label || pa.description != pb.description || pa.status != pb.status
-    })
-}
-
-fn responsibilities_changed(a: &[Responsibility], b: &[Responsibility]) -> bool {
-    if a.len() != b.len() {
-        return true;
-    }
-    for (ra, rb) in a.iter().zip(b.iter()) {
-        if ra.id != rb.id
-            || ra.statement != rb.statement
-            || ra.status != rb.status
-            || ra.vagrant != rb.vagrant
-            || ra.locked != rb.locked
-            || ra.relocated_to != rb.relocated_to
-            || ra.relocated_from != rb.relocated_from
-            || ra.directives != rb.directives
-        {
-            return true;
-        }
-    }
-    false
-}
 
 /// Project root from request param, active model, or cwd.
 pub(crate) fn resolve_model_ref(req_project: Option<&str>) -> Result<ModelRef, McpError> {

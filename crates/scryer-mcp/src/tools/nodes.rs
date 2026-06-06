@@ -55,10 +55,8 @@ impl ScryerServer {
         };
         if let Ok(prior) = scryer_core::read_model_at(&model_ref) {
             enforce_readonly_directives(&mut model, &prior);
-            enforce_readonly_layout(&mut model, &prior);
         } else {
             enforce_readonly_directives(&mut model, &ScryModel::default());
-            enforce_readonly_layout(&mut model, &ScryModel::default());
         }
         if model.version != scryer_core::SCRY_VERSION {
             return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -127,8 +125,9 @@ impl ScryerServer {
                 description: item.description.clone(),
                 responsibilities: item.responsibilities.clone().unwrap_or_default(),
                 properties: item.properties.clone().unwrap_or_default(),
-                cell: None,
                 icon: None,
+                visual: None,
+                appearance: None,
                 deprecated: None,
                 relocated: None,
                 locked: None,
@@ -139,7 +138,6 @@ impl ScryerServer {
             added_ids.push(id);
         }
         enforce_readonly_directives(&mut model, &prior);
-        enforce_readonly_layout(&mut model, &prior);
 
         if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
@@ -206,6 +204,9 @@ impl ScryerServer {
             if let Some(v) = &u.properties {
                 n.properties = v.clone();
             }
+            if let Some(v) = u.visual {
+                n.visual = if v { Some(true) } else { None };
+            }
             if let Some(v) = u.deprecated {
                 n.deprecated = if v { Some(true) } else { None };
             }
@@ -218,7 +219,6 @@ impl ScryerServer {
             updated += 1;
         }
         enforce_readonly_directives(&mut model, &prior);
-        enforce_readonly_layout(&mut model, &prior);
 
         if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
@@ -229,6 +229,101 @@ impl ScryerServer {
             "Updated {} node(s)",
             updated
         ))]))
+    }
+
+    #[tool(
+        description = "Mark a node's outstanding work as implemented after you've written the code — the counterpart to `get_unimplemented`, which closes the loop. Advances `proposed`/`changed` items to `implemented`. With no `responsibilityIds`, advances EVERYTHING outstanding on the node: every proposed/changed responsibility and property, plus a proposed/changed appearance (the visual). Pass `responsibilityIds` to advance only those responsibilities. Leaves `implemented`/`verified`/`relocated` items untouched (advancing to `verified` is a separate, checked step). Call this when you finish implementing, so the model stops reporting the work as outstanding."
+    )]
+    fn mark_implemented(
+        &self,
+        Parameters(req): Parameters<MarkImplementedRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        use scryer_core::Status;
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_model_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read model at {}: {}",
+                    model_ref, e
+                ))]));
+            }
+        };
+        let prior = model.clone();
+
+        let Some(n) = model.nodes.iter_mut().find(|n| n.id == req.node_id) else {
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "Node '{}' not found",
+                req.node_id
+            ))]));
+        };
+
+        let outstanding = |s: &Option<Status>| {
+            matches!(s, Some(Status::Proposed) | Some(Status::Changed))
+        };
+        let mut resp_done = 0usize;
+        let mut prop_done = 0usize;
+        let mut appearance_done = false;
+
+        match &req.responsibility_ids {
+            // Scoped: advance exactly the named responsibilities (trust the agent).
+            Some(ids) => {
+                for r in n.responsibilities.iter_mut() {
+                    if ids.contains(&r.id) {
+                        r.status = Some(Status::Implemented);
+                        resp_done += 1;
+                    }
+                }
+            }
+            // Whole node: advance every outstanding facet to implemented.
+            None => {
+                for r in n.responsibilities.iter_mut() {
+                    if outstanding(&r.status) {
+                        r.status = Some(Status::Implemented);
+                        resp_done += 1;
+                    }
+                }
+                for p in n.properties.iter_mut() {
+                    if outstanding(&p.status) {
+                        p.status = Some(Status::Implemented);
+                        prop_done += 1;
+                    }
+                }
+                if let Some(a) = n.appearance.as_mut() {
+                    if outstanding(&a.status) {
+                        a.status = Some(Status::Implemented);
+                        appearance_done = true;
+                    }
+                }
+            }
+        }
+
+        enforce_readonly_directives(&mut model, &prior);
+        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
+        }
+        let _ = scryer_core::save_baseline_at(&model_ref, &model);
+
+        let mut parts = Vec::new();
+        if resp_done > 0 {
+            parts.push(format!("{} responsibilit{}", resp_done, if resp_done == 1 { "y" } else { "ies" }));
+        }
+        if prop_done > 0 {
+            parts.push(format!("{} propert{}", prop_done, if prop_done == 1 { "y" } else { "ies" }));
+        }
+        if appearance_done {
+            parts.push("the appearance".to_string());
+        }
+        let summary = if parts.is_empty() {
+            format!("Nothing outstanding on '{}' — model unchanged.", req.node_id)
+        } else {
+            format!("Marked implemented on '{}': {}.", req.node_id, parts.join(", "))
+        };
+        Ok(CallToolResult::success(vec![Content::text(summary)]))
     }
 
     #[tool(
@@ -310,7 +405,6 @@ impl ScryerServer {
             }
         }
         enforce_readonly_directives(&mut model, &prior);
-        enforce_readonly_layout(&mut model, &prior);
 
         if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
@@ -513,3 +607,121 @@ impl ScryerServer {
 // Helper kept here because `Kind` is used in subtree handling below.
 #[allow(dead_code)]
 fn _kind_check(_k: Kind) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use scryer_core::{Appearance, ModelRef, Responsibility, Status};
+
+    fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
+        Node {
+            id: id.into(),
+            kind,
+            name: name.into(),
+            parent_id: parent.map(|p| p.into()),
+            external: None,
+            technology: None,
+            description: None,
+            responsibilities: Vec::new(),
+            properties: Vec::new(),
+            icon: None,
+            visual: None,
+            appearance: None,
+            deprecated: None,
+            relocated: None,
+            locked: None,
+            relocated_to: None,
+            relocated_from: None,
+        }
+    }
+
+    fn resp(id: &str, status: Status) -> Responsibility {
+        Responsibility {
+            id: id.into(),
+            statement: format!("does {id}"),
+            status: Some(status),
+            vagrant: None,
+            locked: None,
+            relocated_to: None,
+            relocated_from: None,
+            directives: Vec::new(),
+            last_touched_at: None,
+        }
+    }
+
+    #[test]
+    fn mark_implemented_advances_outstanding_incl_appearance() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        let mut c = node("node-1", Kind::Component, "ModelTree", None);
+        c.responsibilities = vec![
+            resp("r-prop", Status::Proposed),
+            resp("r-chg", Status::Changed),
+            resp("r-impl", Status::Implemented),
+            resp("r-ver", Status::Verified),
+        ];
+        c.appearance = Some(Appearance {
+            status: Some(Status::Changed),
+            dist_path: None,
+            built_at: None,
+            source_hash: None,
+        });
+        m.nodes.push(c);
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        let server = ScryerServer::new();
+        let project = dir.path().to_string_lossy().to_string();
+
+        // Whole-node: every outstanding facet advances; implemented/verified untouched.
+        server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(project),
+                node_id: "node-1".into(),
+                responsibility_ids: None,
+            }))
+            .unwrap();
+
+        let m = scryer_core::read_model_at(&model_ref).unwrap();
+        let n = &m.nodes[0];
+        let st = |id: &str| n.responsibilities.iter().find(|r| r.id == id).unwrap().status;
+        assert_eq!(st("r-prop"), Some(Status::Implemented)); // proposed -> implemented
+        assert_eq!(st("r-chg"), Some(Status::Implemented)); // changed -> implemented
+        assert_eq!(st("r-impl"), Some(Status::Implemented)); // unchanged
+        assert_eq!(st("r-ver"), Some(Status::Verified)); // NOT downgraded
+        assert_eq!(n.appearance.as_ref().unwrap().status, Some(Status::Implemented));
+    }
+
+    #[test]
+    fn mark_implemented_scoped_to_named_responsibilities() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        let mut c = node("node-1", Kind::Component, "Billing", None);
+        c.responsibilities = vec![resp("r-a", Status::Proposed), resp("r-b", Status::Proposed)];
+        c.appearance = Some(Appearance {
+            status: Some(Status::Changed),
+            dist_path: None,
+            built_at: None,
+            source_hash: None,
+        });
+        m.nodes.push(c);
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        let server = ScryerServer::new();
+
+        server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                node_id: "node-1".into(),
+                responsibility_ids: Some(vec!["r-a".into()]),
+            }))
+            .unwrap();
+
+        let m = scryer_core::read_model_at(&model_ref).unwrap();
+        let n = &m.nodes[0];
+        let st = |id: &str| n.responsibilities.iter().find(|r| r.id == id).unwrap().status;
+        assert_eq!(st("r-a"), Some(Status::Implemented)); // named -> advanced
+        assert_eq!(st("r-b"), Some(Status::Proposed)); // not named -> left
+        // scoped call leaves appearance alone
+        assert_eq!(n.appearance.as_ref().unwrap().status, Some(Status::Changed));
+    }
+}

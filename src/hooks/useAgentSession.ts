@@ -21,6 +21,11 @@ export interface AgentSession {
    *  message snippets, status) — drives the live activity readout. */
   activity: string | null;
   startFill: (cwd: string, modelRef: string, nodeId: string, nodeName: string) => void;
+  startPreview: (cwd: string, modelRef: string, nodeId: string, nodeName: string) => void;
+  startVariation: (
+    cwd: string, modelRef: string, nodeId: string, nodeName: string,
+    prompt: string, variationCount?: number, baseVariationIdx?: number,
+  ) => void;
   cancel: () => void;
 }
 
@@ -38,11 +43,11 @@ export function useAgentSession(): AgentSession {
     };
   }, []);
 
-  const startFill = useCallback(
-    (cwd: string, modelRef: string, nodeId: string, nodeName: string) => {
+  const startSession = useCallback(
+    (command: string, taskLabel: string, args: Record<string, unknown>) => {
       if (running) return;
       setRunning(true);
-      setLabel(nodeName || "node");
+      setLabel(taskLabel);
       setLastTool(null);
       setActivity("starting…");
 
@@ -65,7 +70,7 @@ export function useAgentSession(): AgentSession {
               setActivity((a) => a ?? "working…");
               break;
             case "failed":
-              toast(`Fill failed: ${p.error}`, "error");
+              toast(`${taskLabel} failed: ${p.error}`, "error");
               unlisten.current?.();
               unlisten.current = null;
               setRunning(false);
@@ -83,13 +88,9 @@ export function useAgentSession(): AgentSession {
         unlisten.current = off;
 
         try {
-          await invoke<string>("start_node_fill_session", {
-            cwd,
-            modelRef,
-            nodeId,
-          });
+          await invoke<string>(command, args);
         } catch (e) {
-          toast(`Fill failed to start: ${String(e)}`, "error");
+          toast(`${taskLabel} failed to start: ${String(e)}`, "error");
           unlisten.current?.();
           unlisten.current = null;
           setRunning(false);
@@ -100,6 +101,31 @@ export function useAgentSession(): AgentSession {
     [running, toast],
   );
 
+  const startFill = useCallback(
+    (cwd: string, modelRef: string, nodeId: string, nodeName: string) => {
+      startSession("start_node_fill_session", `Filling ${nodeName || "node"}`, { cwd, modelRef, nodeId });
+    },
+    [startSession],
+  );
+
+  const startPreview = useCallback(
+    (cwd: string, modelRef: string, nodeId: string, nodeName: string) => {
+      startSession("start_preview_session", `Rendering ${nodeName || "component"}`, { cwd, modelRef, nodeId });
+    },
+    [startSession],
+  );
+
+  const startVariation = useCallback(
+    (cwd: string, modelRef: string, nodeId: string, nodeName: string, prompt: string, variationCount?: number, baseVariationIdx?: number) => {
+      startSession(
+        "start_visual_variation_session",
+        `Variations for ${nodeName || "component"}`,
+        { cwd, modelRef, nodeId, prompt, variationCount: variationCount ?? null, baseVariationIdx: baseVariationIdx ?? null },
+      );
+    },
+    [startSession],
+  );
+
   const cancel = useCallback(async () => {
     try {
       await invoke("cancel_agent_session");
@@ -108,5 +134,5 @@ export function useAgentSession(): AgentSession {
     }
   }, []);
 
-  return { running, label, lastTool, activity, startFill, cancel };
+  return { running, label, lastTool, activity, startFill, startPreview, startVariation, cancel };
 }

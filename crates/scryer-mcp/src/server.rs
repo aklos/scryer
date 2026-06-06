@@ -9,7 +9,7 @@ use rmcp::{
 #[derive(Clone)]
 pub struct ScryerServer {
     tool_router: ToolRouter<Self>,
-    /// Session-level active model. Set by `get_model` / `get_node`; used as the
+    /// Session-level active model. Set by `read_model`; used as the
     /// default if a tool call omits `project`.
     pub(crate) active_model: std::sync::Arc<std::sync::Mutex<Option<scryer_core::ModelRef>>>,
 }

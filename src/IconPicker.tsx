@@ -3,8 +3,8 @@
  *
  * Curated set of lucide-react icons (~80) that cover the common cases. The
  * picked name is stored on `node.icon` / `group.icon`; the rendering layer
- * falls back to the deterministic `tokenIcon(id)` choice when no override is
- * set. To clear an override, the user picks the "Default" item at the top.
+ * falls back to the kind silhouette (see kindIcon) when no override is set.
+ * To clear an override, the user picks the "Default" item at the top.
  */
 
 import {

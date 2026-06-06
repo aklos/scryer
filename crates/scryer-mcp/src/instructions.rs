@@ -4,16 +4,23 @@ The user and you both edit the same model: the user through a visual canvas, you
 file lives at `{project}/.scryer/model.scry`.\n\
 \n\
 ## Reading\n\
-- `get_structure {path}` — annotated project directory tree (manifests, infrastructure files, environment templates). \
-Use this before modeling so you can see deployable units, data stores, and external services from one read.\n\
-- `get_model {project?}` — full model. Nodes come back as a denormalized graph view: each node lists its children IDs, \
-incoming link IDs, and outgoing link IDs.\n\
-- `get_node {nodeId}` — a single subtree: the node + its descendants + their internal links + external links to nodes \
-outside the subtree (with the external nodes' names and kinds for context).\n\
+- `read_model {project?, node?}` — read the architecture model. With NO `node`: the OVERVIEW — the whole tree down to \
+components (symbols excluded) with responsibility/property counts; small and safe, your first read. With a `node` id: \
+THAT node's full subtree — descendants (incl. symbols), responsibilities, properties, links, `referencesForChildren` \
+(the only nodes its children may link to), and the subtree's source map + boundaries. Drill into a component to see its \
+symbols. An oversize subtree degrades to its direct-child skeleton with guidance, so you never bury your context.\n\
+- `search_model {query, kind?}` — find nodes by free text (case-insensitive; space-separated terms must ALL match) across \
+names, descriptions, technology, responsibility statements, and property labels. Returns each hit's id, kind, breadcrumb \
+path, and matched fields — locate a concept without loading the whole model, then `read_model {node}` into it.\n\
+- `read_codebase {path}` — annotated project directory tree (manifests, infrastructure files, environment templates). \
+This reads the FILES ON DISK, not the model. Use it before modeling to see deployable units, data stores, and external \
+services from one read.\n\
+- `get_unimplemented {project?}` — what model intent is NOT yet in code: responsibilities/properties at `proposed` (no \
+code) or `changed` (spec edited after implementation), plus `deprecated` nodes (delete code) and `relocated` nodes (move \
+code), each with breadcrumb path and source anchors. Call this to find what needs implementing or syncing to the codebase.\n\
 - `get_rules` — the modeling rules.\n\
-- `get_changes` — diff against your last-seen baseline. Baseline is updated on every read/write tool call.\n\
 - `validate_model` — run the structural validator and surface warnings. Also cross-references manifest \
-directories from `get_structure` against the source map — flags compilation units with no model coverage and \
+directories (from `read_codebase`) against the source map — flags compilation units with no model coverage and \
 shared source directories mapped across container boundaries. Run after building the source map.\n\
 \n\
 ## Writing\n\
@@ -23,15 +30,15 @@ When modeling from a codebase, build the tree with the intent tools — they con
 - `add_person` / `add_system` — top-level actors and systems (set `external: true` for third-party systems). Persons and externals link to the system.\n\
 - `add_container {parentId, name, technology, boundaryDir?}` — a container under a system. Pass `boundaryDir` (the container's directory) and its boundary glob is set for you.\n\
 - `add_component {parentId, name}` — a component under a container. Cluster components from code cohesion + the dependency graph you were given — NOT one per file.\n\
-- `add_symbol {parentId, name, sourceFile, line?, endLine?, properties?}` — one PUBLIC code definition under a component. The source map is anchored to the file + symbol name for you; give `properties` when it declares a data shape — and for a framework registration object (CMS collection / ORM model) those are the declared FIELDS (the record's columns), never the config wrapper keys (slug/admin/hooks/access). One symbol per real definition: fold generated mirror types (`*-types`, `*.d.ts`) into the source-of-truth symbol and leave private helper methods out. No separate `update_source_map` call needed.\n\
+- `add_symbol {parentId, name, sourceFile, line?, endLine?, properties?}` — one architecturally meaningful code definition under a component. A definition earns a symbol ONLY when it carries a behavioral responsibility at its own altitude, a declared data shape, or a cross-boundary link — being a real public definition is NOT enough. Skip trivial pass-through wrappers, thin re-exports, getters/setters, and test stubs; fold what they do into the component's responsibilities. Aim for a handful of meaningful symbols per component, not a mirror of every definition. The source map is anchored to the file + symbol name for you; give `properties` when it declares a data shape — and for a framework registration object (CMS collection / ORM model) those are the declared FIELDS (the record's columns), never the config wrapper keys (slug/admin/hooks/access). Fold generated mirror types (`*-types`, `*.d.ts`) into the source-of-truth symbol and leave private helper methods out. No separate `update_source_map` call needed.\n\
 - `add_group {parentId, name, memberIds}` — OPTIONAL secondary axis: enclose sibling nodes that ship/package together (containers under a system, or components under a container). 2+ members, all children of `parentId`. The group id + layout are set for you. Skip when siblings are independent — it never replaces decomposition.\n\
-Use `add_links` to connect nodes — but relationships connect nodes at the SAME level: src and dst must be siblings, or the deeper node's parent must already link to the other node (which makes it a reference on that surface). So a deep node reaches an external only when the link exists at every level above it (system→external, then container→external, …); `add_links` rejects links that skip a level. When you drill into a node, `get_node` returns `referencesForChildren` — exactly the nodes its children are allowed to link to. The tools below remain for whole-model edits and refinement.\n\
+Use `add_links` to connect nodes — but relationships connect nodes at the SAME level: src and dst must be siblings, or the deeper node's parent must already link to the other node (which makes it a reference on that surface). So a deep node reaches an external only when the link exists at every level above it (system→external, then container→external, …); `add_links` rejects links that skip a level. When you drill into a node, `read_model {node}` returns `referencesForChildren` — exactly the nodes its children are allowed to link to. The tools below remain for whole-model edits and refinement.\n\
 \n\
 - `set_model` — replace the entire model. Use for initial creation.\n\
 - `add_nodes` / `update_nodes` / `delete_nodes` — node operations. Responsibilities, properties, and sources are \
 fields on the node; pass them in the same call.\n\
 - `set_node {nodeId, data}` — replace one node's subtree (the node plus all descendants and their internal links). The \
-preferred way to drill down: read with `get_node`, edit, write back with `set_node`.\n\
+preferred way to drill down: read with `read_model {node}`, edit, write back with `set_node`.\n\
 - `add_links` / `update_links` / `delete_links` — relationship operations. `link` is the v0.3 name for what C4 calls \
 edges.\n\
 - `move_responsibilities` — move responsibilities between nodes with transition enforcement. Proposed responsibilities \
@@ -48,6 +55,10 @@ discharges them); `schemas` attach a schema node's type-declaration location (ke
 properties, not responsibilities, so they map by node).\n\
 - `set_implementing {active}` — pause/resume drift detection while you implement. Call with active=true before writing \
 code; active=false after.\n\
+- `mark_implemented {nodeId, responsibilityIds?}` — the counterpart to `get_unimplemented`: after you write the code, \
+advance the node's `proposed`/`changed` work to `implemented`. With no `responsibilityIds` it advances EVERYTHING \
+outstanding on the node — responsibilities, properties, and the appearance (visual). Call this when you finish \
+implementing so the model stops reporting the work as outstanding. (Advancing to `verified` is a separate, checked step.)\n\
 \n\
 ## Authority\n\
 - The user is the source of intent. The model is the user's authored spec; you're the editor. Don't add a node, a \

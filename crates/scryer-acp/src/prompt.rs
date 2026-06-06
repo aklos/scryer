@@ -81,8 +81,7 @@ pub fn initial_model_prompt(project_path: &str) -> String {
 ## Procedure
 
 1. Call `get_rules` to load the modeling rules.
-2. Call `get_structure` with path "{project_path}" to get the annotated directory tree. Read the manifests it surfaces (package.json, Cargo.toml, fly.toml, Dockerfile, .env.example, etc.) to identify deployable units, data stores, external services, and frameworks. Use subagents to read multiple source directories in parallel — don't serialize file reads across unrelated parts of the tree.
-3. **Build the system level.** Call `set_model` with the persons (real users / actors), the system itself, and external systems (third-party services the system depends on — Stripe, S3, Resend, etc.; mark these `external: true`). Add system-level links: persons and external systems connect to the SYSTEM itself, not to its internal containers — those are container-level relationships added when you drill in. Every person/external must link to the system, or it appears disconnected on the system-context diagram. For each node, write 1–4 responsibilities. Set responsibility status to `implemented` on responsibilities derived from existing code, `proposed` on anything speculative.
+2. Call `read_codebase` with path "{project_path}" to get the annotated directory tree. Read the manifests it surfaces (package.json, Cargo.toml, fly.toml, Dockerfile, .env.example, etc.) to identify deployable units, data stores, external services, and frameworks.3. **Build the system level.** Call `set_model` with the persons (real users / actors), the system itself, and external systems (third-party services the system depends on — Stripe, S3, Resend, etc.; mark these `external: true`). Add system-level links: persons and external systems connect to the SYSTEM itself, not to its internal containers — those are container-level relationships added when you drill in. Every person/external must link to the system, or it appears disconnected on the system-context diagram. For each node, write 1–4 responsibilities. Set responsibility status to `implemented` on responsibilities derived from existing code, `proposed` on anything speculative.
 4. **Add containers.** Call `set_node` on the system id with a payload containing the containers (web apps, APIs, workers, databases, message queues, file stores). For each container:
    - Set `kind: "container"`, `name` describes the role ("Website", "Worker", "CMS"), `technology` describes what it IS as software ("Next.js 14", "PostgreSQL 16", "S3 Bucket").
    - Write 2–6 responsibilities — pure business statements about what the container is accountable for. No technology words in the statement.
@@ -91,7 +90,7 @@ pub fn initial_model_prompt(project_path: &str) -> String {
 6. **Stop here.** Do not add components or code-level nodes. The user requests component detail explicitly.
 7. Call `update_source_map` with `boundaries` to attach a directory glob to each container that has code (a boundary entry per node, e.g. pattern "apps/web/**/*").
 8. Call `validate_model` and fix every warning — especially "appears disconnected", which means a node has no relationship at its own C4 level (e.g. a person/external linked to a container but not to the system). Re-link and re-validate until clean.
-9. Call `get_changes` to summarize what was modeled.
+9. Call `read_model` (no node) to confirm the architecture overview you built, then summarize it for the user.
 
 ## Don'ts
 
@@ -135,7 +134,7 @@ pub fn enrich_subtree_prompt(
 
 ## Current model — structure is authoritative
 
-The full model is below so you don't call `get_model`. Each component's `boundaries` entry is its source FILE; that's where its code (and its symbols') lives.
+The full model is below so you don't call `read_model`. Each component's `boundaries` entry is its source FILE; that's where its code (and its symbols') lives.
 
 ```json
 {model_json}
@@ -144,7 +143,7 @@ The full model is below so you don't call `get_model`. Each component's `boundar
 ## Procedure (optimized for speed — minimize round-trips)
 
 1. Focus on {focus}
-2. **Read the located source directly.** For the components in scope, read their boundary files (you already have the exact paths — read them in parallel). Do NOT call `get_structure` and do NOT search for files; the model already tells you where everything is.
+2. **Read the located source directly.** For the components in scope, read their boundary files (you already have the exact paths — read them in parallel). Do NOT call `read_codebase` and do NOT search for files; the model already tells you where everything is.
 3. **Batch the writes.** Call `update_nodes` with an ARRAY patching many nodes at once — `responsibilities` (+ `status`) and `description` for each existing node id in scope. One or a few calls, not one per node. Do not touch `kind`, `name`, `parentId`, or `properties` of existing nodes.
 4. Add relationship meaning: set `label` on existing links via `update_links` where the relationship is clear from the code. At the system level only, add any missing persons/externals and their links.
 5. Do NOT loop on `validate_model` — the structure is already valid and you aren't changing it. Run it at most once at the end if you added persons/externals.
@@ -173,7 +172,7 @@ pub fn build_system_prompt(project_path: &str, containers_json: &str) -> String 
 Each tool takes plain responsibility statements (one terse verb-led business clause each — no mechanism/technology words) at the NODE'S OWN altitude: a container's responsibilities say what the container is accountable for, not what its individual components do — that finer detail lands when you model the components in a later pass. Each tool returns the node it created so you have its id for links. Responsibility status is set to implemented for you.
 
 ## Procedure (minimize round-trips)
-1. Read the manifests and a few entry-point files for each unit below — in parallel — only enough to state what each unit is accountable for. Do NOT enumerate components or symbols; that is a later pass.
+1. Read the manifests and a few entry-point files for each unit below — only enough to state what each unit is accountable for. Do NOT enumerate components or symbols; that is a later pass.
 2. `add_system` for the project; add any externals and persons.
 3. `add_container` for each unit below (carry over its dependency edges as container→container links).
 4. `add_links` for person→system, container→container, container→external.
@@ -208,7 +207,7 @@ pub fn build_container_prompt(
 
 ## How to build (use the intent tools — never emit model JSON)
 - `add_component` — `parentId` = "{container_id}". CLUSTER components from cohesion + the dependency graph below: a component groups the files/symbols that work together toward one responsibility. Do NOT make one component per file. Give each a few terse business responsibilities AT THE COMPONENT'S ALTITUDE: each names one accountability the component holds, NOT what an individual symbol inside it does — the per-handler detail belongs on the symbols below. A component's responsibilities are FEWER and BROADER than the union of its symbols'; if a line reads as describing a single symbol (e.g. "Verify HMAC-SHA256 signatures", "Parse payloads into InboundMessage structs"), it is one altitude too low — lift it to what those symbols collectively serve (e.g. "Rejects forged and duplicate events", "Hands valid messages to the router").
-- `add_symbol` — `parentId` = the component id you just created. Pass `name` (the identifier), `sourceFile` and `line`/`endLine` straight from the context (the source map is anchored for you). Give `responsibilities` for behavior — one verb-led clause each (split run-on, multi-clause prose into separate responsibilities); give `properties` (one per field) when the symbol declares a data shape — never fold a data shape into a responsibility. Model the PUBLIC surface, ONE symbol per real definition:
+- `add_symbol` — `parentId` = the component id you just created. Pass `name` (the identifier), `sourceFile` and `line`/`endLine` (for the full definition) straight from the context (the source map is anchored for you). Each responsibility can be a plain string OR `{{"statement", "line", "endLine"}}` with the specific line sub-range within the symbol that does the work — use the rich form when the symbol is large and the responsibility covers a distinct section. Give `responsibilities` for behavior — one verb-led clause each (split run-on, multi-clause prose into separate responsibilities); give `properties` (one per field) when the symbol declares a data shape — never fold a data shape into a responsibility. Set `visual: true` on React components, Vue components, Svelte components, or any symbol that renders UI — anything whose output is visual and would benefit from a rendered preview. A definition earns a symbol ONLY when it carries architecture — a behavioral responsibility at its own altitude, a declared data shape, or a cross-boundary link. Being a real public definition is NOT enough: skip trivial pass-through wrappers, thin re-exports, getters/setters, and test stubs — fold what they do into the component's responsibilities. Aim for a handful of meaningful symbols per component, NOT a mirror of every definition in its files:
   - **Framework registration objects** (a CMS collection config, an ORM model, a settings/route object): descend INTO its `fields[]` array (the schema columns) and emit one property per entry there. Its `properties` are those DECLARED FIELDS — the record's columns — NEVER the sibling config wrapper keys (`slug`, `admin`, `hooks`, `access`, …), which are framework plumbing, not the record's data shape.
   - **Generated / mirror type files** (a `*-types` file, a `*.d.ts`, or any file that just re-declares a definition that already lives in real source): do NOT create a parallel symbol for it. Fold its fields into the source-of-truth symbol so each thing is modeled exactly once — never two sibling symbols for the same record.
   - **Classes/objects with internal helpers**: model the class as ONE symbol carrying its public operations as responsibilities; do NOT add private/internal helper methods (e.g. `_rpc`, `_get_uid`, `_execute`) as their own symbols. Only addressable, public definitions become symbols.
@@ -218,9 +217,9 @@ pub fn build_container_prompt(
 Each tool takes plain responsibility statements and returns the node it created (with its id) so you can parent symbols and draw links. Status is set to implemented for you.
 
 ## Procedure (minimize round-trips)
-1. Decide the component clustering from the dependency graph below (group cohesive files/symbols). Read the actual source for each cluster — in parallel — only enough to state responsibilities accurately.
+1. Decide the component clustering from the dependency graph below (group cohesive files/symbols). Read the actual source for each cluster — only enough to state responsibilities accurately.
 2. `add_component` for each cluster under "{container_id}".
-3. `add_symbol` for the PUBLIC definitions in each component (batch them), carrying over the provided file + line ranges; add `properties` (the declared fields, not config wrapper keys) for data shapes. One symbol per real definition — fold generated mirror types in, leave private helpers out.
+3. `add_symbol` for the architecturally meaningful definitions in each component (batch them), carrying over the provided file + line ranges; add `properties` (the declared fields, not config wrapper keys) for data shapes. A handful of meaningful symbols per component — fold generated mirror types in, leave private helpers, pass-through wrappers, and trivial definitions out.
 4. `add_links` for component→component along the internal edges, AND component→external / component→other-container for each cross-boundary edge "{container_name}" has — linking the specific component that uses it.
 5. If several components form one cohesive module, `add_group` them (a few components ⇒ skip).
 6. Call `validate_model` and fix every warning — especially rejected cross-level links and "appears disconnected". Re-link and re-validate until clean.
@@ -281,6 +280,143 @@ Call `flag_drift` for "{node_id}" with everything you found. If the code and the
     )
 }
 
+/// Prompt for rendering a visual component preview. The agent reads the
+/// component source and writes `main.tsx` for the Vite render harness in
+/// `.scryer/preview/{nodeId}/` — the caller builds it afterward. The harness must
+/// wrap the component with whatever providers/context the codebase requires and
+/// supply reasonable fixture props inferred from the type signatures.
+pub fn preview_render_prompt(
+    project_path: &str,
+    node_id: &str,
+    node_name: &str,
+    source_file: &str,
+    source_lines: &str,
+) -> String {
+    format!(
+        r#"You are rendering a live preview of the visual component "{node_name}" (id {node_id}) in the project at {project_path}.
+
+## The component
+
+Source file: `{source_file}`
+
+```
+{source_lines}
+```
+
+## Your task
+
+Write `main.tsx` for a preview harness that renders this component with realistic fixture data. The harness boilerplate (index.html, vite.config.ts, preview.css, Tauri stubs) is already set up at `.scryer/preview/{node_id}/` — you only need to write `main.tsx`.
+
+### Steps
+
+1. **Read the component source** (and its imports) to understand:
+   - What props it expects (from TypeScript types or PropTypes)
+   - What context providers it needs (Router, Theme, Store, etc.)
+   - What data shape it expects (from types/interfaces)
+
+2. **Write `.scryer/preview/{node_id}/main.tsx`**:
+   - Import `./preview.css` (already set up to include the project's CSS + Tailwind scanning)
+   - Import the component from its project-relative path (e.g. `../../../src/MyComponent`)
+   - Import `createRoot` from `react-dom/client`
+   - Wrap the component in any required providers, pass realistic fixture props, render into `#root`
+
+3. **Generate realistic fixture data** — not placeholder text. Infer sensible values from prop types and the component's purpose. If the component renders a list, include 3-5 items. If it shows user data, use realistic names/emails.
+
+The preview is built for you after you write `main.tsx` — you do not run any build yourself.
+
+### Rules
+
+- Do NOT modify any project source files.
+- Do NOT create or modify index.html, vite.config.ts, preview.css, or stubs/ — they are pre-generated.
+- The ONLY file you write is `.scryer/preview/{node_id}/main.tsx`.
+- Keep the harness minimal. The component IS the preview — don't add navigation chrome, debug tools, or extra UI.
+"#
+    )
+}
+
+/// Prompt for generating visual variations of a component. The agent creates N
+/// different `main.tsx` files, each a distinct visual interpretation of the
+/// user's request — the caller builds each afterward. Each variation imports the
+/// original component and applies changes through CSS overrides, wrappers, modified
+/// props, or inline reimplementation — the project source is never modified.
+pub fn visual_variation_prompt(
+    project_path: &str,
+    node_id: &str,
+    node_name: &str,
+    source_file: &str,
+    source_lines: &str,
+    user_prompt: &str,
+    existing_main_tsx: &str,
+    variation_count: usize,
+) -> String {
+    let existing_section = if existing_main_tsx.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n## Current render harness (main.tsx — use as starting point)\n\n```tsx\n{existing_main_tsx}\n```\n"
+        )
+    };
+
+    let last_idx = variation_count - 1;
+    let source_stripped = source_file.trim_start_matches('/');
+
+    format!(
+        r#"You are generating {variation_count} visual variations of the component "{node_name}" (id {node_id}) in the project at {project_path}.
+
+## The component
+
+Source file: `{source_file}`
+
+```
+{source_lines}
+```
+{existing_section}
+## The user's request
+
+{user_prompt}
+
+## Your task
+
+Create {variation_count} DISTINCT visual interpretations of the user's request. Each variation must be a genuinely different approach, not minor tweaks of the same idea.
+
+For EACH variation (0 through {last_idx}):
+
+1. **Write `.scryer/preview/{node_id}/variations/{{n}}/main.tsx`** where `{{n}}` is the variation index (0, 1, 2).
+
+2. Each `main.tsx` must:
+   - Import `./preview.css` (harness CSS with the project's styles + Tailwind)
+   - Import the original component from its project-relative path: `../../../../../{source_stripped}` (5 directories up from the variation dir to the project root)
+   - Import `createRoot` from `react-dom/client`
+   - Apply the requested visual change through one or more of:
+     - **CSS overrides** — inject a `<style>` element or use inline styles on a wrapper div
+     - **Wrapper components** — wrap the original to modify layout, spacing, or behavior
+     - **Modified props** — change props that affect appearance
+     - **Inline reimplementation** — for structural changes, reimplement the relevant parts inline while importing shared dependencies from the project
+   - Render into `#root`
+
+Each variation is built for you after you write its `main.tsx` — you do not run any build yourself.
+
+### Path reference
+
+From a variation directory (`.scryer/preview/{node_id}/variations/{{n}}/`), the project root is 5 directories up: `../../../../..`
+
+### Variation guidelines
+
+- Each variation should be a genuinely different visual approach
+- Example — "make the header sticky": one uses CSS `position: sticky` with shadow, another `position: fixed` with backdrop-blur, a third adds a condensed mode on scroll
+- Example — "reduce padding": one goes minimal, another balanced with more whitespace on specific sides, a third uses asymmetric padding with tighter vertical
+- Make each variation complete and functional, not half-finished sketches
+- Preserve the component's functionality — only modify visual aspects
+
+### Rules
+
+- Do NOT modify any project source files
+- Do NOT modify harness files (index.html, vite.config.ts, preview.css, stubs/) — they are pre-generated
+- The ONLY files you write are the {variation_count} `main.tsx` files in `variations/{{0..{last_idx}}}/`
+"#
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,8 +447,9 @@ mod tests {
                 })
                 .unwrap_or_default(),
             properties: Vec::new(),
-            cell: None,
             icon: None,
+            visual: None,
+            appearance: None,
             deprecated: None,
             relocated: None,
             locked: None,
@@ -382,7 +519,7 @@ pub fn node_fill_prompt(
         ),
         "component" => (
             "symbols (code definitions — functions, classes, configs, and data types)",
-            r#"   - The code level uses ONE kind: `symbol`. A symbol is exactly one addressable code definition — a function, method, handler, hook, React component, class, struct, interface, type, or config object. The `name` is the identifier as it appears in the source. ONE symbol node = ONE definition; do not collapse a whole multi-function file into a single symbol. Model the PUBLIC surface only: a class is ONE symbol carrying its public operations as responsibilities — do NOT add its private/internal helper methods (e.g. `_rpc`, `_get_uid`, `_execute`) as their own symbols. And a generated/mirror type file (a `*-types` file, a `*.d.ts`, or any file that just re-declares a definition that already lives in real source) is a derived artifact — do NOT create a parallel symbol for it; fold its fields into the source-of-truth symbol so each record is modeled exactly once.
+            r#"   - The code level uses ONE kind: `symbol`. A symbol is exactly one addressable code definition — a function, method, handler, hook, React component, class, struct, interface, type, or config object. The `name` is the identifier as it appears in the source. ONE symbol node = ONE definition; do not collapse a whole multi-function file into a single symbol. Set `"visual": true` on React components, Vue components, Svelte components, or any symbol that renders UI — anything whose output is visual and would benefit from a rendered preview. Model the PUBLIC surface only: a class is ONE symbol carrying its public operations as responsibilities — do NOT add its private/internal helper methods (e.g. `_rpc`, `_get_uid`, `_execute`) as their own symbols. And a generated/mirror type file (a `*-types` file, a `*.d.ts`, or any file that just re-declares a definition that already lives in real source) is a derived artifact — do NOT create a parallel symbol for it; fold its fields into the source-of-truth symbol so each record is modeled exactly once.
    - A symbol has two facets. Most have one; some have both. Populate whichever the definition actually has:
      - **responsibilities** — the behavior it discharges (1–3, pure business statements). Map each to the SPECIFIC LINES that do its work via `update_source_map`'s `entries`: `pattern` = file, `line`/`endLine` = the exact line range, `symbol` = the enclosing definition's name (anchor + context frame). Do NOT map a responsibility to the whole symbol. Two responsibilities on the same line range are one responsibility — merge them.
      - **properties** — if the definition DECLARES A DATA SHAPE (a struct/class/interface/type, OR a config object that defines a field schema — e.g. an ORM/CMS collection, a settings object), you MUST enumerate its fields as `properties`: one property per field, `label` = field name, `description` = what it holds, each with a status. For a framework registration object (a Payload CollectionConfig, an ORM model) descend INTO the `fields[]` array and emit one property per entry — those are the record's COLUMNS — NOT the sibling config wrapper keys (`slug`, `admin`, `hooks`, `access`, …), which are framework plumbing and must never appear as properties. Map the declaration block to the symbol's node id via `update_source_map`'s `schemas` array: `nodeId` = the symbol, `pattern` = file, `symbol` = the type/object name, `line`/`endLine` = the declaration range.
@@ -398,7 +535,7 @@ pub fn node_fill_prompt(
 
 ## Current model state
 
-The model is provided here so you can avoid calling `get_model`:
+The model is provided here so you can avoid calling `read_model`:
 
 ```json
 {model_json}
@@ -414,14 +551,13 @@ The model is provided here so you can avoid calling `get_model`:
 ## Procedure
 
 1. Call `get_rules` to load the modeling rules.
-2. Call `get_node` with id "{node_id}" to see this node's full context (description, responsibilities, sources, existing links).
-3. Use `get_structure` with path "{project_path}" if you need to inspect source files. Open relevant files to identify {child_kind_label}. Use subagents to read multiple source directories in parallel — don't serialize file reads across unrelated parts of the tree.
-4. Call `set_node` on "{node_id}" with the new subtree (nodes + links). Add only nodes whose responsibilities ladder up to "{node_name}". Relationships must connect nodes at THIS level: link the new children to each other and to the reference nodes that surround "{node_name}" (the persons/externals/siblings that link to it). A person or external that used "{node_name}" should now link to the specific child it actually uses — otherwise it appears disconnected when you drill in. Every child needs at least one relationship at this level.
+2. Call `read_model` with node "{node_id}" to see this node's full context (description, responsibilities, sources, existing links).
+3. Use `read_codebase` with path "{project_path}" if you need to inspect source files. Open relevant files to identify {child_kind_label}.4. Call `set_node` on "{node_id}" with the new subtree (nodes + links). Add only nodes whose responsibilities ladder up to "{node_name}". Relationships must connect nodes at THIS level: link the new children to each other and to the reference nodes that surround "{node_name}" (the persons/externals/siblings that link to it). A person or external that used "{node_name}" should now link to the specific child it actually uses — otherwise it appears disconnected when you drill in. Every child needs at least one relationship at this level.
 {child_guidance}
 5. Set responsibility status to `implemented` on responsibilities derived from existing code; `proposed` on speculative ones.
 6. Call `update_source_map` to write the code-side mapping. `boundaries`: node-level directory globs. `entries`: for each responsibility, the **specific lines** that do its work — `pattern` = file, `line`/`endLine` = the exact range of the statements implementing it, `symbol` = the enclosing definition's name (anchor + context). Map to the lines that actually discharge the responsibility, NOT the whole enclosing symbol or file. A responsibility may map to several ranges, possibly across files. `schemas`: for each symbol that declares a data shape (carries `properties`), its declaration block — `nodeId` = the symbol, one location with `pattern` = file, `symbol` = the type/object name, `line`/`endLine` = the declaration range.
 7. Call `validate_model` and fix every warning — especially "appears disconnected", which means a node (or a reference node) has no relationship at this level. Re-link and re-validate until clean.
-8. Call `get_changes` to summarize what was added.
+8. Call `read_model` with node "{node_id}" to confirm the subtree you built, then summarize it for the user.
 
 Stay within the "{node_name}" subtree. Do not modify nodes outside this scope.
 "#

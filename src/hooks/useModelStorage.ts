@@ -92,47 +92,6 @@ export interface ModelStorage {
   forgetRecent: (path: string) => void;
 }
 
-/// Carry placed-node layout (`cell`, and group `cell`/`size`) from the previous
-/// in-memory model onto a freshly-loaded one where the load lacks it. During an
-/// agent run the canvas doesn't write its layout back (the agent owns the file),
-/// so reloads arrive unplaced — this merge keeps already-placed cards from
-/// jumping while new nodes stay unplaced for autoLayout to position.
-function mergeLayout(prev: ScryModel | null, loaded: ScryModel): ScryModel {
-  if (!prev) return loaded;
-  const prevCell = new Map(prev.nodes.map((n) => [n.id, n.cell] as const));
-  const prevGroup = new Map(
-    prev.groups.map((g) => [g.id, { cell: g.cell, size: g.size }] as const),
-  );
-  // Members of a group the agent left unplaced on disk (cell/size null) but that
-  // the canvas already reflowed in memory: carry the in-memory member cells
-  // forward instead of the stale pre-group disk cells. When the agent adds a
-  // group around already-placed cards, autoLayout repacks them into the new
-  // enclosure — but during an in-app build the canvas can't persist that layout,
-  // so every subsequent agent write reloads the old positions and the members
-  // snap back out. Pinning the reflowed positions here keeps them inside the box.
-  const reflowedMembers = new Set<string>();
-  for (const g of loaded.groups) {
-    if (g.cell || g.size) continue; // placed on disk — disk is authoritative
-    const p = prevGroup.get(g.id);
-    if (p?.cell && p?.size) {
-      for (const m of g.memberIds) reflowedMembers.add(m);
-    }
-  }
-  return {
-    ...loaded,
-    nodes: loaded.nodes.map((n) => {
-      const prior = prevCell.get(n.id);
-      if (reflowedMembers.has(n.id) && prior) return { ...n, cell: prior };
-      return n.cell ? n : prior ? { ...n, cell: prior } : n;
-    }),
-    groups: loaded.groups.map((g) => {
-      const p = prevGroup.get(g.id);
-      if (!p) return g;
-      return { ...g, cell: g.cell ?? p.cell, size: g.size ?? p.size };
-    }),
-  };
-}
-
 /// Ids the agent introduced since the previous model, for review highlighting.
 /// Only the node/responsibility ids present in `loaded` but absent in `prev`.
 function arrivals(prev: ScryModel, loaded: ScryModel) {
@@ -234,7 +193,7 @@ export function useModelStorage(): ModelStorage {
       setNewRespIds((cur) => accumulate(cur, reviewableResps, keepResps));
     }
     lastWrittenRaw.current = raw;
-    setModel((prev) => mergeLayout(prev, loaded));
+    setModel(loaded);
   }, []);
 
   // File-watcher subscription — re-read model from disk on external writes.

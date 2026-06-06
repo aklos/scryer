@@ -69,7 +69,7 @@ fn init_project() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("\nDone. {} will use scryer in this project.", tools.join(" and "));
         if has_claude {
             eprintln!("\nTo auto-approve scryer read tools in Claude Code, add to .claude/settings.local.json:");
-            eprintln!("  \"permissions\": {{ \"allow\": [\"mcp__scryer__get_model\", \"mcp__scryer__get_node\", \"mcp__scryer__get_rules\", \"mcp__scryer__get_changes\", \"mcp__scryer__get_structure\", \"mcp__scryer__validate_model\"] }}");
+            eprintln!("  \"permissions\": {{ \"allow\": [\"mcp__scryer__read_model\", \"mcp__scryer__search_model\", \"mcp__scryer__get_rules\", \"mcp__scryer__get_unimplemented\", \"mcp__scryer__read_codebase\", \"mcp__scryer__validate_model\"] }}");
         }
     }
 

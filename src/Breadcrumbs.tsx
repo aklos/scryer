@@ -1,78 +1,105 @@
 /**
- * Top breadcrumb trail. Path is a stack of node ids descended into (or [] at
- * the root); clicking a crumb navigates back up.
+ * Top breadcrumb trail — the ancestor chain of the currently open page. For a
+ * node it's the parent-id chain from the top-level ancestor down to the node;
+ * for a group it's the chain of its containing node plus the group. Clicking a
+ * crumb opens that page.
  */
 
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, FolderOpen } from "lucide-react";
 import type { ScryModel } from "./viewmodel";
+import type { Selected } from "./NodePage";
 
 export function Breadcrumbs({
   model,
-  path,
-  onJump,
+  selected,
+  onSelectNode,
+  onSelectGroup,
   projectPath,
 }: {
   model: ScryModel;
-  /** Stack of node ids, root-most first. `[]` is the root surface. */
-  path: string[];
-  /** Navigate to depth `index + 1` (use -1 to return to the root). */
-  onJump: (index: number) => void;
+  selected: Selected | null;
+  onSelectNode: (id: string) => void;
+  onSelectGroup: (id: string) => void;
   projectPath: string | null;
 }) {
+  const byId = (id: string) => model.nodes.find((n) => n.id === id);
+
+  /** Root-first chain of nodes from the top ancestor down to `nodeId`. */
+  const nodeChain = (nodeId: string) => {
+    const chain: { id: string; name: string }[] = [];
+    const seen = new Set<string>();
+    let cur = byId(nodeId);
+    while (cur && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      chain.unshift({ id: cur.id, name: cur.name });
+      cur = cur.parentId ? byId(cur.parentId) : undefined;
+    }
+    return chain;
+  };
+
+  type Crumb = { key: string; label: string; group?: boolean; onClick: () => void };
+  const crumbs: Crumb[] = [];
+
+  if (selected?.kind === "node") {
+    for (const c of nodeChain(selected.id)) {
+      crumbs.push({ key: c.id, label: c.name || "Untitled", onClick: () => onSelectNode(c.id) });
+    }
+  } else if (selected?.kind === "group") {
+    const group = model.groups.find((g) => g.id === selected.id);
+    if (group) {
+      const container =
+        group.parentNodeId ??
+        byId(group.memberIds[0] ?? "")?.parentId ??
+        null;
+      if (container) {
+        for (const c of nodeChain(container)) {
+          crumbs.push({ key: c.id, label: c.name || "Untitled", onClick: () => onSelectNode(c.id) });
+        }
+      }
+      crumbs.push({
+        key: group.id,
+        label: group.name || "Group",
+        group: true,
+        onClick: () => onSelectGroup(group.id),
+      });
+    }
+  }
+
   return (
-    <nav className="flex shrink-0 items-center gap-0.5 border-b border-[var(--border)] bg-[var(--surface-overlay)] px-3 py-2 backdrop-blur-md">
+    <nav className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-[var(--border)] bg-[var(--surface-overlay)] px-3 py-2 backdrop-blur-md">
       {projectPath && (
         <>
-          <span className="text-xs text-[var(--text-muted)] truncate max-w-[300px] px-1.5 py-0.5">
+          <span className="truncate max-w-[280px] px-1.5 py-0.5 text-xs text-[var(--text-muted)]">
             {projectPath.replace(/^\/home\/[^/]+/, "~")}
           </span>
-          <ChevronRight className="h-3.5 w-3.5 text-[var(--text-ghost)]" />
+          {crumbs.length > 0 && (
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--text-ghost)]" />
+          )}
         </>
       )}
-      <Crumb
-        label="System"
-        active={path.length === 0}
-        onClick={() => onJump(-1)}
-      />
-      {path.map((nodeId, i) => {
-        const isLast = i === path.length - 1;
-        const label = model.nodes.find((n) => n.id === nodeId)?.name ?? nodeId;
+      {crumbs.map((c, i) => {
+        const isLast = i === crumbs.length - 1;
         return (
-          <span key={nodeId} className="flex items-center gap-0.5">
-            <ChevronRight className="h-3.5 w-3.5 text-[var(--text-ghost)]" />
-            <Crumb
-              label={label}
-              active={isLast}
-              onClick={() => onJump(i)}
-            />
+          <span key={c.key} className="flex shrink-0 items-center gap-0.5">
+            {i > 0 && (
+              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--text-ghost)]" />
+            )}
+            <button
+              type="button"
+              disabled={isLast}
+              onClick={c.onClick}
+              className={
+                isLast
+                  ? "flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold text-[var(--text)]"
+                  : "flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] cursor-pointer"
+              }
+            >
+              {c.group && <FolderOpen className="h-3 w-3" />}
+              {c.label}
+            </button>
           </span>
         );
       })}
     </nav>
-  );
-}
-
-function Crumb({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={active}
-      onClick={onClick}
-      className={
-        active
-          ? "rounded px-1.5 py-0.5 text-xs font-semibold text-[var(--text)]"
-          : "rounded px-1.5 py-0.5 text-xs font-medium text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] cursor-pointer"
-      }
-    >
-      {label}
-    </button>
   );
 }

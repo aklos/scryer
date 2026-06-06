@@ -165,7 +165,7 @@ export function SyncBar({
             <div className="w-px h-3 bg-[var(--border)]" />
             <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 min-w-0">
               <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
-              <span className="shrink-0">Filling {agent.label}</span>
+              <span className="shrink-0">{agent.label}</span>
               <span className="truncate text-[var(--text-muted)]">
                 {agent.activity ? `· ${agent.activity}` : "…"}
               </span>

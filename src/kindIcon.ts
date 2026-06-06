@@ -10,19 +10,19 @@
 
 import type { ComponentType } from "react";
 import type { LucideProps } from "lucide-react";
-import { Box, Boxes, Cloud, Code, Component, Database, Layers, User } from "lucide-react";
+import { Box, Boxes, Cloud, Code, Component, Database, Eye, Layers, User } from "lucide-react";
 import type { Node } from "./viewmodel";
 import { isDataShape } from "./viewmodel";
 
-/** The minimal node shape these helpers read — works for both `Node` and the
- *  derived `NodeView` (which extends it). */
-type IconNode = Pick<Node, "kind" | "external" | "technology" | "properties" | "responsibilities">;
+/** The minimal node shape these helpers read. */
+type IconNode = Pick<Node, "kind" | "external" | "technology" | "properties" | "responsibilities" | "visual">;
 
 /** The kind silhouette for a node. Person → bust, external → cloud, data-shape
  *  symbol → database, code symbol → braces, else the C4 box family by altitude. */
 export function kindIcon(node: IconNode): ComponentType<LucideProps> {
   if (node.kind === "person") return User;          // an actor — human, regardless of external
   if (node.external) return Cloud;                  // the world: a third-party service
+  if (node.visual) return Eye;                     // a visual/UI component with preview
   if (isDataShape(node)) return Database;           // a symbol that defines a data shape
   if (node.kind === "symbol") return Code;          // code-level leaf
   switch (node.kind) {

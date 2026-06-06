@@ -2,27 +2,48 @@ use scryer_core::{Responsibility, SchemaProperty, Source, SourceLocation};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct GetModelRequest {
+pub(crate) struct ReadModelRequest {
+    /// Absolute path to the project root. If omitted, uses the current working directory.
+    pub project: Option<String>,
+    /// Optional node id to scope to. OMIT for the architecture overview — the whole tree down to
+    /// components (symbols excluded), with counts; small and safe to read. Pass a node id to read
+    /// THAT node's full subtree: its descendants (including symbols), responsibilities, properties,
+    /// links, and source anchors. Drill into a component to see its symbols.
+    pub node: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SearchModelRequest {
+    /// Absolute path to the project root. If omitted, uses the current working directory.
+    pub project: Option<String>,
+    /// Case-insensitive text to find. Matched against node names, descriptions, technology,
+    /// responsibility statements, and property labels. Space-separated terms must ALL match
+    /// (AND) somewhere on the node.
+    pub query: String,
+    /// Optional kind filter: "person", "system", "container", "component", or "symbol".
+    pub kind: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct GetUnimplementedRequest {
     /// Absolute path to the project root. If omitted, uses the current working directory.
     pub project: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct GetNodeRequest {
+pub(crate) struct MarkImplementedRequest {
     /// Absolute path to the project root. If omitted, uses the current working directory.
     pub project: Option<String>,
-    /// ID of the node to inspect (e.g. "node-3"). Returns this node, all its descendants, links between them,
-    /// and links connecting them to external nodes (with external node names + kinds for context).
+    /// The node whose outstanding work you just implemented.
     pub node_id: String,
+    /// Optional: specific responsibility ids to mark implemented. Omit to advance EVERYTHING
+    /// outstanding on the node — every `proposed`/`changed` responsibility and property, plus a
+    /// `proposed`/`changed` appearance — to `implemented`.
+    pub responsibility_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct GetChangesRequest {
-    pub project: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct GetStructureRequest {
+pub(crate) struct ReadCodebaseRequest {
     /// Absolute path to the project directory to scan.
     pub path: String,
 }
@@ -36,7 +57,7 @@ pub(crate) struct ValidateModelRequest {
 pub(crate) struct SetModelRequest {
     pub project: Option<String>,
     /// The complete model as a JSON string. Must be a valid ScryModel object with version, nodes, links, groups.
-    /// See get_model output for the exact schema.
+    /// See read_model output for the exact schema.
     pub data: String,
 }
 
@@ -84,6 +105,9 @@ pub(crate) struct UpdateNodeItem {
     pub responsibilities: Option<Vec<Responsibility>>,
     /// Full replacement of field declarations for a data-shape symbol. Pass an empty array to clear.
     pub properties: Option<Vec<SchemaProperty>>,
+    /// true for a visual/UI component (React component, UI element). Enables
+    /// the preview rendering workflow on the node's page.
+    pub visual: Option<bool>,
     /// Mark node as planned for removal. Set true to deprecate, false to clear.
     pub deprecated: Option<bool>,
     /// Mark node as reparented (code needs to move). Set true to flag, false to clear.
@@ -218,7 +242,7 @@ pub(crate) struct SetGroupsRequest {
     /// (the node ids it groups — never leave empty). Set `parentNodeId` to the node whose children
     /// the members are: it anchors the group to that node's level so it renders inside that node's
     /// diagram (e.g. a deployment group over containers needs parentNodeId set to their parent system).
-    /// Optional: description, parentGroupId (to nest under another group), responsibilities, cell, size.
+    /// Optional: description, parentGroupId (to nest under another group), responsibilities, icon.
     pub data: String,
 }
 
@@ -368,6 +392,46 @@ pub(crate) struct PropertyInput {
     pub description: String,
 }
 
+/// A responsibility with optional line-range anchor. Accepts either a plain
+/// string `"statement"` or an object `{statement, line?, endLine?}`.
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub(crate) enum ResponsibilityInput {
+    /// `{statement, line?, endLine?}` — responsibility with specific line range within the symbol.
+    Rich {
+        /// The business-responsibility statement.
+        statement: String,
+        /// 1-based start line of the code that discharges this responsibility.
+        line: Option<u32>,
+        /// 1-based end line.
+        #[serde(alias = "endLine")]
+        end_line: Option<u32>,
+    },
+    /// Plain string — responsibility with no sub-range (whole symbol).
+    Plain(String),
+}
+
+impl ResponsibilityInput {
+    pub fn statement(&self) -> &str {
+        match self {
+            Self::Rich { statement, .. } => statement,
+            Self::Plain(s) => s,
+        }
+    }
+    pub fn line(&self) -> Option<u32> {
+        match self {
+            Self::Rich { line, .. } => *line,
+            Self::Plain(_) => None,
+        }
+    }
+    pub fn end_line(&self) -> Option<u32> {
+        match self {
+            Self::Rich { end_line, .. } => *end_line,
+            Self::Plain(_) => None,
+        }
+    }
+}
+
 /// Symbol (one code definition) to add under a component.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SymbolItem {
@@ -381,12 +445,16 @@ pub(crate) struct SymbolItem {
     pub line: Option<u32>,
     /// 1-based end line of the definition.
     pub end_line: Option<u32>,
-    /// Pure business-responsibility statements (the behavior this definition discharges). Status defaults to implemented. Omit for a pure data type.
+    /// Responsibilities this symbol discharges. Each can be a plain string or `{statement, line?, endLine?}` with the specific line range within the symbol that does the work. Status defaults to implemented.
     #[serde(default)]
-    pub responsibilities: Vec<String>,
+    pub responsibilities: Vec<ResponsibilityInput>,
     /// Field declarations when this symbol declares a data shape (struct/class/interface/type/config object). One per field. Status defaults to implemented.
     #[serde(default)]
     pub properties: Vec<PropertyInput>,
+    /// true for a visual/UI component (React component, UI element). Enables
+    /// the preview rendering workflow on the node's page.
+    #[serde(default)]
+    pub visual: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -405,6 +473,11 @@ pub(crate) struct UndescribedItem {
     pub source_file: String,
     /// Enclosing definition name, if any (durable source anchor).
     pub symbol: Option<String>,
+    /// 1-based start line of the code that exhibits this behaviour.
+    pub line: Option<u32>,
+    /// 1-based end line.
+    #[serde(alias = "endLine")]
+    pub end_line: Option<u32>,
 }
 
 /// An existing responsibility whose code no longer discharges it.

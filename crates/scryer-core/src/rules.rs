@@ -32,7 +32,12 @@ component of the host container. Group containers that deploy together.\n\
 implementation details mentioned in `technology`.\n\
 8. Code level uses only the `symbol` kind. A `symbol` is exactly one addressable code definition — a function, \
 method, handler, hook, React component, class, struct, interface, type, or config object. One symbol node = one \
-definition in the source; its name must be the identifier as it appears in the code. A symbol has two independent \
+definition in the source; its name must be the identifier as it appears in the code. A definition earns a symbol \
+node only when it carries architecture — a behavioral responsibility at its OWN altitude, a declared data shape, or \
+a cross-boundary link. Being a real, public definition is NOT sufficient: trivial pass-through wrappers, thin \
+re-exports, getters/setters, and test stubs do NOT earn a node — fold whatever they do into their component's \
+responsibilities rather than minting a leaf for each. Prefer a component with a handful of meaningful symbols over \
+one mirroring every definition in its files. A symbol has two independent \
 facets; most carry one, some carry both:\n\
    - **responsibilities** — the behavior the definition discharges. Map each to the specific LINE RANGE that does its \
 work (with the enclosing `symbol` named as anchor and context) — not to the whole symbol. Two responsibilities sharing \

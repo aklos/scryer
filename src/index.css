@@ -124,112 +124,12 @@
   --focus-halo-a: 0.1;
 }
 
-@keyframes dash-flow {
-  to {
-    stroke-dashoffset: -9;
-  }
-}
-
 @keyframes shimmer {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(400%); }
 }
 
-/* Marks the node the AI is currently generating. Ring width comes from the
-   inline --ring-w custom prop so it scales with canvas zoom; only the amber
-   intensity pulses. */
-@keyframes build-ring {
-  0%, 100% { box-shadow: 0 0 0 var(--ring-w, 2px) var(--accent-amber); }
-  50%      { box-shadow: 0 0 0 var(--ring-w, 2px) color-mix(in srgb, var(--accent-amber) 55%, transparent); }
-}
-.scryer-building {
-  animation: build-ring 1.4s ease-in-out infinite;
-}
-
-/* Edges render above nodes so shape decorations don't overlap arrows */
-.react-flow__edges {
-  z-index: 1 !important;
-}
-
-.react-flow__handle {
-  width: 8px;
-  height: 8px;
-  opacity: 0;
-}
-
-/* Larger invisible hit area for easier targeting */
-.react-flow__handle::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-}
-
-/* Show handles when hovering over any node */
-.react-flow__node:hover .react-flow__handle {
-  opacity: 1;
-}
-
-/* Show handles on nodes near the cursor during connection drag */
-.react-flow__node.connection-nearby .react-flow__handle {
-  opacity: 1;
-}
-
-
-/* edge midpoint dot: hidden by default, shown when hovering the edge */
-.edge-handle-dot {
-  opacity: 0;
-}
-
-.react-flow__edge:hover .edge-handle-dot {
-  opacity: 0.7;
-}
-
-/* Hide the bounding box around selected nodes (selection logic still works) */
-.react-flow__nodesselection {
-  display: none !important;
-}
-
-/* Normalize ReactFlow controls to match other canvas panels */
-.react-flow__controls {
-  border-radius: 0.5rem;
-  border: 1px solid var(--border-overlay);
-  background: var(--surface-overlay);
-  backdrop-filter: blur(4px);
-  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-  overflow: hidden;
-  margin: 0.75rem !important;
-}
-
-.react-flow__controls-button {
-  border: none !important;
-  background: transparent !important;
-  color: var(--text-muted) !important;
-  fill: var(--text-muted) !important;
-  transition: background 0.15s, color 0.15s;
-}
-
-.react-flow__controls-button:hover {
-  background: var(--surface-hover) !important;
-  color: var(--text-secondary) !important;
-  fill: var(--text-secondary) !important;
-}
-
-.react-flow__controls-button svg {
-  fill: currentColor !important;
-}
-
 /* Thin scrollbars */
 * {
   scrollbar-width: thin;
-}
-
-/* Kill text selection while dragging items on the grid */
-body.dragging {
-  user-select: none;
-  -webkit-user-select: none;
 }

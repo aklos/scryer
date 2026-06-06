@@ -66,6 +66,34 @@ impl RespMinter {
             })
             .collect()
     }
+
+    /// Build responsibilities from rich inputs, returning per-responsibility
+    /// line ranges alongside.
+    fn build_rich(
+        &mut self,
+        inputs: &[ResponsibilityInput],
+    ) -> Vec<(Responsibility, Option<u32>, Option<u32>)> {
+        inputs
+            .iter()
+            .filter(|i| !i.statement().trim().is_empty())
+            .map(|i| {
+                let id = format!("resp-{}", self.next);
+                self.next += 1;
+                let resp = Responsibility {
+                    id,
+                    statement: i.statement().trim().to_string(),
+                    status: Some(Status::Implemented),
+                    vagrant: None,
+                    locked: None,
+                    relocated_to: None,
+                    relocated_from: None,
+                    directives: Vec::new(),
+                    last_touched_at: None,
+                };
+                (resp, i.line(), i.end_line())
+            })
+            .collect()
+    }
 }
 
 fn err(msg: impl Into<String>) -> CallToolResult {
@@ -105,8 +133,9 @@ fn blank_node(id: String, kind: Kind, name: String, parent_id: Option<String>) -
         description: None,
         responsibilities: Vec::new(),
         properties: Vec::new(),
-        cell: None,
         icon: None,
+        visual: None,
+        appearance: None,
         deprecated: None,
         relocated: None,
         locked: None,
@@ -124,7 +153,6 @@ fn commit(
     minted: &[String],
 ) -> Result<CallToolResult, McpError> {
     enforce_readonly_directives(&mut model, prior);
-    enforce_readonly_layout(&mut model, prior);
 
     if let Err(e) = scryer_core::write_model_at(model_ref, &model) {
         return Ok(err(e));
@@ -349,8 +377,6 @@ impl ScryerServer {
                 parent_group_id: None,
                 parent_node_id: Some(item.parent_id.clone()),
                 responsibilities: minter.build(&item.responsibilities),
-                cell: None,
-                size: None,
                 icon: None,
             });
             minted.push(id);
@@ -358,7 +384,6 @@ impl ScryerServer {
         // Groups aren't nodes, so commit by hand (the node-returning `commit`
         // helper doesn't apply): enforce read-only invariants, write, baseline.
         enforce_readonly_directives(&mut model, &prior);
-        enforce_readonly_layout(&mut model, &prior);
         if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
             return Ok(err(e));
         }
@@ -371,7 +396,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Add one or more symbols (one addressable code definition each) under a component. Pass the `sourceFile` (and line/endLine) from the codebase context; the source map is anchored to the file + symbol name for you — no separate update_source_map call. Give `responsibilities` for behavior and/or `properties` for a declared data shape. Plain statements; ids and status set for you."
+        description = "Add one or more symbols (one addressable code definition each) under a component. Pass the `sourceFile` (and line/endLine for the full definition) from the codebase context; the source map is anchored to the file + symbol name for you — no separate update_source_map call. Each responsibility can be a plain string or `{statement, line, endLine}` with the specific sub-range within the symbol that does the work. Give `responsibilities` for behavior and/or `properties` for a declared data shape. Ids and status set for you."
     )]
     fn add_symbol(
         &self,
@@ -400,7 +425,7 @@ impl ScryerServer {
                 item.name.clone(),
                 Some(item.parent_id.clone()),
             );
-            let resps = minter.build(&item.responsibilities);
+            let rich = minter.build_rich(&item.responsibilities);
             node.properties = item
                 .properties
                 .iter()
@@ -413,20 +438,24 @@ impl ScryerServer {
                 .collect();
 
             // Anchor each responsibility to the file + symbol name (durable over
-            // line shifts), and — for a data shape — the declaration block to the
-            // symbol node id, using the line range the context provided.
-            for r in &resps {
-                model.source_map.insert(
-                    r.id.clone(),
-                    vec![SourceLocation {
-                        pattern: item.source_file.clone(),
-                        symbol: Some(item.name.clone()),
-                        line: None,
-                        end_line: None,
-                        command: None,
-                    }],
-                );
-            }
+            // line shifts) with the specific sub-range when provided. For a data
+            // shape, the declaration block is anchored to the symbol node id.
+            let resps: Vec<Responsibility> = rich
+                .into_iter()
+                .map(|(r, line, end_line)| {
+                    model.source_map.insert(
+                        r.id.clone(),
+                        vec![SourceLocation {
+                            pattern: item.source_file.clone(),
+                            symbol: Some(item.name.clone()),
+                            line,
+                            end_line,
+                            command: None,
+                        }],
+                    );
+                    r
+                })
+                .collect();
             if !node.properties.is_empty() {
                 model.source_map.insert(
                     id.clone(),
@@ -440,6 +469,7 @@ impl ScryerServer {
                 );
             }
             node.responsibilities = resps;
+            node.visual = item.visual;
             model.nodes.push(node);
             minted.push(id);
         }
@@ -486,8 +516,8 @@ impl ScryerServer {
                 vec![SourceLocation {
                     pattern: item.source_file.clone(),
                     symbol: item.symbol.clone(),
-                    line: None,
-                    end_line: None,
+                    line: item.line,
+                    end_line: item.end_line,
                     command: None,
                 }],
             );
@@ -520,7 +550,6 @@ impl ScryerServer {
         }
 
         enforce_readonly_directives(&mut model, &prior);
-        enforce_readonly_layout(&mut model, &prior);
         if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
             return Ok(err(e));
         }
@@ -610,7 +639,7 @@ mod tests {
         let component = m.nodes.iter().find(|n| n.kind == Kind::Component).unwrap();
         let component_id = component.id.clone();
 
-        // a data-shape symbol with properties + a responsibility
+        // a data-shape symbol with properties + a responsibility with sub-range
         server
             .add_symbol(Parameters(AddSymbolRequest {
                 project: Some(project.clone()),
@@ -620,11 +649,16 @@ mod tests {
                     source_file: "crates/api/src/auth.rs".into(),
                     line: Some(10),
                     end_line: Some(20),
-                    responsibilities: vec!["holds the logged-in session".into()],
+                    responsibilities: vec![ResponsibilityInput::Rich {
+                        statement: "holds the logged-in session".into(),
+                        line: Some(12),
+                        end_line: Some(15),
+                    }],
                     properties: vec![PropertyInput {
                         label: "token".into(),
                         description: "bearer token".into(),
                     }],
+                    visual: None,
                 }],
             }))
             .unwrap();
@@ -633,11 +667,12 @@ mod tests {
         let symbol_id = symbol.id.clone();
         assert_eq!(symbol.properties.len(), 1);
         let resp_id = symbol.responsibilities[0].id.clone();
-        // responsibility anchored to file + symbol name, no brittle line numbers
+        // responsibility anchored to file + symbol name + specific sub-range
         let resp_loc = &m.source_map.get(&resp_id).unwrap()[0];
         assert_eq!(resp_loc.pattern, "crates/api/src/auth.rs");
         assert_eq!(resp_loc.symbol.as_deref(), Some("Session"));
-        assert_eq!(resp_loc.line, None);
+        assert_eq!(resp_loc.line, Some(12));
+        assert_eq!(resp_loc.end_line, Some(15));
         // declaration block keyed by the symbol node id, with the context line range
         let decl = &m.source_map.get(&symbol_id).unwrap()[0];
         assert_eq!(decl.line, Some(10));
@@ -761,6 +796,8 @@ mod tests {
                     statement: "exposes an undocumented admin endpoint".into(),
                     source_file: "api/admin.rs".into(),
                     symbol: Some("admin_handler".into()),
+                    line: Some(42),
+                    end_line: Some(58),
                 }],
                 stale: vec![StaleResponsibility {
                     responsibility_id: rid.clone(),
@@ -784,6 +821,8 @@ mod tests {
         let anchor = &m.source_map.get(&vagrant.id).unwrap()[0];
         assert_eq!(anchor.pattern, "api/admin.rs");
         assert_eq!(anchor.symbol.as_deref(), Some("admin_handler"));
+        assert_eq!(anchor.line, Some(42));
+        assert_eq!(anchor.end_line, Some(58));
     }
 
     #[test]

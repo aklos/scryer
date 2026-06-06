@@ -342,9 +342,11 @@ fn text_search_symbol(lines: &[&str], symbol: &str) -> Option<u32> {
 /// `file` is the `SourceLocation.pattern`. The responsibility's *focus* is the
 /// explicit `line`/`end_line` range — the statements that do its work. `symbol`
 /// names the enclosing definition: it's the durable anchor (so the focus can be
-/// shown even as line numbers drift) and bounds the surrounding context, so the
-/// focus is rendered in-situ inside its function rather than the whole file.
-/// When only `symbol` is given, the whole definition is the focus. Reads are
+/// shown even as line numbers drift) and bounds what we render — the whole
+/// symbol body is returned with the focus lines flagged, so you read the focus
+/// in full context. When only `symbol` is given, the whole definition is the
+/// focus. With no symbol, the whole file is returned. The fixed-height scroll
+/// viewport bounds the visual size, so the data is never truncated. Reads are
 /// constrained to within `project_path`.
 #[tauri::command]
 fn read_source_span(
@@ -354,10 +356,8 @@ fn read_source_span(
     line: Option<u32>,
     end_line: Option<u32>,
 ) -> Result<SourceSpan, String> {
-    const PAD: u32 = 4; // context lines around the focus
     const NO_LINE_LIMIT: u32 = 40;
     const DEFAULT_SPAN: u32 = 30;
-    const MAX_LINES: u32 = 80; // guard against whole-symbol dumps
 
     let base = PathBuf::from(&project_path);
     let path = base.join(&file);
@@ -405,22 +405,19 @@ fn read_source_span(
         },
     };
 
-    // Context window: a few lines around the focus, clamped to the enclosing
-    // symbol so we never spill into neighbouring code, and capped so a whole-
-    // symbol focus can't dump hundreds of lines.
-    let mut start = focus_start.saturating_sub(PAD).max(1);
-    let mut end = (focus_end + PAD).min(total);
-    if let Some((ss, se)) = sym_range {
-        start = start.max(ss);
-        end = end.min(se).max(focus_end.min(total));
-    }
-    if end.saturating_sub(start) + 1 > MAX_LINES {
-        end = (start + MAX_LINES - 1).min(total);
-    }
+    // Render window: the whole enclosing symbol body (so the focus is always
+    // read in full context), or the whole file when no symbol resolves. The
+    // focus is always contained. The fixed-height scroll viewport on the
+    // frontend bounds visual size, so we never truncate — that only ever hid
+    // lines and lied about the range.
+    let (start, end) = match sym_range {
+        Some((ss, se)) => (ss.min(focus_start), se.max(focus_end).min(total)),
+        None => (1, total),
+    };
 
     // Syntax-highlight the whole file (line N → index N-1), falling back to
     // plain default-coloured segments for languages without a grammar, then
-    // slice out the context window.
+    // slice out the render window.
     let highlighted = highlight::highlight_lines(&canon, &contents).unwrap_or_else(|| {
         all.iter()
             .map(|l| {
@@ -459,12 +456,12 @@ fn check_mcp_json(project_path: &str) -> bool {
 }
 
 const SCRYER_READ_TOOLS: &[&str] = &[
-    "mcp__scryer__list_models",
-    "mcp__scryer__get_model",
-    "mcp__scryer__get_node",
+    "mcp__scryer__read_model",
+    "mcp__scryer__search_model",
+    "mcp__scryer__get_unimplemented",
     "mcp__scryer__get_rules",
-    "mcp__scryer__get_changes",
-    "mcp__scryer__get_structure",
+    "mcp__scryer__read_codebase",
+    "mcp__scryer__validate_model",
 ];
 
 /// Check if Claude Code has auto-approved scryer read tools in project settings.
@@ -759,7 +756,7 @@ async fn start_initial_model_session(
     };
 
     runtime
-        .start_session(agent_binary, mode, cwd, model_name, effort, mcp_binary, prompt, event_tx)
+        .start_session(agent_binary, mode, cwd, model_name, effort, mcp_binary, prompt, vec!["mcp__scryer__*".into()], event_tx)
         .await
 }
 
@@ -824,7 +821,7 @@ async fn start_node_fill_session(
     };
 
     runtime
-        .start_session(agent_binary, mode, cwd, model_name, effort, mcp_binary, prompt, event_tx)
+        .start_session(agent_binary, mode, cwd, model_name, effort, mcp_binary, prompt, vec!["mcp__scryer__*".into()], event_tx)
         .await
 }
 
@@ -892,8 +889,551 @@ async fn start_enrich_session(
     };
 
     runtime
-        .start_session(agent_binary, mode, cwd, model_name, effort, mcp_binary, prompt, event_tx)
+        .start_session(agent_binary, mode, cwd, model_name, effort, mcp_binary, prompt, vec!["mcp__scryer__*".into()], event_tx)
         .await
+}
+
+const HARNESS_INDEX_HTML: &str = r#"<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Preview</title>
+    <style>
+      html, body, #root { height: 100%; margin: 0; padding: 0; overflow: hidden; }
+      #_theme-toggle {
+        position: fixed; top: 6px; right: 6px; z-index: 9999;
+        width: 24px; height: 24px; border-radius: 6px; border: none;
+        cursor: pointer; font-size: 13px; line-height: 24px; text-align: center;
+        background: rgba(128,128,128,0.15); color: inherit; opacity: 0.5;
+      }
+      #_theme-toggle:hover { opacity: 1; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <button id="_theme-toggle" title="Toggle dark mode"></button>
+    <script>
+      (function() {
+        var p = new URLSearchParams(window.location.search);
+        var dark = p.get('theme') === 'dark' ||
+          (!p.has('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        var root = document.documentElement;
+        function apply(d) { dark = d; root.classList.toggle('dark', d); btn.textContent = d ? '☀' : '☾'; }
+        var btn = document.getElementById('_theme-toggle');
+        btn.addEventListener('click', function() { apply(!dark); });
+        apply(dark);
+      })();
+    </script>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>
+"#;
+
+const HARNESS_VITE_CONFIG: &str = r#"import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+import path from "path";
+
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  root: path.resolve(__dirname),
+  base: "./",
+  build: {
+    outDir: path.resolve(__dirname, "dist"),
+    emptyOutDir: true,
+    minify: false,
+  },
+  resolve: {
+    alias: {
+      "@tauri-apps/api/core": path.resolve(__dirname, "stubs/tauri-core.ts"),
+      "@tauri-apps/api": path.resolve(__dirname, "stubs/tauri-core.ts"),
+      "@tauri-apps/plugin-shell": path.resolve(__dirname, "stubs/tauri-core.ts"),
+    },
+  },
+});
+"#;
+
+const HARNESS_STUBS: &str = concat!(
+    "export const invoke = async (_cmd: string, _args?: unknown) => null;\n",
+    "export const convertFileSrc = (src: string) => src;\n",
+    "export const listen = async () => () => {};\n",
+    "export const getCurrentWindow = () => ({ setTheme: async () => {} });\n",
+    "export default { invoke, convertFileSrc };\n",
+);
+
+/// Write the standardized preview harness files into `dir`. The `css_depth`
+/// controls how many `..` segments preview.css uses to reach the project root
+/// (3 for the main preview, 5 for variation subdirectories).
+fn write_harness_at(dir: &std::path::Path, css_depth: usize) -> Result<(), String> {
+    use std::fs;
+    fs::create_dir_all(dir.join("stubs")).map_err(|e| e.to_string())?;
+    fs::write(dir.join("index.html"), HARNESS_INDEX_HTML).map_err(|e| e.to_string())?;
+
+    let up = "../".repeat(css_depth);
+    let css = format!(
+        "@import \"{}src/index.css\";\n@source \"{}\";\n",
+        up,
+        up.trim_end_matches('/'),
+    );
+    fs::write(dir.join("preview.css"), css).map_err(|e| e.to_string())?;
+    fs::write(dir.join("vite.config.ts"), HARNESS_VITE_CONFIG).map_err(|e| e.to_string())?;
+    fs::write(dir.join("stubs/tauri-core.ts"), HARNESS_STUBS).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Write the standardized preview harness files for a component preview.
+/// Creates index.html, preview.css, vite.config.ts, and Tauri API stubs.
+/// The agent only needs to write `main.tsx`.
+fn write_preview_harness(cwd: &str, node_id: &str) -> Result<(), String> {
+    let dir = PathBuf::from(cwd)
+        .join(".scryer")
+        .join("preview")
+        .join(node_id);
+    write_harness_at(&dir, 3)
+}
+
+/// Write harness files for N variation directories under the node's preview dir.
+fn write_variation_harnesses(cwd: &str, node_id: &str, count: usize) -> Result<(), String> {
+    for i in 0..count {
+        let dir = PathBuf::from(cwd)
+            .join(".scryer")
+            .join("preview")
+            .join(node_id)
+            .join("variations")
+            .join(i.to_string());
+        write_harness_at(&dir, 5)?;
+    }
+    Ok(())
+}
+
+/// Build one preview harness with Vite. `harness_dir` is the directory holding
+/// `vite.config.ts`; the build runs from the project root so npx resolves the
+/// project's local vite + node_modules, and the config's `root` (set to its own
+/// dir) places the output. Deterministic plumbing — the agent only writes
+/// `main.tsx`; running vite here keeps the build (and its output, errors, and
+/// retries) out of the agent's token budget.
+async fn build_preview_harness(cwd: &str, harness_dir: &std::path::Path) -> Result<(), String> {
+    let config = harness_dir.join("vite.config.ts");
+    let output = tokio::process::Command::new("npx")
+        .arg("vite")
+        .arg("build")
+        .arg("--config")
+        .arg(&config)
+        .current_dir(cwd)
+        .output()
+        .await
+        .map_err(|e| format!("failed to launch vite build: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+/// Build all N variation harnesses concurrently (bounded), returning each one's
+/// result by index. One Vite invocation per variation, but run in parallel from
+/// Rust instead of serially by the agent.
+async fn build_variations(cwd: String, node_id: String, count: usize) -> Vec<Result<(), String>> {
+    let base = PathBuf::from(&cwd)
+        .join(".scryer")
+        .join("preview")
+        .join(&node_id)
+        .join("variations");
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(3));
+    let mut handles = Vec::with_capacity(count);
+    for i in 0..count {
+        let sem = sem.clone();
+        let cwd = cwd.clone();
+        let dir = base.join(i.to_string());
+        handles.push(tokio::spawn(async move {
+            let _permit = sem.acquire().await;
+            build_preview_harness(&cwd, &dir).await
+        }));
+    }
+    let mut results = Vec::with_capacity(count);
+    for h in handles {
+        results.push(h.await.unwrap_or_else(|e| Err(e.to_string())));
+    }
+    results
+}
+
+/// Render a preview of a visual component. Starts an agent session that reads
+/// the component source, writes `main.tsx` in the standardized preview harness
+/// at `.scryer/preview/{nodeId}/`, builds it, and reports back. The frontend
+/// loads the output via the `preview://` protocol.
+///
+/// The harness boilerplate (index.html, vite.config.ts, preview.css, Tauri stubs)
+/// is written deterministically before the agent launches — the agent only needs
+/// to produce `main.tsx`.
+#[tauri::command]
+async fn start_preview_session(
+    cwd: String,
+    model_ref: String,
+    node_id: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AcpState>,
+) -> Result<String, String> {
+    // Write the standardized harness before the agent launches.
+    write_preview_harness(&cwd, &node_id)?;
+
+    let mcp_binary = find_scryer_mcp()
+        .ok_or("scryer-mcp binary not found")?;
+
+    let settings = scryer_core::read_subagent_settings();
+    let launch = scryer_acp::detect_available_agent_pref(&settings.agent)
+        .ok_or("No AI agent found. Install Claude Code or Codex first.")?;
+
+    let parsed_ref = scryer_core::ModelRef::parse(&model_ref)?;
+    let model = scryer_core::read_model_at(&parsed_ref)?;
+    let node = model
+        .nodes
+        .iter()
+        .find(|n| n.id == node_id)
+        .ok_or_else(|| format!("Node '{}' not found in model", node_id))?;
+    let node_name = node.name.clone();
+
+    // Find the component's source file from the source map (either the node id
+    // entry for data-shape declarations, or the first responsibility's source).
+    let source_map = &model.source_map;
+    let source_file = source_map
+        .get(&node_id)
+        .and_then(|locs| locs.first())
+        .map(|loc| loc.pattern.clone())
+        .or_else(|| {
+            node.responsibilities
+                .iter()
+                .find_map(|r| source_map.get(&r.id))
+                .and_then(|locs| locs.first())
+                .map(|loc| loc.pattern.clone())
+        })
+        .unwrap_or_default();
+
+    // Read the source lines for the prompt context.
+    let source_lines = if !source_file.is_empty() {
+        let abs = PathBuf::from(&cwd).join(&source_file);
+        std::fs::read_to_string(&abs).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let prompt = scryer_acp::prompt::preview_render_prompt(
+        &cwd, &node_id, &node_name, &source_file, &source_lines,
+    );
+    let (model_name, effort) = config_for_launch(&settings, &launch);
+
+    let runtime = {
+        let mut rt = state.0.lock().unwrap();
+        if rt.is_none() {
+            *rt = Some(scryer_acp::AcpRuntime::new());
+        }
+        rt.clone().unwrap()
+    };
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    // When the session completes, update the model with the preview metadata.
+    let cwd_clone = cwd.clone();
+    let node_id_clone = node_id.clone();
+    let model_ref_clone = model_ref.clone();
+    let handle = app.clone();
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            if !matches!(event, scryer_acp::AgentEvent::Completed { .. }) {
+                let _ = handle.emit("agent-event", &event);
+                continue;
+            }
+            // The agent finished writing main.tsx; build it here, then forward
+            // the completion so the frontend loads freshly-built output.
+            let _ = handle.emit(
+                "agent-event",
+                &scryer_acp::AgentEvent::Message { text: "Building preview…".into() },
+            );
+            let harness_dir = PathBuf::from(&cwd_clone)
+                .join(".scryer")
+                .join("preview")
+                .join(&node_id_clone);
+            if let Err(e) = build_preview_harness(&cwd_clone, &harness_dir).await {
+                let _ = handle.emit(
+                    "agent-event",
+                    &scryer_acp::AgentEvent::Message { text: format!("⚠ preview build failed: {e}") },
+                );
+            }
+            {
+                // Write preview metadata to the model.
+                let dist_path = format!(".scryer/preview/{}/dist", node_id_clone);
+                let dist_abs = PathBuf::from(&cwd_clone).join(&dist_path);
+                if dist_abs.join("index.html").exists() {
+                    if let Ok(parsed) = scryer_core::ModelRef::parse(&model_ref_clone) {
+                        let _lock = scryer_core::lock_model(&parsed).ok();
+                        if let Ok(mut m) = scryer_core::read_model_at(&parsed) {
+                            if let Some(n) = m.nodes.iter_mut().find(|n| n.id == node_id_clone) {
+                                n.appearance = Some(scryer_core::Appearance {
+                                    status: Some(scryer_core::Status::Implemented),
+                                    dist_path: Some(dist_path),
+                                    built_at: Some(scryer_core::drift::now_secs()),
+                                    source_hash: None,
+                                });
+                            }
+                            let _ = scryer_core::write_model_at(&parsed, &m);
+                        }
+                    }
+                }
+            }
+            let _ = handle.emit("agent-event", &event);
+        }
+    });
+
+    let (agent_binary, mode) = match launch {
+        scryer_acp::AgentLaunch::Cli { binary, kind } => {
+            (binary, scryer_acp::runtime::LaunchMode::Cli { kind })
+        }
+        scryer_acp::AgentLaunch::Acp { binary } => {
+            (binary, scryer_acp::runtime::LaunchMode::Acp)
+        }
+    };
+
+    let allowed_tools = vec![
+        "mcp__scryer__*".into(),
+        "Write".into(),
+        "Edit".into(),
+        "Bash".into(),
+    ];
+
+    runtime
+        .start_session(agent_binary, mode, cwd, model_name, effort, mcp_binary, prompt, allowed_tools, event_tx)
+        .await
+}
+
+/// Generate visual variations of a component. Writes N variation harnesses,
+/// launches an agent to produce N different `main.tsx` files + build each.
+/// Ephemeral — does NOT update the model on completion.
+#[tauri::command]
+async fn start_visual_variation_session(
+    cwd: String,
+    model_ref: String,
+    node_id: String,
+    prompt: String,
+    variation_count: Option<usize>,
+    base_variation_idx: Option<u32>,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AcpState>,
+) -> Result<String, String> {
+    let variation_count = variation_count.unwrap_or(3).clamp(1, 5);
+
+    write_variation_harnesses(&cwd, &node_id, variation_count)?;
+
+    let mcp_binary = find_scryer_mcp()
+        .ok_or("scryer-mcp binary not found")?;
+
+    let settings = scryer_core::read_subagent_settings();
+    let launch = scryer_acp::detect_available_agent_pref(&settings.agent)
+        .ok_or("No AI agent found. Install Claude Code or Codex first.")?;
+
+    let parsed_ref = scryer_core::ModelRef::parse(&model_ref)?;
+    let model = scryer_core::read_model_at(&parsed_ref)?;
+    let node = model
+        .nodes
+        .iter()
+        .find(|n| n.id == node_id)
+        .ok_or_else(|| format!("Node '{}' not found in model", node_id))?;
+    let node_name = node.name.clone();
+
+    let source_map = &model.source_map;
+    let source_file = source_map
+        .get(&node_id)
+        .and_then(|locs| locs.first())
+        .map(|loc| loc.pattern.clone())
+        .or_else(|| {
+            node.responsibilities
+                .iter()
+                .find_map(|r| source_map.get(&r.id))
+                .and_then(|locs| locs.first())
+                .map(|loc| loc.pattern.clone())
+        })
+        .unwrap_or_default();
+
+    let source_lines = if !source_file.is_empty() {
+        let abs = PathBuf::from(&cwd).join(&source_file);
+        std::fs::read_to_string(&abs).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    // If iterating on a previous variation, read its main.tsx as the base.
+    // Otherwise read the existing main preview's main.tsx (if any).
+    let existing_main_tsx = if let Some(idx) = base_variation_idx {
+        let path = PathBuf::from(&cwd)
+            .join(".scryer/preview")
+            .join(&node_id)
+            .join("variations")
+            .join(idx.to_string())
+            .join("main.tsx");
+        std::fs::read_to_string(&path).unwrap_or_default()
+    } else {
+        let path = PathBuf::from(&cwd)
+            .join(".scryer/preview")
+            .join(&node_id)
+            .join("main.tsx");
+        std::fs::read_to_string(&path).unwrap_or_default()
+    };
+
+    let agent_prompt = scryer_acp::prompt::visual_variation_prompt(
+        &cwd, &node_id, &node_name, &source_file, &source_lines,
+        &prompt, &existing_main_tsx, variation_count,
+    );
+    let (model_name, effort) = config_for_launch(&settings, &launch);
+
+    let runtime = {
+        let mut rt = state.0.lock().unwrap();
+        if rt.is_none() {
+            *rt = Some(scryer_acp::AcpRuntime::new());
+        }
+        rt.clone().unwrap()
+    };
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let handle = app.clone();
+    let cwd_build = cwd.clone();
+    let node_id_build = node_id.clone();
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            if !matches!(event, scryer_acp::AgentEvent::Completed { .. }) {
+                let _ = handle.emit("agent-event", &event);
+                continue;
+            }
+            // The agent finished writing the N main.tsx files; build them here
+            // (concurrently, out of the agent's token budget), then forward the
+            // completion so the frontend loads the freshly-built variations.
+            let _ = handle.emit(
+                "agent-event",
+                &scryer_acp::AgentEvent::Message {
+                    text: format!("Building {variation_count} variation(s)…"),
+                },
+            );
+            let results =
+                build_variations(cwd_build.clone(), node_id_build.clone(), variation_count).await;
+            for (i, r) in results.iter().enumerate() {
+                if let Err(e) = r {
+                    let _ = handle.emit(
+                        "agent-event",
+                        &scryer_acp::AgentEvent::Message {
+                            text: format!("⚠ variation {i} build failed: {e}"),
+                        },
+                    );
+                }
+            }
+            let _ = handle.emit("agent-event", &event);
+        }
+    });
+
+    let (agent_binary, mode) = match launch {
+        scryer_acp::AgentLaunch::Cli { binary, kind } => {
+            (binary, scryer_acp::runtime::LaunchMode::Cli { kind })
+        }
+        scryer_acp::AgentLaunch::Acp { binary } => {
+            (binary, scryer_acp::runtime::LaunchMode::Acp)
+        }
+    };
+
+    let allowed_tools = vec![
+        "mcp__scryer__*".into(),
+        "Write".into(),
+        "Edit".into(),
+        "Bash".into(),
+    ];
+
+    runtime
+        .start_session(agent_binary, mode, cwd, model_name, effort, mcp_binary, agent_prompt, allowed_tools, event_tx)
+        .await
+}
+
+/// Accept a visual variation: copy its dist + main.tsx to the main preview
+/// directory, update the model's preview metadata, and clean up variations.
+#[tauri::command]
+async fn accept_visual_variation(
+    cwd: String,
+    model_ref: String,
+    node_id: String,
+    variation_idx: u32,
+) -> Result<(), String> {
+    let base = PathBuf::from(&cwd).join(".scryer/preview").join(&node_id);
+    let var_dir = base.join("variations").join(variation_idx.to_string());
+
+    if !var_dir.join("dist/index.html").exists() {
+        return Err(format!("Variation {} has no built output", variation_idx));
+    }
+
+    // Copy variation dist → main dist
+    let main_dist = base.join("dist");
+    if main_dist.exists() {
+        std::fs::remove_dir_all(&main_dist).map_err(|e| e.to_string())?;
+    }
+    copy_dir_recursive(&var_dir.join("dist"), &main_dist)?;
+
+    // Copy variation main.tsx → main dir (so re-renders use the accepted version)
+    let var_main = var_dir.join("main.tsx");
+    if var_main.exists() {
+        // Rewrite imports: variation main.tsx uses 5 levels up (../../../../..)
+        // but the main preview dir is 3 levels up (../../..)
+        let content = std::fs::read_to_string(&var_main).map_err(|e| e.to_string())?;
+        let adjusted = content.replace("../../../../..", "../../..");
+        std::fs::write(base.join("main.tsx"), adjusted).map_err(|e| e.to_string())?;
+    }
+
+    // Update model preview metadata
+    let parsed_ref = scryer_core::ModelRef::parse(&model_ref)?;
+    let _lock = scryer_core::lock_model(&parsed_ref).ok();
+    if let Ok(mut m) = scryer_core::read_model_at(&parsed_ref) {
+        if let Some(n) = m.nodes.iter_mut().find(|n| n.id == node_id) {
+            n.appearance = Some(scryer_core::Appearance {
+                status: Some(scryer_core::Status::Changed),
+                dist_path: Some(format!(".scryer/preview/{}/dist", node_id)),
+                built_at: Some(scryer_core::drift::now_secs()),
+                source_hash: None,
+            });
+        }
+        let _ = scryer_core::write_model_at(&parsed_ref, &m);
+    }
+
+    // Clean up all variation directories
+    let vars_dir = base.join("variations");
+    if vars_dir.exists() {
+        let _ = std::fs::remove_dir_all(&vars_dir);
+    }
+
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(src).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let target = dst.join(entry.file_name());
+        if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+            copy_dir_recursive(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Discard visual variations: remove the variations directory.
+#[tauri::command]
+async fn discard_visual_variations(
+    cwd: String,
+    node_id: String,
+) -> Result<(), String> {
+    let vars_dir = PathBuf::from(&cwd)
+        .join(".scryer/preview")
+        .join(&node_id)
+        .join("variations");
+    if vars_dir.exists() {
+        std::fs::remove_dir_all(&vars_dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1104,6 +1644,7 @@ async fn run_wave(
             effort.to_string(),
             mcp_binary.to_string(),
             prompt,
+            vec!["mcp__scryer__*".into()],
             tx,
         )
         .await?;
@@ -1617,6 +2158,90 @@ pub fn run() {
             Mutex::new(None),
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         ))
+        .register_uri_scheme_protocol("preview", {
+            let preview_project: std::sync::Arc<Mutex<String>> =
+                std::sync::Arc::new(Mutex::new(String::new()));
+            move |_app, request| {
+            // preview://{nodeId}/path/to/file → .scryer/preview/{nodeId}/dist/path/to/file
+            // The host is the node id; the path is the file within the dist.
+            let url = request.uri();
+            let host = url.host().unwrap_or_default();
+            let path = url.path();
+            let path = if path.is_empty() || path == "/" {
+                "/index.html"
+            } else {
+                path
+            };
+
+            // The project path comes as a query parameter on the initial index.html
+            // request. Sub-resource requests (JS, CSS, fonts) don't carry the query,
+            // so we cache the last-seen project path for them.
+            let query = url.query().unwrap_or_default();
+            let project_from_query = query
+                .split('&')
+                .find_map(|kv| kv.strip_prefix("project="))
+                .and_then(|v| urlencoding::decode(v).ok())
+                .map(|v| v.into_owned())
+                .unwrap_or_default();
+
+            let project = if !project_from_query.is_empty() {
+                *preview_project.lock().unwrap() = project_from_query.clone();
+                project_from_query
+            } else {
+                preview_project.lock().unwrap().clone()
+            };
+
+            if project.is_empty() || host.is_empty() {
+                return tauri::http::Response::builder()
+                    .status(404)
+                    .body(b"Missing project or node id".to_vec())
+                    .unwrap();
+            }
+
+            // Variation support: preview://{nodeId}__v{n}/path routes to
+            // .scryer/preview/{nodeId}/variations/{n}/dist/path
+            let file_path = if let Some((real_id, var_idx)) = host.split_once("__v") {
+                std::path::Path::new(&project)
+                    .join(".scryer/preview")
+                    .join(real_id)
+                    .join("variations")
+                    .join(var_idx)
+                    .join("dist")
+                    .join(path.trim_start_matches('/'))
+            } else {
+                std::path::Path::new(&project)
+                    .join(".scryer/preview")
+                    .join(host)
+                    .join("dist")
+                    .join(path.trim_start_matches('/'))
+            };
+
+            match std::fs::read(&file_path) {
+                Ok(data) => {
+                    let mime = match file_path.extension().and_then(|e| e.to_str()) {
+                        Some("html") => "text/html",
+                        Some("js" | "mjs") => "application/javascript",
+                        Some("css") => "text/css",
+                        Some("json") => "application/json",
+                        Some("svg") => "image/svg+xml",
+                        Some("png") => "image/png",
+                        Some("jpg" | "jpeg") => "image/jpeg",
+                        Some("woff2") => "font/woff2",
+                        Some("woff") => "font/woff",
+                        _ => "application/octet-stream",
+                    };
+                    tauri::http::Response::builder()
+                        .status(200)
+                        .header("content-type", mime)
+                        .body(data)
+                        .unwrap()
+                }
+                Err(_) => tauri::http::Response::builder()
+                    .status(404)
+                    .body(format!("Not found: {}", file_path.display()).into_bytes())
+                    .unwrap(),
+            }
+        }})
         .setup(move |app| {
             app.manage(Mutex::new(WatcherState { project: None }));
             Ok(())
@@ -1642,6 +2267,10 @@ pub fn run() {
             start_initial_model_session,
             start_node_fill_session,
             start_enrich_session,
+            start_preview_session,
+            start_visual_variation_session,
+            accept_visual_variation,
+            discard_visual_variations,
             start_model_build,
             start_drift_check,
             get_drift_status,

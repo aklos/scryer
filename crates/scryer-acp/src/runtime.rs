@@ -31,6 +31,7 @@ enum RuntimeCommand {
         effort: String,
         mcp_binary: String,
         prompt: String,
+        allowed_tools: Vec<String>,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
         result_tx: oneshot::Sender<Result<String, String>>,
     },
@@ -74,6 +75,7 @@ impl AcpRuntime {
         effort: String,
         mcp_binary: String,
         prompt: String,
+        allowed_tools: Vec<String>,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
     ) -> Result<String, String> {
         let (result_tx, result_rx) = oneshot::channel();
@@ -86,6 +88,7 @@ impl AcpRuntime {
                 effort,
                 mcp_binary,
                 prompt,
+                allowed_tools,
                 event_tx,
                 result_tx,
             })
@@ -134,6 +137,7 @@ fn runtime_thread(
                     effort,
                     mcp_binary,
                     prompt,
+                    allowed_tools,
                     event_tx,
                     result_tx,
                 } => {
@@ -149,10 +153,11 @@ fn runtime_thread(
                             .as_millis()
                     );
 
+                    let tool_refs: Vec<&str> = allowed_tools.iter().map(|s| s.as_str()).collect();
                     let result = match mode {
                         LaunchMode::Cli { kind } => start_cli_session(
                             &agent_binary, &kind, &cwd, &model_name, &effort, &mcp_binary,
-                            &prompt, id, event_tx, done_tx.clone(),
+                            &prompt, &tool_refs, id, event_tx, done_tx.clone(),
                         ),
                         LaunchMode::Acp => start_acp_session(
                             &agent_binary, &cwd, &model_name, &mcp_binary,
@@ -202,6 +207,7 @@ fn start_cli_session(
     effort: &str,
     mcp_binary: &str,
     prompt: &str,
+    allowed_tools: &[&str],
     id: u64,
     event_tx: mpsc::UnboundedSender<AgentEvent>,
     done_tx: mpsc::UnboundedSender<RuntimeCommand>,
@@ -226,9 +232,11 @@ fn start_cli_session(
             if !model_name.is_empty() {
                 cmd.arg("--model").arg(model_name);
             }
-            cmd.arg("--mcp-config").arg(mcp_config.to_string())
-                .arg("--allowed-tools").arg("mcp__scryer__*")
-                .arg("--no-session-persistence")
+            cmd.arg("--mcp-config").arg(mcp_config.to_string());
+            for pat in allowed_tools {
+                cmd.arg("--allowed-tools").arg(pat);
+            }
+            cmd.arg("--no-session-persistence")
                 .arg(&prompt);
         }
         AgentKind::Codex => {
