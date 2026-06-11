@@ -127,7 +127,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               value={settings.agent}
               onChange={(agent) => setSettings((s) => ({ ...s, agent: agent as AgentPref }))}
             />
-            <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+            <p className="mt-1 text-2xs text-[var(--text-muted)]">
               {resolvedAgent
                 ? `Fills will use ${resolvedAgent === "claudeCode" ? "Claude Code" : "Codex"}.`
                 : "No agent detected — install Claude Code or Codex."}

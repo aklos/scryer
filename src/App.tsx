@@ -9,25 +9,32 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Loader2 } from "lucide-react";
 import type { VariationState } from "./NodePage";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ToastProvider } from "./Toast";
-import { Breadcrumbs } from "./Breadcrumbs";
 import { ModelTree } from "./ModelTree";
-import { NodePage, type Selected } from "./NodePage";
+import { TopBar } from "./TopBar";
+import { NodePage, type Selected, type SpecialPage } from "./NodePage";
+import { buildReviewIndex, NeedsReviewPage, RecentChangesPage } from "./SpecialPages";
 import { ProjectPicker } from "./ProjectPicker";
+import { SearchPalette } from "./SearchPalette";
 import { SyncBar } from "./SyncBar";
 import { SettingsPanel } from "./SettingsPanel";
 import { useModelStorage } from "./hooks/useModelStorage";
 import { useModelBuild, type ModelBuild } from "./hooks/useModelBuild";
 import { useAgentSession } from "./hooks/useAgentSession";
+import { useModelHealth } from "./hooks/useModelHealth";
 import {
   addGroup as addGroupHelper,
+  addLink as addLinkHelper,
   addNode as addNodeHelper,
   addProperty,
   addResponsibility,
+  moveNode as moveNodeHelper,
   moveResponsibility as moveResponsibilityHelper,
   removeGroup as removeGroupHelper,
+  removeLink as removeLinkHelper,
   removeNode as removeNodeHelper,
   removeProperty,
   removeResponsibility,
@@ -80,6 +87,10 @@ function AppBody() {
       clearNewNode={storage.clearNewNode}
       newRespIds={storage.newRespIds}
       clearNewResp={storage.clearNewResp}
+      changeLog={storage.changeLog}
+      clearAllNew={storage.clearAllNew}
+      openProject={storage.openProject}
+      closeProject={storage.closeProject}
     />
   );
 }
@@ -96,6 +107,10 @@ function Workspace({
   clearNewNode,
   newRespIds,
   clearNewResp,
+  changeLog,
+  clearAllNew,
+  openProject,
+  closeProject,
 }: {
   model: ScryModel;
   updateModel: ReturnType<typeof useModelStorage>["updateModel"];
@@ -108,6 +123,10 @@ function Workspace({
   clearNewNode: (id: string) => void;
   newRespIds: ReadonlySet<string>;
   clearNewResp: (id: string) => void;
+  changeLog: ReturnType<typeof useModelStorage>["changeLog"];
+  clearAllNew: () => void;
+  openProject: (path: string) => Promise<void>;
+  closeProject: () => void;
 }) {
   const agent = useAgentSession();
 
@@ -132,6 +151,13 @@ function Workspace({
 
   const writing = agent.running || build.active;
 
+  // The observability feed: coverage, anchor fingerprints, link evidence.
+  // Refreshes on open and whenever an agent run finishes.
+  const { report: healthReport, refresh: refreshHealth } = useModelHealth(
+    projectPath,
+    writing,
+  );
+
   // Cheap, agent-free nudge: which scopes have code changes since the last
   // reconcile. Refreshes on open and whenever an agent run finishes.
   const [driftScopes, setDriftScopes] = useState<DriftScope[]>([]);
@@ -151,6 +177,19 @@ function Workspace({
   const [selected, setSelected] = useState<Selected | null>(null);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  // Ctrl/Cmd+K — jump to any node or group by name.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setSearchOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const modelRef = useRef(model);
   modelRef.current = model;
@@ -177,7 +216,7 @@ function Workspace({
     (id: string) => {
       setSelected({ kind: "node", id });
       const anc = ancestorsToExpand(id);
-      setExpanded((prev) => new Set([...prev, ...anc, id]));
+      setExpanded((prev) => new Set([...prev, ...anc]));
       clearNewNode(id);
     },
     [ancestorsToExpand, clearNewNode],
@@ -325,6 +364,18 @@ function Workspace({
         });
         return newId;
       },
+      moveNode: (nodeId, newParentId) =>
+        updateModel((m) => moveNodeHelper(m, nodeId, newParentId)),
+      addLink: (src, dst, label) => {
+        let newId = "";
+        updateModel((m) => {
+          const { model: next, id } = addLinkHelper(m, src, dst, label ?? "");
+          newId = id;
+          return next;
+        });
+        return newId;
+      },
+      deleteLink: (linkId) => updateModel((m) => removeLinkHelper(m, linkId)),
       setNodeGroup: (nodeId, groupId) =>
         updateModel((m) => setNodeGroupHelper(m, nodeId, groupId)),
       addResponsibility: (host, hostId) => {
@@ -361,23 +412,62 @@ function Workspace({
 
   const pageEditor = writing ? undefined : editor;
 
+  const onDismissDrift = useCallback(() => {
+    if (!projectPath) return;
+    // Optimistic: clear the nudge now; the anchor write makes it stick.
+    setDriftScopes([]);
+    invoke("reconcile_drift", { cwd: projectPath })
+      .then(() => refreshHealth())
+      .catch(() => {});
+  }, [projectPath, refreshHealth]);
+
+  const onCheckDrift = useCallback(() => {
+    if (!projectPath) return;
+    build.checkDrift(projectPath);
+  }, [projectPath, build]);
+
+  const openSpecial = useCallback((page: SpecialPage) => {
+    setSelected({ kind: "special", id: page });
+  }, []);
+
+  // The status-bar counters, shared with the special pages so the number and
+  // the list can never disagree.
+  const reviewIndex = buildReviewIndex(model, healthReport, driftScopes, newNodeIds, newRespIds);
+  const plannedCount = model.nodes.reduce((n, node) => {
+    if (node.external) return n;
+    const resps = (node.responsibilities ?? []).filter((r) => {
+      if (r.vagrant) return false;
+      const s = r.status ?? "proposed";
+      return s === "proposed" || s === "changed";
+    }).length;
+    const props = (node.properties ?? []).filter((p) => {
+      const s = p.status ?? "proposed";
+      return s === "proposed" || s === "changed";
+    }).length;
+    return n + resps + props;
+  }, 0);
+
   return (
     <div className="flex h-screen w-screen flex-col bg-[var(--surface-canvas)]">
-      <Breadcrumbs
-        model={model}
-        selected={selected}
-        onSelectNode={selectNode}
-        onSelectGroup={selectGroup}
+      <TopBar
         projectPath={projectPath}
+        onOpenProject={(p) => void openProject(p)}
+        onCloseProject={closeProject}
+        onReload={() => void reloadFromDisk()}
+        onOpenSearch={() => setSearchOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       {writing && (
-        <div className="flex shrink-0 items-center justify-center bg-amber-500/10 py-1 text-[11px] text-amber-600 dark:text-amber-400">
+        // Indigo = the agent. While it owns the model file the page is
+        // read-only ([edit] affordances disappear); this banner says why.
+        <div className="flex shrink-0 items-center justify-center gap-1.5 bg-indigo-500/10 py-1 text-2xs text-indigo-600 dark:text-indigo-400">
+          <Loader2 className="h-3 w-3 animate-spin" />
           {build.building
-            ? "Building the model"
+            ? "Agent is building the model"
             : build.checking
-              ? "Checking for drift"
+              ? "Agent is checking for drift"
               : agent.label}
-          {build.active && build.phase ? ` — ${build.phase}` : " — editing locked"}
+          {build.active && build.phase ? ` — ${build.phase}` : " — editing locked until it finishes"}
         </div>
       )}
       <div className="flex min-h-0 flex-1">
@@ -390,18 +480,38 @@ function Workspace({
           onToggle={toggle}
           editor={pageEditor}
           onFill={projectPath && !writing ? onFill : undefined}
+          onOpenSearch={() => setSearchOpen(true)}
           activeNodeIds={build.active ? build.activeNodeIds : EMPTY_IDS}
           newNodeIds={newNodeIds}
         />
-        {selected ? (
+        {selected?.kind === "special" ? (
+          selected.id === "changes" ? (
+            <RecentChangesPage changeLog={changeLog} onSelectNode={selectNode} />
+          ) : (
+            <NeedsReviewPage
+              model={model}
+              report={healthReport}
+              driftScopes={driftScopes}
+              newNodeIds={newNodeIds}
+              newRespIds={newRespIds}
+              editor={pageEditor}
+              onSelectNode={selectNode}
+              onCheckDrift={pageEditor ? onCheckDrift : undefined}
+              onDismissDrift={pageEditor ? onDismissDrift : undefined}
+              onClearAllNew={clearAllNew}
+            />
+          )
+        ) : selected ? (
           <NodePage
             key={previewKey}
             model={model}
             selected={selected}
+            report={healthReport}
             projectPath={projectPath}
             editor={pageEditor}
             onSelectNode={selectNode}
             onSelectGroup={selectGroup}
+            onFill={projectPath && !writing ? onFill : undefined}
             onRender={!writing ? onRender : undefined}
             variationState={variationState}
             onStartVariation={!writing || variationState ? onStartVariation : undefined}
@@ -410,24 +520,33 @@ function Workspace({
             onSelectVariation={onSelectVariation}
             newRespIds={newRespIds}
             onClearNewResp={clearNewResp}
+            driftScopes={driftScopes}
+            onCheckDrift={pageEditor ? onCheckDrift : undefined}
+            onDismissDrift={pageEditor ? onDismissDrift : undefined}
           />
         ) : (
-          <div className="flex flex-1 items-center justify-center text-[12px] text-[var(--text-muted)]">
+          <div className="flex flex-1 items-center justify-center text-xs text-[var(--text-muted)]">
             Select a node from the tree.
           </div>
         )}
-        <div className="w-[340px] shrink-0" aria-hidden />
       </div>
       <SyncBar
         model={model}
         agent={agent}
         build={build}
-        projectPath={projectPath}
-        driftScopes={driftScopes}
-        onRevealNode={selectNode}
-        onOpenSettings={() => setSettingsOpen(true)}
+        reviewCount={reviewIndex.total}
+        plannedCount={plannedCount}
+        onOpenSpecial={openSpecial}
       />
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+      {searchOpen && (
+        <SearchPalette
+          model={model}
+          onSelectNode={selectNode}
+          onSelectGroup={selectGroup}
+          onClose={() => setSearchOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -9,11 +9,44 @@ fn main() {
 
     match task {
         "build-sidecar" => build_sidecar(!debug),
+        "validate-model" => validate_model(args.get(2).map(PathBuf::from)),
         _ => {
-            eprintln!("Usage: cargo run -p xtask -- build-sidecar [--debug]");
+            eprintln!(
+                "Usage:\n  cargo run -p xtask -- build-sidecar [--debug]\n  \
+                 cargo run -p xtask -- validate-model [project-path]"
+            );
             std::process::exit(1);
         }
     }
+}
+
+fn validate_model(project: Option<PathBuf>) {
+    let project = project.unwrap_or_else(workspace_root);
+    let model_ref = scryer_core::ModelRef::ProjectLocal(project.clone());
+    let model = scryer_core::read_model_at(&model_ref).unwrap_or_else(|e| {
+        eprintln!("Failed to read {}: {e}", model_ref.model_path().display());
+        std::process::exit(1);
+    });
+    let mut warnings = scryer_core::validate::validate(&model);
+    warnings.extend(scryer_core::validate::validate_coverage(&model, &project));
+
+    println!(
+        "{} nodes, {} links, {} groups, {} source mappings, {} boundaries",
+        model.nodes.len(),
+        model.links.len(),
+        model.groups.len(),
+        model.source_map.len(),
+        model.boundaries.len(),
+    );
+    if warnings.is_empty() {
+        println!("Model is structurally and source-coverage clean.");
+        return;
+    }
+    eprintln!("{} validation warning(s):", warnings.len());
+    for warning in warnings {
+        eprintln!("- {warning}");
+    }
+    std::process::exit(2);
 }
 
 fn build_sidecar(release: bool) {
@@ -53,11 +86,7 @@ fn build_sidecar(release: bool) {
     let dst = out_dir.join(&dst_name);
 
     std::fs::copy(&src, &dst).unwrap_or_else(|e| {
-        panic!(
-            "failed to copy {} -> {}: {e}",
-            src.display(),
-            dst.display()
-        );
+        panic!("failed to copy {} -> {}: {e}", src.display(), dst.display());
     });
 
     println!("Sidecar copied to {}", dst.display());

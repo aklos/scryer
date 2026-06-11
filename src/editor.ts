@@ -30,6 +30,15 @@ export interface Editor {
     groupId?: string;
     external?: boolean;
   }) => string;
+  /** Re-parent a node (subtree moves with it); null = top-level. Kind
+   *  hierarchy validated; no-op when the move is invalid. */
+  moveNode: (nodeId: string, newParentId: string | null) => void;
+
+  // --- links ---
+  /** Declare a directed link (e.g. minted from an import-evidence suggestion).
+   *  Duplicate (src,dst) pairs are a no-op. Returns the link id. */
+  addLink: (src: string, dst: string, label?: string) => string;
+  deleteLink: (linkId: string) => void;
 
   // --- groups ---
   updateGroup: (

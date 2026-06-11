@@ -11,6 +11,7 @@ ignore = "0.4"
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rayon = "1"
 
 # Grammars compiled into the binary. Versions MUST match src-tauri/Cargo.toml so
 # Cargo unifies a single copy across the workspace (a mismatch fails the build).
@@ -26,3 +27,6 @@ tree-sitter-c = "0.24"
 tree-sitter-cpp = "0.23"
 tree-sitter-c-sharp = "0.23"
 tree-sitter-php = "0.24"
+
+[dev-dependencies]
+tempfile = "3"

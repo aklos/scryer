@@ -10,10 +10,6 @@ use rmcp::{
 use scryer_core::{Node, ScryModel};
 use std::collections::HashSet;
 
-/// Placeholder for tools that take no parameters.
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub(crate) struct EmptyRequest {}
-
 /// The architecture overview: the model tree down to components (symbols
 /// excluded) with responsibility/property counts. Always small enough to read
 /// whole, so an unqualified `read_model` can never bury the agent's context.
@@ -150,6 +146,108 @@ fn subtree_payload(model: &ScryModel, node_id: &str) -> Result<serde_json::Value
         "sourceMap": source_map,
         "boundaries": boundaries,
     }))
+}
+
+/// A queryable node field resolved to a comparable typed value.
+enum FieldVal {
+    Str(Option<String>),
+    Bool(bool),
+    Num(f64),
+}
+
+/// Resolve a `query_model` field name to its typed value on a node. `child_count`
+/// is precomputed by the caller. Unknown field names are an error the agent can
+/// correct from.
+fn resolve_field(n: &Node, field: &str, child_count: usize) -> Result<FieldVal, String> {
+    Ok(match field {
+        "kind" => FieldVal::Str(Some(kind_str(&n.kind).to_string())),
+        "name" => FieldVal::Str(Some(n.name.clone())),
+        "description" => FieldVal::Str(n.description.clone()),
+        "technology" => FieldVal::Str(n.technology.clone()),
+        "external" => FieldVal::Bool(n.external == Some(true)),
+        "deprecated" => FieldVal::Bool(n.deprecated == Some(true)),
+        "relocated" => FieldVal::Bool(n.relocated == Some(true)),
+        "visual" => FieldVal::Bool(n.visual == Some(true)),
+        "empty" => FieldVal::Bool(scryer_core::is_node_empty(n)),
+        "vagrant" => FieldVal::Bool(n.responsibilities.iter().any(|r| r.vagrant == Some(true))),
+        "responsibilityCount" | "responsibilities" => {
+            FieldVal::Num(n.responsibilities.len() as f64)
+        }
+        "propertyCount" | "properties" => FieldVal::Num(n.properties.len() as f64),
+        "childCount" | "children" => FieldVal::Num(child_count as f64),
+        other => {
+            return Err(format!(
+                "Unknown query field '{}'. Valid: kind, name, description, technology, external, \
+                 deprecated, relocated, visual, empty, vagrant, responsibilityCount, propertyCount, \
+                 childCount.",
+                other
+            ))
+        }
+    })
+}
+
+/// Evaluate one condition against a node. `Err` on a malformed condition
+/// (unknown field/op or a value of the wrong type) so the query fails loud.
+fn eval_condition(n: &Node, c: &QueryCondition, child_count: usize) -> Result<bool, String> {
+    let fv = resolve_field(n, &c.field, child_count)?;
+    let op = c.op.as_str();
+
+    // `exists` / `absent` test presence, not a value.
+    if op == "exists" || op == "absent" {
+        let present = match &fv {
+            FieldVal::Str(o) => o.as_ref().is_some_and(|s| !s.trim().is_empty()),
+            FieldVal::Num(x) => *x > 0.0,
+            FieldVal::Bool(b) => *b,
+        };
+        return Ok(if op == "exists" { present } else { !present });
+    }
+
+    let value = c
+        .value
+        .as_ref()
+        .ok_or_else(|| format!("Condition on '{}' with op '{}' needs a `value`.", c.field, op))?;
+
+    match &fv {
+        FieldVal::Bool(b) => {
+            let want = value
+                .as_bool()
+                .ok_or_else(|| format!("Field '{}' is boolean — `value` must be true/false.", c.field))?;
+            match op {
+                "eq" => Ok(*b == want),
+                "ne" => Ok(*b != want),
+                _ => Err(format!("Operator '{}' invalid on boolean field '{}' (use eq/ne).", op, c.field)),
+            }
+        }
+        FieldVal::Num(x) => {
+            let want = value
+                .as_f64()
+                .ok_or_else(|| format!("Field '{}' is numeric — `value` must be a number.", c.field))?;
+            match op {
+                "eq" => Ok(*x == want),
+                "ne" => Ok(*x != want),
+                "gt" => Ok(*x > want),
+                "gte" => Ok(*x >= want),
+                "lt" => Ok(*x < want),
+                "lte" => Ok(*x <= want),
+                _ => Err(format!("Operator '{}' invalid on numeric field '{}'.", op, c.field)),
+            }
+        }
+        FieldVal::Str(o) => {
+            let want = value
+                .as_str()
+                .ok_or_else(|| format!("Field '{}' is a string — `value` must be a string.", c.field))?;
+            let have = o.as_deref().unwrap_or("");
+            match op {
+                "eq" => Ok(have.eq_ignore_ascii_case(want)),
+                "ne" => Ok(!have.eq_ignore_ascii_case(want)),
+                "contains" => Ok(have.to_lowercase().contains(&want.to_lowercase())),
+                _ => Err(format!(
+                    "Operator '{}' invalid on string field '{}' (use eq/ne/contains/exists/absent).",
+                    op, c.field
+                )),
+            }
+        }
+    }
 }
 
 #[tool_router(router = tool_router_read, vis = "pub(crate)")]
@@ -328,6 +426,198 @@ impl ScryerServer {
     }
 
     #[tool(
+        description = "Query the model for nodes matching field predicates — the on-demand, structural complement to the text-based `search_model`. Supply `where`: a list of `{field, op, value}` conditions that must ALL hold (AND). Fields and operators compose freely, so any node-shape question is expressible without a bespoke flag: empty symbols = `[{field:'kind',op:'eq',value:'symbol'},{field:'empty',op:'eq',value:true}]`; under-decomposed components = `[{field:'kind',op:'eq',value:'component'},{field:'childCount',op:'eq',value:0}]`; external systems = `[{field:'kind',op:'eq',value:'system'},{field:'external',op:'eq',value:true}]`. Scope to a subtree with `under`. Returns each node's id, kind, name, breadcrumb path, and responsibility/property counts. Use this to find nodes by SHAPE instead of reading the raw `.scry` file. Capped at 200 hits."
+    )]
+    fn query_model(
+        &self,
+        Parameters(req): Parameters<QueryModelRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let model = match scryer_core::read_model_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read model at {}: {}",
+                    model_ref, e
+                ))]));
+            }
+        };
+        let _ = scryer_core::save_baseline_at(&model_ref, &model);
+
+        if req.conditions.is_empty() {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "query_model needs at least one condition in `where`. For the full tree use read_model.",
+            )]));
+        }
+
+        // `under`: restrict to the subtree rooted at the given node id.
+        let scope: Option<HashSet<String>> = match req.under.as_deref() {
+            Some(root) => {
+                if !model.nodes.iter().any(|n| n.id == root) {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Node '{}' not found",
+                        root
+                    ))]));
+                }
+                let mut ids: HashSet<String> = HashSet::new();
+                ids.insert(root.to_string());
+                let mut frontier = vec![root.to_string()];
+                while let Some(id) = frontier.pop() {
+                    for child in model.nodes.iter().filter(|n| n.parent_id.as_deref() == Some(&id)) {
+                        if ids.insert(child.id.clone()) {
+                            frontier.push(child.id.clone());
+                        }
+                    }
+                }
+                Some(ids)
+            }
+            None => None,
+        };
+
+        // Child counts, computed once (childCount is a queryable field).
+        let mut child_count: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for n in &model.nodes {
+            if let Some(p) = n.parent_id.as_deref() {
+                *child_count.entry(p).or_insert(0) += 1;
+            }
+        }
+
+        const CAP: usize = 200;
+        let mut hits: Vec<serde_json::Value> = Vec::new();
+        let mut truncated = false;
+        for n in &model.nodes {
+            if scope.as_ref().is_some_and(|s| !s.contains(&n.id)) {
+                continue;
+            }
+            // Every condition must hold. A malformed condition (unknown field /
+            // op, or a type mismatch) aborts the whole query with guidance.
+            let mut matches = true;
+            for c in &req.conditions {
+                match eval_condition(n, c, child_count.get(n.id.as_str()).copied().unwrap_or(0)) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        matches = false;
+                        break;
+                    }
+                    Err(e) => {
+                        return Ok(CallToolResult::error(vec![Content::text(e)]));
+                    }
+                }
+            }
+            if !matches {
+                continue;
+            }
+            if hits.len() >= CAP {
+                truncated = true;
+                break;
+            }
+            let mut v = serde_json::json!({
+                "id": n.id,
+                "kind": kind_str(&n.kind),
+                "name": n.name,
+                "path": breadcrumb(&model, &n.id),
+                "nResp": n.responsibilities.len(),
+                "nProps": n.properties.len(),
+                // surfaced only when true (strip_fields_compact drops the null)
+                "empty": if scryer_core::is_node_empty(n) { serde_json::json!(true) } else { serde_json::Value::Null },
+            });
+            strip_fields_compact(&mut v);
+            hits.push(v);
+        }
+
+        let payload = serde_json::json!({
+            "hits": hits.len(),
+            "truncated": truncated,
+            "results": hits,
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
+        )]))
+    }
+
+    #[tool(
+        description = "What code has CHANGED since the model was last reconciled — the code→model drift scope. Cheap and deterministic (file mtimes + git diff, no semantic judgment): returns the boundary-owning nodes whose code changed and the exact `changedFiles` under each, so you know where to re-examine. A changed file is NOT a verdict that the model drifted — it only means \"re-check this scope.\" The loop: for each scope, `read_model {node}` to load its claims, compare them against what the changed code now does, then call `flag_drift` to record undescribed behaviour (→ vagrant) and stale claims (→ `changed`). When you have examined every scope, call `reconcile_drift` to advance the anchor so the same changes don't resurface. A model with no reconcile anchor yet (e.g. just built through these tools) is seeded as in-sync as of now and reports clean — real drift surfaces once code changes after that."
+    )]
+    fn get_drift(
+        &self,
+        Parameters(req): Parameters<GetDriftRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let model = match scryer_core::read_model_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read model at {}: {}",
+                    model_ref, e
+                ))]));
+            }
+        };
+        let project = model_ref.project_path();
+
+        // A model that has never been reconciled has no `.sync` anchor, so the
+        // baseline defaults to epoch 0 and EVERY file reads as "changed since
+        // reconcile" — flagging every boundary-owning node as drift, forever,
+        // against no real baseline. Seed the anchor to now (treat the model as
+        // in-sync as of this moment) and report clean; real drift then surfaces
+        // once code changes after this point. Mirrors the in-app `get_drift_status`
+        // bootstrap — models built through these MCP tools land here, since only
+        // the in-app build and `reconcile_drift` write the anchor.
+        if !model_ref.sync_path().exists() {
+            let _ = scryer_core::write_sync_state(
+                &model_ref,
+                &scryer_core::drift::SyncState {
+                    reconciled_at: scryer_core::drift::now_secs(),
+                    commit: scryer_core::drift::head_commit(project),
+                },
+            );
+            let _ = scryer_extract::anchors::write_baseline(&model_ref);
+            let payload = serde_json::json!({
+                "clean": true,
+                "seeded": true,
+                "scopes": [],
+                "guidance": "No reconcile anchor existed; seeded the model as in-sync as of now. \
+                             Drift will surface here once code changes after this point.",
+            });
+            return Ok(CallToolResult::success(vec![Content::text(
+                serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
+            )]));
+        }
+
+        let sync = scryer_core::read_sync_state(&model_ref);
+        let scopes = scryer_core::drift::drifted_scopes(&model, project, &sync);
+        let scopes_out: Vec<serde_json::Value> = scopes
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "nodeId": s.node_id,
+                    "nodeName": s.node_name,
+                    "path": breadcrumb(&model, &s.node_id),
+                    "changedFiles": s.changed_files,
+                })
+            })
+            .collect();
+
+        let guidance = if scopes_out.is_empty() {
+            "No code changed since the last reconcile — the model is in sync. \
+             Nothing to flag; no need to reconcile."
+                .to_string()
+        } else {
+            "For each scope: read_model {node} to load its claims, compare them against the \
+             changed code, then flag_drift to record undescribed behaviour and stale claims. \
+             After examining every scope, call reconcile_drift to advance the anchor."
+                .to_string()
+        };
+        let payload = serde_json::json!({
+            "clean": scopes_out.is_empty(),
+            "scopes": scopes_out,
+            "guidance": guidance,
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
+        )]))
+    }
+
+    #[tool(
         description = "What model intent is NOT yet reflected in code — the model→code work outstanding. Returns responsibilities, properties, AND component visuals (the `preview`) at status `proposed` (no code yet) or `changed` (spec/visual edited after implementation, needs re-implementation), plus nodes flagged `deprecated` (delete the code) or `relocated` (move the code), each with its breadcrumb path and source anchors. Call this to find what needs implementing or syncing to the codebase."
     )]
     fn get_unimplemented(
@@ -352,24 +642,31 @@ impl ScryerServer {
         };
 
         let mut nodes_out: Vec<serde_json::Value> = Vec::new();
-        let (mut n_proposed, mut n_changed, mut n_deprecated, mut n_relocated) = (0, 0, 0, 0);
+        let (mut n_proposed, mut n_changed, mut n_stale, mut n_deprecated, mut n_relocated) =
+            (0, 0, 0, 0, 0);
 
         for n in &model.nodes {
+            // A stale flag is outstanding work whatever status it sits on: the
+            // drift check judged the code no longer discharges the claim.
             let resp_items: Vec<serde_json::Value> = n
                 .responsibilities
                 .iter()
-                .filter(|r| outstanding(&r.status))
+                .filter(|r| outstanding(&r.status) || r.stale == Some(true))
                 .map(|r| {
                     match r.status {
                         Some(Status::Proposed) => n_proposed += 1,
                         Some(Status::Changed) => n_changed += 1,
                         _ => {}
                     }
+                    if r.stale == Some(true) {
+                        n_stale += 1;
+                    }
                     let sources = model.source_map.get(&r.id);
                     serde_json::json!({
                         "id": r.id,
                         "statement": r.statement,
                         "status": r.status,
+                        "stale": r.stale,
                         "sources": sources,
                     })
                 })
@@ -450,6 +747,7 @@ impl ScryerServer {
             "summary": {
                 "toImplement": n_proposed,
                 "toReimplement": n_changed,
+                "staleClaims": n_stale,
                 "nodesToDelete": n_deprecated,
                 "nodesToMove": n_relocated,
             },
@@ -462,15 +760,33 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Return the scryer modeling rules — the constraints that govern responsibilities, decomposition, groups, and link semantics. Call before building or editing a model."
+        description = "The authoritative, BINDING scryer modeling rules — the knowledge base that governs responsibilities, decomposition, symbols, groups, status, and link semantics. These rules decide every modeling judgment: consult them, never infer the conventions from existing nodes. With NO `topic`: the compact index (every rule's id, title, tags) — read it to see what's available. With a `topic` (e.g. \"symbol\", \"group\", \"responsibility altitude\"): the matching rules in full. Pull the relevant rule whenever you're deciding how to model something — what earns a symbol, how to pitch a responsibility, when a group is right."
     )]
     fn get_rules(
         &self,
-        Parameters(_): Parameters<EmptyRequest>,
+        Parameters(req): Parameters<GetRulesRequest>,
     ) -> Result<CallToolResult, McpError> {
-        Ok(CallToolResult::success(vec![Content::text(
-            scryer_core::rules::RULES.to_string(),
-        )]))
+        use scryer_core::rules;
+        let body = match req.topic.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            None => format!(
+                "Modeling rules (index). These are authoritative and binding — pull the full text of \
+                 any rule with get_rules{{topic}} before making the related modeling decision.\n\n{}",
+                rules::rules_index()
+            ),
+            Some(topic) => {
+                let hits = rules::lookup(topic);
+                if hits.is_empty() {
+                    format!(
+                        "No rule matched '{}'. Pick a topic from the index:\n\n{}",
+                        topic,
+                        rules::rules_index()
+                    )
+                } else {
+                    rules::render(&hits)
+                }
+            }
+        };
+        Ok(CallToolResult::success(vec![Content::text(body)]))
     }
 
     #[tool(
@@ -488,7 +804,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Run the structural validator. Returns a list of warnings: parent-kind mismatches, unknown link endpoints, group members at mixed levels, and source-map entries that reference unknown ids. An empty list means the model is structurally clean (does NOT check responsibility quality)."
+        description = "Run the structural validator. Returns a list of warnings: parent-kind mismatches, unknown link endpoints, group members at mixed levels, empty symbols (carrying no responsibility/property/appearance), source-map entries that reference unknown ids, and responsibility mappings whose line range covers the whole enclosing symbol (a range must be a proper subset — drop it to mean the whole definition). A clean run is a post-edit gate, not a lookup — to FIND nodes by shape on demand (e.g. every empty symbol) use `query_model`. Does NOT judge responsibility wording quality."
     )]
     fn validate_model(
         &self,
@@ -506,6 +822,10 @@ impl ScryerServer {
         };
         let mut warnings = validate::validate(&model);
         warnings.extend(validate::validate_coverage(&model, model_ref.project_path()));
+        warnings.extend(scryer_extract::anchors::whole_symbol_warnings(
+            &model,
+            model_ref.project_path(),
+        ));
         if warnings.is_empty() {
             Ok(CallToolResult::success(vec![Content::text(
                 "Model is structurally clean.",
@@ -517,6 +837,184 @@ impl ScryerServer {
             }
             Ok(CallToolResult::success(vec![Content::text(msg)]))
         }
+    }
+
+    #[tool(
+        description = "The model's observability report — deterministic, no semantic judgment. Per node: own + subtree rollups of responsibility/property statuses, vagrant flags, and anchor coverage (anchorable = implemented claims on LEAF nodes; claims on structural nodes are discharged through their subtree and are never 'unmapped'). Plus: anchor observations from the git-free fingerprint check — `changed` (the anchored span's content differs from what the model last saw), `broken` (the symbol is gone), `fileMissing` — with moved-but-unchanged symbols silently re-anchored, and a declared-link audit against the extracted import graph (edge_count 0 = asserted-only; 'unmodeled' = sibling pairs the code connects but no link declares). Pass node_id to scope to one subtree with per-child summaries; omit it for the whole-model summary. Use this to decide WHERE work is needed (unmapped claims, vagrant flags, dark links) before reading full subtrees."
+    )]
+    fn get_health(
+        &self,
+        Parameters(req): Parameters<GetHealthRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let model = match scryer_core::read_model_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read model at {}: {}",
+                    model_ref, e
+                ))]));
+            }
+        };
+        let project = model_ref.project_path();
+
+        // Same no-anchor bootstrap as get_drift: a model never reconciled would
+        // read as "everything drifted" against no baseline. Seeding also writes
+        // the anchor fingerprint baseline (git-free content snapshot).
+        let anchor_check = if model_ref.sync_path().exists() {
+            // May silently re-anchor moved symbols — re-read the model after.
+            scryer_extract::anchors::check_anchors(&model_ref).unwrap_or_default()
+        } else {
+            let _ = scryer_core::write_sync_state(
+                &model_ref,
+                &scryer_core::drift::SyncState {
+                    reconciled_at: scryer_core::drift::now_secs(),
+                    commit: scryer_core::drift::head_commit(project),
+                },
+            );
+            let _ = scryer_extract::anchors::write_baseline(&model_ref);
+            scryer_extract::anchors::AnchorCheck::default()
+        };
+        let model = if anchor_check.reanchored > 0 {
+            scryer_core::read_model_at(&model_ref).unwrap_or(model)
+        } else {
+            model
+        };
+
+        // Boundary darkness needs the extractor's file inventory; health here
+        // covers everything model-derivable (counts, discharge, coverage).
+        let health = scryer_core::health::compute_health(&model, None);
+
+        // The import graph is cached by builds / the app's health refresh; when
+        // absent the link audit is simply omitted rather than guessed.
+        let derived = scryer_core::build_edges::read_build_edges(&model_ref.build_edges_path())
+            .map(|edges| scryer_core::build_edges::derive_graph(&model, &edges));
+
+        let counts_json = |c: &scryer_core::health::HealthCounts| {
+            serde_json::to_value(c).unwrap_or_default()
+        };
+
+        let payload = match req.node_id.as_deref() {
+            Some(node_id) => {
+                let Some(node) = model.nodes.iter().find(|n| n.id == node_id) else {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Node '{}' not found",
+                        node_id
+                    ))]));
+                };
+                let nh = health.nodes.get(node_id);
+
+                // One level down: each child's subtree summary, so altitude
+                // decisions don't require walking the whole tree.
+                let children: Vec<serde_json::Value> = model
+                    .nodes
+                    .iter()
+                    .filter(|n| n.parent_id.as_deref() == Some(node_id))
+                    .map(|n| {
+                        serde_json::json!({
+                            "id": n.id,
+                            "name": n.name,
+                            "kind": kind_str(&n.kind),
+                            "subtree": health.nodes.get(&n.id).map(|h| counts_json(&h.subtree)),
+                        })
+                    })
+                    .collect();
+
+                // Subtree membership for filtering drift to this scope.
+                let mut subtree_ids: HashSet<&str> = HashSet::new();
+                let mut frontier = vec![node_id];
+                while let Some(id) = frontier.pop() {
+                    if !subtree_ids.insert(id) {
+                        continue;
+                    }
+                    frontier.extend(
+                        model
+                            .nodes
+                            .iter()
+                            .filter(|n| n.parent_id.as_deref() == Some(id))
+                            .map(|n| n.id.as_str()),
+                    );
+                }
+                let drift_here: Vec<&scryer_extract::anchors::AnchorObservation> = anchor_check
+                    .observations
+                    .iter()
+                    .filter(|d| subtree_ids.contains(d.host_id.as_str()))
+                    .collect();
+
+                let links_here = derived.as_ref().map(|g| {
+                    let audited: Vec<serde_json::Value> = model
+                        .links
+                        .iter()
+                        .filter(|l| l.src == node_id || l.dst == node_id)
+                        .map(|l| {
+                            let backed = g
+                                .link_audit
+                                .iter()
+                                .find(|a| a.link_id == l.id)
+                                .map(|a| a.edge_count)
+                                .unwrap_or(0);
+                            serde_json::json!({
+                                "id": l.id, "src": l.src, "dst": l.dst,
+                                "label": l.label, "edgeCount": backed,
+                            })
+                        })
+                        .collect();
+                    audited
+                });
+                let unmodeled_here = derived.as_ref().map(|g| {
+                    g.unmodeled
+                        .iter()
+                        .filter(|e| {
+                            subtree_ids.contains(e.src.as_str())
+                                || subtree_ids.contains(e.dst.as_str())
+                        })
+                        .collect::<Vec<_>>()
+                });
+
+                serde_json::json!({
+                    "nodeId": node.id,
+                    "name": node.name,
+                    "kind": kind_str(&node.kind),
+                    "own": nh.map(|h| counts_json(&h.own)),
+                    "subtree": nh.map(|h| counts_json(&h.subtree)),
+                    "children": children,
+                    "anchors": drift_here,
+                    "links": links_here,
+                    "unmodeled": unmodeled_here,
+                })
+            }
+            None => {
+                let roots: Vec<serde_json::Value> = model
+                    .nodes
+                    .iter()
+                    .filter(|n| n.parent_id.is_none())
+                    .map(|n| {
+                        serde_json::json!({
+                            "id": n.id,
+                            "name": n.name,
+                            "kind": kind_str(&n.kind),
+                            "subtree": health.nodes.get(&n.id).map(|h| counts_json(&h.subtree)),
+                        })
+                    })
+                    .collect();
+                let asserted_only = derived
+                    .as_ref()
+                    .map(|g| g.link_audit.iter().filter(|a| a.edge_count == 0).count());
+                serde_json::json!({
+                    "totals": counts_json(&health.totals),
+                    "roots": roots,
+                    "anchors": anchor_check.observations,
+                    "reanchored": anchor_check.reanchored,
+                    "assertedOnlyLinks": asserted_only,
+                    "unmodeled": derived.as_ref().map(|g| &g.unmodeled),
+                    "edgeGraph": if derived.is_some() { "from last build's dependency cache" } else { "absent — run a model build (or the app's health refresh) to derive the link audit" },
+                })
+            }
+        };
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
+        )]))
     }
 }
 
@@ -554,6 +1052,7 @@ mod tests {
             statement: statement.into(),
             status: Some(Status::Implemented),
             vagrant: None,
+            stale: None,
             locked: None,
             relocated_to: None,
             relocated_from: None,
@@ -751,6 +1250,67 @@ mod tests {
     }
 
     #[test]
+    fn query_finds_empty_symbols_and_composes_predicates() {
+        let (server, _dir, project) = temp_project();
+        let run = |conds: serde_json::Value, under: Option<&str>| {
+            let req: QueryModelRequest = serde_json::from_value(serde_json::json!({
+                "project": project,
+                "where": conds,
+                "under": under,
+            }))
+            .unwrap();
+            result_json(&server.query_model(Parameters(req)).unwrap())
+        };
+
+        // node-5 (hash_password) is an empty symbol; node-4 (verify_token) is not.
+        let v = run(
+            serde_json::json!([
+                {"field": "kind", "op": "eq", "value": "symbol"},
+                {"field": "empty", "op": "eq", "value": true},
+            ]),
+            None,
+        );
+        assert_eq!(v["hits"], 1);
+        assert_eq!(v["results"][0]["id"], "node-5");
+        assert_eq!(v["results"][0]["empty"], true);
+
+        // Numeric op: components with zero children (under-decomposed). None here —
+        // the only component (node-3) has two symbols.
+        let v = run(
+            serde_json::json!([
+                {"field": "kind", "op": "eq", "value": "component"},
+                {"field": "childCount", "op": "eq", "value": 0},
+            ]),
+            None,
+        );
+        assert_eq!(v["hits"], 0);
+
+        // `under` scopes to a subtree: both symbols live under the component.
+        let v = run(
+            serde_json::json!([{"field": "kind", "op": "eq", "value": "symbol"}]),
+            Some("node-3"),
+        );
+        assert_eq!(v["hits"], 2);
+
+        // Empty `where` is rejected.
+        let req: QueryModelRequest = serde_json::from_value(serde_json::json!({
+            "project": project, "where": [],
+        }))
+        .unwrap();
+        let r = server.query_model(Parameters(req)).unwrap();
+        assert!(r.is_error.unwrap_or(false));
+
+        // A bad operator on a string field fails loudly.
+        let req: QueryModelRequest = serde_json::from_value(serde_json::json!({
+            "project": project,
+            "where": [{"field": "name", "op": "gt", "value": "x"}],
+        }))
+        .unwrap();
+        let r = server.query_model(Parameters(req)).unwrap();
+        assert!(r.is_error.unwrap_or(false));
+    }
+
+    #[test]
     fn search_ands_terms_and_filters_by_kind() {
         let (server, _dir, project) = temp_project();
         // both terms present, but on different nodes => no single-node match
@@ -771,5 +1331,121 @@ mod tests {
             }))
             .unwrap();
         assert_eq!(result_json(&r)["hits"], 0);
+    }
+
+    #[test]
+    fn get_drift_seeds_then_surfaces() {
+        use scryer_core::Source;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let model_ref = ModelRef::ProjectLocal(root.to_path_buf());
+        std::fs::create_dir_all(root.join("api/src")).unwrap();
+        std::fs::write(root.join("api/src/server.rs"), "fn v1() {}").unwrap();
+
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::Container, "API", None));
+        m.boundaries
+            .insert("node-1".into(), vec![Source { pattern: "api/**/*".into(), comment: None }]);
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        let project = root.to_string_lossy().to_string();
+        let server = ScryerServer::new();
+
+        // First call: no anchor exists → seed in-sync, report clean (not noise).
+        let v = result_json(
+            &server
+                .get_drift(Parameters(GetDriftRequest { project: Some(project.clone()) }))
+                .unwrap(),
+        );
+        assert_eq!(v["clean"], true);
+        assert_eq!(v["seeded"], true);
+        assert!(model_ref.sync_path().exists());
+
+        // Touch a boundary file AFTER the seed → its scope surfaces.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(root.join("api/src/server.rs"), "fn v2() {}").unwrap();
+        let v = result_json(
+            &server
+                .get_drift(Parameters(GetDriftRequest { project: Some(project.clone()) }))
+                .unwrap(),
+        );
+        assert_eq!(v["clean"], false);
+        assert_eq!(v["scopes"][0]["nodeId"], "node-1");
+        assert!(v["scopes"][0]["changedFiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f == "api/src/server.rs"));
+    }
+
+    /// get_health: structural claims are discharged (never unmapped), leaf
+    /// blind spots roll up, and the node-scoped report carries child summaries.
+    #[test]
+    fn get_health_reports_discharge_and_rollup() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let model_ref = ModelRef::ProjectLocal(root.to_path_buf());
+
+        let mut m = ScryModel::new();
+        let mut sys = node("sys", Kind::System, "Sys", None);
+        sys.responsibilities.push(Responsibility {
+            id: "r-sys".into(),
+            statement: "orchestrates everything".into(),
+            status: Some(Status::Implemented),
+            vagrant: None,
+            stale: None,
+            locked: None,
+            relocated_to: None,
+            relocated_from: None,
+            directives: Vec::new(),
+            last_touched_at: None,
+        });
+        m.nodes.push(sys);
+        let mut leaf = node("leaf", Kind::Symbol, "leafFn", Some("sys"));
+        leaf.responsibilities.push(Responsibility {
+            id: "r-leaf".into(),
+            statement: "does the thing".into(),
+            status: Some(Status::Implemented),
+            vagrant: None,
+            stale: None,
+            locked: None,
+            relocated_to: None,
+            relocated_from: None,
+            directives: Vec::new(),
+            last_touched_at: None,
+        });
+        m.nodes.push(leaf);
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+
+        let server = ScryerServer::new();
+        let project = root.to_string_lossy().to_string();
+
+        // Whole-model summary: the system's claim is discharged structurally;
+        // the leaf's unanchored claim is the only blind spot.
+        let v = result_json(
+            &server
+                .get_health(Parameters(GetHealthRequest {
+                    project: Some(project.clone()),
+                    node_id: None,
+                }))
+                .unwrap(),
+        );
+        assert_eq!(v["totals"]["responsibilities"], 2);
+        assert_eq!(v["totals"]["anchorable"], 1);
+        assert_eq!(v["totals"]["unmapped"], 1);
+
+        // Node scope: child summaries surface the leaf's gap at the parent.
+        let v = result_json(
+            &server
+                .get_health(Parameters(GetHealthRequest {
+                    project: Some(project),
+                    node_id: Some("sys".into()),
+                }))
+                .unwrap(),
+        );
+        assert_eq!(v["own"]["unmapped"], 0, "structural claim never unmapped");
+        assert_eq!(v["subtree"]["unmapped"], 1);
+        assert_eq!(v["children"][0]["id"], "leaf");
+        assert_eq!(v["children"][0]["subtree"]["unmapped"], 1);
     }
 }

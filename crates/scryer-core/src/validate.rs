@@ -96,6 +96,20 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
                 n.id, n.name
             ));
         }
+
+        // Empty symbol — carries no semantic content of its own: no
+        // responsibility, no declared data shape, no rendered appearance. Such a
+        // node justifies nothing on the diagram. This is a flag, not a hard
+        // error: the agent must resolve each one by giving it a business
+        // responsibility or removing it (folding it into the parent symbol that
+        // uses it). Scoped to symbols — structural nodes carry meaning through
+        // their children.
+        if crate::is_node_empty(n) {
+            warnings.push(format!(
+                "Symbol node {} (\"{}\") is empty — give it a responsibility or data shape, or fold it into its parent and remove it (a link alone does not justify it)",
+                n.id, n.name
+            ));
+        }
     }
 
     // --- Links ---

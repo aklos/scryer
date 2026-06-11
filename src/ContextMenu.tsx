@@ -151,7 +151,7 @@ export function ContextMenu({
           >
             <span className="truncate">{it.label}</span>
             {it.hint && (
-              <span className="shrink-0 text-[10px] text-[var(--text-ghost)]">
+              <span className="shrink-0 text-2xs text-[var(--text-ghost)]">
                 {it.hint}
               </span>
             )}

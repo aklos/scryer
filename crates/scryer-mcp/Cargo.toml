@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 scryer-core = { path = "../scryer-core" }
+scryer-extract = { path = "../scryer-extract" }
 rmcp = { version = "0.15", features = ["server", "transport-io"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

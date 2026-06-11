@@ -16,7 +16,7 @@
 use crate::lang::{Def, FileParse};
 use crate::manifest::Container;
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// A parsed source file, project-relative path with `/` separators.
 pub struct ParsedFile {
@@ -39,6 +39,18 @@ pub struct ProjectContext {
     pub symbol_edges: Vec<Edge>,
     /// File→file dependency edges (keyed by `rel_path`), sorted.
     pub file_edges: Vec<Edge>,
+    /// Non-serialized lookup indexes used to build container slices without
+    /// rescanning the whole project graph for every agent job.
+    #[serde(skip)]
+    index: ContextIndex,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ContextIndex {
+    files_by_container: HashMap<String, Vec<usize>>,
+    file_container_by_path: HashMap<String, String>,
+    symbol_edges_by_container: HashMap<String, Vec<usize>>,
+    file_edges_by_container: HashMap<String, Vec<usize>>,
 }
 
 /// A declared build/deploy unit — a 1:1 projection of [`manifest::Container`]
@@ -159,13 +171,68 @@ pub fn build_context(
 
     let (symbol_edges, file_edges) = build_edges(files, &recs);
 
-    ProjectContext {
+    let mut context = ProjectContext {
         project_name: project_name.to_string(),
         containers: container_facts,
         files: file_ctxs,
         symbol_edges,
         file_edges,
+        index: ContextIndex::default(),
+    };
+    context.index = build_index(&context);
+    context
+}
+
+fn build_index(ctx: &ProjectContext) -> ContextIndex {
+    let mut index = ContextIndex::default();
+    let mut file_container: HashMap<&str, &str> = HashMap::new();
+    let mut symbol_container: HashMap<&str, &str> = HashMap::new();
+
+    for (file_idx, file) in ctx.files.iter().enumerate() {
+        index
+            .files_by_container
+            .entry(file.container_dir.clone())
+            .or_default()
+            .push(file_idx);
+        file_container.insert(file.rel_path.as_str(), file.container_dir.as_str());
+        index
+            .file_container_by_path
+            .insert(file.rel_path.clone(), file.container_dir.clone());
+        for symbol in &file.symbols {
+            symbol_container.insert(symbol.key.as_str(), file.container_dir.as_str());
+        }
     }
+    for (edge_idx, edge) in ctx.symbol_edges.iter().enumerate() {
+        let Some(container) = symbol_container.get(edge.src.as_str()) else {
+            continue;
+        };
+        if symbol_container.get(edge.dst.as_str()) == Some(container) {
+            index
+                .symbol_edges_by_container
+                .entry((*container).to_string())
+                .or_default()
+                .push(edge_idx);
+        }
+    }
+    for (edge_idx, edge) in ctx.file_edges.iter().enumerate() {
+        let src = file_container.get(edge.src.as_str()).copied();
+        let dst = file_container.get(edge.dst.as_str()).copied();
+        if let Some(container) = src {
+            index
+                .file_edges_by_container
+                .entry(container.to_string())
+                .or_default()
+                .push(edge_idx);
+        }
+        if let Some(container) = dst.filter(|dst| Some(*dst) != src) {
+            index
+                .file_edges_by_container
+                .entry(container.to_string())
+                .or_default()
+                .push(edge_idx);
+        }
+    }
+    index
 }
 
 /// Provenance of one emitted symbol, retained to resolve the dependency graph.
@@ -230,7 +297,10 @@ fn build_edges(files: &[ParsedFile], recs: &[SymRec]) -> (Vec<Edge>, Vec<Edge>) 
         let file = f.rel_path.as_str();
         let container_dir = container_of_file.get(file).copied();
         for ident in &f.parse.idents {
-            if let Some(defs) = file_names.get(file).and_then(|m| m.get(ident.name.as_str())) {
+            if let Some(defs) = file_names
+                .get(file)
+                .and_then(|m| m.get(ident.name.as_str()))
+            {
                 if defs.len() == 1 {
                     let dst = defs[0];
                     if let Some(src) = enclosing(file, ident.line) {
@@ -285,6 +355,143 @@ pub struct ScopeContext {
     pub inbound_file_edges: Vec<Edge>,
 }
 
+/// Token-efficient wire format for one modeling agent. Paths and symbols are
+/// interned once; graph edges use integer ids rather than repeating long
+/// `path#symbol@line` strings. The full [`ScopeContext`] remains available for
+/// inspection and drift workflows.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptScopeContext {
+    pub scope: String,
+    /// String table for every file referenced by this scope.
+    pub paths: Vec<String>,
+    pub files: Vec<PromptFile>,
+    pub symbol_edges: Vec<[u32; 2]>,
+    pub file_edges: PromptFileEdges,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptFile {
+    /// Index into `paths`.
+    pub path: u32,
+    pub symbols: Vec<PromptSymbol>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptSymbol {
+    /// Scope-global symbol id used by `symbolEdges`.
+    pub id: u32,
+    pub name: String,
+    /// Inclusive start/end lines.
+    pub lines: [u32; 2],
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub data: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptFileEdges {
+    pub internal: Vec<[u32; 2]>,
+    pub outbound: Vec<[u32; 2]>,
+    pub inbound: Vec<[u32; 2]>,
+}
+
+impl PromptScopeContext {
+    /// Rough scheduling weight proportional to the amount of evidence the agent
+    /// must reason over. It is deterministic and cheap to compute.
+    pub fn work_units(&self) -> usize {
+        let symbols: usize = self.files.iter().map(|f| f.symbols.len()).sum();
+        let edges = self.symbol_edges.len()
+            + self.file_edges.internal.len()
+            + self.file_edges.outbound.len()
+            + self.file_edges.inbound.len();
+        self.files.len() * 4 + symbols * 3 + edges
+    }
+}
+
+/// Convert a scope into the compact agent wire format.
+pub fn compact_scope(scope: &ScopeContext) -> PromptScopeContext {
+    let mut all_paths: BTreeSet<&str> = scope.files.iter().map(|f| f.rel_path.as_str()).collect();
+    for edge in scope
+        .internal_file_edges
+        .iter()
+        .chain(&scope.outbound_file_edges)
+        .chain(&scope.inbound_file_edges)
+    {
+        all_paths.insert(edge.src.as_str());
+        all_paths.insert(edge.dst.as_str());
+    }
+    let paths: Vec<String> = all_paths.into_iter().map(str::to_string).collect();
+    let path_ids: HashMap<String, u32> = paths
+        .iter()
+        .enumerate()
+        .map(|(idx, path)| (path.clone(), idx as u32))
+        .collect();
+
+    let mut symbol_ids: HashMap<&str, u32> = HashMap::new();
+    let mut next_symbol = 0u32;
+    let files = scope
+        .files
+        .iter()
+        .map(|file| {
+            let symbols = file
+                .symbols
+                .iter()
+                .map(|symbol| {
+                    let id = next_symbol;
+                    next_symbol += 1;
+                    symbol_ids.insert(symbol.key.as_str(), id);
+                    PromptSymbol {
+                        id,
+                        name: symbol.name.clone(),
+                        lines: [symbol.start_line, symbol.end_line],
+                        fields: symbol.fields.clone(),
+                        data: symbol.is_data_shape,
+                    }
+                })
+                .collect();
+            PromptFile {
+                path: path_ids[file.rel_path.as_str()],
+                symbols,
+            }
+        })
+        .collect();
+
+    let symbol_edges = scope
+        .internal_symbol_edges
+        .iter()
+        .filter_map(|edge| {
+            Some([
+                *symbol_ids.get(edge.src.as_str())?,
+                *symbol_ids.get(edge.dst.as_str())?,
+            ])
+        })
+        .collect();
+    let encode_file_edges = |edges: &[Edge]| {
+        edges
+            .iter()
+            .map(|edge| [path_ids[edge.src.as_str()], path_ids[edge.dst.as_str()]])
+            .collect()
+    };
+
+    PromptScopeContext {
+        scope: scope.scope.clone(),
+        paths,
+        files,
+        symbol_edges,
+        file_edges: PromptFileEdges {
+            internal: encode_file_edges(&scope.internal_file_edges),
+            outbound: encode_file_edges(&scope.outbound_file_edges),
+            inbound: encode_file_edges(&scope.inbound_file_edges),
+        },
+    }
+}
+
 /// True when `path` is at or under directory `scope`. An empty scope is the
 /// whole project.
 pub fn is_under(path: &str, scope: &str) -> bool {
@@ -321,10 +528,12 @@ pub fn slice_scope(ctx: &ProjectContext, scope: &str) -> ScopeContext {
 /// repo). This is the per-container scope Wave 2 modeling consumes.
 pub fn slice_container(ctx: &ProjectContext, container_dir: &str) -> ScopeContext {
     let files: Vec<FileContext> = ctx
-        .files
-        .iter()
-        .filter(|f| f.container_dir == container_dir)
-        .cloned()
+        .index
+        .files_by_container
+        .get(container_dir)
+        .into_iter()
+        .flatten()
+        .map(|&idx| ctx.files[idx].clone())
         .collect();
     let containers: Vec<ContainerFacts> = ctx
         .containers
@@ -332,7 +541,60 @@ pub fn slice_container(ctx: &ProjectContext, container_dir: &str) -> ScopeContex
         .filter(|c| c.dir == container_dir)
         .cloned()
         .collect();
-    build_scope(ctx, container_dir.to_string(), files, containers)
+    build_container_scope(ctx, container_dir.to_string(), files, containers)
+}
+
+fn build_container_scope(
+    ctx: &ProjectContext,
+    scope: String,
+    files: Vec<FileContext>,
+    containers: Vec<ContainerFacts>,
+) -> ScopeContext {
+    let internal_symbol_edges = ctx
+        .index
+        .symbol_edges_by_container
+        .get(scope.as_str())
+        .into_iter()
+        .flatten()
+        .map(|&idx| ctx.symbol_edges[idx].clone())
+        .collect();
+    let mut internal_file_edges = Vec::new();
+    let mut outbound_file_edges = Vec::new();
+    let mut inbound_file_edges = Vec::new();
+    for &idx in ctx
+        .index
+        .file_edges_by_container
+        .get(scope.as_str())
+        .into_iter()
+        .flatten()
+    {
+        let edge = &ctx.file_edges[idx];
+        let src_inside = ctx
+            .index
+            .file_container_by_path
+            .get(edge.src.as_str())
+            .is_some_and(|container| container == &scope);
+        let dst_inside = ctx
+            .index
+            .file_container_by_path
+            .get(edge.dst.as_str())
+            .is_some_and(|container| container == &scope);
+        match (src_inside, dst_inside) {
+            (true, true) => internal_file_edges.push(edge.clone()),
+            (true, false) => outbound_file_edges.push(edge.clone()),
+            (false, true) => inbound_file_edges.push(edge.clone()),
+            (false, false) => {}
+        }
+    }
+    ScopeContext {
+        scope,
+        containers,
+        files,
+        internal_symbol_edges,
+        internal_file_edges,
+        outbound_file_edges,
+        inbound_file_edges,
+    }
 }
 
 /// Assemble a [`ScopeContext`] from a chosen set of in-scope files: carries the
@@ -353,7 +615,9 @@ fn build_scope(
     let internal_symbol_edges: Vec<Edge> = ctx
         .symbol_edges
         .iter()
-        .filter(|e| keys_in_scope.contains(e.src.as_str()) && keys_in_scope.contains(e.dst.as_str()))
+        .filter(|e| {
+            keys_in_scope.contains(e.src.as_str()) && keys_in_scope.contains(e.dst.as_str())
+        })
         .cloned()
         .collect();
 
@@ -361,7 +625,10 @@ fn build_scope(
     let mut outbound_file_edges = Vec::new();
     let mut inbound_file_edges = Vec::new();
     for e in &ctx.file_edges {
-        match (in_scope.contains(e.src.as_str()), in_scope.contains(e.dst.as_str())) {
+        match (
+            in_scope.contains(e.src.as_str()),
+            in_scope.contains(e.dst.as_str()),
+        ) {
             (true, true) => internal_file_edges.push(e.clone()),
             (true, false) => outbound_file_edges.push(e.clone()),
             (false, true) => inbound_file_edges.push(e.clone()),
@@ -514,5 +781,46 @@ mod tests {
             .any(|e| e.src == "api/server.ts" && e.dst == "shared/util.ts"));
         // The empty-root container encloses the api/ scope.
         assert!(scoped.containers.iter().any(|c| c.dir.is_empty()));
+    }
+
+    #[test]
+    fn compact_scope_interns_repeated_paths_and_symbol_keys() {
+        let files = vec![
+            ParsedFile {
+                rel_path: "api/server.ts".into(),
+                parse: FileParse {
+                    defs: vec![def("serve", 1, 20), def("route", 22, 30)],
+                    idents: vec![ident("route", 5), ident("util", 8)],
+                },
+            },
+            ParsedFile {
+                rel_path: "api/util.ts".into(),
+                parse: FileParse {
+                    defs: vec![def("util", 1, 4)],
+                    idents: vec![],
+                },
+            },
+        ];
+        let containers = vec![container("api", "api")];
+        let ctx = build_context("proj", &containers, &files);
+        let scope = slice_container(&ctx, "api");
+        let compact = compact_scope(&scope);
+
+        assert_eq!(compact.paths, vec!["api/server.ts", "api/util.ts"]);
+        assert_eq!(compact.files.len(), 2);
+        assert_eq!(compact.files[0].symbols[0].id, 0);
+        assert!(compact
+            .symbol_edges
+            .iter()
+            .all(|edge| edge[0] < 3 && edge[1] < 3));
+
+        let full_json = serde_json::to_string(&scope).unwrap();
+        let compact_json = serde_json::to_string(&compact).unwrap();
+        assert!(
+            compact_json.len() < full_json.len(),
+            "compact payload should be smaller: {} vs {}",
+            compact_json.len(),
+            full_json.len()
+        );
     }
 }

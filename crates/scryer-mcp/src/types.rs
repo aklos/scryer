@@ -24,8 +24,82 @@ pub(crate) struct SearchModelRequest {
     pub kind: Option<String>,
 }
 
+/// One predicate in a `query_model` request: a `field`, a comparison `op`, and
+/// (for everything but `exists`/`absent`) a `value`. Fields and operators are
+/// orthogonal — compose them into any node-shape question.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct QueryCondition {
+    /// Queryable node field. One of:
+    /// `kind`, `name`, `description`, `technology` (strings);
+    /// `external`, `deprecated`, `relocated`, `visual`, `empty`, `vagrant` (booleans —
+    /// `empty` = a symbol with no responsibility/property/appearance, `vagrant` = carries a
+    /// discovered-in-code responsibility awaiting review);
+    /// `responsibilityCount`, `propertyCount`, `childCount` (numbers).
+    pub field: String,
+    /// Comparison operator. `eq`/`ne` (any type); `gt`/`gte`/`lt`/`lte` (numbers);
+    /// `contains` (case-insensitive substring, strings); `exists`/`absent`
+    /// (string is set & non-empty, or count > 0 / == 0 — no `value` needed).
+    pub op: String,
+    /// The value to compare against — a string, number, or boolean matching the
+    /// field's type. Omit for `exists`/`absent`.
+    #[serde(default)]
+    pub value: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct QueryModelRequest {
+    /// Absolute path to the project root. If omitted, uses the current working directory.
+    pub project: Option<String>,
+    /// Predicates that must ALL hold for a node to match (AND). At least one
+    /// required. E.g. empty symbols = `[{field:"kind",op:"eq",value:"symbol"},
+    /// {field:"empty",op:"eq",value:true}]`; fat components =
+    /// `[{field:"kind",op:"eq",value:"component"},{field:"responsibilityCount",op:"gt",value:8}]`.
+    #[serde(rename = "where", alias = "conditions")]
+    pub conditions: Vec<QueryCondition>,
+    /// Restrict results to the subtree rooted at this node id (the node and its
+    /// descendants). Omit to query the whole model.
+    pub under: Option<String>,
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct GetUnimplementedRequest {
+    /// Absolute path to the project root. If omitted, uses the current working directory.
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct GetDriftRequest {
+    /// Absolute path to the project root. If omitted, uses the current working directory.
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct NodeMove {
+    /// The node to re-parent. Its whole subtree moves with it.
+    pub node_id: String,
+    /// The new parent. Must satisfy the kind hierarchy (system→container→
+    /// component→symbol). Omit to make the node top-level (system/person only).
+    pub new_parent_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct MoveNodesRequest {
+    /// Absolute path to the project root. If omitted, uses the current working directory.
+    pub project: Option<String>,
+    pub moves: Vec<NodeMove>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct GetHealthRequest {
+    /// Absolute path to the project root. If omitted, uses the current working directory.
+    pub project: Option<String>,
+    /// Scope the report to one node's subtree (own + rolled-up counts, children
+    /// summaries, per-anchor drift, link audit). Omit for the whole-model summary.
+    pub node_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ReconcileDriftRequest {
     /// Absolute path to the project root. If omitted, uses the current working directory.
     pub project: Option<String>,
 }
@@ -40,6 +114,15 @@ pub(crate) struct MarkImplementedRequest {
     /// outstanding on the node — every `proposed`/`changed` responsibility and property, plus a
     /// `proposed`/`changed` appearance — to `implemented`.
     pub responsibility_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct GetRulesRequest {
+    /// Topic to look up — free text matched against each rule's title and tags
+    /// (e.g. "symbol", "group", "responsibility altitude", "links"). Returns the
+    /// matching rules in full. OMIT to get the compact index of every rule (id,
+    /// title, tags) to see what's available, then drill in by topic.
+    pub topic: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -464,6 +547,82 @@ pub(crate) struct AddSymbolRequest {
     pub items: Vec<SymbolItem>,
 }
 
+// --- Atomic codebase-to-model generation ---
+
+/// A component in an atomic container proposal. `key` is local to this request
+/// and lets links/groups refer to the component before the server mints node ids.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ProposedComponent {
+    /// Unique request-local key, e.g. "authentication".
+    pub key: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// Responsibilities at the component's C4 altitude.
+    #[serde(default)]
+    pub responsibilities: Vec<String>,
+    /// Architecturally meaningful code definitions owned by this component.
+    /// Code-bearing components must include at least one symbol.
+    pub symbols: Vec<ProposedSymbol>,
+}
+
+/// One mandatory code-level symbol nested under a proposed component.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ProposedSymbol {
+    /// Unique request-local key used by links, e.g. "auth.login".
+    pub key: String,
+    /// Identifier exactly as it appears in source.
+    pub name: String,
+    /// Project-relative source file.
+    pub source_file: String,
+    /// Inclusive definition range.
+    pub line: Option<u32>,
+    pub end_line: Option<u32>,
+    #[serde(default)]
+    pub responsibilities: Vec<ResponsibilityInput>,
+    #[serde(default)]
+    pub properties: Vec<PropertyInput>,
+    #[serde(default)]
+    pub visual: Option<bool>,
+}
+
+/// An OPTIONAL cross-boundary relationship in a container proposal — used only
+/// for links the deterministic dependency graph can't infer (to an external or
+/// other-container existing node id). Code-level component→component and
+/// symbol→symbol links are wired by the server; do NOT author them here.
+/// Endpoints are a component/symbol request-local key or an existing node id. A
+/// link that can't be placed legally is dropped and reported, never fatal.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ProposedLink {
+    pub src: String,
+    pub dst: String,
+    pub label: String,
+    pub method: Option<String>,
+}
+
+/// Optional secondary grouping of proposed components.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ProposedGroup {
+    pub name: String,
+    pub description: Option<String>,
+    /// Request-local component keys.
+    pub member_keys: Vec<String>,
+    #[serde(default)]
+    pub responsibilities: Vec<String>,
+}
+
+/// Commit the complete component + symbol subtree for one container in one
+/// validated read-modify-write operation.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct CommitContainerModelRequest {
+    pub project: Option<String>,
+    pub container_id: String,
+    pub components: Vec<ProposedComponent>,
+    #[serde(default)]
+    pub links: Vec<ProposedLink>,
+    #[serde(default)]
+    pub groups: Vec<ProposedGroup>,
+}
+
 /// A behaviour the code has that no responsibility describes — semantic drift.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct UndescribedItem {
@@ -505,4 +664,3 @@ pub(crate) struct FlagDriftRequest {
     #[serde(default)]
     pub stale: Vec<StaleResponsibility>,
 }
-

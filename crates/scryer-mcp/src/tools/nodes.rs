@@ -219,6 +219,7 @@ impl ScryerServer {
             updated += 1;
         }
         enforce_readonly_directives(&mut model, &prior);
+        scryer_core::rewrite_renamed_wikilinks(&mut model, &prior);
 
         if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
@@ -232,7 +233,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Mark a node's outstanding work as implemented after you've written the code — the counterpart to `get_unimplemented`, which closes the loop. Advances `proposed`/`changed` items to `implemented`. With no `responsibilityIds`, advances EVERYTHING outstanding on the node: every proposed/changed responsibility and property, plus a proposed/changed appearance (the visual). Pass `responsibilityIds` to advance only those responsibilities. Leaves `implemented`/`verified`/`relocated` items untouched (advancing to `verified` is a separate, checked step). Call this when you finish implementing, so the model stops reporting the work as outstanding."
+        description = "Mark a node's outstanding work as implemented after you've written the code — the counterpart to `get_unimplemented`, which closes the loop. Advances `proposed`/`changed` items to `implemented` and clears the `stale` drift flag on anything it advances (re-implementation is the verdict that resolves it). With no `responsibilityIds`, advances EVERYTHING outstanding on the node: every proposed/changed/stale responsibility and every proposed/changed property, plus a proposed/changed appearance (the visual). Pass `responsibilityIds` to advance only those responsibilities. Leaves clean `implemented`/`verified` items untouched (advancing to `verified` is a separate, checked step). Call this when you finish implementing, so the model stops reporting the work as outstanding."
     )]
     fn mark_implemented(
         &self,
@@ -275,15 +276,19 @@ impl ScryerServer {
                 for r in n.responsibilities.iter_mut() {
                     if ids.contains(&r.id) {
                         r.status = Some(Status::Implemented);
+                        r.stale = None; // re-implementation resolves the drift flag
                         resp_done += 1;
                     }
                 }
             }
-            // Whole node: advance every outstanding facet to implemented.
+            // Whole node: advance every outstanding facet to implemented. A
+            // stale flag IS outstanding work (the claim needs re-discharging),
+            // whatever status it sits on.
             None => {
                 for r in n.responsibilities.iter_mut() {
-                    if outstanding(&r.status) {
+                    if outstanding(&r.status) || r.stale == Some(true) {
                         r.status = Some(Status::Implemented);
+                        r.stale = None;
                         resp_done += 1;
                     }
                 }
@@ -324,6 +329,127 @@ impl ScryerServer {
             format!("Marked implemented on '{}': {}.", req.node_id, parts.join(", "))
         };
         Ok(CallToolResult::success(vec![Content::text(summary)]))
+    }
+
+    #[tool(
+        description = "Re-parent nodes — move a node (and its whole subtree) to a different parent, e.g. a component to another container. Validated: the new parent must satisfy the kind hierarchy (system→container→component→symbol; omit newParentId only for top-level systems/persons), must not be external, and must not sit inside the moved node's own subtree. The node leaves any group at its old level (groups organize siblings). Links to former siblings may become invalid — run `validate_model` after structural moves."
+    )]
+    fn move_nodes(
+        &self,
+        Parameters(req): Parameters<MoveNodesRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_model_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read model at {}: {}",
+                    model_ref, e
+                ))]));
+            }
+        };
+        let prior = model.clone();
+
+        let mut moved = 0usize;
+        for mv in &req.moves {
+            let Some(node) = model.nodes.iter().find(|n| n.id == mv.node_id) else {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Node '{}' not found",
+                    mv.node_id
+                ))]));
+            };
+            if node.locked == Some(true) {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Node '{}' is locked and cannot be moved",
+                    mv.node_id
+                ))]));
+            }
+            let kind = node.kind;
+
+            match mv.new_parent_id.as_deref() {
+                None => {
+                    if !matches!(kind, Kind::System | Kind::Person) {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Node '{}' ({:?}) cannot be top-level — only person/system are",
+                            mv.node_id, kind
+                        ))]));
+                    }
+                }
+                Some(pid) => {
+                    let Some(parent) = model.nodes.iter().find(|n| n.id == pid) else {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "New parent '{}' not found",
+                            pid
+                        ))]));
+                    };
+                    let valid = matches!(
+                        (parent.kind, kind),
+                        (Kind::System, Kind::Container)
+                            | (Kind::Container, Kind::Component)
+                            | (Kind::Component, Kind::Symbol)
+                    );
+                    if !valid {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "A {:?} cannot be parented by a {:?}",
+                            kind, parent.kind
+                        ))]));
+                    }
+                    if parent.external == Some(true) {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "External node '{}' cannot have children",
+                            pid
+                        ))]));
+                    }
+                    // The new parent must not be the node itself or inside its
+                    // own subtree (that would orphan the chain into a cycle).
+                    let mut cur = Some(pid.to_string());
+                    while let Some(id) = cur {
+                        if id == mv.node_id {
+                            return Ok(CallToolResult::error(vec![Content::text(format!(
+                                "Cannot move '{}' under its own subtree",
+                                mv.node_id
+                            ))]));
+                        }
+                        cur = model
+                            .nodes
+                            .iter()
+                            .find(|n| n.id == id)
+                            .and_then(|n| n.parent_id.clone());
+                    }
+                }
+            }
+
+            let node = model.nodes.iter_mut().find(|n| n.id == mv.node_id).unwrap();
+            node.parent_id = mv.new_parent_id.clone();
+            // Groups organize siblings at one level — leaving the level leaves
+            // the group.
+            for g in model.groups.iter_mut() {
+                g.member_ids.retain(|m| m != &mv.node_id);
+            }
+            moved += 1;
+        }
+
+        enforce_readonly_directives(&mut model, &prior);
+        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
+        }
+        let _ = scryer_core::save_baseline_at(&model_ref, &model);
+        let warnings = validate::validate(&model);
+        let mut msg = format!("Moved {moved} node(s).");
+        if !warnings.is_empty() {
+            msg.push_str(&format!(
+                " {} validation warning(s) — run validate_model:",
+                warnings.len()
+            ));
+            for w in warnings.iter().take(5) {
+                msg.push_str(&format!("\n- {}", w));
+            }
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     #[tool(
@@ -405,6 +531,7 @@ impl ScryerServer {
             }
         }
         enforce_readonly_directives(&mut model, &prior);
+        scryer_core::rewrite_renamed_wikilinks(&mut model, &prior);
 
         if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
@@ -532,11 +659,12 @@ impl ScryerServer {
                 ))]));
             }
 
+            // Relocated copies keep their lifecycle status (relocation is the
+            // relocated_to/relocated_from flag pair), so status alone tells us
+            // whether code backs the claim.
             let has_code = matches!(
                 resp.status,
-                Some(scryer_core::Status::Implemented)
-                    | Some(scryer_core::Status::Verified)
-                    | Some(scryer_core::Status::Relocated)
+                Some(scryer_core::Status::Implemented) | Some(scryer_core::Status::Verified)
             );
 
             let new_id = {
@@ -551,19 +679,21 @@ impl ScryerServer {
             };
 
             if has_code {
-                // Source: mark as relocated + locked
+                // Relocation is a FLAG pair, never a status: the source becomes
+                // a locked ghost pointing forward; the claim's lifecycle is
+                // untouched by the move.
                 let from = model.nodes.iter_mut().find(|n| n.id == mv.from_node_id).unwrap();
                 if let Some(r) = from.responsibilities.iter_mut().find(|r| r.id == mv.responsibility_id) {
-                    r.status = Some(scryer_core::Status::Relocated);
                     r.locked = Some(true);
                     r.relocated_to = Some(mv.to_node_id.clone());
                 }
-                // Destination: add relocated copy
+                // Destination: live copy pointing back, status carried through.
                 let dest_resp = scryer_core::Responsibility {
                     id: new_id,
                     statement: resp.statement.clone(),
-                    status: Some(scryer_core::Status::Relocated),
+                    status: resp.status,
                     vagrant: None,
+                    stale: None,
                     locked: None,
                     relocated_to: None,
                     relocated_from: Some(mv.from_node_id.clone()),
@@ -581,6 +711,7 @@ impl ScryerServer {
                     statement: resp.statement.clone(),
                     status: resp.status,
                     vagrant: None,
+                    stale: None,
                     locked: None,
                     relocated_to: None,
                     relocated_from: None,
@@ -641,6 +772,7 @@ mod tests {
             statement: format!("does {id}"),
             status: Some(status),
             vagrant: None,
+            stale: None,
             locked: None,
             relocated_to: None,
             relocated_from: None,
@@ -723,5 +855,65 @@ mod tests {
         assert_eq!(st("r-b"), Some(Status::Proposed)); // not named -> left
         // scoped call leaves appearance alone
         assert_eq!(n.appearance.as_ref().unwrap().status, Some(Status::Changed));
+    }
+
+    /// move_nodes re-parents with kind/cycle validation and pulls the node out
+    /// of its old-level group.
+    #[test]
+    fn move_nodes_validates_and_leaves_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, "Sys", None));
+        m.nodes.push(node("ca", Kind::Container, "A", Some("sys")));
+        m.nodes.push(node("cb", Kind::Container, "B", Some("sys")));
+        m.nodes.push(node("comp", Kind::Component, "Comp", Some("ca")));
+        m.nodes.push(node("sym", Kind::Symbol, "sym", Some("comp")));
+        m.groups.push(scryer_core::Group {
+            id: "g1".into(),
+            name: "Edge".into(),
+            description: None,
+            member_ids: vec!["comp".into()],
+            parent_group_id: None,
+            parent_node_id: Some("ca".into()),
+            responsibilities: Vec::new(),
+            icon: None,
+        });
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        let server = ScryerServer::new();
+        let project = dir.path().to_string_lossy().to_string();
+
+        // Valid: component A→B. The subtree (sym) follows; the group lets go.
+        let r = server
+            .move_nodes(Parameters(MoveNodesRequest {
+                project: Some(project.clone()),
+                moves: vec![NodeMove { node_id: "comp".into(), new_parent_id: Some("cb".into()) }],
+            }))
+            .unwrap();
+        assert!(!r.is_error.unwrap_or(false), "{r:?}");
+        let m = scryer_core::read_model_at(&model_ref).unwrap();
+        let comp = m.nodes.iter().find(|n| n.id == "comp").unwrap();
+        assert_eq!(comp.parent_id.as_deref(), Some("cb"));
+        let sym = m.nodes.iter().find(|n| n.id == "sym").unwrap();
+        assert_eq!(sym.parent_id.as_deref(), Some("comp"), "subtree intact");
+        assert!(m.groups[0].member_ids.is_empty(), "left the old-level group");
+
+        // Invalid kind pair: component under system.
+        let r = server
+            .move_nodes(Parameters(MoveNodesRequest {
+                project: Some(project.clone()),
+                moves: vec![NodeMove { node_id: "comp".into(), new_parent_id: Some("sys".into()) }],
+            }))
+            .unwrap();
+        assert!(r.is_error.unwrap_or(false), "kind pair rejected");
+
+        // Cycle: container under a symbol inside its own subtree.
+        let r = server
+            .move_nodes(Parameters(MoveNodesRequest {
+                project: Some(project),
+                moves: vec![NodeMove { node_id: "cb".into(), new_parent_id: Some("sym".into()) }],
+            }))
+            .unwrap();
+        assert!(r.is_error.unwrap_or(false), "cycle rejected");
     }
 }

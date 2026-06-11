@@ -8,11 +8,13 @@ export type SelectOption = {
 
 type SelectVariant = "inline" | "bordered";
 
+// Both variants share Input's field treatment; inline is the compact row form.
+const triggerBase =
+  "w-full flex items-center justify-between gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] text-left text-[var(--text-secondary)] outline-none transition-colors hover:border-[var(--border-strong)] cursor-pointer";
+
 const triggerClasses: Record<SelectVariant, string> = {
-  inline:
-    "w-full flex items-center justify-end gap-1 rounded bg-[var(--surface-inset)] text-sm text-right text-[var(--text-secondary)] outline-none px-1.5 py-0.5 cursor-pointer",
-  bordered:
-    "mt-0.5 w-full flex items-center justify-between gap-1 rounded border border-[var(--border-strong)] bg-[var(--surface-raised)] px-2 py-1.5 text-xs text-[var(--text-secondary)] outline-none cursor-pointer",
+  inline: `${triggerBase} px-2 py-1 text-xs`,
+  bordered: `${triggerBase} px-2.5 py-1.5 text-sm`,
 };
 
 export function Select({
@@ -115,7 +117,7 @@ export function Select({
                   type="button"
                   className={`w-full px-2.5 py-1 text-xs text-left cursor-pointer transition-colors ${
                     o.value === value
-                      ? "bg-violet-50 text-violet-600 dark:bg-violet-500/20 dark:text-violet-300"
+                      ? "bg-[var(--surface-active)] text-[var(--text)]"
                       : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
                   }`}
                   onClick={() => handleSelect(o.value)}

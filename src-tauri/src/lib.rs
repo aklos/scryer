@@ -760,6 +760,26 @@ async fn start_initial_model_session(
         .await
 }
 
+/// Does this node have real code behind it? True when it owns a boundary glob
+/// or any of its responsibilities are anchored to source — i.e. it was built
+/// from / maps to a codebase. False for a node the user just designed (no
+/// boundary, no source anchors), which routes to strict design mode.
+fn node_has_code(model: &scryer_core::ScryModel, node_id: &str) -> bool {
+    if model.boundaries.get(node_id).is_some_and(|s| !s.is_empty()) {
+        return true;
+    }
+    if let Some(node) = model.nodes.iter().find(|n| n.id == node_id) {
+        if node
+            .responsibilities
+            .iter()
+            .any(|r| model.source_map.contains_key(&r.id))
+        {
+            return true;
+        }
+    }
+    model.source_map.contains_key(node_id)
+}
+
 #[tauri::command]
 async fn start_node_fill_session(
     cwd: String,
@@ -789,9 +809,16 @@ async fn start_node_fill_session(
         .unwrap_or_default();
 
     let model_json = scryer_acp::prompt::serialize_model_for_prompt(&model);
-    let prompt = scryer_acp::prompt::node_fill_prompt(
-        &cwd, &node_id, &node_name, &node_kind, &model_json,
-    );
+    // Auto-select by code presence: a node backed by real code (a boundary glob,
+    // or source-anchored responsibilities) is EXTRACTED from that code; a node
+    // with no code behind it — greenfield design, or a not-yet-built addition —
+    // is DESIGNED strictly: the agent models every relationship itself and marks
+    // everything `proposed`, since there is nothing to extract.
+    let prompt = if node_has_code(&model, &node_id) {
+        scryer_acp::prompt::node_fill_prompt(&cwd, &node_id, &node_name, &node_kind, &model_json)
+    } else {
+        scryer_acp::prompt::node_design_prompt(&cwd, &node_id, &node_name, &node_kind, &model_json)
+    };
     let (model_name, effort) = config_for_launch(&settings, &launch);
 
     let runtime = {
@@ -1549,7 +1576,7 @@ fn map_codeful_containers(
     let mut mapped = Vec::new();
     let mut unmapped = Vec::new();
     for c in &ctx.containers {
-        if scryer_extract::slice_container(ctx, &c.dir).files.is_empty() {
+        if !ctx.files.iter().any(|file| file.container_dir == c.dir) {
             continue; // nothing to model (e.g. a database image)
         }
         match by_dir.iter().find(|(d, _)| d == &c.dir) {
@@ -1604,6 +1631,71 @@ enum WaveOutcome {
     Completed,
     /// The user cancelled — the orchestrator must abort the whole build.
     Cancelled,
+}
+
+struct Wave2Job {
+    id: String,
+    name: String,
+    evidence_json: String,
+    work_units: usize,
+    payload_bytes: usize,
+}
+
+/// Derive agent concurrency from the actual evidence payload rather than a
+/// fixed pool. Small scopes are cheap enough to fan out; large prompts get fewer
+/// concurrent sessions to avoid memory/subscription pressure.
+fn wave2_pool_size(jobs: &[Wave2Job]) -> usize {
+    if jobs.is_empty() {
+        return 1;
+    }
+    let average_bytes = jobs.iter().map(|job| job.payload_bytes).sum::<usize>() / jobs.len();
+    let cpu_cap = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2)
+        .clamp(1, 4);
+    let payload_cap = match average_bytes {
+        0..=48_000 => 4,
+        48_001..=160_000 => 3,
+        _ => 2,
+    };
+    jobs.len().min(cpu_cap).min(payload_cap).max(1)
+}
+
+fn wave2_job_permits(job: &Wave2Job, pool: usize) -> u32 {
+    let desired = match (job.payload_bytes, job.work_units) {
+        (160_001.., _) | (_, 8_001..) => pool,
+        (48_001.., _) | (_, 3_001..) => 2,
+        _ => 1,
+    };
+    desired.min(pool).max(1) as u32
+}
+
+#[cfg(test)]
+mod build_scheduling_tests {
+    use super::{wave2_job_permits, wave2_pool_size, Wave2Job};
+
+    fn jobs(count: usize, bytes: usize) -> Vec<Wave2Job> {
+        (0..count)
+            .map(|idx| Wave2Job {
+                id: format!("node-{idx}"),
+                name: format!("job-{idx}"),
+                evidence_json: String::new(),
+                work_units: idx,
+                payload_bytes: bytes,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn large_prompts_never_get_more_concurrency_than_small_prompts() {
+        let small = jobs(8, 10_000);
+        let large = jobs(8, 300_000);
+        assert!(wave2_pool_size(&large) <= wave2_pool_size(&small));
+        assert_eq!(wave2_pool_size(&jobs(0, 0)), 1);
+        assert_eq!(wave2_pool_size(&jobs(1, 10_000)), 1);
+        assert_eq!(wave2_job_permits(&small[0], 4), 1);
+        assert_eq!(wave2_job_permits(&large[0], 4), 4);
+    }
 }
 
 /// Run one modeling agent session to completion. Forwards only the session's
@@ -1674,8 +1766,8 @@ async fn run_wave(
 /// Orchestrate a full auto-context model build with zero per-level clicking:
 /// extract the deterministic codebase context, then drive top-down modeling
 /// sessions — Wave 1 builds the system + containers (fed the container facts),
-/// then a serial Wave 2 models each container's components + symbols (each fed
-/// its sliced code context). Returns immediately; progress streams via
+/// then an adaptive parallel Wave 2 models each container's components + symbols
+/// (each fed its compact sliced code context). Returns immediately; progress streams via
 /// "agent-event" and nodes stream onto the canvas as the agent writes them.
 #[tauri::command]
 async fn start_model_build(
@@ -1686,8 +1778,30 @@ async fn start_model_build(
     let project = std::path::Path::new(&cwd);
 
     // 1. Deterministic context — instant, in-memory, never persisted as a model.
-    let ctx = scryer_extract::extract_context(project)?;
+    let (ctx, extraction) = scryer_extract::extract_context_with_stats(project)?;
+    eprintln!(
+        "[build] extraction: {} source files, {} parsed, {} cache hits",
+        extraction.source_files, extraction.parsed_files, extraction.cache_hits,
+    );
     let containers_json = serde_json::to_string(&ctx.containers).map_err(|e| e.to_string())?;
+
+    // Cache the deterministic symbol dependency graph so the MCP
+    // `commit_container_model` tool (a separate process) wires code-level links
+    // from the same edges the agent saw, instead of having the agent author
+    // them by hand and fight the same-level link validator. Best-effort.
+    let build_edges = scryer_core::build_edges::BuildEdges {
+        symbol_edges: ctx
+            .symbol_edges
+            .iter()
+            .map(|e| scryer_core::build_edges::CachedEdge {
+                src: e.src.clone(),
+                dst: e.dst.clone(),
+            })
+            .collect(),
+    };
+    if let Err(e) = scryer_core::build_edges::write_build_edges(project, &build_edges) {
+        eprintln!("[build] could not cache dependency graph: {e}");
+    }
 
     // 2. Ensure a model exists so the intent tools have something to read; a
     //    blank one if absent (the agent's writes become the first real content).
@@ -1790,33 +1904,48 @@ async fn start_model_build(
         };
         let (containers, unmapped) = map_codeful_containers(&model, &ctx);
         if !unmapped.is_empty() {
-            // Never drop coverage silently — tell the user which units the agent
-            // didn't create a container for (so Wave 2 can't model them).
-            emit_msg(format!(
-                "⚠ No container node for {} — not modeled. Re-run, or add the container by hand.",
-                unmapped.join(", ")
-            ));
+            let _ = app.emit(
+                "agent-event",
+                &scryer_acp::AgentEvent::Failed {
+                    error: format!(
+                        "System/container pass omitted code-bearing unit(s): {}",
+                        unmapped.join(", ")
+                    ),
+                },
+            );
+            return;
         }
 
-        // Wave 2 — components + symbols. Up to WAVE2_POOL containers are modeled
-        // at once: each is an independent agent session (its code scope is sliced
-        // independently and the model-write lock serializes their commits), so
-        // they're safe to run concurrently. The pool bounds how many of the
-        // user's own agent processes run at once against their subscription.
-        const WAVE2_POOL: usize = 3;
-
         // Slice each codeful container's scope up front; skip source-less units
-        // (e.g. a database image) — nothing to model there.
-        let mut jobs: Vec<(String, String, String)> = Vec::new();
+        // (e.g. a database image). Convert to the compact indexed wire format so
+        // paths and synthetic symbol keys are not repeated throughout the prompt.
+        let mut jobs: Vec<Wave2Job> = Vec::new();
         for (id, name, dir) in containers {
             let scope = scryer_extract::slice_container(&ctx, &dir);
             if scope.files.is_empty() {
                 continue;
             }
-            if let Ok(scope_json) = serde_json::to_string(&scope) {
-                jobs.push((id, name, scope_json));
+            let evidence = scryer_extract::compact_scope(&scope);
+            if let Ok(evidence_json) = serde_json::to_string(&evidence) {
+                jobs.push(Wave2Job {
+                    id,
+                    name,
+                    payload_bytes: evidence_json.len(),
+                    work_units: evidence.work_units(),
+                    evidence_json,
+                });
             }
         }
+        // Longest-processing-time-first reduces the tail when containers vary
+        // substantially in size.
+        jobs.sort_by(|a, b| b.work_units.cmp(&a.work_units));
+        let wave2_pool = wave2_pool_size(&jobs);
+        eprintln!(
+            "[build] Wave 2: {} job(s), adaptive pool {}, {} evidence bytes",
+            jobs.len(),
+            wave2_pool,
+            jobs.iter().map(|job| job.payload_bytes).sum::<usize>(),
+        );
 
         // Honor a stop pressed during the Wave 1→2 setup (read model + slice
         // every container): no session is live here, so the runtime cancel was a
@@ -1838,10 +1967,18 @@ async fn start_model_build(
         // Tokens summed across the parallel container sessions (debug log).
         let wave2_usage: std::sync::Arc<tokio::sync::Mutex<scryer_acp::Usage>> =
             std::sync::Arc::new(tokio::sync::Mutex::new(scryer_acp::Usage::default()));
-        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(WAVE2_POOL));
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(wave2_pool));
 
         let mut handles = Vec::with_capacity(jobs.len());
-        for (id, name, scope_json) in jobs {
+        for job in jobs {
+            let permit_count = wave2_job_permits(&job, wave2_pool);
+            let Wave2Job {
+                id,
+                name,
+                evidence_json,
+                work_units,
+                payload_bytes,
+            } = job;
             let sem = sem.clone();
             let active = active.clone();
             let cancelled = cancel_flag.clone();
@@ -1856,8 +1993,9 @@ async fn start_model_build(
             let mcp_binary = mcp_binary.clone();
             let app = app.clone();
             handles.push(tokio::spawn(async move {
-                // Bound how many sessions run at once.
-                let _permit = match sem.acquire().await {
+                // Large prompts consume more pool capacity so one oversized
+                // container cannot run beside several other expensive sessions.
+                let _permit = match sem.acquire_many(permit_count).await {
                     Ok(p) => p,
                     Err(_) => return,
                 };
@@ -1885,8 +2023,12 @@ async fn start_model_build(
                             text: format!("Modeling container: {name}…"),
                         },
                     );
-                    let w2 =
-                        scryer_acp::prompt::build_container_prompt(&cwd, &name, &id, &scope_json);
+                    let w2 = scryer_acp::prompt::build_container_prompt(
+                        &cwd,
+                        &name,
+                        &id,
+                        &evidence_json,
+                    );
                     run_wave(
                         &runtime, &agent_binary, &mode, &cwd, &model_name, &effort, &mcp_binary,
                         w2, &app,
@@ -1905,9 +2047,11 @@ async fn start_model_build(
                     Ok((WaveOutcome::Completed, usage)) => {
                         wave2_usage.lock().await.add(&usage);
                         eprintln!(
-                            "[build] Wave 2 container '{name}': {:.1}s, {}",
+                            "[build] Wave 2 container '{name}': {:.1}s, {} (work {}, payload {} bytes)",
                             c_start.elapsed().as_secs_f64(),
                             fmt_usage(&usage),
+                            work_units,
+                            payload_bytes,
                         );
                     }
                     Ok((WaveOutcome::Cancelled, _)) => {
@@ -1926,8 +2070,19 @@ async fn start_model_build(
             let _ = h.await;
         }
 
-        for f in failures.lock().await.iter() {
-            emit_msg(f.clone());
+        let failed_jobs = failures.lock().await.clone();
+        if !failed_jobs.is_empty() {
+            let _ = app.emit(
+                "agent-event",
+                &scryer_acp::AgentEvent::Failed {
+                    error: format!(
+                        "{} container modeling job(s) failed: {}",
+                        failed_jobs.len(),
+                        failed_jobs.join(" | ")
+                    ),
+                },
+            );
+            return;
         }
 
         total_usage.add(&*wave2_usage.lock().await);
@@ -1943,8 +2098,124 @@ async fn start_model_build(
             return;
         }
 
+        // Every container proposal is committed without an intermediate
+        // baseline snapshot. Validate the merged model once. The fast path
+        // snapshots immediately; only an invalid model pays for one targeted
+        // repair session.
+        let mut completed_model = match scryer_core::read_model_at(&model_ref) {
+            Ok(model) => model,
+            Err(e) => {
+                let _ = app.emit(
+                    "agent-event",
+                    &scryer_acp::AgentEvent::Failed {
+                        error: format!("Could not read the completed model: {e}"),
+                    },
+                );
+                return;
+            }
+        };
+        let validate_completed = |model: &scryer_core::ScryModel| {
+            let mut warnings = scryer_core::validate::validate(model);
+            warnings.extend(scryer_core::validate::validate_coverage(
+                model,
+                std::path::Path::new(&cwd),
+            ));
+            warnings
+        };
+        // A code-level "appears disconnected" warning is NOT worth a repair
+        // session: the deterministic dependency graph is legitimately sparse
+        // (data types, UI leaves, entry points connect to nothing), so firing an
+        // agent to invent links between them is pure cost for no signal. The
+        // validator still reports them for the canvas/SyncBar; the BUILD just
+        // doesn't repair them. Everything else (bad parents, real cross-level
+        // link violations, coverage gaps) still gates.
+        let is_sparse_code_disconnect = |w: &str| {
+            w.contains("disconnected") && (w.contains("(symbol)") || w.contains("(component)"))
+        };
+        let all_warnings = validate_completed(&completed_model);
+        let deferred = all_warnings.iter().filter(|w| is_sparse_code_disconnect(w)).count();
+        if deferred > 0 {
+            emit_msg(format!(
+                "ℹ {deferred} code-level node(s) have no modeled relationship — left as-is (not a build error)."
+            ));
+        }
+        let mut warnings: Vec<String> = all_warnings
+            .into_iter()
+            .filter(|w| !is_sparse_code_disconnect(w))
+            .collect();
+        if !warnings.is_empty() {
+            emit_msg(format!(
+                "▶ Repairing {} model validation issue(s)…",
+                warnings.len()
+            ));
+            let warnings_json =
+                serde_json::to_string(&warnings).unwrap_or_else(|_| "[]".to_string());
+            let repair_prompt = scryer_acp::prompt::repair_model_prompt(&cwd, &warnings_json);
+            match run_wave(
+                &runtime,
+                &agent_binary,
+                &mode,
+                &cwd,
+                &model_name,
+                &effort,
+                &mcp_binary,
+                repair_prompt,
+                &app,
+            )
+            .await
+            {
+                Ok((WaveOutcome::Completed, usage)) => total_usage.add(&usage),
+                Ok((WaveOutcome::Cancelled, _)) => {
+                    let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Cancelled);
+                    return;
+                }
+                Err(e) => {
+                    let _ = app.emit(
+                        "agent-event",
+                        &scryer_acp::AgentEvent::Failed {
+                            error: format!("Model validation repair failed: {e}"),
+                        },
+                    );
+                    return;
+                }
+            }
+
+            completed_model = match scryer_core::read_model_at(&model_ref) {
+                Ok(model) => model,
+                Err(e) => {
+                    let _ = app.emit(
+                        "agent-event",
+                        &scryer_acp::AgentEvent::Failed {
+                            error: format!("Could not read the repaired model: {e}"),
+                        },
+                    );
+                    return;
+                }
+            };
+            warnings = validate_completed(&completed_model)
+                .into_iter()
+                .filter(|w| !is_sparse_code_disconnect(w))
+                .collect();
+            if !warnings.is_empty() {
+                let _ = app.emit(
+                    "agent-event",
+                    &scryer_acp::AgentEvent::Failed {
+                        error: format!(
+                            "Model remains invalid after repair: {}",
+                            warnings.join(" | ")
+                        ),
+                    },
+                );
+                return;
+            }
+        }
+        if let Err(e) = scryer_core::save_baseline_at(&model_ref, &completed_model) {
+            emit_msg(format!("⚠ Could not save the final model baseline: {e}"));
+        }
+
         // Anchor the reconcile point so the first drift check only examines
-        // changes made AFTER the build, not the whole repo.
+        // changes made AFTER the build, not the whole repo — and fingerprint
+        // every anchor so the check is content-addressed, not git-dependent.
         let _ = scryer_core::write_sync_state(
             &model_ref,
             &scryer_core::drift::SyncState {
@@ -1952,6 +2223,9 @@ async fn start_model_build(
                 commit: scryer_core::drift::head_commit(std::path::Path::new(&cwd)),
             },
         );
+        if let Err(e) = scryer_extract::anchors::write_baseline(&model_ref) {
+            emit_msg(format!("⚠ Could not fingerprint anchors: {e}"));
+        }
 
         let elapsed = build_start.elapsed().as_secs_f64();
         eprintln!(
@@ -2003,11 +2277,90 @@ fn get_drift_status(cwd: String) -> Result<Vec<scryer_core::drift::DriftScope>, 
                 commit: scryer_core::drift::head_commit(project),
             },
         );
+        let _ = scryer_extract::anchors::write_baseline(&model_ref);
         return Ok(Vec::new());
     }
 
     let sync = scryer_core::read_sync_state(&model_ref);
     Ok(scryer_core::drift::drifted_scopes(&model, project, &sync))
+}
+
+/// Everything the observability surfaces read, in one deterministic pass — no
+/// agent involved, no git. Composes the per-node health rollup (computed
+/// discharge + anchor coverage + boundary darkness), the anchor fingerprint
+/// check (changed/broken anchors, with moved-but-unchanged symbols silently
+/// re-anchored as a side effect), and the link evidence (declared-link audit +
+/// unmodeled candidates). Runs the extractor, so it also refreshes the
+/// `.build_edges.json` cache the MCP commit tool reads.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelHealthReport {
+    health: scryer_core::health::ModelHealth,
+    /// Anchors whose code changed/broke since the last reconcile.
+    anchors: Vec<scryer_extract::anchors::AnchorObservation>,
+    /// Anchors silently healed this pass (symbol moved, content unchanged).
+    reanchored: usize,
+    derived: scryer_core::build_edges::DerivedGraph,
+}
+
+#[tauri::command]
+async fn get_model_health(cwd: String) -> Result<ModelHealthReport, String> {
+    // The extractor parses the whole repo (seconds on a big project) — keep it
+    // off the IPC thread so the UI stays responsive while the report computes.
+    tauri::async_runtime::spawn_blocking(move || {
+        let project = std::path::Path::new(&cwd);
+        let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
+
+        // Check (and self-heal) anchors first: re-anchoring may update sourceMap
+        // line ranges, and the health/evidence below should see the healed model.
+        let check = scryer_extract::anchors::check_anchors(&model_ref)?;
+        let model = scryer_core::read_model_at(&model_ref)?;
+
+        let (ctx, _) = scryer_extract::extract_context_with_stats(project)?;
+        let files: std::collections::BTreeSet<String> =
+            ctx.files.iter().map(|f| f.rel_path.clone()).collect();
+        let edges = scryer_core::build_edges::BuildEdges {
+            symbol_edges: ctx
+                .symbol_edges
+                .iter()
+                .map(|e| scryer_core::build_edges::CachedEdge {
+                    src: e.src.clone(),
+                    dst: e.dst.clone(),
+                })
+                .collect(),
+        };
+        // Keep the cross-process cache fresh for the MCP commit tool. Best-effort.
+        let _ = scryer_core::build_edges::write_build_edges(project, &edges);
+
+        Ok(ModelHealthReport {
+            health: scryer_core::health::compute_health(&model, Some(&files)),
+            anchors: check.observations,
+            reanchored: check.reanchored,
+            derived: scryer_core::build_edges::derive_graph(&model, &edges),
+        })
+    })
+    .await
+    .map_err(|e| format!("health task failed: {e}"))?
+}
+
+/// Dismiss the current drift nudge without running a semantic check: advance the
+/// reconcile anchor to now (the same write `start_drift_check` does on
+/// completion). The user is asserting "I've looked, these changes are fine" —
+/// the changed scopes stop surfacing until code changes again. The cheap
+/// counterpart to running the agent over them.
+#[tauri::command]
+fn reconcile_drift(cwd: String) -> Result<(), String> {
+    let project = std::path::Path::new(&cwd);
+    let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
+    scryer_core::write_sync_state(
+        &model_ref,
+        &scryer_core::drift::SyncState {
+            reconciled_at: scryer_core::drift::now_secs(),
+            commit: scryer_core::drift::head_commit(project),
+        },
+    )?;
+    // Re-fingerprint: "reconciled" means the anchors as they stand are the truth.
+    scryer_extract::anchors::write_baseline(&model_ref).map(|_| ())
 }
 
 /// Run a semantic drift check: find the boundary-owning nodes whose code changed
@@ -2051,7 +2404,11 @@ async fn start_drift_check(
         rt.clone().unwrap()
     };
 
-    let ctx = scryer_extract::extract_context(project)?;
+    let (ctx, extraction) = scryer_extract::extract_context_with_stats(project)?;
+    eprintln!(
+        "[drift] extraction: {} source files, {} parsed, {} cache hits",
+        extraction.source_files, extraction.parsed_files, extraction.cache_hits,
+    );
 
     let cancel_flag = state.1.clone();
     cancel_flag.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -2069,6 +2426,7 @@ async fn start_drift_check(
                     commit: scryer_core::drift::head_commit(std::path::Path::new(&cwd)),
                 },
             );
+            let _ = scryer_extract::anchors::write_baseline(&model_ref);
         };
 
         if scopes.is_empty() {
@@ -2274,6 +2632,8 @@ pub fn run() {
             start_model_build,
             start_drift_check,
             get_drift_status,
+            get_model_health,
+            reconcile_drift,
             cancel_agent_session,
         ])
         .run(tauri::generate_context!())

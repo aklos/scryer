@@ -7,15 +7,26 @@
  * (add child, rename, delete, group membership).
  */
 
-import { useState } from "react";
-import { ChevronRight, Folder, FolderOpen, Loader2, Plus } from "lucide-react";
+import { useRef, useState } from "react";
+import {
+  Braces,
+  ChevronRight,
+  ClipboardList,
+  Flag,
+  Folder,
+  FolderOpen,
+  Loader2,
+  Plus,
+  Search,
+} from "lucide-react";
 import type { ScryModel, Node, Group, Kind } from "./viewmodel";
 import { childKindFor } from "./viewmodel";
 import type { Editor } from "./editor";
-import { effectiveNodeStatus } from "./rollup";
+import { effectiveNodeStatus, isNodeEmpty } from "./rollup";
 import { rollupStatus } from "./statusColors";
 import type { Status } from "./statusColors";
 import { STATUS_COLORS } from "./statusColors";
+import { EmptyDot } from "./pagekit";
 import { kindIcon } from "./kindIcon";
 import { KIND_ICON } from "./kindIcons";
 import { lookupIcon } from "./IconPicker";
@@ -26,6 +37,23 @@ import type { Selected } from "./NodePage";
 
 const INDENT = 14;
 const ROW = "group/row flex items-center gap-1 rounded pr-3 h-[26px] cursor-pointer select-none";
+
+/** Alphabetical within a level, unnamed entries last. */
+const byName = (a: { name: string }, b: { name: string }) =>
+  (a.name || "￿").localeCompare(b.name || "￿");
+
+/** One visible row of the flattened tree, in render order — the basis for both
+ *  rendering and arrow-key navigation. */
+interface TreeRow {
+  kind: "node" | "group";
+  id: string;
+  depth: number;
+  hasChildren: boolean;
+  isOpen: boolean;
+  parent: { kind: "node" | "group"; id: string } | null;
+  node?: Node;
+  group?: Group;
+}
 
 // Status dot that stays hidden for healthy (implemented) and unset nodes, so
 // the tree only flags rows that actually need attention.
@@ -55,6 +83,7 @@ export function ModelTree({
   onToggle,
   editor,
   onFill,
+  onOpenSearch,
   activeNodeIds,
   newNodeIds,
 }: {
@@ -66,6 +95,7 @@ export function ModelTree({
   onToggle: (id: string, expand?: boolean) => void;
   editor: Editor | undefined;
   onFill?: (nodeId: string) => void;
+  onOpenSearch?: () => void;
   activeNodeIds: ReadonlySet<string>;
   newNodeIds: ReadonlySet<string>;
 }) {
@@ -78,6 +108,23 @@ export function ModelTree({
   const [confirmDel, setConfirmDel] = useState<
     { rect: DOMRect; run: () => void; label: string } | null
   >(null);
+
+  // Symbols are first-class pages and the page no longer re-lists children,
+  // so the tree shows the full hierarchy by default. The altitude toggle
+  // remains for reading the model at architecture height.
+  const [showSymbols, setShowSymbols] = useState(
+    () => localStorage.getItem("scryer:treeSymbols") !== "0",
+  );
+  const toggleSymbols = () =>
+    setShowSymbols((s) => {
+      localStorage.setItem("scryer:treeSymbols", s ? "0" : "1");
+      return !s;
+    });
+
+  // Drag-to-move: nodes re-parent by dropping onto a valid parent (kind
+  // hierarchy, no cycles), or join a group by dropping onto its folder.
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropKey, setDropKey] = useState<string | null>(null);
 
   const startResize = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -97,18 +144,103 @@ export function ModelTree({
     window.addEventListener("pointerup", onUp);
   };
 
+  // --- filter + lenses --------------------------------------------------------
+  // Type-to-filter narrows by name; the lenses narrow by state: "planned"
+  // (proposed/changed claims — the backlog the agent will implement) and
+  // "attention" (vagrant/stale/empty — things awaiting a verdict). A branch
+  // stays visible when anything below it matches; matching auto-expands.
+
+  const [filter, setFilter] = useState("");
+  const [lens, setLens] = useState<"all" | "planned" | "attention">("all");
+
+  const childIndex = new Map<string | null, Node[]>();
+  for (const n of model.nodes) {
+    const k = n.parentId ?? null;
+    const arr = childIndex.get(k);
+    if (arr) arr.push(n);
+    else childIndex.set(k, [n]);
+  }
+
+  /** Verdict items on this node itself: vagrant/stale claims, the empty flag. */
+  const ownAttention = (n: Node) =>
+    (n.responsibilities ?? []).filter((r) => r.vagrant || r.stale).length +
+    (isNodeEmpty(n) ? 1 : 0);
+
+  /** Plan items on this node itself: proposed/changed claims and properties. */
+  const ownPlanned = (n: Node) => {
+    if (n.external) return 0;
+    const resps = (n.responsibilities ?? []).filter((r) => {
+      if (r.vagrant) return false;
+      const s = r.status ?? "proposed";
+      return s === "proposed" || s === "changed";
+    }).length;
+    const props = (n.properties ?? []).filter((p) => {
+      const s = p.status ?? "proposed";
+      return s === "proposed" || s === "changed";
+    }).length;
+    return resps + props;
+  };
+
+  // Subtree attention totals — the rollup badge on collapsed branches, so a
+  // flag buried three levels down is never invisible.
+  const attentionTotal = new Map<string, number>();
+  const sumAttention = (n: Node): number => {
+    const memo = attentionTotal.get(n.id);
+    if (memo !== undefined) return memo;
+    let total = ownAttention(n);
+    for (const c of childIndex.get(n.id) ?? []) total += sumAttention(c);
+    attentionTotal.set(n.id, total);
+    return total;
+  };
+  for (const n of model.nodes) sumAttention(n);
+
+  const q = filter.trim().toLowerCase();
+  const filterActive = q !== "" || lens !== "all";
+  let visibleIds: ReadonlySet<string> | null = null;
+  if (filterActive) {
+    const matchSelf = (n: Node) =>
+      (q === "" || (n.name || "").toLowerCase().includes(q)) &&
+      (lens === "all" || (lens === "planned" ? ownPlanned(n) > 0 : ownAttention(n) > 0));
+    const set = new Set<string>();
+    const walk = (n: Node): boolean => {
+      let inc = matchSelf(n);
+      for (const c of childIndex.get(n.id) ?? []) if (walk(c)) inc = true;
+      if (inc) set.add(n.id);
+      return inc;
+    };
+    for (const n of childIndex.get(null) ?? []) walk(n);
+    visibleIds = set;
+  }
+
   // --- level derivation -----------------------------------------------------
 
+  // A filter/lens overrides the symbol-altitude toggle — search reaches
+  // everything, and a match is a match.
+  const visible = (n: Node) =>
+    visibleIds ? visibleIds.has(n.id) : showSymbols || n.kind !== "symbol";
+
   const childNodes = (parentId: string | null) =>
-    model.nodes.filter((n) => (n.parentId ?? null) === parentId);
+    model.nodes
+      .filter((n) => (n.parentId ?? null) === parentId && visible(n))
+      .sort(byName);
+
+  /** Symbol children hidden by the altitude filter — surfaced as a quiet count
+   *  so a collapsed component still reads as "has content". */
+  const hiddenSymbolCount = (nodeId: string) =>
+    showSymbols
+      ? 0
+      : model.nodes.filter((n) => n.parentId === nodeId && n.kind === "symbol").length;
 
   const groupsAtLevel = (parentId: string | null): Group[] =>
-    model.groups.filter((g) => {
-      if (g.memberIds.length === 0) return (g.parentNodeId ?? null) === parentId;
-      return g.memberIds.some(
-        (m) => (model.nodes.find((n) => n.id === m)?.parentId ?? null) === parentId,
-      );
-    });
+    model.groups
+      .filter((g) => {
+        if (g.memberIds.length === 0) return (g.parentNodeId ?? null) === parentId;
+        return g.memberIds.some((m) => {
+          const n = model.nodes.find((nd) => nd.id === m);
+          return n && (n.parentId ?? null) === parentId && visible(n);
+        });
+      })
+      .sort(byName);
 
   const groupOfNode = (nodeId: string) =>
     model.groups.find((g) => g.memberIds.includes(nodeId));
@@ -128,6 +260,9 @@ export function ModelTree({
     return n;
   };
 
+  // Dots are LOCAL: a dot means "this node's own spec needs attention", never
+  // "something somewhere below" — descendants speak for themselves when
+  // expanded, and buried flags are reached via the SyncBar's review counter.
   const groupStatus = (g: Group): Status | null => {
     const memberStatuses = g.memberIds
       .map((id) => model.nodes.find((n) => n.id === id))
@@ -259,171 +394,449 @@ export function ModelTree({
     });
   };
 
-  // --- rendering ------------------------------------------------------------
+  // --- flattened visible rows -----------------------------------------------
+  // One traversal produces the rows in render order; rendering maps over it and
+  // arrow-key navigation walks it. Indentation is padding, so no nesting needed.
 
-  const renderLevel = (parentId: string | null, depth: number): React.ReactNode[] => {
-    const groups = groupsAtLevel(parentId);
-    const grouped = new Set<string>();
-    for (const g of groups)
-      for (const m of g.memberIds)
-        if ((model.nodes.find((n) => n.id === m)?.parentId ?? null) === parentId)
-          grouped.add(m);
+  const rows: TreeRow[] = [];
+  {
+    const pushNode = (
+      node: Node,
+      depth: number,
+      parent: TreeRow["parent"],
+    ) => {
+      const hasChildren =
+        childNodes(node.id).length > 0 || groupsAtLevel(node.id).length > 0;
+      // While filtering, every surviving branch is open — the match is the point.
+      const isOpen = filterActive ? hasChildren : expanded.has(node.id);
+      rows.push({ kind: "node", id: node.id, depth, hasChildren, isOpen, parent, node });
+      if (isOpen && hasChildren)
+        pushLevel(node.id, depth + 1, { kind: "node", id: node.id });
+    };
+    const pushLevel = (
+      parentId: string | null,
+      depth: number,
+      parent: TreeRow["parent"],
+    ) => {
+      const groups = groupsAtLevel(parentId);
+      const grouped = new Set<string>();
+      for (const g of groups)
+        for (const m of g.memberIds)
+          if ((model.nodes.find((n) => n.id === m)?.parentId ?? null) === parentId)
+            grouped.add(m);
+      for (const n of childNodes(parentId).filter((n) => !grouped.has(n.id)))
+        pushNode(n, depth, parent);
+      for (const g of groups) {
+        const members = g.memberIds
+          .map((id) => model.nodes.find((n) => n.id === id))
+          .filter((n): n is Node => n != null && (n.parentId ?? null) === parentId && visible(n))
+          .sort(byName);
+        const isOpen = filterActive ? true : expanded.has(g.id);
+        rows.push({
+          kind: "group", id: g.id, depth,
+          hasChildren: members.length > 0, isOpen, parent, group: g,
+        });
+        if (isOpen)
+          for (const m of members) pushNode(m, depth + 1, { kind: "group", id: g.id });
+      }
+    };
+    pushLevel(null, 0, null);
+  }
 
-    const loose = childNodes(parentId).filter((n) => !grouped.has(n.id));
+  // --- drag-to-move ------------------------------------------------------------
 
-    const rows: React.ReactNode[] = [];
-    for (const n of loose) rows.push(renderNode(n, depth));
-    for (const g of groups) rows.push(renderGroup(g, parentId, depth));
-    return rows;
+  const draggedNode = dragId ? model.nodes.find((n) => n.id === dragId) : null;
+
+  /** Mirrors viewmodel.moveNode validation so only legal targets light up. */
+  const canDropOnNode = (target: Node): boolean => {
+    if (!editor || !draggedNode || target.id === draggedNode.id) return false;
+    if (target.external || target.locked) return false;
+    if (target.kind === "symbol" || target.kind === "person") return false;
+    if (childKindFor(target.kind) !== draggedNode.kind) return false;
+    if (target.id === draggedNode.parentId) return false;
+    // No cycles: the target must not live inside the dragged subtree.
+    let cur: Node | undefined = target;
+    const seen = new Set<string>();
+    while (cur?.parentId && !seen.has(cur.id)) {
+      if (cur.parentId === draggedNode.id) return false;
+      seen.add(cur.id);
+      cur = model.nodes.find((n) => n.id === cur!.parentId);
+    }
+    return true;
   };
 
-  const renderNode = (node: Node, depth: number): React.ReactNode => {
-    const hasChildren =
-      childNodes(node.id).length > 0 || groupsAtLevel(node.id).length > 0;
-    const isOpen = expanded.has(node.id);
+  /** Groups accept siblings of their members (same level), nothing else. */
+  const canDropOnGroup = (group: Group): boolean => {
+    if (!editor || !draggedNode) return false;
+    if (group.memberIds.includes(draggedNode.id)) return false;
+    const level =
+      group.parentNodeId ??
+      model.nodes.find((n) => n.id === group.memberIds[0])?.parentId ??
+      null;
+    return (draggedNode.parentId ?? null) === (level ?? null);
+  };
+
+  const dropProps = (row: TreeRow) => {
+    if (!editor) return {};
+    const key = `${row.kind}:${row.id}`;
+    const valid =
+      row.kind === "node" ? canDropOnNode(row.node!) : canDropOnGroup(row.group!);
+    return {
+      onDragOver: (e: React.DragEvent) => {
+        if (!valid) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        setDropKey(key);
+      },
+      onDragLeave: () => setDropKey((k) => (k === key ? null : k)),
+      onDrop: (e: React.DragEvent) => {
+        if (!valid || !draggedNode) return;
+        e.preventDefault();
+        if (row.kind === "node") editor.moveNode(draggedNode.id, row.id);
+        else editor.setNodeGroup(draggedNode.id, row.id);
+        onToggle(row.id, true);
+        setDropKey(null);
+        setDragId(null);
+      },
+    };
+  };
+
+  const dragProps = (node: Node) =>
+    editor && renaming !== node.id
+      ? {
+          draggable: true,
+          onDragStart: (e: React.DragEvent) => {
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", node.id);
+            setDragId(node.id);
+          },
+          onDragEnd: () => {
+            setDragId(null);
+            setDropKey(null);
+          },
+        }
+      : {};
+
+  // --- keyboard navigation ----------------------------------------------------
+
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const focusRow = (row: TreeRow) => {
+    if (row.kind === "node") onSelectNode(row.id);
+    else onSelectGroup(row.id);
+    requestAnimationFrame(() => {
+      containerRef.current
+        ?.querySelector(`[data-rk="${row.kind}:${row.id}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    });
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const t = e.target as HTMLElement;
+    if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return; // renaming
+    if (rows.length === 0) return;
+    const idx = rows.findIndex(
+      (r) => selected && r.kind === selected.kind && r.id === selected.id,
+    );
+    const cur = idx >= 0 ? rows[idx] : null;
+    switch (e.key) {
+      case "ArrowDown": {
+        e.preventDefault();
+        const next = idx < 0 ? rows[0] : rows[Math.min(rows.length - 1, idx + 1)];
+        focusRow(next);
+        break;
+      }
+      case "ArrowUp": {
+        e.preventDefault();
+        const prev = idx < 0 ? rows[0] : rows[Math.max(0, idx - 1)];
+        focusRow(prev);
+        break;
+      }
+      case "ArrowRight": {
+        e.preventDefault();
+        if (cur?.hasChildren && !cur.isOpen) onToggle(cur.id, true);
+        else if (cur && idx < rows.length - 1) focusRow(rows[idx + 1]);
+        break;
+      }
+      case "ArrowLeft": {
+        e.preventDefault();
+        if (cur?.isOpen) onToggle(cur.id, false);
+        else if (cur?.parent) {
+          const p = rows.find(
+            (r) => r.kind === cur.parent!.kind && r.id === cur.parent!.id,
+          );
+          if (p) focusRow(p);
+        }
+        break;
+      }
+    }
+  };
+
+  // --- rendering ------------------------------------------------------------
+
+  const renderNode = (row: TreeRow): React.ReactNode => {
+    const node = row.node!;
     const isSel = selected?.kind === "node" && selected.id === node.id;
     const Icon = lookupIcon(node.icon) ?? kindIcon(node);
     const status = effectiveNodeStatus(node);
+    const empty = isNodeEmpty(node);
     const active = activeNodeIds.has(node.id);
     const fresh = newNodeIds.has(node.id);
+    const hiddenSyms =
+      !filterActive && node.kind === "component" ? hiddenSymbolCount(node.id) : 0;
+    const isDrop = dropKey === `node:${node.id}`;
+    // Attention rollup: a collapsed branch answers for everything below it;
+    // an open one only for itself (descendants speak for themselves).
+    const attn = row.isOpen ? ownAttention(node) : attentionTotal.get(node.id) ?? 0;
 
     return (
-      <div key={node.id}>
-        <div
-          style={{ paddingLeft: 6 + depth * INDENT }}
-          onClick={() => onSelectNode(node.id)}
-          onContextMenu={(e) => nodeMenu(e, node)}
-          className={`${ROW} ${
-            isSel
-              ? "bg-[var(--surface-active)] text-[var(--text)]"
-              : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-          }`}
-        >
-          <Chevron has={hasChildren} open={isOpen} onClick={() => onToggle(node.id)} />
-          <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
-          <span className="min-w-0 flex-1 truncate text-[12.5px]">
-            {renaming === node.id && editor ? (
-              <InlineText
-                value={node.name}
-                autoEdit
-                placeholder="name"
-                onCommit={(v) => {
-                  editor.updateNode(node.id, { name: v });
-                  setRenaming(null);
-                }}
-              />
-            ) : (
-              <span className={fresh ? "text-amber-600 dark:text-amber-400" : ""}>
-                {node.name || <span className="italic text-[var(--text-ghost)]">Untitled</span>}
-              </span>
-            )}
-          </span>
-          {active ? (
-            <Loader2 className="h-3 w-3 shrink-0 animate-spin text-amber-400" />
+      <div
+        key={`node:${node.id}`}
+        data-rk={`node:${node.id}`}
+        style={{ paddingLeft: 6 + row.depth * INDENT }}
+        onClick={() => onSelectNode(node.id)}
+        onDoubleClick={() => row.hasChildren && onToggle(node.id)}
+        onContextMenu={(e) => nodeMenu(e, node)}
+        {...dragProps(node)}
+        {...dropProps(row)}
+        className={`${ROW} ${
+          isSel
+            ? "bg-[var(--surface-active)] text-[var(--text)]"
+            : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+        } ${isDrop ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""}`}
+      >
+        <Chevron has={row.hasChildren} open={row.isOpen} onClick={() => onToggle(node.id)} />
+        <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
+        <span className="min-w-0 flex-1 truncate text-sm">
+          {renaming === node.id && editor ? (
+            <InlineText
+              value={node.name}
+              autoEdit
+              placeholder="name"
+              onCommit={(v) => {
+                editor.updateNode(node.id, { name: v });
+                setRenaming(null);
+              }}
+            />
           ) : (
-            <StatusDotFiltered status={status} className="shrink-0" />
+            // Indigo = the agent: this node arrived from an agent write and
+            // hasn't been reviewed yet (cleared on selection).
+            <span className={fresh ? "text-indigo-600 dark:text-indigo-400" : ""}>
+              {node.name || <span className="italic text-[var(--text-ghost)]">Untitled</span>}
+            </span>
           )}
-        </div>
-        {isOpen && hasChildren && renderLevel(node.id, depth + 1)}
+        </span>
+        {hiddenSyms > 0 && (
+          <span
+            className="shrink-0 text-2xs tabular-nums text-[var(--text-ghost)]"
+            title={`${hiddenSyms} symbol${hiddenSyms === 1 ? "" : "s"} hidden at this altitude`}
+          >
+            {hiddenSyms}
+          </span>
+        )}
+        {attn > 0 && (
+          <span
+            className="shrink-0 rounded-full bg-orange-500/10 px-1.5 text-2xs font-medium tabular-nums text-orange-700 dark:text-orange-300"
+            title={`${attn} item${attn === 1 ? "" : "s"} awaiting review ${
+              row.isOpen ? "on this node" : "in this branch"
+            } — vagrant, stale, or empty`}
+          >
+            {attn}
+          </span>
+        )}
+        {active ? (
+          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-indigo-500 dark:text-indigo-400" />
+        ) : empty ? (
+          <EmptyDot className="shrink-0" />
+        ) : (
+          <StatusDotFiltered status={status} className="shrink-0" />
+        )}
       </div>
     );
   };
 
-  const renderGroup = (
-    group: Group,
-    parentId: string | null,
-    depth: number,
-  ): React.ReactNode => {
-    const isOpen = expanded.has(group.id);
+  const renderGroup = (row: TreeRow): React.ReactNode => {
+    const group = row.group!;
     const isSel = selected?.kind === "group" && selected.id === group.id;
-    const members = group.memberIds
-      .map((id) => model.nodes.find((n) => n.id === id))
-      .filter((n): n is Node => n != null && (n.parentId ?? null) === parentId);
     const status = groupStatus(group);
-    const FolderIcon = isOpen ? FolderOpen : Folder;
+    const FolderIcon = row.isOpen ? FolderOpen : Folder;
+    const ownAttn = (group.responsibilities ?? []).filter((r) => r.vagrant || r.stale).length;
+    const attn = row.isOpen
+      ? ownAttn
+      : ownAttn +
+        group.memberIds.reduce((s, id) => s + (attentionTotal.get(id) ?? 0), 0);
 
     return (
-      <div key={group.id}>
-        <div
-          style={{ paddingLeft: 4 + depth * INDENT }}
-          onClick={() => onSelectGroup(group.id)}
-          onContextMenu={(e) => groupMenu(e, group)}
-          className={`${ROW} border-l-2 border-amber-400/50 ${
-            isSel
-              ? "bg-amber-400/10 text-[var(--text)]"
-              : "bg-amber-400/[0.04] text-[var(--text-secondary)] hover:bg-amber-400/10"
-          }`}
-        >
-          <Chevron has={members.length > 0} open={isOpen} onClick={() => onToggle(group.id)} />
-          <FolderIcon className="h-3.5 w-3.5 shrink-0 text-amber-400" />
-          <span className="min-w-0 flex-1 truncate text-[12.5px] italic">
-            {renaming === group.id && editor ? (
-              <InlineText
-                value={group.name}
-                autoEdit
-                placeholder="group name"
-                onCommit={(v) => {
-                  editor.updateGroup(group.id, { name: v });
-                  setRenaming(null);
-                }}
-              />
-            ) : (
-              group.name || <span className="text-[var(--text-ghost)]">Group</span>
-            )}
+      <div
+        key={`group:${group.id}`}
+        data-rk={`group:${group.id}`}
+        style={{ paddingLeft: 4 + row.depth * INDENT }}
+        onClick={() => onSelectGroup(group.id)}
+        onDoubleClick={() => row.hasChildren && onToggle(group.id)}
+        onContextMenu={(e) => groupMenu(e, group)}
+        {...dropProps(row)}
+        className={`${ROW} ${
+          isSel
+            ? "bg-[var(--surface-active)] text-[var(--text)]"
+            : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+        } ${dropKey === `group:${group.id}` ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""}`}
+      >
+        <Chevron has={row.hasChildren} open={row.isOpen} onClick={() => onToggle(group.id)} />
+        <FolderIcon className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
+        <span className="min-w-0 flex-1 truncate text-sm italic">
+          {renaming === group.id && editor ? (
+            <InlineText
+              value={group.name}
+              autoEdit
+              placeholder="group name"
+              onCommit={(v) => {
+                editor.updateGroup(group.id, { name: v });
+                setRenaming(null);
+              }}
+            />
+          ) : (
+            group.name || <span className="text-[var(--text-ghost)]">Group</span>
+          )}
+        </span>
+        {attn > 0 && (
+          <span
+            className="shrink-0 rounded-full bg-orange-500/10 px-1.5 text-2xs font-medium tabular-nums text-orange-700 dark:text-orange-300"
+            title={`${attn} item${attn === 1 ? "" : "s"} awaiting review ${
+              row.isOpen ? "on this group" : "in this group"
+            }`}
+          >
+            {attn}
           </span>
-          <StatusDotFiltered status={status} className="shrink-0" />
-        </div>
-        {isOpen &&
-          members.map((m) => renderNode(m, depth + 1))}
+        )}
+        <StatusDotFiltered status={status} className="shrink-0" />
       </div>
     );
   };
 
   return (
     <div
+      ref={containerRef}
       style={{ width }}
-      className="relative flex h-full shrink-0 flex-col border-r border-[var(--border)] bg-[var(--surface)]"
+      tabIndex={0}
+      onKeyDown={onKeyDown}
+      className="relative flex h-full shrink-0 flex-col border-r border-[var(--border)] bg-[var(--surface)] outline-none"
     >
       <div className="flex items-center justify-between px-3 py-2">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text-tertiary)]">
+        <span className="text-2xs font-semibold uppercase tracking-[0.14em] text-[var(--text-tertiary)]">
           Model
         </span>
-        {editor && (
+        <div className="flex items-center gap-0.5">
           <button
             type="button"
-            title="Add top-level node"
-            onClick={openRootMenu}
-            className="rounded p-0.5 text-[var(--text-ghost)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] cursor-pointer"
+            title={
+              showSymbols
+                ? "Hide symbols — read the tree at architecture altitude"
+                : "Show symbols in the tree"
+            }
+            onClick={toggleSymbols}
+            className={`rounded p-0.5 cursor-pointer ${
+              showSymbols
+                ? "bg-[var(--surface-active)] text-[var(--text-secondary)]"
+                : "text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+            }`}
           >
-            <Plus className="h-3.5 w-3.5" />
+            <Braces className="h-3.5 w-3.5" />
           </button>
-        )}
+          {onOpenSearch && (
+            <button
+              type="button"
+              title="Search the model (Ctrl+K)"
+              onClick={onOpenSearch}
+              className="rounded p-0.5 text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] cursor-pointer"
+            >
+              <Search className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {editor && (
+            <button
+              type="button"
+              title="Add top-level node"
+              onClick={openRootMenu}
+              className="rounded p-0.5 text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] cursor-pointer"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+      {/* Type-to-filter + lenses. The lenses are the tree-native plan/review
+          views: the same model, narrowed by state instead of re-projected. */}
+      <div className="flex items-center gap-1 px-2 pb-2">
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              setFilter("");
+              e.currentTarget.blur();
+            }
+          }}
+          placeholder="Filter"
+          className="min-w-0 flex-1 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] px-2 py-1 text-xs text-[var(--text)] outline-none transition-colors placeholder:text-[var(--text-ghost)] focus:border-[var(--border-strong)]"
+        />
+        <button
+          type="button"
+          title="Lens: planned work only — proposed/changed claims the code doesn't discharge yet"
+          onClick={() => setLens((l) => (l === "planned" ? "all" : "planned"))}
+          className={`shrink-0 rounded p-1 cursor-pointer ${
+            lens === "planned"
+              ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
+              : "text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+          }`}
+        >
+          <ClipboardList className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          title="Lens: needs attention only — vagrant, stale, or empty"
+          onClick={() => setLens((l) => (l === "attention" ? "all" : "attention"))}
+          className={`shrink-0 rounded p-1 cursor-pointer ${
+            lens === "attention"
+              ? "bg-orange-500/10 text-orange-600 dark:text-orange-400"
+              : "text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+          }`}
+        >
+          <Flag className="h-3.5 w-3.5" />
+        </button>
       </div>
       <div className="flex-1 overflow-y-auto pb-4" style={{ scrollbarGutter: "stable" }}>
         {model.nodes.length === 0 ? (
-          <div className="flex flex-col items-start gap-3 px-4 py-6 text-[12px] text-[var(--text-ghost)]">
+          <div className="flex flex-col items-start gap-3 px-4 py-6 text-xs text-[var(--text-muted)]">
             <span>Empty model. Generate from the codebase, or start one here:</span>
             {editor && (
               <div className="flex gap-2">
                 <button
                   type="button"
                   onClick={() => addRoot("system", false)}
-                  className="inline-flex items-center gap-1 rounded border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] cursor-pointer"
+                  className="inline-flex items-center gap-1 rounded border border-[var(--border)] px-2 py-1 text-2xs font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] cursor-pointer"
                 >
                   <Plus className="h-3 w-3" /> System
                 </button>
                 <button
                   type="button"
                   onClick={() => addRoot("person", false)}
-                  className="inline-flex items-center gap-1 rounded border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] cursor-pointer"
+                  className="inline-flex items-center gap-1 rounded border border-[var(--border)] px-2 py-1 text-2xs font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] cursor-pointer"
                 >
                   <Plus className="h-3 w-3" /> Person
                 </button>
               </div>
             )}
           </div>
+        ) : rows.length === 0 && filterActive ? (
+          <div className="px-4 py-6 text-xs text-[var(--text-muted)]">
+            {q !== ""
+              ? "No matches."
+              : lens === "planned"
+                ? "No planned work — the code is caught up with the model."
+                : "Nothing needs attention."}
+          </div>
         ) : (
-          renderLevel(null, 0)
+          rows.map((row) => (row.kind === "node" ? renderNode(row) : renderGroup(row)))
         )}
       </div>
 
@@ -431,7 +844,7 @@ export function ModelTree({
         onPointerDown={startResize}
         className="group/resize absolute right-0 top-0 z-20 flex h-full w-2 translate-x-1/2 cursor-col-resize items-stretch"
       >
-        <span className="m-auto h-full w-px bg-transparent transition-colors group-hover/resize:bg-[var(--color-blue-500)]" />
+        <span className="m-auto h-full w-px bg-transparent transition-colors group-hover/resize:bg-[var(--border-strong)]" />
       </div>
 
       {menu && (

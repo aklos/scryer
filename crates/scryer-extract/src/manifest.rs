@@ -37,9 +37,6 @@ struct Signal {
 /// Discover the project's containers. Always returns at least one container
 /// (a root fallback) so the C4 hierarchy below it is well-formed.
 pub fn discover_containers(project: &Path) -> Vec<Container> {
-    // Group every build/deploy signal by its directory.
-    let mut by_dir: BTreeMap<String, Vec<Signal>> = BTreeMap::new();
-
     let walker = ignore::WalkBuilder::new(project)
         .hidden(false)
         .filter_entry(|entry| {
@@ -54,12 +51,26 @@ pub fn discover_containers(project: &Path) -> Vec<Container> {
             true
         })
         .build();
+    let files: Vec<std::path::PathBuf> = walker
+        .flatten()
+        .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
+        .map(|entry| entry.into_path())
+        .collect();
+    discover_containers_from_files(project, &files)
+}
 
-    for entry in walker.flatten() {
-        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
-            continue;
-        }
-        let Ok(rel) = entry.path().strip_prefix(project) else {
+/// Discover containers from a file list already collected by the caller. The
+/// main extractor uses this to share one repository walk between manifest
+/// discovery and source parsing.
+pub fn discover_containers_from_files(
+    project: &Path,
+    files: &[std::path::PathBuf],
+) -> Vec<Container> {
+    // Group every build/deploy signal by its directory.
+    let mut by_dir: BTreeMap<String, Vec<Signal>> = BTreeMap::new();
+
+    for path in files {
+        let Ok(rel) = path.strip_prefix(project) else {
             continue;
         };
         let filename = rel.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -129,12 +140,7 @@ fn manifest_role(filename: &str) -> Option<bool> {
     // holding one is a deployable unit even with no code manifest (e.g. a DB).
     let deploy = matches!(
         filename,
-        "fly.toml"
-            | "Procfile"
-            | "vercel.json"
-            | "netlify.toml"
-            | "render.yaml"
-            | "railway.json"
+        "fly.toml" | "Procfile" | "vercel.json" | "netlify.toml" | "render.yaml" | "railway.json"
     ) || filename.starts_with("Dockerfile")
         || filename == "serverless.yml"
         || filename == "serverless.yaml";
@@ -200,7 +206,13 @@ fn container_for_dir(project: &Path, dir: &str, signals: &[Signal]) -> Option<Co
     }
 
     let name = name
-        .or_else(|| if dir.is_empty() { basename(project) } else { basename(Path::new(dir)) })
+        .or_else(|| {
+            if dir.is_empty() {
+                basename(project)
+            } else {
+                basename(Path::new(dir))
+            }
+        })
         .unwrap_or_else(|| dir.to_string());
 
     dep_dirs.sort();
@@ -235,7 +247,10 @@ fn dockerfile_base_image(text: &str) -> Option<String> {
 }
 
 enum CargoManifest {
-    Package { pkg_name: Option<String>, deps: Vec<String> },
+    Package {
+        pkg_name: Option<String>,
+        deps: Vec<String>,
+    },
     WorkspaceOnly,
     Unparseable,
 }
@@ -265,7 +280,11 @@ fn parse_cargo(text: &str, manifest_dir: &str) -> CargoManifest {
             continue;
         };
         for spec in tbl.values() {
-            if let Some(path) = spec.as_table().and_then(|t| t.get("path")).and_then(|p| p.as_str()) {
+            if let Some(path) = spec
+                .as_table()
+                .and_then(|t| t.get("path"))
+                .and_then(|p| p.as_str())
+            {
                 if let Some(resolved) = resolve_rel(manifest_dir, path) {
                     deps.push(resolved);
                 }
@@ -291,9 +310,7 @@ fn parse_package_json(text: &str, manifest_dir: &str) -> (Option<String>, Vec<St
         };
         for spec in obj.values() {
             if let Some(s) = spec.as_str() {
-                let rel = s
-                    .strip_prefix("file:")
-                    .or_else(|| s.strip_prefix("link:"));
+                let rel = s.strip_prefix("file:").or_else(|| s.strip_prefix("link:"));
                 if let Some(rel) = rel {
                     if let Some(resolved) = resolve_rel(manifest_dir, rel) {
                         deps.push(resolved);
@@ -335,7 +352,10 @@ mod tests {
 
     #[test]
     fn resolves_relative_paths() {
-        assert_eq!(resolve_rel("src-tauri", "../crates/scryer-core").unwrap(), "crates/scryer-core");
+        assert_eq!(
+            resolve_rel("src-tauri", "../crates/scryer-core").unwrap(),
+            "crates/scryer-core"
+        );
         assert_eq!(resolve_rel("a/b", "./c").unwrap(), "a/b/c");
         assert_eq!(resolve_rel("", "crates/x").unwrap(), "crates/x");
     }
@@ -363,7 +383,10 @@ serde = "1"
     #[test]
     fn cargo_workspace_root_is_not_a_container() {
         let toml = "[workspace]\nmembers = [\"a\"]\nresolver = \"2\"\n";
-        assert!(matches!(parse_cargo(toml, ""), CargoManifest::WorkspaceOnly));
+        assert!(matches!(
+            parse_cargo(toml, ""),
+            CargoManifest::WorkspaceOnly
+        ));
     }
 
     #[test]

@@ -1,4 +1,6 @@
+pub mod build_edges;
 pub mod drift;
+pub mod health;
 pub mod rules;
 pub mod scan;
 pub mod validate;
@@ -29,6 +31,15 @@ pub enum Kind {
     Symbol,
 }
 
+/// The PRESCRIPTIVE lifecycle — what the model says about the work. A status is
+/// moved deliberately (by the user, or by an agent closing out work); it is
+/// never a machine observation. Observations about the lens — vagrant
+/// behaviour, stale claims, broken/missing anchors — are FLAGS (or derived
+/// health data), a separate axis on top of the status.
+///
+/// `Changed` means exactly one thing: the spec was edited after the claim was
+/// implemented, so the code must catch up. (It is NOT a drift verdict — the
+/// drift check sets the `stale` flag instead.)
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Status {
@@ -36,7 +47,6 @@ pub enum Status {
     Implemented,
     Verified,
     Changed,
-    Relocated,
 }
 
 // --- Responsibility ---
@@ -54,6 +64,13 @@ pub struct Responsibility {
     pub status: Option<Status>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vagrant: Option<bool>,
+    /// Drift observation: the semantic check judged that the code no longer
+    /// discharges this claim. Like `vagrant`, a flag awaiting a human/agent
+    /// verdict (re-implement, reword, or drop) — the status itself is the
+    /// prescription and stays untouched until that verdict. Cleared by
+    /// `mark_implemented` or by editing the claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locked: Option<bool>,
     /// Source side: node ID the responsibility was moved to.
@@ -200,6 +217,20 @@ pub struct Node {
     pub relocated_from: Option<String>,
 }
 
+/// The `empty` flag — a SYMBOL that carries no semantic content of its own: no
+/// responsibilities, no properties, no rendered appearance, and not external.
+/// Derived, never stored. Mirrors `isNodeEmpty` in the frontend (`src/rollup.ts`)
+/// — keep the two in lockstep. Scoped to symbols: structural nodes
+/// (system/container/component) carry their meaning through their children, so a
+/// parent without its own responsibilities is not "empty" in this sense.
+pub fn is_node_empty(node: &Node) -> bool {
+    node.kind == Kind::Symbol
+        && node.external != Some(true)
+        && node.responsibilities.is_empty()
+        && node.properties.is_empty()
+        && node.appearance.as_ref().and_then(|a| a.status).is_none()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Link {
     pub id: String,
@@ -337,6 +368,25 @@ impl ModelRef {
         }
     }
 
+    /// Where the deterministic codebase dependency graph is cached for the
+    /// duration of a model build, so the MCP `commit_container_model` tool (a
+    /// separate process from the build orchestrator) can wire code-level links
+    /// from the same edges the agent saw — without re-parsing the project.
+    pub fn build_edges_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".build_edges.json"),
+        }
+    }
+
+    /// The anchor fingerprint baseline — what every sourceMap anchor's span
+    /// contained at the last reconcile (see `scryer_extract::anchors`).
+    /// Regenerable, git-free, never hand-authored.
+    pub fn anchors_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".anchors.json"),
+        }
+    }
+
     pub fn dir(&self) -> PathBuf {
         match self {
             ModelRef::ProjectLocal(path) => path.join(".scryer"),
@@ -366,7 +416,7 @@ fn ensure_project_gitignore(scryer_dir: &Path) -> Result<(), String> {
     if !gitignore.exists() {
         fs::write(
             &gitignore,
-            "*.baseline.scry\n.implementing\n.sync\n.tmp.*\n.lock\npreview/\n",
+            "*.baseline.scry\n.implementing\n.sync\n.tmp.*\n.lock\n.anchors.json\n.build_edges.json\npreview/\n",
         )
         .map_err(|e| format!("Failed to create .gitignore: {}", e))?;
     }
@@ -460,6 +510,7 @@ fn resp_truth_changed(a: &Responsibility, b: &Responsibility) -> bool {
     a.statement != b.statement
         || a.status != b.status
         || a.vagrant != b.vagrant
+        || a.stale != b.stale
         || a.locked != b.locked
         || a.relocated_to != b.relocated_to
         || a.relocated_from != b.relocated_from
@@ -695,6 +746,91 @@ pub fn next_responsibility_id(existing: &[Responsibility]) -> String {
     format!("resp-{}", max + 1)
 }
 
+// --- Wikilinks ---
+
+/// Rewrite `[[old]]` / `[[old|label]]` wikilink targets in one text. Target
+/// match is trimmed, case-insensitive — the same resolution the UI renderer
+/// uses. Returns the input unchanged when nothing matches.
+fn rewrite_wikilink_text(text: &str, old_name: &str, new_name: &str) -> String {
+    let target = old_name.trim().to_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("[[") {
+        let Some(end_rel) = rest[start + 2..].find("]]") else { break };
+        let inner = &rest[start + 2..start + 2 + end_rel];
+        out.push_str(&rest[..start]);
+        let (name, label) = match inner.split_once('|') {
+            Some((n, l)) => (n, Some(l)),
+            None => (inner, None),
+        };
+        if !inner.contains('[') && !inner.contains(']') && name.trim().to_lowercase() == target {
+            out.push_str("[[");
+            out.push_str(new_name);
+            if let Some(l) = label {
+                out.push('|');
+                out.push_str(l);
+            }
+            out.push_str("]]");
+        } else {
+            out.push_str(&rest[start..start + 2 + end_rel + 2]);
+        }
+        rest = &rest[start + 2 + end_rel + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Diff node names by id against `prior` and rewrite wikilinks for every
+/// rename found — the post-write hook for any tool that can rename nodes.
+pub fn rewrite_renamed_wikilinks(model: &mut ScryModel, prior: &ScryModel) {
+    let renames: Vec<(String, String)> = prior
+        .nodes
+        .iter()
+        .filter_map(|p| {
+            let n = model.nodes.iter().find(|n| n.id == p.id)?;
+            (n.name != p.name).then(|| (p.name.clone(), n.name.clone()))
+        })
+        .collect();
+    for (old, new) in renames {
+        rewrite_wikilinks(model, &old, &new);
+    }
+}
+
+/// After a node rename, repoint every `[[Old Name]]` prose mention — node and
+/// group descriptions, responsibility statements, directives — at the new
+/// name so wikilinks never dangle.
+pub fn rewrite_wikilinks(model: &mut ScryModel, old_name: &str, new_name: &str) {
+    if old_name.trim().is_empty() || new_name.trim().is_empty() || old_name == new_name {
+        return;
+    }
+    let fix = |t: &mut String| {
+        let next = rewrite_wikilink_text(t, old_name, new_name);
+        if next != *t {
+            *t = next;
+        }
+    };
+    let fix_resps = |resps: &mut Vec<Responsibility>| {
+        for r in resps {
+            fix(&mut r.statement);
+            for d in &mut r.directives {
+                fix(d);
+            }
+        }
+    };
+    for n in &mut model.nodes {
+        if let Some(d) = &mut n.description {
+            fix(d);
+        }
+        fix_resps(&mut n.responsibilities);
+    }
+    for g in &mut model.groups {
+        if let Some(d) = &mut g.description {
+            fix(d);
+        }
+        fix_resps(&mut g.responsibilities);
+    }
+}
+
 // --- Subagent settings (global, ~/.scryer/settings.json) ---
 
 /// Global scryer config directory (`~/.scryer`). Distinct from each project's
@@ -785,6 +921,19 @@ pub fn write_subagent_settings(settings: &SubagentSettings) -> Result<(), String
 mod tests {
     use super::*;
 
+    #[test]
+    fn wikilink_rewrite_handles_plain_label_and_case() {
+        let t = "Talks to [[Auth Service]] and [[auth service|the auth layer]], not [[Billing]].";
+        let out = rewrite_wikilink_text(t, "Auth Service", "Identity Service");
+        assert_eq!(
+            out,
+            "Talks to [[Identity Service]] and [[Identity Service|the auth layer]], not [[Billing]]."
+        );
+        // No match → unchanged, including unclosed/malformed brackets.
+        assert_eq!(rewrite_wikilink_text("see [[Other]]", "Auth", "X"), "see [[Other]]");
+        assert_eq!(rewrite_wikilink_text("broken [[Auth", "Auth", "X"), "broken [[Auth");
+    }
+
     /// Legacy `.scry` files written before the schema/symbol merge stored data
     /// shapes as `"kind":"schema"`. The serde alias must load them as symbols
     /// with their properties intact — there is no migration step.
@@ -836,6 +985,7 @@ mod tests {
                 statement: statement.into(),
                 status: Some(Status::Implemented),
                 vagrant: None,
+                stale: None,
                 locked: None,
                 relocated_to: None,
                 relocated_from: None,

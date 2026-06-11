@@ -12,11 +12,11 @@ use std::collections::HashSet;
 #[tool_router(router = tool_router_misc, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "Write the code-side mapping (agent-produced, regenerable). `entries` set source locations keyed by responsibility id — the conformance numerator (where reality discharges a responsibility). Each location is the SPECIFIC line range that does the work: `pattern` = file, `line`/`endLine` = the range, `symbol` = the enclosing definition (anchor + context). Map the lines that implement the responsibility, not the whole symbol. `schemas` set the declaration location of a schema-kind node (which has properties, not responsibilities) — keyed by node id, normally one location: `pattern` = file, `symbol` = the type name, `line`/`endLine` = the declaration range. `boundaries` set directory globs keyed by node id — the coverage denominator (the code region a node owns); use for containers/components, keeping a child's boundary within its parent's. Pass an empty `locations`/`sources` array to clear an entry."
+        description = "Write the code-side mapping (agent-produced, regenerable). `entries` set source locations keyed by responsibility id — the conformance numerator (where reality discharges a responsibility). Each location is the SPECIFIC line range that does the work: `pattern` = file, `line`/`endLine` = the range, `symbol` = the enclosing definition (anchor + context). A line range must be a PROPER subset of its symbol — when one responsibility is the whole definition's work, omit `line`/`endLine` (a symbol-only anchor means the whole definition). Ranges that cover the whole symbol are normalized to symbol-only anchors and reported back. `schemas` set the declaration location of a schema-kind node (which has properties, not responsibilities) — keyed by node id, normally one location: `pattern` = file, `symbol` = the type name, `line`/`endLine` = the declaration range. `boundaries` set directory globs keyed by node id — the coverage denominator (the code region a node owns); use for containers/components, keeping a child's boundary within its parent's. Pass an empty `locations`/`sources` array to clear an entry."
     )]
     fn update_source_map(
         &self,
-        Parameters(req): Parameters<UpdateSourceMapRequest>,
+        Parameters(mut req): Parameters<UpdateSourceMapRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
         let _lock = match lock_or_err(&model_ref) {
@@ -74,6 +74,35 @@ impl ScryerServer {
             }
         }
 
+        // Normalize whole-symbol mappings: an explicit line range must be a
+        // PROPER subset of its enclosing symbol. A range covering the whole
+        // extent is stripped to the symbol-only anchor (the honest encoding
+        // for "this whole definition") and reported back so the agent learns.
+        let mut normalized: Vec<String> = Vec::new();
+        {
+            let mut resolver =
+                scryer_extract::anchors::ExtentResolver::new(model_ref.project_path());
+            for entry in &mut req.entries {
+                for loc in &mut entry.locations {
+                    let (Some(sym), Some(line)) = (loc.symbol.clone(), loc.line) else {
+                        continue;
+                    };
+                    let end = loc.end_line.unwrap_or(line);
+                    let Some(extent) = resolver.extent(&loc.pattern, &sym, Some(line)) else {
+                        continue;
+                    };
+                    if scryer_extract::anchors::covers_extent(line, end, extent) {
+                        loc.line = None;
+                        loc.end_line = None;
+                        normalized.push(format!(
+                            "{}: {} L{}-{} covered the whole symbol `{}` (L{}-{})",
+                            entry.responsibility_id, loc.pattern, line, end, sym, extent.0, extent.1
+                        ));
+                    }
+                }
+            }
+        }
+
         let count = req.entries.len() + req.schemas.len() + req.boundaries.len();
         for entry in req.entries {
             if entry.locations.is_empty() {
@@ -101,10 +130,17 @@ impl ScryerServer {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
         let _ = scryer_core::save_baseline_at(&model_ref, &model);
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Updated code-side mapping ({} entr(ies))",
-            count
-        ))]))
+        let mut msg = format!("Updated code-side mapping ({} entr(ies))", count);
+        if !normalized.is_empty() {
+            msg.push_str(&format!(
+                "\n\nNormalized {} location(s) — the line range covered the whole enclosing symbol, so it was dropped and the symbol-only anchor kept. A range must be a PROPER subset of its symbol: map the specific lines that do each responsibility's work, or omit line/endLine to mean the whole definition:",
+                normalized.len()
+            ));
+            for n in &normalized {
+                msg.push_str(&format!("\n- {}", n));
+            }
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     #[tool(

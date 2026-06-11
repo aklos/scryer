@@ -1,6 +1,9 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 type ButtonVariant = "primary" | "secondary" | "ghost" | "link";
+/** `default` is neutral chrome; `accent` (indigo) is reserved for accepting
+ *  agent work; `danger` (red) for destructive actions. Lifecycle hues are
+ *  off-limits here — see the color contract in index.css. */
 type ButtonColor = "default" | "accent" | "danger";
 type ButtonSize = "sm" | "md";
 
@@ -8,8 +11,9 @@ const base = "inline-flex items-center justify-center gap-1 cursor-pointer trans
 
 const variantClasses: Record<ButtonVariant, Record<ButtonColor, string>> = {
   primary: {
-    default: "rounded-md bg-blue-500 text-white hover:bg-blue-600",
-    accent: "rounded-md bg-violet-500 text-white hover:bg-violet-600",
+    default:
+      "rounded-md bg-zinc-800 text-zinc-50 hover:bg-zinc-700 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-zinc-300",
+    accent: "rounded-md bg-indigo-500 text-white hover:bg-indigo-600",
     danger: "rounded-md bg-red-500 text-white hover:bg-red-600",
   },
   secondary: {
@@ -39,7 +43,7 @@ const variantClasses: Record<ButtonVariant, Record<ButtonColor, string>> = {
 };
 
 const sizeClasses: Record<ButtonSize, string> = {
-  sm: "px-2 py-1 text-[11px]",
+  sm: "px-2 py-1 text-2xs",
   md: "px-3 py-1.5 text-xs",
 };
 

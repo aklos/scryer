@@ -13,8 +13,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { ScryModel } from "../viewmodel";
-import { stampTouches } from "../viewmodel";
+import type { Node, Responsibility, ScryModel } from "../viewmodel";
+import { respTruthChanged, stampTouches } from "../viewmodel";
 
 const RECENT_KEY = "scryer:recent-projects";
 const RECENT_CAP = 8;
@@ -46,6 +46,172 @@ function bumpRecent(path: string): string[] {
   return all.slice(0, RECENT_CAP);
 }
 
+/** One field's before → after, for `changed` items. */
+export interface FieldDiff {
+  field: string;
+  from: string;
+  to: string;
+}
+
+/** One line of a change revision — something the agent added/changed/removed. */
+export interface ChangeItem {
+  op: "added" | "changed" | "removed";
+  what: "node" | "claim" | "link";
+  /** Node name, claim statement, or "A → B" for links. */
+  label: string;
+  /** Host node name, for claims. */
+  context?: string;
+  /** Jump target — absent for removals. */
+  nodeId?: string;
+  /** Per-field value diffs, for `changed` items — the revision detail. */
+  fields?: FieldDiff[];
+}
+
+/** One edit burst (an agent write, or a user commit), diffed. Session-local. */
+export interface ChangeRevision {
+  at: number;
+  /** Who made the edit — the agent (external write) or the user (UI commit). */
+  by: "agent" | "user";
+  items: ChangeItem[];
+}
+
+/** Consecutive user commits inside this window merge into one revision, so a
+ *  single logical edit (which may land as several editor intents) reads as
+ *  one entry. */
+const USER_MERGE_WINDOW_MS = 3000;
+
+const CHANGE_LOG_CAP = 200;
+
+/** Render a field value for the revision diff: absence reads as "—". */
+function fmtFieldValue(v: unknown): string {
+  if (v === undefined || v === null || v === "") return "—";
+  if (typeof v === "boolean") return v ? "yes" : "no";
+  if (Array.isArray(v)) return v.length === 0 ? "—" : v.map(fmtFieldValue).join(" · ");
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+/** Pairs of (field, before, after) → the fields whose rendered value moved. */
+function fieldDiffs(pairs: [string, unknown, unknown][]): FieldDiff[] {
+  const out: FieldDiff[] = [];
+  for (const [field, a, b] of pairs) {
+    const from = fmtFieldValue(a);
+    const to = fmtFieldValue(b);
+    if (from !== to) out.push({ field, from, to });
+  }
+  return out;
+}
+
+function nodeFieldDiffs(prev: ScryModel, a: Node, b: Node): FieldDiff[] {
+  const parentName = (m: ScryModel, id?: string) =>
+    id ? m.nodes.find((n) => n.id === id)?.name ?? id : undefined;
+  const propsSummary = (n: Node) =>
+    (n.properties ?? []).map((p) => `${p.label}${p.status && p.status !== "implemented" ? ` (${p.status})` : ""}`);
+  return fieldDiffs([
+    ["name", a.name, b.name],
+    ["kind", a.kind, b.kind],
+    ["parent", parentName(prev, a.parentId), parentName(prev, b.parentId) ?? b.parentId],
+    ["technology", a.technology, b.technology],
+    ["description", a.description, b.description],
+    ["visual", !!a.visual, !!b.visual],
+    ["deprecated", !!a.deprecated, !!b.deprecated],
+    ["relocated", !!a.relocated, !!b.relocated],
+    ["properties", propsSummary(a), propsSummary(b)],
+  ]);
+}
+
+function respFieldDiffs(a: Responsibility, b: Responsibility): FieldDiff[] {
+  return fieldDiffs([
+    ["statement", a.statement, b.statement],
+    ["status", a.status ?? "proposed", b.status ?? "proposed"],
+    ["directives", a.directives, b.directives],
+    ["stale", !!a.stale, !!b.stale],
+    ["vagrant", !!a.vagrant, !!b.vagrant],
+  ]);
+}
+
+/** Diff two models into a Recent-changes revision: per-field before → after
+ *  on every changed node and claim. Links are included because builds mint
+ *  them in bulk. */
+function diffRevision(prev: ScryModel, loaded: ScryModel): ChangeItem[] {
+  const items: ChangeItem[] = [];
+  const prevNodeById = new Map(prev.nodes.map((n) => [n.id, n]));
+  const loadedNodeById = new Map(loaded.nodes.map((n) => [n.id, n]));
+  const nodeName = (id: string) =>
+    loadedNodeById.get(id)?.name || prevNodeById.get(id)?.name || "Untitled";
+
+  for (const n of loaded.nodes) {
+    const old = prevNodeById.get(n.id);
+    if (!old) {
+      items.push({ op: "added", what: "node", label: n.name || "Untitled", nodeId: n.id });
+    } else if (nodeFingerprint(old) !== nodeFingerprint(n)) {
+      items.push({
+        op: "changed",
+        what: "node",
+        label: n.name || "Untitled",
+        nodeId: n.id,
+        fields: nodeFieldDiffs(prev, old, n),
+      });
+    }
+  }
+  for (const n of prev.nodes)
+    if (!loadedNodeById.has(n.id))
+      items.push({ op: "removed", what: "node", label: n.name || "Untitled" });
+
+  const prevResps = new Map<string, { resp: Responsibility; nodeId: string }>();
+  for (const n of prev.nodes)
+    for (const r of n.responsibilities ?? []) prevResps.set(r.id, { resp: r, nodeId: n.id });
+  const loadedRespIds = new Set<string>();
+  for (const n of loaded.nodes)
+    for (const r of n.responsibilities ?? []) {
+      loadedRespIds.add(r.id);
+      const old = prevResps.get(r.id);
+      const label = r.statement || "Untitled responsibility";
+      if (!old) {
+        items.push({ op: "added", what: "claim", label, context: n.name, nodeId: n.id });
+      } else if (respTruthChanged(old.resp, r)) {
+        items.push({
+          op: "changed",
+          what: "claim",
+          label,
+          context: n.name,
+          nodeId: n.id,
+          fields: respFieldDiffs(old.resp, r),
+        });
+      }
+    }
+  for (const [id, { resp, nodeId }] of prevResps)
+    if (!loadedRespIds.has(id))
+      items.push({
+        op: "removed",
+        what: "claim",
+        label: resp.statement || "Untitled responsibility",
+        context: nodeName(nodeId),
+        // The host may survive the claim's removal — keep the jump if it did.
+        nodeId: loadedNodeById.has(nodeId) ? nodeId : undefined,
+      });
+
+  const prevLinks = new Set(prev.links.map((l) => l.id));
+  const loadedLinks = new Set(loaded.links.map((l) => l.id));
+  for (const l of loaded.links)
+    if (!prevLinks.has(l.id))
+      items.push({
+        op: "added",
+        what: "link",
+        label: `${nodeName(l.src)} → ${nodeName(l.dst)}`,
+        nodeId: loadedNodeById.has(l.src) ? l.src : undefined,
+      });
+  for (const l of prev.links)
+    if (!loadedLinks.has(l.id))
+      items.push({
+        op: "removed",
+        what: "link",
+        label: `${nodeName(l.src)} → ${nodeName(l.dst)}`,
+      });
+
+  return items;
+}
+
 export type ProjectStatus =
   | "idle" // no project open
   | "loading"
@@ -67,6 +233,9 @@ export interface ModelStorage {
   /** Responsibility ids the agent created since last seen — highlighted until
    *  the user selects the row. */
   newRespIds: ReadonlySet<string>;
+  /** Session-local feed of external (agent) writes, newest first — the data
+   *  behind the Recent changes special page. */
+  changeLog: readonly ChangeRevision[];
 
   /** Open a project. If it has no model, status becomes `needs-model`. */
   openProject: (path: string) => Promise<void>;
@@ -88,23 +257,51 @@ export interface ModelStorage {
   clearNewNode: (id: string) => void;
   /** Clear the "new" highlight for a responsibility (the user selected it). */
   clearNewResp: (id: string) => void;
+  /** Clear every unreviewed-change highlight at once (the review page's
+   *  "mark all reviewed"). */
+  clearAllNew: () => void;
   /** Drop a recent project from localStorage. */
   forgetRecent: (path: string) => void;
 }
 
-/// Ids the agent introduced since the previous model, for review highlighting.
-/// Only the node/responsibility ids present in `loaded` but absent in `prev`.
+/// The node-level facts whose change should flag the node for review — name,
+/// position, prose, technology, flags, properties. Responsibilities are
+/// tracked at row level instead, so a claim edit highlights the claim, not
+/// the whole node.
+function nodeFingerprint(n: Node): string {
+  return JSON.stringify([
+    n.name,
+    n.kind,
+    n.parentId ?? null,
+    n.technology ?? null,
+    n.description ?? null,
+    !!n.visual,
+    !!n.deprecated,
+    !!n.relocated,
+    n.properties ?? [],
+  ]);
+}
+
+/// Ids the agent introduced OR CHANGED since the previous model, for review
+/// highlighting. This is a planning surface: an external write that edits an
+/// existing claim (statement, status, directives, flags) must light up the
+/// same way a new one does, or agent work passes silently.
 function arrivals(prev: ScryModel, loaded: ScryModel) {
-  const prevNodes = new Set(prev.nodes.map((n) => n.id));
+  const prevNodeById = new Map(prev.nodes.map((n) => [n.id, n]));
   const newNodes: string[] = [];
-  for (const n of loaded.nodes) if (!prevNodes.has(n.id)) newNodes.push(n.id);
-  const prevResps = new Set<string>();
+  for (const n of loaded.nodes) {
+    const old = prevNodeById.get(n.id);
+    if (!old || nodeFingerprint(old) !== nodeFingerprint(n)) newNodes.push(n.id);
+  }
+  const prevResps = new Map<string, Responsibility>();
   for (const n of prev.nodes)
-    for (const r of n.responsibilities ?? []) prevResps.add(r.id);
+    for (const r of n.responsibilities ?? []) prevResps.set(r.id, r);
   const newResps: { id: string; nodeId: string }[] = [];
   for (const n of loaded.nodes)
-    for (const r of n.responsibilities ?? [])
-      if (!prevResps.has(r.id)) newResps.push({ id: r.id, nodeId: n.id });
+    for (const r of n.responsibilities ?? []) {
+      const old = prevResps.get(r.id);
+      if (!old || respTruthChanged(old, r)) newResps.push({ id: r.id, nodeId: n.id });
+    }
   return { newNodes, newResps };
 }
 
@@ -142,6 +339,7 @@ export function useModelStorage(): ModelStorage {
   const [newRespIds, setNewRespIds] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
+  const [changeLog, setChangeLog] = useState<ChangeRevision[]>([]);
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Exact bytes of our last write. A `model-changed` event whose file content
@@ -162,6 +360,10 @@ export function useModelStorage(): ModelStorage {
   // node is currently flagged new (the node's ring already covers it).
   const newNodeIdsRef = useRef<ReadonlySet<string>>(newNodeIds);
   newNodeIdsRef.current = newNodeIds;
+  // User-edit revisions staged inside the setModel updater and flushed by the
+  // effect below. Keyed by the prev-model reference so StrictMode's double
+  // updater invocation replaces the entry instead of duplicating it.
+  const pendingUserRevs = useRef<{ prev: ScryModel; items: ChangeItem[] }[]>([]);
 
   // Apply a freshly-read model file to in-memory state: flag the ids the agent
   // introduced (and prune removed ones) for review highlighting, remember the
@@ -172,6 +374,16 @@ export function useModelStorage(): ModelStorage {
     const loaded = JSON.parse(raw) as ScryModel;
     const prevModel = modelStateRef.current;
     if (prevModel) {
+      // Journal this external write for the Recent changes page.
+      const revItems = diffRevision(prevModel, loaded);
+      if (revItems.length > 0) {
+        setChangeLog((log) =>
+          [{ at: Date.now(), by: "agent" as const, items: revItems }, ...log].slice(
+            0,
+            CHANGE_LOG_CAP,
+          ),
+        );
+      }
       const { newNodes, newResps } = arrivals(prevModel, loaded);
       const keepNodes = new Set(loaded.nodes.map((n) => n.id));
       const keepResps = new Set<string>();
@@ -234,6 +446,7 @@ export function useModelStorage(): ModelStorage {
     // The model just loaded is the review baseline — nothing is "new" yet.
     setNewNodeIds(new Set());
     setNewRespIds(new Set());
+    setChangeLog([]);
     try {
       const isLegacy = await invoke<boolean>("is_legacy_model", {
         projectPath: path,
@@ -298,6 +511,7 @@ export function useModelStorage(): ModelStorage {
     setError(null);
     setNewNodeIds(new Set());
     setNewRespIds(new Set());
+    setChangeLog([]);
   }, []);
 
   const clearNewNode = useCallback((id: string) => {
@@ -317,6 +531,11 @@ export function useModelStorage(): ModelStorage {
     });
   }, []);
 
+  const clearAllNew = useCallback(() => {
+    setNewNodeIds(new Set());
+    setNewRespIds(new Set());
+  }, []);
+
   const forgetRecent = useCallback((path: string) => {
     const next = readRecent().filter((p) => p !== path);
     writeRecent(next);
@@ -329,6 +548,16 @@ export function useModelStorage(): ModelStorage {
         if (!cur || !modelRef) return cur;
         const edited = updater(cur);
         if (edited === cur) return cur;
+        // Journal the user's commit alongside agent writes — Recent changes
+        // shows every editor, attributed. Staged here (idempotently, keyed on
+        // `cur`) and flushed to the log by the effect below.
+        const revItems = diffRevision(cur, edited);
+        if (revItems.length > 0) {
+          pendingUserRevs.current = [
+            ...pendingUserRevs.current.filter((p) => p.prev !== cur),
+            { prev: cur, items: revItems },
+          ];
+        }
         // Date any responsibility/property whose truth changed in this edit, so
         // the fossilization clock advances for canvas edits. This is the canvas
         // mirror of the agent's Rust-side write_model_at stamping; doing it at
@@ -351,6 +580,24 @@ export function useModelStorage(): ModelStorage {
     },
     [modelRef],
   );
+
+  // Flush staged user-edit revisions into the journal once the model state
+  // has actually advanced. Consecutive intents from one logical edit (Done
+  // can fire several) merge into the head revision.
+  useEffect(() => {
+    const pend = pendingUserRevs.current;
+    if (pend.length === 0) return;
+    pendingUserRevs.current = [];
+    const items = pend.flatMap((p) => p.items);
+    const now = Date.now();
+    setChangeLog((log) => {
+      const head = log[0];
+      if (head && head.by === "user" && now - head.at < USER_MERGE_WINDOW_MS) {
+        return [{ ...head, at: now, items: [...head.items, ...items] }, ...log.slice(1)];
+      }
+      return [{ at: now, by: "user" as const, items }, ...log].slice(0, CHANGE_LOG_CAP);
+    });
+  }, [model]);
 
   const setAgentRunning = useCallback((running: boolean) => {
     agentRunningRef.current = running;
@@ -382,6 +629,7 @@ export function useModelStorage(): ModelStorage {
     recentProjects,
     newNodeIds,
     newRespIds,
+    changeLog,
     openProject,
     createBlankModel,
     closeProject,
@@ -390,6 +638,7 @@ export function useModelStorage(): ModelStorage {
     reloadFromDisk,
     clearNewNode,
     clearNewResp,
+    clearAllNew,
     forgetRecent,
   };
 }

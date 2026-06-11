@@ -283,11 +283,22 @@ fn start_cli_session(
     let child_pid = child.id();
     let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
 
+    // Tee the raw agent stream to disk. Sessions run with
+    // `--no-session-persistence`, so without this nothing records what the agent
+    // actually did — every tool call, every commit_container_model argument, and
+    // every validator rejection is in this stdout stream. One file per session.
+    let log_dir = std::path::Path::new(cwd).join(".scryer").join("build-logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let stdout_log_path = log_dir.join(format!("session-{id}.jsonl"));
+    let stderr_log_path = log_dir.join(format!("session-{id}.err.log"));
+
     tokio::task::spawn_local(async move {
         // Stream stdout and stderr to detect activity and tool call events.
         // Claude Code writes JSON events to stdout; some agents use stderr.
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
+        let mut stdout_log = std::fs::File::create(&stdout_log_path).ok();
+        let mut stderr_log = std::fs::File::create(&stderr_log_path).ok();
 
         let event_tx_stdout = event_tx.clone();
         let event_tx_stderr = event_tx.clone();
@@ -295,10 +306,14 @@ fn start_cli_session(
         let monitor = async {
             let stdout_task = async {
                 if let Some(stdout) = stdout {
+                    use std::io::Write as _;
                     use tokio::io::{AsyncBufReadExt, BufReader};
                     let reader = BufReader::new(stdout);
                     let mut lines = reader.lines();
                     while let Ok(Some(line)) = lines.next_line().await {
+                        if let Some(f) = stdout_log.as_mut() {
+                            let _ = writeln!(f, "{line}");
+                        }
                         if let Some(usage) = extract_usage(&line) {
                             let _ = event_tx_stdout.send(AgentEvent::Usage { usage });
                         }
@@ -313,10 +328,14 @@ fn start_cli_session(
             let last_stderr2 = last_stderr.clone();
             let stderr_task = async move {
                 if let Some(stderr) = stderr {
+                    use std::io::Write as _;
                     use tokio::io::{AsyncBufReadExt, BufReader};
                     let reader = BufReader::new(stderr);
                     let mut lines = reader.lines();
                     while let Ok(Some(line)) = lines.next_line().await {
+                        if let Some(f) = stderr_log.as_mut() {
+                            let _ = writeln!(f, "{line}");
+                        }
                         *last_stderr2.lock().unwrap() = line.clone();
                         let _ = event_tx_stderr.send(AgentEvent::Message { text: line });
                     }

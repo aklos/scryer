@@ -43,6 +43,10 @@ export interface Responsibility {
   /** Discovered in code with no upstream commitment (drift). The user adopts
    *  it (clear the flag) or rejects it (delete it). */
   vagrant?: boolean;
+  /** Drift observation: the semantic check judged the code no longer
+   *  discharges this claim. A flag awaiting a verdict (re-implement, reword,
+   *  or drop) — the status is the prescription and stays untouched. */
+  stale?: boolean;
   /** Source side: node ID the responsibility was moved to. */
   relocatedTo?: string;
   /** Destination side: node ID the responsibility came from. */
@@ -206,11 +210,14 @@ function sameDirectives(a?: string[], b?: string[]): boolean {
   return true;
 }
 
-function respTruthChanged(a: Responsibility, b: Responsibility): boolean {
+/** Whether a responsibility's truth-bearing content differs — used both for
+ *  lastTouchedAt stamping and for highlighting external (agent) edits. */
+export function respTruthChanged(a: Responsibility, b: Responsibility): boolean {
   return (
     a.statement !== b.statement ||
     a.status !== b.status ||
     a.vagrant !== b.vagrant ||
+    a.stale !== b.stale ||
     a.locked !== b.locked ||
     a.relocatedTo !== b.relocatedTo ||
     a.relocatedFrom !== b.relocatedFrom ||
@@ -281,14 +288,112 @@ export function stampTouches(prev: ScryModel, next: ScryModel): ScryModel {
   };
 }
 
+/** Rewrite `[[old]]` / `[[old|label]]` wikilink targets to the new name in one
+ *  text. Returns the input unchanged when nothing matches. */
+function rewriteWikilinkText(text: string, oldName: string, newName: string): string {
+  const target = oldName.trim().toLowerCase();
+  return text.replace(
+    /\[\[([^\][|]+?)(\|[^\][]+?)?\]\]/g,
+    (whole, name: string, label: string | undefined) =>
+      name.trim().toLowerCase() === target ? `[[${newName}${label ?? ""}]]` : whole,
+  );
+}
+
+/** After a node rename, repoint every `[[Old Name]]` prose mention (node and
+ *  group descriptions, responsibility statements, directives) at the new name
+ *  so wikilinks never dangle. */
+export function rewriteWikilinks(
+  model: ScryModel,
+  oldName: string,
+  newName: string,
+): ScryModel {
+  if (!oldName.trim() || !newName.trim() || oldName === newName) return model;
+  const fix = (t: string) => rewriteWikilinkText(t, oldName, newName);
+  const fixResps = (resps: Responsibility[] | undefined) =>
+    resps?.map((r) => ({
+      ...r,
+      statement: fix(r.statement),
+      directives: r.directives?.map(fix),
+    }));
+  return {
+    ...model,
+    nodes: model.nodes.map((n) => ({
+      ...n,
+      description: n.description ? fix(n.description) : n.description,
+      responsibilities: fixResps(n.responsibilities),
+    })),
+    groups: model.groups.map((g) => ({
+      ...g,
+      description: g.description ? fix(g.description) : g.description,
+      responsibilities: fixResps(g.responsibilities),
+    })),
+  };
+}
+
 export function updateNode(
   model: ScryModel,
   nodeId: string,
   patch: Partial<Node>,
 ): ScryModel {
-  return {
+  const prev = model.nodes.find((n) => n.id === nodeId);
+  const next = {
     ...model,
     nodes: model.nodes.map((n) => (n.id === nodeId ? { ...n, ...patch } : n)),
+  };
+  // A rename repoints prose mentions everywhere — wikilinks must not dangle.
+  if (prev && patch.name !== undefined && patch.name !== prev.name) {
+    return rewriteWikilinks(next, prev.name, patch.name);
+  }
+  return next;
+}
+
+/**
+ * Re-parent a node — its whole subtree moves with it. Mirrors the MCP
+ * `move_nodes` validation: the new parent must satisfy the kind hierarchy
+ * (system→container→component→symbol; null only for top-level systems/
+ * persons), must not be external, and must not sit inside the moved node's own
+ * subtree. The node leaves any group at its old level (groups organize
+ * siblings). Returns the model unchanged when the move is invalid.
+ */
+export function moveNode(
+  model: ScryModel,
+  nodeId: string,
+  newParentId: string | null,
+): ScryModel {
+  const node = model.nodes.find((n) => n.id === nodeId);
+  if (!node || node.locked) return model;
+
+  if (newParentId === null) {
+    if (node.kind !== "system" && node.kind !== "person") return model;
+  } else {
+    const parent = model.nodes.find((n) => n.id === newParentId);
+    if (!parent || parent.external) return model;
+    const valid =
+      (parent.kind === "system" && node.kind === "container") ||
+      (parent.kind === "container" && node.kind === "component") ||
+      (parent.kind === "component" && node.kind === "symbol");
+    if (!valid) return model;
+    // The new parent must not be the node itself or inside its subtree.
+    let cur: string | undefined = newParentId;
+    const seen = new Set<string>();
+    while (cur) {
+      if (cur === nodeId) return model;
+      if (seen.has(cur)) break;
+      seen.add(cur);
+      cur = model.nodes.find((n) => n.id === cur)?.parentId;
+    }
+  }
+
+  return {
+    ...model,
+    nodes: model.nodes.map((n) =>
+      n.id === nodeId ? { ...n, parentId: newParentId ?? undefined } : n,
+    ),
+    groups: model.groups.map((g) =>
+      g.memberIds.includes(nodeId)
+        ? { ...g, memberIds: g.memberIds.filter((m) => m !== nodeId) }
+        : g,
+    ),
   };
 }
 
@@ -437,6 +542,32 @@ export function removeNode(model: ScryModel, nodeId: string): ScryModel {
   };
 }
 
+// --- Links ---------------------------------------------------------------------
+
+/**
+ * Declare a link — links are a C4 model primitive, directed and same-level.
+ * Minting one from an unmodeled import-evidence candidate is the main UI path.
+ * Duplicate (src,dst) pairs are a no-op (returns the existing link's id).
+ */
+export function addLink(
+  model: ScryModel,
+  src: string,
+  dst: string,
+  label: string = "",
+): { model: ScryModel; id: string } {
+  const existing = model.links.find((l) => l.src === src && l.dst === dst);
+  if (existing) return { model, id: existing.id };
+  const id = nextLinkId(model);
+  return {
+    model: { ...model, links: [...model.links, { id, src, dst, label }] },
+    id,
+  };
+}
+
+export function removeLink(model: ScryModel, linkId: string): ScryModel {
+  return { ...model, links: model.links.filter((l) => l.id !== linkId) };
+}
+
 // --- Add / remove groups -----------------------------------------------------
 
 /** Add a new group. Members start empty. */
@@ -564,11 +695,11 @@ export function removeResponsibility(
 /**
  * Move a responsibility from one node to another.
  *
- * Transition rules:
+ * Transition rules — relocation is the relocatedTo/relocatedFrom flag pair,
+ * never a status (the claim's lifecycle is unchanged by moving it):
  *  - proposed: just moves, no trace at source (no code to relocate)
- *  - implemented/verified: source keeps a locked relocated copy pointing to
- *    destination; destination gets a relocated copy pointing back to source
- *  - relocated: stays relocated at destination, source keeps locked copy
+ *  - implemented/verified: source keeps a locked ghost pointing to the
+ *    destination; destination gets a live copy pointing back, status intact
  *  - vagrant: not movable
  *
  * Deleting the destination copy should unlock the source (see unlockRelocated).
@@ -584,7 +715,7 @@ export function moveResponsibility(
   if (!resp || resp.locked) return model;
 
   const status = resp.status ?? "proposed";
-  const hasCode = status === "implemented" || status === "verified" || status === "relocated";
+  const hasCode = status === "implemented" || status === "verified";
 
   const destResps = getResponsibilities(model, "node", toNodeId);
   const newId = nextResponsibilityId([...sourceResps, ...destResps]);
@@ -592,14 +723,12 @@ export function moveResponsibility(
   if (hasCode) {
     const sourceCopy: Responsibility = {
       ...resp,
-      status: "relocated",
       locked: true,
       relocatedTo: toNodeId,
     };
     const destCopy: Responsibility = {
       ...resp,
       id: newId,
-      status: "relocated",
       relocatedFrom: fromNodeId,
     };
     let next = setResponsibilities(

@@ -3,12 +3,39 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* — Type scale —
+   The UI uses exactly five sizes; everything maps onto this scale.
+     text-2xs  11px  micro labels, eyebrows, status tags, anchors
+     text-xs   12px  secondary/meta content, buttons, infobox rows
+     text-sm   13px  primary content: tree rows, statements, descriptions
+     text-base 15px  section titles
+     text-xl   22px  page title */
+@theme {
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1.4;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.45;
+  --text-base: 0.9375rem;
+  --text-base--line-height: 1.4;
+  --text-xl: 1.375rem;
+  --text-xl--line-height: 1.2;
+}
+
+/* — Color contract —
+   Chromatic hues are reserved for semantics; interaction chrome (buttons,
+   selection, focus, links, [edit]) is neutral. One hue, one meaning:
+
+     blue     proposed        (planned, no code yet)
+     amber    implemented     (built, awaiting human verification)
+     emerald  verified        (checked against code)
+     orange   changed / drift (model and code disagree; empty symbols)
+     red      vagrant + destructive actions
+     violet   relocated
+     indigo   the agent       (activity, new arrivals, accept-agent-work)
+
+   Neutral surface/text/border tokens below are fallbacks — applyTheme()
+   regenerates them from the configured palette at startup (see theme.ts). */
 :root {
-  --grid-color: #d4d4d8;
-  --grid-line: rgba(0, 0, 0, 0.03);
-  --grid-line-major: rgba(0, 0, 0, 0.07);
-  --xy-background-color: #f8f8fa;
-  --selection-color: #18181b;
   --surface-canvas: #f4f4f5;
   --surface: #fafafa;
   --surface-raised: #ffffff;
@@ -26,53 +53,9 @@
   --border-subtle: #e4e4e799;
   --border-strong: #d4d4d8;
   --border-overlay: #e4e4e7cc;
-
-  /* — Card surfaces (boundary recede + sunken well + raised bevel) —
-     The card is a raised "act-on" object; responsibilities sit in a sunken
-     "read" well. "The world" (persons + externals) recedes onto a duller
-     surface. `--bevel-hi` is the 1px top highlight — invisible on a white
-     card (light leans on the contact shadow + border instead). */
-  --surface-world: #f1f1f3;
-  --well: rgba(0, 0, 0, 0.035);
-  --bevel-hi: rgba(255, 255, 255, 0);
-  --row-sep: rgba(0, 0, 0, 0.09);
-
-  /* — Canvas decoration tokens (see fossil.ts) —
-     One accent palette + a few patina/structure values. Every decoration color
-     flows through these so a single value flips per theme. Light-mode accents
-     anchor on 600/700 palette weights so a 1px state edge / ring clears WCAG's
-     3:1 non-text contrast on white. */
-  --accent-blue: #3b82f6; /* selection ring */
-  --accent-indigo: #4f46e5; /* AI-new / unreviewed */
-  --accent-emerald: #047857; /* verified honed edge */
-  --accent-amber: #b45309; /* active-build pulse */
-  --accent-orange: #c2410c; /* changed fracture seam */
-  --accent-red: #dc2626; /* vagrant / deprecated / reject */
-  --accent-violet: #7c3aed; /* relocated */
-
-  /* card elevation = the age axis: fresh sits higher on a softer shadow, age
-     drains it flat. Near-black on light. */
-  --card-shadow: 17, 24, 39;
-  --card-shadow-a: 0.1;
-  /* age also desaturates the surface toward this neutral "bedrock" (a touch
-     darker than the raised surface on light). */
-  --card-settle: var(--border);
-  --card-settle-a: 0.06;
-
-  /* group depth fill + drag-clone tint: darken on light */
-  --group-fill: 0, 0, 0;
-  --group-fill-a: 0.045;
-  /* edit-modal focus halo: a soft dark ambient glow reads on the light backdrop */
-  --focus-halo: 17, 24, 39;
-  --focus-halo-a: 0.16;
 }
 
 .dark {
-  --xy-background-color: #18181b;
-  --selection-color: #d4d4d8;
-  --grid-color: #2a2a2e;
-  --grid-line: rgba(255, 255, 255, 0.02);
-  --grid-line-major: rgba(255, 255, 255, 0.045);
   --surface-canvas: #18181b;
   --surface: #18181b;
   --surface-raised: #27272a;
@@ -90,43 +73,21 @@
   --border-subtle: #3f3f4699;
   --border-strong: #52525b;
   --border-overlay: #3f3f46cc;
-
-  /* Card surfaces — dark. World recedes below the raised surface; the well digs
-     in below the card; the bevel highlight reads against the dark fill. */
-  --surface-world: #1f1f23;
-  --well: rgba(0, 0, 0, 0.24);
-  --bevel-hi: rgba(255, 255, 255, 0.06);
-  --row-sep: rgba(255, 255, 255, 0.09);
-
-  /* Accents lighten to 400 weights (the status-dot trick) so they read against
-     the dark surface. */
-  --accent-blue: #60a5fa;
-  --accent-indigo: #818cf8;
-  --accent-emerald: #34d399;
-  --accent-amber: #fbbf24;
-  --accent-orange: #fb923c;
-  --accent-red: #f87171;
-  --accent-violet: #a78bfa;
-
-  /* On dark a black drop shadow is nearly invisible, so keep it tight + dark
-     for real contact; elevation also reads via the lighter settle below. */
-  --card-shadow: 0, 0, 0;
-  --card-shadow-a: 0.42;
-  /* CRITICAL FLIP: old cards age toward a *lighter* bedrock so they flatten
-     toward light, never sink into a murky hole. */
-  --card-settle: var(--border-strong);
-  --card-settle-a: 0.05;
-
-  /* groups + drag clone must LIGHTEN to separate from the dark canvas */
-  --group-fill: 255, 255, 255;
-  --group-fill-a: 0.05;
-  --focus-halo: 255, 255, 255;
-  --focus-halo-a: 0.1;
 }
 
 @keyframes shimmer {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(400%); }
+}
+
+/* Citation-jump flash: briefly highlight the hunk/claim that was jumped to
+   (see pagekit.jumpTo). Amber — the "highlighted passage" convention. */
+@keyframes flash-fade {
+  0%, 35% { background-color: color-mix(in srgb, var(--color-amber-400) 22%, transparent); }
+  100% { background-color: transparent; }
+}
+.flash-target {
+  animation: flash-fade 1.4s ease-out;
 }
 
 /* Thin scrollbars */

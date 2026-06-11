@@ -21,6 +21,7 @@ impl ScryerServer {
                 + Self::tool_router_nodes()
                 + Self::tool_router_links()
                 + Self::tool_router_misc()
+                + Self::tool_router_generation()
                 + Self::tool_router_intent(),
             active_model: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
@@ -31,9 +32,14 @@ impl ScryerServer {
 impl ServerHandler for ScryerServer {
     fn get_info(&self) -> ServerInfo {
         let instructions = format!(
-            "{}\n\n## Modeling Rules\n{}",
+            "{}\n\n## Modeling Rules (authoritative & binding)\n\
+             These rules decide every modeling judgment. They are BINDING — follow them, and never \
+             infer the conventions from existing nodes. Below is the index only; before you make a \
+             modeling decision (what earns a symbol, how to pitch a responsibility, when a group is \
+             right, how links propagate), call `get_rules{{topic}}` to read the relevant rule in \
+             full. Do not skip this.\n\n{}",
             INSTRUCTIONS,
-            scryer_core::rules::RULES
+            scryer_core::rules::rules_index()
         );
         ServerInfo {
             instructions: Some(instructions.into()),

@@ -58,7 +58,7 @@ export function ProjectPicker({
     return (
       <Centered>
         <div className="flex flex-col items-center gap-3 max-w-md text-center">
-          <AlertTriangle className="h-8 w-8 text-amber-500" />
+          <AlertTriangle className="h-8 w-8 text-orange-500 dark:text-orange-400" />
           <h2 className="text-base font-semibold text-[var(--text)]">
             Legacy model
           </h2>
@@ -91,9 +91,9 @@ export function ProjectPicker({
               className="flex items-center justify-center gap-2 rounded border border-[var(--border)] bg-[var(--surface-raised)] px-3 py-2 text-sm text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
               onClick={onGenerate}
             >
-              <Sparkles className="h-4 w-4 text-amber-400" />
+              <Sparkles className="h-4 w-4 text-indigo-500 dark:text-indigo-400" />
               Generate from codebase
-              <span className="text-xs text-[var(--text-ghost)]">
+              <span className="text-xs text-[var(--text-muted)]">
                 (uses your local AI agent)
               </span>
             </button>
@@ -167,7 +167,7 @@ export function ProjectPicker({
           </div>
         )}
         {storage.error && (
-          <div className="rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+          <div className="rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-300">
             {storage.error}
           </div>
         )}

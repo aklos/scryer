@@ -6,15 +6,7 @@
  * automatically pick up the new colors — no component code changes needed.
  */
 
-import { createContext } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-
-/**
- * Tick counter that increments on every theme change.
- * ReactFlow node/edge components consume this context so they re-render
- * when the theme changes (their inline hex styles need recalculation).
- */
-export const ThemeContext = createContext(0);
 
 // ---------------------------------------------------------------------------
 // Palette data — Tailwind's default hex values for each color family
@@ -111,19 +103,20 @@ export interface ThemeConfig {
   nodeDark: number;
 }
 
-/** Role metadata for the theme editor UI. */
+/** Role metadata for a future theme editor UI. Matches the color contract in
+ *  index.css: one hue, one meaning; interaction chrome is neutral. */
 export const THEME_ROLES: { key: PaletteRole; label: string; description: string; palettes: readonly string[] }[] = [
   { key: "zinc",    label: "Neutral",     description: "Chrome, backgrounds, borders, text",        palettes: GRAY_PALETTES },
-  { key: "slate",   label: "Structural",  description: "System kind, edges",                        palettes: ALL_PALETTE_NAMES },
-  { key: "blue",    label: "Accent",      description: "Buttons, selection, proposed status",        palettes: CHROMATIC_PALETTES },
-  { key: "emerald", label: "Success",     description: "Implemented status, process kind",           palettes: CHROMATIC_PALETTES },
-  { key: "amber",   label: "Warning",     description: "Changed status",                             palettes: CHROMATIC_PALETTES },
-  { key: "red",     label: "Danger",      description: "Deprecated status, errors",                  palettes: CHROMATIC_PALETTES },
-  { key: "violet",  label: "Secondary",   description: "Component kind, accent alt",                 palettes: CHROMATIC_PALETTES },
-  { key: "indigo",  label: "Tertiary",    description: "Secondary buttons, focus rings",             palettes: CHROMATIC_PALETTES },
-  { key: "cyan",    label: "Container",   description: "Container kind",                             palettes: CHROMATIC_PALETTES },
-  { key: "orange",  label: "Hint warning", description: "Hint warning badges",                       palettes: CHROMATIC_PALETTES },
-  { key: "teal",    label: "Hint info",   description: "Hint info badges",                           palettes: CHROMATIC_PALETTES },
+  { key: "blue",    label: "Proposed",    description: "Proposed status",                            palettes: CHROMATIC_PALETTES },
+  { key: "amber",   label: "Implemented", description: "Implemented status, code-focus highlight",   palettes: CHROMATIC_PALETTES },
+  { key: "emerald", label: "Verified",    description: "Verified status, success toasts",            palettes: CHROMATIC_PALETTES },
+  { key: "orange",  label: "Drift",       description: "Changed status, drift nudges, empty symbols", palettes: CHROMATIC_PALETTES },
+  { key: "red",     label: "Vagrant",     description: "Vagrant status, destructive actions, errors", palettes: CHROMATIC_PALETTES },
+  { key: "violet",  label: "Relocated",   description: "Relocated status, syntax keywords",           palettes: CHROMATIC_PALETTES },
+  { key: "indigo",  label: "Agent",       description: "Agent activity, new arrivals, accept actions", palettes: CHROMATIC_PALETTES },
+  { key: "cyan",    label: "Syntax",      description: "Syntax type names",                           palettes: CHROMATIC_PALETTES },
+  { key: "slate",   label: "Unused",      description: "Reserved",                                    palettes: ALL_PALETTE_NAMES },
+  { key: "teal",    label: "Unused",      description: "Reserved",                                    palettes: CHROMATIC_PALETTES },
 ];
 
 export const DEFAULT_THEME: ThemeConfig = {
@@ -222,8 +215,9 @@ export function applyTheme(theme: ThemeConfig): void {
     }
   }
 
-  // Derive canvas/node CSS variables from the neutral palette via a dynamic stylesheet.
-  // (Cannot use inline styles — they'd override the .dark selector.)
+  // Derive surface/text/border CSS variables from the neutral palette via a
+  // dynamic stylesheet. (Cannot use inline styles — they'd override the .dark
+  // selector.)
   const np = PALETTES[theme.zinc];
   const nOff = theme.offsets.zinc ?? 0;
   const clamp = (v: number) => Math.max(0, Math.min(SHADES.length - 1, v));
@@ -232,22 +226,10 @@ export function applyTheme(theme: ThemeConfig): void {
   // Light mode
   const canvasLightHex = sh(theme.canvasLight);
   const nodeLightHex = theme.nodeLight < 0 ? "#ffffff" : sh(theme.nodeLight);
-  const gridLightIdx = Math.min(theme.canvasLight + 3, SHADES.length - 1);
 
   // Dark mode
   const canvasDarkHex = sh(theme.canvasDark);
   const nodeDarkHex = sh(theme.nodeDark);
-  const gridDarkIdx = Math.max(theme.canvasDark - 3, 0);
-
-  // External & reference fills: darker in light mode, lighter in dark mode
-  const extLightHex = mixHex(canvasLightHex, sh(5), 0.3);   // 30% toward darker
-  const extDarkHex = mixHex(canvasDarkHex, sh(7), 0.3);     // 30% toward slightly lighter
-  const refLightHex = mixHex(canvasLightHex, sh(5), 0.15);  // 15% toward darker
-  const refDarkHex = mixHex(canvasDarkHex, sh(7), 0.15);    // 15% toward slightly lighter
-
-  // Person silhouette: same as external fill
-  const personLightHex = extLightHex;
-  const personDarkHex = extDarkHex;
 
   let themeStyle = document.getElementById("scryer-theme-vars") as HTMLStyleElement | null;
   if (!themeStyle) {
@@ -256,15 +238,6 @@ export function applyTheme(theme: ThemeConfig): void {
     document.head.appendChild(themeStyle);
   }
   themeStyle.textContent = `:root {
-  --grid-color: ${sh(gridLightIdx)};
-  --xy-background-color: ${canvasLightHex};
-  --selection-color: ${sh(10)};
-  --scryer-node-bg: ${nodeLightHex};
-  --scryer-ext-bg: ${extLightHex};
-  --scryer-ref-bg: ${refLightHex};
-  --scryer-person-fill: ${personLightHex};
-  --scryer-select-stroke: ${sh(10)};
-  --scryer-outline-stroke: ${sh(4)};
   --surface-canvas: ${canvasLightHex};
   --surface: ${sh(clamp(theme.canvasLight - 1))};
   --surface-raised: ${nodeLightHex};
@@ -284,15 +257,6 @@ export function applyTheme(theme: ThemeConfig): void {
   --border-overlay: ${hexAlpha(sh(clamp(theme.canvasLight + 1)), 0.8)};
 }
 .dark {
-  --xy-background-color: ${canvasDarkHex};
-  --selection-color: ${sh(2)};
-  --grid-color: ${mixHex(sh(gridDarkIdx), canvasDarkHex, 0.5)};
-  --scryer-node-bg: ${nodeDarkHex};
-  --scryer-ext-bg: ${extDarkHex};
-  --scryer-ref-bg: ${refDarkHex};
-  --scryer-person-fill: ${personDarkHex};
-  --scryer-select-stroke: ${sh(2)};
-  --scryer-outline-stroke: ${sh(7)};
   --surface-canvas: ${canvasDarkHex};
   --surface: ${sh(theme.canvasDark)};
   --surface-raised: ${nodeDarkHex};
@@ -370,20 +334,6 @@ export function isDefaultTheme(theme: ThemeConfig): boolean {
 /** Get the current resolved hex for a Tailwind color variable. */
 export function getCssColor(varName: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
-}
-
-/** Simple hex color mixing. */
-function mixHex(a: string, b: string, t: number): string {
-  const pa = parseHex(a), pb = parseHex(b);
-  const r = Math.round(pa[0] + (pb[0] - pa[0]) * t);
-  const g = Math.round(pa[1] + (pb[1] - pa[1]) * t);
-  const bl = Math.round(pa[2] + (pb[2] - pa[2]) * t);
-  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${bl.toString(16).padStart(2, "0")}`;
-}
-
-function parseHex(hex: string): [number, number, number] {
-  const h = hex.replace("#", "");
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
 }
 
 /** Append hex alpha channel (0–1 → 00–ff). */

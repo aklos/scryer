@@ -57,6 +57,7 @@ impl RespMinter {
                     statement: s.trim().to_string(),
                     status: Some(Status::Implemented),
                     vagrant: None,
+                    stale: None,
                     locked: None,
                     relocated_to: None,
                     relocated_from: None,
@@ -84,6 +85,7 @@ impl RespMinter {
                     statement: i.statement().trim().to_string(),
                     status: Some(Status::Implemented),
                     vagrant: None,
+                    stale: None,
                     locked: None,
                     relocated_to: None,
                     relocated_from: None,
@@ -239,7 +241,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Add one or more containers under a system. `name` is the role, `technology` is what it IS as software. Pass `boundaryDir` (the container's directory from the codebase context) to set its boundary glob automatically. Give responsibilities at the container's altitude (what the container is accountable for, not what its individual components do). Plain responsibility statements; ids and status set for you."
+        description = "Add one or more containers under a system. `name` is the role; `technology` is what it IS as software. Pass `boundaryDir` (the container's directory from the codebase context) to set its boundary glob automatically. Responsibilities go at the container's own altitude — what it is accountable for, not what its components do. Plain responsibility statements; ids and status set for you. On altitude and runtime boundaries: get_rules{topic:'container altitude'}."
     )]
     fn add_container(
         &self,
@@ -288,7 +290,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Add one or more components under a container. Cluster components from code cohesion + the dependency graph in the provided context — NOT one component per file. Give responsibilities at the component's altitude: one accountability each, NOT what an individual symbol does (that per-handler detail belongs on the symbols below). Plain responsibility statements; ids and status set for you."
+        description = "Add one or more components under a container. Give responsibilities at the component's own altitude — one accountability each, not what an individual symbol does. Plain responsibility statements; ids and status set for you. How to cluster components (cohesion + dependency graph, not one-per-file) and pitch altitude: get_rules{topic:'component'}."
     )]
     fn add_component(
         &self,
@@ -326,7 +328,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Group sibling nodes that ship or package together — a SECONDARY axis, never a substitute for decomposition. `parent_id` = the node whose children you're grouping (the system for a group of containers; a container for a group of components). `member_ids` = the sibling node ids to enclose (2+, all children of parent_id, same level). Optional responsibility statements describe the unit (e.g. 'deploys atomically'). The group id + layout are set for you. Only group genuinely cohesive units; skip when siblings are independent."
+        description = "Group sibling nodes that ship or package together — a SECONDARY axis, never a substitute for decomposition. `parent_id` = the node whose children you're grouping (the system for a group of containers; a container for a group of components). `member_ids` = the sibling node ids to enclose (2+, all children of parent_id, same level). Optional responsibility statements describe the unit (e.g. 'deploys atomically'). The group id + layout are set for you. When a group is right vs. a missing parent node, and logical vs. architectural groups: get_rules{topic:'group'}."
     )]
     fn add_group(
         &self,
@@ -396,7 +398,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Add one or more symbols (one addressable code definition each) under a component. Pass the `sourceFile` (and line/endLine for the full definition) from the codebase context; the source map is anchored to the file + symbol name for you — no separate update_source_map call. Each responsibility can be a plain string or `{statement, line, endLine}` with the specific sub-range within the symbol that does the work. Give `responsibilities` for behavior and/or `properties` for a declared data shape. Ids and status set for you."
+        description = "Add one or more symbols (one addressable code definition each) under a component. Pass the `sourceFile` (and line/endLine for the full definition) from the codebase context; the source map is anchored to the file + symbol name for you — no separate update_source_map call. Each responsibility is a plain string or `{statement, line, endLine}` for the sub-range that does the work; give `properties` for a declared data shape. Ids and status set for you. Not every definition earns a symbol, and a data shape goes in `properties`, never in prose — read get_rules{topic:'symbol'} before adding."
     )]
     fn add_symbol(
         &self,
@@ -477,7 +479,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Record SEMANTIC drift for a node after comparing its code against its responsibilities. `undescribed`: behaviours the code has that NO responsibility describes — each becomes a vagrant responsibility on the node (implemented, vagrant) for the user to adopt or reject; do NOT report code that changed but still satisfies an existing responsibility (the user doesn't care). `stale`: existing responsibilities whose code no longer discharges them — marked `changed`. Call with empty arrays (or don't call) when the code and the model still agree."
+        description = "Record SEMANTIC drift for a node after comparing its code against its responsibilities. Both findings are OBSERVATION FLAGS awaiting the user's verdict — statuses (the prescription) are never touched. `undescribed`: behaviours the code has that NO responsibility describes — each becomes a vagrant responsibility on the node for the user to adopt or reject; do NOT report code that changed but still satisfies an existing responsibility (the user doesn't care). `stale`: existing responsibilities whose code no longer discharges them — flagged `stale` (resolved by re-implementing via `mark_implemented`, rewording, or deletion). Call with empty arrays (or don't call) when the code and the model still agree."
     )]
     fn flag_drift(
         &self,
@@ -527,7 +529,8 @@ impl ScryerServer {
             node.responsibilities.extend(resps);
         }
 
-        // Stale claims → status `changed` (needs re-confirmation against code).
+        // Stale claims → the `stale` observation flag. The status is the
+        // prescription and stays put until the user's verdict resolves it.
         let mut staled = 0usize;
         for s in &req.stale {
             let found = model
@@ -537,7 +540,7 @@ impl ScryerServer {
                 .find(|r| r.id == s.responsibility_id);
             match found {
                 Some(r) => {
-                    r.status = Some(Status::Changed);
+                    r.stale = Some(true);
                     staled += 1;
                 }
                 None => {
@@ -560,9 +563,39 @@ impl ScryerServer {
             req.node_id
         );
         for s in &req.stale {
-            msg.push_str(&format!("\n  changed {}: {}", s.responsibility_id, s.reason));
+            msg.push_str(&format!("\n  stale {}: {}", s.responsibility_id, s.reason));
         }
         Ok(CallToolResult::success(vec![Content::text(msg)]))
+    }
+
+    #[tool(
+        description = "Advance the drift reconcile anchor to NOW after you have examined every scope `get_drift` reported (and recorded any findings with `flag_drift`). This stamps the model as reconciled against the current code state — file changes up to this point stop surfacing in `get_drift`, so only NEWER changes count next time. Call it to close a drift pass, or when `get_drift` is already clean and you simply want to re-baseline. Records the current git commit when the project is a repo. Caution: this asserts you have reviewed everything that changed — anything you skipped will not resurface."
+    )]
+    fn reconcile_drift(
+        &self,
+        Parameters(req): Parameters<ReconcileDriftRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let project = model_ref.project_path();
+        let state = scryer_core::drift::SyncState {
+            reconciled_at: scryer_core::drift::now_secs(),
+            commit: scryer_core::drift::head_commit(project),
+        };
+        if let Err(e) = scryer_core::write_sync_state(&model_ref, &state) {
+            return Ok(err(format!("Failed to write reconcile anchor: {e}")));
+        }
+        // "Reconciled" means the anchors as they stand are the truth — refresh
+        // the content fingerprints so the next check compares against them.
+        if let Err(e) = scryer_extract::anchors::write_baseline(&model_ref) {
+            return Ok(err(format!("Failed to fingerprint anchors: {e}")));
+        }
+        let commit_note = match &state.commit {
+            Some(c) => format!(" at commit {}", &c[..c.len().min(12)]),
+            None => String::new(),
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Reconciled — drift anchor advanced to now{commit_note}. Only code changes after this point will surface in get_drift."
+        ))]))
     }
 }
 
@@ -766,7 +799,7 @@ mod tests {
     }
 
     #[test]
-    fn flag_drift_records_vagrant_and_marks_changed() {
+    fn flag_drift_records_vagrant_and_flags_stale() {
         let (server, dir, system_id) = temp_project();
         let project = dir.path().to_string_lossy().to_string();
         server
@@ -808,9 +841,11 @@ mod tests {
 
         let m = read_back(&dir);
         let container = m.nodes.iter().find(|n| n.id == cid).unwrap();
-        // original responsibility marked changed
+        // original responsibility: stale FLAG set, status (the prescription)
+        // untouched — drift is an observation, never a lifecycle move
         let orig = container.responsibilities.iter().find(|r| r.id == rid).unwrap();
-        assert_eq!(orig.status, Some(Status::Changed));
+        assert_eq!(orig.stale, Some(true));
+        assert_eq!(orig.status, Some(Status::Implemented));
         // a vagrant responsibility added (implemented + vagrant), source-anchored
         let vagrant = container
             .responsibilities
@@ -842,5 +877,45 @@ mod tests {
             }))
             .unwrap();
         assert!(res.is_error.unwrap_or(false), "wrong parent kind is rejected");
+    }
+
+    #[test]
+    fn reconcile_drift_advances_anchor_and_clears_scope() {
+        use scryer_core::{drift, Source};
+
+        let (server, dir, _system_id) = temp_project();
+        let root = dir.path();
+        let model_ref = ModelRef::ProjectLocal(root.to_path_buf());
+        std::fs::create_dir_all(root.join("api/src")).unwrap();
+        std::fs::write(root.join("api/src/server.rs"), "fn v1() {}").unwrap();
+
+        let mut model = read_back(&dir);
+        model
+            .boundaries
+            .insert("node-1".into(), vec![Source { pattern: "api/**/*".into(), comment: None }]);
+        scryer_core::write_model_at(&model_ref, &model).unwrap();
+
+        // Anchor in the past + a file touched after it → the scope is drifted.
+        let old = drift::SyncState { reconciled_at: drift::now_secs(), commit: None };
+        scryer_core::write_sync_state(&model_ref, &old).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(root.join("api/src/server.rs"), "fn v2() {}").unwrap();
+        assert!(
+            !drift::drifted_scopes(&model, root, &old).is_empty(),
+            "the touched file should drift against the old anchor"
+        );
+
+        // Reconcile advances the anchor to now → the same change stops surfacing.
+        let project = root.to_string_lossy().to_string();
+        let res = server
+            .reconcile_drift(Parameters(ReconcileDriftRequest { project: Some(project) }))
+            .unwrap();
+        assert!(!res.is_error.unwrap_or(false));
+        let fresh = scryer_core::read_sync_state(&model_ref);
+        assert!(fresh.reconciled_at > old.reconciled_at, "anchor moved forward");
+        assert!(
+            drift::drifted_scopes(&model, root, &fresh).is_empty(),
+            "post-reconcile, the prior change no longer reads as drift"
+        );
     }
 }

@@ -87,9 +87,14 @@ pub struct FileParse {
 /// Parse a source file into its definitions + identifier occurrences. Returns
 /// `None` for unsupported extensions or unparseable input.
 pub fn parse_file(path: &Path, source: &str) -> Option<FileParse> {
+    parse_file_with(path, source, &mut Parser::new())
+}
+
+/// Parse with a caller-owned parser. Reusing one parser per worker avoids
+/// repeated parser allocation while still switching grammars per file.
+pub fn parse_file_with(path: &Path, source: &str, parser: &mut Parser) -> Option<FileParse> {
     let ext = ext_of(path)?;
     let language = language_for_ext(ext)?;
-    let mut parser = Parser::new();
     parser.set_language(&language).ok()?;
     let tree = parser.parse(source, None)?;
     let bytes = source.as_bytes();
@@ -139,7 +144,13 @@ fn is_identifier(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-fn push_def(defs: &mut Vec<Def>, name: Option<String>, node: Node, fields: Vec<String>, data: bool) {
+fn push_def(
+    defs: &mut Vec<Def>,
+    name: Option<String>,
+    node: Node,
+    fields: Vec<String>,
+    data: bool,
+) {
     if let Some(name) = name {
         if is_identifier(&name) {
             let (start_line, end_line) = line_span(node);
@@ -159,9 +170,15 @@ fn push_def(defs: &mut Vec<Def>, name: Option<String>, node: Node, fields: Vec<S
 fn collect_rust(node: Node, bytes: &[u8], defs: &mut Vec<Def>) {
     for child in named_children(node) {
         match child.kind() {
-            "function_item" | "const_item" | "static_item" | "macro_definition"
-            | "type_item" | "trait_item" => {
-                push_def(defs, field_text(child, "name", bytes), child, Vec::new(), false);
+            "function_item" | "const_item" | "static_item" | "macro_definition" | "type_item"
+            | "trait_item" => {
+                push_def(
+                    defs,
+                    field_text(child, "name", bytes),
+                    child,
+                    Vec::new(),
+                    false,
+                );
             }
             "struct_item" => {
                 let fields = rust_struct_fields(child, bytes);
@@ -229,7 +246,13 @@ fn collect_ts(root: Node, bytes: &[u8], defs: &mut Vec<Def>) {
 fn classify_ts(node: Node, bytes: &[u8], defs: &mut Vec<Def>) {
     match node.kind() {
         "function_declaration" | "generator_function_declaration" => {
-            push_def(defs, field_text(node, "name", bytes), node, Vec::new(), false);
+            push_def(
+                defs,
+                field_text(node, "name", bytes),
+                node,
+                Vec::new(),
+                false,
+            );
         }
         "class_declaration" | "abstract_class_declaration" => {
             let fields = ts_class_fields(node, bytes);
@@ -319,10 +342,22 @@ fn collect_python(node: Node, bytes: &[u8], defs: &mut Vec<Def>) {
         };
         match node.kind() {
             "function_definition" => {
-                push_def(defs, field_text(node, "name", bytes), node, Vec::new(), false);
+                push_def(
+                    defs,
+                    field_text(node, "name", bytes),
+                    node,
+                    Vec::new(),
+                    false,
+                );
             }
             "class_definition" => {
-                push_def(defs, field_text(node, "name", bytes), node, Vec::new(), false);
+                push_def(
+                    defs,
+                    field_text(node, "name", bytes),
+                    node,
+                    Vec::new(),
+                    false,
+                );
                 // Methods are symbols too.
                 if let Some(body) = node.child_by_field_name("body") {
                     collect_python(body, bytes, defs);
@@ -340,7 +375,13 @@ fn collect_generic(node: Node, bytes: &[u8], defs: &mut Vec<Def>) {
     // deliberately excluding field/property/declarator/variable-level kinds to
     // avoid collecting non-symbols. No field extraction in the fallback.
     const KINDS: &[&str] = &[
-        "function", "method", "class", "struct", "enum", "interface", "trait",
+        "function",
+        "method",
+        "class",
+        "struct",
+        "enum",
+        "interface",
+        "trait",
     ];
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {

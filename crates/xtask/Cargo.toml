@@ -2,3 +2,6 @@
 name = "xtask"
 version = "0.2.5"
 edition = "2021"
+
+[dependencies]
+scryer-core = { path = "../scryer-core" }
