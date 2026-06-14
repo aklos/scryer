@@ -22,6 +22,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 pub struct ParsedFile {
     pub rel_path: String,
     pub parse: FileParse,
+    /// Full source text — used to cut per-symbol evidence excerpts. May be
+    /// empty (tests, synthetic inputs); symbols then carry no excerpt.
+    pub source: String,
 }
 
 /// The full deterministic context for a project: manifest facts + a per-file
@@ -90,6 +93,16 @@ pub struct SymbolContext {
     /// Declared field/variant names when this is a data shape; else empty.
     pub fields: Vec<String>,
     pub is_data_shape: bool,
+    /// Source excerpt: contiguous doc/attribute lines above the definition plus
+    /// the definition itself, capped at extraction time (no truncation marker —
+    /// `excerpt_total_lines` says how long the real thing is). Carried for the
+    /// compact Wave 2 payload only; skipped here so the full ScopeContext wire
+    /// (drift checks) is unchanged.
+    #[serde(skip)]
+    pub excerpt: String,
+    /// Full line count of doc block + definition, before any cap.
+    #[serde(skip)]
+    pub excerpt_total_lines: u32,
 }
 
 /// A directed dependency edge between two `key`s (symbol edges) or two
@@ -102,6 +115,81 @@ pub struct Edge {
 
 fn symbol_key(rel_path: &str, name: &str, start_line: u32) -> String {
     format!("{}#{}@{}", rel_path, name, start_line)
+}
+
+/// Generous per-symbol excerpt cap applied at extraction time. Bounds the
+/// memory a `ProjectContext` holds; the compact payload tightens further.
+const EXCERPT_MAX_LINES: usize = 48;
+const EXCERPT_MAX_BYTES: usize = 2_400;
+
+/// Scope-level evidence budget for the compact Wave 2 payload. When the
+/// excerpts of a scope sum past this, the per-symbol line cap steps down the
+/// ladder until they fit (or the smallest cap is reached — splitting a scope
+/// that is still too big at the smallest cap is A3's job, not truncation's).
+const EVIDENCE_BUDGET_BYTES: usize = 300_000;
+const EVIDENCE_LINE_LADDER: [usize; 5] = [48, 32, 20, 12, 6];
+
+/// Cut the evidence excerpt for one definition: the contiguous run of
+/// doc-comment / attribute / decorator lines immediately above it, then the
+/// definition body, capped by lines and bytes. Returns the excerpt and the
+/// uncapped line count (doc block + body).
+fn extract_excerpt(lines: &[&str], start_line: u32, end_line: u32) -> (String, u32) {
+    let start = (start_line as usize).saturating_sub(1);
+    let end = (end_line as usize).min(lines.len());
+    if start >= end {
+        return (String::new(), 0);
+    }
+
+    // Doc comments, attributes, and decorators directly above the definition
+    // are the highest-value evidence per byte — walk them in.
+    let is_doc_line = |s: &str| {
+        let t = s.trim_start();
+        t.starts_with("//")
+            || t.starts_with("/*")
+            || t.starts_with('*')
+            || t.starts_with('#')
+            || t.starts_with('@')
+            || t.starts_with("\"\"\"")
+            || t.starts_with("'''")
+    };
+    let mut doc_start = start;
+    while doc_start > 0
+        && !lines[doc_start - 1].trim().is_empty()
+        && is_doc_line(lines[doc_start - 1])
+    {
+        doc_start -= 1;
+    }
+
+    let total = end - doc_start;
+    let mut out = String::new();
+    let mut taken = 0usize;
+    for line in &lines[doc_start..end] {
+        if taken >= EXCERPT_MAX_LINES || out.len() + line.len() + 1 > EXCERPT_MAX_BYTES {
+            break;
+        }
+        if taken > 0 {
+            out.push('\n');
+        }
+        out.push_str(line);
+        taken += 1;
+    }
+    (out, total as u32)
+}
+
+/// Render a symbol's `code` field at a given line cap, with a trailing
+/// `… +N lines` marker when the definition continues past what is shown.
+fn render_code(excerpt: &str, total_lines: u32, max_lines: usize) -> Option<String> {
+    if excerpt.is_empty() {
+        return None;
+    }
+    let lines: Vec<&str> = excerpt.lines().collect();
+    let keep = lines.len().min(max_lines);
+    let hidden = (total_lines as usize).saturating_sub(keep);
+    let mut out = lines[..keep].join("\n");
+    if hidden > 0 {
+        out.push_str(&format!("\n… +{hidden} lines"));
+    }
+    Some(out)
 }
 
 /// Assemble the full project context from discovered containers + parsed files.
@@ -140,11 +228,14 @@ pub fn build_context(
         let Some(cdir) = owning_container_dir(&f.rel_path, &containers_sorted) else {
             continue;
         };
+        let source_lines: Vec<&str> = f.source.lines().collect();
         let mut defs: Vec<&Def> = f.parse.defs.iter().collect();
         defs.sort_by(|a, b| (a.start_line, &a.name).cmp(&(b.start_line, &b.name)));
         let mut symbols = Vec::with_capacity(defs.len());
         for def in defs {
             let key = symbol_key(&f.rel_path, &def.name, def.start_line);
+            let (excerpt, excerpt_total_lines) =
+                extract_excerpt(&source_lines, def.start_line, def.end_line);
             symbols.push(SymbolContext {
                 key: key.clone(),
                 name: def.name.clone(),
@@ -152,6 +243,8 @@ pub fn build_context(
                 end_line: def.end_line,
                 fields: def.fields.clone(),
                 is_data_shape: def.is_data_shape,
+                excerpt,
+                excerpt_total_lines,
             });
             recs.push(SymRec {
                 key,
@@ -255,6 +348,16 @@ struct SymRec {
 /// dependency, and resolution is weaker for the generic-fallback languages
 /// (go/java/ruby/c/cpp/c#/php), where only coarse definitions and bare
 /// identifiers are seen.
+/// Bare identifier names that overwhelmingly denote universal trait/inherent
+/// methods or constructors. A name-only reference to one of these is noise, not
+/// a dependency (see the skip in `build_edges`).
+const UNIVERSAL_NAMES: &[&str] = &[
+    "new", "default", "build", "from", "into", "clone", "to_string", "to_owned",
+    "as_str", "as_ref", "as_bytes", "len", "is_empty", "unwrap", "expect",
+    "parse", "get", "insert", "push", "iter", "into_iter", "contains",
+    "with_capacity", "next", "collect",
+];
+
 fn build_edges(files: &[ParsedFile], recs: &[SymRec]) -> (Vec<Edge>, Vec<Edge>) {
     let mut ranges_by_file: HashMap<&str, Vec<(u32, u32, &str)>> = HashMap::new();
     let mut container_of_file: HashMap<&str, &str> = HashMap::new();
@@ -297,6 +400,15 @@ fn build_edges(files: &[ParsedFile], recs: &[SymRec]) -> (Vec<Edge>, Vec<Edge>) 
         let file = f.rel_path.as_str();
         let container_dir = container_of_file.get(file).copied();
         for ident in &f.parse.idents {
+            // Universal trait/inherent method & constructor names (`Vec::new`,
+            // `x.clone()`, `T::from`, …) carry no dependency signal: the name-only
+            // resolver can't tell `ScryModel::new` from `Vec::new`, so a single
+            // captured def with one of these names would falsely absorb every call
+            // site in the container. Link evidence deliberately under-reports
+            // (absence of an edge ≠ absence of a dependency), so skip them.
+            if UNIVERSAL_NAMES.contains(&ident.name.as_str()) {
+                continue;
+            }
             if let Some(defs) = file_names
                 .get(file)
                 .and_then(|m| m.get(ident.name.as_str()))
@@ -313,9 +425,21 @@ fn build_edges(files: &[ParsedFile], recs: &[SymRec]) -> (Vec<Edge>, Vec<Edge>) 
             if let Some(cd) = container_dir {
                 if let Some(cands) = cont_names.get(cd).and_then(|m| m.get(ident.name.as_str())) {
                     if cands.len() == 1 {
-                        let dst_file = cands[0].1;
+                        let (dst_key, dst_file) = cands[0];
                         if dst_file != file {
                             file_edges.insert((file.to_string(), dst_file.to_string()));
+                            // The reference resolved uniquely to a symbol in
+                            // ANOTHER file of the same container. Record the
+                            // symbol→symbol edge too, not just the file pairing:
+                            // cross-file deps are the dominant form of component
+                            // coupling (one file ≈ one module), and both the link
+                            // audit and commit-time link derivation join on symbol
+                            // anchors, so without this they never see it.
+                            if let Some(src) = enclosing(file, ident.line) {
+                                if src != dst_key {
+                                    sym_edges.insert((src.to_string(), dst_key.to_string()));
+                                }
+                            }
                         }
                     }
                 }
@@ -388,6 +512,10 @@ pub struct PromptSymbol {
     pub fields: Vec<String>,
     #[serde(skip_serializing_if = "is_false")]
     pub data: bool,
+    /// Source excerpt: doc comment + signature + leading body. A trailing
+    /// `… +N lines` marker means the definition continues in the file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -433,6 +561,24 @@ pub fn compact_scope(scope: &ScopeContext) -> PromptScopeContext {
         .map(|(idx, path)| (path.clone(), idx as u32))
         .collect();
 
+    // Payload-size guard: pick the largest per-symbol line cap whose total
+    // evidence fits the scope budget. Most scopes fit at the full cap; a huge
+    // one degrades toward signature+doc-only rather than blowing the prompt.
+    let line_cap = EVIDENCE_LINE_LADDER
+        .iter()
+        .copied()
+        .find(|cap| {
+            let total: usize = scope
+                .files
+                .iter()
+                .flat_map(|f| &f.symbols)
+                .filter_map(|s| render_code(&s.excerpt, s.excerpt_total_lines, *cap))
+                .map(|code| code.len())
+                .sum();
+            total <= EVIDENCE_BUDGET_BYTES
+        })
+        .unwrap_or(*EVIDENCE_LINE_LADDER.last().unwrap());
+
     let mut symbol_ids: HashMap<&str, u32> = HashMap::new();
     let mut next_symbol = 0u32;
     let files = scope
@@ -452,6 +598,7 @@ pub fn compact_scope(scope: &ScopeContext) -> PromptScopeContext {
                         lines: [symbol.start_line, symbol.end_line],
                         fields: symbol.fields.clone(),
                         data: symbol.is_data_shape,
+                        code: render_code(&symbol.excerpt, symbol.excerpt_total_lines, line_cap),
                     }
                 })
                 .collect();
@@ -695,6 +842,7 @@ mod tests {
         let files = vec![
             ParsedFile {
                 rel_path: "src/helper.rs".into(),
+                source: String::new(),
                 parse: FileParse {
                     defs: vec![def("helper", 1, 3)],
                     idents: vec![ident("helper", 1)],
@@ -702,6 +850,7 @@ mod tests {
             },
             ParsedFile {
                 rel_path: "src/main.rs".into(),
+                source: String::new(),
                 parse: FileParse {
                     defs: vec![def("run", 1, 10), def("compute", 12, 14)],
                     idents: vec![ident("run", 1), ident("compute", 5), ident("helper", 6)],
@@ -724,6 +873,17 @@ mod tests {
             .file_edges
             .iter()
             .any(|e| e.src == "src/main.rs" && e.dst == "src/helper.rs"));
+        // ...and the SYMBOL edge run -> helper for the same cross-file reference:
+        // `helper` (line 6) is enclosed by run (1..10) and resolves uniquely in
+        // the container, so the coupling is recorded at symbol granularity, not
+        // just as a file pairing.
+        assert!(
+            ctx.symbol_edges.iter().any(|e| {
+                e.src == symbol_key("src/main.rs", "run", 1)
+                    && e.dst == symbol_key("src/helper.rs", "helper", 1)
+            }),
+            "cross-file reference should also yield a symbol edge"
+        );
         // symbol edge run -> compute: the `compute` ident at line 5 is enclosed
         // by run (1..10), not by compute (12..14), and resolves uniquely.
         assert!(ctx.symbol_edges.iter().any(|e| {
@@ -732,10 +892,50 @@ mod tests {
         }));
     }
 
+    /// A reference to a universal method/constructor name (`new`, `clone`, …)
+    /// is noise — the name-only resolver can't tell `Thing::new` from `Vec::new`
+    /// — so it yields NO edge even when a single same-named def exists.
+    #[test]
+    fn universal_method_names_yield_no_edge() {
+        // model.rs defines `new` (the lone `new` in the container). caller.rs's
+        // `run` calls `.new()` — which here means `Vec::new()`/`String::new()`,
+        // not `Model::new`. The resolver must not wire it.
+        let files = vec![
+            ParsedFile {
+                rel_path: "src/model.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    defs: vec![def("new", 1, 3)],
+                    idents: vec![],
+                },
+            },
+            ParsedFile {
+                rel_path: "src/caller.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    defs: vec![def("run", 1, 10)],
+                    idents: vec![ident("new", 5)],
+                },
+            },
+        ];
+        let containers = vec![container("", "proj")];
+        let ctx = build_context("proj", &containers, &files);
+
+        assert!(
+            !ctx.symbol_edges.iter().any(|e| e.dst.contains("#new@")),
+            "a universal name must not produce a symbol edge"
+        );
+        assert!(
+            !ctx.file_edges.iter().any(|e| e.dst == "src/model.rs"),
+            "a universal name must not produce a file edge either"
+        );
+    }
+
     #[test]
     fn deterministic() {
         let files = vec![ParsedFile {
             rel_path: "a.rs".into(),
+            source: String::new(),
             parse: FileParse {
                 defs: vec![def("x", 1, 2)],
                 idents: vec![],
@@ -755,6 +955,7 @@ mod tests {
         let files = vec![
             ParsedFile {
                 rel_path: "api/server.ts".into(),
+                source: String::new(),
                 parse: FileParse {
                     defs: vec![def("serve", 1, 5)],
                     idents: vec![ident("util", 3)],
@@ -762,6 +963,7 @@ mod tests {
             },
             ParsedFile {
                 rel_path: "shared/util.ts".into(),
+                source: String::new(),
                 parse: FileParse {
                     defs: vec![def("util", 1, 2)],
                     idents: vec![],
@@ -784,10 +986,103 @@ mod tests {
     }
 
     #[test]
+    fn embeds_doc_and_body_excerpts() {
+        let source = "\
+/// Adds one to the input.
+#[inline]
+fn add_one(x: u32) -> u32 {
+    x + 1
+}
+";
+        let files = vec![ParsedFile {
+            rel_path: "src/math.rs".into(),
+            source: source.into(),
+            parse: FileParse {
+                defs: vec![def("add_one", 3, 5)],
+                idents: vec![],
+            },
+        }];
+        let containers = vec![container("", "p")];
+        let ctx = build_context("p", &containers, &files);
+        let compact = compact_scope(&slice_container(&ctx, ""));
+
+        let code = compact.files[0].symbols[0].code.as_deref().unwrap();
+        // Doc comment and attribute above the definition are walked in.
+        assert!(code.starts_with("/// Adds one to the input."), "{code}");
+        assert!(code.contains("#[inline]"));
+        assert!(code.contains("x + 1"));
+        // Complete definition — no truncation marker.
+        assert!(!code.contains("… +"), "{code}");
+    }
+
+    #[test]
+    fn long_definitions_truncate_with_marker_and_budget_tightens_the_cap() {
+        // One oversized definition: marker carries the hidden line count.
+        let big_source: String = (0..200)
+            .map(|i| format!("    let value_{i:04} = compute_something_with_a_long_name({i});\n"))
+            .collect::<String>();
+        let files = vec![ParsedFile {
+            rel_path: "src/big.rs".into(),
+            source: format!("fn big() {{\n{big_source}}}\n"),
+            parse: FileParse {
+                defs: vec![def("big", 1, 202)],
+                idents: vec![],
+            },
+        }];
+        let containers = vec![container("", "p")];
+        let ctx = build_context("p", &containers, &files);
+        let compact = compact_scope(&slice_container(&ctx, ""));
+        let code = compact.files[0].symbols[0].code.as_deref().unwrap();
+        let shown = code.lines().count() - 1;
+        assert!(shown <= 48, "line cap respected (got {shown})");
+        // The marker accounts for every hidden line of the 202-line definition.
+        let marker = code.lines().last().unwrap();
+        let hidden: usize = marker
+            .strip_prefix("… +")
+            .and_then(|m| m.strip_suffix(" lines"))
+            .unwrap_or_else(|| panic!("marker line: {marker}"))
+            .parse()
+            .unwrap();
+        assert_eq!(shown + hidden, 202);
+
+        // Many such files blow the scope budget — the per-symbol cap steps down.
+        let many: Vec<ParsedFile> = (0..200)
+            .map(|n| ParsedFile {
+                rel_path: format!("src/f{n:03}.rs"),
+                source: format!("fn f{n}() {{\n{big_source}}}\n"),
+                parse: FileParse {
+                    defs: vec![def(&format!("f{n}"), 1, 202)],
+                    idents: vec![],
+                },
+            })
+            .collect();
+        let ctx = build_context("p", &containers, &many);
+        let compact = compact_scope(&slice_container(&ctx, ""));
+        let max_code_lines = compact
+            .files
+            .iter()
+            .flat_map(|f| &f.symbols)
+            .filter_map(|s| s.code.as_deref())
+            .map(|c| c.lines().count())
+            .max()
+            .unwrap();
+        assert!(
+            max_code_lines < 48,
+            "budget should tighten the line cap (got {max_code_lines})"
+        );
+        let total: usize = serde_json::to_string(&compact).unwrap().len();
+        assert!(
+            total < 450_000,
+            "payload stays near the evidence budget (got {total})"
+        );
+    }
+
+    #[test]
     fn compact_scope_interns_repeated_paths_and_symbol_keys() {
         let files = vec![
             ParsedFile {
                 rel_path: "api/server.ts".into(),
+                source: String::new(),
                 parse: FileParse {
                     defs: vec![def("serve", 1, 20), def("route", 22, 30)],
                     idents: vec![ident("route", 5), ident("util", 8)],
@@ -795,6 +1090,7 @@ mod tests {
             },
             ParsedFile {
                 rel_path: "api/util.ts".into(),
+                source: String::new(),
                 parse: FileParse {
                     defs: vec![def("util", 1, 4)],
                     idents: vec![],

@@ -263,11 +263,11 @@ function Workspace({
     [agent, projectPath, modelRefStr],
   );
 
-  const onRender = useCallback(
-    (nodeId: string) => {
+  const onFixture = useCallback(
+    (nodeId: string, renderStatus: string, renderError: string | null) => {
       if (!projectPath || !modelRefStr || writing) return;
       const node = modelRef.current.nodes.find((n) => n.id === nodeId);
-      agent.startPreview(projectPath, modelRefStr, nodeId, node?.name ?? "component");
+      agent.startFixture(projectPath, modelRefStr, nodeId, node?.name ?? "component", renderStatus, renderError);
     },
     [agent, projectPath, modelRefStr, writing],
   );
@@ -512,7 +512,7 @@ function Workspace({
             onSelectNode={selectNode}
             onSelectGroup={selectGroup}
             onFill={projectPath && !writing ? onFill : undefined}
-            onRender={!writing ? onRender : undefined}
+            onFixture={projectPath && !writing ? onFixture : undefined}
             variationState={variationState}
             onStartVariation={!writing || variationState ? onStartVariation : undefined}
             onAcceptVariation={onAcceptVariation}
@@ -520,6 +520,7 @@ function Workspace({
             onSelectVariation={onSelectVariation}
             newRespIds={newRespIds}
             onClearNewResp={clearNewResp}
+            changeLog={changeLog}
             driftScopes={driftScopes}
             onCheckDrift={pageEditor ? onCheckDrift : undefined}
             onDismissDrift={pageEditor ? onDismissDrift : undefined}

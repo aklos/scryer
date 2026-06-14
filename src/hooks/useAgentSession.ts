@@ -21,7 +21,12 @@ export interface AgentSession {
    *  message snippets, status) — drives the live activity readout. */
   activity: string | null;
   startFill: (cwd: string, modelRef: string, nodeId: string, nodeName: string) => void;
-  startPreview: (cwd: string, modelRef: string, nodeId: string, nodeName: string) => void;
+  /** B5 repair path: write realistic fixture props for a component whose
+   *  deterministic preview rendered empty or crashed. */
+  startFixture: (
+    cwd: string, modelRef: string, nodeId: string, nodeName: string,
+    renderStatus: string, renderError: string | null,
+  ) => void;
   startVariation: (
     cwd: string, modelRef: string, nodeId: string, nodeName: string,
     prompt: string, variationCount?: number, baseVariationIdx?: number,
@@ -108,9 +113,13 @@ export function useAgentSession(): AgentSession {
     [startSession],
   );
 
-  const startPreview = useCallback(
-    (cwd: string, modelRef: string, nodeId: string, nodeName: string) => {
-      startSession("start_preview_session", `Rendering ${nodeName || "component"}`, { cwd, modelRef, nodeId });
+  const startFixture = useCallback(
+    (cwd: string, modelRef: string, nodeId: string, nodeName: string, renderStatus: string, renderError: string | null) => {
+      startSession(
+        "start_preview_fixture_session",
+        `Preview data for ${nodeName || "component"}`,
+        { cwd, modelRef, nodeId, renderStatus, renderError },
+      );
     },
     [startSession],
   );
@@ -134,5 +143,5 @@ export function useAgentSession(): AgentSession {
     }
   }, []);
 
-  return { running, label, lastTool, activity, startFill, startPreview, startVariation, cancel };
+  return { running, label, lastTool, activity, startFill, startFixture, startVariation, cancel };
 }

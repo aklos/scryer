@@ -61,6 +61,17 @@ struct WatcherState {
     project: Option<(PathBuf, notify::RecommendedWatcher)>,
 }
 
+/// Managed state for the deterministic preview server — one shared Vite dev
+/// server per open project (Track B). The child's stdin is held open by the
+/// handle; the sidecar exits when the pipe closes, so it can't outlive us.
+struct PreviewState(tokio::sync::Mutex<Option<PreviewServer>>);
+
+struct PreviewServer {
+    cwd: String,
+    url: String,
+    child: tokio::process::Child,
+}
+
 /// True if the given path contains a recognizable codebase (has a manifest/etc).
 #[tauri::command]
 fn is_codebase(path: String) -> bool {
@@ -920,190 +931,138 @@ async fn start_enrich_session(
         .await
 }
 
-const HARNESS_INDEX_HTML: &str = r#"<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Preview</title>
-    <style>
-      html, body, #root { height: 100%; margin: 0; padding: 0; overflow: hidden; }
-      #_theme-toggle {
-        position: fixed; top: 6px; right: 6px; z-index: 9999;
-        width: 24px; height: 24px; border-radius: 6px; border: none;
-        cursor: pointer; font-size: 13px; line-height: 24px; text-align: center;
-        background: rgba(128,128,128,0.15); color: inherit; opacity: 0.5;
-      }
-      #_theme-toggle:hover { opacity: 1; }
-    </style>
-  </head>
-  <body>
-    <div id="root"></div>
-    <button id="_theme-toggle" title="Toggle dark mode"></button>
-    <script>
-      (function() {
-        var p = new URLSearchParams(window.location.search);
-        var dark = p.get('theme') === 'dark' ||
-          (!p.has('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
-        var root = document.documentElement;
-        function apply(d) { dark = d; root.classList.toggle('dark', d); btn.textContent = d ? '☀' : '☾'; }
-        var btn = document.getElementById('_theme-toggle');
-        btn.addEventListener('click', function() { apply(!dark); });
-        apply(dark);
-      })();
-    </script>
-    <script type="module" src="./main.tsx"></script>
-  </body>
-</html>
-"#;
+// --- deterministic preview server (Track B) ----------------------------------
 
-const HARNESS_VITE_CONFIG: &str = r#"import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
-import path from "path";
+/// The preview sidecar's sources, embedded at compile time and written to
+/// `{project}/.scryer/preview/server/` before launch, so the spawned `node`
+/// process always runs the version matching this binary. The sidecar has no
+/// npm dependencies of its own — it resolves `vite` and `typescript` from the
+/// target project's node_modules.
+const PREVIEW_SIDECAR: &[(&str, &str)] = &[
+    ("server.mjs", include_str!("../../preview/server.mjs")),
+    ("plugin.mjs", include_str!("../../preview/plugin.mjs")),
+    ("props.mjs", include_str!("../../preview/props.mjs")),
+];
 
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  root: path.resolve(__dirname),
-  base: "./",
-  build: {
-    outDir: path.resolve(__dirname, "dist"),
-    emptyOutDir: true,
-    minify: false,
-  },
-  resolve: {
-    alias: {
-      "@tauri-apps/api/core": path.resolve(__dirname, "stubs/tauri-core.ts"),
-      "@tauri-apps/api": path.resolve(__dirname, "stubs/tauri-core.ts"),
-      "@tauri-apps/plugin-shell": path.resolve(__dirname, "stubs/tauri-core.ts"),
-    },
-  },
-});
-"#;
-
-const HARNESS_STUBS: &str = concat!(
-    "export const invoke = async (_cmd: string, _args?: unknown) => null;\n",
-    "export const convertFileSrc = (src: string) => src;\n",
-    "export const listen = async () => () => {};\n",
-    "export const getCurrentWindow = () => ({ setTheme: async () => {} });\n",
-    "export default { invoke, convertFileSrc };\n",
-);
-
-/// Write the standardized preview harness files into `dir`. The `css_depth`
-/// controls how many `..` segments preview.css uses to reach the project root
-/// (3 for the main preview, 5 for variation subdirectories).
-fn write_harness_at(dir: &std::path::Path, css_depth: usize) -> Result<(), String> {
-    use std::fs;
-    fs::create_dir_all(dir.join("stubs")).map_err(|e| e.to_string())?;
-    fs::write(dir.join("index.html"), HARNESS_INDEX_HTML).map_err(|e| e.to_string())?;
-
-    let up = "../".repeat(css_depth);
-    let css = format!(
-        "@import \"{}src/index.css\";\n@source \"{}\";\n",
-        up,
-        up.trim_end_matches('/'),
-    );
-    fs::write(dir.join("preview.css"), css).map_err(|e| e.to_string())?;
-    fs::write(dir.join("vite.config.ts"), HARNESS_VITE_CONFIG).map_err(|e| e.to_string())?;
-    fs::write(dir.join("stubs/tauri-core.ts"), HARNESS_STUBS).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Write the standardized preview harness files for a component preview.
-/// Creates index.html, preview.css, vite.config.ts, and Tauri API stubs.
-/// The agent only needs to write `main.tsx`.
-fn write_preview_harness(cwd: &str, node_id: &str) -> Result<(), String> {
-    let dir = PathBuf::from(cwd)
-        .join(".scryer")
-        .join("preview")
-        .join(node_id);
-    write_harness_at(&dir, 3)
-}
-
-/// Write harness files for N variation directories under the node's preview dir.
-fn write_variation_harnesses(cwd: &str, node_id: &str, count: usize) -> Result<(), String> {
-    for i in 0..count {
-        let dir = PathBuf::from(cwd)
-            .join(".scryer")
-            .join("preview")
-            .join(node_id)
-            .join("variations")
-            .join(i.to_string());
-        write_harness_at(&dir, 5)?;
-    }
-    Ok(())
-}
-
-/// Build one preview harness with Vite. `harness_dir` is the directory holding
-/// `vite.config.ts`; the build runs from the project root so npx resolves the
-/// project's local vite + node_modules, and the config's `root` (set to its own
-/// dir) places the output. Deterministic plumbing — the agent only writes
-/// `main.tsx`; running vite here keeps the build (and its output, errors, and
-/// retries) out of the agent's token budget.
-async fn build_preview_harness(cwd: &str, harness_dir: &std::path::Path) -> Result<(), String> {
-    let config = harness_dir.join("vite.config.ts");
-    let output = tokio::process::Command::new("npx")
-        .arg("vite")
-        .arg("build")
-        .arg("--config")
-        .arg(&config)
-        .current_dir(cwd)
-        .output()
-        .await
-        .map_err(|e| format!("failed to launch vite build: {e}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-    }
-}
-
-/// Build all N variation harnesses concurrently (bounded), returning each one's
-/// result by index. One Vite invocation per variation, but run in parallel from
-/// Rust instead of serially by the agent.
-async fn build_variations(cwd: String, node_id: String, count: usize) -> Vec<Result<(), String>> {
-    let base = PathBuf::from(&cwd)
-        .join(".scryer")
-        .join("preview")
-        .join(&node_id)
-        .join("variations");
-    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(3));
-    let mut handles = Vec::with_capacity(count);
-    for i in 0..count {
-        let sem = sem.clone();
-        let cwd = cwd.clone();
-        let dir = base.join(i.to_string());
-        handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await;
-            build_preview_harness(&cwd, &dir).await
-        }));
-    }
-    let mut results = Vec::with_capacity(count);
-    for h in handles {
-        results.push(h.await.unwrap_or_else(|e| Err(e.to_string())));
-    }
-    results
-}
-
-/// Render a preview of a visual component. Starts an agent session that reads
-/// the component source, writes `main.tsx` in the standardized preview harness
-/// at `.scryer/preview/{nodeId}/`, builds it, and reports back. The frontend
-/// loads the output via the `preview://` protocol.
-///
-/// The harness boilerplate (index.html, vite.config.ts, preview.css, Tauri stubs)
-/// is written deterministically before the agent launches — the agent only needs
-/// to produce `main.tsx`.
+/// Start (or reuse) the shared preview dev server for a project and return its
+/// base URL. Deterministic rendering: any visual component is then viewable at
+/// `{url}/__preview?file=...&export=...` with no agent involvement.
 #[tauri::command]
-async fn start_preview_session(
+async fn ensure_preview_server(
+    cwd: String,
+    state: tauri::State<'_, PreviewState>,
+) -> Result<String, String> {
+    use tokio::io::AsyncBufReadExt;
+
+    #[cfg(target_os = "macos")]
+    ensure_full_path();
+
+    let mut guard = state.0.lock().await;
+
+    // Reuse a live server for the same project; replace anything else.
+    if let Some(srv) = guard.as_mut() {
+        let alive = matches!(srv.child.try_wait(), Ok(None));
+        if alive && srv.cwd == cwd {
+            return Ok(srv.url.clone());
+        }
+        let _ = srv.child.kill().await;
+        *guard = None;
+    }
+
+    let dir = PathBuf::from(&cwd)
+        .join(".scryer")
+        .join("preview")
+        .join("server");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    for (name, source) in PREVIEW_SIDECAR {
+        std::fs::write(dir.join(name), source).map_err(|e| e.to_string())?;
+    }
+
+    let mut child = tokio::process::Command::new("node")
+        .arg(dir.join("server.mjs"))
+        .arg(&cwd)
+        .arg("--exit-on-stdin-close")
+        .current_dir(&cwd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("failed to launch preview server (is node installed?): {e}"))?;
+
+    let stdout = child.stdout.take().ok_or("preview server has no stdout")?;
+    let mut lines = tokio::io::BufReader::new(stdout).lines();
+    let url = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        while let Ok(Some(line)) = lines.next_line().await {
+            if let Some(url) = line.strip_prefix("SCRYER_PREVIEW_URL=") {
+                return Ok(url.trim().to_string());
+            }
+        }
+        Err("preview server exited before reporting its URL".to_string())
+    })
+    .await
+    .map_err(|_| "preview server startup timed out".to_string())?;
+    let url = match url {
+        Ok(url) => url,
+        Err(e) => {
+            let _ = child.kill().await;
+            return Err(e);
+        }
+    };
+
+    // Keep draining stdout so the sidecar never blocks (or dies on EPIPE)
+    // writing logs after we stop caring about them.
+    tokio::spawn(async move { while let Ok(Some(_)) = lines.next_line().await {} });
+
+    *guard = Some(PreviewServer {
+        cwd,
+        url: url.clone(),
+        child,
+    });
+    Ok(url)
+}
+
+/// Find a node's anchored source file: the node-id source-map entry (data
+/// shapes) or the first responsibility's source location.
+fn node_source_file(model: &scryer_core::ScryModel, node_id: &str) -> String {
+    let from_node = model
+        .source_map
+        .get(node_id)
+        .and_then(|locs| locs.first())
+        .map(|loc| loc.pattern.clone());
+    from_node
+        .or_else(|| {
+            model
+                .nodes
+                .iter()
+                .find(|n| n.id == node_id)
+                .and_then(|node| {
+                    node.responsibilities
+                        .iter()
+                        .find_map(|r| model.source_map.get(&r.id))
+                        .and_then(|locs| locs.first())
+                        .map(|loc| loc.pattern.clone())
+                })
+        })
+        .unwrap_or_default()
+}
+
+/// Repair path for a failed deterministic render (B6). The preview server
+/// renders components with synthesized placeholder props; when that comes out
+/// empty or crashes, this launches an agent that authors realistic data —
+/// primarily a shared, type-keyed fixture set (`.scryer/preview/fixtures/`
+/// `shared.tsx` + `manifest.json`) reused across every component touching a
+/// type, with a per-node override file as fallback. The preview server picks
+/// the files up automatically — no build step.
+#[tauri::command]
+async fn start_preview_fixture_session(
     cwd: String,
     model_ref: String,
     node_id: String,
+    render_status: String,
+    render_error: Option<String>,
     app: tauri::AppHandle,
     state: tauri::State<'_, AcpState>,
 ) -> Result<String, String> {
-    // Write the standardized harness before the agent launches.
-    write_preview_harness(&cwd, &node_id)?;
-
     let mcp_binary = find_scryer_mcp()
         .ok_or("scryer-mcp binary not found")?;
 
@@ -1120,23 +1079,7 @@ async fn start_preview_session(
         .ok_or_else(|| format!("Node '{}' not found in model", node_id))?;
     let node_name = node.name.clone();
 
-    // Find the component's source file from the source map (either the node id
-    // entry for data-shape declarations, or the first responsibility's source).
-    let source_map = &model.source_map;
-    let source_file = source_map
-        .get(&node_id)
-        .and_then(|locs| locs.first())
-        .map(|loc| loc.pattern.clone())
-        .or_else(|| {
-            node.responsibilities
-                .iter()
-                .find_map(|r| source_map.get(&r.id))
-                .and_then(|locs| locs.first())
-                .map(|loc| loc.pattern.clone())
-        })
-        .unwrap_or_default();
-
-    // Read the source lines for the prompt context.
+    let source_file = node_source_file(&model, &node_id);
     let source_lines = if !source_file.is_empty() {
         let abs = PathBuf::from(&cwd).join(&source_file);
         std::fs::read_to_string(&abs).unwrap_or_default()
@@ -1144,8 +1087,14 @@ async fn start_preview_session(
         String::new()
     };
 
-    let prompt = scryer_acp::prompt::preview_render_prompt(
-        &cwd, &node_id, &node_name, &source_file, &source_lines,
+    let prompt = scryer_acp::prompt::preview_fixture_prompt(
+        &cwd,
+        &node_id,
+        &node_name,
+        &source_file,
+        &source_lines,
+        &render_status,
+        render_error.as_deref().unwrap_or(""),
     );
     let (model_name, effort) = config_for_launch(&settings, &launch);
 
@@ -1159,54 +1108,9 @@ async fn start_preview_session(
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
 
-    // When the session completes, update the model with the preview metadata.
-    let cwd_clone = cwd.clone();
-    let node_id_clone = node_id.clone();
-    let model_ref_clone = model_ref.clone();
     let handle = app.clone();
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
-            if !matches!(event, scryer_acp::AgentEvent::Completed { .. }) {
-                let _ = handle.emit("agent-event", &event);
-                continue;
-            }
-            // The agent finished writing main.tsx; build it here, then forward
-            // the completion so the frontend loads freshly-built output.
-            let _ = handle.emit(
-                "agent-event",
-                &scryer_acp::AgentEvent::Message { text: "Building preview…".into() },
-            );
-            let harness_dir = PathBuf::from(&cwd_clone)
-                .join(".scryer")
-                .join("preview")
-                .join(&node_id_clone);
-            if let Err(e) = build_preview_harness(&cwd_clone, &harness_dir).await {
-                let _ = handle.emit(
-                    "agent-event",
-                    &scryer_acp::AgentEvent::Message { text: format!("⚠ preview build failed: {e}") },
-                );
-            }
-            {
-                // Write preview metadata to the model.
-                let dist_path = format!(".scryer/preview/{}/dist", node_id_clone);
-                let dist_abs = PathBuf::from(&cwd_clone).join(&dist_path);
-                if dist_abs.join("index.html").exists() {
-                    if let Ok(parsed) = scryer_core::ModelRef::parse(&model_ref_clone) {
-                        let _lock = scryer_core::lock_model(&parsed).ok();
-                        if let Ok(mut m) = scryer_core::read_model_at(&parsed) {
-                            if let Some(n) = m.nodes.iter_mut().find(|n| n.id == node_id_clone) {
-                                n.appearance = Some(scryer_core::Appearance {
-                                    status: Some(scryer_core::Status::Implemented),
-                                    dist_path: Some(dist_path),
-                                    built_at: Some(scryer_core::drift::now_secs()),
-                                    source_hash: None,
-                                });
-                            }
-                            let _ = scryer_core::write_model_at(&parsed, &m);
-                        }
-                    }
-                }
-            }
             let _ = handle.emit("agent-event", &event);
         }
     });
@@ -1232,8 +1136,10 @@ async fn start_preview_session(
         .await
 }
 
-/// Generate visual variations of a component. Writes N variation harnesses,
-/// launches an agent to produce N different `main.tsx` files + build each.
+/// Generate visual variations of a component (B6). Launches an agent that
+/// writes N self-contained variant modules under
+/// `.scryer/preview/variations/{nodeId}/{i}.tsx`; the always-running preview
+/// server serves each as a virtual entry instantly — no build step.
 /// Ephemeral — does NOT update the model on completion.
 #[tauri::command]
 async fn start_visual_variation_session(
@@ -1247,8 +1153,6 @@ async fn start_visual_variation_session(
     state: tauri::State<'_, AcpState>,
 ) -> Result<String, String> {
     let variation_count = variation_count.unwrap_or(3).clamp(1, 5);
-
-    write_variation_harnesses(&cwd, &node_id, variation_count)?;
 
     let mcp_binary = find_scryer_mcp()
         .ok_or("scryer-mcp binary not found")?;
@@ -1266,20 +1170,7 @@ async fn start_visual_variation_session(
         .ok_or_else(|| format!("Node '{}' not found in model", node_id))?;
     let node_name = node.name.clone();
 
-    let source_map = &model.source_map;
-    let source_file = source_map
-        .get(&node_id)
-        .and_then(|locs| locs.first())
-        .map(|loc| loc.pattern.clone())
-        .or_else(|| {
-            node.responsibilities
-                .iter()
-                .find_map(|r| source_map.get(&r.id))
-                .and_then(|locs| locs.first())
-                .map(|loc| loc.pattern.clone())
-        })
-        .unwrap_or_default();
-
+    let source_file = node_source_file(&model, &node_id);
     let source_lines = if !source_file.is_empty() {
         let abs = PathBuf::from(&cwd).join(&source_file);
         std::fs::read_to_string(&abs).unwrap_or_default()
@@ -1287,27 +1178,24 @@ async fn start_visual_variation_session(
         String::new()
     };
 
-    // If iterating on a previous variation, read its main.tsx as the base.
-    // Otherwise read the existing main preview's main.tsx (if any).
-    let existing_main_tsx = if let Some(idx) = base_variation_idx {
+    // If iterating on a previous variation, that variant is the base; otherwise
+    // a previously accepted variant (if any) is.
+    let base_variant = if let Some(idx) = base_variation_idx {
         let path = PathBuf::from(&cwd)
-            .join(".scryer/preview")
+            .join(".scryer/preview/variations")
             .join(&node_id)
-            .join("variations")
-            .join(idx.to_string())
-            .join("main.tsx");
+            .join(format!("{idx}.tsx"));
         std::fs::read_to_string(&path).unwrap_or_default()
     } else {
         let path = PathBuf::from(&cwd)
-            .join(".scryer/preview")
-            .join(&node_id)
-            .join("main.tsx");
+            .join(".scryer/preview/accepted")
+            .join(format!("{node_id}.tsx"));
         std::fs::read_to_string(&path).unwrap_or_default()
     };
 
     let agent_prompt = scryer_acp::prompt::visual_variation_prompt(
         &cwd, &node_id, &node_name, &source_file, &source_lines,
-        &prompt, &existing_main_tsx, variation_count,
+        &prompt, &base_variant, variation_count,
     );
     let (model_name, effort) = config_for_launch(&settings, &launch);
 
@@ -1322,35 +1210,8 @@ async fn start_visual_variation_session(
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
 
     let handle = app.clone();
-    let cwd_build = cwd.clone();
-    let node_id_build = node_id.clone();
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
-            if !matches!(event, scryer_acp::AgentEvent::Completed { .. }) {
-                let _ = handle.emit("agent-event", &event);
-                continue;
-            }
-            // The agent finished writing the N main.tsx files; build them here
-            // (concurrently, out of the agent's token budget), then forward the
-            // completion so the frontend loads the freshly-built variations.
-            let _ = handle.emit(
-                "agent-event",
-                &scryer_acp::AgentEvent::Message {
-                    text: format!("Building {variation_count} variation(s)…"),
-                },
-            );
-            let results =
-                build_variations(cwd_build.clone(), node_id_build.clone(), variation_count).await;
-            for (i, r) in results.iter().enumerate() {
-                if let Err(e) = r {
-                    let _ = handle.emit(
-                        "agent-event",
-                        &scryer_acp::AgentEvent::Message {
-                            text: format!("⚠ variation {i} build failed: {e}"),
-                        },
-                    );
-                }
-            }
             let _ = handle.emit("agent-event", &event);
         }
     });
@@ -1376,8 +1237,11 @@ async fn start_visual_variation_session(
         .await
 }
 
-/// Accept a visual variation: copy its dist + main.tsx to the main preview
-/// directory, update the model's preview metadata, and clean up variations.
+/// Accept a visual variation: persist the chosen variant module as the node's
+/// appearance (`.scryer/preview/accepted/{nodeId}.tsx`), point the model's
+/// preview metadata at it, and clean up the variation files. The accepted
+/// variant is design intent — the node renders it (status `changed`) until the
+/// real component code catches up.
 #[tauri::command]
 async fn accept_visual_variation(
     cwd: String,
@@ -1385,29 +1249,16 @@ async fn accept_visual_variation(
     node_id: String,
     variation_idx: u32,
 ) -> Result<(), String> {
-    let base = PathBuf::from(&cwd).join(".scryer/preview").join(&node_id);
-    let var_dir = base.join("variations").join(variation_idx.to_string());
-
-    if !var_dir.join("dist/index.html").exists() {
-        return Err(format!("Variation {} has no built output", variation_idx));
+    let vars_dir = PathBuf::from(&cwd).join(".scryer/preview/variations").join(&node_id);
+    let variant = vars_dir.join(format!("{variation_idx}.tsx"));
+    if !variant.exists() {
+        return Err(format!("Variation {} not found", variation_idx));
     }
 
-    // Copy variation dist → main dist
-    let main_dist = base.join("dist");
-    if main_dist.exists() {
-        std::fs::remove_dir_all(&main_dist).map_err(|e| e.to_string())?;
-    }
-    copy_dir_recursive(&var_dir.join("dist"), &main_dist)?;
-
-    // Copy variation main.tsx → main dir (so re-renders use the accepted version)
-    let var_main = var_dir.join("main.tsx");
-    if var_main.exists() {
-        // Rewrite imports: variation main.tsx uses 5 levels up (../../../../..)
-        // but the main preview dir is 3 levels up (../../..)
-        let content = std::fs::read_to_string(&var_main).map_err(|e| e.to_string())?;
-        let adjusted = content.replace("../../../../..", "../../..");
-        std::fs::write(base.join("main.tsx"), adjusted).map_err(|e| e.to_string())?;
-    }
+    let accepted_rel = format!(".scryer/preview/accepted/{node_id}.tsx");
+    let accepted = PathBuf::from(&cwd).join(&accepted_rel);
+    std::fs::create_dir_all(accepted.parent().unwrap()).map_err(|e| e.to_string())?;
+    std::fs::copy(&variant, &accepted).map_err(|e| e.to_string())?;
 
     // Update model preview metadata
     let parsed_ref = scryer_core::ModelRef::parse(&model_ref)?;
@@ -1416,7 +1267,7 @@ async fn accept_visual_variation(
         if let Some(n) = m.nodes.iter_mut().find(|n| n.id == node_id) {
             n.appearance = Some(scryer_core::Appearance {
                 status: Some(scryer_core::Status::Changed),
-                dist_path: Some(format!(".scryer/preview/{}/dist", node_id)),
+                dist_path: Some(accepted_rel),
                 built_at: Some(scryer_core::drift::now_secs()),
                 source_hash: None,
             });
@@ -1424,39 +1275,19 @@ async fn accept_visual_variation(
         let _ = scryer_core::write_model_at(&parsed_ref, &m);
     }
 
-    // Clean up all variation directories
-    let vars_dir = base.join("variations");
-    if vars_dir.exists() {
-        let _ = std::fs::remove_dir_all(&vars_dir);
-    }
-
+    let _ = std::fs::remove_dir_all(&vars_dir);
     Ok(())
 }
 
-fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
-    std::fs::create_dir_all(dst).map_err(|e| e.to_string())?;
-    for entry in std::fs::read_dir(src).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let target = dst.join(entry.file_name());
-        if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
-            copy_dir_recursive(&entry.path(), &target)?;
-        } else {
-            std::fs::copy(entry.path(), target).map_err(|e| e.to_string())?;
-        }
-    }
-    Ok(())
-}
-
-/// Discard visual variations: remove the variations directory.
+/// Discard visual variations: remove the node's variation files.
 #[tauri::command]
 async fn discard_visual_variations(
     cwd: String,
     node_id: String,
 ) -> Result<(), String> {
     let vars_dir = PathBuf::from(&cwd)
-        .join(".scryer/preview")
-        .join(&node_id)
-        .join("variations");
+        .join(".scryer/preview/variations")
+        .join(&node_id);
     if vars_dir.exists() {
         std::fs::remove_dir_all(&vars_dir).map_err(|e| e.to_string())?;
     }
@@ -1510,92 +1341,17 @@ fn derive_container_dir(
         .map(|c| c.dir.clone())
 }
 
-/// Pair every deterministic-context container that actually has code to the
-/// model Container node the agent created for it, so Wave 2 covers all of them.
-///
-/// The fragile case is the project ROOT unit (empty `dir`): [`add_container`]
-/// only records a boundary glob for non-empty dirs, so the root node has no glob
-/// to round-trip and `name`-matching is unreliable (it often collides with the
-/// system's name). So: non-empty dirs match by glob (then exact name) and are
-/// CONSUMED — even code-less units like a DB image — and the single empty-dir
-/// root then claims whatever model container is left unmatched. Returns the
-/// `(node_id, name, dir)` triples to model, plus the labels of any codeful
-/// container that could NOT be paired, so the caller surfaces them rather than
-/// silently dropping coverage.
-fn map_codeful_containers(
-    model: &scryer_core::ScryModel,
-    ctx: &scryer_extract::ProjectContext,
-) -> (Vec<(String, String, String)>, Vec<String>) {
-    use std::collections::HashSet;
-    let nodes: Vec<&scryer_core::Node> = model
-        .nodes
+/// Adapt extracted container facts to the model crate's seeding input.
+fn seed_units(ctx: &scryer_extract::ProjectContext) -> Vec<scryer_core::seed::SeedUnit> {
+    ctx.containers
         .iter()
-        .filter(|n| n.kind == scryer_core::Kind::Container && n.external != Some(true))
-        .collect();
-
-    // The boundary-glob directory a node round-trips to, if it carries one.
-    let node_dir = |n: &scryer_core::Node| -> Option<String> {
-        model.boundaries.get(&n.id).and_then(|s| s.first()).map(|s| {
-            s.pattern
-                .trim_end_matches("/**/*")
-                .trim_end_matches("/**")
-                .trim_end_matches("/*")
-                .to_string()
+        .map(|c| scryer_core::seed::SeedUnit {
+            dir: c.dir.clone(),
+            name: c.name.clone(),
+            technology: c.technology.clone(),
+            dep_dirs: c.dep_dirs.clone(),
         })
-    };
-
-    let mut used: HashSet<String> = HashSet::new();
-    let mut by_dir: Vec<(String, String)> = Vec::new(); // (dir, node_id)
-
-    // 1. Non-empty dirs: glob match, then exact-name fallback. Consume the node
-    //    even for code-less units so they can't be mistaken for the root below.
-    for c in ctx.containers.iter().filter(|c| !c.dir.is_empty()) {
-        let pick = nodes
-            .iter()
-            .find(|n| !used.contains(&n.id) && node_dir(n).as_deref() == Some(c.dir.as_str()))
-            .or_else(|| nodes.iter().find(|n| !used.contains(&n.id) && n.name == c.name));
-        if let Some(n) = pick {
-            used.insert(n.id.clone());
-            by_dir.push((c.dir.clone(), n.id.clone()));
-        }
-    }
-
-    // 2. The root unit (empty dir) carries no glob — give it the one model
-    //    container still unclaimed, when exactly one remains (unambiguous).
-    if ctx.containers.iter().any(|c| c.dir.is_empty()) {
-        let remaining: Vec<&scryer_core::Node> =
-            nodes.iter().copied().filter(|n| !used.contains(&n.id)).collect();
-        if let [only] = remaining.as_slice() {
-            used.insert(only.id.clone());
-            by_dir.push((String::new(), only.id.clone()));
-        }
-    }
-
-    // 3. Emit the modeling list for containers that actually have code; report
-    //    any codeful container we couldn't pair.
-    let mut mapped = Vec::new();
-    let mut unmapped = Vec::new();
-    for c in &ctx.containers {
-        if !ctx.files.iter().any(|file| file.container_dir == c.dir) {
-            continue; // nothing to model (e.g. a database image)
-        }
-        match by_dir.iter().find(|(d, _)| d == &c.dir) {
-            Some((_, node_id)) => {
-                let name = nodes
-                    .iter()
-                    .find(|n| &n.id == node_id)
-                    .map(|n| n.name.clone())
-                    .unwrap_or_default();
-                mapped.push((node_id.clone(), name, c.dir.clone()));
-            }
-            None => unmapped.push(if c.name.is_empty() {
-                format!("'{}'", c.dir)
-            } else {
-                c.name.clone()
-            }),
-        }
-    }
-    (mapped, unmapped)
+        .collect()
 }
 
 /// Render token usage for a one-line debug log. Leads with the "fresh" tokens
@@ -1644,6 +1400,10 @@ struct Wave2Job {
 /// Derive agent concurrency from the actual evidence payload rather than a
 /// fixed pool. Small scopes are cheap enough to fan out; large prompts get fewer
 /// concurrent sessions to avoid memory/subscription pressure.
+///
+/// Byte thresholds are calibrated for evidence-embedded payloads (each symbol
+/// carries its source excerpt, ~10x the bare index): a typical scope lands at
+/// 50–250 KB, and only a genuinely huge scope should sacrifice concurrency.
 fn wave2_pool_size(jobs: &[Wave2Job]) -> usize {
     if jobs.is_empty() {
         return 1;
@@ -1654,8 +1414,8 @@ fn wave2_pool_size(jobs: &[Wave2Job]) -> usize {
         .unwrap_or(2)
         .clamp(1, 4);
     let payload_cap = match average_bytes {
-        0..=48_000 => 4,
-        48_001..=160_000 => 3,
+        0..=150_000 => 4,
+        150_001..=450_000 => 3,
         _ => 2,
     };
     jobs.len().min(cpu_cap).min(payload_cap).max(1)
@@ -1663,8 +1423,8 @@ fn wave2_pool_size(jobs: &[Wave2Job]) -> usize {
 
 fn wave2_job_permits(job: &Wave2Job, pool: usize) -> u32 {
     let desired = match (job.payload_bytes, job.work_units) {
-        (160_001.., _) | (_, 8_001..) => pool,
-        (48_001.., _) | (_, 3_001..) => 2,
+        (450_001.., _) | (_, 8_001..) => pool,
+        (150_001.., _) | (_, 3_001..) => 2,
         _ => 1,
     };
     desired.min(pool).max(1) as u32
@@ -1688,12 +1448,14 @@ mod build_scheduling_tests {
 
     #[test]
     fn large_prompts_never_get_more_concurrency_than_small_prompts() {
-        let small = jobs(8, 10_000);
-        let large = jobs(8, 300_000);
+        let small = jobs(8, 60_000);
+        let medium = jobs(8, 250_000);
+        let large = jobs(8, 900_000);
         assert!(wave2_pool_size(&large) <= wave2_pool_size(&small));
         assert_eq!(wave2_pool_size(&jobs(0, 0)), 1);
-        assert_eq!(wave2_pool_size(&jobs(1, 10_000)), 1);
+        assert_eq!(wave2_pool_size(&jobs(1, 60_000)), 1);
         assert_eq!(wave2_job_permits(&small[0], 4), 1);
+        assert_eq!(wave2_job_permits(&medium[0], 4), 2);
         assert_eq!(wave2_job_permits(&large[0], 4), 4);
     }
 }
@@ -1764,10 +1526,13 @@ async fn run_wave(
 }
 
 /// Orchestrate a full auto-context model build with zero per-level clicking:
-/// extract the deterministic codebase context, then drive top-down modeling
-/// sessions — Wave 1 builds the system + containers (fed the container facts),
-/// then an adaptive parallel Wave 2 models each container's components + symbols
-/// (each fed its compact sliced code context). Returns immediately; progress streams via
+/// extract the deterministic codebase context, mint the system + container
+/// skeleton mechanically from manifest facts (instant — no agent), then run
+/// EVERY semantic session concurrently: the system-level pass (persons,
+/// externals, responsibilities, names) beside one adaptive-pool session per
+/// code-bearing container (each fed its compact sliced code context with
+/// embedded source evidence). Wall clock approaches max(single session)
+/// instead of wave1 + slowest round. Returns immediately; progress streams via
 /// "agent-event" and nodes stream onto the canvas as the agent writes them.
 #[tauri::command]
 async fn start_model_build(
@@ -1783,8 +1548,6 @@ async fn start_model_build(
         "[build] extraction: {} source files, {} parsed, {} cache hits",
         extraction.source_files, extraction.parsed_files, extraction.cache_hits,
     );
-    let containers_json = serde_json::to_string(&ctx.containers).map_err(|e| e.to_string())?;
-
     // Cache the deterministic symbol dependency graph so the MCP
     // `commit_container_model` tool (a separate process) wires code-level links
     // from the same edges the agent saw, instead of having the agent author
@@ -1857,64 +1620,51 @@ async fn start_model_build(
         let mut total_usage = scryer_acp::Usage::default();
         eprintln!("[build] start: {cwd}");
 
-        // Wave 1 — system + containers.
-        emit_msg("▶ Building system and containers…".into());
-        let w1 = scryer_acp::prompt::build_system_prompt(&cwd, &containers_json);
-        let w1_start = std::time::Instant::now();
-        match run_wave(
-            &runtime, &agent_binary, &mode, &cwd, &model_name, &effort, &mcp_binary, w1, &app,
-        )
-        .await
-        {
-            Ok((WaveOutcome::Completed, usage)) => {
-                total_usage.add(&usage);
-                eprintln!(
-                    "[build] Wave 1 (system + containers): {:.1}s, {}",
-                    w1_start.elapsed().as_secs_f64(),
-                    fmt_usage(&usage),
+        // No Wave 1 (A2): mint the structural skeleton mechanically — the
+        // system + containers land on the canvas instantly, container coverage
+        // holds by construction, and no session blocks any other.
+        let minted = {
+            let mint = || -> Result<(String, Vec<(String, String, String)>), String> {
+                let _lock = scryer_core::lock_model(&model_ref)?;
+                let mut model = scryer_core::read_model_at(&model_ref)?;
+                let minted = scryer_core::seed::mint_initial_structure(
+                    &mut model,
+                    &ctx.project_name,
+                    &seed_units(&ctx),
                 );
-            }
-            Ok((WaveOutcome::Cancelled, _)) => {
-                let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Cancelled);
-                return;
-            }
-            Err(e) => {
-                let _ = app.emit(
-                    "agent-event",
-                    &scryer_acp::AgentEvent::Failed {
-                        error: format!("System/container pass failed: {e}"),
-                    },
-                );
-                return;
-            }
-        }
-
-        // Determine each container's scope from the model + the context.
-        let model = match scryer_core::read_model_at(&model_ref) {
-            Ok(m) => m,
-            Err(e) => {
-                let _ = app.emit(
-                    "agent-event",
-                    &scryer_acp::AgentEvent::Failed {
-                        error: format!("Could not read model after the container pass: {e}"),
-                    },
-                );
-                return;
+                scryer_core::write_model_at(&model_ref, &model)?;
+                Ok(minted)
+            };
+            match mint() {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = app.emit(
+                        "agent-event",
+                        &scryer_acp::AgentEvent::Failed {
+                            error: format!("Could not seed the model structure: {e}"),
+                        },
+                    );
+                    return;
+                }
             }
         };
-        let (containers, unmapped) = map_codeful_containers(&model, &ctx);
-        if !unmapped.is_empty() {
-            let _ = app.emit(
-                "agent-event",
-                &scryer_acp::AgentEvent::Failed {
-                    error: format!(
-                        "System/container pass omitted code-bearing unit(s): {}",
-                        unmapped.join(", ")
-                    ),
-                },
-            );
-            return;
-        }
+        let (system_id, containers) = minted;
+
+        // What the system-level semantic session works against: the minted
+        // skeleton with authoritative ids.
+        let structure_json = serde_json::to_string_pretty(
+            &ctx.containers
+                .iter()
+                .zip(&containers)
+                .map(|(c, (id, name, dir))| {
+                    serde_json::json!({
+                        "id": id, "name": name, "dir": dir,
+                        "technology": c.technology, "depDirs": c.dep_dirs,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_default();
 
         // Slice each codeful container's scope up front; skip source-less units
         // (e.g. a database image). Convert to the compact indexed wire format so
@@ -1947,29 +1697,104 @@ async fn start_model_build(
             jobs.iter().map(|job| job.payload_bytes).sum::<usize>(),
         );
 
-        // Honor a stop pressed during the Wave 1→2 setup (read model + slice
-        // every container): no session is live here, so the runtime cancel was a
-        // no-op — this flag is the only signal that survives the gap.
+        // Honor a stop pressed during setup (mint + slice every container): no
+        // session is live here, so the runtime cancel was a no-op — this flag
+        // is the only signal that survives the gap.
         if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
             let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Cancelled);
             return;
         }
 
-        emit_msg("▶ Modeling components and symbols…".into());
+        emit_msg("▶ Modeling the system and every container in parallel…".into());
 
-        // Shared across the parallel container tasks: the live active-node set
-        // (drives the canvas rings — several can be amber at once), a cancel
-        // flag, and a failure log we surface after the pool drains.
+        // Shared across the parallel tasks: the live active-node set (drives
+        // the canvas rings — several can be amber at once), a cancel flag, and
+        // a failure log we surface after the pool drains.
         let active: std::sync::Arc<tokio::sync::Mutex<std::collections::BTreeSet<String>>> =
             std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::BTreeSet::new()));
         let failures: std::sync::Arc<tokio::sync::Mutex<Vec<String>>> =
             std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
-        // Tokens summed across the parallel container sessions (debug log).
+        // Tokens summed across the parallel sessions (debug log).
         let wave2_usage: std::sync::Arc<tokio::sync::Mutex<scryer_acp::Usage>> =
             std::sync::Arc::new(tokio::sync::Mutex::new(scryer_acp::Usage::default()));
-        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(wave2_pool));
+        // +1 permit: the system-level semantic session runs beside the
+        // container pool without stealing a container slot.
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(wave2_pool + 1));
 
-        let mut handles = Vec::with_capacity(jobs.len());
+        let mut handles = Vec::with_capacity(jobs.len() + 1);
+
+        // The system-level semantic session — persons, externals, system &
+        // container responsibilities, refined names, link labels — runs
+        // concurrently with every container session.
+        {
+            let sem = sem.clone();
+            let active = active.clone();
+            let cancelled = cancel_flag.clone();
+            let failures = failures.clone();
+            let wave2_usage = wave2_usage.clone();
+            let runtime = runtime.clone();
+            let agent_binary = agent_binary.clone();
+            let mode = mode.clone();
+            let cwd = cwd.clone();
+            let model_name = model_name.clone();
+            let effort = effort.clone();
+            let mcp_binary = mcp_binary.clone();
+            let app = app.clone();
+            let system_id = system_id.clone();
+            handles.push(tokio::spawn(async move {
+                let _permit = match sem.acquire().await {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                if cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                {
+                    let mut a = active.lock().await;
+                    a.insert(system_id.clone());
+                    let _ = app.emit(
+                        "build-active-node",
+                        a.iter().cloned().collect::<Vec<String>>(),
+                    );
+                }
+                let s_start = std::time::Instant::now();
+                let prompt = scryer_acp::prompt::enrich_system_prompt(
+                    &cwd,
+                    &system_id,
+                    &structure_json,
+                );
+                let outcome = run_wave(
+                    &runtime, &agent_binary, &mode, &cwd, &model_name, &effort, &mcp_binary,
+                    prompt, &app,
+                )
+                .await;
+                {
+                    let mut a = active.lock().await;
+                    a.remove(&system_id);
+                    let _ = app.emit(
+                        "build-active-node",
+                        a.iter().cloned().collect::<Vec<String>>(),
+                    );
+                }
+                match outcome {
+                    Ok((WaveOutcome::Completed, usage)) => {
+                        wave2_usage.lock().await.add(&usage);
+                        eprintln!(
+                            "[build] system semantic pass: {:.1}s, {}",
+                            s_start.elapsed().as_secs_f64(),
+                            fmt_usage(&usage),
+                        );
+                    }
+                    Ok((WaveOutcome::Cancelled, _)) => {
+                        cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    Err(e) => failures
+                        .lock()
+                        .await
+                        .push(format!("System-level semantic pass failed: {e}")),
+                }
+            }));
+        }
         for job in jobs {
             let permit_count = wave2_job_permits(&job, wave2_pool);
             let Wave2Job {
@@ -2516,92 +2341,9 @@ pub fn run() {
             Mutex::new(None),
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         ))
-        .register_uri_scheme_protocol("preview", {
-            let preview_project: std::sync::Arc<Mutex<String>> =
-                std::sync::Arc::new(Mutex::new(String::new()));
-            move |_app, request| {
-            // preview://{nodeId}/path/to/file → .scryer/preview/{nodeId}/dist/path/to/file
-            // The host is the node id; the path is the file within the dist.
-            let url = request.uri();
-            let host = url.host().unwrap_or_default();
-            let path = url.path();
-            let path = if path.is_empty() || path == "/" {
-                "/index.html"
-            } else {
-                path
-            };
-
-            // The project path comes as a query parameter on the initial index.html
-            // request. Sub-resource requests (JS, CSS, fonts) don't carry the query,
-            // so we cache the last-seen project path for them.
-            let query = url.query().unwrap_or_default();
-            let project_from_query = query
-                .split('&')
-                .find_map(|kv| kv.strip_prefix("project="))
-                .and_then(|v| urlencoding::decode(v).ok())
-                .map(|v| v.into_owned())
-                .unwrap_or_default();
-
-            let project = if !project_from_query.is_empty() {
-                *preview_project.lock().unwrap() = project_from_query.clone();
-                project_from_query
-            } else {
-                preview_project.lock().unwrap().clone()
-            };
-
-            if project.is_empty() || host.is_empty() {
-                return tauri::http::Response::builder()
-                    .status(404)
-                    .body(b"Missing project or node id".to_vec())
-                    .unwrap();
-            }
-
-            // Variation support: preview://{nodeId}__v{n}/path routes to
-            // .scryer/preview/{nodeId}/variations/{n}/dist/path
-            let file_path = if let Some((real_id, var_idx)) = host.split_once("__v") {
-                std::path::Path::new(&project)
-                    .join(".scryer/preview")
-                    .join(real_id)
-                    .join("variations")
-                    .join(var_idx)
-                    .join("dist")
-                    .join(path.trim_start_matches('/'))
-            } else {
-                std::path::Path::new(&project)
-                    .join(".scryer/preview")
-                    .join(host)
-                    .join("dist")
-                    .join(path.trim_start_matches('/'))
-            };
-
-            match std::fs::read(&file_path) {
-                Ok(data) => {
-                    let mime = match file_path.extension().and_then(|e| e.to_str()) {
-                        Some("html") => "text/html",
-                        Some("js" | "mjs") => "application/javascript",
-                        Some("css") => "text/css",
-                        Some("json") => "application/json",
-                        Some("svg") => "image/svg+xml",
-                        Some("png") => "image/png",
-                        Some("jpg" | "jpeg") => "image/jpeg",
-                        Some("woff2") => "font/woff2",
-                        Some("woff") => "font/woff",
-                        _ => "application/octet-stream",
-                    };
-                    tauri::http::Response::builder()
-                        .status(200)
-                        .header("content-type", mime)
-                        .body(data)
-                        .unwrap()
-                }
-                Err(_) => tauri::http::Response::builder()
-                    .status(404)
-                    .body(format!("Not found: {}", file_path.display()).into_bytes())
-                    .unwrap(),
-            }
-        }})
         .setup(move |app| {
             app.manage(Mutex::new(WatcherState { project: None }));
+            app.manage(PreviewState(tokio::sync::Mutex::new(None)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2625,7 +2367,8 @@ pub fn run() {
             start_initial_model_session,
             start_node_fill_session,
             start_enrich_session,
-            start_preview_session,
+            ensure_preview_server,
+            start_preview_fixture_session,
             start_visual_variation_session,
             accept_visual_variation,
             discard_visual_variations,

@@ -36,7 +36,7 @@ import { ConfirmPopover } from "./ConfirmPopover";
 import type { Selected } from "./NodePage";
 
 const INDENT = 14;
-const ROW = "group/row flex items-center gap-1 rounded pr-3 h-[26px] cursor-pointer select-none";
+const ROW = "group/row relative flex items-center gap-1 rounded pr-3 h-[26px] cursor-pointer select-none";
 
 /** Alphabetical within a level, unnamed entries last. */
 const byName = (a: { name: string }, b: { name: string }) =>
@@ -51,6 +51,9 @@ interface TreeRow {
   hasChildren: boolean;
   isOpen: boolean;
   parent: { kind: "node" | "group"; id: string } | null;
+  // Full chain root→immediate-parent, one entry per depth. Drives the indent
+  // guide rails (a rail per ancestor) and active-branch highlighting.
+  ancestors: { kind: "node" | "group"; id: string }[];
   node?: Node;
   group?: Group;
 }
@@ -72,6 +75,32 @@ function StatusDotFiltered({
       title={colors.label}
     />
   );
+}
+
+// Altitude ramp — make the C4 tier *felt*, not inferred from indent alone.
+// Higher tier = more visual weight; detail recedes. Built on value/lightness
+// contrast and weight (per NN/G visual-hierarchy guidance) rather than hue, and
+// kept to ≤3 size steps so the steps still read as a hierarchy, not noise.
+//   person/system → the anchors      (semibold, full-contrast)
+//   container     → structure        (medium)
+//   component     → grouping of code  (regular, secondary)
+//   symbol        → the leaf detail   (smaller, muted)
+// One clean value step PER tier (--text → secondary → tertiary → muted) so each
+// altitude is distinct on its own, with weight reinforcing the top two anchors.
+// The leaf recedes by value, not by also shrinking — a smaller-and-dimmer leaf
+// reads as "disabled". `color` is applied only when the row isn't selected
+// (selection drives its own foreground); `weight`/`icon` apply always.
+function altitudeRamp(node: Node): { weight: string; color: string; icon: string } {
+  if (node.kind === "person" || node.kind === "system")
+    return { weight: "font-semibold", color: "text-[var(--text)]", icon: "text-[var(--text-secondary)]" };
+  if (node.kind === "container")
+    return { weight: "font-medium", color: "text-[var(--text-secondary)]", icon: "text-[var(--text-tertiary)]" };
+  if (node.kind === "component")
+    return { weight: "font-normal", color: "text-[var(--text-tertiary)]", icon: "text-[var(--text-muted)]" };
+  // symbol — the leaf. Indent + rail + icon already mark it subordinate, so the
+  // label stays readable (--text-tertiary, shared with component); only the icon
+  // recedes. Going dimmer here read as "disabled".
+  return { weight: "font-normal", color: "text-[var(--text-tertiary)]", icon: "text-[var(--text-muted)]" };
 }
 
 export function ModelTree({
@@ -403,20 +432,21 @@ export function ModelTree({
     const pushNode = (
       node: Node,
       depth: number,
-      parent: TreeRow["parent"],
+      ancestors: TreeRow["ancestors"],
     ) => {
       const hasChildren =
         childNodes(node.id).length > 0 || groupsAtLevel(node.id).length > 0;
       // While filtering, every surviving branch is open — the match is the point.
       const isOpen = filterActive ? hasChildren : expanded.has(node.id);
-      rows.push({ kind: "node", id: node.id, depth, hasChildren, isOpen, parent, node });
+      const parent = ancestors[ancestors.length - 1] ?? null;
+      rows.push({ kind: "node", id: node.id, depth, hasChildren, isOpen, parent, ancestors, node });
       if (isOpen && hasChildren)
-        pushLevel(node.id, depth + 1, { kind: "node", id: node.id });
+        pushLevel(node.id, depth + 1, [...ancestors, { kind: "node", id: node.id }]);
     };
     const pushLevel = (
       parentId: string | null,
       depth: number,
-      parent: TreeRow["parent"],
+      ancestors: TreeRow["ancestors"],
     ) => {
       const groups = groupsAtLevel(parentId);
       const grouped = new Set<string>();
@@ -425,23 +455,50 @@ export function ModelTree({
           if ((model.nodes.find((n) => n.id === m)?.parentId ?? null) === parentId)
             grouped.add(m);
       for (const n of childNodes(parentId).filter((n) => !grouped.has(n.id)))
-        pushNode(n, depth, parent);
+        pushNode(n, depth, ancestors);
       for (const g of groups) {
         const members = g.memberIds
           .map((id) => model.nodes.find((n) => n.id === id))
           .filter((n): n is Node => n != null && (n.parentId ?? null) === parentId && visible(n))
           .sort(byName);
         const isOpen = filterActive ? true : expanded.has(g.id);
+        const parent = ancestors[ancestors.length - 1] ?? null;
         rows.push({
           kind: "group", id: g.id, depth,
-          hasChildren: members.length > 0, isOpen, parent, group: g,
+          hasChildren: members.length > 0, isOpen, parent, ancestors, group: g,
         });
         if (isOpen)
-          for (const m of members) pushNode(m, depth + 1, { kind: "group", id: g.id });
+          for (const m of members)
+            pushNode(m, depth + 1, [...ancestors, { kind: "group", id: g.id }]);
       }
     };
-    pushLevel(null, 0, null);
+    pushLevel(null, 0, []);
   }
+
+  // The spine of the selected branch lights up: every rail whose ancestor is on
+  // the path to the selection (or the selection itself) brightens.
+  const activeRailIds = (() => {
+    if (!selected) return new Set<string>();
+    const sel = rows.find((r) => r.kind === selected.kind && r.id === selected.id);
+    if (!sel) return new Set<string>();
+    const ids = new Set(sel.ancestors.map((a) => a.id));
+    ids.add(sel.id);
+    return ids;
+  })();
+
+  // Indent guide rails — one 1px vertical line per ancestor depth, aligned to
+  // that ancestor's chevron centre (base pad 6 + half the 14px chevron = 13).
+  const renderRails = (row: TreeRow) =>
+    row.ancestors.map((anc, i) => (
+      <span
+        key={i}
+        aria-hidden
+        className={`pointer-events-none absolute top-0 h-full w-px ${
+          activeRailIds.has(anc.id) ? "bg-[var(--text-muted)]" : "bg-[var(--border)]"
+        }`}
+        style={{ left: 13 + i * INDENT }}
+      />
+    ));
 
   // --- drag-to-move ------------------------------------------------------------
 
@@ -577,6 +634,7 @@ export function ModelTree({
   const renderNode = (row: TreeRow): React.ReactNode => {
     const node = row.node!;
     const isSel = selected?.kind === "node" && selected.id === node.id;
+    const ramp = altitudeRamp(node);
     const Icon = lookupIcon(node.icon) ?? kindIcon(node);
     const status = effectiveNodeStatus(node);
     const empty = isNodeEmpty(node);
@@ -605,9 +663,10 @@ export function ModelTree({
             : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
         } ${isDrop ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""}`}
       >
+        {renderRails(row)}
         <Chevron has={row.hasChildren} open={row.isOpen} onClick={() => onToggle(node.id)} />
-        <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
-        <span className="min-w-0 flex-1 truncate text-sm">
+        <Icon className={`h-3.5 w-3.5 shrink-0 ${ramp.icon}`} />
+        <span className={`min-w-0 flex-1 truncate text-sm ${ramp.weight} ${isSel ? "" : ramp.color}`}>
           {renaming === node.id && editor ? (
             <InlineText
               value={node.name}
@@ -675,15 +734,16 @@ export function ModelTree({
         onDoubleClick={() => row.hasChildren && onToggle(group.id)}
         onContextMenu={(e) => groupMenu(e, group)}
         {...dropProps(row)}
-        className={`${ROW} ${
+        className={`${ROW} mt-1 ${
           isSel
             ? "bg-[var(--surface-active)] text-[var(--text)]"
             : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
         } ${dropKey === `group:${group.id}` ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""}`}
       >
+        {renderRails(row)}
         <Chevron has={row.hasChildren} open={row.isOpen} onClick={() => onToggle(group.id)} />
-        <FolderIcon className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
-        <span className="min-w-0 flex-1 truncate text-sm italic">
+        <FolderIcon className="h-3 w-3 shrink-0 text-[var(--text-ghost)]" />
+        <span className="min-w-0 flex-1 truncate text-2xs font-medium uppercase tracking-[0.08em] text-[var(--text-tertiary)]">
           {renaming === group.id && editor ? (
             <InlineText
               value={group.name}

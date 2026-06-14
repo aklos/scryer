@@ -488,6 +488,7 @@ mod tests {
                 relocated_from: None,
                 directives: Vec::new(),
                 last_touched_at: None,
+                changed_from: None,
             }],
             properties: Vec::new(),
             icon: None,

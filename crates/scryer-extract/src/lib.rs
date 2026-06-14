@@ -153,7 +153,11 @@ pub fn extract_context_with_stats(
                     parse
                 }
             };
-            (!parse.defs.is_empty()).then_some(ParsedFile { rel_path, parse })
+            (!parse.defs.is_empty()).then_some(ParsedFile {
+                rel_path,
+                parse,
+                source,
+            })
         })
         .collect();
     files.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));

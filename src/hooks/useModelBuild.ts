@@ -54,6 +54,9 @@ export function useModelBuild(storage: ModelStorage): ModelBuild {
   const unlisten = useRef<(() => void) | null>(null);
   const unlistenNode = useRef<(() => void) | null>(null);
   const activeRef = useRef(false);
+  // Which kind of run is in flight — finish() re-bases the review baseline only
+  // after a from-scratch build, not a drift check (whose flags are the point).
+  const runKindRef = useRef<"build" | "drift">("build");
   // Polls the agent's writes from disk onto the canvas while the build runs.
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -65,7 +68,7 @@ export function useModelBuild(storage: ModelStorage): ModelBuild {
     };
   }, []);
 
-  const finish = useCallback(() => {
+  const finish = useCallback((completed: boolean) => {
     unlisten.current?.();
     unlisten.current = null;
     unlistenNode.current?.();
@@ -81,7 +84,15 @@ export function useModelBuild(storage: ModelStorage): ModelBuild {
     // missed it is stale/empty and would clobber the agent's work (the model
     // would then survive only in the separate baseline file). autoLayout re-seeds
     // and persists positions for the freshly-loaded nodes now that writes resume.
-    void storage.reloadFromDisk();
+    void storage.reloadFromDisk().then(() => {
+      // A completed build modeled the codebase AS IT STANDS — the result is in
+      // sync by construction and is the new review baseline, not a pile of
+      // "unseen changes." (Every node was diffed in as "new" against the blank
+      // model the build opened with.) Re-base so the count reflects only real
+      // post-build drift, which is zero until the code changes. Drift checks are
+      // exempt: their flags are exactly what the user opened the page to review.
+      if (completed && runKindRef.current === "build") storage.clearAllNew();
+    });
     setBuilding(false);
     setChecking(false);
     setPhase(null);
@@ -93,6 +104,7 @@ export function useModelBuild(storage: ModelStorage): ModelBuild {
     async (kind: "build" | "drift", cwd: string) => {
       if (activeRef.current) return;
       activeRef.current = true;
+      runKindRef.current = kind;
       if (kind === "build") setBuilding(true);
       else setChecking(true);
       setPhase(null);
@@ -137,11 +149,13 @@ export function useModelBuild(storage: ModelStorage): ModelBuild {
             break;
           case "failed":
             toast(`${label} failed: ${p.error}`, "error");
-            finish();
+            finish(false);
             break;
           case "completed":
+            finish(true);
+            break;
           case "cancelled":
-            finish();
+            finish(false);
             break;
         }
       });
@@ -167,7 +181,7 @@ export function useModelBuild(storage: ModelStorage): ModelBuild {
         }
       } catch (e) {
         toast(`${label} failed to start: ${String(e)}`, "error");
-        finish();
+        finish(false);
       }
     },
     [storage, toast, finish],

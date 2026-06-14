@@ -1,8 +1,26 @@
 pub(crate) const INSTRUCTIONS: &str = "\
-You are editing a scryer architecture model — a responsibility tree backed by a flat node graph (schema version \
-0.3). The user and you both edit the same model: the user through a visual canvas, you through these MCP tools. \
-The on-disk file lives at `{project}/.scryer/model.scry`. Each tool's own description tells you how to call it; \
-this is the cross-cutting picture.\n\
+You are working in a project that has a scryer architecture model alongside its code — a responsibility tree \
+backed by a flat node graph (schema version 0.3). The model is the user's authored spec for what the system is \
+accountable for; the code is how it's discharged. The user and you both edit the model: the user through a visual \
+canvas, you through these MCP tools. The on-disk file lives at `{project}/.scryer/model.scry`. Each tool's own \
+description tells you how to call it; this is the cross-cutting picture.\n\
+\n\
+## The working loop — model first, then code\n\
+The model leads; the code follows. Whenever a task will change behaviour, capture the intent in the model BEFORE \
+you write code, so the spec stays ahead of the implementation and drift becomes the exception, not the norm.\n\
+\n\
+- **If a model exists, propose in the model first.** Before editing code: consult the area you're about to touch \
+(`get_health` to see where work is needed, then `search_model` / `read_model` for the governing nodes, their \
+responsibilities, and any binding `directives`). Then AUTHOR THE INTENDED CHANGE IN THE MODEL AS A PROPOSAL — \
+add/extend the nodes, responsibilities, and links it implies, at the right altitude, with status `proposed`. This \
+shows up on the user's canvas for them to see and adjust; it is the intent capture, not an afterthought. Only \
+THEN implement the code to that proposal. If the change conflicts with an existing responsibility or directive, \
+surface the conflict — don't silently diverge.\n\
+- **After you write the code**, close the loop: `mark_implemented` the responsibilities you built (proposed → \
+implemented), and `flag_drift` / `reconcile_drift` for anything the code does that the proposal didn't capture. \
+Don't leave the model behind the code.\n\
+- **If no model exists yet, build one first** (the \"Building from a codebase\" flow below), then work the loop \
+above against it.\n\
 \n\
 ## The rules are binding\n\
 `get_rules` is the authoritative knowledge base for every modeling judgment — what earns a symbol, how to pitch a \

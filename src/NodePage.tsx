@@ -15,16 +15,16 @@
  * New items land as `proposed`. Mutations flow through the Editor intents.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   CircleDashed,
   Eye,
+  FileClock,
   Flag,
   GitCompare,
   Loader2,
   Plus,
-  RefreshCw,
   Send,
   Sparkles,
   Trash2,
@@ -50,6 +50,9 @@ import { kindIcon, typeTag } from "./kindIcon";
 import { lookupIcon } from "./IconPicker";
 import { Infobox } from "./Infobox";
 import { ConnectionsSection } from "./ConnectionsSection";
+import { RevisionList } from "./SpecialPages";
+import type { ChangeRevision } from "./hooks/useModelStorage";
+import { matchPreviewComponent, usePreviewServer } from "./hooks/usePreviewServer";
 import {
   SourceSection,
   buildSourceIndex,
@@ -102,7 +105,9 @@ interface PageProps {
   onSelectNode: (id: string) => void;
   onSelectGroup: (id: string) => void;
   onFill?: (nodeId: string) => void;
-  onRender?: (nodeId: string) => void;
+  /** B5 repair path: agent writes realistic fixture props after a failed
+   *  deterministic render. */
+  onFixture?: (nodeId: string, renderStatus: string, renderError: string | null) => void;
   variationState: VariationState | null;
   onStartVariation?: (nodeId: string, prompt: string, count?: number, baseVariationIdx?: number) => void;
   onAcceptVariation?: (nodeId: string, variationIdx: number) => void;
@@ -110,6 +115,9 @@ interface PageProps {
   onSelectVariation?: (idx: number | null) => void;
   newRespIds: ReadonlySet<string>;
   onClearNewResp: (id: string) => void;
+  /** Session-local journal of every edit (yours and the agent's), newest
+   *  first — filtered per node to drive the History tab. */
+  changeLog: readonly ChangeRevision[];
   /** Boundary-owning nodes whose code changed since the last reconcile —
    *  surfaced as a drift banner on the owning node's page. */
   driftScopes: DriftScope[];
@@ -268,6 +276,134 @@ function PageHeader({
   );
 }
 
+// --- tabs -------------------------------------------------------------------
+
+/** Wikipedia-style article tabs (Overview · History), underline marking the
+ *  active one. Lives between the page header and the scrolling body. */
+function PageTabs({
+  tab,
+  onTab,
+  historyCount,
+}: {
+  tab: "overview" | "history";
+  onTab: (t: "overview" | "history") => void;
+  historyCount: number;
+}) {
+  const tabClass = (active: boolean) =>
+    `-mb-px border-b-2 px-1 py-2 text-xs font-medium cursor-pointer transition-colors ${
+      active
+        ? "border-[var(--text)] text-[var(--text)]"
+        : "border-transparent text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:border-[var(--border)]"
+    }`;
+  return (
+    <div className="shrink-0 border-b border-[var(--border-subtle)] px-8">
+      <div className="mx-auto flex w-full max-w-[1080px] items-center gap-5">
+        <button type="button" onClick={() => onTab("overview")} className={tabClass(tab === "overview")}>
+          Overview
+        </button>
+        <button
+          type="button"
+          onClick={() => onTab("history")}
+          className={tabClass(tab === "history")}
+        >
+          History
+          {historyCount > 0 && (
+            <span className="ml-1.5 tabular-nums text-[var(--text-ghost)]">{historyCount}</span>
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Render a list of values as the collapsed diff cell does — absence reads "—". */
+function fmtSpecValue(v: string | string[] | undefined): string {
+  if (v === undefined || v === "") return "—";
+  if (Array.isArray(v)) return v.length === 0 ? "—" : v.join(" · ");
+  return v;
+}
+
+/** One persistent "what it was → what it is now" row for a reworded claim,
+ *  collapsed to the net change per field (statement, directives) against the
+ *  last reconciled spec. */
+function PendingDiff({ resp }: { resp: Responsibility }) {
+  const from = resp.changedFrom;
+  if (!from) return null;
+  const rows: { field: string; from: string; to: string }[] = [];
+  if (from.statement !== resp.statement)
+    rows.push({ field: "statement", from: from.statement, to: resp.statement });
+  const fromDir = fmtSpecValue(from.directives);
+  const toDir = fmtSpecValue(resp.directives);
+  if (fromDir !== toDir) rows.push({ field: "directives", from: fromDir, to: toDir });
+  return (
+    <li className="border-b border-[var(--border-subtle)] py-3 last:border-b-0">
+      <div className="mb-1 truncate text-sm text-[var(--text-secondary)]">{resp.statement}</div>
+      <ul className="flex flex-col gap-px pl-1">
+        {rows.map((r) => (
+          <li key={r.field} className="text-2xs leading-relaxed">
+            <span className="text-[var(--text-muted)]">{r.field}: </span>
+            <del className="text-[var(--text-muted)] decoration-[var(--text-ghost)]">{r.from}</del>
+            <span className="text-[var(--text-ghost)]"> → </span>
+            <span className="text-[var(--text-secondary)]">{r.to}</span>
+          </li>
+        ))}
+      </ul>
+    </li>
+  );
+}
+
+/** The History tab body: persistent unreconciled spec edits (survive reload)
+ *  above the live session journal for this node. */
+function NodeHistory({
+  pending,
+  revisions,
+  onSelectNode,
+}: {
+  pending: readonly Responsibility[];
+  revisions: readonly ChangeRevision[];
+  onSelectNode: (id: string) => void;
+}) {
+  if (pending.length === 0 && revisions.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
+        <FileClock className="h-6 w-6 text-[var(--text-ghost)]" />
+        <p className="max-w-sm text-xs text-[var(--text-muted)]">
+          No changes to this node. Reword an implemented claim and the net diff shows here
+          until the agent reconciles it with the code.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-7 pt-5">
+      {pending.length > 0 && (
+        <section>
+          <h3 className="mb-1 text-2xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
+            Changed since last reconcile
+          </h3>
+          <p className="mb-2 text-2xs text-[var(--text-muted)]">
+            The spec moved after implementation — these persist until the agent catches the
+            code up.
+          </p>
+          <ul className="flex flex-col">
+            {pending.map((r) => (
+              <PendingDiff key={r.id} resp={r} />
+            ))}
+          </ul>
+        </section>
+      )}
+      {revisions.length > 0 && (
+        <section>
+          <h3 className="mb-2 text-2xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
+            This session
+          </h3>
+          <RevisionList revisions={revisions} showContext={false} onSelectNode={onSelectNode} />
+        </section>
+      )}
+    </div>
+  );
+}
+
 // --- node page --------------------------------------------------------------
 
 function NodePageBody(props: PageProps & { node: Node }) {
@@ -280,14 +416,36 @@ function NodePageBody(props: PageProps & { node: Node }) {
     onSelectNode,
     onSelectGroup,
     onFill,
-    onRender,
+    onFixture,
     newRespIds,
     onClearNewResp,
+    changeLog,
     driftScopes,
     onCheckDrift,
     onDismissDrift,
   } = props;
   const ed = useEditSections();
+  const [tab, setTab] = useState<"overview" | "history">("overview");
+  // This node's slice of the session journal — every revision that touched it,
+  // narrowed to just its own items (an agent build burst touches many nodes).
+  const nodeRevisions = useMemo(() => {
+    const out: ChangeRevision[] = [];
+    for (const rev of changeLog) {
+      const items = rev.items.filter((it) => it.nodeId === node.id);
+      if (items.length > 0) out.push({ ...rev, items });
+    }
+    return out;
+  }, [changeLog, node.id]);
+  // Persistent, reconcile-scoped diffs: claims reworded after implementation
+  // carry a `changedFrom` snapshot until the agent catches the code up. These
+  // survive reload (they live in the model), unlike the session journal above.
+  const pendingReconcile = useMemo(
+    () =>
+      (node.responsibilities ?? []).filter(
+        (r) => r.status === "changed" && r.changedFrom,
+      ),
+    [node.responsibilities],
+  );
   const status = effectiveNodeStatus(node);
   const tag = typeTag(node);
   const KindIcon = lookupIcon(node.icon) ?? kindIcon(node);
@@ -305,8 +463,9 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const undefinedNode = fillable && !hasChildren && resps.length === 0;
 
   // Leaf claims must read through to code; structural nodes discharge through
-  // their subtree, so their claims are never "unmapped".
-  const leafHost = !hasChildren && !node.external;
+  // their subtree, so their claims are never "unmapped". Persons (actors) and
+  // externals are out-of-system — their claims are never code-backed.
+  const leafHost = !hasChildren && !node.external && node.kind !== "person";
 
   const sourceIndex = buildSourceIndex(definition, dataShape ? [] : resps, sourceMap);
 
@@ -365,8 +524,18 @@ function NodePageBody(props: PageProps & { node: Node }) {
         onRename={(v) => editor?.updateNode(node.id, { name: v })}
       />
 
+      <PageTabs tab={tab} onTab={setTab} historyCount={pendingReconcile.length} />
+
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[1080px] px-8 pb-16">
+          {tab === "history" ? (
+            <NodeHistory
+              pending={pendingReconcile}
+              revisions={nodeRevisions}
+              onSelectNode={onSelectNode}
+            />
+          ) : (
+            <>
           {/* Maintenance banners — the page states its own problems up top. */}
           {(drift || staleCount > 0 || vagrantCount > 0 || isNodeEmpty(node)) && (
             <div className="flex flex-col gap-2 pt-4">
@@ -473,7 +642,13 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 <PreviewSection
                   node={node}
                   projectPath={projectPath}
-                  onRender={onRender}
+                  sourceFile={
+                    sourceMap[node.id]?.[0]?.pattern ??
+                    node.responsibilities
+                      ?.map((r) => sourceMap[r.id]?.[0]?.pattern)
+                      .find(Boolean)
+                  }
+                  onFixture={onFixture}
                   variationState={
                     props.variationState?.nodeId === node.id ? props.variationState : null
                   }
@@ -537,6 +712,8 @@ function NodePageBody(props: PageProps & { node: Node }) {
               />
             </div>
           </div>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -1376,20 +1553,11 @@ function PropertiesSection({
 
 // --- visual preview ---------------------------------------------------------
 
-function previewSrc(nodeId: string, projectPath: string) {
-  const isDark = document.documentElement.classList.contains("dark");
-  return `preview://${nodeId}/index.html?project=${encodeURIComponent(projectPath)}&theme=${isDark ? "dark" : "light"}`;
-}
-
-function variationSrc(nodeId: string, varIdx: number, projectPath: string) {
-  const isDark = document.documentElement.classList.contains("dark");
-  return `preview://${nodeId}__v${varIdx}/index.html?project=${encodeURIComponent(projectPath)}&theme=${isDark ? "dark" : "light"}`;
-}
-
 function PreviewSection({
   node,
   projectPath,
-  onRender,
+  sourceFile,
+  onFixture,
   variationState,
   onStartVariation,
   onAcceptVariation,
@@ -1398,7 +1566,10 @@ function PreviewSection({
 }: {
   node: Node;
   projectPath: string | null;
-  onRender?: (nodeId: string) => void;
+  /** The node's anchored source file (from the source map), used to pick the
+   *  matching component export on the preview server. */
+  sourceFile?: string;
+  onFixture?: (nodeId: string, renderStatus: string, renderError: string | null) => void;
   variationState: VariationState | null;
   onStartVariation?: (nodeId: string, prompt: string, count?: number, baseVariationIdx?: number) => void;
   onAcceptVariation?: (nodeId: string, variationIdx: number) => void;
@@ -1414,56 +1585,124 @@ function PreviewSection({
     prevVarStatus.current = variationState?.status ?? null;
   }, [variationState?.status]);
 
-  const preview = node.appearance;
-  const hasPreview = preview?.distPath;
-  const iframeSrc = hasPreview && projectPath ? previewSrc(node.id, projectPath) : null;
+  // Deterministic render: the shared dev server serves any component as a
+  // virtual entry with synthesized props — no agent, no per-component build.
+  const server = usePreviewServer(projectPath);
+  const entry = server.components
+    ? matchPreviewComponent(server.components, node.name, sourceFile)
+    : null;
+  const isDark = document.documentElement.classList.contains("dark");
+  const theme = isDark ? "dark" : "light";
+  // Pass scryer's resolved canvas/text colors so the iframe shell paints the
+  // matching background on its very first frame — before the target project's
+  // global CSS (imported as an async module) loads and supplies its own
+  // --surface-canvas. Without this the shell flashes its hardcoded white
+  // fallback, even in dark mode.
+  const rootStyle = getComputedStyle(document.documentElement);
+  const fallbackBg = rootStyle.getPropertyValue("--surface-canvas").trim();
+  const fallbackFg = rootStyle.getPropertyValue("--text").trim();
 
-  const canEdit = hasPreview && onStartVariation;
+  // An accepted variation (design intent, status `changed`) overrides the
+  // live component until the real code catches up.
+  const accepted = node.appearance?.distPath?.endsWith(".tsx")
+    ? node.appearance.distPath
+    : null;
+  const previewUrl = (file: string, exportName: string, fixture?: string) =>
+    `${server.url}/__preview?file=${encodeURIComponent(file)}&export=${encodeURIComponent(exportName)}` +
+    (fixture ? `&fixture=${encodeURIComponent(fixture)}` : "") +
+    `&theme=${theme}` +
+    (fallbackBg ? `&bg=${encodeURIComponent(fallbackBg)}` : "") +
+    (fallbackFg ? `&fg=${encodeURIComponent(fallbackFg)}` : "");
+
+  const watched: { file: string; exportName: string } | null = accepted
+    ? { file: accepted, exportName: "default" }
+    : entry
+      ? { file: entry.file, exportName: entry.exportName }
+      : null;
+  const iframeSrc =
+    server.url && watched
+      ? previewUrl(watched.file, watched.exportName, accepted ? undefined : `.scryer/preview/fixtures/${node.id}.tsx`)
+      : null;
+
+  // The preview entry posts its render verdict (ok/empty/error) to the parent
+  // window — this drives the B5 "generate preview data" repair path.
+  const [report, setReport] = useState<{ status: string; error: string | null } | null>(null);
+  useEffect(() => setReport(null), [watched?.file, watched?.exportName]);
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      const d = e.data;
+      if (d?.type !== "scryer-render" || !watched || d.file !== watched.file || d.exportName !== watched.exportName) return;
+      setReport({ status: d.status, error: d.error ?? null });
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [watched?.file, watched?.exportName]);
+
+  const placeholder =
+    server.status === "error"
+      ? `Preview server failed: ${server.error}`
+      : server.status === "starting" || !server.components
+        ? "Starting preview server…"
+        : "No renderable export matches this node.";
+
+  const canEdit = iframeSrc && onStartVariation;
+  const needsRepair = report != null && (report.status === "empty" || report.status === "error");
+
+  const variationSrcFor = (idx: number) =>
+    previewUrl(`.scryer/preview/variations/${node.id}/${idx}.tsx`, "default");
 
   return (
     <PageSection
       title="Visual"
-      right={preview?.status ? <StatusTag status={preview.status} /> : undefined}
+      right={accepted && node.appearance?.status ? <StatusTag status={node.appearance.status} /> : undefined}
       editable={!!canEdit}
       editing={modalOpen}
       onToggleEdit={() => setModalOpen(!modalOpen)}
     >
       {iframeSrc ? (
         <div className="flex flex-col gap-2">
-          <div className="overflow-hidden rounded-md border border-[var(--border)]">
+          <div className="relative overflow-hidden rounded-md border border-[var(--border)]">
             <iframe
               src={iframeSrc}
               title={`Preview: ${node.name}`}
               className="h-[400px] w-full border-0"
               sandbox="allow-scripts allow-same-origin"
             />
+            {/* The dev server compiles the component (and its deps) on the
+                first hit — 5–10s cold. Cover the blank iframe until the entry
+                posts its first render verdict. */}
+            {report == null && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--surface-canvas)]">
+                <Loader2 className="h-5 w-5 animate-spin text-indigo-500 dark:text-indigo-400" />
+                <span className="text-2xs text-[var(--text-muted)]">Loading preview…</span>
+              </div>
+            )}
           </div>
-          {onRender && (
-            <button
-              type="button"
-              onClick={() => onRender(node.id)}
-              className="inline-flex items-center gap-1.5 self-start rounded px-2 py-1 text-2xs font-medium text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] cursor-pointer"
-            >
-              <RefreshCw className="h-3 w-3" /> Re-render
-            </button>
+          {needsRepair && onFixture && (
+            <div className="flex items-center gap-3 self-start">
+              <span className="text-2xs text-[var(--text-muted)]">
+                {report!.status === "empty"
+                  ? "Rendered empty with placeholder props."
+                  : "Render failed with placeholder props."}
+              </span>
+              <Button size="sm" onClick={() => onFixture(node.id, report!.status, report!.error)}>
+                <Sparkles className="h-3 w-3" /> Generate preview data
+              </Button>
+            </div>
           )}
         </div>
       ) : (
         <div className="flex flex-col items-center gap-3 rounded-md border border-dashed border-[var(--border)] bg-[var(--surface-raised)] px-6 py-10">
           <Eye className="h-6 w-6 text-[var(--text-ghost)]" />
-          <p className="text-xs text-[var(--text-muted)]">No render yet.</p>
-          {onRender && (
-            <Button variant="primary" size="md" onClick={() => onRender(node.id)}>
-              <Eye className="h-3.5 w-3.5" /> Render component
-            </Button>
-          )}
+          <p className="text-xs text-[var(--text-muted)]">{placeholder}</p>
         </div>
       )}
 
-      {modalOpen && projectPath && (
+      {modalOpen && iframeSrc && (
         <VariationModal
           node={node}
-          projectPath={projectPath}
+          currentSrc={iframeSrc}
+          variationSrc={variationSrcFor}
           variationState={variationState}
           onStartVariation={onStartVariation!}
           onAcceptVariation={onAcceptVariation}
@@ -1478,7 +1717,8 @@ function PreviewSection({
 
 function VariationModal({
   node,
-  projectPath,
+  currentSrc,
+  variationSrc,
   variationState,
   onStartVariation,
   onAcceptVariation,
@@ -1487,7 +1727,10 @@ function VariationModal({
   onClose,
 }: {
   node: Node;
-  projectPath: string;
+  /** Live deterministic preview of the component as it exists now. */
+  currentSrc: string;
+  /** Preview URL for variation `idx` on the shared dev server. */
+  variationSrc: (idx: number) => string;
   variationState: VariationState | null;
   onStartVariation: (nodeId: string, prompt: string, count?: number, baseVariationIdx?: number) => void;
   onAcceptVariation?: (nodeId: string, variationIdx: number) => void;
@@ -1549,7 +1792,7 @@ function VariationModal({
             <p className="mb-2 text-2xs font-medium text-[var(--text-tertiary)]">Current</p>
             <div className="overflow-hidden rounded-md border border-[var(--border-subtle)]">
               <iframe
-                src={previewSrc(node.id, projectPath)}
+                src={currentSrc}
                 title={`Current: ${node.name}`}
                 className="h-[350px] w-full border-0"
                 sandbox="allow-scripts allow-same-origin"
@@ -1634,7 +1877,7 @@ function VariationModal({
                   >
                     <div className="overflow-hidden rounded-md">
                       <iframe
-                        src={variationSrc(node.id, i, projectPath)}
+                        src={variationSrc(i)}
                         title={`Variation ${i + 1}`}
                         className="pointer-events-none h-[280px] w-full border-0"
                         sandbox="allow-scripts allow-same-origin"

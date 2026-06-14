@@ -437,6 +437,7 @@ mod tests {
             relocated_from: None,
             directives: Vec::new(),
             last_touched_at: None,
+            changed_from: None,
         });
         m.nodes.push(sa);
         m.nodes.push(node("symb", Kind::Symbol, Some("sys")));

@@ -14,7 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Node, Responsibility, ScryModel } from "../viewmodel";
-import { respTruthChanged, stampTouches } from "../viewmodel";
+import { flagSpecEdits, respTruthChanged, stampTouches } from "../viewmodel";
 
 const RECENT_KEY = "scryer:recent-projects";
 const RECENT_CAP = 8;
@@ -155,8 +155,18 @@ function diffRevision(prev: ScryModel, loaded: ScryModel): ChangeItem[] {
     }
   }
   for (const n of prev.nodes)
-    if (!loadedNodeById.has(n.id))
-      items.push({ op: "removed", what: "node", label: n.name || "Untitled" });
+    if (!loadedNodeById.has(n.id)) {
+      // A deleted node has no page of its own — surface it under the surviving
+      // parent's history so the deletion is visible somewhere.
+      const parentAlive = !!n.parentId && loadedNodeById.has(n.parentId);
+      items.push({
+        op: "removed",
+        what: "node",
+        label: n.name || "Untitled",
+        context: n.parentId ? nodeName(n.parentId) : undefined,
+        nodeId: parentAlive ? n.parentId : undefined,
+      });
+    }
 
   const prevResps = new Map<string, { resp: Responsibility; nodeId: string }>();
   for (const n of prev.nodes)
@@ -546,8 +556,13 @@ export function useModelStorage(): ModelStorage {
     (updater: (m: ScryModel) => ScryModel) => {
       setModel((cur) => {
         if (!cur || !modelRef) return cur;
-        const edited = updater(cur);
-        if (edited === cur) return cur;
+        const raw = updater(cur);
+        if (raw === cur) return cur;
+        // Apply the lifecycle rule before journaling/stamping: reediting an
+        // implemented/verified claim's spec flips it to `changed` — a persistent
+        // "code must catch up" marker that lives in the model until the agent
+        // reconciles it. Done here so the History diff records the flip too.
+        const edited = flagSpecEdits(cur, raw);
         // Journal the user's commit alongside agent writes — Recent changes
         // shows every editor, attributed. Staged here (idempotently, keyed on
         // `cur`) and flushed to the log by the effect below.

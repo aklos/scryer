@@ -14,12 +14,14 @@
  * categories.
  */
 
+import { useState } from "react";
 import { Check, FileClock, GitCompare, Sparkles } from "lucide-react";
-import type { ChangeRevision } from "./hooks/useModelStorage";
+import { ConfirmPopover } from "./ConfirmPopover";
+import type { ChangeItem, ChangeRevision } from "./hooks/useModelStorage";
 import type { ScryModel, Node, Responsibility, DriftScope } from "./viewmodel";
 import type { Editor } from "./editor";
 import type { ModelHealthReport } from "./health";
-import { ANCHOR_STATE_LABEL } from "./health";
+import { ANCHOR_STATE_LABEL, collapseAnchors } from "./health";
 import { kindIcon } from "./kindIcon";
 import { isNodeEmpty } from "./rollup";
 import { respElementId } from "./SourceSection";
@@ -67,6 +69,123 @@ function timeLabel(at: number): string {
   });
 }
 
+/** One revision's diff rows. `context` is hidden when every item shares the
+ *  same host (a per-node history, where "on X" would repeat on every line). */
+function RevisionItems({
+  items,
+  showContext,
+  onSelectNode,
+}: {
+  items: readonly ChangeItem[];
+  showContext: boolean;
+  onSelectNode: (id: string) => void;
+}) {
+  return (
+    <ul className="flex flex-col gap-1">
+      {items.map((it, j) => (
+        <li key={j} className="flex items-start gap-2">
+          <span
+            title={OP_MARK[it.op].title}
+            className="w-3 shrink-0 pt-px text-center font-mono text-xs text-[var(--text-muted)]"
+          >
+            {OP_MARK[it.op].mark}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-baseline gap-1.5 text-sm">
+              <span className="shrink-0 text-2xs uppercase tracking-wide text-[var(--text-ghost)]">
+                {it.what}
+              </span>
+              {/* Removals read as struck-through text (never a live link — the
+                  thing is gone); additions/changes link to their node. */}
+              {it.op !== "removed" && it.nodeId ? (
+                <button
+                  type="button"
+                  onClick={() => onSelectNode(it.nodeId!)}
+                  className="min-w-0 truncate text-left text-blue-700 hover:underline dark:text-blue-400 cursor-pointer"
+                >
+                  {it.label}
+                </button>
+              ) : (
+                <span
+                  className={`min-w-0 truncate ${
+                    it.op === "removed"
+                      ? "text-[var(--text-muted)] line-through decoration-[var(--text-ghost)]"
+                      : "text-[var(--text-secondary)]"
+                  }`}
+                >
+                  {it.label}
+                </span>
+              )}
+              {showContext && it.context && (
+                <span className="shrink-0 text-2xs text-[var(--text-muted)]">
+                  on {it.context}
+                </span>
+              )}
+            </div>
+            {it.fields && it.fields.length > 0 && (
+              <ul className="mt-0.5 flex flex-col gap-px pl-1">
+                {it.fields.map((f) => (
+                  <li key={f.field} className="text-2xs leading-relaxed">
+                    <span className="text-[var(--text-muted)]">{f.field}: </span>
+                    <del className="text-[var(--text-muted)] decoration-[var(--text-ghost)]">
+                      {f.from}
+                    </del>
+                    <span className="text-[var(--text-ghost)]"> → </span>
+                    <span className="text-[var(--text-secondary)]">{f.to}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Shared revision feed: time + attribution header per edit burst, then its
+ *  diff rows. Drives both the global Recent-changes page and a single node's
+ *  History tab. */
+export function RevisionList({
+  revisions,
+  showContext = true,
+  onSelectNode,
+}: {
+  revisions: readonly ChangeRevision[];
+  /** Hide the "on X" host label — redundant in a per-node history. */
+  showContext?: boolean;
+  onSelectNode: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-col">
+      {revisions.map((rev, i) => (
+        <section
+          key={`${rev.at}-${i}`}
+          className="border-b border-[var(--border-subtle)] py-3 last:border-b-0"
+        >
+          <div className="mb-1.5 flex items-center gap-2 font-mono text-2xs tabular-nums text-[var(--text-muted)]">
+            {timeLabel(rev.at)}
+            {/* Attribution — indigo is the agent's hue. */}
+            <span
+              className={
+                rev.by === "agent"
+                  ? "font-sans font-medium text-indigo-600 dark:text-indigo-400"
+                  : "font-sans font-medium text-[var(--text-tertiary)]"
+              }
+            >
+              {rev.by === "agent" ? "agent" : "you"}
+            </span>
+            <span className="text-[var(--text-ghost)]">
+              {rev.items.length} change{rev.items.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <RevisionItems items={rev.items} showContext={showContext} onSelectNode={onSelectNode} />
+        </section>
+      ))}
+    </div>
+  );
+}
+
 export function RecentChangesPage({
   changeLog,
   onSelectNode,
@@ -90,81 +209,8 @@ export function RecentChangesPage({
             </p>
           </div>
         ) : (
-          <div className="flex flex-col pt-5">
-            {changeLog.map((rev, i) => (
-              <section
-                key={`${rev.at}-${i}`}
-                className="border-b border-[var(--border-subtle)] py-3 last:border-b-0"
-              >
-                <div className="mb-1.5 flex items-center gap-2 font-mono text-2xs tabular-nums text-[var(--text-muted)]">
-                  {timeLabel(rev.at)}
-                  {/* Attribution — indigo is the agent's hue. */}
-                  <span
-                    className={
-                      rev.by === "agent"
-                        ? "font-sans font-medium text-indigo-600 dark:text-indigo-400"
-                        : "font-sans font-medium text-[var(--text-tertiary)]"
-                    }
-                  >
-                    {rev.by === "agent" ? "agent" : "you"}
-                  </span>
-                  <span className="text-[var(--text-ghost)]">
-                    {rev.items.length} change{rev.items.length === 1 ? "" : "s"}
-                  </span>
-                </div>
-                <ul className="flex flex-col gap-1">
-                  {rev.items.map((it, j) => (
-                    <li key={j} className="flex items-start gap-2">
-                      <span
-                        title={OP_MARK[it.op].title}
-                        className="w-3 shrink-0 pt-px text-center font-mono text-xs text-[var(--text-muted)]"
-                      >
-                        {OP_MARK[it.op].mark}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex min-w-0 items-baseline gap-1.5 text-sm">
-                          <span className="shrink-0 text-2xs uppercase tracking-wide text-[var(--text-ghost)]">
-                            {it.what}
-                          </span>
-                          {it.nodeId ? (
-                            <button
-                              type="button"
-                              onClick={() => onSelectNode(it.nodeId!)}
-                              className="min-w-0 truncate text-left text-blue-700 hover:underline dark:text-blue-400 cursor-pointer"
-                            >
-                              {it.label}
-                            </button>
-                          ) : (
-                            <span className="min-w-0 truncate text-[var(--text-secondary)] line-through decoration-[var(--text-ghost)]">
-                              {it.label}
-                            </span>
-                          )}
-                          {it.context && (
-                            <span className="shrink-0 text-2xs text-[var(--text-muted)]">
-                              on {it.context}
-                            </span>
-                          )}
-                        </div>
-                        {it.fields && it.fields.length > 0 && (
-                          <ul className="mt-0.5 flex flex-col gap-px pl-1">
-                            {it.fields.map((f) => (
-                              <li key={f.field} className="text-2xs leading-relaxed">
-                                <span className="text-[var(--text-muted)]">{f.field}: </span>
-                                <del className="text-[var(--text-muted)] decoration-[var(--text-ghost)]">
-                                  {f.from}
-                                </del>
-                                <span className="text-[var(--text-ghost)]"> → </span>
-                                <span className="text-[var(--text-secondary)]">{f.to}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ))}
+          <div className="pt-5">
+            <RevisionList revisions={changeLog} onSelectNode={onSelectNode} />
           </div>
         )}
       </SpecialBody>
@@ -212,6 +258,7 @@ export function buildReviewIndex(
       if (
         !hasChildren.has(node.id) &&
         !node.external &&
+        node.kind !== "person" &&
         (s === "implemented" || s === "verified" || s === "changed") &&
         (sourceMap[resp.id] ?? []).length === 0
       )
@@ -229,7 +276,7 @@ export function buildReviewIndex(
     unseenNodes.length +
     unseenClaims.length +
     driftScopes.length +
-    (report?.anchors.length ?? 0);
+    collapseAnchors(report?.anchors ?? []).length;
   return { vagrant, stale, unmapped, emptySymbols, unseenNodes, unseenClaims, total };
 }
 
@@ -257,7 +304,15 @@ export function NeedsReviewPage({
   onClearAllNew: () => void;
 }) {
   const idx = buildReviewIndex(model, report, driftScopes, newNodeIds, newRespIds);
-  const anchors = report?.anchors ?? [];
+  const anchors = collapseAnchors(report?.anchors ?? []);
+
+  // Dropping a stale claim deletes an authored responsibility (and its anchors),
+  // so it's confirmed inline rather than firing on a single click.
+  const [confirmDrop, setConfirmDrop] = useState<{
+    rect: DOMRect;
+    label: string;
+    run: () => void;
+  } | null>(null);
 
   // Open the claim's page and flash its row once it has rendered.
   const goToClaim = (nodeId: string, respId: string) => {
@@ -393,24 +448,44 @@ export function NeedsReviewPage({
               <PageSection title="Stale claims" count={idx.stale.length}>
                 <p className="mb-2 text-2xs text-[var(--text-muted)]">
                   The drift check judged the code no longer discharges these. Confirm each is
-                  still valid, or reword/drop it on its page.
+                  still valid, drop it, or reword it on its page.
                 </p>
                 <ul className="flex flex-col">
                   {idx.stale.map((ref) =>
                     claimRow(
                       ref,
                       editor && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            editor.updateResponsibility("node", ref.node.id, ref.resp.id, {
-                              stale: undefined,
-                            })
-                          }
-                          className="shrink-0 pt-0.5 text-2xs font-medium text-[var(--text-tertiary)] hover:text-[var(--text)] hover:underline cursor-pointer"
-                        >
-                          Still valid
-                        </button>
+                        <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              editor.updateResponsibility("node", ref.node.id, ref.resp.id, {
+                                stale: undefined,
+                              })
+                            }
+                            className="font-medium text-[var(--text-tertiary)] hover:text-[var(--text)] hover:underline cursor-pointer"
+                          >
+                            Still valid
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) =>
+                              setConfirmDrop({
+                                rect: e.currentTarget.getBoundingClientRect(),
+                                label: "Drop this claim?",
+                                run: () =>
+                                  editor.removeResponsibility(
+                                    "node",
+                                    ref.node.id,
+                                    ref.resp.id,
+                                  ),
+                              })
+                            }
+                            className="font-medium text-[var(--text-tertiary)] hover:text-red-500 hover:underline dark:hover:text-red-400 cursor-pointer"
+                          >
+                            Drop
+                          </button>
+                        </span>
                       ),
                     ),
                   )}
@@ -485,7 +560,7 @@ export function NeedsReviewPage({
                 <ul className="flex flex-col">
                   {anchors.map((a) => (
                     <li
-                      key={`${a.key}:${a.file}`}
+                      key={`${a.hostId}:${a.file}:${a.symbol ?? ""}:${a.state}`}
                       className="flex items-center gap-2 border-b border-[var(--border-subtle)] py-1.5 last:border-b-0"
                     >
                       <button
@@ -540,6 +615,18 @@ export function NeedsReviewPage({
           </>
         )}
       </SpecialBody>
+      {confirmDrop && (
+        <ConfirmPopover
+          anchorRect={confirmDrop.rect}
+          label={confirmDrop.label}
+          confirmLabel="Drop"
+          onConfirm={() => {
+            confirmDrop.run();
+            setConfirmDrop(null);
+          }}
+          onCancel={() => setConfirmDrop(null)}
+        />
+      )}
     </div>
   );
 }

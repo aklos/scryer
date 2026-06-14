@@ -3,6 +3,7 @@ pub mod drift;
 pub mod health;
 pub mod rules;
 pub mod scan;
+pub mod seed;
 pub mod validate;
 
 use serde::{Deserialize, Serialize};
@@ -95,6 +96,25 @@ pub struct Responsibility {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub last_touched_at: Option<u64>,
+    /// Spec snapshot from the last reconcile — the `statement`/`directives` as
+    /// they stood when the claim was implemented, captured the moment a user
+    /// reword flipped an `implemented`/`verified` claim to `changed`. Drives the
+    /// persistent "what it was → what it is now" diff and is dropped once the
+    /// claim leaves `changed` (the agent reconciled the edit with the code).
+    /// Canvas-authored, hidden from the agent's write schemas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub changed_from: Option<SpecSnapshot>,
+}
+
+/// Snapshot of a responsibility's spec at its last reconcile — see
+/// [`Responsibility::changed_from`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SpecSnapshot {
+    pub statement: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub directives: Vec<String>,
 }
 
 // --- Code-level data ---
@@ -569,6 +589,12 @@ fn stamp_touches(model: &mut ScryModel, prior: Option<&ScryModel>, now: u64) {
         .unwrap_or_default();
 
     let date_resp = |r: &mut Responsibility, host: Option<&HashMap<&str, &Responsibility>>| {
+        // The reconcile snapshot only lives while the claim is `changed`; once
+        // it returns to any other status the spec edit has been reconciled, so
+        // the diff is resolved and the snapshot is dropped.
+        if r.status != Some(Status::Changed) {
+            r.changed_from = None;
+        }
         let prev = host.and_then(|m| m.get(r.id.as_str()).copied());
         r.last_touched_at = match prev {
             Some(pv) if !resp_truth_changed(pv, r) => pv.last_touched_at,
@@ -991,6 +1017,7 @@ mod tests {
                 relocated_from: None,
                 directives: Vec::new(),
                 last_touched_at: None,
+                changed_from: None,
             }],
             properties: Vec::new(),
             icon: None,

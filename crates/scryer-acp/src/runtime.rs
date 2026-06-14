@@ -214,6 +214,10 @@ fn start_cli_session(
 ) -> Result<oneshot::Sender<()>, String> {
     let mut cmd = tokio::process::Command::new(agent_binary);
 
+    // The prompt goes over STDIN for the known CLIs, never argv: an
+    // evidence-embedded build prompt easily exceeds Linux's ~128 KB per-argument
+    // cap (E2BIG), and both `claude -p` and `codex exec -` read stdin.
+    let mut prompt_via_stdin = true;
     match kind {
         AgentKind::ClaudeCode => {
             let mcp_config = serde_json::json!({
@@ -236,8 +240,7 @@ fn start_cli_session(
             for pat in allowed_tools {
                 cmd.arg("--allowed-tools").arg(pat);
             }
-            cmd.arg("--no-session-persistence")
-                .arg(&prompt);
+            cmd.arg("--no-session-persistence");
         }
         AgentKind::Codex => {
             // Codex uses `codex exec` with MCP pre-configured via .codex/config.toml
@@ -249,16 +252,23 @@ fn start_cli_session(
             if !model_name.is_empty() {
                 cmd.arg("-c").arg(format!("model=\"{}\"", model_name));
             }
-            cmd.arg(&prompt);
+            // `-` = read the prompt from stdin.
+            cmd.arg("-");
         }
         AgentKind::Other => {
-            // Best-effort: pass prompt as last arg
+            // Best-effort: pass prompt as last arg (unknown CLIs may not read
+            // stdin — large prompts are unsupported here).
             cmd.arg(&prompt);
+            prompt_via_stdin = false;
         }
     }
 
     cmd.current_dir(cwd)
-        .stdin(std::process::Stdio::null())
+        .stdin(if prompt_via_stdin {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        })
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
@@ -279,6 +289,18 @@ fn start_cli_session(
 
     let mut child = cmd.spawn()
         .map_err(|e| format!("Failed to spawn {agent_binary}: {e}"))?;
+
+    if prompt_via_stdin {
+        if let Some(mut stdin) = child.stdin.take() {
+            let prompt_bytes = prompt.as_bytes().to_vec();
+            tokio::task::spawn_local(async move {
+                use tokio::io::AsyncWriteExt;
+                let _ = stdin.write_all(&prompt_bytes).await;
+                let _ = stdin.shutdown().await;
+                // Dropping stdin closes the pipe — the CLI sees EOF and starts.
+            });
+        }
+    }
 
     let child_pid = child.id();
     let (cancel_tx, cancel_rx) = oneshot::channel::<()>();

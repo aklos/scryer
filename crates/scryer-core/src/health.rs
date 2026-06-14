@@ -10,7 +10,9 @@
 //!   its subtree — it is *never* expected to carry its own source anchor. Only
 //!   leaf-hosted claims (a childless node saying "this code exists") are
 //!   anchorable, and only those can be "unmapped". This kills the false
-//!   "unmapped" flag on System/Container responsibilities.
+//!   "unmapped" flag on System/Container responsibilities. Persons (actors) and
+//!   external systems are out-of-system — their claims are never code-backed, so
+//!   they are never anchorable either.
 //! - **Coverage rolls up.** Every node reports its own counts and its subtree's
 //!   counts (statuses, vagrant flags, anchorable vs anchored claims, the most
 //!   recent truth-bearing edit), so any altitude can answer "how much of what I
@@ -19,7 +21,7 @@
 //!   each boundary-owning node reports which of its files no anchor in its
 //!   subtree reaches — the code the lens cannot see.
 
-use crate::{ScryModel, Status};
+use crate::{Kind, ScryModel, Status};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -150,6 +152,10 @@ pub fn compute_health(model: &ScryModel, files: Option<&BTreeSet<String>>) -> Mo
             .get(node.id.as_str())
             .map_or(true, |c| c.is_empty());
         let external = node.external == Some(true);
+        // Persons are actors and externals are out-of-system; neither is backed
+        // by code in this model, so their claims are never anchorable (and so
+        // never "unmapped").
+        let anchorable_node = is_leaf && !external && node.kind != Kind::Person;
         let mut h = HealthCounts::default();
 
         for resp in &node.responsibilities {
@@ -162,7 +168,7 @@ pub fn compute_health(model: &ScryModel, files: Option<&BTreeSet<String>>) -> Mo
                 h.stale += 1;
             }
             h.touch(resp.last_touched_at);
-            if is_leaf && !external && claims_code(resp.status) {
+            if anchorable_node && claims_code(resp.status) {
                 h.anchorable += 1;
                 if model
                     .source_map
@@ -185,7 +191,7 @@ pub fn compute_health(model: &ScryModel, files: Option<&BTreeSet<String>>) -> Mo
             h.touch(prop.last_touched_at);
             shape_claims = shape_claims || claims_code(prop.status);
         }
-        if is_leaf && !external && shape_claims {
+        if anchorable_node && shape_claims {
             h.anchorable += 1;
             if model
                 .source_map
@@ -483,6 +489,7 @@ mod tests {
             relocated_from: None,
             directives: Vec::new(),
             last_touched_at: Some(100),
+            changed_from: None,
         }
     }
 
@@ -516,6 +523,23 @@ mod tests {
         assert_eq!(h.nodes["leaf"].own.unmapped, 1);
         assert_eq!(sys_h.subtree.unmapped, 1);
         assert_eq!(sys_h.subtree.responsibilities, 2);
+    }
+
+    /// A person is an actor, not code. Its implemented responsibilities are
+    /// never anchorable, so they never count as unmapped.
+    #[test]
+    fn person_responsibilities_are_never_unmapped() {
+        let mut m = ScryModel::new();
+        let mut dev = node("dev", Kind::Person, None);
+        dev.responsibilities.push(resp("r-1", Status::Implemented));
+        dev.responsibilities.push(resp("r-2", Status::Implemented));
+        m.nodes.push(dev);
+
+        let h = compute_health(&m, None);
+        let dev_h = &h.nodes["dev"];
+        assert_eq!(dev_h.own.anchorable, 0, "a person's claims are not code-backed");
+        assert_eq!(dev_h.own.unmapped, 0);
+        assert_eq!(dev_h.own.responsibilities, 2);
     }
 
     /// Anchored leaf claims count as coverage; proposed claims aren't expected

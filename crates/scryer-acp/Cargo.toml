@@ -17,3 +17,6 @@ which = "7"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+scryer-extract = { path = "../scryer-extract" }

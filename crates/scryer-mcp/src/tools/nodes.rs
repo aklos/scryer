@@ -699,6 +699,7 @@ impl ScryerServer {
                     relocated_from: Some(mv.from_node_id.clone()),
                     directives: resp.directives.clone(),
                     last_touched_at: None,
+                    changed_from: None,
                 };
                 let to = model.nodes.iter_mut().find(|n| n.id == mv.to_node_id).unwrap();
                 to.responsibilities.push(dest_resp);
@@ -717,6 +718,7 @@ impl ScryerServer {
                     relocated_from: None,
                     directives: resp.directives.clone(),
                     last_touched_at: None,
+                    changed_from: None,
                 };
                 let to = model.nodes.iter_mut().find(|n| n.id == mv.to_node_id).unwrap();
                 to.responsibilities.push(dest_resp);
@@ -778,6 +780,7 @@ mod tests {
             relocated_from: None,
             directives: Vec::new(),
             last_touched_at: None,
+            changed_from: None,
         }
     }
 

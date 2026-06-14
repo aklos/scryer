@@ -41,9 +41,9 @@ function EvidenceTag({
   ) : (
     <span
       className={`shrink-0 ${PILL_BASE} bg-orange-500/10 text-orange-700 ring-orange-500/25 dark:bg-orange-400/10 dark:text-orange-300 dark:ring-orange-400/25`}
-      title="No import evidence for this link — it may still be real (runtime calls, IPC, HTTP)"
+      title="No import in the code crosses this link. It may still be real (runtime calls, IPC, HTTP), or it may be a link to question."
     >
-      asserted
+      no code evidence
     </span>
   );
 }

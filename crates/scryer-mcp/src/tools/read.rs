@@ -1058,6 +1058,7 @@ mod tests {
             relocated_from: None,
             directives: Vec::new(),
             last_touched_at: None,
+            changed_from: None,
         }
     }
 
@@ -1399,6 +1400,7 @@ mod tests {
             relocated_from: None,
             directives: Vec::new(),
             last_touched_at: None,
+            changed_from: None,
         });
         m.nodes.push(sys);
         let mut leaf = node("leaf", Kind::Symbol, "leafFn", Some("sys"));
@@ -1413,6 +1415,7 @@ mod tests {
             relocated_from: None,
             directives: Vec::new(),
             last_touched_at: None,
+            changed_from: None,
         });
         m.nodes.push(leaf);
         scryer_core::write_model_at(&model_ref, &m).unwrap();

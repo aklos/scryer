@@ -63,6 +63,7 @@ impl RespMinter {
                     relocated_from: None,
                     directives: Vec::new(),
                     last_touched_at: None,
+                    changed_from: None,
                 }
             })
             .collect()
@@ -91,6 +92,7 @@ impl RespMinter {
                     relocated_from: None,
                     directives: Vec::new(),
                     last_touched_at: None,
+                    changed_from: None,
                 };
                 (resp, i.line(), i.end_line())
             })

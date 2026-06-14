@@ -154,40 +154,41 @@ Stay within the "{node_name}" subtree. The goal is a complete, accurate semantic
     )
 }
 
-/// Wave 1 of the auto-context build: create the system + container levels from
-/// the deterministic codebase context (the containers were already discovered
-/// from manifests, so the agent skips structure discovery and goes straight to
-/// naming roles + writing responsibilities). Built with the intent tools only.
-/// `containers_json` is the serialized container facts (dir, name, technology,
-/// dependency edges) from the context engine.
-pub fn build_system_prompt(project_path: &str, containers_json: &str) -> String {
+/// The system-level SEMANTIC session of the auto-context build. The structural
+/// skeleton (system node + one container per deployable unit, boundary globs,
+/// dependency links) was already minted mechanically from manifest facts, and
+/// the per-container modeling sessions are running IN PARALLEL with this one.
+/// This session owns everything those jobs don't: persons, external systems,
+/// system/container responsibilities, refined names/technology, link labels,
+/// deploy groups. `structure_json` is the minted skeleton (ids included).
+pub fn enrich_system_prompt(project_path: &str, system_id: &str, structure_json: &str) -> String {
     format!(
-        r#"You have the scryer MCP server (schema v0.3). Build the SYSTEM and CONTAINER levels of the architecture model for the project at {project_path}. The codebase has already been scanned: its deployable units are given below, so you do NOT need to discover structure — go straight to the meaning.
+        r#"You have the scryer MCP server (schema v0.3). The architecture model for the project at {project_path} was just seeded MECHANICALLY from its manifests: a system node and one container per deployable unit (with boundary globs and raw dependency links) already exist — their ids are below. Separate agent sessions are filling each container's components IN PARALLEL with you right now. Your job is everything at the SYSTEM and CONTAINER level that a manifest can't say:
 
-## How to build (use the intent tools — never emit model JSON)
-- `add_system` — create the system being modeled (the project itself). Add external third-party systems it depends on as separate systems with external=true (only if evident from manifests/config — e.g. Stripe, S3, a managed database).
-- `add_person` — real users / actors, if the codebase evidences them.
-- `add_container` — one per deployable unit below. Pass `parentId` = the system id, `name` = its role, `technology` = what it IS as software (refine the declared technology into a clear label), and `boundaryDir` = its `dir` from the context (sets the boundary glob for you). One unit may have an EMPTY `dir` — that is the project root itself (the primary application, e.g. the web app the repo is built around). It is a real container distinct from the system node: create it too, name its role, and pass `boundaryDir: ""`. Do NOT collapse it into the system or skip it.
-- `add_links` — connect persons and externals to the SYSTEM (not to containers), and containers to each other along the dependency edges, and containers to externals.
-- `add_group` — OPTIONAL, and a SECONDARY axis (never a substitute for the container decomposition). Group containers that deploy or package together (e.g. several services provisioned by one module / compose file). Pass `parent_id` = the system id and `member_ids` = the container ids. SKIP grouping when the containers are independent services — most small projects ship each unit on its own and need no groups.
+1. **Refine the minted containers** via `update_nodes` (batch ONE call): `name` = the unit's role ("Desktop App", "MCP Server", "Docs Site" — the minted names are raw manifest names), `technology` = what it IS as software ("Tauri 2 + React", "Rust MCP server"), and 2–6 terse, verb-led business responsibilities per container (status `implemented`). Write the system node's own responsibilities (1–4, broader than any container's) and a short description of what the system IS.
+2. **Add persons and externals.** `add_person` for real users/actors the code evidences; `add_system` with external=true for third-party systems it depends on (only if evident from manifests/config — e.g. Stripe, S3, a managed database). Link them to the SYSTEM (id below) with `add_links`, never to containers.
+3. **Add non-code containers** the manifests evidence but the scan can't mint — a managed database, a queue, a bucket — with `add_container` (parentId = the system id). Do NOT add, remove, rename-to-something-unrelated, or re-parent the minted code-bearing containers; refining their name/technology/responsibilities is yours, their existence is not.
+4. **Label the links.** The minted container→container links carry no labels: `update_links` each with a clear label ("invokes", "reads models from"). Add missing container→container, container→external links with `add_links`.
+5. **Group deploy units** with `add_group` ONLY when several containers ship/package together. Independent services get no groups — most small projects need none.
 
-Each tool takes plain responsibility statements (one terse verb-led business clause each — no mechanism/technology words) at the NODE'S OWN altitude: a container's responsibilities say what the container is accountable for, not what its individual components do — that finer detail lands when you model the components in a later pass. Each tool returns the node it created so you have its id for links. Responsibility status is set to implemented for you.
+## Rules
+- Responsibilities are pure business statements at the node's own altitude — no technology words, no mechanism, no per-component enumeration. Technology belongs in the `technology` field.
+- Mention other nodes in descriptions/statements as wikilinks by id (`[[node-id]]`), and still declare the structural link.
+- Do NOT touch anything below container level: no components, no symbols — the parallel sessions own container internals, and structure they commit while you work is not yours to edit.
+- Read manifests and a few entry-point files only — enough to state what each unit is accountable for.
 
 ## Procedure (minimize round-trips)
-1. Read the manifests and a few entry-point files for each unit below — only enough to state what each unit is accountable for. Do NOT enumerate components or symbols; that is a later pass.
-2. `add_system` for the project; add any externals and persons.
-3. `add_container` for each unit below (carry over its dependency edges as container→container links).
-4. `add_links` for person→system, container→container, container→external.
-5. ONLY if some containers clearly deploy/package together, `add_group` them. Independent services get no groups.
-6. Call `validate_model` and fix every warning — especially rejected cross-level links and "appears disconnected". Re-link and re-validate until clean.
-7. Stop at the container level. Do not add components or code-level nodes.
+1. Read the key manifests; decide roles, actors, externals.
+2. One batched `update_nodes` for system + minted containers; `add_person`/`add_system`/`add_container` for the rest; `add_links`; `update_links` for labels.
+3. Call `validate_model` ONCE at the end and fix only system/container-level warnings (especially "appears disconnected" persons/externals). Warnings about nodes you did not create (components/symbols from the parallel sessions) are NOT yours — leave them.
 
-## Deployable units (from the codebase scan)
+## The minted structure (ids are authoritative)
+- System id: `{system_id}`
 ```json
-{containers_json}
+{structure_json}
 ```
 
-Write only what the code evidences. Keep responsibilities terse and business-level; put technology in the `technology` field, never in a responsibility.
+Write only what the code evidences. Keep responsibilities terse and business-level.
 "#
     )
 }
@@ -205,7 +206,7 @@ pub fn build_container_prompt(
     scope_json: &str,
 ) -> String {
     format!(
-        r#"You have the scryer MCP server (schema v0.3). Model the COMPONENTS and SYMBOLS for one existing code-bearing container. Its code has already been indexed — every file, every symbol with its line range, and the dependency edges are supplied at the end, so you do NOT need to discover structure. Go straight to the meaning.
+        r#"You have the scryer MCP server (schema v0.3). Model the COMPONENTS and SYMBOLS for one existing code-bearing container. Its code has already been indexed — every file, every symbol with its line range AND its source excerpt, and the dependency edges are supplied at the end, so you do NOT need to discover structure or read files. Go straight to the meaning.
 
 ## How to build
 
@@ -229,7 +230,7 @@ Every component must contain at least one architecturally meaningful symbol. For
   - **Classes/objects with internal helpers**: model the class as ONE symbol carrying its public operations as responsibilities; do NOT add private/internal helper methods (e.g. `_rpc`, `_get_uid`, `_execute`) as their own symbols. Only addressable, public definitions become symbols.
 
 ## Procedure (minimize round-trips)
-1. Decide the component clustering from the dependency graph below (group cohesive files/symbols). Read the actual source for each cluster — only enough to state responsibilities accurately.
+1. Decide the component clustering from the dependency graph below (group cohesive files/symbols). The evidence already embeds each symbol's source (`code`) — work from it directly. Open a source file ONLY when a truncated excerpt (`… +N lines`) leaves a symbol's accountability genuinely unclear; never re-read what is already inline.
 2. Build the full proposal in memory with components and their mandatory nested symbols.
 3. Do NOT build a `links` array for internal code dependencies — the server derives every component→component and symbol→symbol link from the dependency graph after it mints ids. Add a `links` entry ONLY for a cross-boundary relationship to an external or another container (by existing node id); call `read_model` once for the task's container if you need those ids. When in doubt, leave `links` empty.
 4. Include optional groups only when several components form a cohesive secondary module.
@@ -246,6 +247,7 @@ The payload is compact and indexed:
 - `paths[n]` is a project-relative source path.
 - each file has `path` = index into `paths`.
 - each symbol has a scope-global integer `id`, `name`, inclusive `lines`, optional `fields`, and `data: true` for data shapes.
+- each symbol's `code` is its source: doc comment + signature + body. A trailing `… +N lines` marker means the definition continues in the file — everything else is the complete definition.
 - `symbolEdges` entries are `[sourceSymbolId, destinationSymbolId]`.
 - `fileEdges` entries are `[sourcePathIndex, destinationPathIndex]`, partitioned into `internal`, `outbound`, and `inbound`.
 
@@ -332,15 +334,31 @@ Call `flag_drift` for "{node_id}" with everything you found. If the code and the
 /// `.scryer/preview/{nodeId}/` — the caller builds it afterward. The harness must
 /// wrap the component with whatever providers/context the codebase requires and
 /// supply reasonable fixture props inferred from the type signatures.
-pub fn preview_render_prompt(
+/// Prompt for the preview repair path (B6): the deterministic render of a
+/// component came out empty or crashed with synthesized placeholder props, so
+/// the agent authors realistic data. The primary output is a SHARED,
+/// type-keyed fixture set (`shared.tsx` + `manifest.json`) reused across every
+/// component that touches a type; a per-node override file is the fallback for
+/// what shared samples can't express. No build step, no harness.
+pub fn preview_fixture_prompt(
     project_path: &str,
     node_id: &str,
     node_name: &str,
     source_file: &str,
     source_lines: &str,
+    render_status: &str,
+    render_error: &str,
 ) -> String {
+    let error_section = if render_error.is_empty() {
+        String::new()
+    } else {
+        format!("\nRender error:\n\n```\n{render_error}\n```\n")
+    };
+
     format!(
-        r#"You are rendering a live preview of the visual component "{node_name}" (id {node_id}) in the project at {project_path}.
+        r#"The live preview of the visual component "{node_name}" (id {node_id}) in the project at {project_path} is rendered by a dev server that synthesizes placeholder props from the component's TypeScript types. With those placeholders the render came out **{render_status}** — the preview needs realistic data instead.
+{error_section}
+Generic synthesis can't invent interconnected domain data: a prop that is a graph (or any object) plus another prop that points INTO it (an id, a selection) can't be made consistent from types alone. You supply that domain knowledge ONCE, keyed by type, so every component that touches the type reuses it.
 
 ## The component
 
@@ -350,42 +368,50 @@ Source file: `{source_file}`
 {source_lines}
 ```
 
+## How shared fixtures work
+
+The preview server reads `.scryer/preview/fixtures/manifest.json`. For any prop whose TypeScript type is named there, it feeds a sample export from a fixture module instead of a placeholder. The manifest maps type name → export:
+
+```json
+{{
+  "byType": {{
+    "ScryModel": {{ "module": "shared.tsx", "export": "sampleModel" }},
+    "Node": {{ "module": "shared.tsx", "export": "sampleNode", "sourceFile": "src/viewmodel.ts" }}
+  }}
+}}
+```
+
+`module` is a file under `.scryer/preview/fixtures/`. `export` is a named export in it. `sourceFile` is OPTIONAL — add it only to disambiguate a common type name (e.g. `Node`) by requiring the type's declaration to live in that file, so a same-named type in some library never matches.
+
 ## Your task
 
-Write `main.tsx` for a preview harness that renders this component with realistic fixture data. The harness boilerplate (index.html, vite.config.ts, preview.css, Tauri stubs) is already set up at `.scryer/preview/{node_id}/` — you only need to write `main.tsx`.
+1. **Read the component's prop types** (follow the imports in the source above) to see which types its props are.
+2. **Read the existing `.scryer/preview/fixtures/manifest.json` and `shared.tsx` if they exist** — you are EXTENDING them, not overwriting. Reuse any type already covered; never duplicate an entry.
+3. For each domain type this component needs that is NOT already in the manifest, **add a named sample export** to `shared.tsx` and a `byType` entry to the manifest. Prefer extending `shared.tsx`; these samples are shared across the whole project.
+4. **Make the samples mutually consistent**: ids that resolve, collection members and link/edge endpoints reference ids that exist in the sample, and any pointer-typed prop (a `selected`/`activeId`-style string) names a real element in the sample so the component renders a populated state, not an empty/not-found one.
+5. **Realistic data, not placeholders.** Lists get 3–5 plausible items; names/labels/timestamps look real. The goal is a preview that shows the component doing its job.
+6. **Seed controlled state to a POPULATED snapshot.** If the component's expand/select/open/active state is driven by props (an `expanded`/`openIds` set, a `selected` id, an `isOpen` flag) with companion callbacks (`onToggle`, `onSelect`), the synthesized empty set / false flag renders it collapsed-and-blank — functionally useless as a preview, even though it "rendered". The callbacks stay no-ops (the preview is a snapshot, not interactive), so the ONLY way the component shows its structure is to seed those state props open: an `expanded` set containing the sample's ids, a real `selected`, flags set so panels are visible. These props are usually generic-typed (`Set<string>`, `boolean`), so seed them in the per-node override below rather than the shared manifest.
 
-### Steps
+### Per-node override (fallback + controlled state)
 
-1. **Read the component source** (and its imports) to understand:
-   - What props it expects (from TypeScript types or PropTypes)
-   - What context providers it needs (Router, Theme, Store, etc.)
-   - What data shape it expects (from types/interfaces)
-
-2. **Write `.scryer/preview/{node_id}/main.tsx`**:
-   - Import `./preview.css` (already set up to include the project's CSS + Tailwind scanning)
-   - Import the component from its project-relative path (e.g. `../../../src/MyComponent`)
-   - Import `createRoot` from `react-dom/client`
-   - Wrap the component in any required providers, pass realistic fixture props, render into `#root`
-
-3. **Generate realistic fixture data** — not placeholder text. Infer sensible values from prop types and the component's purpose. If the component renders a list, include 3-5 items. If it shows user data, use realistic names/emails.
-
-The preview is built for you after you write `main.tsx` — you do not run any build yourself.
+Write `.scryer/preview/fixtures/{node_id}.tsx` (DEFAULT EXPORT = a partial props object for "{node_name}") when this component needs props the shared samples can't express — a particular selection, a special-case shape, or **controlled-state props seeded open per point 6**. The server spreads it OVER the shared/synthesized props, so include only the keys you override, and import the shared samples to keep ids consistent (e.g. `import {{ sampleModel }} from "/.scryer/preview/fixtures/shared.tsx"` then `expanded: new Set(sampleModel.nodes.map((n) => n.id))`). Keep domain DATA in the shared fixtures; use the override for this component's view state.
 
 ### Rules
 
-- Do NOT modify any project source files.
-- Do NOT create or modify index.html, vite.config.ts, preview.css, or stubs/ — they are pre-generated.
-- The ONLY file you write is `.scryer/preview/{node_id}/main.tsx`.
-- Keep the harness minimal. The component IS the preview — don't add navigation chrome, debug tools, or extra UI.
+- Import types or helpers from the project by root-absolute path (e.g. `import type {{ Node }} from "/src/viewmodel"`). Never use relative imports — fixtures live outside `src/`.
+- Function props may be no-ops (`() => {{}}`).
+- Do NOT modify any project source files. The only files you write are under `.scryer/preview/fixtures/`.
+- You do not run, build, or render anything — the preview server picks up the files automatically.
 "#
     )
 }
 
-/// Prompt for generating visual variations of a component. The agent creates N
-/// different `main.tsx` files, each a distinct visual interpretation of the
-/// user's request — the caller builds each afterward. Each variation imports the
-/// original component and applies changes through CSS overrides, wrappers, modified
-/// props, or inline reimplementation — the project source is never modified.
+/// Prompt for generating visual variations of a component (B6). The agent
+/// writes N self-contained variant modules; the always-running preview server
+/// serves each as a virtual entry instantly — there is no build step. Each
+/// variant imports the original component (or reimplements parts inline) and
+/// applies changes through wrappers, CSS overrides, or modified props — the
+/// project source is never modified.
 pub fn visual_variation_prompt(
     project_path: &str,
     node_id: &str,
@@ -393,19 +419,18 @@ pub fn visual_variation_prompt(
     source_file: &str,
     source_lines: &str,
     user_prompt: &str,
-    existing_main_tsx: &str,
+    base_variant: &str,
     variation_count: usize,
 ) -> String {
-    let existing_section = if existing_main_tsx.is_empty() {
+    let base_section = if base_variant.is_empty() {
         String::new()
     } else {
         format!(
-            "\n## Current render harness (main.tsx — use as starting point)\n\n```tsx\n{existing_main_tsx}\n```\n"
+            "\n## Starting point (previously chosen variant — iterate on this)\n\n```tsx\n{base_variant}\n```\n"
         )
     };
 
     let last_idx = variation_count - 1;
-    let source_stripped = source_file.trim_start_matches('/');
 
     format!(
         r#"You are generating {variation_count} visual variations of the component "{node_name}" (id {node_id}) in the project at {project_path}.
@@ -417,7 +442,7 @@ Source file: `{source_file}`
 ```
 {source_lines}
 ```
-{existing_section}
+{base_section}
 ## The user's request
 
 {user_prompt}
@@ -426,26 +451,19 @@ Source file: `{source_file}`
 
 Create {variation_count} DISTINCT visual interpretations of the user's request. Each variation must be a genuinely different approach, not minor tweaks of the same idea.
 
-For EACH variation (0 through {last_idx}):
+For EACH variation index 0 through {last_idx}, write ONE file `.scryer/preview/variations/{node_id}/{{n}}.tsx` that:
 
-1. **Write `.scryer/preview/{node_id}/variations/{{n}}/main.tsx`** where `{{n}}` is the variation index (0, 1, 2).
+- `export default` a self-contained React component taking NO props — it renders the varied version of "{node_name}" with realistic inline fixture data (lists get 3–5 plausible items, labels look real).
+- Imports everything from the project by ROOT-ABSOLUTE path (e.g. `import {{ {node_name} }} from "/{source_file}"`, `import {{ helper }} from "/src/lib/helper"`). NEVER use relative imports — the variant module lives outside `src/`.
+- Applies the requested change through one or more of:
+  - **CSS overrides** — a `<style>` element or inline styles on a wrapper
+  - **Wrapper components** — wrap the original to modify layout, spacing, or behavior
+  - **Modified props** — change props that affect appearance
+  - **Inline reimplementation** — for structural changes, reimplement the relevant parts inline while importing shared dependencies from the project
+- Does NOT import the project's global CSS — the preview server injects it automatically.
+- Does NOT call `createRoot` or render itself — just export the component.
 
-2. Each `main.tsx` must:
-   - Import `./preview.css` (harness CSS with the project's styles + Tailwind)
-   - Import the original component from its project-relative path: `../../../../../{source_stripped}` (5 directories up from the variation dir to the project root)
-   - Import `createRoot` from `react-dom/client`
-   - Apply the requested visual change through one or more of:
-     - **CSS overrides** — inject a `<style>` element or use inline styles on a wrapper div
-     - **Wrapper components** — wrap the original to modify layout, spacing, or behavior
-     - **Modified props** — change props that affect appearance
-     - **Inline reimplementation** — for structural changes, reimplement the relevant parts inline while importing shared dependencies from the project
-   - Render into `#root`
-
-Each variation is built for you after you write its `main.tsx` — you do not run any build yourself.
-
-### Path reference
-
-From a variation directory (`.scryer/preview/{node_id}/variations/{{n}}/`), the project root is 5 directories up: `../../../../..`
+An always-running dev server picks each file up instantly; there is no build step and nothing else to write.
 
 ### Variation guidelines
 
@@ -458,8 +476,7 @@ From a variation directory (`.scryer/preview/{node_id}/variations/{{n}}/`), the 
 ### Rules
 
 - Do NOT modify any project source files
-- Do NOT modify harness files (index.html, vite.config.ts, preview.css, stubs/) — they are pre-generated
-- The ONLY files you write are the {variation_count} `main.tsx` files in `variations/{{0..{last_idx}}}/`
+- The ONLY files you write are the {variation_count} variant modules `.scryer/preview/variations/{node_id}/{{0..{last_idx}}}.tsx`
 "#
     )
 }
@@ -491,6 +508,7 @@ mod tests {
                         relocated_from: None,
                         directives: Vec::new(),
                         last_touched_at: None,
+                        changed_from: None,
                     }]
                 })
                 .unwrap_or_default(),

@@ -58,6 +58,17 @@ export interface Responsibility {
    *  the Rust write path (agent edits) and the mutation helpers below (canvas
    *  edits); never hand-authored. */
   lastTouchedAt?: number;
+  /** Spec as it stood at the last reconcile — captured when a reword flipped an
+   *  implemented/verified claim to `changed`. Drives the persistent "what it
+   *  was → what it is now" diff and is dropped once the claim leaves `changed`
+   *  (the agent reconciled the edit with the code). See {@link flagSpecEdits}. */
+  changedFrom?: SpecSnapshot;
+}
+
+/** A responsibility's spec at its last reconcile — see {@link Responsibility.changedFrom}. */
+export interface SpecSnapshot {
+  statement: string;
+  directives?: string[];
 }
 
 export interface SchemaProperty {
@@ -286,6 +297,65 @@ export function stampTouches(prev: ScryModel, next: ScryModel): ScryModel {
       return { ...g, responsibilities: g.responsibilities?.map((r) => dateResp(r, hr)) };
     }),
   };
+}
+
+/**
+ * Apply the lifecycle rule "editing the spec after implementation flips the
+ * claim to `changed`" (see rules.rs `responsibility-status`): for every
+ * responsibility whose statement or directives moved relative to `prev` while
+ * its status was `implemented`/`verified`, set status to `changed`. This is the
+ * persistent, reconcile-scoped marker that the model now describes something the
+ * code doesn't yet — it survives reload (it's in the model file) and the agent
+ * clears it back to `implemented` when it reconciles the change with the code.
+ *
+ * Runs at the user-edit chokepoint only (agent writes set status explicitly).
+ * An explicit status change in the same edit is respected — we only auto-flip
+ * when the user left the status alone and just reworded the claim.
+ */
+export function flagSpecEdits(prev: ScryModel, next: ScryModel): ScryModel {
+  const priorResp = new Map<string, Responsibility>();
+  for (const n of prev.nodes)
+    for (const r of n.responsibilities ?? []) priorResp.set(r.id, r);
+  for (const g of prev.groups)
+    for (const r of g.responsibilities ?? []) priorResp.set(r.id, r);
+
+  let touched = false;
+  const flip = (r: Responsibility): Responsibility => {
+    // Reconciled out of `changed` (by hand, or the agent on its next write):
+    // the snapshot has served its purpose — drop it so the diff resolves.
+    if (r.status !== "changed" && r.changedFrom) {
+      touched = true;
+      const { changedFrom: _drop, ...rest } = r;
+      return rest;
+    }
+    const pv = priorResp.get(r.id);
+    if (!pv) return r;
+    const wasImplemented = pv.status === "implemented" || pv.status === "verified";
+    // Status untouched this edit (an explicit pick wins); spec actually moved.
+    if (!wasImplemented || r.status !== pv.status) return r;
+    const specMoved =
+      r.statement !== pv.statement || !sameDirectives(r.directives, pv.directives);
+    if (!specMoved) return r;
+    touched = true;
+    // Snapshot the pre-edit spec once, on the first flip — later rewords keep
+    // comparing against the last reconciled value, not the previous keystroke.
+    return {
+      ...r,
+      status: "changed",
+      changedFrom: r.changedFrom ?? {
+        statement: pv.statement,
+        ...(pv.directives && pv.directives.length > 0 ? { directives: pv.directives } : {}),
+      },
+    };
+  };
+
+  const nodes = next.nodes.map((n) =>
+    n.responsibilities ? { ...n, responsibilities: n.responsibilities.map(flip) } : n,
+  );
+  const groups = next.groups.map((g) =>
+    g.responsibilities ? { ...g, responsibilities: g.responsibilities.map(flip) } : g,
+  );
+  return touched ? { ...next, nodes, groups } : next;
 }
 
 /** Rewrite `[[old]]` / `[[old|label]]` wikilink targets to the new name in one
