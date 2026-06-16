@@ -1,6 +1,8 @@
 pub mod build_edges;
+pub mod diff;
 pub mod drift;
 pub mod health;
+pub mod history;
 pub mod rules;
 pub mod scan;
 pub mod seed;
@@ -224,8 +226,6 @@ pub struct Node {
     #[serde(default, alias = "preview", skip_serializing_if = "Option::is_none")]
     pub appearance: Option<Appearance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub deprecated: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relocated: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locked: Option<bool>,
@@ -370,6 +370,15 @@ impl ModelRef {
         }
     }
 
+    /// The PLANNED (draft) model — the intent the canvas and agent edit. The
+    /// diff against `model.scry` (the committed source of truth) is the planning
+    /// substrate. Absent until the first edit diverges from the model.
+    pub fn planned_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join("planned.scry"),
+        }
+    }
+
     pub fn implementing_path(&self) -> PathBuf {
         match self {
             ModelRef::ProjectLocal(path) => path.join(".scryer").join(".implementing"),
@@ -385,6 +394,14 @@ impl ModelRef {
     pub fn sync_path(&self) -> PathBuf {
         match self {
             ModelRef::ProjectLocal(path) => path.join(".scryer").join(".sync"),
+        }
+    }
+
+    /// The durable committed-model event log (append-only JSONL). Git-tracked
+    /// like the model — see [`crate::history`].
+    pub fn history_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join("history.jsonl"),
         }
     }
 
@@ -661,6 +678,214 @@ pub fn read_baseline_at(r: &ModelRef) -> Option<ScryModel> {
         return None;
     }
     serde_json::from_value(v).ok()
+}
+
+// --- Planned (draft) layer + plan diff ---
+
+/// Write raw JSON to the planned path. Atomic temp-file + rename, like the model
+/// write, so the frontend watcher sees a single event.
+pub fn write_planned_raw_at(r: &ModelRef, data: &str) -> Result<(), String> {
+    let dir = r.dir();
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    ensure_project_gitignore(&dir)?;
+    let tmp = dir.join(".tmp.planned.scry");
+    fs::write(&tmp, data).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &r.planned_path()).map_err(|e| e.to_string())
+}
+
+/// Read the raw planned JSON, byte-for-byte. Falls back to the committed model's
+/// raw bytes when no planned file exists yet (planned == model), so the frontend
+/// can echo-dedup its own writes against exactly what it wrote.
+pub fn read_planned_raw_at(r: &ModelRef) -> Result<String, String> {
+    let path = r.planned_path();
+    if !path.exists() {
+        return read_model_raw_at(r);
+    }
+    fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+/// Read the planned (draft) model. Falls back to the committed model when no
+/// planned file exists yet — a fresh project has an empty plan (planned == model),
+/// so the plan diff is empty.
+pub fn read_planned_at(r: &ModelRef) -> Result<ScryModel, String> {
+    let path = r.planned_path();
+    if !path.exists() {
+        return read_model_at(r);
+    }
+    let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    check_version(&v)?;
+    serde_json::from_value(v).map_err(|e| e.to_string())
+}
+
+/// Write the planned (draft) model, stamping fossilization dates against the
+/// prior planned version (mirrors [`write_model_at`]). Hold the model lock across
+/// the read-modify-write, exactly as for the committed model.
+pub fn write_planned_at(r: &ModelRef, model: &ScryModel) -> Result<(), String> {
+    let prior = read_planned_at(r).ok();
+    let mut stamped = model.clone();
+    stamp_touches(&mut stamped, prior.as_ref(), drift::now_secs());
+    let json = serde_json::to_string_pretty(&stamped).map_err(|e| e.to_string())?;
+    write_planned_raw_at(r, &json)
+}
+
+/// Seed the planned file from the committed model when absent, so the plan starts
+/// empty (planned == model). No-op if planned already exists.
+pub fn ensure_planned_at(r: &ModelRef) -> Result<(), String> {
+    if r.planned_path().exists() {
+        return Ok(());
+    }
+    let model = read_model_at(r)?;
+    let json = serde_json::to_string_pretty(&model).map_err(|e| e.to_string())?;
+    write_planned_raw_at(r, &json)
+}
+
+/// The plan diff: how the draft (`planned`) diverges from the committed `model` —
+/// the planning substrate. Empty when there is no pending plan.
+pub fn plan_diff_at(r: &ModelRef) -> Result<diff::ModelDiff, String> {
+    let model = read_model_at(r)?;
+    let planned = read_planned_at(r)?;
+    Ok(diff::diff(&model, &planned))
+}
+
+/// Locate a responsibility by id anywhere in a model, returning its host id
+/// (node or group) and a clone. Responsibility ids are globally unique (the
+/// minters seed past every node- and group-owned id), so this is unambiguous.
+fn find_responsibility(model: &ScryModel, id: &str) -> Option<(String, Responsibility)> {
+    for n in &model.nodes {
+        if let Some(r) = n.responsibilities.iter().find(|r| r.id == id) {
+            return Some((n.id.clone(), r.clone()));
+        }
+    }
+    for g in &model.groups {
+        if let Some(r) = g.responsibilities.iter().find(|r| r.id == id) {
+            return Some((g.id.clone(), r.clone()));
+        }
+    }
+    None
+}
+
+/// Auto-commit a single planned element into the committed model — the fold that
+/// fires when an element's code is implemented (planned → model). Remove-then-
+/// insert, so one path handles add, update, move, AND delete:
+///
+///   - planned still holds the element → upsert it into the model at its planned
+///     home (a reparent/move comes along for free: the planned copy carries its
+///     new `parent_id` / host).
+///   - planned no longer holds it → a committed deletion: drop it from the model.
+///
+/// On a committed deletion the element is also purged from the planned mirror, so
+/// the plan clears. On an upsert, planned already mirrors the element, so it is
+/// left as-is (the diff for it goes empty automatically).
+///
+/// `owner_id` is required only for properties (their `(owner node, label)`
+/// identity); for responsibilities the host is derived from planned. Hold the
+/// model lock across the call.
+///
+/// (When the explicit delete tombstone lands, a tombstoned element routes through
+/// the same delete branch — one added `.filter(|x| !deleted)` at each lookup.)
+pub fn commit_element(
+    r: &ModelRef,
+    kind: diff::ElementKind,
+    owner_id: Option<&str>,
+    id: &str,
+) -> Result<(), String> {
+    let mut model = read_model_at(r)?;
+    let planned = read_planned_at(r)?;
+    let mut purge_from_planned = false;
+
+    match kind {
+        diff::ElementKind::Node => {
+            model.nodes.retain(|n| n.id != id);
+            match planned.nodes.iter().find(|n| n.id == id) {
+                Some(n) => model.nodes.push(n.clone()),
+                None => purge_from_planned = true,
+            }
+        }
+        diff::ElementKind::Link => {
+            model.links.retain(|l| l.id != id);
+            match planned.links.iter().find(|l| l.id == id) {
+                Some(l) => model.links.push(l.clone()),
+                None => purge_from_planned = true,
+            }
+        }
+        diff::ElementKind::Group => {
+            model.groups.retain(|g| g.id != id);
+            match planned.groups.iter().find(|g| g.id == id) {
+                Some(g) => model.groups.push(g.clone()),
+                None => purge_from_planned = true,
+            }
+        }
+        diff::ElementKind::Responsibility => {
+            for n in &mut model.nodes {
+                n.responsibilities.retain(|x| x.id != id);
+            }
+            for g in &mut model.groups {
+                g.responsibilities.retain(|x| x.id != id);
+            }
+            match find_responsibility(&planned, id) {
+                Some((host, resp)) => {
+                    if let Some(n) = model.nodes.iter_mut().find(|n| n.id == host) {
+                        n.responsibilities.push(resp);
+                    } else if let Some(g) = model.groups.iter_mut().find(|g| g.id == host) {
+                        g.responsibilities.push(resp);
+                    } else {
+                        return Err(format!(
+                            "cannot commit responsibility '{id}': its host '{host}' is not in \
+                             the committed model yet (commit the host node/group first)"
+                        ));
+                    }
+                }
+                None => purge_from_planned = true,
+            }
+        }
+        diff::ElementKind::Property => {
+            let owner = owner_id
+                .ok_or_else(|| "committing a property requires its owner node id".to_string())?;
+            let node = model
+                .nodes
+                .iter_mut()
+                .find(|n| n.id == owner)
+                .ok_or_else(|| {
+                    format!("cannot commit property '{id}': owner node '{owner}' not in the model")
+                })?;
+            node.properties.retain(|p| p.label != id);
+            // Upsert from planned if present there; absence is a committed delete,
+            // already handled by the retain above.
+            if let Some(p) = planned
+                .nodes
+                .iter()
+                .find(|n| n.id == owner)
+                .and_then(|n| n.properties.iter().find(|p| p.label == id))
+            {
+                node.properties.push(p.clone());
+            }
+        }
+    }
+
+    write_model_at(r, &model)?;
+
+    if purge_from_planned {
+        let mut p = planned;
+        match kind {
+            diff::ElementKind::Node => p.nodes.retain(|n| n.id != id),
+            diff::ElementKind::Link => p.links.retain(|l| l.id != id),
+            diff::ElementKind::Group => p.groups.retain(|g| g.id != id),
+            diff::ElementKind::Responsibility => {
+                for n in &mut p.nodes {
+                    n.responsibilities.retain(|x| x.id != id);
+                }
+                for g in &mut p.groups {
+                    g.responsibilities.retain(|x| x.id != id);
+                }
+            }
+            diff::ElementKind::Property => {}
+        }
+        let json = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?;
+        write_planned_raw_at(r, &json)?;
+    }
+
+    Ok(())
 }
 
 // --- Implementing flag ---
@@ -1023,7 +1248,6 @@ mod tests {
             icon: None,
             visual: None,
             appearance: None,
-            deprecated: None,
             relocated: None,
             locked: None,
             relocated_to: None,
@@ -1129,7 +1353,6 @@ mod lock_tests {
                         icon: None,
                         visual: None,
                         appearance: None,
-                        deprecated: None,
                         relocated: None,
                         locked: None,
                         relocated_to: None,
@@ -1146,5 +1369,203 @@ mod lock_tests {
         let ids: std::collections::HashSet<&str> =
             m.nodes.iter().map(|n| n.id.as_str()).collect();
         assert_eq!(ids.len(), N, "all minted ids are unique (no collision)");
+    }
+
+    /// With no planned file, the plan diff is empty (planned falls back to model).
+    /// After seeding and diverging the draft, the diff reports the change.
+    #[test]
+    fn plan_diff_tracks_draft_divergence() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        m.nodes.push(Node {
+            id: "n1".into(),
+            kind: Kind::System,
+            name: "Auth".into(),
+            parent_id: None,
+            external: None,
+            technology: None,
+            description: None,
+            responsibilities: Vec::new(),
+            properties: Vec::new(),
+            icon: None,
+            visual: None,
+            appearance: None,
+            relocated: None,
+            locked: None,
+            relocated_to: None,
+            relocated_from: None,
+        });
+        write_model_at(&r, &m).unwrap();
+
+        // No planned file yet → empty plan.
+        assert!(plan_diff_at(&r).unwrap().is_empty());
+
+        // Seed the draft from the model, then add a node to the draft.
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes.push(Node {
+            id: "n2".into(),
+            kind: Kind::System,
+            name: "Billing".into(),
+            parent_id: None,
+            external: None,
+            technology: None,
+            description: None,
+            responsibilities: Vec::new(),
+            properties: Vec::new(),
+            icon: None,
+            visual: None,
+            appearance: None,
+            relocated: None,
+            locked: None,
+            relocated_to: None,
+            relocated_from: None,
+        });
+        write_planned_at(&r, &planned).unwrap();
+
+        let d = plan_diff_at(&r).unwrap();
+        assert_eq!(d.changes.len(), 1);
+        assert_eq!(d.changes[0].id, "n2");
+        assert_eq!(d.changes[0].changes, vec![diff::Change::Added]);
+    }
+
+    fn mk_node(id: &str, name: &str, parent: Option<&str>) -> Node {
+        Node {
+            id: id.into(),
+            kind: Kind::Component,
+            name: name.into(),
+            parent_id: parent.map(|s| s.into()),
+            external: None,
+            technology: None,
+            description: None,
+            responsibilities: Vec::new(),
+            properties: Vec::new(),
+            icon: None,
+            visual: None,
+            appearance: None,
+            relocated: None,
+            locked: None,
+            relocated_to: None,
+            relocated_from: None,
+        }
+    }
+
+    fn mk_resp(id: &str, statement: &str) -> Responsibility {
+        Responsibility {
+            id: id.into(),
+            statement: statement.into(),
+            status: None,
+            vagrant: None,
+            stale: None,
+            locked: None,
+            relocated_to: None,
+            relocated_from: None,
+            directives: Vec::new(),
+            last_touched_at: None,
+            changed_from: None,
+        }
+    }
+
+    /// Committing an added/renamed node folds the draft into the model; once
+    /// committed the plan diff for it goes empty.
+    #[test]
+    fn commit_node_add_and_update() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        m.nodes.push(mk_node("n1", "Old", None));
+        write_model_at(&r, &m).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes[0].name = "New".into(); // rename n1
+        planned.nodes.push(mk_node("n2", "Billing", None)); // add n2
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Node, None, "n1").unwrap();
+        commit_element(&r, diff::ElementKind::Node, None, "n2").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        assert_eq!(model.nodes.iter().find(|n| n.id == "n1").unwrap().name, "New");
+        assert!(model.nodes.iter().any(|n| n.id == "n2"));
+        assert!(plan_diff_at(&r).unwrap().is_empty(), "plan clears after commit");
+    }
+
+    /// Committing a node that the draft dropped removes it from the model and
+    /// purges it from the plan.
+    #[test]
+    fn commit_node_delete() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        m.nodes.push(mk_node("n1", "Keep", None));
+        m.nodes.push(mk_node("n2", "Drop", None));
+        write_model_at(&r, &m).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes.retain(|n| n.id != "n2"); // delete n2 in the draft
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Node, None, "n2").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        assert!(model.nodes.iter().any(|n| n.id == "n1"));
+        assert!(!model.nodes.iter().any(|n| n.id == "n2"), "n2 removed from model");
+        assert!(plan_diff_at(&r).unwrap().is_empty());
+    }
+
+    /// Committing a responsibility that the draft moved to another host lands it
+    /// under the new host in the model and removes it from the old one.
+    #[test]
+    fn commit_responsibility_move() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        let mut a = mk_node("a", "A", None);
+        a.responsibilities.push(mk_resp("resp-1", "do the thing"));
+        m.nodes.push(a);
+        m.nodes.push(mk_node("b", "B", None));
+        write_model_at(&r, &m).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        // move resp-1 from a to b in the draft
+        let resp = planned.nodes[0].responsibilities.remove(0);
+        planned.nodes[1].responsibilities.push(resp);
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Responsibility, None, "resp-1").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        let a = model.nodes.iter().find(|n| n.id == "a").unwrap();
+        let b = model.nodes.iter().find(|n| n.id == "b").unwrap();
+        assert!(a.responsibilities.is_empty(), "resp left the old host");
+        assert_eq!(b.responsibilities.len(), 1, "resp landed on the new host");
+        assert!(plan_diff_at(&r).unwrap().is_empty());
+    }
+
+    /// Committing a property upserts it by `(owner, label)`.
+    #[test]
+    fn commit_property_update() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        let mut a = mk_node("a", "A", None);
+        a.properties.push(SchemaProperty {
+            label: "email".into(),
+            description: "old".into(),
+            status: None,
+            last_touched_at: None,
+        });
+        m.nodes.push(a);
+        write_model_at(&r, &m).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes[0].properties[0].description = "new".into();
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Property, Some("a"), "email").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        assert_eq!(model.nodes[0].properties[0].description, "new");
+        assert!(plan_diff_at(&r).unwrap().is_empty());
     }
 }

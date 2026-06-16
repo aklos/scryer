@@ -78,10 +78,26 @@ pub struct Ident {
     pub line: u32,
 }
 
+/// A multi-segment qualified path reference — either a `use` path or a
+/// fully-qualified reference at a call/type site (`scryer_extract::anchors::
+/// write_baseline`). The resolver maps the head segment to a container (via the
+/// crate/package manifest map) and the tail to a symbol, producing the
+/// cross-container edges that bare-name resolution cannot. Currently emitted for
+/// Rust only; empty for other languages (each needs its own import grammar).
+#[derive(Debug, Clone)]
+pub struct PathRef {
+    /// Path segments head-to-leaf, e.g. `["scryer_extract", "anchors", "write_baseline"]`.
+    pub segments: Vec<String>,
+    /// 1-based line of the reference: the `use` line, or the call/type site.
+    pub line: u32,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FileParse {
     pub defs: Vec<Def>,
     pub idents: Vec<Ident>,
+    /// Qualified path references for cross-container resolution. See [`PathRef`].
+    pub paths: Vec<PathRef>,
 }
 
 /// Parse a source file into its definitions + identifier occurrences. Returns
@@ -111,7 +127,20 @@ pub fn parse_file_with(path: &Path, source: &str, parser: &mut Parser) -> Option
     let mut idents: Vec<Ident> = Vec::new();
     collect_idents(root, bytes, &mut idents);
 
-    Some(FileParse { defs, idents })
+    // Qualified path references for cross-container resolution. Rust-only for
+    // now; the grammar nodes (`use_declaration`, `scoped_identifier`) are
+    // Rust-specific. Other families leave `paths` empty.
+    let mut paths: Vec<PathRef> = Vec::new();
+    if family_for_ext(ext) == Family::Rust {
+        collect_use_paths(root, bytes, &mut paths);
+        collect_qualified_paths(root, bytes, &mut paths);
+    }
+
+    Some(FileParse {
+        defs,
+        idents,
+        paths,
+    })
 }
 
 // --- shared helpers ---
@@ -417,6 +446,118 @@ fn collect_idents(root: Node, bytes: &[u8], out: &mut Vec<Ident>) {
     }
 }
 
+// --- qualified path references (cross-container resolution input) ---
+
+/// Walk `use` declarations and flatten each into one or more full segment
+/// paths, expanding grouped lists (`use a::{b, c}`) and keeping the real symbol
+/// for `x as y` renames. Globs (`use a::*`) are skipped — resolving a glob would
+/// require knowing the target's exports, and guessing mints false edges.
+fn collect_use_paths(node: Node, bytes: &[u8], out: &mut Vec<PathRef>) {
+    let mut cur = node.walk();
+    for child in node.children(&mut cur) {
+        if child.kind() == "use_declaration" {
+            let line = child.start_position().row as u32 + 1;
+            if let Some(arg) = child.child_by_field_name("argument") {
+                for segments in flatten_use(arg, bytes) {
+                    if segments.len() >= 2 {
+                        out.push(PathRef { segments, line });
+                    }
+                }
+            }
+            continue; // don't descend into the use tree again
+        }
+        collect_use_paths(child, bytes, out);
+    }
+}
+
+/// Walk every fully-qualified `scoped_identifier` in expression/type position
+/// (NOT inside a `use` decl) — e.g. `scryer_extract::anchors::write_baseline(..)`.
+/// This is how cross-crate references most often appear, and unlike a `use` line
+/// the reference sits at a real call site, so the resolver can attribute it to
+/// the enclosing function.
+fn collect_qualified_paths(node: Node, bytes: &[u8], out: &mut Vec<PathRef>) {
+    let mut cur = node.walk();
+    for child in node.children(&mut cur) {
+        if child.kind() == "use_declaration" {
+            continue; // handled by collect_use_paths
+        }
+        // A scoped_identifier nested inside another is just a prefix of it; only
+        // flatten the outermost occurrence.
+        if child.kind() == "scoped_identifier" && node.kind() != "scoped_identifier" {
+            if let Some(segments) = flatten_use(child, bytes).into_iter().next() {
+                if segments.len() >= 2 {
+                    out.push(PathRef {
+                        segments,
+                        line: child.start_position().row as u32 + 1,
+                    });
+                }
+            }
+        }
+        collect_qualified_paths(child, bytes, out);
+    }
+}
+
+/// Flatten a path subtree (`scoped_identifier`, `scoped_use_list`, `use_list`,
+/// `use_as_clause`, leaf identifiers) into the full segment paths it denotes.
+fn flatten_use(node: Node, bytes: &[u8]) -> Vec<Vec<String>> {
+    match node.kind() {
+        "identifier" | "type_identifier" | "crate" | "self" | "super" | "primitive_type" => {
+            vec![vec![node.utf8_text(bytes).unwrap_or("").to_string()]]
+        }
+        "scoped_identifier" => {
+            let name = node
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(bytes).ok())
+                .unwrap_or("")
+                .to_string();
+            let prefixes = match node.child_by_field_name("path") {
+                Some(p) => flatten_use(p, bytes),
+                None => vec![vec![]],
+            };
+            prefixes
+                .into_iter()
+                .map(|mut pre| {
+                    pre.push(name.clone());
+                    pre
+                })
+                .collect()
+        }
+        "scoped_use_list" => {
+            let base = match node.child_by_field_name("path") {
+                Some(p) => flatten_use(p, bytes).into_iter().next().unwrap_or_default(),
+                None => vec![],
+            };
+            let mut out = Vec::new();
+            if let Some(list) = node.child_by_field_name("list") {
+                let mut cur = list.walk();
+                for item in list.named_children(&mut cur) {
+                    for suffix in flatten_use(item, bytes) {
+                        let mut full = base.clone();
+                        full.extend(suffix);
+                        out.push(full);
+                    }
+                }
+            }
+            out
+        }
+        "use_list" => {
+            let mut out = Vec::new();
+            let mut cur = node.walk();
+            for item in node.named_children(&mut cur) {
+                out.extend(flatten_use(item, bytes));
+            }
+            out
+        }
+        // `x as y`: keep the real symbol path `x` (what the edge targets).
+        "use_as_clause" => match node.child_by_field_name("path") {
+            Some(p) => flatten_use(p, bytes),
+            None => vec![],
+        },
+        "use_wildcard" => vec![], // glob: skip (see collect_use_paths)
+        _ => vec![],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -524,5 +665,72 @@ class Foo:
         assert!(n.contains(&"freestanding"));
         assert!(n.contains(&"Foo"));
         assert!(n.contains(&"method"));
+    }
+
+    /// A path appears in the capture iff its segments match, regardless of line.
+    fn has_path(p: &FileParse, segs: &[&str]) -> bool {
+        p.paths.iter().any(|pr| pr.segments == segs)
+    }
+
+    #[test]
+    fn rust_use_paths_captured() {
+        let src = r#"
+use scryer_core::history::HistoryEvent;
+use scryer_core::{drift, build_edges::CachedEdge};
+use scryer_extract::anchors::write_baseline as wb;
+use std::collections::HashMap;
+"#;
+        let p = parse_file(Path::new("f.rs"), src).unwrap();
+        // plain scoped path
+        assert!(has_path(&p, &["scryer_core", "history", "HistoryEvent"]));
+        // grouped list expands into one path per leaf, sharing the prefix
+        assert!(has_path(&p, &["scryer_core", "drift"]));
+        assert!(has_path(&p, &["scryer_core", "build_edges", "CachedEdge"]));
+        // `as` rename keeps the real symbol, not the alias
+        assert!(has_path(
+            &p,
+            &["scryer_extract", "anchors", "write_baseline"]
+        ));
+        assert!(!p
+            .paths
+            .iter()
+            .any(|pr| pr.segments.contains(&"wb".to_string())));
+        // std paths are captured too; the resolver (not the parser) filters them
+        assert!(has_path(&p, &["std", "collections", "HashMap"]));
+    }
+
+    #[test]
+    fn rust_qualified_call_site_captured() {
+        // The dominant cross-crate form: a fully-qualified path at a call site,
+        // with NO `use`. Must be captured with the call-site line.
+        let src = r#"
+pub fn run() {
+    let _ = scryer_extract::anchors::write_baseline(&model);
+}
+"#;
+        let p = parse_file(Path::new("f.rs"), src).unwrap();
+        let pr = p
+            .paths
+            .iter()
+            .find(|pr| pr.segments == ["scryer_extract", "anchors", "write_baseline"])
+            .expect("qualified call-site path captured");
+        assert_eq!(
+            pr.line, 3,
+            "attributed to the call-site line, not the file top"
+        );
+    }
+
+    #[test]
+    fn rust_glob_use_skipped() {
+        let src = "use crate::helpers::*;\nuse scryer_core::prelude::*;\n";
+        let p = parse_file(Path::new("f.rs"), src).unwrap();
+        assert!(p.paths.is_empty(), "globs carry no unambiguous target");
+    }
+
+    #[test]
+    fn non_rust_has_no_paths() {
+        // Path capture is Rust-only for now; other families stay empty.
+        let p = parse_file(Path::new("f.ts"), "import {x} from './y';\n").unwrap();
+        assert!(p.paths.is_empty());
     }
 }

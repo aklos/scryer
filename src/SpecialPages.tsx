@@ -25,20 +25,18 @@ import { ANCHOR_STATE_LABEL, collapseAnchors } from "./health";
 import { kindIcon } from "./kindIcon";
 import { isNodeEmpty } from "./rollup";
 import { respElementId } from "./SourceSection";
-import { isRedLink, jumpTo, PageSection, WikiLink } from "./pagekit";
+import { BTN, jumpTo, PageSection, WikiLink } from "./pagekit";
 
 // --- shared shell -------------------------------------------------------------
 
 function SpecialHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
-    <header className="shrink-0 border-b border-[var(--border-subtle)] px-8 pb-4 pt-4">
-      <div className="mx-auto w-full max-w-[1080px]">
-        <div className="min-h-[18px] text-2xs font-medium text-[var(--text-tertiary)]">
-          Special page
-        </div>
-        <h1 className="mt-1 text-xl font-semibold leading-tight text-[var(--text)]">{title}</h1>
-        <div className="mt-1.5 text-2xs font-medium text-[var(--text-tertiary)]">{subtitle}</div>
+    <header className="shrink-0 border-b border-[var(--border)] px-7 pb-3 pt-[13px]">
+      <div className="min-h-[15px] font-mono text-[11px] text-[var(--text-tertiary)]">
+        Special page
       </div>
+      <h1 className="mt-[5px] text-[21px] font-semibold leading-tight text-[var(--text)]">{title}</h1>
+      <div className="mt-[3px] text-xs text-[var(--text-tertiary)]">{subtitle}</div>
     </header>
   );
 }
@@ -46,9 +44,7 @@ function SpecialHeader({ title, subtitle }: { title: string; subtitle: string })
 function SpecialBody({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-[1080px] px-8 pb-16">
-        <article className="min-w-0 max-w-[840px]">{children}</article>
-      </div>
+      <div className="max-w-[820px] px-7 pb-[50px] pt-[18px]">{children}</div>
     </div>
   );
 }
@@ -377,7 +373,7 @@ export function NeedsReviewPage({
                   <button
                     type="button"
                     onClick={onClearAllNew}
-                    className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs font-medium text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] cursor-pointer"
+                    className={BTN}
                   >
                     <Check className="h-3 w-3" /> Mark all reviewed
                   </button>
@@ -394,7 +390,6 @@ export function NeedsReviewPage({
                       <WikiLink
                         name={n.name}
                         Icon={kindIcon(n)}
-                        red={isRedLink(n)}
                         onClick={() => onSelectNode(n.id)}
                       />
                     </li>
@@ -503,7 +498,7 @@ export function NeedsReviewPage({
                       <button
                         type="button"
                         onClick={onCheckDrift}
-                        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs font-medium text-orange-600 hover:bg-[var(--surface-hover)] dark:text-orange-400 cursor-pointer"
+                        className={BTN}
                       >
                         <GitCompare className="h-3 w-3" /> Run drift check
                       </button>
@@ -513,7 +508,7 @@ export function NeedsReviewPage({
                         type="button"
                         onClick={onDismissDrift}
                         title="Mark reconciled without a semantic check"
-                        className="rounded px-1.5 py-0.5 text-2xs font-medium text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] cursor-pointer"
+                        className={BTN}
                       >
                         Dismiss
                       </button>
@@ -604,7 +599,6 @@ export function NeedsReviewPage({
                       <WikiLink
                         name={n.name}
                         Icon={kindIcon(n)}
-                        red
                         onClick={() => onSelectNode(n.id)}
                       />
                     </li>

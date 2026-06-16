@@ -113,7 +113,9 @@ struct FileCache {
 
 impl FileCache {
     fn new() -> Self {
-        Self { files: HashMap::new() }
+        Self {
+            files: HashMap::new(),
+        }
     }
 
     /// Returns (source, parse) for a project-relative path; `None` when the
@@ -182,7 +184,10 @@ pub struct ExtentResolver<'p> {
 
 impl<'p> ExtentResolver<'p> {
     pub fn new(project: &'p Path) -> Self {
-        Self { project, cache: FileCache::new() }
+        Self {
+            project,
+            cache: FileCache::new(),
+        }
     }
 
     /// Full (start, end) line extent of the named definition in `rel` —
@@ -494,7 +499,6 @@ mod tests {
             icon: None,
             visual: None,
             appearance: None,
-            deprecated: None,
             relocated: None,
             locked: None,
             relocated_to: None,
@@ -519,7 +523,11 @@ mod tests {
     fn reconcile(r: &ModelRef) {
         scryer_core::write_sync_state(
             r,
-            &SyncState { reconciled_at: drift::now_secs(), commit: None },
+            &SyncState {
+                reconciled_at: drift::now_secs(),
+                commit: None,
+                ..Default::default()
+            },
         )
         .unwrap();
         write_baseline(r).unwrap();
@@ -542,7 +550,10 @@ mod tests {
         touch_gate();
         std::fs::write(
             r.project_path().join("src/m.ts"),
-            TS.replace("function beta() {\n    return 1;", "function beta() {\n    return 2;"),
+            TS.replace(
+                "function beta() {\n    return 1;",
+                "function beta() {\n    return 2;",
+            ),
         )
         .unwrap();
         let check = check_anchors(&r).unwrap();
@@ -552,7 +563,10 @@ mod tests {
         touch_gate();
         std::fs::write(
             r.project_path().join("src/m.ts"),
-            TS.replace("function alpha() {\n    return 1;", "function alpha() {\n    return 42;"),
+            TS.replace(
+                "function alpha() {\n    return 1;",
+                "function alpha() {\n    return 42;",
+            ),
         )
         .unwrap();
         let check = check_anchors(&r).unwrap();

@@ -8,7 +8,8 @@ use rmcp::{
     tool, tool_router, ErrorData as McpError,
 };
 use scryer_core::{Kind, Link, Node, ScryModel};
-use std::collections::HashSet;
+use scryer_core::history::{EventKind, EventRow, HistoryEvent};
+use std::collections::{HashMap, HashSet};
 
 /// Remove code-side mapping for a set of nodes about to be deleted: their
 /// boundary globs (keyed by node id) and the source-map locations of every
@@ -66,6 +67,11 @@ impl ScryerServer {
             ))]));
         }
 
+        // A full-state set is code→model generation: write the plan, then commit
+        // it (planned and model land equal, so the plan diff is empty afterward).
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
+        }
         if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
@@ -100,7 +106,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_model_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -128,7 +134,6 @@ impl ScryerServer {
                 icon: None,
                 visual: None,
                 appearance: None,
-                deprecated: None,
                 relocated: None,
                 locked: None,
                 relocated_to: None,
@@ -139,10 +144,9 @@ impl ScryerServer {
         }
         enforce_readonly_directives(&mut model, &prior);
 
-        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Added {} node(s): {}",
@@ -163,7 +167,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_model_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -207,9 +211,6 @@ impl ScryerServer {
             if let Some(v) = u.visual {
                 n.visual = if v { Some(true) } else { None };
             }
-            if let Some(v) = u.deprecated {
-                n.deprecated = if v { Some(true) } else { None };
-            }
             if let Some(v) = u.relocated {
                 n.relocated = if v { Some(true) } else { None };
             }
@@ -221,10 +222,9 @@ impl ScryerServer {
         enforce_readonly_directives(&mut model, &prior);
         scryer_core::rewrite_renamed_wikilinks(&mut model, &prior);
 
-        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Updated {} node(s)",
@@ -239,95 +239,117 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<MarkImplementedRequest>,
     ) -> Result<CallToolResult, McpError> {
-        use scryer_core::Status;
+        use scryer_core::diff::ElementKind;
         let model_ref = resolve_model_ref(req.project.as_deref())?;
         let _lock = match lock_or_err(&model_ref) {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_model_at(&model_ref) {
-            Ok(m) => m,
+
+        // The plan (draft) is the source of the work being closed out: marking
+        // implemented FOLDS the named elements from `planned` into the committed
+        // `model` via the auto-commit fold. The element must exist in the plan.
+        let planned = match scryer_core::read_planned_at(&model_ref) {
+            Ok(p) => p,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
+                    "Failed to read plan at {}: {}",
                     model_ref, e
                 ))]));
             }
         };
-        let prior = model.clone();
-
-        let Some(n) = model.nodes.iter_mut().find(|n| n.id == req.node_id) else {
+        if !planned.nodes.iter().any(|n| n.id == req.node_id) {
             return Ok(CallToolResult::error(vec![Content::text(format!(
-                "Node '{}' not found",
+                "Node '{}' not found in the plan",
                 req.node_id
             ))]));
-        };
+        }
 
-        let outstanding = |s: &Option<Status>| {
-            matches!(s, Some(Status::Proposed) | Some(Status::Changed))
-        };
-        let mut resp_done = 0usize;
-        let mut prop_done = 0usize;
-        let mut appearance_done = false;
+        // Snapshot the node's committed responsibilities so the history event can
+        // show exactly what THIS fold added or reworded, not claims committed in a
+        // prior pass (a whole-node commit re-folds the node's full planned state).
+        let before_stmts: HashMap<String, String> = scryer_core::read_model_at(&model_ref)
+            .ok()
+            .map(|m| {
+                m.nodes
+                    .iter()
+                    .flat_map(|n| n.responsibilities.iter())
+                    .map(|r| (r.id.clone(), r.statement.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
 
-        match &req.responsibility_ids {
-            // Scoped: advance exactly the named responsibilities (trust the agent).
+        let summary = match &req.responsibility_ids {
+            // Scoped: commit exactly the named responsibilities. Their host node
+            // must already be committed (commit the whole node first otherwise).
             Some(ids) => {
-                for r in n.responsibilities.iter_mut() {
-                    if ids.contains(&r.id) {
-                        r.status = Some(Status::Implemented);
-                        r.stale = None; // re-implementation resolves the drift flag
-                        resp_done += 1;
+                for id in ids {
+                    if let Err(e) = scryer_core::commit_element(
+                        &model_ref,
+                        ElementKind::Responsibility,
+                        None,
+                        id,
+                    ) {
+                        return Ok(CallToolResult::error(vec![Content::text(e)]));
                     }
                 }
+                let n = ids.len();
+                format!(
+                    "Committed {} responsibilit{} on '{}' into the model.",
+                    n,
+                    if n == 1 { "y" } else { "ies" },
+                    req.node_id
+                )
             }
-            // Whole node: advance every outstanding facet to implemented. A
-            // stale flag IS outstanding work (the claim needs re-discharging),
-            // whatever status it sits on.
+            // Whole node: commit the node, folding its whole planned state
+            // (responsibilities, properties, appearance) into the model.
             None => {
-                for r in n.responsibilities.iter_mut() {
-                    if outstanding(&r.status) || r.stale == Some(true) {
-                        r.status = Some(Status::Implemented);
-                        r.stale = None;
-                        resp_done += 1;
-                    }
+                if let Err(e) =
+                    scryer_core::commit_element(&model_ref, ElementKind::Node, None, &req.node_id)
+                {
+                    return Ok(CallToolResult::error(vec![Content::text(e)]));
                 }
-                for p in n.properties.iter_mut() {
-                    if outstanding(&p.status) {
-                        p.status = Some(Status::Implemented);
-                        prop_done += 1;
-                    }
-                }
-                if let Some(a) = n.appearance.as_mut() {
-                    if outstanding(&a.status) {
-                        a.status = Some(Status::Implemented);
-                        appearance_done = true;
-                    }
+                format!("Committed '{}' into the model.", req.node_id)
+            }
+        };
+
+        // Keep the legacy baseline snapshot in step with the committed model, and
+        // record the fold as an `impl` event listing the claims it discharged.
+        if let Ok(after) = scryer_core::read_model_at(&model_ref) {
+            let _ = scryer_core::save_baseline_at(&model_ref, &after);
+            if let Some(node) = after.nodes.iter().find(|n| n.id == req.node_id) {
+                let target: Vec<&scryer_core::Responsibility> = match &req.responsibility_ids {
+                    Some(ids) => node.responsibilities.iter().filter(|r| ids.contains(&r.id)).collect(),
+                    // Whole-node: only the responsibilities this fold newly added or
+                    // reworded relative to the committed snapshot above.
+                    None => node
+                        .responsibilities
+                        .iter()
+                        .filter(|r| before_stmts.get(&r.id) != Some(&r.statement))
+                        .collect(),
+                };
+                let rows: Vec<EventRow> = target
+                    .iter()
+                    .map(|r| {
+                        let marker = if before_stmts.contains_key(&r.id) { "~" } else { "+" };
+                        resp_event_row(marker, &after, r)
+                    })
+                    .collect();
+                if !rows.is_empty() {
+                    record_event(
+                        &model_ref,
+                        HistoryEvent::new(
+                            scryer_core::drift::now_secs(),
+                            EventKind::Impl,
+                            &req.node_id,
+                            "fill",
+                        )
+                        .with_rows(rows),
+                    );
                 }
             }
         }
 
-        enforce_readonly_directives(&mut model, &prior);
-        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
-            return Ok(CallToolResult::error(vec![Content::text(e)]));
-        }
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
-
-        let mut parts = Vec::new();
-        if resp_done > 0 {
-            parts.push(format!("{} responsibilit{}", resp_done, if resp_done == 1 { "y" } else { "ies" }));
-        }
-        if prop_done > 0 {
-            parts.push(format!("{} propert{}", prop_done, if prop_done == 1 { "y" } else { "ies" }));
-        }
-        if appearance_done {
-            parts.push("the appearance".to_string());
-        }
-        let summary = if parts.is_empty() {
-            format!("Nothing outstanding on '{}' — model unchanged.", req.node_id)
-        } else {
-            format!("Marked implemented on '{}': {}.", req.node_id, parts.join(", "))
-        };
         Ok(CallToolResult::success(vec![Content::text(summary)]))
     }
 
@@ -343,7 +365,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_model_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -434,10 +456,29 @@ impl ScryerServer {
         }
 
         enforce_readonly_directives(&mut model, &prior);
-        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
+
+        // Timeline: a `move` event per node that actually changed parent.
+        let name_of = |m: &ScryModel, id: &str| {
+            m.nodes.iter().find(|n| n.id == id).map(|n| n.name.clone()).unwrap_or_else(|| id.to_string())
+        };
+        let now = scryer_core::drift::now_secs();
+        for mv in &req.moves {
+            let old_parent = prior.nodes.iter().find(|n| n.id == mv.node_id).and_then(|n| n.parent_id.clone());
+            if old_parent == mv.new_parent_id {
+                continue;
+            }
+            let from = old_parent.as_deref().map(|p| name_of(&prior, p)).unwrap_or_else(|| "top level".into());
+            let to = mv.new_parent_id.as_deref().map(|p| name_of(&model, p)).unwrap_or_else(|| "top level".into());
+            record_event(
+                &model_ref,
+                HistoryEvent::new(now, EventKind::Move, &mv.node_id, "reorganize")
+                    .with_rows(vec![EventRow::new("→", format!("reparented {from} → {to}"))]),
+            );
+        }
+
         let warnings = validate::validate(&model);
         let mut msg = format!("Moved {moved} node(s).");
         if !warnings.is_empty() {
@@ -464,7 +505,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_model_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -533,10 +574,9 @@ impl ScryerServer {
         enforce_readonly_directives(&mut model, &prior);
         scryer_core::rewrite_renamed_wikilinks(&mut model, &prior);
 
-        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
 
         let warnings = validate::validate(&model);
         let mut msg = format!("Replaced subtree under {}", req.node_id);
@@ -561,7 +601,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_model_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -593,10 +633,9 @@ impl ScryerServer {
             g.member_ids.retain(|m| !to_remove.contains(m));
         }
 
-        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Deleted {} node(s) (including descendants)",
@@ -616,7 +655,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_model_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -627,6 +666,8 @@ impl ScryerServer {
         };
 
         let mut moved = 0usize;
+        // (destination node id, row text) for the timeline `move` events below.
+        let mut reloc_rows: Vec<(String, String)> = Vec::new();
         for mv in &req.moves {
             let resp = {
                 let from_node = model.nodes.iter().find(|n| n.id == mv.from_node_id);
@@ -723,13 +764,32 @@ impl ScryerServer {
                 let to = model.nodes.iter_mut().find(|n| n.id == mv.to_node_id).unwrap();
                 to.responsibilities.push(dest_resp);
             }
+            let from_name = model
+                .nodes
+                .iter()
+                .find(|n| n.id == mv.from_node_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| mv.from_node_id.clone());
+            reloc_rows.push((
+                mv.to_node_id.clone(),
+                format!("relocated “{}” from {}", resp.statement, from_name),
+            ));
             moved += 1;
         }
 
-        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
+
+        // Timeline: a `move` event on each destination node.
+        let now = scryer_core::drift::now_secs();
+        for (to_node_id, text) in reloc_rows {
+            record_event(
+                &model_ref,
+                HistoryEvent::new(now, EventKind::Move, &to_node_id, "reorganize")
+                    .with_rows(vec![EventRow::new("→", text)]),
+            );
+        }
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Moved {} responsibility(ies)", moved
@@ -760,7 +820,6 @@ mod tests {
             icon: None,
             visual: None,
             appearance: None,
-            deprecated: None,
             relocated: None,
             locked: None,
             relocated_to: None,
@@ -784,33 +843,35 @@ mod tests {
         }
     }
 
+    /// Whole-node: marking implemented folds the node's entire planned state
+    /// (responsibilities + appearance) into the committed model, and the plan
+    /// for that node clears.
     #[test]
-    fn mark_implemented_advances_outstanding_incl_appearance() {
+    fn mark_implemented_commits_whole_node_from_plan() {
         let dir = tempfile::tempdir().unwrap();
         let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        // Committed model: the node exists but is empty.
         let mut m = ScryModel::new();
-        let mut c = node("node-1", Kind::Component, "ModelTree", None);
-        c.responsibilities = vec![
-            resp("r-prop", Status::Proposed),
-            resp("r-chg", Status::Changed),
-            resp("r-impl", Status::Implemented),
-            resp("r-ver", Status::Verified),
-        ];
-        c.appearance = Some(Appearance {
-            status: Some(Status::Changed),
+        m.nodes.push(node("node-1", Kind::Component, "ModelTree", None));
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+
+        // Plan (draft): the node gains responsibilities and an appearance.
+        let mut planned = m.clone();
+        planned.nodes[0].responsibilities =
+            vec![resp("r-a", Status::Proposed), resp("r-b", Status::Proposed)];
+        planned.nodes[0].appearance = Some(Appearance {
+            status: Some(Status::Proposed),
             dist_path: None,
             built_at: None,
             source_hash: None,
         });
-        m.nodes.push(c);
-        scryer_core::write_model_at(&model_ref, &m).unwrap();
-        let server = ScryerServer::new();
-        let project = dir.path().to_string_lossy().to_string();
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
 
-        // Whole-node: every outstanding facet advances; implemented/verified untouched.
+        let server = ScryerServer::new();
         server
             .mark_implemented(Parameters(MarkImplementedRequest {
-                project: Some(project),
+                project: Some(dir.path().to_string_lossy().to_string()),
                 node_id: "node-1".into(),
                 responsibility_ids: None,
             }))
@@ -818,46 +879,64 @@ mod tests {
 
         let m = scryer_core::read_model_at(&model_ref).unwrap();
         let n = &m.nodes[0];
-        let st = |id: &str| n.responsibilities.iter().find(|r| r.id == id).unwrap().status;
-        assert_eq!(st("r-prop"), Some(Status::Implemented)); // proposed -> implemented
-        assert_eq!(st("r-chg"), Some(Status::Implemented)); // changed -> implemented
-        assert_eq!(st("r-impl"), Some(Status::Implemented)); // unchanged
-        assert_eq!(st("r-ver"), Some(Status::Verified)); // NOT downgraded
-        assert_eq!(n.appearance.as_ref().unwrap().status, Some(Status::Implemented));
+        assert_eq!(n.responsibilities.len(), 2, "responsibilities committed");
+        assert!(n.appearance.is_some(), "appearance committed");
+        assert!(
+            scryer_core::plan_diff_at(&model_ref).unwrap().is_empty(),
+            "plan clears after commit"
+        );
+
+        // The fold is recorded as an `impl` event listing both folded claims.
+        let log = scryer_core::history::read_history(&model_ref);
+        assert_eq!(log.len(), 1, "one impl event");
+        assert_eq!(log[0].kind, scryer_core::history::EventKind::Impl);
+        assert_eq!(log[0].node_id, "node-1");
+        assert_eq!(log[0].rows.len(), 2, "both newly-folded claims listed");
     }
 
+    /// Scoped: marking a single newly-planned responsibility folds just it onto
+    /// its (already-committed) host node, leaving the rest of the plan untouched.
     #[test]
-    fn mark_implemented_scoped_to_named_responsibilities() {
+    fn mark_implemented_commits_named_responsibility_from_plan() {
         let dir = tempfile::tempdir().unwrap();
         let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        // Committed model: node-1 already owns r-a.
         let mut m = ScryModel::new();
         let mut c = node("node-1", Kind::Component, "Billing", None);
-        c.responsibilities = vec![resp("r-a", Status::Proposed), resp("r-b", Status::Proposed)];
-        c.appearance = Some(Appearance {
-            status: Some(Status::Changed),
-            dist_path: None,
-            built_at: None,
-            source_hash: None,
-        });
+        c.responsibilities = vec![resp("r-a", Status::Implemented)];
         m.nodes.push(c);
         scryer_core::write_model_at(&model_ref, &m).unwrap();
-        let server = ScryerServer::new();
 
+        // Plan: a new r-b is proposed on the same node; r-c is proposed too but
+        // not named in the call, so it must stay in the plan.
+        let mut planned = m.clone();
+        planned.nodes[0]
+            .responsibilities
+            .push(resp("r-b", Status::Proposed));
+        planned.nodes[0]
+            .responsibilities
+            .push(resp("r-c", Status::Proposed));
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
         server
             .mark_implemented(Parameters(MarkImplementedRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
                 node_id: "node-1".into(),
-                responsibility_ids: Some(vec!["r-a".into()]),
+                responsibility_ids: Some(vec!["r-b".into()]),
             }))
             .unwrap();
 
         let m = scryer_core::read_model_at(&model_ref).unwrap();
         let n = &m.nodes[0];
-        let st = |id: &str| n.responsibilities.iter().find(|r| r.id == id).unwrap().status;
-        assert_eq!(st("r-a"), Some(Status::Implemented)); // named -> advanced
-        assert_eq!(st("r-b"), Some(Status::Proposed)); // not named -> left
-        // scoped call leaves appearance alone
-        assert_eq!(n.appearance.as_ref().unwrap().status, Some(Status::Changed));
+        assert!(n.responsibilities.iter().any(|r| r.id == "r-b"), "r-b committed");
+        assert!(!n.responsibilities.iter().any(|r| r.id == "r-c"), "r-c left uncommitted");
+
+        // Only r-c remains as a pending plan entry (Added).
+        let plan = scryer_core::plan_diff_at(&model_ref).unwrap();
+        assert_eq!(plan.changes.len(), 1);
+        assert_eq!(plan.changes[0].id, "r-c");
     }
 
     /// move_nodes re-parents with kind/cycle validation and pulls the node out
@@ -894,7 +973,8 @@ mod tests {
             }))
             .unwrap();
         assert!(!r.is_error.unwrap_or(false), "{r:?}");
-        let m = scryer_core::read_model_at(&model_ref).unwrap();
+        // move_nodes authors into the plan; assert on the planned (draft) model.
+        let m = scryer_core::read_planned_at(&model_ref).unwrap();
         let comp = m.nodes.iter().find(|n| n.id == "comp").unwrap();
         assert_eq!(comp.parent_id.as_deref(), Some("cb"));
         let sym = m.nodes.iter().find(|n| n.id == "sym").unwrap();

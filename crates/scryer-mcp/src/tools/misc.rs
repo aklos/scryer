@@ -23,7 +23,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_model_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -126,10 +126,9 @@ impl ScryerServer {
             }
         }
 
-        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
         let mut msg = format!("Updated code-side mapping ({} entr(ies))", count);
         if !normalized.is_empty() {
             msg.push_str(&format!(
@@ -155,7 +154,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_model_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -220,10 +219,9 @@ impl ScryerServer {
         }
         enforce_readonly_directives(&mut model, &prior);
 
-        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Wrote {} group(s)",
             count
@@ -240,7 +238,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_model_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -265,10 +263,9 @@ impl ScryerServer {
             ))]));
         }
 
-        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Deleted group '{}'",
             req.group_id

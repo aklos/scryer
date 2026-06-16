@@ -160,6 +160,37 @@ fn delete_model(ref_str: String) -> Result<(), String> {
     scryer_core::delete_model_at(&model_ref)
 }
 
+/// Read the planned (draft) layer — the working model the canvas edits. Returns
+/// the committed model's bytes when no plan has diverged yet (planned == model),
+/// so a fresh project opens with an empty plan.
+#[tauri::command]
+fn read_planned(ref_str: String) -> Result<String, String> {
+    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
+    scryer_core::read_planned_raw_at(&model_ref)
+}
+
+/// Write the planned (draft) layer. The canvas saves here, never to `model.scry`
+/// directly: the committed model only changes when the agent implements a plan
+/// element and folds it (planned → model). Serialized against MCP writes, like
+/// the committed-model write.
+#[tauri::command]
+fn write_planned(ref_str: String, data: String) -> Result<(), String> {
+    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
+    let _lock = scryer_core::lock_model(&model_ref)?;
+    scryer_core::write_planned_raw_at(&model_ref, &data)
+}
+
+/// Read the durable committed-model history log (`.scryer/history.jsonl`),
+/// returned as a JSON array of events, oldest first. Empty when the project has
+/// no history yet. The frontend re-reads this whenever the model changes (every
+/// event-producing agent operation also writes a `.scry` file the watcher sees).
+#[tauri::command]
+fn read_history(ref_str: String) -> Result<String, String> {
+    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
+    let events = scryer_core::history::read_history(&model_ref);
+    serde_json::to_string(&events).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn list_templates(app: tauri::AppHandle) -> Result<Vec<String>, String> {
     let dir = app.path().resolve("templates", BaseDirectory::Resource)
@@ -2045,8 +2076,7 @@ async fn start_model_build(
             &model_ref,
             &scryer_core::drift::SyncState {
                 reconciled_at: scryer_core::drift::now_secs(),
-                commit: scryer_core::drift::head_commit(std::path::Path::new(&cwd)),
-            },
+                commit: scryer_core::drift::head_commit(std::path::Path::new(&cwd)), ..Default::default() },
         );
         if let Err(e) = scryer_extract::anchors::write_baseline(&model_ref) {
             emit_msg(format!("⚠ Could not fingerprint anchors: {e}"));
@@ -2099,8 +2129,7 @@ fn get_drift_status(cwd: String) -> Result<Vec<scryer_core::drift::DriftScope>, 
             &model_ref,
             &scryer_core::drift::SyncState {
                 reconciled_at: scryer_core::drift::now_secs(),
-                commit: scryer_core::drift::head_commit(project),
-            },
+                commit: scryer_core::drift::head_commit(project), ..Default::default() },
         );
         let _ = scryer_extract::anchors::write_baseline(&model_ref);
         return Ok(Vec::new());
@@ -2181,11 +2210,31 @@ fn reconcile_drift(cwd: String) -> Result<(), String> {
         &model_ref,
         &scryer_core::drift::SyncState {
             reconciled_at: scryer_core::drift::now_secs(),
-            commit: scryer_core::drift::head_commit(project),
-        },
+            commit: scryer_core::drift::head_commit(project), ..Default::default() },
     )?;
     // Re-fingerprint: "reconciled" means the anchors as they stand are the truth.
     scryer_extract::anchors::write_baseline(&model_ref).map(|_| ())
+}
+
+/// Reconcile drift for a single node and its whole subtree, without moving the
+/// project-wide anchor. Records a per-node anchor (`now` / HEAD) for the node and
+/// every descendant, so their boundaries' changes stop reading as drift while the
+/// rest of the model keeps whatever drift it had. The user's "I looked, this part
+/// is fine" verdict, scoped to what they were looking at.
+#[tauri::command]
+fn reconcile_drift_node(cwd: String, node_id: String) -> Result<(), String> {
+    let project = std::path::Path::new(&cwd);
+    let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
+    let model = scryer_core::read_model_at(&model_ref).map_err(|e| e.to_string())?;
+    let mut sync = scryer_core::read_sync_state(&model_ref);
+    let anchor = scryer_core::drift::NodeAnchor {
+        reconciled_at: scryer_core::drift::now_secs(),
+        commit: scryer_core::drift::head_commit(project),
+    };
+    for id in scryer_core::drift::subtree_ids(&model, &node_id) {
+        sync.nodes.insert(id, anchor.clone());
+    }
+    scryer_core::write_sync_state(&model_ref, &sync)
 }
 
 /// Run a semantic drift check: find the boundary-owning nodes whose code changed
@@ -2248,8 +2297,7 @@ async fn start_drift_check(
                 &model_ref,
                 &scryer_core::drift::SyncState {
                     reconciled_at: scryer_core::drift::now_secs(),
-                    commit: scryer_core::drift::head_commit(std::path::Path::new(&cwd)),
-                },
+                    commit: scryer_core::drift::head_commit(std::path::Path::new(&cwd)), ..Default::default() },
             );
             let _ = scryer_extract::anchors::write_baseline(&model_ref);
         };
@@ -2352,6 +2400,9 @@ pub fn run() {
             is_legacy_model,
             read_model,
             write_model,
+            read_planned,
+            write_planned,
+            read_history,
             delete_model,
             list_templates,
             load_template,
@@ -2377,6 +2428,7 @@ pub fn run() {
             get_drift_status,
             get_model_health,
             reconcile_drift,
+            reconcile_drift_node,
             cancel_agent_session,
         ])
         .run(tauri::generate_context!())

@@ -5,35 +5,32 @@
  *  - PageSection — underlined section heading with a per-section [edit] link.
  *  - Banner — the "ambox" maintenance notice pinned to the top of a page
  *    (stale claims, drift, undescribed behaviour), with verdict actions inline.
- *  - WikiLink — inline cross-reference. Blue = the target exists (has built
- *    content); red = the target is plan-only (proposed/empty), Wikipedia's
- *    redlink convention. Status words elsewhere keep the lifecycle hues.
- *  - StatusTag — the status word, always rendered (observability over
- *    minimalism: implemented is shown, not implied by silence).
+ *  - WikiLink — inline cross-reference. A plain blue link to a real page; in
+ *    prose (WikiText) an unresolvable target reads red, the only redlink case.
  */
 
-import { useState, type ComponentType, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ComponentType,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
+import { createPortal } from "react-dom";
 import type { LucideProps } from "lucide-react";
 import { ArrowDownLeft, ArrowUpRight } from "lucide-react";
-import type { Status } from "./statusColors";
-import { STATUS_COLORS } from "./statusColors";
 import type { Node } from "./viewmodel";
-import { effectiveNodeStatus, isNodeEmpty } from "./rollup";
-import { Button } from "./ui";
 
-/** Statuses a person sets by hand. `changed`/`vagrant`/`relocated` are machine
- *  states, surfaced but never picked directly. */
-export const USER_STATUSES: Status[] = ["proposed", "implemented", "verified"];
-
-/** The status pill, tinted with the status's own hue. Implemented is the
- *  steady state and stays silent — the pill only appears when there's
- *  something to say (proposed/changed/verified), so pages don't read as a
- *  wall of status badges. */
-export function StatusTag({ status }: { status: Status | null | undefined }) {
-  if (!status || status === "implemented") return null;
-  const c = STATUS_COLORS[status];
-  return <span className={`shrink-0 ${c.pill}`}>{c.label}</span>;
-}
+/** A section's edit controls (Cancel/Done) render into the section header's
+ *  action lane via this slot — the mockup puts them in the `.h2row`, not the
+ *  form footer. PageSection provides the slot element while editing; the form's
+ *  {@link SectionEditor} portals its buttons into it (falling back to its own
+ *  footer when there's no surrounding PageSection, e.g. the lede). */
+const SectionActionsContext = createContext<HTMLElement | null>(null);
 
 const EMPTY_HINT =
   "Empty — no responsibilities or properties. Give it a business responsibility or remove the node.";
@@ -87,30 +84,109 @@ export function fieldKeys(
   };
 }
 
-/** A bracketed [edit]/[done] control — Wikipedia's section-edit affordance.
- *  Neutral chrome, quiet until hovered. */
+/** One button system for the page (the mockup's `.btn`): bordered, sentence
+ *  case, color = role. Set off the mono content in its own lane. */
+const BTN_BASE =
+  "inline-flex items-center gap-1 rounded-[5px] border px-2.5 py-0.5 text-[11px] transition-colors cursor-pointer whitespace-nowrap";
+export const BTN = `${BTN_BASE} border-[var(--border-strong)] bg-[var(--surface-hover)] text-[var(--text-secondary)] hover:bg-[var(--surface-active)] hover:text-[var(--text)]`;
+export const BTN_GO = `${BTN_BASE} border-emerald-500/45 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400`;
+export const BTN_DANGER = `${BTN_BASE} border-red-500/45 bg-red-500/10 text-red-600 hover:bg-red-500/20 dark:text-red-400`;
+
+/** Per-row edit controls (the mockup's `.ctl`): floated over the row's right
+ *  edge with a gradient fade so they take NO layout space — the field keeps its
+ *  full read-mode width and nothing reflows on edit. Pair with a `relative`
+ *  row and a `group/erow` ancestor; controls reveal on row hover. The gradient
+ *  fades into the editing section's tint. */
+export const CTL =
+  "invisible absolute right-0 top-0 z-10 flex items-center gap-1.5 pl-9 [background-image:linear-gradient(90deg,transparent,color-mix(in_srgb,var(--text)_4%,var(--surface-canvas))_32px)] group-hover/erow:visible";
+
+/**
+ * An in-place editable field — a `contentEditable` span, NOT a native input.
+ * This is the mockup's trick: the edit field is the same element type as the
+ * read content (a span with the same font/size/line-height), so toggling
+ * read↔edit is pixel-identical — no font resize, no reflow, no baseline shift.
+ *
+ * Uncontrolled by design: the initial text is written once on mount and never
+ * fed back from state (which would yank the caret). Edits report out through
+ * `onInput`; the parent's draft stays in sync for the eventual commit.
+ */
+export function Editable({
+  initial,
+  placeholder,
+  autoFocus,
+  onInput,
+  onCommit,
+  className = "",
+}: {
+  initial: string;
+  placeholder?: string;
+  autoFocus?: boolean;
+  /** Fired on every keystroke — for draft-backed fields. */
+  onInput?: (text: string) => void;
+  /** Fired on blur — for fields that commit straight to the model. */
+  onCommit?: (text: string) => void;
+  className?: string;
+}) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (el.textContent !== initial) el.textContent = initial;
+    if (autoFocus) {
+      el.focus();
+      const r = document.createRange();
+      r.selectNodeContents(el);
+      r.collapse(false);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(r);
+    }
+    // Mount-only: stays uncontrolled so typing never resets the caret.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <span
+      ref={ref}
+      role="textbox"
+      contentEditable
+      suppressContentEditableWarning
+      data-placeholder={placeholder}
+      onInput={(e) => onInput?.(e.currentTarget.textContent ?? "")}
+      onBlur={(e) => onCommit?.(e.currentTarget.textContent ?? "")}
+      onKeyDown={(e) => {
+        // Plain text only — Enter commits the field (blur) rather than
+        // injecting <div>/<br> markup; Escape bails out.
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.currentTarget.blur();
+        }
+      }}
+      className={`-mx-1 cursor-text whitespace-pre-wrap break-words rounded-[4px] px-1 outline-none empty:before:text-[var(--text-ghost)] empty:before:content-[attr(data-placeholder)] ${className}`}
+    />
+  );
+}
+
+/** The section-edit affordance — a bordered button, sentence-case. */
 export function EditLink({
   editing,
   label,
   onClick,
+  className = "",
 }: {
   editing?: boolean;
   label?: string;
   onClick: () => void;
+  className?: string;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="shrink-0 rounded px-0.5 text-2xs font-medium text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] hover:underline cursor-pointer"
-    >
-      [{label ?? (editing ? "done" : "edit")}]
+    <button type="button" onClick={onClick} className={`${BTN} ${className}`}>
+      {label ?? (editing ? "Done" : "Edit")}
     </button>
   );
 }
 
-/** A wiki-style section: an underlined heading with an optional count and
- *  [edit] toggle, then the section body. */
+/** A wiki-style section: a tiny uppercase eyebrow heading (with an optional
+ *  count) on a rule, a hover-revealed [Edit] toggle, then the section body. */
 export function PageSection({
   title,
   count,
@@ -128,31 +204,53 @@ export function PageSection({
   onToggleEdit?: () => void;
   children: ReactNode;
 }) {
+  // While editing, the header exposes a slot the form's SectionEditor portals
+  // its Cancel/Done into (the mockup's `.editbtns` live in the `.h2row`).
+  const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
   return (
-    <section className="flow-root pt-6">
-      <div className="mb-3 flex items-baseline gap-2 border-b border-[var(--border)] pb-1.5">
-        <h2 className="text-base font-semibold text-[var(--text)]">{title}</h2>
-        {count != null && count > 0 && (
-          <span className="text-xs tabular-nums text-[var(--text-muted)]">
-            ({count})
-          </span>
-        )}
-        {right}
-        <span className="flex-1" />
-        {/* The [edit] affordance disappears while editing — the form's own
-            footer (Done / Cancel) is the single exit. */}
-        {editable && onToggleEdit && !editing && (
-          <EditLink editing={false} onClick={onToggleEdit} />
-        )}
-      </div>
-      {children}
-    </section>
+    <SectionActionsContext.Provider value={actionsSlot}>
+      <section
+        className={`group/sec mt-[26px] flow-root -mx-3 rounded-md px-3 ${
+          editing
+            ? "bg-[color-mix(in_srgb,var(--text)_4%,transparent)] shadow-[inset_2px_0_0_0_var(--border-strong)]"
+            : ""
+        }`}
+      >
+        <div className="mb-2 flex items-end justify-between gap-2 border-b border-[var(--border)] pb-[5px]">
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.07em] text-[var(--text-tertiary)]">
+            {title}
+            {count != null && count > 0 && (
+              <span className="ml-1.5 font-mono text-[11px] font-normal normal-case tracking-normal text-[var(--text-ghost)]">
+                {count}
+              </span>
+            )}
+          </h2>
+          <div className="flex items-center gap-2 pb-px">
+            {right}
+            {editing ? (
+              // Filled by the form via the actions context (Cancel / Done).
+              <span ref={setActionsSlot} className="flex items-center gap-2" />
+            ) : (
+              editable &&
+              onToggleEdit && (
+                <EditLink
+                  editing={false}
+                  onClick={onToggleEdit}
+                  className="invisible group-hover/sec:visible"
+                />
+              )
+            )}
+          </div>
+        </div>
+        {children}
+      </section>
+    </SectionActionsContext.Provider>
   );
 }
 
 export function Empty({ children }: { children: ReactNode }) {
   return (
-    <div className="text-xs leading-relaxed text-[var(--text-muted)]">
+    <div className="font-mono text-xs leading-relaxed text-[var(--text-muted)]">
       {children}
     </div>
   );
@@ -182,6 +280,24 @@ export function SectionEditor<T>({
   children: (draft: T, setDraft: Dispatch<SetStateAction<T>>) => ReactNode;
 }) {
   const [draft, setDraft] = useState<T>(() => structuredClone(initial));
+  const slot = useContext(SectionActionsContext);
+  const buttons = (
+    <>
+      <button type="button" onClick={onClose} className={BTN}>
+        Cancel
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          onCommit(draft);
+          onClose();
+        }}
+        className={BTN_GO}
+      >
+        Done
+      </button>
+    </>
+  );
   return (
     <div
       className="flex flex-col gap-2"
@@ -192,24 +308,21 @@ export function SectionEditor<T>({
         }
       }}
     >
+      {/* Cancel/Done ride in the section header (mockup `.editbtns`); only when
+          there's no surrounding PageSection do they fall back to the footer. */}
+      {slot && createPortal(buttons, slot)}
       {children(draft, setDraft)}
-      <div className="flex items-center gap-2">
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={() => {
-            onCommit(draft);
-            onClose();
-          }}
-        >
-          Done
-        </Button>
-        <Button variant="ghost" size="sm" onClick={onClose}>
-          Cancel
-        </Button>
-        <span className="flex-1" />
-        {footerExtra?.(setDraft)}
-      </div>
+      {(footerExtra || !slot) && (
+        <div className="mt-2 flex items-center gap-2 border-t border-[var(--border-subtle)] pt-2">
+          {footerExtra?.(setDraft)}
+          {!slot && (
+            <>
+              <span className="flex-1" />
+              {buttons}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -254,45 +367,31 @@ export function Banner({
 
 // --- wiki links ---------------------------------------------------------------
 
-/** Redlink test: the target is plan-only — nothing built behind it yet. */
-export function isRedLink(node: Node): boolean {
-  if (node.external || node.kind === "person") return false;
-  return isNodeEmpty(node) || effectiveNodeStatus(node) === "proposed";
-}
-
 /**
- * An inline cross-reference to another node/group's page. Wikipedia link
- * semantics: blue when the target exists (carries built content), red when the
- * target is plan-only (proposed with nothing built, or an empty symbol) — the
- * redlink. So "what's plan vs what's real" reads in link colour everywhere.
+ * An inline cross-reference to another node/group's page. A plain blue wikilink:
+ * every target is a real, navigable page, so link colour no longer tries to
+ * encode plan-vs-built (that reads on the target's own page). `muted` dims a
+ * link that isn't declared (a code-suggested candidate).
  */
 export function WikiLink({
   name,
   Icon,
   onClick,
   dir,
-  red = false,
   muted = false,
 }: {
   name: string;
   Icon?: ComponentType<LucideProps>;
   onClick: () => void;
   dir?: "in" | "out";
-  /** Redlink: the target doesn't exist in code yet. */
-  red?: boolean;
   muted?: boolean;
 }) {
   const Arrow = dir === "out" ? ArrowUpRight : dir === "in" ? ArrowDownLeft : null;
-  const color = muted
-    ? "text-[var(--text-muted)]"
-    : red
-      ? "text-red-700 dark:text-red-400"
-      : "text-blue-700 dark:text-blue-400";
+  const color = muted ? "text-[var(--text-muted)]" : "text-blue-700 dark:text-blue-400";
   return (
     <button
       type="button"
       onClick={onClick}
-      title={red ? `${name || "Untitled"} — planned, nothing built yet` : undefined}
       className={`group/wl inline-flex max-w-full items-center gap-1.5 rounded px-1 py-0.5 text-left transition-colors hover:bg-[var(--surface-hover)] cursor-pointer ${color}`}
     >
       {Arrow && <Arrow className="h-3.5 w-3.5 shrink-0 text-[var(--text-ghost)]" />}
@@ -312,9 +411,9 @@ const WIKILINK_RE = /\[\[([^\][|]+?)(?:\|([^\][]+?))?\]\]/g;
  * written as plain text; `[[node-id]]` mentions render as live links showing
  * the node's CURRENT name (ids survive renames), `[[node-id|shown text]]`
  * overrides the display. A node name as the target also resolves — the
- * hand-typed form. Blue when built, red when plan-only ({@link isRedLink}),
- * red-unclickable when the target resolves to nothing (the dangling case:
- * the node was deleted, or the prose names something the model doesn't have).
+ * hand-typed form. A resolved target is a plain blue link; an unresolvable one
+ * is red and unclickable (the dangling case: the node was deleted, or the prose
+ * names something the model doesn't have).
  */
 export function WikiText({
   text,
@@ -337,16 +436,13 @@ export function WikiText({
       nodes.find((n) => n.name.trim().toLowerCase() === name.toLowerCase());
     const shown = (m[2] ?? target?.name ?? m[1]).trim();
     if (target) {
-      const red = isRedLink(target);
       parts.push(
         <button
           key={m.index}
           type="button"
           onClick={() => onSelectNode(target.id)}
-          title={red ? `${target.name} — planned, nothing built yet` : target.name}
-          className={`inline cursor-pointer rounded-sm text-left hover:underline ${
-            red ? "text-red-700 dark:text-red-400" : "text-blue-700 dark:text-blue-400"
-          }`}
+          title={target.name}
+          className="inline cursor-pointer rounded-sm text-left text-blue-700 hover:underline dark:text-blue-400"
         >
           {shown}
         </button>,

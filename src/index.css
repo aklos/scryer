@@ -53,6 +53,14 @@
   --border-subtle: #e4e4e799;
   --border-strong: #d4d4d8;
   --border-overlay: #e4e4e7cc;
+  --selection-color: #18181b;
+  /* Diagram (C4 card) chrome — aliased to surface tokens so the ported card
+     styling stays theme-adaptive without main's applyTheme injection. */
+  --scryer-node-bg: var(--surface-raised);
+  --scryer-ext-bg: var(--surface-inset);
+  --scryer-person-fill: var(--surface-active);
+  --scryer-select-stroke: var(--text);
+  --scryer-outline-stroke: var(--border-strong);
 }
 
 .dark {
@@ -73,11 +81,69 @@
   --border-subtle: #3f3f4699;
   --border-strong: #52525b;
   --border-overlay: #3f3f46cc;
+  --selection-color: #d4d4d8;
 }
 
 @keyframes shimmer {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(400%); }
+}
+
+/* --- Diagram view: ported edge + card animations from main --- */
+@keyframes dash-flow {
+  to { stroke-dashoffset: -9; }
+}
+@keyframes pulse-glow {
+  0% { opacity: 0; }
+  15% { opacity: 0.7; }
+  100% { opacity: 0; }
+}
+.scryer-changed-glow {
+  animation: pulse-glow 3s ease-in-out;
+}
+/* Edges render above nodes so shape decorations don't overlap arrows. */
+.react-flow__edges {
+  z-index: 1 !important;
+}
+/* Edge midpoint dot: hidden until the edge is hovered. */
+.edge-handle-dot {
+  opacity: 0;
+}
+.react-flow__edge:hover .edge-handle-dot {
+  opacity: 0.7;
+}
+/* Hide the default selection bounding box (our nodes show their own ring). */
+.react-flow__nodesselection {
+  display: none !important;
+}
+
+/* Zoom/fit controls (bottom-left): follow the theme instead of the library's
+   white-on-grey default. */
+.react-flow__controls {
+  box-shadow: none !important;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.react-flow__controls-button {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  width: 26px;
+  height: 26px;
+}
+.react-flow__controls-button:last-child {
+  border-bottom: none;
+}
+.react-flow__controls-button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.react-flow__controls-button svg {
+  fill: currentColor;
+  max-width: 13px;
+  max-height: 13px;
 }
 
 /* Citation-jump flash: briefly highlight the hunk/claim that was jumped to
@@ -88,6 +154,133 @@
 }
 .flash-target {
   animation: flash-fade 1.4s ease-out;
+}
+
+/* --- Powerline status bar (ported from the mockup `.pl`) ---
+   Chevron-tiled segments whose triangle separators borrow each segment's own
+   background via the inline `--sb` var, so the shape stays seamless in either
+   theme. The `working` modifier adds the violet activity sliver along the top. */
+.pl {
+  display: flex;
+  align-items: stretch;
+  height: 26px;
+  flex-shrink: 0;
+  position: relative;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  background: var(--surface-canvas);
+  user-select: none;
+}
+.pl .seg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* Left pad clears the previous segment's chevron, which bleeds 10px past its
+     own edge into this one (see ::after); +14px keeps real clearance from the tip. */
+  padding: 0 15px 0 24px;
+  position: relative;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  background: var(--sb);
+}
+/* First segment has no chevron before it — drop the bleed allowance. */
+.pl .seg:first-child {
+  padding-left: 13px;
+}
+.pl .seg::after {
+  content: "";
+  position: absolute;
+  right: -10px;
+  top: 0;
+  z-index: 2;
+  border-style: solid;
+  border-width: 13px 0 13px 10px;
+  border-color: transparent transparent transparent var(--sb);
+}
+.pl .grow {
+  flex: 1;
+}
+.pl .rseg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* The NEXT rseg's chevron (::before) bleeds 10px back into this one's right
+     edge; +14px keeps clearance from its tip. Mirrors .seg's left allowance. */
+  padding: 0 24px 0 13px;
+  position: relative;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  background: var(--sb);
+}
+/* Last rseg has no chevron after it (window edge) — drop the bleed allowance. */
+.pl .rseg:last-child {
+  padding-right: 13px;
+}
+/* Interactive segments are <button>s (drift jump, to-review, changes, cancel);
+   static readouts are <div>s. Brightening via filter lifts the fill AND its
+   chevron pseudo-element together — a background change can't reach the chevron,
+   which borrows the inline --sb. Works in both themes (always toward lighter). */
+.pl button.seg,
+.pl button.rseg {
+  transition: filter 0.12s ease;
+}
+.pl button.seg:hover,
+.pl button.rseg:hover {
+  filter: brightness(1.4);
+}
+/* The hover filter turns the segment into a stacking context, which would trap
+   its chevron (.seg::after, normally z-index:2 above the next segment) inside
+   that context — the next segment then paints over it and the > edge vanishes.
+   Lift the segment into the positive layer *permanently* (not just on :hover):
+   the filter lingers through the 0.12s fade-out on unhover, so a hover-only
+   z-index would snap away first and the chevron would drop during the
+   transition. A constant z-index keeps it on top in every state. */
+.pl button.seg {
+  z-index: 1;
+}
+.pl .rseg::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 0;
+  border-style: solid;
+  border-width: 13px 10px 13px 0;
+  border-color: transparent var(--sb) transparent transparent;
+}
+.pl .pl-strong {
+  color: var(--text);
+}
+.pl.working::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  z-index: 5;
+  background: linear-gradient(90deg, transparent 0, var(--color-violet-400) 50%, transparent 100%);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: plslide 1.5s ease-in-out infinite;
+}
+@keyframes plslide {
+  0% { background-position: -45% 0; }
+  100% { background-position: 145% 0; }
+}
+.pl .r-agent {
+  color: var(--color-violet-400);
+  background-image: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--color-violet-500) 16%, var(--sb)) 0,
+    color-mix(in srgb, var(--color-violet-500) 16%, var(--sb)) 9px,
+    color-mix(in srgb, var(--color-violet-500) 30%, var(--sb)) 9px,
+    color-mix(in srgb, var(--color-violet-500) 30%, var(--sb)) 18px
+  );
+  background-size: 25.5px 100%;
+  animation: barber 0.7s linear infinite;
+}
+@keyframes barber {
+  to { background-position: 25.5px 0; }
 }
 
 /* Thin scrollbars */

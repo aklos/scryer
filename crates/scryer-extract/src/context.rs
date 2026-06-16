@@ -262,7 +262,7 @@ pub fn build_context(
         });
     }
 
-    let (symbol_edges, file_edges) = build_edges(files, &recs);
+    let (symbol_edges, file_edges) = build_edges(files, &recs, containers);
 
     let mut context = ProjectContext {
         project_name: project_name.to_string(),
@@ -352,17 +352,55 @@ struct SymRec {
 /// methods or constructors. A name-only reference to one of these is noise, not
 /// a dependency (see the skip in `build_edges`).
 const UNIVERSAL_NAMES: &[&str] = &[
-    "new", "default", "build", "from", "into", "clone", "to_string", "to_owned",
-    "as_str", "as_ref", "as_bytes", "len", "is_empty", "unwrap", "expect",
-    "parse", "get", "insert", "push", "iter", "into_iter", "contains",
-    "with_capacity", "next", "collect",
+    "new",
+    "default",
+    "build",
+    "from",
+    "into",
+    "clone",
+    "to_string",
+    "to_owned",
+    "as_str",
+    "as_ref",
+    "as_bytes",
+    "len",
+    "is_empty",
+    "unwrap",
+    "expect",
+    "parse",
+    "get",
+    "insert",
+    "push",
+    "iter",
+    "into_iter",
+    "contains",
+    "with_capacity",
+    "next",
+    "collect",
 ];
 
-fn build_edges(files: &[ParsedFile], recs: &[SymRec]) -> (Vec<Edge>, Vec<Edge>) {
+/// Path-head segments that never name a workspace container: language keywords
+/// and the standard library roots. Skipped before the crate-map lookup.
+const PATH_BUILTINS: &[&str] = &["crate", "self", "super", "std", "core", "alloc"];
+
+fn build_edges(
+    files: &[ParsedFile],
+    recs: &[SymRec],
+    containers: &[Container],
+) -> (Vec<Edge>, Vec<Edge>) {
     let mut ranges_by_file: HashMap<&str, Vec<(u32, u32, &str)>> = HashMap::new();
     let mut container_of_file: HashMap<&str, &str> = HashMap::new();
     let mut file_names: HashMap<&str, HashMap<&str, Vec<&str>>> = HashMap::new();
     let mut cont_names: HashMap<&str, HashMap<&str, Vec<(&str, &str)>>> = HashMap::new();
+
+    // Manifest map: a `use`/path head segment -> the container it names. Rust
+    // source spells `scryer-extract` as `scryer_extract`, so normalize hyphens.
+    // This is what lets a reference resolve ACROSS containers, not just within
+    // one — the gap the same-container scope below cannot close.
+    let mut crate_to_dir: HashMap<String, &str> = HashMap::new();
+    for c in containers {
+        crate_to_dir.insert(c.name.replace('-', "_"), c.dir.as_str());
+    }
 
     for r in recs {
         ranges_by_file
@@ -392,6 +430,19 @@ fn build_edges(files: &[ParsedFile], recs: &[SymRec]) -> (Vec<Edge>, Vec<Edge>) 
             .min_by_key(|(s, e, _)| e - s)
             .map(|(_, _, k)| *k)
     };
+
+    // Module name -> file within each container, for imports whose leaf names a
+    // module rather than a def (`use scryer_core::drift;`). Lets the container
+    // coupling surface as a file edge even when no symbol is named.
+    let mut mod_files: HashMap<&str, HashMap<&str, Vec<&str>>> = HashMap::new();
+    for (&file, &dir) in &container_of_file {
+        mod_files
+            .entry(dir)
+            .or_default()
+            .entry(module_name(file))
+            .or_default()
+            .push(file);
+    }
 
     let mut sym_edges: HashSet<(String, String)> = HashSet::new();
     let mut file_edges: HashSet<(String, String)> = HashSet::new();
@@ -445,9 +496,83 @@ fn build_edges(files: &[ParsedFile], recs: &[SymRec]) -> (Vec<Edge>, Vec<Edge>) 
                 }
             }
         }
+
+        // --- third scope: CROSS-container references via the manifest map ---
+        // The two scopes above resolve names only within the file's own
+        // container. A qualified path (`scryer_extract::anchors::write_baseline`
+        // or a `use` of it) names its target container in the head segment, so
+        // we can follow it across the boundary — the one resolution the
+        // name-only design deliberately ducked. Same unique-or-skip discipline:
+        // an ambiguous leaf yields no edge.
+        for pref in &f.parse.paths {
+            let head = pref.segments.first().map(String::as_str).unwrap_or("");
+            if PATH_BUILTINS.contains(&head) {
+                continue;
+            }
+            let Some(&dst_dir) = crate_to_dir.get(head) else {
+                continue; // head names an external crate or nothing we model
+            };
+            if Some(dst_dir) == container_dir {
+                continue; // same container — already covered above
+            }
+            // The resolvable symbol is the last segment that isn't a universal
+            // method/constructor name: `ExtentResolver::new` -> `ExtentResolver`.
+            let Some(sym) = pref.segments[1..]
+                .iter()
+                .map(String::as_str)
+                .rev()
+                .find(|s| !UNIVERSAL_NAMES.contains(s))
+            else {
+                continue;
+            };
+            match cont_names.get(dst_dir).and_then(|m| m.get(sym)) {
+                Some(cands) if cands.len() == 1 => {
+                    let (dst_key, dst_file) = cands[0];
+                    file_edges.insert((file.to_string(), dst_file.to_string()));
+                    // Symbol edge from the enclosing function when the reference
+                    // sits at a real call site (a `use` line is module-scoped, so
+                    // `enclosing` returns None and only the file edge stands).
+                    // The commit-time link audit joins on symbol anchors, so this
+                    // is what makes a cross-crate dependency count as evidence.
+                    if let Some(src) = enclosing(file, pref.line) {
+                        if src != dst_key {
+                            sym_edges.insert((src.to_string(), dst_key.to_string()));
+                        }
+                    }
+                }
+                Some(_) => {} // ambiguous leaf — skip (under-report, never guess)
+                None => {
+                    // The leaf names a module, not a def (`use scryer_core::drift;`).
+                    // Resolve to that module's file so the coupling still shows up.
+                    if let Some(cands) = mod_files.get(dst_dir).and_then(|m| m.get(sym)) {
+                        if cands.len() == 1 && cands[0] != file {
+                            file_edges.insert((file.to_string(), cands[0].to_string()));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     (sorted_edges(sym_edges), sorted_edges(file_edges))
+}
+
+/// The module name a Rust file contributes: its stem, except `mod.rs`/`lib.rs`/
+/// `main.rs` which take the parent directory's name (that's the module path
+/// segment a `use` would spell).
+fn module_name(file_rel: &str) -> &str {
+    let name = file_rel.rsplit('/').next().unwrap_or(file_rel);
+    let stem = name.strip_suffix(".rs").unwrap_or(name);
+    if matches!(stem, "mod" | "lib" | "main") {
+        let parent = file_rel
+            .strip_suffix(name)
+            .and_then(|p| p.trim_end_matches('/').rsplit('/').next())
+            .unwrap_or("");
+        if !parent.is_empty() {
+            return parent;
+        }
+    }
+    stem
 }
 
 fn sorted_edges(set: HashSet<(String, String)>) -> Vec<Edge> {
@@ -846,6 +971,7 @@ mod tests {
                 parse: FileParse {
                     defs: vec![def("helper", 1, 3)],
                     idents: vec![ident("helper", 1)],
+                    paths: vec![],
                 },
             },
             ParsedFile {
@@ -854,6 +980,7 @@ mod tests {
                 parse: FileParse {
                     defs: vec![def("run", 1, 10), def("compute", 12, 14)],
                     idents: vec![ident("run", 1), ident("compute", 5), ident("helper", 6)],
+                    paths: vec![],
                 },
             },
         ];
@@ -907,6 +1034,7 @@ mod tests {
                 parse: FileParse {
                     defs: vec![def("new", 1, 3)],
                     idents: vec![],
+                    paths: vec![],
                 },
             },
             ParsedFile {
@@ -915,6 +1043,7 @@ mod tests {
                 parse: FileParse {
                     defs: vec![def("run", 1, 10)],
                     idents: vec![ident("new", 5)],
+                    paths: vec![],
                 },
             },
         ];
@@ -939,6 +1068,7 @@ mod tests {
             parse: FileParse {
                 defs: vec![def("x", 1, 2)],
                 idents: vec![],
+                paths: vec![],
             },
         }];
         let containers = vec![container("", "p")];
@@ -959,6 +1089,7 @@ mod tests {
                 parse: FileParse {
                     defs: vec![def("serve", 1, 5)],
                     idents: vec![ident("util", 3)],
+                    paths: vec![],
                 },
             },
             ParsedFile {
@@ -967,6 +1098,7 @@ mod tests {
                 parse: FileParse {
                     defs: vec![def("util", 1, 2)],
                     idents: vec![],
+                    paths: vec![],
                 },
             },
         ];
@@ -1000,6 +1132,7 @@ fn add_one(x: u32) -> u32 {
             parse: FileParse {
                 defs: vec![def("add_one", 3, 5)],
                 idents: vec![],
+                paths: vec![],
             },
         }];
         let containers = vec![container("", "p")];
@@ -1027,6 +1160,7 @@ fn add_one(x: u32) -> u32 {
             parse: FileParse {
                 defs: vec![def("big", 1, 202)],
                 idents: vec![],
+                paths: vec![],
             },
         }];
         let containers = vec![container("", "p")];
@@ -1053,6 +1187,7 @@ fn add_one(x: u32) -> u32 {
                 parse: FileParse {
                     defs: vec![def(&format!("f{n}"), 1, 202)],
                     idents: vec![],
+                    paths: vec![],
                 },
             })
             .collect();
@@ -1086,6 +1221,7 @@ fn add_one(x: u32) -> u32 {
                 parse: FileParse {
                     defs: vec![def("serve", 1, 20), def("route", 22, 30)],
                     idents: vec![ident("route", 5), ident("util", 8)],
+                    paths: vec![],
                 },
             },
             ParsedFile {
@@ -1094,6 +1230,7 @@ fn add_one(x: u32) -> u32 {
                 parse: FileParse {
                     defs: vec![def("util", 1, 4)],
                     idents: vec![],
+                    paths: vec![],
                 },
             },
         ];
@@ -1118,5 +1255,204 @@ fn add_one(x: u32) -> u32 {
             compact_json.len(),
             full_json.len()
         );
+    }
+
+    fn pathref(segments: &[&str], line: u32) -> crate::lang::PathRef {
+        crate::lang::PathRef {
+            segments: segments.iter().map(|s| s.to_string()).collect(),
+            line,
+        }
+    }
+
+    /// A fully-qualified call-site reference into ANOTHER crate resolves through
+    /// the manifest map and yields BOTH a file edge and a symbol edge attributed
+    /// to the calling function — the gap the same-container scopes can't close.
+    #[test]
+    fn cross_container_qualified_call_resolves() {
+        // extract/src/anchors.rs defines `write_baseline`. mcp/src/tools/intent.rs
+        // calls `scryer_extract::anchors::write_baseline(..)` from inside `run`.
+        let files = vec![
+            ParsedFile {
+                rel_path: "crates/scryer-extract/src/anchors.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    defs: vec![def("write_baseline", 1, 5)],
+                    idents: vec![],
+                    paths: vec![],
+                },
+            },
+            ParsedFile {
+                rel_path: "crates/scryer-mcp/src/tools/intent.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    defs: vec![def("run", 1, 10)],
+                    idents: vec![],
+                    paths: vec![pathref(&["scryer_extract", "anchors", "write_baseline"], 6)],
+                },
+            },
+        ];
+        let containers = vec![
+            container("crates/scryer-extract", "scryer-extract"),
+            container("crates/scryer-mcp", "scryer-mcp"),
+        ];
+        let ctx = build_context("proj", &containers, &files);
+
+        assert!(
+            ctx.file_edges.iter().any(|e| {
+                e.src == "crates/scryer-mcp/src/tools/intent.rs"
+                    && e.dst == "crates/scryer-extract/src/anchors.rs"
+            }),
+            "cross-crate reference should yield a file edge"
+        );
+        assert!(
+            ctx.symbol_edges.iter().any(|e| {
+                e.src == symbol_key("crates/scryer-mcp/src/tools/intent.rs", "run", 1)
+                    && e.dst
+                        == symbol_key("crates/scryer-extract/src/anchors.rs", "write_baseline", 1)
+            }),
+            "the call site is enclosed by `run`, so a symbol edge must exist too"
+        );
+    }
+
+    /// Hyphenated crate names (`scryer-extract`) are spelled with underscores in
+    /// Rust paths (`scryer_extract`); the map normalizes so they still match.
+    #[test]
+    fn cross_container_normalizes_crate_name_hyphens() {
+        let files = vec![
+            ParsedFile {
+                rel_path: "crates/scryer-extract/src/lib.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    defs: vec![def("Anchor", 1, 3)],
+                    idents: vec![],
+                    paths: vec![],
+                },
+            },
+            ParsedFile {
+                rel_path: "crates/scryer-mcp/src/m.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    defs: vec![def("run", 1, 4)],
+                    idents: vec![],
+                    paths: vec![pathref(&["scryer_extract", "Anchor"], 2)],
+                },
+            },
+        ];
+        let containers = vec![
+            container("crates/scryer-extract", "scryer-extract"),
+            container("crates/scryer-mcp", "scryer-mcp"),
+        ];
+        let ctx = build_context("proj", &containers, &files);
+        assert!(ctx
+            .file_edges
+            .iter()
+            .any(|e| e.dst == "crates/scryer-extract/src/lib.rs"));
+    }
+
+    /// An ambiguous leaf (the same name defined in two files of the target crate)
+    /// resolves to nothing — the under-report discipline holds across containers.
+    #[test]
+    fn cross_container_ambiguous_leaf_yields_no_edge() {
+        let files = vec![
+            ParsedFile {
+                rel_path: "crates/dep/src/a.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    defs: vec![def("Thing", 1, 3)],
+                    idents: vec![],
+                    paths: vec![],
+                },
+            },
+            ParsedFile {
+                rel_path: "crates/dep/src/b.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    defs: vec![def("Thing", 1, 3)],
+                    idents: vec![],
+                    paths: vec![],
+                },
+            },
+            ParsedFile {
+                rel_path: "crates/app/src/m.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    defs: vec![def("run", 1, 4)],
+                    idents: vec![],
+                    paths: vec![pathref(&["dep", "Thing"], 2)],
+                },
+            },
+        ];
+        let containers = vec![
+            container("crates/dep", "dep"),
+            container("crates/app", "app"),
+        ];
+        let ctx = build_context("proj", &containers, &files);
+        assert!(
+            !ctx.file_edges
+                .iter()
+                .any(|e| e.src == "crates/app/src/m.rs"),
+            "ambiguous target leaf must not mint a cross-crate edge"
+        );
+    }
+
+    /// A bare module import (`use dep::helpers;`) names a module, not a def, and
+    /// still resolves to that module's file (file edge only — no symbol).
+    #[test]
+    fn cross_container_module_import_resolves_to_file() {
+        let files = vec![
+            ParsedFile {
+                rel_path: "crates/dep/src/helpers.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    defs: vec![def("assist", 1, 3)],
+                    idents: vec![],
+                    paths: vec![],
+                },
+            },
+            ParsedFile {
+                rel_path: "crates/app/src/m.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    defs: vec![def("run", 1, 4)],
+                    idents: vec![],
+                    // `use dep::helpers;` — leaf is the module, not a symbol.
+                    paths: vec![pathref(&["dep", "helpers"], 1)],
+                },
+            },
+        ];
+        let containers = vec![
+            container("crates/dep", "dep"),
+            container("crates/app", "app"),
+        ];
+        let ctx = build_context("proj", &containers, &files);
+        assert!(
+            ctx.file_edges.iter().any(|e| {
+                e.src == "crates/app/src/m.rs" && e.dst == "crates/dep/src/helpers.rs"
+            }),
+            "module import should resolve to the module's file"
+        );
+    }
+
+    /// Same-crate qualified paths and stdlib paths must NOT produce edges: the
+    /// head is either the file's own container or an external crate we don't model.
+    #[test]
+    fn cross_container_ignores_self_and_external() {
+        let files = vec![ParsedFile {
+            rel_path: "crates/app/src/m.rs".into(),
+            source: String::new(),
+            parse: FileParse {
+                defs: vec![def("run", 1, 4), def("Helper", 6, 8)],
+                idents: vec![],
+                paths: vec![
+                    pathref(&["std", "collections", "HashMap"], 1),
+                    pathref(&["app", "Helper"], 2), // own crate -> handled elsewhere
+                    pathref(&["crate", "Helper"], 3),
+                ],
+            },
+        }];
+        let containers = vec![container("crates/app", "app")];
+        let ctx = build_context("proj", &containers, &files);
+        // No cross-container edges: std is external, app is self.
+        assert!(ctx.file_edges.is_empty(), "no cross-crate edges expected");
     }
 }

@@ -2,23 +2,29 @@ pub(crate) const INSTRUCTIONS: &str = "\
 You are working in a project that has a scryer architecture model alongside its code — a responsibility tree \
 backed by a flat node graph (schema version 0.3). The model is the user's authored spec for what the system is \
 accountable for; the code is how it's discharged. The user and you both edit the model: the user through a visual \
-canvas, you through these MCP tools. The on-disk file lives at `{project}/.scryer/model.scry`. Each tool's own \
-description tells you how to call it; this is the cross-cutting picture.\n\
+canvas, you through these MCP tools.\n\
 \n\
-## The working loop — model first, then code\n\
-The model leads; the code follows. Whenever a task will change behaviour, capture the intent in the model BEFORE \
+## Two layers: the committed model and the plan\n\
+Scryer holds two layers on disk: the committed `model` (`.scryer/model.scry`, the source of truth — what the code \
+is believed to satisfy) and the `planned` draft (`.scryer/planned.scry`, the intent you and the canvas edit). Their \
+difference is the PLAN — the model→code work queue (`get_unimplemented`). Every authoring tool writes the PLAN; the \
+committed model changes only when work is implemented and folds in (`mark_implemented`), or when you extract from \
+code that already exists. Each tool's own description tells you how to call it; this is the cross-cutting picture.\n\
+\n\
+## The working loop — plan first, then code\n\
+The model leads; the code follows. Whenever a task will change behaviour, capture the intent in the plan BEFORE \
 you write code, so the spec stays ahead of the implementation and drift becomes the exception, not the norm.\n\
 \n\
-- **If a model exists, propose in the model first.** Before editing code: consult the area you're about to touch \
+- **If a model exists, propose into the plan first.** Before editing code: consult the area you're about to touch \
 (`get_health` to see where work is needed, then `search_model` / `read_model` for the governing nodes, their \
-responsibilities, and any binding `directives`). Then AUTHOR THE INTENDED CHANGE IN THE MODEL AS A PROPOSAL — \
-add/extend the nodes, responsibilities, and links it implies, at the right altitude, with status `proposed`. This \
-shows up on the user's canvas for them to see and adjust; it is the intent capture, not an afterthought. Only \
-THEN implement the code to that proposal. If the change conflicts with an existing responsibility or directive, \
-surface the conflict — don't silently diverge.\n\
-- **After you write the code**, close the loop: `mark_implemented` the responsibilities you built (proposed → \
-implemented), and `flag_drift` / `reconcile_drift` for anything the code does that the proposal didn't capture. \
-Don't leave the model behind the code.\n\
+responsibilities, and any binding `directives`). Then AUTHOR THE INTENDED CHANGE — add/extend the nodes, \
+responsibilities, and links it implies, at the right altitude. The authoring tools write the planned draft, so the \
+change shows up on the user's canvas as a pending plan to see and adjust; it is the intent capture, not an \
+afterthought. Only THEN implement the code to that plan. If the change conflicts with an existing responsibility or \
+directive, surface the conflict — don't silently diverge.\n\
+- **After you write the code**, close the loop: `mark_implemented` the elements you built — that folds them from the \
+plan into the committed model — and `flag_drift` / `reconcile_drift` for anything the code does that the plan didn't \
+capture. Don't leave the model behind the code.\n\
 - **If no model exists yet, build one first** (the \"Building from a codebase\" flow below), then work the loop \
 above against it.\n\
 \n\
@@ -29,24 +35,28 @@ infer the conventions from existing nodes. Run `validate_model` and fix every wa
 \n\
 ## Building from a codebase (preferred flow)\n\
 1. `read_codebase {path}` to see deployable units, data stores, and external services on disk.\n\
-2. Build top-down with the INTENT tools — `add_person` / `add_system` / `add_container` / `add_component` / \
-`add_symbol` (or `commit_container_model` to commit a whole container's subtree at once). They mint ids and set \
-status for you from plain responsibility statements, and return the nodes they create so you have ids for the next \
-level. Derive responsibilities from real code as `implemented`; only speculative ones stay `proposed`.\n\
+2. Build top-down. When you are EXTRACTING a model from code that already exists, use `commit_container_model` to \
+commit a whole container's subtree at once (it writes the plan and immediately folds it into the committed model — \
+the code is already there, so it is committed, not pending). The INTENT tools — `add_person` / `add_system` / \
+`add_container` / `add_component` / `add_symbol` — mint ids from plain responsibility statements and return the \
+nodes they create; they write the PLAN, so when you build with them from existing code, `mark_implemented` what you \
+authored to commit it (the code already discharges it).\n\
 3. `add_links` to connect nodes, then `validate_model`.\n\
-The raw tools — `set_model`, `add_nodes` / `update_nodes` / `delete_nodes`, `set_node`, `update_source_map` — remain \
-for whole-model edits and refinement. To find things: `search_model` by text, `query_model` by structure, \
-`get_unimplemented` for outstanding model→code work, `mark_implemented` to close it out after you write code.\n\
+The raw tools — `set_model` (commits the whole state), `add_nodes` / `update_nodes` / `delete_nodes`, `set_node`, \
+`update_source_map` — remain for whole-model edits and refinement; the granular ones write the plan. To find \
+things: `search_model` by text, `query_model` by structure, `get_unimplemented` for the plan (outstanding \
+model→code work), `mark_implemented` to commit it after you write code.\n\
 \n\
 ## Keeping the model in sync with the code (drift)\n\
 Two directions. Model→code: `get_unimplemented` lists spec not yet built; `mark_implemented` closes it. \
 Code→model: `get_drift` reports the boundary-owning nodes whose code CHANGED since the last reconcile (cheap, \
 deterministic — mtimes + git, no verdict). For each scope it returns, `read_model {node}` to load the claims, \
-compare them against what the changed code now does, and `flag_drift` to record undescribed behaviour (→ vagrant \
-flag) and stale claims (→ `stale` flag). Both are observations awaiting the user's verdict — statuses are the \
-prescription and are never set by drift. When you have examined every scope, call `reconcile_drift` to \
-advance the anchor so the same changes stop surfacing. A model just built through these tools is seeded in-sync, \
-so drift only appears once code changes afterward.\n\
+compare them against what the changed code now does, and `flag_drift` to record undescribed behaviour and stale \
+claims. Undescribed behaviour is proposed into the PLAN as a vagrant adoption (the user adopts it — commit, the \
+code already exists — or rejects it, dropping it from the plan); a stale claim is flagged on the COMMITTED model \
+claim the code regressed from. When you have examined every scope, call `reconcile_drift` to advance the anchor so \
+the same changes stop surfacing. A model just built through these tools is seeded in-sync, so drift only appears \
+once code changes afterward.\n\
 \n\
 ## Knowing where work is needed (health)\n\
 `get_health` is the deterministic observability report — call it BEFORE reading full subtrees to decide where to \

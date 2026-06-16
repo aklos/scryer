@@ -1,0 +1,120 @@
+/**
+ * Change marks — the single-letter vocabulary the UI uses to show how the plan
+ * (`planned`) diverges from the committed model, plus the two drift flags. One
+ * letter summarizes a row in the tree gutter; the node page and status bar
+ * spell the same changes out in full.
+ *
+ *   A  added       — new in the plan (green)
+ *   M  modified    — fields reworded, or own content added/removed (amber)
+ *   D  deleted     — dropped from the plan (red)
+ *   R  relocated   — re-parented / re-pointed (blue)
+ *   Q  undescribed — a vagrant claim: code does it, the model didn't say so (violet, drift)
+ *   X  stale       — a committed claim the code regressed from (orange, drift)
+ *
+ * A/M/D/R are PLAN marks (the model→code work queue, `diff(committed,planned)`);
+ * Q/X are DRIFT marks (model↔code mismatch, carried as flags on claims). A row
+ * can have both; the plan mark wins for the single glanceable letter.
+ */
+
+import type { Change, ElementChange, ModelDiff } from "./planDiff";
+import type { Group, Node } from "./viewmodel";
+
+export type Mark = "A" | "M" | "D" | "R" | "Q" | "X";
+
+/** Per-mark hue + label. Hues follow the mockup palette: A green, M amber,
+ *  D red, R blue, Q violet, X orange. */
+export const MARK_META: Record<Mark, { color: string; label: string }> = {
+  A: { color: "text-emerald-600 dark:text-emerald-400", label: "Added" },
+  M: { color: "text-amber-600 dark:text-amber-400", label: "Modified" },
+  D: { color: "text-red-600 dark:text-red-400", label: "Deleted" },
+  R: { color: "text-blue-600 dark:text-blue-400", label: "Relocated" },
+  Q: { color: "text-violet-600 dark:text-violet-400", label: "Undescribed in the model (drift)" },
+  X: { color: "text-orange-600 dark:text-orange-400", label: "Stale — code regressed (drift)" },
+};
+
+/** The plan diff, indexed for per-element lookup: each node/group's own changes,
+ *  and the responsibility/property changes grouped under their owning id. */
+export interface DiffIndex {
+  nodeOwn: Map<string, Change[]>;
+  groupOwn: Map<string, Change[]>;
+  byOwner: Map<string, ElementChange[]>;
+}
+
+export function indexDiff(diff: ModelDiff): DiffIndex {
+  const nodeOwn = new Map<string, Change[]>();
+  const groupOwn = new Map<string, Change[]>();
+  const byOwner = new Map<string, ElementChange[]>();
+  for (const ec of diff.changes) {
+    if (ec.kind === "node") nodeOwn.set(ec.id, ec.changes);
+    else if (ec.kind === "group") groupOwn.set(ec.id, ec.changes);
+    else if (ec.ownerId) {
+      const arr = byOwner.get(ec.ownerId);
+      if (arr) arr.push(ec);
+      else byOwner.set(ec.ownerId, [ec]);
+    }
+  }
+  return { nodeOwn, groupOwn, byOwner };
+}
+
+/** Classify a single PLAN mark from an element's own changes plus the changes
+ *  to the content it owns. A brand-new or dropped element wins outright; then a
+ *  relocation; then any reword/add/remove reads as "modified". */
+function classifyPlan(own: Change[] | undefined, childChanges: Change[]): Mark | null {
+  if (own?.some((c) => c.type === "added")) return "A";
+  if (own?.some((c) => c.type === "deleted")) return "D";
+  const all = own ? [...own, ...childChanges] : childChanges;
+  if (all.length === 0) return null;
+  if (all.some((c) => c.type === "moved" || c.type === "repointed")) return "R";
+  return "M";
+}
+
+/** Drift mark for a set of responsibilities: a vagrant claim is undescribed
+ *  behaviour (Q), a stale one is a regression (X). */
+function driftOf(resps: { vagrant?: boolean; stale?: boolean }[] | undefined): Mark | null {
+  let vagrant = false;
+  let stale = false;
+  for (const r of resps ?? []) {
+    if (r.vagrant) vagrant = true;
+    if (r.stale) stale = true;
+  }
+  return vagrant ? "Q" : stale ? "X" : null;
+}
+
+/** The plan and drift marks for one node, computed independently so the lenses
+ *  can filter on either axis. Vagrant claims feed the drift mark, not the plan
+ *  mark (they're code-first, not a planned edit). */
+export function nodeMarks(node: Node, idx: DiffIndex): { plan: Mark | null; drift: Mark | null } {
+  const vagrantIds = new Set<string>();
+  let vagrant = false;
+  let stale = false;
+  for (const r of node.responsibilities ?? []) {
+    if (r.vagrant) {
+      vagrant = true;
+      vagrantIds.add(r.id);
+    }
+    if (r.stale) stale = true;
+  }
+  const childChanges: Change[] = [];
+  for (const ec of idx.byOwner.get(node.id) ?? []) {
+    if (ec.kind === "responsibility" && vagrantIds.has(ec.id)) continue; // drift, not plan
+    childChanges.push(...ec.changes);
+  }
+  return {
+    plan: classifyPlan(idx.nodeOwn.get(node.id), childChanges),
+    drift: vagrant ? "Q" : stale ? "X" : null,
+  };
+}
+
+export function groupMarks(group: Group, idx: DiffIndex): { plan: Mark | null; drift: Mark | null } {
+  const childChanges: Change[] = [];
+  for (const ec of idx.byOwner.get(group.id) ?? []) childChanges.push(...ec.changes);
+  return {
+    plan: classifyPlan(idx.groupOwn.get(group.id), childChanges),
+    drift: driftOf(group.responsibilities),
+  };
+}
+
+/** The single glanceable letter for a row — the plan mark if any, else drift. */
+export function resolveMark(marks: { plan: Mark | null; drift: Mark | null }): Mark | null {
+  return marks.plan ?? marks.drift;
+}

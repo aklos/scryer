@@ -17,7 +17,6 @@ export interface Editor {
       technology?: string;
       icon?: string;
       visual?: boolean;
-      deprecated?: boolean;
       relocated?: boolean;
       responsibilities?: Responsibility[];
       properties?: SchemaProperty[];

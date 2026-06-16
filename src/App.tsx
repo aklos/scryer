@@ -9,18 +9,25 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Loader2 } from "lucide-react";
 import type { VariationState } from "./NodePage";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ToastProvider } from "./Toast";
 import { ModelTree } from "./ModelTree";
-import { TopBar } from "./TopBar";
+import { TopBar, type WorkspaceView } from "./TopBar";
+import { DiagramView } from "./DiagramView";
 import { NodePage, type Selected, type SpecialPage } from "./NodePage";
 import { buildReviewIndex, NeedsReviewPage, RecentChangesPage } from "./SpecialPages";
 import { ProjectPicker } from "./ProjectPicker";
 import { SearchPalette } from "./SearchPalette";
-import { SyncBar } from "./SyncBar";
-import { SettingsPanel } from "./SettingsPanel";
+import { Powerline } from "./Powerline";
+import {
+  SettingsPanel,
+  SUBAGENT_DEFAULTS,
+  resolveLaunch,
+  type Detected,
+  type ResolvedLaunch,
+  type SubagentSettings,
+} from "./SettingsPanel";
 import { useModelStorage } from "./hooks/useModelStorage";
 import { useModelBuild, type ModelBuild } from "./hooks/useModelBuild";
 import { useAgentSession } from "./hooks/useAgentSession";
@@ -77,6 +84,8 @@ function AppBody() {
   return (
     <Workspace
       model={model}
+      committed={storage.committed}
+      planDiff={storage.planDiff}
       updateModel={storage.updateModel}
       projectPath={storage.projectPath}
       modelRef={storage.modelRef}
@@ -88,6 +97,7 @@ function AppBody() {
       newRespIds={storage.newRespIds}
       clearNewResp={storage.clearNewResp}
       changeLog={storage.changeLog}
+      history={storage.history}
       clearAllNew={storage.clearAllNew}
       openProject={storage.openProject}
       closeProject={storage.closeProject}
@@ -97,6 +107,8 @@ function AppBody() {
 
 function Workspace({
   model,
+  committed,
+  planDiff,
   updateModel,
   projectPath,
   modelRef: modelRefStr,
@@ -108,11 +120,14 @@ function Workspace({
   newRespIds,
   clearNewResp,
   changeLog,
+  history,
   clearAllNew,
   openProject,
   closeProject,
 }: {
   model: ScryModel;
+  committed: ScryModel | null;
+  planDiff: ReturnType<typeof useModelStorage>["planDiff"];
   updateModel: ReturnType<typeof useModelStorage>["updateModel"];
   projectPath: string | null;
   modelRef: string | null;
@@ -124,6 +139,7 @@ function Workspace({
   newRespIds: ReadonlySet<string>;
   clearNewResp: (id: string) => void;
   changeLog: ReturnType<typeof useModelStorage>["changeLog"];
+  history: ReturnType<typeof useModelStorage>["history"];
   clearAllNew: () => void;
   openProject: (path: string) => Promise<void>;
   closeProject: () => void;
@@ -179,6 +195,37 @@ function Workspace({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
 
+  // The subagent launch setup (which agent + model + effort a fill will run
+  // with), surfaced read-only in the powerline. Reloaded whenever the settings
+  // panel closes so an edit there reflects immediately.
+  const [subagent, setSubagent] = useState<SubagentSettings>(SUBAGENT_DEFAULTS);
+  const [detectedTools, setDetectedTools] = useState<Detected>({ claude: false, codex: false });
+  const loadLaunch = useCallback(() => {
+    invoke<SubagentSettings>("get_subagent_settings")
+      .then((s) => setSubagent({ ...SUBAGENT_DEFAULTS, ...s }))
+      .catch(() => {});
+    invoke<Detected>("detect_ai_tools", { projectPath: null })
+      .then((d) => setDetectedTools({ claude: !!d.claude, codex: !!d.codex }))
+      .catch(() => {});
+  }, []);
+  useEffect(loadLaunch, [loadLaunch]);
+  const launch: ResolvedLaunch = useMemo(
+    () => resolveLaunch(subagent, detectedTools),
+    [subagent, detectedTools],
+  );
+
+  // The Wiki/Diagram toggle. The diagram is a secondary nav surface onto the
+  // same model and selection; `diagramFocus` is the level it currently shows
+  // (children of this node, or top-level when null).
+  const [view, setView] = useState<WorkspaceView>(
+    () => (localStorage.getItem("scryer:view") === "diagram" ? "diagram" : "wiki"),
+  );
+  const setWorkspaceView = useCallback((v: WorkspaceView) => {
+    localStorage.setItem("scryer:view", v);
+    setView(v);
+  }, []);
+  const [diagramFocus, setDiagramFocus] = useState<string | null>(null);
+
   // Ctrl/Cmd+K — jump to any node or group by name.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -218,6 +265,11 @@ function Workspace({
       const anc = ancestorsToExpand(id);
       setExpanded((prev) => new Set([...prev, ...anc]));
       clearNewNode(id);
+      // Keep the diagram framed on the selection's level: show the node among
+      // its siblings (its parent's children). Drilling deeper is the diagram's
+      // own double-click; this only reframes on selection.
+      const node = modelRef.current.nodes.find((n) => n.id === id);
+      setDiagramFocus(node?.parentId ?? null);
     },
     [ancestorsToExpand, clearNewNode],
   );
@@ -233,6 +285,17 @@ function Workspace({
         null;
       const anc = container ? [container, ...ancestorsToExpand(container)] : [];
       setExpanded((prev) => new Set([...prev, ...anc]));
+    },
+    [ancestorsToExpand],
+  );
+
+  // Drilling into a node on the diagram should also open it in the tree, so the
+  // two surfaces stay in lockstep: reveal the node's children by expanding it
+  // (and its ancestor chain) alongside reframing the diagram on that level.
+  const drillDiagram = useCallback(
+    (id: string | null) => {
+      setDiagramFocus(id);
+      if (id) setExpanded((prev) => new Set([...prev, id, ...ancestorsToExpand(id)]));
     },
     [ancestorsToExpand],
   );
@@ -412,9 +475,34 @@ function Workspace({
 
   const pageEditor = writing ? undefined : editor;
 
-  const onDismissDrift = useCallback(() => {
+  const onDismissDrift = useCallback(
+    (nodeId: string) => {
+      if (!projectPath) return;
+      // The node and its whole subtree reconcile together (mirrors the backend),
+      // since each descendant can be its own boundary owner.
+      const subtree = new Set<string>([nodeId]);
+      for (let added = true; added; ) {
+        added = false;
+        for (const n of model.nodes) {
+          if (n.parentId && subtree.has(n.parentId) && !subtree.has(n.id)) {
+            subtree.add(n.id);
+            added = true;
+          }
+        }
+      }
+      // Optimistic: drop the node + descendants now; the per-node anchor makes it stick.
+      setDriftScopes((scopes) => scopes.filter((s) => !subtree.has(s.nodeId)));
+      invoke("reconcile_drift_node", { cwd: projectPath, nodeId })
+        .then(() => refreshHealth())
+        .catch(() => {});
+    },
+    [projectPath, model.nodes, refreshHealth],
+  );
+
+  // Project-wide dismiss for the Needs-review page, which lists every drifted
+  // scope at once — clears them all and advances the global reconcile anchor.
+  const onDismissAllDrift = useCallback(() => {
     if (!projectPath) return;
-    // Optimistic: clear the nudge now; the anchor write makes it stick.
     setDriftScopes([]);
     invoke("reconcile_drift", { cwd: projectPath })
       .then(() => refreshHealth())
@@ -426,53 +514,34 @@ function Workspace({
     build.checkDrift(projectPath);
   }, [projectPath, build]);
 
-  const openSpecial = useCallback((page: SpecialPage) => {
-    setSelected({ kind: "special", id: page });
-  }, []);
+  const openSpecial = useCallback(
+    (page: SpecialPage) => {
+      // Special pages are part of the wiki; surfacing one returns from the diagram.
+      setWorkspaceView("wiki");
+      setSelected({ kind: "special", id: page });
+    },
+    [setWorkspaceView],
+  );
 
   // The status-bar counters, shared with the special pages so the number and
   // the list can never disagree.
   const reviewIndex = buildReviewIndex(model, healthReport, driftScopes, newNodeIds, newRespIds);
-  const plannedCount = model.nodes.reduce((n, node) => {
-    if (node.external) return n;
-    const resps = (node.responsibilities ?? []).filter((r) => {
-      if (r.vagrant) return false;
-      const s = r.status ?? "proposed";
-      return s === "proposed" || s === "changed";
-    }).length;
-    const props = (node.properties ?? []).filter((p) => {
-      const s = p.status ?? "proposed";
-      return s === "proposed" || s === "changed";
-    }).length;
-    return n + resps + props;
-  }, 0);
 
   return (
     <div className="flex h-screen w-screen flex-col bg-[var(--surface-canvas)]">
       <TopBar
         projectPath={projectPath}
+        view={view}
+        onSetView={setWorkspaceView}
         onOpenProject={(p) => void openProject(p)}
         onCloseProject={closeProject}
-        onReload={() => void reloadFromDisk()}
         onOpenSearch={() => setSearchOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
       />
-      {writing && (
-        // Indigo = the agent. While it owns the model file the page is
-        // read-only ([edit] affordances disappear); this banner says why.
-        <div className="flex shrink-0 items-center justify-center gap-1.5 bg-indigo-500/10 py-1 text-2xs text-indigo-600 dark:text-indigo-400">
-          <Loader2 className="h-3 w-3 animate-spin" />
-          {build.building
-            ? "Agent is building the model"
-            : build.checking
-              ? "Agent is checking for drift"
-              : agent.label}
-          {build.active && build.phase ? ` — ${build.phase}` : " — editing locked until it finishes"}
-        </div>
-      )}
       <div className="flex min-h-0 flex-1">
         <ModelTree
           model={model}
+          planDiff={planDiff}
           selected={selected}
           expanded={expanded}
           onSelectNode={selectNode}
@@ -480,11 +549,19 @@ function Workspace({
           onToggle={toggle}
           editor={pageEditor}
           onFill={projectPath && !writing ? onFill : undefined}
-          onOpenSearch={() => setSearchOpen(true)}
           activeNodeIds={build.active ? build.activeNodeIds : EMPTY_IDS}
           newNodeIds={newNodeIds}
         />
-        {selected?.kind === "special" ? (
+        {view === "diagram" ? (
+          <DiagramView
+            model={model}
+            planDiff={planDiff}
+            focusId={diagramFocus}
+            selectedId={selected?.kind === "node" ? selected.id : null}
+            onFocus={drillDiagram}
+            onSelectNode={selectNode}
+          />
+        ) : selected?.kind === "special" ? (
           selected.id === "changes" ? (
             <RecentChangesPage changeLog={changeLog} onSelectNode={selectNode} />
           ) : (
@@ -497,7 +574,7 @@ function Workspace({
               editor={pageEditor}
               onSelectNode={selectNode}
               onCheckDrift={pageEditor ? onCheckDrift : undefined}
-              onDismissDrift={pageEditor ? onDismissDrift : undefined}
+              onDismissDrift={pageEditor ? onDismissAllDrift : undefined}
               onClearAllNew={clearAllNew}
             />
           )
@@ -505,6 +582,7 @@ function Workspace({
           <NodePage
             key={previewKey}
             model={model}
+            committed={committed}
             selected={selected}
             report={healthReport}
             projectPath={projectPath}
@@ -521,6 +599,7 @@ function Workspace({
             newRespIds={newRespIds}
             onClearNewResp={clearNewResp}
             changeLog={changeLog}
+            history={history}
             driftScopes={driftScopes}
             onCheckDrift={pageEditor ? onCheckDrift : undefined}
             onDismissDrift={pageEditor ? onDismissDrift : undefined}
@@ -531,15 +610,24 @@ function Workspace({
           </div>
         )}
       </div>
-      <SyncBar
+      <Powerline
         model={model}
         agent={agent}
         build={build}
-        reviewCount={reviewIndex.total}
-        plannedCount={plannedCount}
+        reviewIndex={reviewIndex}
+        health={healthReport}
+        launch={launch}
         onOpenSpecial={openSpecial}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
-      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <SettingsPanel
+          onClose={() => {
+            setSettingsOpen(false);
+            loadLaunch();
+          }}
+        />
+      )}
       {searchOpen && (
         <SearchPalette
           model={model}

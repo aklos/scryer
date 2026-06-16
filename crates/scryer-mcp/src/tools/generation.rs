@@ -14,6 +14,7 @@ use rmcp::{
     model::{CallToolResult, Content},
     tool, tool_router, ErrorData as McpError,
 };
+use scryer_core::history::{EventKind, EventRow, HistoryEvent};
 use scryer_core::{
     Group, Kind, Link, Node, Responsibility, SchemaProperty, SourceLocation, Status,
 };
@@ -114,7 +115,6 @@ fn blank_node(id: String, kind: Kind, name: String, parent_id: String) -> Node {
         icon: None,
         visual: None,
         appearance: None,
-        deprecated: None,
         relocated: None,
         locked: None,
         relocated_to: None,
@@ -485,8 +485,39 @@ impl ScryerServer {
             dropped_links.push(msg.clone());
         }
 
+        // Codebase→model generation: write the plan, then commit it (planned and
+        // model land equal, so an extracted container carries no pending plan).
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
+            return Ok(err(e));
+        }
         if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
             return Ok(err(e));
+        }
+
+        // Timeline: a `born` event per component that just entered the model.
+        let now = scryer_core::drift::now_secs();
+        for comp_id in &minted_components {
+            let resp_count = model
+                .nodes
+                .iter()
+                .find(|n| n.id == *comp_id)
+                .map(|n| n.responsibilities.len())
+                .unwrap_or(0);
+            let sym_count = model
+                .nodes
+                .iter()
+                .filter(|n| n.parent_id.as_deref() == Some(comp_id.as_str()) && n.kind == Kind::Symbol)
+                .count();
+            let text = format!(
+                "{resp_count} responsibilit{} · {sym_count} symbol{} · component",
+                if resp_count == 1 { "y" } else { "ies" },
+                if sym_count == 1 { "" } else { "s" },
+            );
+            record_event(
+                &model_ref,
+                HistoryEvent::new(now, EventKind::Born, comp_id, "build")
+                    .with_rows(vec![EventRow::new("+", text)]),
+            );
         }
 
         let payload = serde_json::json!({

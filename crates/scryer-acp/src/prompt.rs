@@ -516,7 +516,6 @@ mod tests {
             icon: None,
             visual: None,
             appearance: None,
-            deprecated: None,
             relocated: None,
             locked: None,
             relocated_to: None,

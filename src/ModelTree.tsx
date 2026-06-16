@@ -2,31 +2,33 @@
  * Left explorer — the definition surface. An IDE-style tree of the full node
  * hierarchy (persons, systems, containers, components, symbols) with groups
  * rendered as folders that wrap their members. Every node is reachable and
- * first-class. Status dots roll up node health at a glance; agent activity and
- * fresh arrivals are reflected on the rows. Right-click for structural edits
- * (add child, rename, delete, group membership).
+ * first-class. A change-letter gutter (A/M/D/R from the plan diff, Q/X for
+ * drift) marks each row at a glance and rolls up onto collapsed branches; agent
+ * activity and fresh arrivals are reflected on the rows. Right-click for
+ * structural edits (add child, rename, delete, group membership).
  */
 
 import { useRef, useState } from "react";
 import {
   Braces,
   ChevronRight,
-  ClipboardList,
-  Flag,
   Folder,
   FolderOpen,
   Loader2,
   Plus,
-  Search,
 } from "lucide-react";
 import type { ScryModel, Node, Group, Kind } from "./viewmodel";
 import { childKindFor } from "./viewmodel";
 import type { Editor } from "./editor";
-import { effectiveNodeStatus, isNodeEmpty } from "./rollup";
-import { rollupStatus } from "./statusColors";
-import type { Status } from "./statusColors";
-import { STATUS_COLORS } from "./statusColors";
-import { EmptyDot } from "./pagekit";
+import type { ModelDiff } from "./planDiff";
+import {
+  groupMarks,
+  indexDiff,
+  MARK_META,
+  type Mark,
+  nodeMarks,
+  resolveMark,
+} from "./changeMarks";
 import { kindIcon } from "./kindIcon";
 import { KIND_ICON } from "./kindIcons";
 import { lookupIcon } from "./IconPicker";
@@ -36,7 +38,28 @@ import { ConfirmPopover } from "./ConfirmPopover";
 import type { Selected } from "./NodePage";
 
 const INDENT = 14;
+// Fixed gutter at the row's left edge carrying the change letter; depth indent
+// and the rails sit to the right of it, so the letters form a clean column.
+const GUTTER = 16;
 const ROW = "group/row relative flex items-center gap-1 rounded pr-3 h-[26px] cursor-pointer select-none";
+
+// The change letter for one row — a fixed-width, centered, mono cell pinned to
+// the row's left edge so the letters line up regardless of depth. Renders an
+// empty cell when there's no mark, keeping the label column aligned.
+function ChangeGutter({ mark }: { mark: Mark | null }) {
+  return (
+    <span
+      aria-hidden={!mark}
+      title={mark ? MARK_META[mark].label : undefined}
+      className={`pointer-events-none absolute inset-y-0 left-0 flex items-center justify-center font-mono text-[11px] font-bold ${
+        mark ? MARK_META[mark].color : ""
+      }`}
+      style={{ width: GUTTER }}
+    >
+      {mark}
+    </span>
+  );
+}
 
 /** Alphabetical within a level, unnamed entries last. */
 const byName = (a: { name: string }, b: { name: string }) =>
@@ -58,53 +81,35 @@ interface TreeRow {
   group?: Group;
 }
 
-// Status dot that stays hidden for healthy (implemented) and unset nodes, so
-// the tree only flags rows that actually need attention.
-function StatusDotFiltered({
-  status,
-  className = "",
-}: {
-  status: Status | null | undefined;
-  className?: string;
-}) {
-  if (!status || status === "implemented") return null;
-  const colors = STATUS_COLORS[status];
-  return (
-    <span
-      className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${colors.dot} ${className}`}
-      title={colors.label}
-    />
-  );
-}
-
 // Altitude ramp — make the C4 tier *felt*, not inferred from indent alone.
-// Higher tier = more visual weight; detail recedes. Built on value/lightness
-// contrast and weight (per NN/G visual-hierarchy guidance) rather than hue, and
-// kept to ≤3 size steps so the steps still read as a hierarchy, not noise.
-//   person/system → the anchors      (semibold, full-contrast)
-//   container     → structure        (medium)
-//   component     → grouping of code  (regular, secondary)
-//   symbol        → the leaf detail   (smaller, muted)
-// One clean value step PER tier (--text → secondary → tertiary → muted) so each
-// altitude is distinct on its own, with weight reinforcing the top two anchors.
-// The leaf recedes by value, not by also shrinking — a smaller-and-dimmer leaf
-// reads as "disabled". `color` is applied only when the row isn't selected
-// (selection drives its own foreground); `weight`/`icon` apply always.
+// Built on weight and value (per NN/G visual-hierarchy guidance) rather than
+// hue. A flat 3-tier value ramp keeps every label readable: the graphite dark
+// palette's lower shades are crushed, so dropping detail rows to --text-muted/
+// -tertiary reads as "disabled", not "subordinate". Structure is carried by
+// WEIGHT between the readable tiers, value only for the true anchors and leaf.
+//   person/system → the anchors     (semibold, full-contrast --text)
+//   container     → structure       (medium,  --text-secondary)
+//   component     → grouping of code (regular, --text-secondary — same value as
+//                                      container, separated by weight not value)
+//   symbol        → the leaf detail  (regular, --text-tertiary — one step down)
+// `color` is applied only when the row isn't selected (selection drives its own
+// foreground); `weight`/`icon` apply always.
 function altitudeRamp(node: Node): { weight: string; color: string; icon: string } {
   if (node.kind === "person" || node.kind === "system")
     return { weight: "font-semibold", color: "text-[var(--text)]", icon: "text-[var(--text-secondary)]" };
   if (node.kind === "container")
     return { weight: "font-medium", color: "text-[var(--text-secondary)]", icon: "text-[var(--text-tertiary)]" };
   if (node.kind === "component")
-    return { weight: "font-normal", color: "text-[var(--text-tertiary)]", icon: "text-[var(--text-muted)]" };
+    return { weight: "font-normal", color: "text-[var(--text-secondary)]", icon: "text-[var(--text-tertiary)]" };
   // symbol — the leaf. Indent + rail + icon already mark it subordinate, so the
-  // label stays readable (--text-tertiary, shared with component); only the icon
-  // recedes. Going dimmer here read as "disabled".
+  // label only drops one value step to --text-tertiary (still readable); the
+  // icon recedes a touch further.
   return { weight: "font-normal", color: "text-[var(--text-tertiary)]", icon: "text-[var(--text-muted)]" };
 }
 
 export function ModelTree({
   model,
+  planDiff,
   selected,
   expanded,
   onSelectNode,
@@ -112,11 +117,12 @@ export function ModelTree({
   onToggle,
   editor,
   onFill,
-  onOpenSearch,
   activeNodeIds,
   newNodeIds,
 }: {
   model: ScryModel;
+  /** Live `diff(committed, planned)` — drives the change-letter gutter. */
+  planDiff: ModelDiff;
   selected: Selected | null;
   expanded: ReadonlySet<string>;
   onSelectNode: (id: string) => void;
@@ -124,7 +130,6 @@ export function ModelTree({
   onToggle: (id: string, expand?: boolean) => void;
   editor: Editor | undefined;
   onFill?: (nodeId: string) => void;
-  onOpenSearch?: () => void;
   activeNodeIds: ReadonlySet<string>;
   newNodeIds: ReadonlySet<string>;
 }) {
@@ -174,13 +179,13 @@ export function ModelTree({
   };
 
   // --- filter + lenses --------------------------------------------------------
-  // Type-to-filter narrows by name; the lenses narrow by state: "planned"
-  // (proposed/changed claims — the backlog the agent will implement) and
-  // "attention" (vagrant/stale/empty — things awaiting a verdict). A branch
-  // stays visible when anything below it matches; matching auto-expands.
+  // Type-to-filter narrows by name; the lenses narrow by mark: "changes" (the
+  // plan — A/M/D/R, the model→code work queue) and "drift" (Q/X — model↔code
+  // mismatch awaiting a verdict). A branch stays visible when anything below it
+  // matches; matching auto-expands.
 
   const [filter, setFilter] = useState("");
-  const [lens, setLens] = useState<"all" | "planned" | "attention">("all");
+  const [lens, setLens] = useState<"all" | "changes" | "drift">("all");
 
   const childIndex = new Map<string | null, Node[]>();
   for (const n of model.nodes) {
@@ -190,38 +195,41 @@ export function ModelTree({
     else childIndex.set(k, [n]);
   }
 
-  /** Verdict items on this node itself: vagrant/stale claims, the empty flag. */
-  const ownAttention = (n: Node) =>
-    (n.responsibilities ?? []).filter((r) => r.vagrant || r.stale).length +
-    (isNodeEmpty(n) ? 1 : 0);
+  // Per-node plan/drift marks from the live plan diff, computed once.
+  const diffIndex = indexDiff(planDiff);
+  const markOf = new Map<string, { plan: Mark | null; drift: Mark | null }>();
+  for (const n of model.nodes) markOf.set(n.id, nodeMarks(n, diffIndex));
+  const hasPlan = (id: string) => markOf.get(id)?.plan != null;
+  const hasDrift = (id: string) => markOf.get(id)?.drift != null;
 
-  /** Plan items on this node itself: proposed/changed claims and properties. */
-  const ownPlanned = (n: Node) => {
-    if (n.external) return 0;
-    const resps = (n.responsibilities ?? []).filter((r) => {
-      if (r.vagrant) return false;
-      const s = r.status ?? "proposed";
-      return s === "proposed" || s === "changed";
-    }).length;
-    const props = (n.properties ?? []).filter((p) => {
-      const s = p.status ?? "proposed";
-      return s === "proposed" || s === "changed";
-    }).length;
-    return resps + props;
+  // Subtree mark counts — the rollup badge on a collapsed branch, so a change
+  // buried three levels down is never invisible. Plan and drift counted
+  // separately so each lens's badge reflects only its own axis.
+  const subtreePlan = new Map<string, number>();
+  const subtreeDrift = new Map<string, number>();
+  const sumMarks = (n: Node): [number, number] => {
+    const memo = subtreePlan.get(n.id);
+    if (memo !== undefined) return [memo, subtreeDrift.get(n.id) ?? 0];
+    let plan = hasPlan(n.id) ? 1 : 0;
+    let drift = hasDrift(n.id) ? 1 : 0;
+    for (const c of childIndex.get(n.id) ?? []) {
+      const [cp, cd] = sumMarks(c);
+      plan += cp;
+      drift += cd;
+    }
+    subtreePlan.set(n.id, plan);
+    subtreeDrift.set(n.id, drift);
+    return [plan, drift];
   };
+  for (const n of model.nodes) sumMarks(n);
 
-  // Subtree attention totals — the rollup badge on collapsed branches, so a
-  // flag buried three levels down is never invisible.
-  const attentionTotal = new Map<string, number>();
-  const sumAttention = (n: Node): number => {
-    const memo = attentionTotal.get(n.id);
-    if (memo !== undefined) return memo;
-    let total = ownAttention(n);
-    for (const c of childIndex.get(n.id) ?? []) total += sumAttention(c);
-    attentionTotal.set(n.id, total);
-    return total;
-  };
-  for (const n of model.nodes) sumAttention(n);
+  // Lens counts shown on the segmented control — how many rows each lens lights.
+  let changeCount = 0;
+  let driftCount = 0;
+  for (const n of model.nodes) {
+    if (hasPlan(n.id)) changeCount++;
+    if (hasDrift(n.id)) driftCount++;
+  }
 
   const q = filter.trim().toLowerCase();
   const filterActive = q !== "" || lens !== "all";
@@ -229,7 +237,7 @@ export function ModelTree({
   if (filterActive) {
     const matchSelf = (n: Node) =>
       (q === "" || (n.name || "").toLowerCase().includes(q)) &&
-      (lens === "all" || (lens === "planned" ? ownPlanned(n) > 0 : ownAttention(n) > 0));
+      (lens === "all" || (lens === "changes" ? hasPlan(n.id) : hasDrift(n.id)));
     const set = new Set<string>();
     const walk = (n: Node): boolean => {
       let inc = matchSelf(n);
@@ -289,28 +297,15 @@ export function ModelTree({
     return n;
   };
 
-  // Dots are LOCAL: a dot means "this node's own spec needs attention", never
-  // "something somewhere below" — descendants speak for themselves when
-  // expanded, and buried flags are reached via the SyncBar's review counter.
-  const groupStatus = (g: Group): Status | null => {
-    const memberStatuses = g.memberIds
-      .map((id) => model.nodes.find((n) => n.id === id))
-      .filter((n): n is Node => Boolean(n))
-      .map((n) => effectiveNodeStatus(n))
-      .filter((s): s is Status => Boolean(s));
-    const own = (g.responsibilities ?? []).map((r) => r.status ?? "proposed");
-    const all = [...own, ...memberStatuses];
-    return all.length ? rollupStatus(all) : null;
-  };
-
   // --- structural edits -----------------------------------------------------
 
   const addChild = (parent: Node) => {
     if (!editor) return;
-    const id = editor.addNode({
-      kind: childKindFor(parent.kind),
-      parentId: parent.id,
-    });
+    const kind = childKindFor(parent.kind);
+    const id = editor.addNode({ kind, parentId: parent.id });
+    // A symbol added while the altitude toggle hides symbols would land
+    // invisibly — surface them so the new node is where the eye expects it.
+    if (kind === "symbol") setShowSymbols(true);
     onToggle(parent.id, true);
     onSelectNode(id);
     setRenaming(id);
@@ -328,10 +323,12 @@ export function ModelTree({
     { id: "person", label: "Add person", onSelect: () => addRoot("person", false) },
     { id: "ext", label: "Add external system", onSelect: () => addRoot("system", true) },
   ];
+  // Right-clicking the empty tree surface adds a top-level node — the root is
+  // the "parent" of systems, mirroring right-click-to-add-child on a node.
   const openRootMenu = (e: React.MouseEvent) => {
     if (!editor) return;
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    setMenu({ x: r.left, y: r.bottom + 2, items: rootMenuItems() });
+    e.preventDefault();
+    setMenu({ x: e.clientX, y: e.clientY, items: rootMenuItems() });
   };
 
   const nodeMenu = (e: React.MouseEvent, node: Node) => {
@@ -487,7 +484,8 @@ export function ModelTree({
   })();
 
   // Indent guide rails — one 1px vertical line per ancestor depth, aligned to
-  // that ancestor's chevron centre (base pad 6 + half the 14px chevron = 13).
+  // that ancestor's chevron centre (gutter + base pad 6 + half the 14px
+  // chevron = GUTTER + 13), sitting to the right of the change-letter gutter.
   const renderRails = (row: TreeRow) =>
     row.ancestors.map((anc, i) => (
       <span
@@ -496,7 +494,7 @@ export function ModelTree({
         className={`pointer-events-none absolute top-0 h-full w-px ${
           activeRailIds.has(anc.id) ? "bg-[var(--text-muted)]" : "bg-[var(--border)]"
         }`}
-        style={{ left: 13 + i * INDENT }}
+        style={{ left: GUTTER + 13 + i * INDENT }}
       />
     ));
 
@@ -504,23 +502,12 @@ export function ModelTree({
 
   const draggedNode = dragId ? model.nodes.find((n) => n.id === dragId) : null;
 
-  /** Mirrors viewmodel.moveNode validation so only legal targets light up. */
-  const canDropOnNode = (target: Node): boolean => {
-    if (!editor || !draggedNode || target.id === draggedNode.id) return false;
-    if (target.external || target.locked) return false;
-    if (target.kind === "symbol" || target.kind === "person") return false;
-    if (childKindFor(target.kind) !== draggedNode.kind) return false;
-    if (target.id === draggedNode.parentId) return false;
-    // No cycles: the target must not live inside the dragged subtree.
-    let cur: Node | undefined = target;
-    const seen = new Set<string>();
-    while (cur?.parentId && !seen.has(cur.id)) {
-      if (cur.parentId === draggedNode.id) return false;
-      seen.add(cur.id);
-      cur = model.nodes.find((n) => n.id === cur!.parentId);
-    }
-    return true;
-  };
+  // Cross-container reparenting is disabled: a node's dependency links are plain
+  // (src,dst) pairs that moveNode leaves untouched, so re-homing a node would
+  // silently leave its links pointing across container boundaries — an invariant
+  // we don't yet reconcile. Until we do, nodes can't be dropped onto other nodes.
+  // Drag-into-group still works (it only changes group membership, never links).
+  const canDropOnNode = (_target: Node): boolean => false;
 
   /** Groups accept siblings of their members (same level), nothing else. */
   const canDropOnGroup = (group: Group): boolean => {
@@ -636,22 +623,27 @@ export function ModelTree({
     const isSel = selected?.kind === "node" && selected.id === node.id;
     const ramp = altitudeRamp(node);
     const Icon = lookupIcon(node.icon) ?? kindIcon(node);
-    const status = effectiveNodeStatus(node);
-    const empty = isNodeEmpty(node);
     const active = activeNodeIds.has(node.id);
     const fresh = newNodeIds.has(node.id);
     const hiddenSyms =
       !filterActive && node.kind === "component" ? hiddenSymbolCount(node.id) : 0;
     const isDrop = dropKey === `node:${node.id}`;
-    // Attention rollup: a collapsed branch answers for everything below it;
-    // an open one only for itself (descendants speak for themselves).
-    const attn = row.isOpen ? ownAttention(node) : attentionTotal.get(node.id) ?? 0;
+    const marks = markOf.get(node.id) ?? { plan: null, drift: null };
+    // The gutter shows this node's OWN mark; a collapsed branch additionally
+    // gets a neutral count of changes buried below, so nothing hides — but the
+    // letter stays honest (we don't synthesize a type for the subtree).
+    const ownMark = resolveMark(marks);
+    const subPlan = subtreePlan.get(node.id) ?? 0;
+    const subDrift = subtreeDrift.get(node.id) ?? 0;
+    const rollupCount = row.isOpen
+      ? 0
+      : subPlan - (marks.plan ? 1 : 0) + (subDrift - (marks.drift ? 1 : 0));
 
     return (
       <div
         key={`node:${node.id}`}
         data-rk={`node:${node.id}`}
-        style={{ paddingLeft: 6 + row.depth * INDENT }}
+        style={{ paddingLeft: GUTTER + 6 + row.depth * INDENT }}
         onClick={() => onSelectNode(node.id)}
         onDoubleClick={() => row.hasChildren && onToggle(node.id)}
         onContextMenu={(e) => nodeMenu(e, node)}
@@ -663,6 +655,7 @@ export function ModelTree({
             : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
         } ${isDrop ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""}`}
       >
+        <ChangeGutter mark={ownMark} />
         {renderRails(row)}
         <Chevron has={row.hasChildren} open={row.isOpen} onClick={() => onToggle(node.id)} />
         <Icon className={`h-3.5 w-3.5 shrink-0 ${ramp.icon}`} />
@@ -685,6 +678,19 @@ export function ModelTree({
             </span>
           )}
         </span>
+        {editor && node.kind !== "symbol" && node.kind !== "person" && renaming !== node.id && (
+          <button
+            type="button"
+            title={`Add ${KIND_ICON[childKindFor(node.kind)].label.toLowerCase()}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              addChild(node);
+            }}
+            className="shrink-0 rounded p-0.5 text-[var(--text-ghost)] opacity-0 transition-opacity group-hover/row:opacity-100 hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] cursor-pointer"
+          >
+            <Plus className="h-3 w-3" />
+          </button>
+        )}
         {hiddenSyms > 0 && (
           <span
             className="shrink-0 text-2xs tabular-nums text-[var(--text-ghost)]"
@@ -693,22 +699,16 @@ export function ModelTree({
             {hiddenSyms}
           </span>
         )}
-        {attn > 0 && (
+        {rollupCount > 0 && (
           <span
-            className="shrink-0 rounded-full bg-orange-500/10 px-1.5 text-2xs font-medium tabular-nums text-orange-700 dark:text-orange-300"
-            title={`${attn} item${attn === 1 ? "" : "s"} awaiting review ${
-              row.isOpen ? "on this node" : "in this branch"
-            } — vagrant, stale, or empty`}
+            className="shrink-0 rounded-full bg-[var(--surface-active)] px-1.5 font-mono text-[10px] tabular-nums text-[var(--text-tertiary)]"
+            title={`${rollupCount} more change${rollupCount === 1 ? "" : "s"} in this branch`}
           >
-            {attn}
+            {rollupCount}
           </span>
         )}
-        {active ? (
+        {active && (
           <Loader2 className="h-3 w-3 shrink-0 animate-spin text-indigo-500 dark:text-indigo-400" />
-        ) : empty ? (
-          <EmptyDot className="shrink-0" />
-        ) : (
-          <StatusDotFiltered status={status} className="shrink-0" />
         )}
       </div>
     );
@@ -717,19 +717,21 @@ export function ModelTree({
   const renderGroup = (row: TreeRow): React.ReactNode => {
     const group = row.group!;
     const isSel = selected?.kind === "group" && selected.id === group.id;
-    const status = groupStatus(group);
     const FolderIcon = row.isOpen ? FolderOpen : Folder;
-    const ownAttn = (group.responsibilities ?? []).filter((r) => r.vagrant || r.stale).length;
-    const attn = row.isOpen
-      ? ownAttn
-      : ownAttn +
-        group.memberIds.reduce((s, id) => s + (attentionTotal.get(id) ?? 0), 0);
+    const gMark = resolveMark(groupMarks(group, diffIndex));
+    // Rolled-up change count across the group's members (their whole subtrees),
+    // shown when collapsed so a folder still reads as "has pending work".
+    const memberCount = group.memberIds.reduce(
+      (s, id) => s + (subtreePlan.get(id) ?? 0) + (subtreeDrift.get(id) ?? 0),
+      0,
+    );
+    const rollupCount = row.isOpen ? 0 : memberCount;
 
     return (
       <div
         key={`group:${group.id}`}
         data-rk={`group:${group.id}`}
-        style={{ paddingLeft: 4 + row.depth * INDENT }}
+        style={{ paddingLeft: GUTTER + 4 + row.depth * INDENT }}
         onClick={() => onSelectGroup(group.id)}
         onDoubleClick={() => row.hasChildren && onToggle(group.id)}
         onContextMenu={(e) => groupMenu(e, group)}
@@ -740,6 +742,7 @@ export function ModelTree({
             : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
         } ${dropKey === `group:${group.id}` ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""}`}
       >
+        <ChangeGutter mark={gMark} />
         {renderRails(row)}
         <Chevron has={row.hasChildren} open={row.isOpen} onClick={() => onToggle(group.id)} />
         <FolderIcon className="h-3 w-3 shrink-0 text-[var(--text-ghost)]" />
@@ -758,17 +761,14 @@ export function ModelTree({
             group.name || <span className="text-[var(--text-ghost)]">Group</span>
           )}
         </span>
-        {attn > 0 && (
+        {rollupCount > 0 && (
           <span
-            className="shrink-0 rounded-full bg-orange-500/10 px-1.5 text-2xs font-medium tabular-nums text-orange-700 dark:text-orange-300"
-            title={`${attn} item${attn === 1 ? "" : "s"} awaiting review ${
-              row.isOpen ? "on this group" : "in this group"
-            }`}
+            className="shrink-0 rounded-full bg-[var(--surface-active)] px-1.5 font-mono text-[10px] tabular-nums text-[var(--text-tertiary)]"
+            title={`${rollupCount} change${rollupCount === 1 ? "" : "s"} in this group`}
           >
-            {attn}
+            {rollupCount}
           </span>
         )}
-        <StatusDotFiltered status={status} className="shrink-0" />
       </div>
     );
   };
@@ -802,31 +802,12 @@ export function ModelTree({
           >
             <Braces className="h-3.5 w-3.5" />
           </button>
-          {onOpenSearch && (
-            <button
-              type="button"
-              title="Search the model (Ctrl+K)"
-              onClick={onOpenSearch}
-              className="rounded p-0.5 text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] cursor-pointer"
-            >
-              <Search className="h-3.5 w-3.5" />
-            </button>
-          )}
-          {editor && (
-            <button
-              type="button"
-              title="Add top-level node"
-              onClick={openRootMenu}
-              className="rounded p-0.5 text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] cursor-pointer"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
-          )}
         </div>
       </div>
-      {/* Type-to-filter + lenses. The lenses are the tree-native plan/review
-          views: the same model, narrowed by state instead of re-projected. */}
-      <div className="flex items-center gap-1 px-2 pb-2">
+      {/* Type-to-filter + lenses. The lenses are the tree-native plan/drift
+          views: the same model, narrowed by mark instead of re-projected.
+          "Changes" = the plan (A/M/D/R); "Drift" = model↔code mismatch (Q/X). */}
+      <div className="flex flex-col gap-1.5 px-2 pb-2">
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
@@ -839,32 +820,46 @@ export function ModelTree({
           placeholder="Filter"
           className="min-w-0 flex-1 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] px-2 py-1 text-xs text-[var(--text)] outline-none transition-colors placeholder:text-[var(--text-ghost)] focus:border-[var(--border-strong)]"
         />
-        <button
-          type="button"
-          title="Lens: planned work only — proposed/changed claims the code doesn't discharge yet"
-          onClick={() => setLens((l) => (l === "planned" ? "all" : "planned"))}
-          className={`shrink-0 rounded p-1 cursor-pointer ${
-            lens === "planned"
-              ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
-              : "text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
-          }`}
-        >
-          <ClipboardList className="h-3.5 w-3.5" />
-        </button>
-        <button
-          type="button"
-          title="Lens: needs attention only — vagrant, stale, or empty"
-          onClick={() => setLens((l) => (l === "attention" ? "all" : "attention"))}
-          className={`shrink-0 rounded p-1 cursor-pointer ${
-            lens === "attention"
-              ? "bg-orange-500/10 text-orange-600 dark:text-orange-400"
-              : "text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
-          }`}
-        >
-          <Flag className="h-3.5 w-3.5" />
-        </button>
+        <div className="flex">
+          {(
+            [
+              { id: "all", label: "All", count: null, countColor: "" },
+              { id: "changes", label: "Changes", count: changeCount, countColor: MARK_META.M.color },
+              { id: "drift", label: "Drift", count: driftCount, countColor: MARK_META.Q.color },
+            ] as const
+          ).map((opt, i) => (
+            <button
+              key={opt.id}
+              type="button"
+              title={
+                opt.id === "changes"
+                  ? "Lens: the plan — added / modified / deleted / relocated since the committed model"
+                  : opt.id === "drift"
+                    ? "Lens: drift — undescribed (Q) or stale (X) claims where code and model disagree"
+                    : "Show the whole model"
+              }
+              onClick={() => setLens(opt.id)}
+              className={`flex flex-1 items-center justify-center gap-1.5 border border-[var(--border)] py-1 text-xs cursor-pointer ${
+                i > 0 ? "border-l-0" : ""
+              } ${i === 0 ? "rounded-l-md" : ""} ${i === 2 ? "rounded-r-md" : ""} ${
+                lens === opt.id
+                  ? "bg-[var(--surface-active)] text-[var(--text)] border-[var(--border-strong)]"
+                  : "text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)]"
+              }`}
+            >
+              {opt.label}
+              {opt.count != null && opt.count > 0 && (
+                <span className={`font-mono text-[10px] tabular-nums ${opt.countColor}`}>{opt.count}</span>
+              )}
+            </button>
+          ))}
+        </div>
       </div>
-      <div className="flex-1 overflow-y-auto pb-4" style={{ scrollbarGutter: "stable" }}>
+      <div
+        className="flex-1 overflow-y-auto pb-4"
+        style={{ scrollbarGutter: "stable" }}
+        onContextMenu={openRootMenu}
+      >
         {model.nodes.length === 0 ? (
           <div className="flex flex-col items-start gap-3 px-4 py-6 text-xs text-[var(--text-muted)]">
             <span>Empty model. Generate from the codebase, or start one here:</span>
@@ -891,9 +886,9 @@ export function ModelTree({
           <div className="px-4 py-6 text-xs text-[var(--text-muted)]">
             {q !== ""
               ? "No matches."
-              : lens === "planned"
-                ? "No planned work — the code is caught up with the model."
-                : "Nothing needs attention."}
+              : lens === "changes"
+                ? "No pending changes — the plan matches the committed model."
+                : "No drift — the model and code agree."}
           </div>
         ) : (
           rows.map((row) => (row.kind === "node" ? renderNode(row) : renderGroup(row)))

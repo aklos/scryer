@@ -24,6 +24,10 @@ export const PALETTES: Record<string, PaletteValues> = {
   zinc:    { 50: "#fafafa", 100: "#f4f4f5", 200: "#e4e4e7", 300: "#d4d4d8", 400: "#a1a1aa", 500: "#71717a", 600: "#52525b", 700: "#3f3f46", 800: "#27272a", 900: "#18181b", 950: "#09090b" },
   neutral: { 50: "#fafafa", 100: "#f5f5f5", 200: "#e5e5e5", 300: "#d4d4d4", 400: "#a3a3a3", 500: "#737373", 600: "#525252", 700: "#404040", 800: "#262626", 900: "#171717", 950: "#0a0a0a" },
   stone:   { 50: "#fafaf9", 100: "#f5f5f4", 200: "#e7e5e4", 300: "#d6d3d1", 400: "#a8a29e", 500: "#78716c", 600: "#57534e", 700: "#44403c", 800: "#292524", 900: "#1c1917", 950: "#0c0a09" },
+  // The scryer house neutral — a cool blue-grey ramp (the mockup palette). In
+  // dark mode it gives canvas (#0c0e12) / panels (#14171d) / borders (#20262f)
+  // real separation; the light shades carry the cool cast through too.
+  graphite:{ 50: "#f5f7fa", 100: "#eef2f6", 200: "#e6edf3", 300: "#a9b2be", 400: "#717b89", 500: "#5b6573", 600: "#4d5663", 700: "#3a4453", 800: "#20262f", 900: "#14171d", 950: "#0c0e12" },
   red:     { 50: "#fef2f2", 100: "#fee2e2", 200: "#fecaca", 300: "#fca5a5", 400: "#f87171", 500: "#ef4444", 600: "#dc2626", 700: "#b91c1c", 800: "#991b1b", 900: "#7f1d1d", 950: "#450a0a" },
   orange:  { 50: "#fff7ed", 100: "#ffedd5", 200: "#fed7aa", 300: "#fdba74", 400: "#fb923c", 500: "#f97316", 600: "#ea580c", 700: "#c2410c", 800: "#9a3412", 900: "#7c2d12", 950: "#431407" },
   amber:   { 50: "#fffbeb", 100: "#fef3c7", 200: "#fde68a", 300: "#fcd34d", 400: "#fbbf24", 500: "#f59e0b", 600: "#d97706", 700: "#b45309", 800: "#92400e", 900: "#78350f", 950: "#451a03" },
@@ -47,7 +51,7 @@ export const PALETTES: Record<string, PaletteValues> = {
 // Palette metadata — human-readable labels and grouping for the UI
 // ---------------------------------------------------------------------------
 
-export const GRAY_PALETTES = ["slate", "gray", "zinc", "neutral", "stone"] as const;
+export const GRAY_PALETTES = ["graphite", "slate", "gray", "zinc", "neutral", "stone"] as const;
 export const CHROMATIC_PALETTES = [
   "red", "orange", "amber", "yellow", "lime", "green", "emerald",
   "teal", "cyan", "sky", "blue", "indigo", "violet", "purple", "fuchsia", "pink", "rose",
@@ -121,7 +125,7 @@ export const THEME_ROLES: { key: PaletteRole; label: string; description: string
 
 export const DEFAULT_THEME: ThemeConfig = {
   colorMode: "system",
-  zinc: "zinc",
+  zinc: "graphite",
   blue: "blue",
   emerald: "emerald",
   amber: "amber",
@@ -135,7 +139,7 @@ export const DEFAULT_THEME: ThemeConfig = {
   offsets: {},
   canvasLight: 1,
   nodeLight: -1,
-  canvasDark: 9,
+  canvasDark: 10,
   nodeDark: 8,
 };
 
@@ -144,6 +148,12 @@ export const DEFAULT_THEME: ThemeConfig = {
 // ---------------------------------------------------------------------------
 
 const STORAGE_KEY = "scryer:theme";
+
+// Bumped when the default chrome changes so existing installs adopt it. v2 =
+// the graphite (mockup) cool blue-grey neutral + its canvas/node shades.
+const THEME_VERSION = 2;
+/** The neutral-chrome fields a version migration re-seeds from the defaults. */
+const CHROME_KEYS = ["zinc", "canvasLight", "nodeLight", "canvasDark", "nodeDark"] as const;
 
 /** Resolve a shade after applying an offset, clamping to valid range. */
 function shiftShade(shade: Shade, offset: number): Shade {
@@ -258,7 +268,7 @@ export function applyTheme(theme: ThemeConfig): void {
 }
 .dark {
   --surface-canvas: ${canvasDarkHex};
-  --surface: ${sh(theme.canvasDark)};
+  --surface: ${sh(clamp(theme.canvasDark - 1))};
   --surface-raised: ${nodeDarkHex};
   --surface-overlay: ${hexAlpha(sh(theme.canvasDark), 0.8)};
   --surface-inset: ${hexAlpha(nodeDarkHex, 0.6)};
@@ -307,6 +317,13 @@ export function loadTheme(): ThemeConfig {
       if (typeof parsed.nodeLight === "number") theme.nodeLight = Math.max(-1, Math.min(SHADES.length - 1, Math.round(parsed.nodeLight)));
       if (typeof parsed.canvasDark === "number") theme.canvasDark = Math.max(0, Math.min(SHADES.length - 1, Math.round(parsed.canvasDark)));
       if (typeof parsed.nodeDark === "number") theme.nodeDark = Math.max(0, Math.min(SHADES.length - 1, Math.round(parsed.nodeDark)));
+      // One-time migration: an install saved before the graphite default keeps
+      // its old (flat-gray) neutral. Re-seed the chrome fields from the current
+      // defaults so the mockup palette lands, then persist the new version.
+      if (parsed.v !== THEME_VERSION) {
+        for (const k of CHROME_KEYS) (theme[k] as ThemeConfig[typeof k]) = DEFAULT_THEME[k];
+        saveTheme(theme);
+      }
       return theme;
     }
   } catch { /* ignore */ }
@@ -315,7 +332,7 @@ export function loadTheme(): ThemeConfig {
 
 /** Save theme to localStorage. */
 export function saveTheme(theme: ThemeConfig): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(theme));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...theme, v: THEME_VERSION }));
 }
 
 /** Check if a theme is the default (no customizations). */

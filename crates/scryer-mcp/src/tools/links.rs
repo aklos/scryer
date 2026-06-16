@@ -23,7 +23,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_model_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -87,10 +87,9 @@ impl ScryerServer {
             ))]));
         }
 
-        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Added {} link(s): {}",
@@ -111,7 +110,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_model_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -138,10 +137,9 @@ impl ScryerServer {
             updated += 1;
         }
 
-        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Updated {} link(s)",
@@ -161,7 +159,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_model_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -175,10 +173,9 @@ impl ScryerServer {
         let before = model.links.len();
         model.links.retain(|l| !target.contains(l.id.as_str()));
 
-        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Deleted {} link(s)",

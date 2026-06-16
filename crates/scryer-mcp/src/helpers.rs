@@ -1,5 +1,6 @@
 use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
+use scryer_core::history::{append_event, EventRow, HistoryEvent};
 use scryer_core::{Kind, ModelLock, ModelRef, Node, Responsibility, ScryModel};
 use std::collections::HashMap;
 
@@ -188,6 +189,22 @@ pub(crate) fn enforce_readonly_directives(model: &mut ScryModel, prior: &ScryMod
 
 
 /// Project root from request param, active model, or cwd.
+/// Build a committed-model event diff row for a responsibility — its statement,
+/// anchored to the first source location the model maps it to (if any).
+pub(crate) fn resp_event_row(marker: &str, model: &ScryModel, resp: &Responsibility) -> EventRow {
+    let row = EventRow::new(marker, resp.statement.clone());
+    match model.source_map.get(&resp.id).and_then(|locs| locs.first()) {
+        Some(loc) => row.with_source(loc.clone()),
+        None => row,
+    }
+}
+
+/// Record a committed-model history event, best-effort: a logging failure must
+/// never abort the model operation that produced it (see [`scryer_core::history`]).
+pub(crate) fn record_event(model_ref: &ModelRef, ev: HistoryEvent) {
+    let _ = append_event(model_ref, &ev);
+}
+
 pub(crate) fn resolve_model_ref(req_project: Option<&str>) -> Result<ModelRef, McpError> {
     let path = match req_project {
         Some(p) => std::path::PathBuf::from(p),

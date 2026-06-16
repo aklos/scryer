@@ -1,28 +1,122 @@
 /**
- * Jump-to-node palette (Ctrl/Cmd+K). Filters every node and group by name,
- * shows the ancestor chain so same-named symbols are tellable apart, and opens
- * the picked page. Keyboard: arrows to move, Enter to open, Esc to close.
+ * Global search palette (Ctrl/Cmd+K). Unlike the left tree's name-only filter,
+ * this searches every node's authored content — name, technology, description,
+ * responsibilities and their directives, schema properties — plus group prose
+ * and link labels, and surfaces WHERE each match landed with a highlighted
+ * snippet. Name matches rank first, then content by field. Keyboard: arrows to
+ * move, Enter to open, Esc to close.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { createPortal } from "react-dom";
-import { FolderOpen, Search } from "lucide-react";
-import type { ScryModel } from "./viewmodel";
+import { FolderOpen, Link2, Search, type LucideProps } from "lucide-react";
+import type { ScryModel, Node, Group } from "./viewmodel";
 import { kindIcon, typeTag } from "./kindIcon";
 import { lookupIcon } from "./IconPicker";
-import { effectiveNodeStatus } from "./rollup";
-import { StatusTag } from "./pagekit";
 
 const MAX_RESULTS = 50;
 
 interface Hit {
   key: string;
-  kind: "node" | "group";
+  kind: "node" | "group" | "link";
+  /** Target to open on select — node id (links open their source node). */
   id: string;
   name: string;
-  /** Root-first ancestor names, for disambiguation. */
+  /** Root-first ancestor names (or the endpoints, for a link), for context. */
   path: string[];
-  row: React.ReactNode;
+  Icon: ComponentType<LucideProps>;
+  typeLabel: string;
+  italic: boolean;
+  /** Where the match landed; null when it matched the name itself. */
+  field: string | null;
+  /** The field text the match came from — the snippet source. */
+  matchText: string;
+  /** Lower = higher in the list. */
+  rank: number;
+}
+
+/** One searchable field of a node/group, in ascending rank (best first). */
+interface Field {
+  label: string | null;
+  rank: number;
+  text: string;
+}
+
+function nodeFields(n: Node): Field[] {
+  const f: Field[] = [{ label: null, rank: 0, text: n.name || "" }];
+  if (n.technology) f.push({ label: "Technology", rank: 1, text: n.technology });
+  if (n.description) f.push({ label: "Description", rank: 2, text: n.description });
+  for (const r of n.responsibilities ?? []) {
+    if (r.statement) f.push({ label: "Responsibility", rank: 3, text: r.statement });
+    for (const d of r.directives ?? [])
+      if (d) f.push({ label: "Directive", rank: 4, text: d });
+  }
+  for (const p of n.properties ?? []) {
+    if (p.label) f.push({ label: "Property", rank: 5, text: p.label });
+    if (p.description)
+      f.push({ label: "Property", rank: 5, text: `${p.label}: ${p.description}` });
+  }
+  return f;
+}
+
+function groupFields(g: Group): Field[] {
+  const f: Field[] = [{ label: null, rank: 0, text: g.name || "Group" }];
+  if (g.description) f.push({ label: "Description", rank: 2, text: g.description });
+  for (const r of g.responsibilities ?? []) {
+    if (r.statement) f.push({ label: "Responsibility", rank: 3, text: r.statement });
+    for (const d of r.directives ?? [])
+      if (d) f.push({ label: "Directive", rank: 4, text: d });
+  }
+  return f;
+}
+
+/** First (lowest-rank) field whose text contains the query, or null. */
+function bestMatch(fields: Field[], q: string): Field | null {
+  for (const f of fields) if (f.text.toLowerCase().includes(q)) return f;
+  return null;
+}
+
+/** Render `text` with every case-insensitive occurrence of `q` marked. */
+function Highlighted({ text, q }: { text: string; q: string }) {
+  if (!q) return <>{text}</>;
+  const lower = text.toLowerCase();
+  const out: React.ReactNode[] = [];
+  let from = 0;
+  let key = 0;
+  for (;;) {
+    const idx = lower.indexOf(q, from);
+    if (idx < 0) {
+      out.push(text.slice(from));
+      break;
+    }
+    if (idx > from) out.push(text.slice(from, idx));
+    out.push(
+      <mark
+        key={key++}
+        className="rounded-sm bg-blue-500/30 text-[var(--text)]"
+      >
+        {text.slice(idx, idx + q.length)}
+      </mark>,
+    );
+    from = idx + q.length;
+  }
+  return <>{out}</>;
+}
+
+/** A window of `text` centred on the first match, with leading/trailing
+ *  ellipses when it's clipped. */
+function Snippet({ text, q }: { text: string; q: string }) {
+  const idx = text.toLowerCase().indexOf(q);
+  const start = idx < 0 ? 0 : Math.max(0, idx - 32);
+  const end = idx < 0 ? text.length : Math.min(text.length, idx + q.length + 64);
+  const slice = text.slice(start, end);
+  return (
+    <>
+      {start > 0 && "…"}
+      <Highlighted text={slice} q={q} />
+      {end < text.length && "…"}
+    </>
+  );
 }
 
 export function SearchPalette({
@@ -49,7 +143,7 @@ export function SearchPalette({
   useEffect(() => {
     const onDown = (e: PointerEvent) => {
       const el = containerRef.current;
-      if (el && !el.contains(e.target as Node)) onClose();
+      if (el && !el.contains(e.target as globalThis.Node)) onClose();
     };
     window.addEventListener("pointerdown", onDown, true);
     return () => window.removeEventListener("pointerdown", onDown, true);
@@ -58,6 +152,7 @@ export function SearchPalette({
   const hits = useMemo<Hit[]>(() => {
     const q = query.trim().toLowerCase();
     const byId = new Map(model.nodes.map((n) => [n.id, n]));
+    const nameOf = (id: string) => byId.get(id)?.name || "Untitled";
     const chain = (nodeId: string | undefined): string[] => {
       const out: string[] = [];
       const seen = new Set<string>();
@@ -72,49 +167,67 @@ export function SearchPalette({
 
     const out: Hit[] = [];
     for (const n of model.nodes) {
-      const name = n.name || "Untitled";
-      if (q && !name.toLowerCase().includes(q)) continue;
-      const Icon = lookupIcon(n.icon) ?? kindIcon(n);
+      // Empty query: name-only listing, like a jump palette.
+      const match = q ? bestMatch(nodeFields(n), q) : { label: null, rank: 0, text: n.name || "" };
+      if (!match) continue;
       out.push({
         key: `n:${n.id}`,
         kind: "node",
         id: n.id,
-        name,
+        name: n.name || "Untitled",
         path: chain(n.parentId),
-        row: (
-          <>
-            <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
-            <span className="truncate text-sm">{name}</span>
-            <span className="shrink-0 text-2xs text-[var(--text-muted)]">{typeTag(n).type}</span>
-            <span className="flex-1" />
-            <StatusTag status={effectiveNodeStatus(n)} />
-          </>
-        ),
+        Icon: lookupIcon(n.icon) ?? kindIcon(n),
+        typeLabel: typeTag(n).type,
+        italic: false,
+        field: match.label,
+        matchText: match.text,
+        rank: match.rank,
       });
-      if (out.length >= MAX_RESULTS) return out;
     }
     for (const g of model.groups) {
-      const name = g.name || "Group";
-      if (q && !name.toLowerCase().includes(q)) continue;
+      const match = q ? bestMatch(groupFields(g), q) : { label: null, rank: 0, text: g.name || "Group" };
+      if (!match) continue;
       const container =
         g.parentNodeId ?? byId.get(g.memberIds[0] ?? "")?.parentId ?? undefined;
       out.push({
         key: `g:${g.id}`,
         kind: "group",
         id: g.id,
-        name,
+        name: g.name || "Group",
         path: container ? chain(container) : [],
-        row: (
-          <>
-            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
-            <span className="truncate text-sm italic">{name}</span>
-            <span className="shrink-0 text-2xs text-[var(--text-muted)]">Group</span>
-          </>
-        ),
+        Icon: FolderOpen,
+        typeLabel: "Group",
+        italic: true,
+        field: match.label,
+        matchText: match.text,
+        rank: match.rank,
       });
-      if (out.length >= MAX_RESULTS) break;
     }
-    return out;
+    // Links carry no page of their own — a label hit opens the source node.
+    if (q) {
+      for (const l of model.links) {
+        if (!l.label || !l.label.toLowerCase().includes(q)) continue;
+        out.push({
+          key: `l:${l.id}`,
+          kind: "link",
+          id: l.src,
+          name: l.label,
+          path: [`${nameOf(l.src)} → ${nameOf(l.dst)}`],
+          Icon: Link2,
+          typeLabel: "Link",
+          italic: false,
+          // The title IS the label — the type tag + endpoints below say the
+          // rest, so no duplicate snippet.
+          field: null,
+          matchText: l.label,
+          rank: 6,
+        });
+      }
+    }
+
+    // Stable sort by rank — name matches first, then content by field.
+    out.sort((a, b) => a.rank - b.rank);
+    return out.slice(0, MAX_RESULTS);
   }, [model, query]);
 
   useEffect(() => {
@@ -123,15 +236,16 @@ export function SearchPalette({
 
   // Keep the active row in view while arrowing through the list.
   useEffect(() => {
-    listRef.current
-      ?.children[active]?.scrollIntoView({ block: "nearest" });
+    listRef.current?.children[active]?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
   const pick = (hit: Hit) => {
-    if (hit.kind === "node") onSelectNode(hit.id);
-    else onSelectGroup(hit.id);
+    if (hit.kind === "group") onSelectGroup(hit.id);
+    else onSelectNode(hit.id);
     onClose();
   };
+
+  const q = query.trim().toLowerCase();
 
   return createPortal(
     <div className="fixed inset-0 z-[1000] flex justify-center bg-black/30 pt-[12vh]">
@@ -144,7 +258,7 @@ export function SearchPalette({
           <input
             ref={inputRef}
             type="text"
-            placeholder="Jump to a node or group…"
+            placeholder="Search names, descriptions, responsibilities…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
@@ -184,8 +298,26 @@ export function SearchPalette({
                 }`}
               >
                 <span className="flex items-center gap-2 text-[var(--text-secondary)]">
-                  {hit.row}
+                  <hit.Icon className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
+                  <span className={`truncate text-sm ${hit.italic ? "italic" : ""}`}>
+                    <Highlighted text={hit.name} q={q} />
+                  </span>
+                  <span className="ml-auto shrink-0 text-2xs text-[var(--text-muted)]">
+                    {hit.typeLabel}
+                  </span>
                 </span>
+                {/* Content match: show which field hit and a snippet of it. The
+                    name match needs no snippet — it's already highlighted above. */}
+                {hit.field && (
+                  <span className="flex gap-1.5 truncate pl-[22px] text-2xs text-[var(--text-muted)]">
+                    <span className="shrink-0 font-medium uppercase tracking-wide text-[var(--text-tertiary)]">
+                      {hit.field}
+                    </span>
+                    <span className="truncate text-[var(--text-secondary)]">
+                      <Snippet text={hit.matchText} q={q} />
+                    </span>
+                  </span>
+                )}
                 {hit.path.length > 0 && (
                   <span className="truncate pl-[22px] text-2xs text-[var(--text-muted)]">
                     {hit.path.join(" › ")}

@@ -3,13 +3,14 @@
 //! Each tool takes INTENT (a name, plain responsibility statements, the source
 //! location the agent already holds from the codebase context) and builds the
 //! node itself: it mints the node id and the `resp-` ids, fixes the kind from
-//! the parent level (validating the parent is the right kind), defaults
-//! responsibility status to `implemented` (a bootstrap describes existing
-//! code), and — for symbols — writes the source map anchored to the file +
-//! symbol name. The agent never assembles the JSON shape or hand-mints ids.
+//! the parent level (validating the parent is the right kind), and — for
+//! symbols — writes the source map anchored to the file + symbol name. The
+//! agent never assembles the JSON shape or hand-mints ids.
 //!
-//! The raw `set_model` / `set_node` / `add_nodes` tools remain for the legacy
-//! flow and canvas-driven edits, but the new modeling prompts use only these.
+//! These tools author into the PLANNED draft (`.scryer/planned.scry`); the
+//! committed model changes only when the work is implemented and folds in
+//! (`mark_implemented`). The raw `set_model` / `set_node` / `add_nodes` tools
+//! remain for whole-model edits and canvas-driven edits.
 
 use crate::helpers::*;
 use crate::server::ScryerServer;
@@ -19,10 +20,12 @@ use rmcp::{
     model::{CallToolResult, Content},
     tool, tool_router, ErrorData as McpError,
 };
+use scryer_core::history::{EventKind, EventRow, HistoryEvent};
 use scryer_core::{
     Group, Kind, ModelRef, Node, Responsibility, SchemaProperty, ScryModel, Source, SourceLocation,
     Status,
 };
+use std::collections::HashMap;
 
 /// Mints sequential `resp-N` ids across a single tool call, seeded past every
 /// existing responsibility id (on nodes AND groups, so it can't collide with a
@@ -104,10 +107,19 @@ fn err(msg: impl Into<String>) -> CallToolResult {
     CallToolResult::error(vec![Content::text(msg.into())])
 }
 
-/// Read the model or return an error result.
+/// Read the committed model or return an error result.
 fn read_model(model_ref: &ModelRef) -> Result<ScryModel, CallToolResult> {
     scryer_core::read_model_at(model_ref)
         .map_err(|e| err(format!("Failed to read model at {}: {}", model_ref, e)))
+}
+
+/// Read the planned (draft) model — the authoring base. Falls back to the
+/// committed model when no plan has diverged yet. Agent authoring proposes into
+/// the plan; the committed model only changes when the work is implemented and
+/// folded (planned → model).
+fn read_planned(model_ref: &ModelRef) -> Result<ScryModel, CallToolResult> {
+    scryer_core::read_planned_at(model_ref)
+        .map_err(|e| err(format!("Failed to read plan at {}: {}", model_ref, e)))
 }
 
 /// Verify a parent node exists and is the expected kind. Returns the error
@@ -140,7 +152,6 @@ fn blank_node(id: String, kind: Kind, name: String, parent_id: Option<String>) -
         icon: None,
         visual: None,
         appearance: None,
-        deprecated: None,
         relocated: None,
         locked: None,
         relocated_to: None,
@@ -158,10 +169,9 @@ fn commit(
 ) -> Result<CallToolResult, McpError> {
     enforce_readonly_directives(&mut model, prior);
 
-    if let Err(e) = scryer_core::write_model_at(model_ref, &model) {
+    if let Err(e) = scryer_core::write_planned_at(model_ref, &model) {
         return Ok(err(e));
     }
-    let _ = scryer_core::save_baseline_at(model_ref, &model);
 
     let added: Vec<serde_json::Value> = minted
         .iter()
@@ -192,7 +202,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match read_model(&model_ref) {
+        let mut model = match read_planned(&model_ref) {
             Ok(m) => m,
             Err(e) => return Ok(e),
         };
@@ -222,7 +232,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match read_model(&model_ref) {
+        let mut model = match read_planned(&model_ref) {
             Ok(m) => m,
             Err(e) => return Ok(e),
         };
@@ -254,7 +264,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match read_model(&model_ref) {
+        let mut model = match read_planned(&model_ref) {
             Ok(m) => m,
             Err(e) => return Ok(e),
         };
@@ -303,7 +313,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match read_model(&model_ref) {
+        let mut model = match read_planned(&model_ref) {
             Ok(m) => m,
             Err(e) => return Ok(e),
         };
@@ -341,7 +351,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match read_model(&model_ref) {
+        let mut model = match read_planned(&model_ref) {
             Ok(m) => m,
             Err(e) => return Ok(e),
         };
@@ -388,10 +398,9 @@ impl ScryerServer {
         // Groups aren't nodes, so commit by hand (the node-returning `commit`
         // helper doesn't apply): enforce read-only invariants, write, baseline.
         enforce_readonly_directives(&mut model, &prior);
-        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(err(e));
         }
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Created {} group(s): {}",
             minted.len(),
@@ -411,7 +420,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match read_model(&model_ref) {
+        let mut model = match read_planned(&model_ref) {
             Ok(m) => m,
             Err(e) => return Ok(e),
         };
@@ -481,7 +490,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Record SEMANTIC drift for a node after comparing its code against its responsibilities. Both findings are OBSERVATION FLAGS awaiting the user's verdict — statuses (the prescription) are never touched. `undescribed`: behaviours the code has that NO responsibility describes — each becomes a vagrant responsibility on the node for the user to adopt or reject; do NOT report code that changed but still satisfies an existing responsibility (the user doesn't care). `stale`: existing responsibilities whose code no longer discharges them — flagged `stale` (resolved by re-implementing via `mark_implemented`, rewording, or deletion). Call with empty arrays (or don't call) when the code and the model still agree."
+        description = "Record SEMANTIC drift for a node after comparing its code against its responsibilities — the model↔code reconcile, where each finding gets a DIRECTION. `undescribed` is the *take-code* direction: behaviours the code has that NO responsibility describes — each is proposed into the PLAN as a vagrant adoption (a code-discovered `added` claim), which the user adopts (commit — the code already exists) or rejects (drop from the plan); do NOT report code that changed but still satisfies an existing responsibility. `stale` is the *take-model* direction: existing committed responsibilities the model still asserts but whose code regressed — flagged `stale` so the code is brought back in line (resolved by re-implementing via `mark_implemented`, rewording, or deletion). Call with empty arrays (or don't call) when the code and the model still agree."
     )]
     fn flag_drift(
         &self,
@@ -492,30 +501,33 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match read_model(&model_ref) {
-            Ok(m) => m,
-            Err(e) => return Ok(e),
+
+        // TAKE CODE — undescribed behaviour → adoptions proposed into the PLAN.
+        // Each becomes a vagrant `Added` responsibility in the draft, anchored to
+        // its source; the user adopts it (commit — code already exists) or rejects
+        // it (drop from the plan). The `vagrant` marker distinguishes "code already
+        // has this, adopt?" from "intent ahead of code, implement!".
+        let mut planned = match scryer_core::read_planned_at(&model_ref) {
+            Ok(p) => p,
+            Err(e) => return Ok(err(format!("Failed to read plan: {e}"))),
         };
-        if !model.nodes.iter().any(|n| n.id == req.node_id) {
+        if !planned.nodes.iter().any(|n| n.id == req.node_id) {
             return Ok(err(format!("Node '{}' not found", req.node_id)));
         }
-        let prior = model.clone();
-
-        // Undescribed behaviour → vagrant responsibilities on the node, each
-        // anchored to its source. Pre-filter blanks so items and resps align.
+        let prior_plan = planned.clone();
         let items: Vec<&UndescribedItem> = req
             .undescribed
             .iter()
             .filter(|u| !u.statement.trim().is_empty())
             .collect();
-        let mut minter = RespMinter::new(&model);
+        let mut minter = RespMinter::new(&planned);
         let statements: Vec<String> = items.iter().map(|u| u.statement.clone()).collect();
         let mut resps = minter.build(&statements);
         for r in resps.iter_mut() {
             r.vagrant = Some(true);
         }
         for (item, r) in items.iter().zip(resps.iter()) {
-            model.source_map.insert(
+            planned.source_map.insert(
                 r.id.clone(),
                 vec![SourceLocation {
                     pattern: item.source_file.clone(),
@@ -527,41 +539,98 @@ impl ScryerServer {
             );
         }
         let flagged = resps.len();
-        if let Some(node) = model.nodes.iter_mut().find(|n| n.id == req.node_id) {
+        // Build the timeline rows now, while the freshly-minted adoptions and their
+        // source map are still in hand (they're about to be moved onto the node).
+        let undescribed_rows: Vec<EventRow> =
+            resps.iter().map(|r| resp_event_row("+", &planned, r)).collect();
+        if let Some(node) = planned.nodes.iter_mut().find(|n| n.id == req.node_id) {
             node.responsibilities.extend(resps);
         }
-
-        // Stale claims → the `stale` observation flag. The status is the
-        // prescription and stays put until the user's verdict resolves it.
-        let mut staled = 0usize;
-        for s in &req.stale {
-            let found = model
-                .nodes
-                .iter_mut()
-                .flat_map(|n| n.responsibilities.iter_mut())
-                .find(|r| r.id == s.responsibility_id);
-            match found {
-                Some(r) => {
-                    r.stale = Some(true);
-                    staled += 1;
-                }
-                None => {
-                    return Ok(err(format!(
-                        "Responsibility '{}' not found",
-                        s.responsibility_id
-                    )));
-                }
+        if flagged > 0 {
+            enforce_readonly_directives(&mut planned, &prior_plan);
+            if let Err(e) = scryer_core::write_planned_at(&model_ref, &planned) {
+                return Ok(err(e));
             }
         }
 
-        enforce_readonly_directives(&mut model, &prior);
-        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
-            return Ok(err(e));
+        // TAKE MODEL — stale claims → the `stale` observation flag on the
+        // COMMITTED model claim: the model is right, the code regressed and must
+        // be brought back in line. The status (the prescription) stays put.
+        let mut staled = 0usize;
+        if !req.stale.is_empty() {
+            let mut model = match read_model(&model_ref) {
+                Ok(m) => m,
+                Err(e) => return Ok(e),
+            };
+            for s in &req.stale {
+                let found = model
+                    .nodes
+                    .iter_mut()
+                    .flat_map(|n| n.responsibilities.iter_mut())
+                    .find(|r| r.id == s.responsibility_id);
+                match found {
+                    Some(r) => {
+                        r.stale = Some(true);
+                        staled += 1;
+                    }
+                    None => {
+                        return Ok(err(format!(
+                            "Responsibility '{}' not found",
+                            s.responsibility_id
+                        )));
+                    }
+                }
+            }
+            if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
+                return Ok(err(e));
+            }
+            let _ = scryer_core::save_baseline_at(&model_ref, &model);
+
+            // Timeline: group stale findings by their host node — each reads as a
+            // "took model" drift event (the model is right, the code regressed).
+            let now = scryer_core::drift::now_secs();
+            let mut stale_by_node: HashMap<String, Vec<EventRow>> = HashMap::new();
+            for s in &req.stale {
+                if let Some(node) = model
+                    .nodes
+                    .iter()
+                    .find(|n| n.responsibilities.iter().any(|r| r.id == s.responsibility_id))
+                {
+                    if let Some(r) =
+                        node.responsibilities.iter().find(|r| r.id == s.responsibility_id)
+                    {
+                        stale_by_node
+                            .entry(node.id.clone())
+                            .or_default()
+                            .push(resp_event_row("!", &model, r));
+                    }
+                }
+            }
+            for (node_id, rows) in stale_by_node {
+                record_event(
+                    &model_ref,
+                    HistoryEvent::new(now, EventKind::Drift, &node_id, "took model").with_rows(rows),
+                );
+            }
         }
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
+
+        // Timeline: undescribed behaviours adopted from code read as a "took code"
+        // drift event on the node they were proposed onto.
+        if !undescribed_rows.is_empty() {
+            record_event(
+                &model_ref,
+                HistoryEvent::new(
+                    scryer_core::drift::now_secs(),
+                    EventKind::Drift,
+                    &req.node_id,
+                    "took code",
+                )
+                .with_rows(undescribed_rows),
+            );
+        }
 
         let mut msg = format!(
-            "Flagged {flagged} undescribed behaviour(s) as vagrant and {staled} stale responsibility(ies) on '{}'.",
+            "Proposed {flagged} undescribed behaviour(s) into the plan as adoptions and flagged {staled} stale responsibility(ies) on '{}'.",
             req.node_id
         );
         for s in &req.stale {
@@ -581,8 +650,7 @@ impl ScryerServer {
         let project = model_ref.project_path();
         let state = scryer_core::drift::SyncState {
             reconciled_at: scryer_core::drift::now_secs(),
-            commit: scryer_core::drift::head_commit(project),
-        };
+            commit: scryer_core::drift::head_commit(project), ..Default::default() };
         if let Err(e) = scryer_core::write_sync_state(&model_ref, &state) {
             return Ok(err(format!("Failed to write reconcile anchor: {e}")));
         }
@@ -625,6 +693,19 @@ mod tests {
         scryer_core::read_model_at(&ModelRef::ProjectLocal(dir.path().to_path_buf())).unwrap()
     }
 
+    /// The planned (draft) layer — where the authoring tools now write.
+    fn read_plan(dir: &tempfile::TempDir) -> ScryModel {
+        scryer_core::read_planned_at(&ModelRef::ProjectLocal(dir.path().to_path_buf())).unwrap()
+    }
+
+    /// Commit the whole current plan into the committed model — the test stand-in
+    /// for "this authored intent got implemented" (planned → model fold).
+    fn commit_plan(dir: &tempfile::TempDir) {
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let plan = scryer_core::read_planned_at(&r).unwrap();
+        scryer_core::write_model_at(&r, &plan).unwrap();
+    }
+
     #[test]
     fn intent_tools_build_the_tree_and_source_map() {
         let (server, dir, system_id) = temp_project();
@@ -645,7 +726,7 @@ mod tests {
                 }],
             }))
             .unwrap();
-        let m = read_back(&dir);
+        let m = read_plan(&dir);
         let container = m.nodes.iter().find(|n| n.kind == Kind::Container).unwrap();
         let container_id = container.id.clone();
         assert_eq!(container.technology.as_deref(), Some("Axum"));
@@ -670,7 +751,7 @@ mod tests {
                 }],
             }))
             .unwrap();
-        let m = read_back(&dir);
+        let m = read_plan(&dir);
         let component = m.nodes.iter().find(|n| n.kind == Kind::Component).unwrap();
         let component_id = component.id.clone();
 
@@ -697,7 +778,7 @@ mod tests {
                 }],
             }))
             .unwrap();
-        let m = read_back(&dir);
+        let m = read_plan(&dir);
         let symbol = m.nodes.iter().find(|n| n.kind == Kind::Symbol).unwrap();
         let symbol_id = symbol.id.clone();
         assert_eq!(symbol.properties.len(), 1);
@@ -751,7 +832,7 @@ mod tests {
                 ],
             }))
             .unwrap();
-        let m = read_back(&dir);
+        let m = read_plan(&dir);
         let ids: Vec<String> = m
             .nodes
             .iter()
@@ -773,7 +854,7 @@ mod tests {
                 }],
             }))
             .unwrap();
-        let m = read_back(&dir);
+        let m = read_plan(&dir);
         assert_eq!(m.groups.len(), 1);
         let g = &m.groups[0];
         assert_eq!(g.parent_node_id.as_deref(), Some(system_id.as_str()));
@@ -818,6 +899,9 @@ mod tests {
                 }],
             }))
             .unwrap();
+        // The container was authored into the plan; commit it so there is a
+        // COMMITTED, implemented claim for the stale path to flag.
+        commit_plan(&dir);
         let m = read_back(&dir);
         let container = m.nodes.iter().find(|n| n.kind == Kind::Container).unwrap();
         let cid = container.id.clone();
@@ -841,21 +925,33 @@ mod tests {
             }))
             .unwrap();
 
+        // TAKE MODEL — the committed model: the original claim is flagged stale,
+        // its status (the prescription) untouched; the undescribed behaviour is
+        // NOT silently adopted into the model.
         let m = read_back(&dir);
         let container = m.nodes.iter().find(|n| n.id == cid).unwrap();
-        // original responsibility: stale FLAG set, status (the prescription)
-        // untouched — drift is an observation, never a lifecycle move
         let orig = container.responsibilities.iter().find(|r| r.id == rid).unwrap();
         assert_eq!(orig.stale, Some(true));
         assert_eq!(orig.status, Some(Status::Implemented));
-        // a vagrant responsibility added (implemented + vagrant), source-anchored
-        let vagrant = container
+        assert!(
+            container.responsibilities.iter().all(|r| r.vagrant != Some(true)),
+            "undescribed behaviour must not land in the committed model"
+        );
+
+        // TAKE CODE — the plan (draft): the undescribed behaviour is proposed as
+        // a vagrant adoption, source-anchored, awaiting the user's verdict.
+        let plan = scryer_core::read_planned_at(&scryer_core::ModelRef::ProjectLocal(
+            dir.path().to_path_buf(),
+        ))
+        .unwrap();
+        let pc = plan.nodes.iter().find(|n| n.id == cid).unwrap();
+        let vagrant = pc
             .responsibilities
             .iter()
             .find(|r| r.vagrant == Some(true))
-            .expect("a vagrant responsibility was added");
-        assert_eq!(vagrant.status, Some(Status::Implemented));
-        let anchor = &m.source_map.get(&vagrant.id).unwrap()[0];
+            .expect("a vagrant adoption was proposed into the plan");
+        assert_eq!(vagrant.statement, "exposes an undocumented admin endpoint");
+        let anchor = &plan.source_map.get(&vagrant.id).unwrap()[0];
         assert_eq!(anchor.pattern, "api/admin.rs");
         assert_eq!(anchor.symbol.as_deref(), Some("admin_handler"));
         assert_eq!(anchor.line, Some(42));
@@ -898,7 +994,7 @@ mod tests {
         scryer_core::write_model_at(&model_ref, &model).unwrap();
 
         // Anchor in the past + a file touched after it → the scope is drifted.
-        let old = drift::SyncState { reconciled_at: drift::now_secs(), commit: None };
+        let old = drift::SyncState { reconciled_at: drift::now_secs(), commit: None, ..Default::default() };
         scryer_core::write_sync_state(&model_ref, &old).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(1100));
         std::fs::write(root.join("api/src/server.rs"), "fn v2() {}").unwrap();

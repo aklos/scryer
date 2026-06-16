@@ -26,6 +26,10 @@ export interface ContextMenuProps {
   y: number;
   items: ContextMenuItem[];
   placeholder?: string;
+  /** Show the type-to-filter input. Defaults to true — useful for the long
+   *  right-click menus, pointless on a short fixed list (e.g. the top-bar
+   *  logo dropdown), so callers can opt out. */
+  searchable?: boolean;
   onClose: () => void;
 }
 
@@ -34,6 +38,7 @@ export function ContextMenu({
   y,
   items,
   placeholder = "Search…",
+  searchable = true,
   onClose,
 }: ContextMenuProps) {
   const [query, setQuery] = useState("");
@@ -43,17 +48,20 @@ export function ContextMenu({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return items;
+    if (!searchable || !q) return items;
     return items.filter((it) => it.label.toLowerCase().includes(q));
-  }, [items, query]);
+  }, [items, query, searchable]);
 
   useEffect(() => {
     setActive(0);
   }, [query]);
 
+  // Focus the input when searchable; otherwise focus the container so
+  // arrow-key navigation and Enter still work on the bare list.
   useLayoutEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    if (searchable) inputRef.current?.focus();
+    else containerRef.current?.focus();
+  }, [searchable]);
 
   useEffect(() => {
     const onDown = (e: PointerEvent) => {
@@ -84,10 +92,29 @@ export function ContextMenu({
   const left = Math.min(x, window.innerWidth - W - 8);
   const top = Math.min(y, window.innerHeight - H - 8);
 
+  const onNavKey = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActive((a) => Math.min(filtered.length - 1, a + 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActive((a) => Math.max(0, a - 1));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const it = filtered[active];
+      if (it) {
+        it.onSelect();
+        onClose();
+      }
+    }
+  };
+
   return createPortal(
     <div
       ref={containerRef}
       data-no-pickup
+      tabIndex={-1}
+      onKeyDown={searchable ? undefined : onNavKey}
       onPointerDown={(e) => e.stopPropagation()}
       onWheel={(e) => e.stopPropagation()}
       onContextMenu={(e) => {
@@ -101,33 +128,20 @@ export function ContextMenu({
         width: W,
         zIndex: 1200,
       }}
-      className="rounded border border-[var(--border-overlay)] bg-[var(--surface-overlay)] backdrop-blur-md shadow-xl"
+      className="rounded border border-[var(--border-overlay)] bg-[var(--surface-overlay)] backdrop-blur-md shadow-xl outline-none"
     >
-      <input
-        ref={inputRef}
-        type="text"
-        placeholder={placeholder}
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "ArrowDown") {
-            e.preventDefault();
-            setActive((a) => Math.min(filtered.length - 1, a + 1));
-          } else if (e.key === "ArrowUp") {
-            e.preventDefault();
-            setActive((a) => Math.max(0, a - 1));
-          } else if (e.key === "Enter") {
-            e.preventDefault();
-            const it = filtered[active];
-            if (it) {
-              it.onSelect();
-              onClose();
-            }
-          }
-        }}
-        className="w-full bg-transparent px-3 py-2 text-xs outline-none border-b border-[var(--border-subtle)] placeholder:text-[var(--text-ghost)]"
-        style={{ color: "var(--text)" }}
-      />
+      {searchable && (
+        <input
+          ref={inputRef}
+          type="text"
+          placeholder={placeholder}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={onNavKey}
+          className="w-full bg-transparent px-3 py-2 text-xs outline-none border-b border-[var(--border-subtle)] placeholder:text-[var(--text-ghost)]"
+          style={{ color: "var(--text)" }}
+        />
+      )}
       <ul className="max-h-60 overflow-y-auto py-1">
         {filtered.length === 0 && (
           <li className="px-3 py-2 text-xs text-[var(--text-ghost)] italic">

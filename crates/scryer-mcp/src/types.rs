@@ -31,7 +31,7 @@ pub(crate) struct SearchModelRequest {
 pub(crate) struct QueryCondition {
     /// Queryable node field. One of:
     /// `kind`, `name`, `description`, `technology` (strings);
-    /// `external`, `deprecated`, `relocated`, `visual`, `empty`, `vagrant` (booleans —
+    /// `external`, `relocated`, `visual`, `empty`, `vagrant` (booleans —
     /// `empty` = a symbol with no responsibility/property/appearance, `vagrant` = carries a
     /// discovered-in-code responsibility awaiting review);
     /// `responsibilityCount`, `propertyCount`, `childCount` (numbers).
@@ -191,8 +191,6 @@ pub(crate) struct UpdateNodeItem {
     /// true for a visual/UI component (React component, UI element). Enables
     /// the preview rendering workflow on the node's page.
     pub visual: Option<bool>,
-    /// Mark node as planned for removal. Set true to deprecate, false to clear.
-    pub deprecated: Option<bool>,
     /// Mark node as reparented (code needs to move). Set true to flag, false to clear.
     pub relocated: Option<bool>,
     /// New parent node ID. Changes the node's parent (reparent operation).

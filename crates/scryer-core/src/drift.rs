@@ -15,7 +15,7 @@
 
 use crate::{scan, ScryModel};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -29,6 +29,22 @@ pub struct SyncState {
     pub reconciled_at: u64,
     /// Git commit the model was last reconciled against, when the project is a
     /// git repo. Precise: ignores touches that didn't change content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    /// Per-node reconcile overrides. A node dismissed on its own (with its whole
+    /// subtree) gets its own anchor here, so its boundary's changes clear without
+    /// moving the project-wide anchor and silencing every other node. Empty in
+    /// the common case; a node falls back to the global anchor above.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub nodes: BTreeMap<String, NodeAnchor>,
+}
+
+/// A single node's reconcile anchor — same shape as the global one, applied only
+/// to that node's boundary (see [`SyncState::nodes`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeAnchor {
+    pub reconciled_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
 }
@@ -182,10 +198,13 @@ fn mtime_changed_files(project: &Path, baseline_secs: u64) -> BTreeSet<String> {
 /// drifts (needs re-check) when a changed file matches one of its boundary
 /// globs. Returned in stable node-id order so a run is reproducible.
 pub fn drifted_scopes(model: &ScryModel, project: &Path, sync: &SyncState) -> Vec<DriftScope> {
-    let changed = changed_files_since(project, sync);
-    if changed.is_empty() {
-        return Vec::new();
-    }
+    let global_changed = changed_files_since(project, sync);
+
+    // A node dismissed on its own measures its changes against its own (later)
+    // anchor, not the global one. A node and its subtree are dismissed together
+    // and share one anchor, so cache the changed-file set per distinct anchor to
+    // avoid re-walking the tree per node.
+    let mut override_cache: HashMap<(u64, Option<String>), BTreeSet<String>> = HashMap::new();
 
     let mut scopes: Vec<DriftScope> = Vec::new();
     for node in &model.nodes {
@@ -199,6 +218,21 @@ pub fn drifted_scopes(model: &ScryModel, project: &Path, sync: &SyncState) -> Ve
         if patterns.is_empty() {
             continue;
         }
+        let changed: &BTreeSet<String> = match sync.nodes.get(&node.id) {
+            Some(anchor) => override_cache
+                .entry((anchor.reconciled_at, anchor.commit.clone()))
+                .or_insert_with(|| {
+                    changed_files_since(
+                        project,
+                        &SyncState {
+                            reconciled_at: anchor.reconciled_at,
+                            commit: anchor.commit.clone(),
+                            nodes: BTreeMap::new(),
+                        },
+                    )
+                }),
+            None => &global_changed,
+        };
         let hits: Vec<String> = changed
             .iter()
             .filter(|f| patterns.iter().any(|p| p.matches(f)))
@@ -214,6 +248,24 @@ pub fn drifted_scopes(model: &ScryModel, project: &Path, sync: &SyncState) -> Ve
     }
     scopes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
     scopes
+}
+
+/// `node_id` plus every transitive descendant (via `parent_id`). Used to
+/// reconcile a node's whole subtree at once — each descendant can be its own
+/// boundary owner, so they must clear together.
+pub fn subtree_ids(model: &ScryModel, node_id: &str) -> Vec<String> {
+    let mut out = vec![node_id.to_string()];
+    let mut i = 0;
+    while i < out.len() {
+        let cur = out[i].clone();
+        for n in &model.nodes {
+            if n.parent_id.as_deref() == Some(cur.as_str()) {
+                out.push(n.id.clone());
+            }
+        }
+        i += 1;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -235,7 +287,6 @@ mod tests {
             icon: None,
             visual: None,
             appearance: None,
-            deprecated: None,
             relocated: None,
             locked: None,
             relocated_to: None,
@@ -265,7 +316,7 @@ mod tests {
         );
 
         // Reconcile anchor in the past; only the API file is touched afterwards.
-        let sync = SyncState { reconciled_at: now_secs(), commit: None };
+        let sync = SyncState { reconciled_at: now_secs(), commit: None, ..Default::default() };
         std::thread::sleep(std::time::Duration::from_millis(1100));
         std::fs::write(root.join("api/src/server.rs"), "fn changed() {}").unwrap();
 
@@ -314,7 +365,7 @@ mod tests {
         // Dirty the working tree (uncommitted), THEN reconcile against it.
         std::fs::write(root.join("api/src/server.rs"), "fn v2() {}").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(1100));
-        let sync = SyncState { reconciled_at: now_secs(), commit: Some(commit) };
+        let sync = SyncState { reconciled_at: now_secs(), commit: Some(commit), ..Default::default() };
 
         // Working tree differs from HEAD, but nothing changed since reconcile.
         assert!(
@@ -331,6 +382,52 @@ mod tests {
     }
 
     #[test]
+    fn per_node_override_clears_only_that_node() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("api/src")).unwrap();
+        std::fs::create_dir_all(root.join("web/src")).unwrap();
+        std::fs::write(root.join("api/src/server.rs"), "fn a() {}").unwrap();
+        std::fs::write(root.join("web/src/app.ts"), "const x = 1;").unwrap();
+
+        let mut model = ScryModel::new();
+        model.nodes.push(node("node-1", "API", Kind::Container));
+        model.nodes.push(node("node-2", "Web", Kind::Container));
+        model.boundaries.insert(
+            "node-1".into(),
+            vec![Source { pattern: "api/**/*".into(), comment: None }],
+        );
+        model.boundaries.insert(
+            "node-2".into(),
+            vec![Source { pattern: "web/**/*".into(), comment: None }],
+        );
+
+        // Global anchor in the past; both boundaries are touched after it.
+        let global = now_secs();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(root.join("api/src/server.rs"), "fn a2() {}").unwrap();
+        std::fs::write(root.join("web/src/app.ts"), "const x = 2;").unwrap();
+
+        let mut sync = SyncState { reconciled_at: global, commit: None, ..Default::default() };
+        assert_eq!(
+            drifted_scopes(&model, root, &sync).len(),
+            2,
+            "both boundaries drift before any dismiss"
+        );
+
+        // Dismiss node-1 only: its own anchor is later than its file edits, so it
+        // clears — while node-2 still measures against the old global anchor.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        sync.nodes.insert(
+            "node-1".into(),
+            NodeAnchor { reconciled_at: now_secs(), commit: None },
+        );
+        let scopes = drifted_scopes(&model, root, &sync);
+        assert_eq!(scopes.len(), 1, "only the non-dismissed node still drifts");
+        assert_eq!(scopes[0].node_id, "node-2");
+    }
+
+    #[test]
     fn no_changes_no_scopes() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.rs"), "fn a() {}").unwrap();
@@ -340,7 +437,7 @@ mod tests {
             .boundaries
             .insert("node-1".into(), vec![Source { pattern: "**/*".into(), comment: None }]);
         // Anchor in the future → nothing is newer.
-        let sync = SyncState { reconciled_at: now_secs() + 10, commit: None };
+        let sync = SyncState { reconciled_at: now_secs() + 10, commit: None, ..Default::default() };
         assert!(drifted_scopes(&model, dir.path(), &sync).is_empty());
     }
 }

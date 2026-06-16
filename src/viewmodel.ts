@@ -15,7 +15,7 @@ export const SCRY_VERSION = "0.3" as const;
 
 /** One boundary-owning node whose code changed since the last reconcile, as
  *  returned by the `get_drift_status` Tauri command (mirrors the Rust
- *  `scryer_core::drift::DriftScope`). Drives the SyncBar drift panel. */
+ *  `scryer_core::drift::DriftScope`). Drives the per-node drift banner. */
 export interface DriftScope {
   nodeId: string;
   nodeName: string;
@@ -121,7 +121,6 @@ export interface Node {
   icon?: string;
   visual?: boolean;
   appearance?: Appearance;
-  deprecated?: boolean;
   relocated?: boolean;
   locked?: boolean;
   relocatedTo?: string;

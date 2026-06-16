@@ -165,7 +165,6 @@ fn resolve_field(n: &Node, field: &str, child_count: usize) -> Result<FieldVal, 
         "description" => FieldVal::Str(n.description.clone()),
         "technology" => FieldVal::Str(n.technology.clone()),
         "external" => FieldVal::Bool(n.external == Some(true)),
-        "deprecated" => FieldVal::Bool(n.deprecated == Some(true)),
         "relocated" => FieldVal::Bool(n.relocated == Some(true)),
         "visual" => FieldVal::Bool(n.visual == Some(true)),
         "empty" => FieldVal::Bool(scryer_core::is_node_empty(n)),
@@ -178,7 +177,7 @@ fn resolve_field(n: &Node, field: &str, child_count: usize) -> Result<FieldVal, 
         other => {
             return Err(format!(
                 "Unknown query field '{}'. Valid: kind, name, description, technology, external, \
-                 deprecated, relocated, visual, empty, vagrant, responsibilityCount, propertyCount, \
+                 relocated, visual, empty, vagrant, responsibilityCount, propertyCount, \
                  childCount.",
                 other
             ))
@@ -567,8 +566,7 @@ impl ScryerServer {
                 &model_ref,
                 &scryer_core::drift::SyncState {
                     reconciled_at: scryer_core::drift::now_secs(),
-                    commit: scryer_core::drift::head_commit(project),
-                },
+                    commit: scryer_core::drift::head_commit(project), ..Default::default() },
             );
             let _ = scryer_extract::anchors::write_baseline(&model_ref);
             let payload = serde_json::json!({
@@ -618,7 +616,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "What model intent is NOT yet reflected in code — the model→code work outstanding. Returns responsibilities, properties, AND component visuals (the `preview`) at status `proposed` (no code yet) or `changed` (spec/visual edited after implementation, needs re-implementation), plus nodes flagged `deprecated` (delete the code) or `relocated` (move the code), each with its breadcrumb path and source anchors. Call this to find what needs implementing or syncing to the codebase."
+        description = "What model intent is NOT yet reflected in code — the model→code work outstanding. This is the PLAN diff: how the draft (`planned`) diverges from the committed `model`. Each entry names an element (node / responsibility / property / link / group) and what to do: `added` (implement new code), `reworded` (re-implement to the new spec), `moved` (move the code), `repointed` (re-point the relationship), `deleted` (remove the code) — with a breadcrumb path and, for responsibilities, source anchors. Implementing an entry and calling `mark_implemented` commits it (folds it from the plan into the model). Call this to find what needs implementing or syncing to the codebase."
     )]
     fn get_unimplemented(
         &self,
@@ -634,125 +632,85 @@ impl ScryerServer {
                 ))]));
             }
         };
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
-
-        use scryer_core::Status;
-        let outstanding = |s: &Option<Status>| {
-            matches!(s, Some(Status::Proposed) | Some(Status::Changed))
+        let planned = match scryer_core::read_planned_at(&model_ref) {
+            Ok(p) => p,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read plan at {}: {}",
+                    model_ref, e
+                ))]));
+            }
         };
 
-        let mut nodes_out: Vec<serde_json::Value> = Vec::new();
-        let (mut n_proposed, mut n_changed, mut n_stale, mut n_deprecated, mut n_relocated) =
-            (0, 0, 0, 0, 0);
+        // The work queue IS the plan diff: how the draft diverges from the
+        // committed model. Each change is a thing the code must catch up to.
+        use scryer_core::diff::{Change, ElementKind};
+        let plan = scryer_core::diff::diff(&model, &planned);
 
-        for n in &model.nodes {
-            // A stale flag is outstanding work whatever status it sits on: the
-            // drift check judged the code no longer discharges the claim.
-            let resp_items: Vec<serde_json::Value> = n
-                .responsibilities
-                .iter()
-                .filter(|r| outstanding(&r.status) || r.stale == Some(true))
-                .map(|r| {
-                    match r.status {
-                        Some(Status::Proposed) => n_proposed += 1,
-                        Some(Status::Changed) => n_changed += 1,
-                        _ => {}
-                    }
-                    if r.stale == Some(true) {
-                        n_stale += 1;
-                    }
-                    let sources = model.source_map.get(&r.id);
-                    serde_json::json!({
-                        "id": r.id,
-                        "statement": r.statement,
-                        "status": r.status,
-                        "stale": r.stale,
-                        "sources": sources,
-                    })
-                })
-                .collect();
+        // Resolve a node's breadcrumb against whichever side actually holds it:
+        // the draft for added/existing nodes, the committed model for a deletion.
+        let breadcrumb_of = |id: &str| -> String {
+            if planned.nodes.iter().any(|n| n.id == id) {
+                breadcrumb(&planned, id)
+            } else {
+                breadcrumb(&model, id)
+            }
+        };
 
-            let prop_items: Vec<serde_json::Value> = n
-                .properties
-                .iter()
-                .filter(|p| outstanding(&p.status))
-                .map(|p| {
-                    match p.status {
-                        Some(Status::Proposed) => n_proposed += 1,
-                        Some(Status::Changed) => n_changed += 1,
-                        _ => {}
-                    }
-                    serde_json::json!({ "label": p.label, "status": p.status })
-                })
-                .collect();
+        let (mut to_implement, mut to_reimplement, mut to_move, mut to_delete, mut to_repoint) =
+            (0u32, 0u32, 0u32, 0u32, 0u32);
+        let mut changes_out: Vec<serde_json::Value> = Vec::new();
 
-            // A node's appearance is status-bearing too: a `changed` look means
-            // the code drifted from the modeled appearance; `proposed` means a
-            // planned look not yet built. Both are outstanding model→code work.
-            let appearance_status = n.appearance.as_ref().and_then(|a| a.status);
-            let appearance_outstanding = outstanding(&appearance_status);
-            if appearance_outstanding {
-                match appearance_status {
-                    Some(Status::Proposed) => n_proposed += 1,
-                    Some(Status::Changed) => n_changed += 1,
-                    _ => {}
+        for ch in &plan.changes {
+            for c in &ch.changes {
+                match c {
+                    Change::Added => to_implement += 1,
+                    Change::Reworded { .. } => to_reimplement += 1,
+                    Change::Moved { .. } | Change::MembersChanged { .. } => to_move += 1,
+                    Change::Deleted => to_delete += 1,
+                    Change::Repointed { .. } => to_repoint += 1,
                 }
             }
 
-            let deprecated = n.deprecated == Some(true);
-            let relocated = n.relocated == Some(true);
-            if deprecated {
-                n_deprecated += 1;
+            let mut v = serde_json::to_value(ch).unwrap_or(serde_json::Value::Null);
+            match ch.kind {
+                ElementKind::Node => {
+                    v["path"] = serde_json::Value::String(breadcrumb_of(&ch.id));
+                }
+                ElementKind::Responsibility => {
+                    if let Some(owner) = &ch.owner_id {
+                        v["path"] = serde_json::Value::String(breadcrumb_of(owner));
+                    }
+                    // Source anchors live in the draft for added claims, the
+                    // committed model for existing/deleted ones.
+                    if let Some(src) = planned
+                        .source_map
+                        .get(&ch.id)
+                        .or_else(|| model.source_map.get(&ch.id))
+                    {
+                        v["sources"] = serde_json::to_value(src).unwrap_or(serde_json::Value::Null);
+                    }
+                }
+                ElementKind::Property => {
+                    if let Some(owner) = &ch.owner_id {
+                        v["path"] = serde_json::Value::String(breadcrumb_of(owner));
+                    }
+                }
+                ElementKind::Link | ElementKind::Group => {}
             }
-            if relocated {
-                n_relocated += 1;
-            }
-
-            if resp_items.is_empty()
-                && prop_items.is_empty()
-                && !deprecated
-                && !relocated
-                && !appearance_outstanding
-            {
-                continue;
-            }
-            // The declaration source for a data-shape node is keyed by node id.
-            let decl_source = if prop_items.is_empty() {
-                None
-            } else {
-                model.source_map.get(&n.id)
-            };
-            let mut v = serde_json::json!({
-                "id": n.id,
-                "name": n.name,
-                "kind": kind_str(&n.kind),
-                "path": breadcrumb(&model, &n.id),
-                "deprecated": deprecated,
-                "relocated": relocated,
-                "relocatedTo": n.relocated_to,
-                "responsibilities": resp_items,
-                "properties": prop_items,
-                "appearanceStatus": if appearance_outstanding {
-                    serde_json::to_value(appearance_status).unwrap_or(serde_json::Value::Null)
-                } else {
-                    serde_json::Value::Null
-                },
-                "declSource": decl_source,
-            });
-            strip_fields_compact(&mut v);
-            nodes_out.push(v);
+            changes_out.push(v);
         }
 
         let payload = serde_json::json!({
             "summary": {
-                "toImplement": n_proposed,
-                "toReimplement": n_changed,
-                "staleClaims": n_stale,
-                "nodesToDelete": n_deprecated,
-                "nodesToMove": n_relocated,
+                "toImplement": to_implement,
+                "toReimplement": to_reimplement,
+                "toMove": to_move,
+                "toDelete": to_delete,
+                "toRepoint": to_repoint,
             },
-            "clean": nodes_out.is_empty(),
-            "nodes": nodes_out,
+            "clean": changes_out.is_empty(),
+            "changes": changes_out,
         });
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
@@ -869,8 +827,7 @@ impl ScryerServer {
                 &model_ref,
                 &scryer_core::drift::SyncState {
                     reconciled_at: scryer_core::drift::now_secs(),
-                    commit: scryer_core::drift::head_commit(project),
-                },
+                    commit: scryer_core::drift::head_commit(project), ..Default::default() },
             );
             let _ = scryer_extract::anchors::write_baseline(&model_ref);
             scryer_extract::anchors::AnchorCheck::default()
@@ -1038,7 +995,6 @@ mod tests {
             icon: None,
             visual: None,
             appearance: None,
-            deprecated: None,
             relocated: None,
             locked: None,
             relocated_to: None,
@@ -1186,35 +1142,33 @@ mod tests {
     }
 
     #[test]
-    fn sync_status_lists_proposed_changed_and_flags() {
+    fn get_unimplemented_reports_the_plan_diff() {
         let dir = tempfile::tempdir().unwrap();
         let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        // Committed model: a system with a Billing component (two claims) and a
+        // Legacy component.
         let mut m = ScryModel::new();
         m.nodes.push(node("node-1", Kind::System, "Acme", None));
         let mut c = node("node-2", Kind::Component, "Billing", Some("node-1"));
         c.responsibilities = vec![
-            resp("resp-impl", "charges the card"),       // implemented → excluded
-            resp("resp-prop", "issues refunds"),         // proposed → included
-            resp("resp-chg", "emails a receipt"),        // changed → included
+            resp("resp-impl", "charges the card"),
+            resp("resp-keep", "settles nightly"),
         ];
-        c.responsibilities[0].status = Some(Status::Implemented);
-        c.responsibilities[1].status = Some(Status::Proposed);
-        c.responsibilities[2].status = Some(Status::Changed);
         m.nodes.push(c);
-        let mut dead = node("node-3", Kind::Component, "Legacy", Some("node-1"));
-        dead.deprecated = Some(true);
-        m.nodes.push(dead);
-        // a node whose ONLY outstanding signal is a changed visual preview
-        let mut dash = node("node-4", Kind::Component, "Dashboard", Some("node-1"));
-        dash.appearance = Some(scryer_core::Appearance {
-            status: Some(Status::Changed),
-            dist_path: None,
-            built_at: None,
-            source_hash: None,
-        });
-        m.nodes.push(dash);
-        // a source anchor for the proposed responsibility
-        m.source_map.insert(
+        m.nodes.push(node("node-3", Kind::Component, "Legacy", Some("node-1")));
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+
+        // Plan (draft): add a claim, reword another, leave one untouched, and
+        // delete the Legacy node.
+        let mut planned = m.clone();
+        planned.nodes[1]
+            .responsibilities
+            .push(resp("resp-prop", "issues refunds")); // Added
+        planned.nodes[1].responsibilities[0].statement = "charges the card and logs it".into(); // Reworded
+        planned.nodes.retain(|n| n.id != "node-3"); // Deleted
+        // a source anchor for the new claim (lives in the draft's source map)
+        planned.source_map.insert(
             "resp-prop".into(),
             vec![scryer_core::SourceLocation {
                 pattern: "src/billing.rs".into(),
@@ -1224,30 +1178,28 @@ mod tests {
                 command: None,
             }],
         );
-        scryer_core::write_model_at(&model_ref, &m).unwrap();
-        let server = ScryerServer::new();
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
 
+        let server = ScryerServer::new();
         let r = server
             .get_unimplemented(Parameters(GetUnimplementedRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
             }))
             .unwrap();
         let v = result_json(&r);
+
         assert_eq!(v["clean"], false);
-        assert_eq!(v["summary"]["toImplement"], 1);
-        // resp-chg (1) + the changed Dashboard preview (1)
-        assert_eq!(v["summary"]["toReimplement"], 2);
-        assert_eq!(v["summary"]["nodesToDelete"], 1);
-        // implemented responsibility is not surfaced
+        assert_eq!(v["summary"]["toImplement"], 1); // resp-prop added
+        assert_eq!(v["summary"]["toReimplement"], 1); // resp-impl reworded
+        assert_eq!(v["summary"]["toDelete"], 1); // node-3 deleted
+
         let dump = serde_json::to_string(&v).unwrap();
-        assert!(!dump.contains("charges the card"));
-        assert!(dump.contains("issues refunds"));
+        assert!(dump.contains("issues refunds")); // added claim surfaced
+        assert!(dump.contains("charges the card and logs it")); // reworded (new text)
         assert!(dump.contains("src/billing.rs")); // source anchor carried through
-        // the deprecated node appears even with no outstanding responsibilities
-        assert!(dump.contains("node-3"));
-        // the node whose only outstanding signal is a changed appearance is surfaced
-        assert!(dump.contains("node-4"));
-        assert!(dump.contains("\"appearanceStatus\":\"changed\""));
+        assert!(dump.contains("node-3")); // deletion surfaced
+        // the untouched claim is not part of the plan
+        assert!(!dump.contains("settles nightly"));
     }
 
     #[test]

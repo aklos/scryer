@@ -16,6 +16,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Check,
   CircleDashed,
@@ -37,41 +38,39 @@ import type {
   Group,
   Responsibility,
   SchemaProperty,
+  SourceLocation,
   DriftScope,
 } from "./viewmodel";
 import { isDataShape, nextResponsibilityId } from "./viewmodel";
+import { wordDiff } from "./wordDiff";
 import type { Editor } from "./editor";
 import type { ModelHealthReport } from "./health";
-import type { Status } from "./statusColors";
-import { FLAG_COLORS, PILL_BASE, STATUS_COLORS } from "./statusColors";
-import { effectiveNodeStatus, isNodeEmpty } from "./rollup";
-import { rollupStatus } from "./statusColors";
+import { FLAG_COLORS } from "./statusColors";
+import { isNodeEmpty } from "./rollup";
 import { kindIcon, typeTag } from "./kindIcon";
 import { lookupIcon } from "./IconPicker";
-import { Infobox } from "./Infobox";
 import { ConnectionsSection } from "./ConnectionsSection";
-import { RevisionList } from "./SpecialPages";
 import type { ChangeRevision } from "./hooks/useModelStorage";
+import {
+  EVENT_META,
+  type HistoryEvent,
+  markerColor,
+  relativeTime,
+} from "./history";
 import { matchPreviewComponent, usePreviewServer } from "./hooks/usePreviewServer";
+import { ClaimSource, respElementId } from "./SourceSection";
 import {
-  SourceSection,
-  buildSourceIndex,
-  hunkElementId,
-  respElementId,
-} from "./SourceSection";
-import { Input, Textarea, Button, SegmentedControl, type SelectOption } from "./ui";
-import {
-  Banner,
+  BTN,
+  BTN_DANGER,
+  BTN_GO,
+  CTL,
+  Editable,
   EditLink,
   Empty,
   EmptyFlag,
-  isRedLink,
   jumpTo,
   PageSection,
   SectionEditor,
-  StatusTag,
-  USER_STATUSES,
-  WikiLink,
   WikiText,
 } from "./pagekit";
 
@@ -91,13 +90,12 @@ export type Selected =
   // Wiki special pages — Recent changes and Needs review (App routes these).
   | { kind: "special"; id: SpecialPage };
 
-const STATUS_OPTIONS: SelectOption[] = USER_STATUSES.map((s) => ({
-  value: s,
-  label: STATUS_COLORS[s].label,
-}));
-
 interface PageProps {
   model: ScryModel;
+  /** The committed model (`model.scry`) — the diff base. The Overview renders
+   *  each claim as a diff of `model` (working/planned) against this. Null only
+   *  in the brief window before the committed model loads. */
+  committed: ScryModel | null;
   selected: Selected;
   report: ModelHealthReport | null;
   projectPath: string | null;
@@ -118,11 +116,15 @@ interface PageProps {
   /** Session-local journal of every edit (yours and the agent's), newest
    *  first — filtered per node to drive the History tab. */
   changeLog: readonly ChangeRevision[];
+  /** Durable committed-model timeline (`.scryer/history.jsonl`), oldest first —
+   *  filtered per node to drive the History tab. */
+  history: readonly HistoryEvent[];
   /** Boundary-owning nodes whose code changed since the last reconcile —
    *  surfaced as a drift banner on the owning node's page. */
   driftScopes: DriftScope[];
   onCheckDrift?: () => void;
-  onDismissDrift?: () => void;
+  /** Reconcile drift for a node and its subtree (scoped Dismiss). */
+  onDismissDrift?: (nodeId: string) => void;
 }
 
 /** Per-section edit toggles for one page. Edits inside a section accumulate
@@ -187,15 +189,16 @@ function Crumbs({
   onSelectNode: (id: string) => void;
 }) {
   if (chain.length === 0) return null;
+  // Inherits the header crumb row's font (mono) / size (11px) / color.
   return (
-    <nav className="flex min-w-0 items-center gap-1 text-2xs text-[var(--text-muted)]">
+    <nav className="flex min-w-0 items-center gap-1">
       {chain.map((n, i) => (
         <span key={n.id} className="flex min-w-0 items-center gap-1">
-          {i > 0 && <span className="text-[var(--text-ghost)]">›</span>}
+          {i > 0 && <span className="text-[var(--text-ghost)]">/</span>}
           <button
             type="button"
             onClick={() => onSelectNode(n.id)}
-            className="max-w-[200px] truncate rounded px-0.5 hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] hover:underline cursor-pointer"
+            className="max-w-[200px] truncate hover:text-[var(--text-secondary)] hover:underline cursor-pointer"
           >
             {n.name || "Untitled"}
           </button>
@@ -210,6 +213,7 @@ function PageHeader({
   actions,
   name,
   typeLine,
+  tabs,
   editor,
   editingName,
   onToggleName,
@@ -221,65 +225,95 @@ function PageHeader({
   name: string;
   /** The line under the title: kind icon, type word, technology, status. */
   typeLine: React.ReactNode;
+  /** Article tabs (Overview · History), rendered as the header's last row. */
+  tabs?: React.ReactNode;
   editor: Editor | undefined;
   editingName: boolean;
   onToggleName: () => void;
   onRename: (v: string) => void;
 }) {
-  // Enter commits the rename, Esc or click-away cancels — one exit path
-  // (blur), with the commit decision carried across it.
-  const commitRef = useRef(false);
   return (
-    <header className="shrink-0 border-b border-[var(--border-subtle)] px-8 pb-4 pt-4">
-      <div className="mx-auto w-full max-w-[1080px]">
-        <div className="flex min-h-[18px] items-center gap-1.5">
-          {crumbs}
-          <span className="flex-1" />
-          {actions}
-        </div>
-        <div className="mt-1 flex items-baseline gap-3">
+    <header className="shrink-0 border-b border-[var(--border)] px-7 pt-[13px]">
+      <div className="flex min-h-[15px] items-center gap-1 font-mono text-[11px] text-[var(--text-tertiary)]">
+        {crumbs}
+        <span className="flex-1" />
+        {actions}
+      </div>
+      <div className="mt-[5px] flex items-start gap-4">
+        <div className="flex min-w-0 flex-1 items-baseline gap-3">
           <div className="min-w-0 flex-1">
             {editingName ? (
-              <Input
-                variant="title"
+              // The title edits in place as a contentEditable span (same metrics
+              // as the h1, no reflow), committing on blur. Header edit mode stays
+              // open across fields until Done — so you can edit the type line too.
+              <Editable
+                initial={name}
                 autoFocus
-                defaultValue={name}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    commitRef.current = true;
-                    e.currentTarget.blur();
-                  } else if (e.key === "Escape") {
-                    commitRef.current = false;
-                    e.currentTarget.blur();
-                  }
-                }}
-                onBlur={(e) => {
-                  if (commitRef.current) onRename(e.currentTarget.value);
-                  commitRef.current = false;
-                  onToggleName();
-                }}
-                className="w-full !text-xl font-semibold leading-tight"
+                placeholder="Untitled"
+                onCommit={(t) => onRename(t)}
+                className="block text-[21px] font-semibold leading-tight text-[var(--text)]"
               />
             ) : (
-              <h1 className="truncate text-xl font-semibold leading-tight text-[var(--text)]">
+              <h1 className="truncate text-[21px] font-semibold leading-tight text-[var(--text)]">
                 {name || "Untitled"}
               </h1>
             )}
           </div>
-          {editor && <EditLink editing={editingName} onClick={onToggleName} />}
-        </div>
-        <div className="mt-1.5 flex items-center gap-2 text-2xs font-medium text-[var(--text-tertiary)]">
-          {typeLine}
+          {editor &&
+            (editingName ? (
+              <button type="button" onClick={onToggleName} className={BTN_GO}>
+                Done
+              </button>
+            ) : (
+              <EditLink editing={false} onClick={onToggleName} />
+            ))}
         </div>
       </div>
+      <div className="mt-[3px] flex items-center gap-2 text-xs text-[var(--text-tertiary)]">
+        {typeLine}
+      </div>
+      {tabs}
     </header>
   );
 }
 
+/** A maintenance notice (ambox) — a full-width banner stacked at the top of the
+ *  article body: a tinted strip with a left accent rule, an icon, the message,
+ *  and inline actions right-aligned. The classic wiki hatnote, not a header chip. */
+function Ambox({
+  tone,
+  icon,
+  children,
+  actions,
+}: {
+  tone: "warning" | "danger" | "info";
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  actions?: React.ReactNode;
+}) {
+  const c =
+    tone === "danger"
+      ? "border-red-500/30 border-l-red-500/70 bg-red-500/10 text-red-700 dark:text-red-300"
+      : tone === "info"
+        ? "border-violet-500/30 border-l-violet-500/70 bg-violet-500/10 text-violet-700 dark:text-violet-300"
+        : "border-orange-500/30 border-l-orange-500/70 bg-orange-500/10 text-orange-700 dark:text-orange-300";
+  return (
+    <div className={`flex items-center gap-2.5 rounded-md border border-l-[3px] px-3 py-2 text-xs ${c}`}>
+      <span className="shrink-0 opacity-80">{icon}</span>
+      <span className="min-w-0 flex-1">{children}</span>
+      {actions && <span className="flex shrink-0 items-center gap-3">{actions}</span>}
+    </div>
+  );
+}
+
+/** Inline text action for an {@link Ambox} — terse, underlined, no chrome. */
+const NOTICE_ACTION =
+  "shrink-0 font-medium underline-offset-2 hover:underline cursor-pointer";
+
 // --- tabs -------------------------------------------------------------------
 
-/** Wikipedia-style article tabs (Overview · History), underline marking the
- *  active one. Lives between the page header and the scrolling body. */
+/** Article tabs (Overview · History) — the mockup's `.modes` underline tabs,
+ *  rendered as the last row of the page header. */
 function PageTabs({
   tab,
   onTab,
@@ -290,116 +324,101 @@ function PageTabs({
   historyCount: number;
 }) {
   const tabClass = (active: boolean) =>
-    `-mb-px border-b-2 px-1 py-2 text-xs font-medium cursor-pointer transition-colors ${
+    `-mb-px mr-[18px] border-b-2 py-1.5 text-xs cursor-pointer transition-colors ${
       active
         ? "border-[var(--text)] text-[var(--text)]"
-        : "border-transparent text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:border-[var(--border)]"
+        : "border-transparent text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
     }`;
   return (
-    <div className="shrink-0 border-b border-[var(--border-subtle)] px-8">
-      <div className="mx-auto flex w-full max-w-[1080px] items-center gap-5">
-        <button type="button" onClick={() => onTab("overview")} className={tabClass(tab === "overview")}>
-          Overview
-        </button>
-        <button
-          type="button"
-          onClick={() => onTab("history")}
-          className={tabClass(tab === "history")}
-        >
-          History
-          {historyCount > 0 && (
-            <span className="ml-1.5 tabular-nums text-[var(--text-ghost)]">{historyCount}</span>
-          )}
-        </button>
-      </div>
+    <div className="mt-[11px] flex">
+      <button type="button" onClick={() => onTab("overview")} className={tabClass(tab === "overview")}>
+        Overview
+      </button>
+      <button type="button" onClick={() => onTab("history")} className={tabClass(tab === "history")}>
+        History
+        {historyCount > 0 && (
+          <span className="ml-1.5 font-mono text-[10px] text-[var(--text-ghost)]">{historyCount}</span>
+        )}
+      </button>
     </div>
   );
 }
 
-/** Render a list of values as the collapsed diff cell does — absence reads "—". */
-function fmtSpecValue(v: string | string[] | undefined): string {
-  if (v === undefined || v === "") return "—";
-  if (Array.isArray(v)) return v.length === 0 ? "—" : v.join(" · ");
-  return v;
-}
-
-/** One persistent "what it was → what it is now" row for a reworded claim,
- *  collapsed to the net change per field (statement, directives) against the
- *  last reconciled spec. */
-function PendingDiff({ resp }: { resp: Responsibility }) {
-  const from = resp.changedFrom;
-  if (!from) return null;
-  const rows: { field: string; from: string; to: string }[] = [];
-  if (from.statement !== resp.statement)
-    rows.push({ field: "statement", from: from.statement, to: resp.statement });
-  const fromDir = fmtSpecValue(from.directives);
-  const toDir = fmtSpecValue(resp.directives);
-  if (fromDir !== toDir) rows.push({ field: "directives", from: fromDir, to: toDir });
-  return (
-    <li className="border-b border-[var(--border-subtle)] py-3 last:border-b-0">
-      <div className="mb-1 truncate text-sm text-[var(--text-secondary)]">{resp.statement}</div>
-      <ul className="flex flex-col gap-px pl-1">
-        {rows.map((r) => (
-          <li key={r.field} className="text-2xs leading-relaxed">
-            <span className="text-[var(--text-muted)]">{r.field}: </span>
-            <del className="text-[var(--text-muted)] decoration-[var(--text-ghost)]">{r.from}</del>
-            <span className="text-[var(--text-ghost)]"> → </span>
-            <span className="text-[var(--text-secondary)]">{r.to}</span>
-          </li>
-        ))}
-      </ul>
-    </li>
-  );
-}
-
-/** The History tab body: persistent unreconciled spec edits (survive reload)
- *  above the live session journal for this node. */
+/** The History tab body: this node's durable committed-model timeline — every
+ *  fold, drift reconcile, move and birth, newest first. Each event reads as a
+ *  rail dot coloured by kind, a driver badge, attribution, and its diff rows
+ *  (with inline source peeks for the claims an `impl` discharged). */
 function NodeHistory({
-  pending,
-  revisions,
-  onSelectNode,
+  events,
+  projectPath,
 }: {
-  pending: readonly Responsibility[];
-  revisions: readonly ChangeRevision[];
-  onSelectNode: (id: string) => void;
+  events: readonly HistoryEvent[];
+  projectPath: string | null;
 }) {
-  if (pending.length === 0 && revisions.length === 0) {
+  if (events.length === 0) {
     return (
       <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
         <FileClock className="h-6 w-6 text-[var(--text-ghost)]" />
         <p className="max-w-sm text-xs text-[var(--text-muted)]">
-          No changes to this node. Reword an implemented claim and the net diff shows here
-          until the agent reconciles it with the code.
+          No committed history yet. When the agent implements, reconciles drift, moves, or builds
+          this node, it lands here.
         </p>
       </div>
     );
   }
+  // Stored oldest-first (append-only); the timeline reads newest-first.
+  const ordered = [...events].reverse();
   return (
-    <div className="flex flex-col gap-7 pt-5">
-      {pending.length > 0 && (
-        <section>
-          <h3 className="mb-1 text-2xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
-            Changed since last reconcile
-          </h3>
-          <p className="mb-2 text-2xs text-[var(--text-muted)]">
-            The spec moved after implementation — these persist until the agent catches the
-            code up.
-          </p>
-          <ul className="flex flex-col">
-            {pending.map((r) => (
-              <PendingDiff key={r.id} resp={r} />
-            ))}
-          </ul>
-        </section>
-      )}
-      {revisions.length > 0 && (
-        <section>
-          <h3 className="mb-2 text-2xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
-            This session
-          </h3>
-          <RevisionList revisions={revisions} showContext={false} onSelectNode={onSelectNode} />
-        </section>
-      )}
+    <div className="pt-5">
+      {ordered.map((ev, i) => {
+        const meta = EVENT_META[ev.kind];
+        const last = i === ordered.length - 1;
+        return (
+          <div
+            key={`${ev.at}-${i}`}
+            className={`relative ml-1.5 border-l pl-6 pb-6 ${
+              last ? "border-transparent" : "border-[var(--border)]"
+            }`}
+          >
+            <span
+              className="absolute -left-[5px] top-1 h-2.5 w-2.5 rounded-full"
+              style={{ background: meta.dot, boxShadow: "0 0 0 2px var(--surface)" }}
+            />
+            <div className="mb-2 flex flex-wrap items-baseline gap-2">
+              <span className="font-mono text-2xs tabular-nums text-[var(--text-tertiary)]">
+                {relativeTime(ev.at)}
+              </span>
+              <span
+                className={`rounded border px-1.5 py-px font-mono text-[10px] uppercase tracking-wide ${meta.badge}`}
+              >
+                {meta.label}
+              </span>
+              <span className="text-2xs text-[var(--text-muted)]">
+                <span className="text-violet-500 dark:text-violet-400">⌁</span> {ev.by} · {ev.driver}
+              </span>
+            </div>
+            <div className="flex flex-col gap-1">
+              {ev.rows.map((row, j) => (
+                <div key={j} className="grid grid-cols-[16px_1fr] items-baseline gap-1">
+                  <span
+                    className={`text-center font-mono text-xs font-bold ${markerColor(row.marker)}`}
+                  >
+                    {row.marker}
+                  </span>
+                  <div className="min-w-0">
+                    <span className="font-mono text-xs leading-relaxed text-[var(--text-secondary)]">
+                      {row.text}
+                    </span>
+                    {row.source && (
+                      <ClaimSource locations={[row.source]} projectPath={projectPath} />
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -409,50 +428,37 @@ function NodeHistory({
 function NodePageBody(props: PageProps & { node: Node }) {
   const {
     model,
+    committed,
     node,
     report,
     editor,
     projectPath,
     onSelectNode,
-    onSelectGroup,
     onFill,
     onFixture,
     newRespIds,
     onClearNewResp,
-    changeLog,
+    history,
     driftScopes,
     onCheckDrift,
     onDismissDrift,
   } = props;
   const ed = useEditSections();
   const [tab, setTab] = useState<"overview" | "history">("overview");
-  // This node's slice of the session journal — every revision that touched it,
-  // narrowed to just its own items (an agent build burst touches many nodes).
-  const nodeRevisions = useMemo(() => {
-    const out: ChangeRevision[] = [];
-    for (const rev of changeLog) {
-      const items = rev.items.filter((it) => it.nodeId === node.id);
-      if (items.length > 0) out.push({ ...rev, items });
-    }
-    return out;
-  }, [changeLog, node.id]);
-  // Persistent, reconcile-scoped diffs: claims reworded after implementation
-  // carry a `changedFrom` snapshot until the agent catches the code up. These
-  // survive reload (they live in the model), unlike the session journal above.
-  const pendingReconcile = useMemo(
-    () =>
-      (node.responsibilities ?? []).filter(
-        (r) => r.status === "changed" && r.changedFrom,
-      ),
-    [node.responsibilities],
+  // This node's slice of the durable committed-model timeline.
+  const nodeEvents = useMemo(
+    () => history.filter((e) => e.nodeId === node.id),
+    [history, node.id],
   );
-  const status = effectiveNodeStatus(node);
   const tag = typeTag(node);
   const KindIcon = lookupIcon(node.icon) ?? kindIcon(node);
 
   const sourceMap = model.sourceMap ?? {};
   const dataShape = isDataShape(node);
   const resps = node.responsibilities ?? [];
+  // The committed copy of this node's claims — the diff base for the Overview.
+  const committedResps =
+    committed?.nodes.find((n) => n.id === node.id)?.responsibilities ?? [];
   const definition = sourceMap[node.id] ?? [];
   const hasChildren = model.nodes.some((n) => n.parentId === node.id);
 
@@ -467,11 +473,98 @@ function NodePageBody(props: PageProps & { node: Node }) {
   // externals are out-of-system — their claims are never code-backed.
   const leafHost = !hasChildren && !node.external && node.kind !== "person";
 
-  const sourceIndex = buildSourceIndex(definition, dataShape ? [] : resps, sourceMap);
+  // The node's own definition anchor — its file, surfaced in the type line.
+  const defFile = definition[0]?.pattern;
 
   const staleCount = resps.filter((r) => r.stale).length;
   const vagrantCount = resps.filter((r) => r.vagrant).length;
   const drift = driftScopes.find((s) => s.nodeId === node.id);
+
+  // Maintenance notices — full-width amboxes stacked at the top of the article
+  // body (the wiki hatnote pattern), not chips crammed beside the title.
+  const bannerStack =
+    drift || staleCount > 0 || vagrantCount > 0 || isNodeEmpty(node) ? (
+      <>
+        {drift && (
+          <Ambox
+            tone="warning"
+            icon={<GitCompare className="h-3 w-3" />}
+            actions={
+              <>
+                {onCheckDrift && (
+                  <button
+                    type="button"
+                    onClick={onCheckDrift}
+                    title="Run a semantic drift check across the whole project"
+                    className={NOTICE_ACTION}
+                  >
+                    Check
+                  </button>
+                )}
+                {onDismissDrift && (
+                  <button
+                    type="button"
+                    onClick={() => onDismissDrift(node.id)}
+                    title="Mark this node and its children reconciled, without a semantic check"
+                    className={NOTICE_ACTION}
+                  >
+                    Dismiss
+                  </button>
+                )}
+              </>
+            }
+          >
+            Code changed ({drift.changedFiles.length} file
+            {drift.changedFiles.length === 1 ? "" : "s"}) — claims may not hold
+          </Ambox>
+        )}
+        {staleCount > 0 && (
+          <Ambox
+            tone="warning"
+            icon={<Flag className="h-3 w-3" />}
+            actions={
+              <button
+                type="button"
+                onClick={() => {
+                  const first = resps.find((r) => r.stale);
+                  if (first) jumpTo(respElementId(first.id));
+                }}
+                className={NOTICE_ACTION}
+              >
+                Review
+              </button>
+            }
+          >
+            {staleCount} stale claim{staleCount === 1 ? "" : "s"}
+          </Ambox>
+        )}
+        {vagrantCount > 0 && (
+          <Ambox
+            tone="danger"
+            icon={<Flag className="h-3 w-3" />}
+            actions={
+              <button
+                type="button"
+                onClick={() => {
+                  const first = resps.find((r) => r.vagrant);
+                  if (first) jumpTo(respElementId(first.id));
+                }}
+                className={NOTICE_ACTION}
+              >
+                Review
+              </button>
+            }
+          >
+            {vagrantCount} undescribed behaviour{vagrantCount === 1 ? "" : "s"} in code
+          </Ambox>
+        )}
+        {isNodeEmpty(node) && (
+          <Ambox tone="warning" icon={<CircleDashed className="h-3 w-3" />}>
+            Empty symbol — no responsibilities or properties
+          </Ambox>
+        )}
+      </>
+    ) : null;
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -484,7 +577,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 type="button"
                 onClick={() => onFill(node.id)}
                 title="Have the agent model this node from the codebase — children, responsibilities, source mapping"
-                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs font-medium text-indigo-600 hover:bg-indigo-500/10 dark:text-indigo-400 cursor-pointer"
+                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs font-medium text-violet-600 hover:bg-violet-500/10 dark:text-violet-400 cursor-pointer"
               >
                 <Sparkles className="h-3 w-3" /> Model from code
               </button>
@@ -496,140 +589,61 @@ function NodePageBody(props: PageProps & { node: Node }) {
           <>
             <KindIcon className="h-3.5 w-3.5" />
             <span>{dataShape ? "Data type" : tag.type}</span>
-            {node.technology && (
+            {/* Technology — editable in place when the header is in edit mode,
+                committing on blur; otherwise shown only when set. */}
+            {ed.isEditing("title") ? (
               <>
                 <span className="text-[var(--text-ghost)]">·</span>
-                <span>{node.technology}</span>
+                <Editable
+                  initial={node.technology ?? ""}
+                  placeholder="technology"
+                  onCommit={(t) => editor?.updateNode(node.id, { technology: t.trim() || undefined })}
+                  className="font-mono text-[var(--text-secondary)]"
+                />
               </>
+            ) : (
+              node.technology && (
+                <>
+                  <span className="text-[var(--text-ghost)]">·</span>
+                  <span className="font-mono">{node.technology}</span>
+                </>
+              )
             )}
-            {status && status !== "implemented" && (
+            {defFile && (
               <>
                 <span className="text-[var(--text-ghost)]">·</span>
-                <StatusTag status={status} />
+                <button
+                  type="button"
+                  onClick={() => void invoke("open_in_editor", { file: defFile, line: definition[0]?.line ?? null, projectPath })}
+                  title="Open in editor"
+                  className="font-mono text-[var(--text-tertiary)] hover:text-blue-600 hover:underline dark:hover:text-blue-400 cursor-pointer"
+                >
+                  {defFile}
+                </button>
               </>
             )}
             {isNodeEmpty(node) && <EmptyFlag />}
-            {node.deprecated && (
-              <span
-                className={`shrink-0 ${PILL_BASE} bg-red-500/10 text-red-700 ring-red-500/25 dark:bg-red-400/10 dark:text-red-300 dark:ring-red-400/25`}
-              >
-                deprecated
-              </span>
-            )}
           </>
         }
         editor={editor}
         editingName={ed.isEditing("title")}
         onToggleName={() => ed.toggle("title")}
         onRename={(v) => editor?.updateNode(node.id, { name: v })}
+        tabs={<PageTabs tab={tab} onTab={setTab} historyCount={nodeEvents.length} />}
       />
 
-      <PageTabs tab={tab} onTab={setTab} historyCount={pendingReconcile.length} />
-
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-[1080px] px-8 pb-16">
+        <div className="max-w-[900px] px-7 pb-[50px] pt-[18px]">
           {tab === "history" ? (
-            <NodeHistory
-              pending={pendingReconcile}
-              revisions={nodeRevisions}
-              onSelectNode={onSelectNode}
-            />
+            <NodeHistory events={nodeEvents} projectPath={projectPath} />
           ) : (
             <>
-          {/* Maintenance banners — the page states its own problems up top. */}
-          {(drift || staleCount > 0 || vagrantCount > 0 || isNodeEmpty(node)) && (
-            <div className="flex flex-col gap-2 pt-4">
-              {drift && (
-                <Banner
-                  tone="warning"
-                  icon={<GitCompare className="h-3.5 w-3.5" />}
-                  actions={
-                    <>
-                      {onCheckDrift && (
-                        <button
-                          type="button"
-                          onClick={onCheckDrift}
-                          className="rounded px-1.5 py-0.5 text-2xs font-medium text-orange-600 hover:bg-[var(--surface-hover)] dark:text-orange-400 cursor-pointer"
-                        >
-                          Run drift check
-                        </button>
-                      )}
-                      {onDismissDrift && (
-                        <button
-                          type="button"
-                          onClick={onDismissDrift}
-                          title="Mark reconciled without a semantic check"
-                          className="rounded px-1.5 py-0.5 text-2xs font-medium text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] cursor-pointer"
-                        >
-                          Dismiss
-                        </button>
-                      )}
-                    </>
-                  }
-                >
-                  Code in this node's boundary changed since the last reconcile (
-                  {drift.changedFiles.length} file{drift.changedFiles.length === 1 ? "" : "s"}
-                  ) — the claims below may no longer hold.
-                </Banner>
+              {bannerStack && (
+                <div className="mb-5 flex flex-col gap-2">{bannerStack}</div>
               )}
-              {staleCount > 0 && (
-                <Banner
-                  tone="warning"
-                  icon={<Flag className="h-3.5 w-3.5" />}
-                  actions={
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const first = resps.find((r) => r.stale);
-                        if (first) jumpTo(respElementId(first.id));
-                      }}
-                      className="rounded px-1.5 py-0.5 text-2xs font-medium text-orange-600 hover:bg-[var(--surface-hover)] dark:text-orange-400 cursor-pointer"
-                    >
-                      Review
-                    </button>
-                  }
-                >
-                  The drift check judged {staleCount} claim{staleCount === 1 ? "" : "s"} no
-                  longer discharged by the code. Each needs a verdict: still valid, reword,
-                  or drop.
-                </Banner>
-              )}
-              {vagrantCount > 0 && (
-                <Banner
-                  tone="danger"
-                  icon={<Flag className="h-3.5 w-3.5" />}
-                  actions={
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const first = resps.find((r) => r.vagrant);
-                        if (first) jumpTo(respElementId(first.id));
-                      }}
-                      className="rounded px-1.5 py-0.5 text-2xs font-medium text-red-600 hover:bg-[var(--surface-hover)] dark:text-red-400 cursor-pointer"
-                    >
-                      Review
-                    </button>
-                  }
-                >
-                  {vagrantCount === 1 ? "A behaviour" : `${vagrantCount} behaviours`} found in
-                  the code {vagrantCount === 1 ? "is" : "are"} not described by this page.
-                  Adopt into the contract or reject.
-                </Banner>
-              )}
-              {isNodeEmpty(node) && (
-                <Banner tone="warning" icon={<CircleDashed className="h-3.5 w-3.5" />}>
-                  This symbol carries no semantic content — no responsibilities, no
-                  properties. Give it a business responsibility or remove it.
-                </Banner>
-              )}
-            </div>
-          )}
-
-          <div className="flex flex-col gap-6 pt-5 lg:flex-row lg:gap-8">
-            {/* Article column. */}
-            <article className="min-w-0 flex-1">
               <DescriptionSection
                 value={node.description}
+                prevValue={committed?.nodes.find((n) => n.id === node.id)?.description}
                 model={model}
                 onSelectNode={onSelectNode}
                 editor={editor}
@@ -665,7 +679,9 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   host="node"
                   hostId={node.id}
                   resps={resps}
-                  citations={sourceIndex.citations}
+                  prevResps={committedResps}
+                  sourceMap={sourceMap}
+                  projectPath={projectPath}
                   leafHost={leafHost}
                   editor={editor}
                   editing={ed.isEditing("responsibilities")}
@@ -679,39 +695,25 @@ function NodePageBody(props: PageProps & { node: Node }) {
               {node.kind === "symbol" && (
                 <PropertiesSection
                   node={node}
+                  prevProps={committed?.nodes.find((n) => n.id === node.id)?.properties ?? []}
+                  model={model}
+                  onSelectNode={onSelectNode}
                   editor={editor}
                   editing={ed.isEditing("properties")}
                   onToggle={() => ed.toggle("properties")}
                 />
               )}
 
-              {(sourceIndex.hunks.length > 0 || sourceIndex.wholeFiles.length > 0) && (
-                <PageSection title="Source" count={sourceIndex.hunks.length}>
-                  <SourceSection index={sourceIndex} projectPath={projectPath} />
-                </PageSection>
-              )}
-
               <ConnectionsSection
                 model={model}
+                committed={committed}
                 node={node}
                 report={report}
                 editor={editor}
+                editing={ed.isEditing("connections")}
+                onToggle={() => ed.toggle("connections")}
                 onSelectNode={onSelectNode}
               />
-            </article>
-
-            {/* Infobox column — sticky beside the article, Wikipedia-right. */}
-            <div className="w-full shrink-0 lg:sticky lg:top-4 lg:w-[300px] lg:self-start">
-              <Infobox
-                model={model}
-                node={node}
-                report={report}
-                editor={editor}
-                onSelectNode={onSelectNode}
-                onSelectGroup={onSelectGroup}
-              />
-            </div>
-          </div>
             </>
           )}
         </div>
@@ -723,21 +725,16 @@ function NodePageBody(props: PageProps & { node: Node }) {
 // --- group page -------------------------------------------------------------
 
 function GroupPageBody(props: PageProps & { group: Group }) {
-  const { model, group, editor, projectPath, onSelectNode, newRespIds, onClearNewResp } = props;
+  const { model, committed, group, editor, projectPath, onSelectNode, newRespIds, onClearNewResp } = props;
   const ed = useEditSections();
   const members = group.memberIds
     .map((id) => model.nodes.find((n) => n.id === id))
     .filter((n): n is Node => Boolean(n));
-  const memberStatuses = members
-    .map((m) => effectiveNodeStatus(m))
-    .filter((s): s is Status => Boolean(s));
-  const ownStatuses = (group.responsibilities ?? []).map((r) => r.status ?? "proposed");
-  const all = [...ownStatuses, ...memberStatuses];
-  const status = all.length ? rollupStatus(all) : null;
 
   const sourceMap = model.sourceMap ?? {};
   const resps = group.responsibilities ?? [];
-  const sourceIndex = buildSourceIndex([], resps, sourceMap);
+  const committedResps =
+    committed?.groups.find((g) => g.id === group.id)?.responsibilities ?? [];
 
   const containerId =
     group.parentNodeId ??
@@ -769,12 +766,6 @@ function GroupPageBody(props: PageProps & { group: Group }) {
                 </span>
               </>
             )}
-            {status && status !== "implemented" && (
-              <>
-                <span className="text-[var(--text-ghost)]">·</span>
-                <StatusTag status={status} />
-              </>
-            )}
           </>
         }
         editor={editor}
@@ -784,10 +775,10 @@ function GroupPageBody(props: PageProps & { group: Group }) {
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-[1080px] px-8 pb-16">
-          <article className="min-w-0 max-w-[760px]">
+        <div className="max-w-[900px] px-7 pb-[50px] pt-[18px]">
             <DescriptionSection
               value={group.description}
+              prevValue={committed?.groups.find((g) => g.id === group.id)?.description}
               model={model}
               onSelectNode={onSelectNode}
               editor={editor}
@@ -801,7 +792,9 @@ function GroupPageBody(props: PageProps & { group: Group }) {
               host="group"
               hostId={group.id}
               resps={resps}
-              citations={sourceIndex.citations}
+              prevResps={committedResps}
+              sourceMap={sourceMap}
+              projectPath={projectPath}
               leafHost={false} // group claims discharge through members
               editor={editor}
               editing={ed.isEditing("responsibilities")}
@@ -818,53 +811,138 @@ function GroupPageBody(props: PageProps & { group: Group }) {
               editing={ed.isEditing("members")}
               onToggleEdit={() => ed.toggle("members")}
             >
-              {members.length === 0 ? (
+              {ed.isEditing("members") && editor ? (
+                <MembersEditor
+                  members={members}
+                  editor={editor}
+                  onSelectNode={onSelectNode}
+                  onClose={() => ed.toggle("members")}
+                />
+              ) : members.length === 0 ? (
                 <Empty>No members yet. Add nodes to this group from the tree.</Empty>
               ) : (
-                <ul className="-mx-1 flex flex-col">
+                <ol className="-mx-2 flex flex-col">
                   {members.map((m) => (
-                    <li key={m.id} className="flex items-center gap-1">
-                      <span className="flex-1">
-                        <WikiLink
-                          name={m.name}
-                          Icon={kindIcon(m)}
-                          red={isRedLink(m)}
-                          onClick={() => onSelectNode(m.id)}
-                        />
-                      </span>
-                      <StatusTag status={effectiveNodeStatus(m)} />
-                      {editor && ed.isEditing("members") && (
-                        <button
-                          type="button"
-                          title="Remove from group"
-                          onClick={() => editor.setNodeGroup(m.id, null)}
-                          className="ml-1 rounded p-1 text-[var(--text-ghost)] hover:text-red-400 cursor-pointer"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </li>
+                    <MemberRow
+                      key={m.id}
+                      member={m}
+                      onSelectNode={onSelectNode}
+                    />
                   ))}
-                </ul>
-              )}
-              {editor && ed.isEditing("members") && (
-                <div className="mt-3">
-                  <Button variant="primary" size="sm" onClick={() => ed.toggle("members")}>
-                    Done
-                  </Button>
-                </div>
+                </ol>
               )}
             </PageSection>
-
-            {(sourceIndex.hunks.length > 0 || sourceIndex.wholeFiles.length > 0) && (
-              <PageSection title="Source" count={sourceIndex.hunks.length}>
-                <SourceSection index={sourceIndex} projectPath={projectPath} />
-              </PageSection>
-            )}
-          </article>
         </div>
       </div>
     </div>
+  );
+}
+
+/** One group member as a mono row — the node as a blue wikilink in the shared
+ *  marker/number grid, so the Members list reads as the same diff sheet as
+ *  everything else on the page. */
+function MemberRow({
+  member,
+  onSelectNode,
+  onRemove,
+}: {
+  member: Node;
+  onSelectNode: (id: string) => void;
+  onRemove?: () => void;
+}) {
+  return (
+    <li className="group/conn grid grid-cols-[18px_22px_1fr] items-baseline py-[1.5px]">
+      <span className="select-none" />
+      <span className="select-none" />
+      <div className="flex min-w-0 items-baseline font-mono text-[12.5px] leading-[1.65]">
+        <button
+          type="button"
+          onClick={() => onSelectNode(member.id)}
+          title={member.name}
+          className="shrink truncate text-left text-blue-700 hover:underline dark:text-blue-400 cursor-pointer"
+        >
+          {member.name || "Untitled"}
+        </button>
+        {onRemove && (
+          <button
+            type="button"
+            title="Remove from group"
+            onClick={onRemove}
+            className="invisible ml-2 shrink-0 rounded p-0.5 text-[var(--text-ghost)] hover:text-red-400 group-hover/conn:visible cursor-pointer"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        )}
+      </div>
+    </li>
+  );
+}
+
+/** The Members form inside the shared {@link SectionEditor} shell — Cancel/Done
+ *  ride in the section header. Removals accumulate in a draft (the dropped row
+ *  reads struck) and only fire `setNodeGroup(null)` on Done. */
+function MembersEditor({
+  members,
+  editor,
+  onSelectNode,
+  onClose,
+}: {
+  members: Node[];
+  editor: Editor;
+  onSelectNode: (id: string) => void;
+  onClose: () => void;
+}) {
+  const initialIds = members.map((m) => m.id);
+  return (
+    <SectionEditor<string[]>
+      initial={initialIds}
+      onCommit={(keptIds) => {
+        const kept = new Set(keptIds);
+        for (const id of initialIds) if (!kept.has(id)) editor.setNodeGroup(id, null);
+      }}
+      onClose={onClose}
+    >
+      {(draft, setDraft) => {
+        const kept = members.filter((m) => draft.includes(m.id));
+        const dropped = members.filter((m) => !draft.includes(m.id));
+        if (members.length === 0) return <Empty>No members.</Empty>;
+        return (
+          <ol className="-mx-2 flex flex-col">
+            {kept.map((m) => (
+              <MemberRow
+                key={m.id}
+                member={m}
+                onSelectNode={onSelectNode}
+                onRemove={() => setDraft((d) => d.filter((id) => id !== m.id))}
+              />
+            ))}
+            {dropped.map((m) => (
+              <li
+                key={m.id}
+                className="grid grid-cols-[18px_22px_1fr] items-baseline py-[1.5px]"
+              >
+                <span className="select-none text-center font-mono text-xs font-bold text-red-600 dark:text-red-400">
+                  −
+                </span>
+                <span className="select-none" />
+                <div className="flex min-w-0 items-baseline gap-2 font-mono text-[12.5px] leading-[1.65]">
+                  <span className="truncate text-[var(--text-muted)] line-through decoration-red-400/50">
+                    {m.name || "Untitled"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setDraft((d) => [...d, m.id])}
+                    className={BTN}
+                  >
+                    Undo
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ol>
+        );
+      }}
+    </SectionEditor>
   );
 }
 
@@ -876,6 +954,7 @@ function GroupPageBody(props: PageProps & { group: Group }) {
  *  persist only on Save; Cancel/Esc discards. */
 function DescriptionSection({
   value,
+  prevValue,
   model,
   onSelectNode,
   editor,
@@ -884,6 +963,9 @@ function DescriptionSection({
   onCommit,
 }: {
   value: string | undefined;
+  /** The committed description — when it differs from `value`, the lede shows
+   *  the reword inline (word-diff), like a claim. */
+  prevValue?: string;
   model: ScryModel;
   onSelectNode: (id: string) => void;
   editor: Editor | undefined;
@@ -892,52 +974,139 @@ function DescriptionSection({
   onCommit: (v: string) => void;
 }) {
   if (editing && editor) {
+    // The lede edits in place: a contentEditable span with the SAME size/
+    // leading/colour as the read paragraph, so the swap doesn't reflow.
     return (
       <SectionEditor<string> initial={value ?? ""} onCommit={onCommit} onClose={onToggle}>
-        {(draft, setDraft) => (
-          <Textarea
+        {(_draft, setDraft) => (
+          <Editable
+            initial={value ?? ""}
             autoFocus
-            value={draft}
-            rows={3}
             placeholder="Describe what this is. Link other nodes with [[Name]]."
-            onChange={(e) => setDraft(e.target.value)}
-            className="w-full text-sm leading-relaxed"
+            onInput={setDraft}
+            className="block text-[13.5px] leading-[1.6] text-[var(--text-secondary)]"
           />
         )}
       </SectionEditor>
     );
   }
+  // A reworded description (committed text present and differing) shows the
+  // change inline; an added one (no committed text) reads plain — the node's
+  // own diff marker already announces it's new.
+  const reworded = !!value && prevValue !== undefined && prevValue !== "" && prevValue !== value;
   return (
-    <div className="flow-root">
+    <div className="group/lede relative flow-root pr-16">
       <p
-        className={`text-sm leading-relaxed ${
+        className={`text-[13.5px] leading-[1.6] ${
           value ? "text-[var(--text-secondary)]" : "italic text-[var(--text-muted)]"
         }`}
       >
         {value ? (
-          <WikiText text={value} nodes={model.nodes} onSelectNode={onSelectNode} />
+          reworded ? (
+            <WordDiffText from={prevValue!} to={value} />
+          ) : (
+            <WikiText text={value} nodes={model.nodes} onSelectNode={onSelectNode}/>
+          )
         ) : (
           "No description."
         )}
-        {editor && (
-          <span className="ml-2 align-baseline">
-            <EditLink editing={false} onClick={onToggle} />
-          </span>
-        )}
       </p>
+      {editor && (
+        <EditLink
+          editing={false}
+          onClick={onToggle}
+          className="invisible absolute right-0 top-0 group-hover/lede:visible"
+        />
+      )}
     </div>
   );
 }
 
 
-// --- responsibilities -------------------------------------------------------
+// --- responsibilities (the diff view) ---------------------------------------
+
+/** How one claim diverges from the committed model. The Overview reads as a
+ *  diff: `added` (in the plan, not yet committed), `reworded` (statement or
+ *  directives moved), `deleted` (committed but dropped from the plan, shown so
+ *  it can be restored), `vagrant` (code does it, the model never claimed it —
+ *  adopt or reject), or `unchanged`. */
+type RespDiffKind = "added" | "reworded" | "deleted" | "vagrant" | "unchanged";
+
+interface RespDiffRow {
+  resp: Responsibility;
+  kind: RespDiffKind;
+  /** The committed version, for word-diffing a reworded statement/directives. */
+  prev?: Responsibility;
+  /** Display number — null for deleted rows (they're no longer in the list). */
+  index: number | null;
+}
+
+const RESP_MARK: Record<Exclude<RespDiffKind, "unchanged">, { glyph: string; color: string }> = {
+  added: { glyph: "+", color: "text-emerald-600 dark:text-emerald-400" },
+  reworded: { glyph: "~", color: "text-amber-600 dark:text-amber-400" },
+  deleted: { glyph: "−", color: "text-red-600 dark:text-red-400" },
+  vagrant: { glyph: "?", color: "text-violet-600 dark:text-violet-400" },
+};
+
+/** Build the diff rows for a host's claims: planned claims in order (each tagged
+ *  added / reworded / vagrant / unchanged against the committed copy), then any
+ *  committed claims the plan dropped, as restorable `deleted` rows. */
+function buildRespDiff(planned: Responsibility[], committed: Responsibility[]): RespDiffRow[] {
+  const prevById = new Map(committed.map((r) => [r.id, r]));
+  const liveIds = new Set(planned.map((r) => r.id));
+  const rows: RespDiffRow[] = [];
+  let n = 0;
+  for (const r of planned) {
+    const prev = prevById.get(r.id);
+    let kind: RespDiffKind;
+    if (r.vagrant) kind = "vagrant";
+    else if (!prev) kind = "added";
+    else if (
+      prev.statement !== r.statement ||
+      (prev.directives ?? []).join("\n") !== (r.directives ?? []).join("\n")
+    )
+      kind = "reworded";
+    else kind = "unchanged";
+    // Vagrant claims aren't part of the numbered contract yet (they await a
+    // verdict); everything else takes the next sequence number.
+    rows.push({ resp: r, kind, prev, index: kind === "vagrant" ? null : ++n });
+  }
+  for (const r of committed)
+    if (!liveIds.has(r.id)) rows.push({ resp: r, kind: "deleted", index: null });
+  return rows;
+}
+
+/** Render text with word-level add/remove highlighting (a reworded claim). When
+ *  `from`/`to` are equal it's just the plain text. */
+function WordDiffText({ from, to }: { from: string; to: string }) {
+  const segs = wordDiff(from, to);
+  return (
+    <>
+      {segs.map((s, i) =>
+        s.kind === "equal" ? (
+          <span key={i}>{s.text}</span>
+        ) : s.kind === "added" ? (
+          <span key={i} className="rounded-[2px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+            {s.text}
+          </span>
+        ) : (
+          <del key={i} className="text-[var(--text-muted)] decoration-red-400/60">
+            {s.text}
+          </del>
+        ),
+      )}
+    </>
+  );
+}
 
 function ResponsibilitiesSection({
   model,
   host,
   hostId,
   resps,
-  citations,
+  prevResps,
+  sourceMap,
+  projectPath,
   leafHost,
   editor,
   editing,
@@ -950,8 +1119,11 @@ function ResponsibilitiesSection({
   host: "node" | "group";
   hostId: string;
   resps: Responsibility[];
-  /** respId → hunk citation numbers, for the footnote chips. */
-  citations: Map<string, number[]>;
+  /** The committed copy of this host's claims — the diff base for the rows. */
+  prevResps: Responsibility[];
+  /** respId → source locations, for the inline `↳ file:range` peeks per claim. */
+  sourceMap: Record<string, SourceLocation[]>;
+  projectPath: string | null;
   /** Whether claims here must anchor to source (leaf node). Structural hosts
    *  discharge through their subtree and never flag "unmapped". */
   leafHost: boolean;
@@ -962,6 +1134,14 @@ function ResponsibilitiesSection({
   newRespIds: ReadonlySet<string>;
   onClearNewResp: (id: string) => void;
 }) {
+  const diffRows = buildRespDiff(resps, prevResps);
+  /** Restore a dropped claim by putting the committed copy back into the plan. */
+  const restore = (r: Responsibility) => {
+    if (!editor) return;
+    const next = [...resps, r];
+    if (host === "node") editor.updateNode(hostId, { responsibilities: next });
+    else editor.updateGroup(hostId, { responsibilities: next });
+  };
   // "Add responsibility" from read mode opens the editor seeded with a fresh
   // row; nothing is written to the model until Done.
   const [seedNewRow, setSeedNewRow] = useState(false);
@@ -989,39 +1169,28 @@ function ResponsibilitiesSection({
             onToggle();
           }}
         />
-      ) : resps.length === 0 ? (
+      ) : diffRows.length === 0 ? (
         <Empty>No responsibilities.</Empty>
       ) : (
         <ol className="-mx-2 flex flex-col">
-          {resps.map((r, i) => (
-            <ResponsibilityRow
-              key={r.id}
+          {diffRows.map((row) => (
+            <RespDiffRow
+              key={row.resp.id}
               model={model}
-              index={i + 1}
+              row={row}
               host={host}
               hostId={hostId}
-              resp={r}
-              cites={citations.get(r.id) ?? []}
+              locations={sourceMap[row.resp.id] ?? []}
+              projectPath={projectPath}
               leafHost={leafHost}
-              isNew={newRespIds.has(r.id)}
-              onSeen={() => onClearNewResp(r.id)}
+              isNew={newRespIds.has(row.resp.id)}
+              onSeen={() => onClearNewResp(row.resp.id)}
               onSelectNode={onSelectNode}
+              onRestore={() => restore(row.resp)}
               editor={editor}
             />
           ))}
         </ol>
-      )}
-      {editor && !editing && (
-        <button
-          type="button"
-          onClick={() => {
-            setSeedNewRow(true);
-            onToggle();
-          }}
-          className="mt-3 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs font-medium text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] cursor-pointer"
-        >
-          <Plus className="h-3 w-3" /> Add responsibility
-        </button>
       )}
     </PageSection>
   );
@@ -1082,7 +1251,7 @@ function ResponsibilitiesEditor({
               { id: nextResponsibilityId(d), statement: "", status: "proposed" },
             ])
           }
-          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs font-medium text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] cursor-pointer"
+          className={BTN}
         >
           <Plus className="h-3 w-3" /> Add responsibility
         </button>
@@ -1095,11 +1264,12 @@ function ResponsibilitiesEditor({
         return draft.length === 0 ? (
           <Empty>No responsibilities.</Empty>
         ) : (
-          <ul className="flex flex-col gap-2">
-            {draft.map((r) => (
+          <ul className="-mx-2 flex flex-col">
+            {draft.map((r, i) => (
               <ResponsibilityEditRow
                 key={r.id}
                 resp={r}
+                index={i + 1}
                 // autoFocus fires at mount only — it lands on the seeded row
                 // and on rows appended via "Add responsibility".
                 autoFocus={r.statement === "" && r.id === draft[draft.length - 1].id}
@@ -1115,115 +1285,99 @@ function ResponsibilitiesEditor({
 }
 
 /**
- * One numbered row of the responsibilities list. The statement carries
- * footnote-style citation chips that jump to the source hunks discharging it;
- * directives and flag verdicts render inline, always visible — the contract
- * reads in one pass, nothing hides behind selection.
+ * One claim, rendered as a diff row against the committed model: a marker
+ * (+ added / ~ reworded / − deleted / ? vagrant / blank unchanged), the
+ * sequence number, the statement (word-diffed when reworded), its directives
+ * (new ones flagged +), footnote citation chips, and the inline verdict actions
+ * the row's kind calls for (adopt/reject a vagrant, restore a deletion, clear a
+ * stale flag). No status pill — the marker carries the lifecycle now.
  */
-function ResponsibilityRow({
+function RespDiffRow({
   model,
-  index,
+  row,
   host,
   hostId,
-  resp,
-  cites,
+  locations,
+  projectPath,
   leafHost,
   isNew,
   onSeen,
   onSelectNode,
+  onRestore,
   editor,
 }: {
   model: ScryModel;
-  index: number;
+  row: RespDiffRow;
   host: "node" | "group";
   hostId: string;
-  resp: Responsibility;
-  cites: number[];
+  /** This claim's source locations — rendered inline with expandable peeks. */
+  locations: SourceLocation[];
+  projectPath: string | null;
   leafHost: boolean;
   isNew: boolean;
   onSeen: () => void;
   onSelectNode: (id: string) => void;
+  onRestore: () => void;
   editor: Editor | undefined;
 }) {
-  const status: Status = resp.status ?? "proposed";
+  const { resp, kind, prev, index } = row;
+  const mark = kind === "unchanged" ? null : RESP_MARK[kind];
+  const deleted = kind === "deleted";
   const directives = resp.directives ?? [];
-  const reviewable = resp.vagrant && host === "node" && editor;
-  // A LEAF claim that says code exists but has no source anchor is a blind
-  // spot in the lens — flag it. Structural hosts discharge through their
-  // subtree; proposed claims naturally have no code yet.
-  const unmapped =
-    leafHost &&
-    cites.length === 0 &&
-    (status === "implemented" || status === "verified" || status === "changed");
-  const relocTarget = resp.relocatedTo
-    ? model.nodes.find((n) => n.id === resp.relocatedTo)
-    : undefined;
-  const relocSource = resp.relocatedFrom
-    ? model.nodes.find((n) => n.id === resp.relocatedFrom)
-    : undefined;
-  // Implemented is the steady state and stays silent (StatusTag renders null),
-  // so the meta line only exists when it has something to say.
-  const hasMeta =
-    status !== "implemented" ||
-    resp.stale === true ||
-    resp.vagrant === true ||
-    unmapped ||
-    !!relocTarget ||
-    !!relocSource;
+  const prevDirs = prev?.directives ?? [];
+  // Directives the plan dropped from a kept claim — shown struck so the removal
+  // is visible, like a deleted line.
+  const removedDirs =
+    kind === "reworded" || kind === "unchanged" ? prevDirs.filter((d) => !directives.includes(d)) : [];
+  const reviewable = kind === "vagrant" && host === "node" && editor;
+  // A LEAF claim that's believed code-backed (committed: unchanged or reworded)
+  // but anchors to no source is a blind spot. Added/vagrant claims are plan-only
+  // or code-first, so they're never "unmapped".
+  const unmapped = leafHost && locations.length === 0 && (kind === "unchanged" || kind === "reworded");
+  const relocTarget = resp.relocatedTo ? model.nodes.find((n) => n.id === resp.relocatedTo) : undefined;
+  const relocSource = resp.relocatedFrom ? model.nodes.find((n) => n.id === resp.relocatedFrom) : undefined;
+  const hasMeta = resp.stale === true || unmapped || !!relocTarget || !!relocSource;
+
+  const contentColor = deleted
+    ? "text-[var(--text-muted)]"
+    : kind === "unchanged"
+      ? "text-[var(--text-secondary)]"
+      : "text-[var(--text)]";
 
   return (
+    <>
     <li
       id={respElementId(resp.id)}
       onMouseEnter={isNew ? onSeen : undefined}
-      className={`border-b border-[var(--border-subtle)] px-2 py-2.5 last:border-b-0 ${
-        isNew ? "bg-indigo-500/10" : ""
+      className={`grid grid-cols-[18px_22px_1fr] items-baseline rounded-sm py-[1.5px] [&:not(:first-child)]:mt-2.5 ${
+        isNew ? "bg-violet-500/10" : ""
       }`}
     >
-      <div className="flex items-start gap-3">
-        <span className="w-6 shrink-0 pt-px text-right font-mono text-2xs leading-normal tabular-nums text-[var(--text-ghost)]">
-          {index}.
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="text-sm leading-normal text-[var(--text-secondary)]">
-            {resp.statement ? (
-              <WikiText text={resp.statement} nodes={model.nodes} onSelectNode={onSelectNode} />
+      <span
+        className={`select-none text-center font-mono text-xs font-bold ${mark?.color ?? "text-[var(--text-ghost)]"}`}
+      >
+        {mark?.glyph}
+      </span>
+      <span className="select-none pr-2.5 text-right font-mono text-[11px] tabular-nums text-[var(--text-ghost)]">
+        {index}
+      </span>
+      <div className="min-w-0 font-mono text-[12.5px] leading-[1.65]">
+        <span className={contentColor}>
+          {resp.statement ? (
+            kind === "reworded" && prev ? (
+              <WordDiffText from={prev.statement} to={resp.statement} />
             ) : (
-              <span className="italic text-[var(--text-ghost)]">Untitled responsibility</span>
-            )}
-            {cites.map((n) => (
-              <button
-                key={n}
-                type="button"
-                onClick={() => jumpTo(hunkElementId(n))}
-                title="Jump to the source for this claim"
-                className="ml-1 align-super font-mono text-2xs text-blue-700 hover:underline dark:text-blue-400 cursor-pointer"
-              >
-                [{n}]
-              </button>
-            ))}
-          </p>
-
-          {directives.length > 0 && (
-            <ul className="mt-1 flex flex-col gap-0.5">
-              {directives.map((d, i) => (
-                <li key={i} className="text-xs italic leading-snug text-[var(--text-muted)]">
-                  → <WikiText text={d} nodes={model.nodes} onSelectNode={onSelectNode} />
-                </li>
-              ))}
-            </ul>
+              <WikiText text={resp.statement} nodes={model.nodes} onSelectNode={onSelectNode}/>
+            )
+          ) : (
+            <span className="italic text-[var(--text-ghost)]">Untitled responsibility</span>
           )}
+        </span>
 
-          {hasMeta && (
+        <ClaimSource locations={locations} projectPath={projectPath} deleted={deleted} />
+
+        {hasMeta && (
           <span className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-2xs">
-            <StatusTag status={status} />
-            {resp.vagrant && (
-              <span
-                className={FLAG_COLORS.vagrant.pill}
-                title="Found in the code, not described by the contract — adopt or reject below."
-              >
-                vagrant
-              </span>
-            )}
             {resp.stale && (
               <span
                 className={FLAG_COLORS.stale.pill}
@@ -1261,47 +1415,96 @@ function ResponsibilityRow({
               </button>
             )}
           </span>
-          )}
+        )}
 
-          {/* Verdict actions, inline where the flag is. */}
-          {resp.stale && editor && (
-            <div className="mt-1.5 flex items-center gap-3 text-2xs">
-              <button
-                type="button"
-                onClick={() =>
-                  editor.updateResponsibility(host, hostId, resp.id, { stale: undefined })
-                }
-                className="font-medium text-[var(--text-tertiary)] hover:text-[var(--text)] hover:underline cursor-pointer"
-                title="The claim still holds as written — clear the stale flag"
-              >
-                Still valid
-              </button>
-              <span className="text-[var(--text-ghost)]">or reword / delete it via [edit]</span>
-            </div>
-          )}
-          {reviewable && (
-            <div className="mt-1.5 flex items-center gap-3 text-2xs">
-              <button
-                type="button"
-                onClick={() => editor!.updateResponsibility(host, hostId, resp.id, { vagrant: undefined })}
-                className="font-medium text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
-                title="Accept this discovered behaviour into the spec"
-              >
-                Adopt
-              </button>
-              <button
-                type="button"
-                onClick={() => editor!.removeResponsibility(host, hostId, resp.id)}
-                className="font-medium text-[var(--text-tertiary)] hover:text-red-500 dark:hover:text-red-400 hover:underline cursor-pointer"
-                title="Delete — the code it describes is not wanted behaviour"
-              >
-                Reject
-              </button>
-            </div>
-          )}
-        </div>
+        {/* Verdict actions, inline where the row needs one — controls in their
+            own lane, off the mono content. */}
+        {resp.stale && editor && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+            <span className="text-[var(--text-tertiary)]">Drift says this no longer holds —</span>
+            <button
+              type="button"
+              onClick={() => editor.updateResponsibility(host, hostId, resp.id, { stale: undefined })}
+              className={BTN}
+              title="The claim still holds as written — clear the stale flag"
+            >
+              Still valid
+            </button>
+            <span className="text-[var(--text-ghost)]">or reword / delete via Edit</span>
+          </div>
+        )}
+        {reviewable && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+            <span className="text-[var(--text-tertiary)]">In the code, not in the model —</span>
+            <button
+              type="button"
+              onClick={() => editor!.updateResponsibility(host, hostId, resp.id, { vagrant: undefined })}
+              className={BTN_GO}
+              title="Accept this discovered behaviour into the contract — it stays in the plan and the agent commits it"
+            >
+              Adopt
+            </button>
+            <button
+              type="button"
+              onClick={() => editor!.removeResponsibility(host, hostId, resp.id)}
+              className={BTN_DANGER}
+              title="Drop it from the plan — the code it describes is not wanted behaviour"
+            >
+              Reject
+            </button>
+          </div>
+        )}
+        {deleted && editor && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+            <span className="text-[var(--text-tertiary)]">Removed from the plan —</span>
+            <button type="button" onClick={onRestore} className={BTN_GO} title="Put this committed claim back into the plan">
+              Restore
+            </button>
+          </div>
+        )}
       </div>
     </li>
+
+      {/* Directives — each its own grid row so the +/− marker aligns in the
+          page's marker lane, like the mockup's `.row.dir`. */}
+      {directives.map((d, i) => {
+        const added = !!prev && !prevDirs.includes(d) && !deleted;
+        return (
+          <li key={`d${i}`} className="grid grid-cols-[18px_22px_1fr] items-baseline py-[0.5px]">
+            <span
+              className={`select-none text-center font-mono text-xs font-bold ${
+                added ? "text-emerald-600 dark:text-emerald-400" : "text-[var(--text-ghost)]"
+              }`}
+            >
+              {added ? "+" : ""}
+            </span>
+            <span className="select-none" />
+            <div
+              className={`min-w-0 font-mono text-[12.5px] italic leading-[1.65] ${
+                added ? "text-emerald-600 dark:text-emerald-400" : "text-[var(--text-tertiary)]"
+              }`}
+            >
+              →{" "}
+              <WikiText text={d} nodes={model.nodes} onSelectNode={onSelectNode}/>
+            </div>
+          </li>
+        );
+      })}
+      {removedDirs.map((d, i) => (
+        <li key={`rd${i}`} className="grid grid-cols-[18px_22px_1fr] items-baseline py-[0.5px]">
+          <span className="select-none text-center font-mono text-xs font-bold text-red-600 dark:text-red-400">
+            −
+          </span>
+          <span className="select-none" />
+          <div className="min-w-0 font-mono text-[12.5px] italic leading-[1.65] text-[var(--text-tertiary)]">
+            →{" "}
+            <del className="decoration-red-400/50">
+              <WikiText text={d} nodes={model.nodes} onSelectNode={onSelectNode}/>
+            </del>
+          </div>
+        </li>
+      ))}
+    </>
   );
 }
 
@@ -1309,11 +1512,13 @@ function ResponsibilityRow({
  *  change lands in the section draft, never directly in the model. */
 function ResponsibilityEditRow({
   resp,
+  index,
   autoFocus,
   onPatch,
   onRemove,
 }: {
   resp: Responsibility;
+  index: number;
   autoFocus: boolean;
   onPatch: (id: string, patch: Partial<Responsibility>) => void;
   onRemove: (id: string) => void;
@@ -1321,104 +1526,240 @@ function ResponsibilityEditRow({
   const directives = resp.directives ?? [];
   const setDirectives = (next: string[]) => onPatch(resp.id, { directives: next });
 
+  // In-place edit row: the field is a contentEditable span flowing in the SAME
+  // content cell as the read diff row, with the SAME font/size/line-height — so
+  // read↔edit is pixel-identical (no resize, no reflow). Controls float over
+  // the right edge (CTL) and take no layout space; the field highlights on
+  // row hover.
+  const FIELD_HL =
+    "group-hover/erow:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus:bg-[var(--surface-active)]";
   return (
-    <li className="flex flex-col gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] p-3">
-      <Textarea
-        autoFocus={autoFocus}
-        value={resp.statement}
-        rows={1}
-        placeholder="Verb-led statement of accountability"
-        onChange={(e) => onPatch(resp.id, { statement: e.target.value })}
-        className="text-sm leading-snug"
-      />
+    <li className="group/erow relative grid grid-cols-[18px_22px_1fr] items-baseline py-[1.5px] [&:not(:first-child)]:mt-2.5">
+      <span className="select-none text-center font-mono text-xs" />
+      <span className="select-none pr-2.5 text-right font-mono text-[11px] tabular-nums text-[var(--text-ghost)]">
+        {index}
+      </span>
+      <div className="min-w-0 font-mono text-[12.5px] leading-[1.65]">
+        <Editable
+          initial={resp.statement}
+          autoFocus={autoFocus}
+          placeholder="Verb-led statement of accountability"
+          onInput={(t) => onPatch(resp.id, { statement: t })}
+          className={`block text-[var(--text)] ${FIELD_HL}`}
+        />
 
-      {directives.length > 0 && (
-        <div className="flex flex-col gap-1">
-          {directives.map((d, i) => (
-            <div key={i} className="flex items-center gap-1.5 pl-2">
-              <span className="shrink-0 text-xs text-[var(--text-ghost)]">→</span>
-              <Input
-                variant="inline"
-                autoFocus={d === ""}
-                value={d}
-                placeholder={'directive — "must …" / "never …"'}
-                onChange={(e) => {
-                  const next = directives.slice();
-                  next[i] = e.target.value;
-                  setDirectives(next);
-                }}
-                className="flex-1 italic"
-              />
-              <button
-                type="button"
-                title="Remove directive"
-                onClick={() => {
-                  const next = directives.slice();
-                  next.splice(i, 1);
-                  setDirectives(next);
-                }}
-                className="shrink-0 rounded p-1 text-[var(--text-ghost)] hover:text-red-400 cursor-pointer"
+        {directives.length > 0 && (
+          <div className="mt-0.5 flex flex-col gap-0.5">
+            {directives.map((d, i) => (
+              <div
+                key={i}
+                className="group/drow relative flex items-baseline gap-1.5 italic text-[var(--text-tertiary)]"
               >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+                <span className="shrink-0 not-italic text-[var(--text-ghost)]">→</span>
+                <Editable
+                  initial={d}
+                  autoFocus={d === ""}
+                  placeholder={'directive — "must …" / "never …"'}
+                  onInput={(t) => {
+                    const next = directives.slice();
+                    next[i] = t;
+                    setDirectives(next);
+                  }}
+                  className={`block min-w-0 flex-1 ${FIELD_HL}`}
+                />
+                <button
+                  type="button"
+                  title="Remove directive"
+                  onClick={() => {
+                    const next = directives.slice();
+                    next.splice(i, 1);
+                    setDirectives(next);
+                  }}
+                  className="invisible absolute right-0 top-0 z-10 rounded p-0.5 pl-9 text-[var(--text-ghost)] [background-image:linear-gradient(90deg,transparent,color-mix(in_srgb,var(--text)_4%,var(--surface-canvas))_32px)] hover:text-red-400 group-hover/drow:visible cursor-pointer"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
-      <div className="flex items-center gap-3">
-        <div className="w-fit min-w-[220px]">
-          <SegmentedControl
-            options={STATUS_OPTIONS}
-            value={resp.status ?? "proposed"}
-            onChange={(v) => onPatch(resp.id, { status: v as Status })}
-          />
-        </div>
-        <button
-          type="button"
-          onClick={() => setDirectives([...directives, ""])}
-          className="rounded px-1.5 py-0.5 text-2xs font-medium text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] cursor-pointer"
-        >
-          <span className="inline-flex items-center gap-1">
-            <Plus className="h-3 w-3" /> Directive
-          </span>
+      {/* Statement-level controls — absolute, no layout impact (mockup .ctl). */}
+      <span className={CTL}>
+        <button type="button" onClick={() => setDirectives([...directives, ""])} className={BTN}>
+          <Plus className="h-3 w-3" /> Directive
         </button>
-        <span className="flex-1" />
         {!resp.locked && (
           <button
             type="button"
             title="Delete responsibility"
             onClick={() => onRemove(resp.id)}
-            className="shrink-0 rounded p-1 text-[var(--text-ghost)] hover:text-red-400 cursor-pointer"
+            className={BTN_DANGER}
           >
-            <Trash2 className="h-3.5 w-3.5" />
+            <Trash2 className="h-3 w-3" /> Delete
           </button>
         )}
-      </div>
+      </span>
     </li>
   );
 }
 
 // --- properties (data shapes) -----------------------------------------------
 
+/** A property's divergence from the committed model, matched by label (props
+ *  carry no stable id): `added`, `reworded` (description changed), `deleted`
+ *  (committed but dropped), or `unchanged`. */
+type PropDiffKind = "added" | "reworded" | "deleted" | "unchanged";
+
+interface PropDiffRow {
+  prop: SchemaProperty;
+  kind: PropDiffKind;
+  prev?: SchemaProperty;
+  index: number | null;
+}
+
+const propKey = (label: string) => label.trim().toLowerCase();
+
+function buildPropDiff(planned: SchemaProperty[], committed: SchemaProperty[]): PropDiffRow[] {
+  const prevByKey = new Map(committed.map((p) => [propKey(p.label), p]));
+  const liveKeys = new Set(planned.map((p) => propKey(p.label)));
+  const rows: PropDiffRow[] = [];
+  let n = 0;
+  for (const p of planned) {
+    const prev = prevByKey.get(propKey(p.label));
+    let kind: PropDiffKind;
+    if (!prev) kind = "added";
+    else if (prev.description !== p.description) kind = "reworded";
+    else kind = "unchanged";
+    rows.push({ prop: p, kind, prev, index: ++n });
+  }
+  for (const p of committed)
+    if (!liveKeys.has(propKey(p.label))) rows.push({ prop: p, kind: "deleted", index: null });
+  return rows;
+}
+
+/** One property as a mono diff row — the field name, then its description after
+ *  an em-dash (word-diffed when reworded), keyed to the shared marker/number
+ *  grid so it reads as part of the same diff sheet as the responsibilities. */
+function PropDiffRow({
+  row,
+  model,
+  onSelectNode,
+}: {
+  row: PropDiffRow;
+  model: ScryModel;
+  onSelectNode: (id: string) => void;
+}) {
+  const { prop, kind, prev, index } = row;
+  const mark = kind === "unchanged" ? null : RESP_MARK[kind];
+  const deleted = kind === "deleted";
+  const desc = prop.description ?? "";
+  const contentColor = deleted
+    ? "text-[var(--text-muted)]"
+    : kind === "unchanged"
+      ? "text-[var(--text-secondary)]"
+      : "text-[var(--text)]";
+  return (
+    <li className="grid grid-cols-[18px_22px_1fr] items-baseline rounded-sm py-[1.5px]">
+      <span
+        className={`select-none text-center font-mono text-xs font-bold ${mark?.color ?? "text-[var(--text-ghost)]"}`}
+      >
+        {mark?.glyph}
+      </span>
+      <span className="select-none pr-2.5 text-right font-mono text-[11px] tabular-nums text-[var(--text-ghost)]">
+        {index}
+      </span>
+      <div className="min-w-0 font-mono text-[12.5px] leading-[1.65]">
+        <span className={`font-medium ${contentColor}`}>{prop.label || "field"}</span>
+        {(desc || (kind === "reworded" && prev?.description)) && (
+          <span className="text-[var(--text-tertiary)]">
+            {" "}—{" "}
+            {kind === "reworded" && prev ? (
+              <WordDiffText from={prev.description ?? ""} to={desc} />
+            ) : (
+              <WikiText text={desc} nodes={model.nodes} onSelectNode={onSelectNode}/>
+            )}
+          </span>
+        )}
+      </div>
+    </li>
+  );
+}
+
+/** One draft row of the properties form — field + description as flush ghost
+ *  fields in the mono content lane, with a hover-revealed delete in its own
+ *  control lane (identical grid to {@link PropDiffRow}, so read↔edit doesn't
+ *  reflow). */
+function PropertyEditRow({
+  prop,
+  index,
+  autoFocus,
+  onPatch,
+  onRemove,
+}: {
+  prop: SchemaProperty;
+  index: number;
+  autoFocus: boolean;
+  onPatch: (patch: Partial<SchemaProperty>) => void;
+  onRemove: () => void;
+}) {
+  const FIELD_HL =
+    "group-hover/erow:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus:bg-[var(--surface-active)]";
+  // Mirrors PropDiffRow's content cell exactly — `label — description` inline
+  // in the mono lane — with the two fields as contentEditable spans and the
+  // delete floated over the right edge (CTL), so read↔edit doesn't reflow.
+  return (
+    <li className="group/erow relative grid grid-cols-[18px_22px_1fr] items-baseline py-[1.5px]">
+      <span className="select-none text-center font-mono text-xs" />
+      <span className="select-none pr-2.5 text-right font-mono text-[11px] tabular-nums text-[var(--text-ghost)]">
+        {index}
+      </span>
+      <div className="min-w-0 font-mono text-[12.5px] leading-[1.65]">
+        <Editable
+          initial={prop.label}
+          autoFocus={autoFocus}
+          placeholder="field"
+          onInput={(t) => onPatch({ label: t })}
+          className={`font-medium text-[var(--text)] ${FIELD_HL}`}
+        />
+        <span className="text-[var(--text-tertiary)]"> — </span>
+        <Editable
+          initial={prop.description ?? ""}
+          placeholder="description"
+          onInput={(t) => onPatch({ description: t })}
+          className={`text-[var(--text-tertiary)] ${FIELD_HL}`}
+        />
+      </div>
+      <span className={CTL}>
+        <button type="button" title="Delete property" onClick={onRemove} className={BTN_DANGER}>
+          <Trash2 className="h-3 w-3" /> Delete
+        </button>
+      </span>
+    </li>
+  );
+}
+
 function PropertiesSection({
   node,
+  prevProps,
+  model,
+  onSelectNode,
   editor,
   editing,
   onToggle,
 }: {
   node: Node;
+  /** The committed copy of this symbol's properties — the diff base. */
+  prevProps: SchemaProperty[];
+  model: ScryModel;
+  onSelectNode: (id: string) => void;
   editor: Editor | undefined;
   editing: boolean;
   onToggle: () => void;
 }) {
   const properties = node.properties ?? [];
-  // "Add property" from read mode opens the editor seeded with a fresh row.
-  const [seedNewRow, setSeedNewRow] = useState(false);
-  const close = () => {
-    setSeedNewRow(false);
-    onToggle();
-  };
+  const diffRows = buildPropDiff(properties, prevProps);
 
   return (
     <PageSection
@@ -1426,32 +1767,25 @@ function PropertiesSection({
       count={properties.length}
       editable={!!editor}
       editing={editing}
-      onToggleEdit={() => {
-        setSeedNewRow(false);
-        onToggle();
-      }}
+      onToggleEdit={onToggle}
     >
       {editing && editor ? (
         <SectionEditor<SchemaProperty[]>
-          initial={
-            seedNewRow
-              ? [...properties, { label: "", description: "", status: "proposed" }]
-              : properties
-          }
+          initial={properties}
           onCommit={(draft) => {
             const cleaned = draft
               .filter((p) => p.label.trim() !== "" || (p.description ?? "").trim() !== "")
               .map((p) => ({ ...p, label: p.label.trim() }));
             editor.updateNode(node.id, { properties: cleaned });
           }}
-          onClose={close}
+          onClose={onToggle}
           footerExtra={(setDraft) => (
             <button
               type="button"
               onClick={() =>
                 setDraft((d) => [...d, { label: "", description: "", status: "proposed" }])
               }
-              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs font-medium text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] cursor-pointer"
+              className={BTN}
             >
               <Plus className="h-3 w-3" /> Add property
             </button>
@@ -1463,89 +1797,29 @@ function PropertiesSection({
             return draft.length === 0 ? (
               <Empty>No properties.</Empty>
             ) : (
-              <div className="grid grid-cols-[minmax(120px,160px)_1fr_auto_auto] items-center gap-x-2 gap-y-1.5">
-                <span className="text-2xs font-semibold uppercase tracking-[0.12em] text-[var(--text-tertiary)]">
-                  Field
-                </span>
-                <span className="text-2xs font-semibold uppercase tracking-[0.12em] text-[var(--text-tertiary)]">
-                  Description
-                </span>
-                <span className="text-2xs font-semibold uppercase tracking-[0.12em] text-[var(--text-tertiary)]">
-                  Status
-                </span>
-                <span />
+              <ul className="-mx-2 flex flex-col">
                 {draft.map((p, i) => (
-                  <div key={i} className="col-span-4 grid grid-cols-subgrid items-center">
-                    <Input
-                      variant="inline"
-                      autoFocus={p.label === "" && i === draft.length - 1}
-                      value={p.label}
-                      placeholder="field"
-                      onChange={(e) => patchRow(i, { label: e.target.value })}
-                      className="font-mono"
-                    />
-                    <Input
-                      variant="inline"
-                      value={p.description ?? ""}
-                      placeholder="description"
-                      onChange={(e) => patchRow(i, { description: e.target.value })}
-                    />
-                    <SegmentedControl
-                      options={STATUS_OPTIONS}
-                      value={p.status ?? "proposed"}
-                      onChange={(v) => patchRow(i, { status: v as Status })}
-                    />
-                    <button
-                      type="button"
-                      title="Delete property"
-                      onClick={() => setDraft((d) => d.filter((_, j) => j !== i))}
-                      className="rounded p-1 text-[var(--text-ghost)] hover:text-red-400 cursor-pointer"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
+                  <PropertyEditRow
+                    key={i}
+                    prop={p}
+                    index={i + 1}
+                    autoFocus={p.label === "" && i === draft.length - 1}
+                    onPatch={(patch) => patchRow(i, patch)}
+                    onRemove={() => setDraft((d) => d.filter((_, j) => j !== i))}
+                  />
                 ))}
-              </div>
+              </ul>
             );
           }}
         </SectionEditor>
-      ) : properties.length === 0 ? (
+      ) : diffRows.length === 0 ? (
         <Empty>No properties.</Empty>
       ) : (
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="border-b border-[var(--border-subtle)] text-left text-2xs font-semibold uppercase tracking-[0.12em] text-[var(--text-tertiary)]">
-              <th className="py-1 pr-3 font-semibold">Field</th>
-              <th className="py-1 pr-3 font-semibold">Description</th>
-              <th className="py-1 font-semibold">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {properties.map((p, i) => (
-              <tr key={i} className="border-b border-[var(--border-subtle)] align-top">
-                <td className="py-1.5 pr-3 font-mono font-medium text-[var(--text-secondary)]">
-                  {p.label}
-                </td>
-                <td className="py-1.5 pr-3 text-[var(--text-muted)]">{p.description || "—"}</td>
-                <td className="py-1.5">
-                  <StatusTag status={p.status ?? "proposed"} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {editor && !editing && (
-        <button
-          type="button"
-          onClick={() => {
-            setSeedNewRow(true);
-            onToggle();
-          }}
-          className="mt-3 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs font-medium text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] cursor-pointer"
-        >
-          <Plus className="h-3 w-3" /> Add property
-        </button>
+        <ol className="-mx-2 flex flex-col">
+          {diffRows.map((row, i) => (
+            <PropDiffRow key={i} row={row} model={model} onSelectNode={onSelectNode} />
+          ))}
+        </ol>
       )}
     </PageSection>
   );
@@ -1643,7 +1917,7 @@ function PreviewSection({
       ? `Preview server failed: ${server.error}`
       : server.status === "starting" || !server.components
         ? "Starting preview server…"
-        : "No renderable export matches this node.";
+        : "Can't preview this yet — only web (React/TSX) components render for now.";
 
   const canEdit = iframeSrc && onStartVariation;
   const needsRepair = report != null && (report.status === "empty" || report.status === "error");
@@ -1653,8 +1927,7 @@ function PreviewSection({
 
   return (
     <PageSection
-      title="Visual"
-      right={accepted && node.appearance?.status ? <StatusTag status={node.appearance.status} /> : undefined}
+      title="Preview"
       editable={!!canEdit}
       editing={modalOpen}
       onToggleEdit={() => setModalOpen(!modalOpen)}
@@ -1673,7 +1946,7 @@ function PreviewSection({
                 posts its first render verdict. */}
             {report == null && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--surface-canvas)]">
-                <Loader2 className="h-5 w-5 animate-spin text-indigo-500 dark:text-indigo-400" />
+                <Loader2 className="h-5 w-5 animate-spin text-violet-500 dark:text-violet-400" />
                 <span className="text-2xs text-[var(--text-muted)]">Loading preview…</span>
               </div>
             )}
@@ -1685,9 +1958,13 @@ function PreviewSection({
                   ? "Rendered empty with placeholder props."
                   : "Render failed with placeholder props."}
               </span>
-              <Button size="sm" onClick={() => onFixture(node.id, report!.status, report!.error)}>
+              <button
+                type="button"
+                onClick={() => onFixture(node.id, report!.status, report!.error)}
+                className={BTN}
+              >
                 <Sparkles className="h-3 w-3" /> Generate preview data
-              </Button>
+              </button>
             </div>
           )}
         </div>
@@ -1827,16 +2104,21 @@ function VariationModal({
                 </button>
               ))}
             </div>
-            <Button variant="primary" size="sm" disabled={generating} onClick={handleSubmit}>
+            <button
+              type="button"
+              disabled={generating}
+              onClick={handleSubmit}
+              className={`${BTN_GO} disabled:opacity-50`}
+            >
               <Send className="h-3.5 w-3.5" />
               {ready ? "Iterate" : "Generate"}
-            </Button>
+            </button>
           </div>
 
           {/* Variations */}
           {generating && (
             <div className="flex flex-col items-center gap-3 px-5 py-12">
-              <Loader2 className="h-6 w-6 animate-spin text-indigo-500 dark:text-indigo-400" />
+              <Loader2 className="h-6 w-6 animate-spin text-violet-500 dark:text-violet-400" />
               <p className="text-sm text-[var(--text-muted)]">
                 Generating {variationState!.count} variation{variationState!.count > 1 ? "s" : ""}…
               </p>
@@ -1854,13 +2136,13 @@ function VariationModal({
                 </p>
                 <div className="flex items-center gap-2">
                   {ready && selectedIdx != null && (
-                    <Button variant="primary" color="accent" size="sm" onClick={handleAccept}>
+                    <button type="button" onClick={handleAccept} className={BTN_GO}>
                       <Check className="h-3.5 w-3.5" /> Accept
-                    </Button>
+                    </button>
                   )}
-                  <Button variant="ghost" size="sm" onClick={handleDiscard}>
+                  <button type="button" onClick={handleDiscard} className={BTN}>
                     <Undo2 className="h-3.5 w-3.5" /> Discard
-                  </Button>
+                  </button>
                 </div>
               </div>
               <div className={`grid gap-3 ${varCount === 1 ? "grid-cols-1 max-w-[600px]" : "grid-cols-3"}`}>
@@ -1871,7 +2153,7 @@ function VariationModal({
                     onClick={() => onSelectVariation?.(selectedIdx === i ? null : i)}
                     className={`flex flex-col gap-1.5 rounded-lg border-2 p-1 transition-colors cursor-pointer ${
                       selectedIdx === i
-                        ? "border-indigo-500 bg-indigo-500/5"
+                        ? "border-violet-500 bg-violet-500/5"
                         : "border-[var(--border-subtle)] hover:border-[var(--border-strong)]"
                     }`}
                   >
@@ -1884,7 +2166,7 @@ function VariationModal({
                       />
                     </div>
                     <span className={`text-2xs font-medium ${
-                      selectedIdx === i ? "text-indigo-500 dark:text-indigo-400" : "text-[var(--text-tertiary)]"
+                      selectedIdx === i ? "text-violet-500 dark:text-violet-400" : "text-[var(--text-tertiary)]"
                     }`}>
                       {selectedIdx === i ? "✓ " : ""}Variation {i + 1}
                     </span>

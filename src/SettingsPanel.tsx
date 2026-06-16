@@ -17,17 +17,57 @@ export interface SubagentSettings {
   codex: AgentSettings;
 }
 
-interface Detected {
+export interface Detected {
   claude: boolean;
   codex: boolean;
 }
 
 const DEFAULT_AGENT: AgentSettings = { model: "", effort: "medium" };
-const DEFAULTS: SubagentSettings = {
+export const SUBAGENT_DEFAULTS: SubagentSettings = {
   agent: "auto",
   claude: { ...DEFAULT_AGENT },
   codex: { ...DEFAULT_AGENT },
 };
+
+/** Which agent a fill will actually use given the preference + what's installed,
+ *  and the model + effort it runs with. Shared by the settings panel and the
+ *  powerline so the launch readout and the editor can never disagree. `model`
+ *  empty means the agent CLI's own default. */
+export interface ResolvedLaunch {
+  agent: "claudeCode" | "codex" | null;
+  model: string;
+  effort: string;
+}
+
+export const AGENT_LABEL: Record<"claudeCode" | "codex", string> = {
+  claudeCode: "Claude Code",
+  codex: "Codex",
+};
+
+export function resolveLaunch(settings: SubagentSettings, detected: Detected): ResolvedLaunch {
+  const c = detected.claude;
+  const x = detected.codex;
+  const agent: ResolvedLaunch["agent"] =
+    settings.agent === "codex"
+      ? x
+        ? "codex"
+        : c
+          ? "claudeCode"
+          : null
+      : settings.agent === "claudeCode"
+        ? c
+          ? "claudeCode"
+          : x
+            ? "codex"
+            : null
+        : c
+          ? "claudeCode"
+          : x
+            ? "codex"
+            : null;
+  const a = agent === "codex" ? settings.codex : agent === "claudeCode" ? settings.claude : null;
+  return { agent, model: a?.model ?? "", effort: a?.effort ?? "" };
+}
 
 // Effort levels are agent-specific (from each CLI's own option set).
 const CLAUDE_EFFORT = ["low", "medium", "high", "xhigh", "max"];
@@ -48,13 +88,13 @@ const CUSTOM = "__custom__";
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
-  const [settings, setSettings] = useState<SubagentSettings>(DEFAULTS);
+  const [settings, setSettings] = useState<SubagentSettings>(SUBAGENT_DEFAULTS);
   const [detected, setDetected] = useState<Detected>({ claude: false, codex: false });
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     invoke<SubagentSettings>("get_subagent_settings")
-      .then((s) => setSettings({ ...DEFAULTS, ...s }))
+      .then((s) => setSettings({ ...SUBAGENT_DEFAULTS, ...s }))
       .catch(() => {});
     invoke<Detected>("detect_ai_tools", { projectPath: null })
       .then((d) => setDetected({ claude: !!d.claude, codex: !!d.codex }))
@@ -80,13 +120,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   };
 
   // Which agent a fill will actually use, given preference + availability.
-  const resolvedAgent: "claudeCode" | "codex" | null = (() => {
-    const c = detected.claude;
-    const x = detected.codex;
-    if (settings.agent === "codex") return x ? "codex" : c ? "claudeCode" : null;
-    if (settings.agent === "claudeCode") return c ? "claudeCode" : x ? "codex" : null;
-    return c ? "claudeCode" : x ? "codex" : null;
-  })();
+  const resolvedAgent = resolveLaunch(settings, detected).agent;
 
   return createPortal(
     <div className="fixed inset-0 z-[1000] flex items-center justify-center">

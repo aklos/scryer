@@ -1,20 +1,28 @@
 /**
- * Project-local model storage. One project open at a time; the model lives on
- * disk at `{projectPath}/.scryer/model.scry`.
+ * Project-local model storage. One project open at a time. Two layers live on
+ * disk under `{projectPath}/.scryer/`: the committed `model.scry` (source of
+ * truth — what the code is believed to satisfy) and the `planned.scry` draft
+ * (the intent the canvas and agent edit). The canvas works the PLANNED layer;
+ * the committed model is the diff base and advances only when work is folded in
+ * (the agent's `mark_implemented`) or extracted from code.
  *
  * Responsibilities:
- *  - load / save the model via Tauri commands (`read_model` / `write_model`)
- *  - debounce saves so a burst of canvas edits collapses to one write
- *  - subscribe to `model-changed` so external writes (an agent via MCP) are
- *    picked up live; suppress the event for our own writes
+ *  - load both layers (`read_planned` working / `read_model` committed)
+ *  - save canvas edits to the plan (`write_planned`), debounced so a burst of
+ *    edits collapses to one write
+ *  - derive the live plan diff `diff(committed, planned)` for the UI
+ *  - subscribe to `model-changed` so external writes (an agent via MCP) to
+ *    either layer are picked up live; suppress the event for our own writes
  *  - track recent projects in localStorage so the picker has somewhere to start
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Node, Responsibility, ScryModel } from "../viewmodel";
-import { flagSpecEdits, respTruthChanged, stampTouches } from "../viewmodel";
+import { respTruthChanged, stampTouches } from "../viewmodel";
+import { EMPTY_DIFF, planDiff as computePlanDiff, type ModelDiff } from "../planDiff";
+import type { HistoryEvent } from "../history";
 
 const RECENT_KEY = "scryer:recent-projects";
 const RECENT_CAP = 8;
@@ -114,7 +122,6 @@ function nodeFieldDiffs(prev: ScryModel, a: Node, b: Node): FieldDiff[] {
     ["technology", a.technology, b.technology],
     ["description", a.description, b.description],
     ["visual", !!a.visual, !!b.visual],
-    ["deprecated", !!a.deprecated, !!b.deprecated],
     ["relocated", !!a.relocated, !!b.relocated],
     ["properties", propsSummary(a), propsSummary(b)],
   ]);
@@ -234,7 +241,15 @@ export interface ModelStorage {
   status: ProjectStatus;
   projectPath: string | null;
   modelRef: string | null;
+  /** The working model — the PLANNED draft the canvas edits (`planned.scry`,
+   *  falling back to the committed model when no plan has diverged yet). */
   model: ScryModel | null;
+  /** The committed model (`model.scry`) — the diff base. Advances only when the
+   *  agent folds implemented work in or extracts from code. */
+  committed: ScryModel | null;
+  /** Live `diff(committed, planned)` — the plan: how the working draft diverges
+   *  from what the code is believed to satisfy. Empty when they're in sync. */
+  planDiff: ModelDiff;
   error: string | null;
   recentProjects: string[];
   /** Node ids the agent created since they were last seen — highlighted on the
@@ -246,6 +261,10 @@ export interface ModelStorage {
   /** Session-local feed of external (agent) writes, newest first — the data
    *  behind the Recent changes special page. */
   changeLog: readonly ChangeRevision[];
+  /** Durable committed-model timeline (`.scryer/history.jsonl`), oldest first —
+   *  the data behind each node's History tab. Reloaded whenever the model
+   *  changes. */
+  history: readonly HistoryEvent[];
 
   /** Open a project. If it has no model, status becomes `needs-model`. */
   openProject: (path: string) => Promise<void>;
@@ -253,15 +272,17 @@ export interface ModelStorage {
   createBlankModel: (path: string) => Promise<void>;
   /** Forget the project; UI returns to the picker. */
   closeProject: () => void;
-  /** Patch the model. Triggers a debounced save (suppressed during an agent run). */
+  /** Patch the working (planned) model. Triggers a debounced save to the plan
+   *  (suppressed during an agent run). */
   updateModel: (updater: (m: ScryModel) => ScryModel) => void;
   /** While an agent run is active, suppress the canvas write-back so the agent
    *  owns the file — layout stays client-side and is merged back on reload. */
   setAgentRunning: (running: boolean) => void;
-  /** Re-read the model from disk into memory. The agent (MCP) is the
+  /** Re-read both layers from disk into memory. The agent (MCP) is the
    *  authoritative writer during a build/fill — this both streams its writes in
-   *  and loads the final result, WITHOUT writing our (possibly stale) in-memory
-   *  model back over the agent's work. */
+   *  (plan edits, and the committed model when it folds work in) and loads the
+   *  final result, WITHOUT writing our (possibly stale) in-memory model back
+   *  over the agent's work. */
   reloadFromDisk: () => Promise<void>;
   /** Clear the "new" highlight for a node (the user selected it). */
   clearNewNode: (id: string) => void;
@@ -286,7 +307,6 @@ function nodeFingerprint(n: Node): string {
     n.technology ?? null,
     n.description ?? null,
     !!n.visual,
-    !!n.deprecated,
     !!n.relocated,
     n.properties ?? [],
   ]);
@@ -339,6 +359,7 @@ export function useModelStorage(): ModelStorage {
   const [projectPath, setProjectPath] = useState<string | null>(null);
   const [modelRef, setModelRef] = useState<string | null>(null);
   const [model, setModel] = useState<ScryModel | null>(null);
+  const [committed, setCommitted] = useState<ScryModel | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recentProjects, setRecentProjects] = useState<string[]>(() => readRecent());
   // Ids the agent has introduced (and not yet reviewed). Frontend-only — diffed
@@ -350,13 +371,19 @@ export function useModelStorage(): ModelStorage {
     () => new Set(),
   );
   const [changeLog, setChangeLog] = useState<ChangeRevision[]>([]);
+  const [history, setHistory] = useState<HistoryEvent[]>([]);
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Exact bytes of our last write. A `model-changed` event whose file content
-  // matches this is our own echo and is ignored; anything else (an agent via
-  // MCP) is a real external change and gets loaded. Content-based rather than a
-  // write counter so inotify event coalescing can't make us miss reloads.
+  // Exact bytes of our last PLANNED write. A `model-changed` event whose plan
+  // content matches this is our own echo and is ignored; anything else (an
+  // agent via MCP) is a real external change and gets loaded. Content-based
+  // rather than a write counter so inotify event coalescing can't make us miss
+  // reloads.
   const lastWrittenRaw = useRef<string | null>(null);
+  // Bytes of the committed model we last loaded — the canvas never writes this
+  // layer, so it's a pure load-dedup (only the agent advances the committed
+  // model, via a fold or extraction).
+  const lastCommittedRaw = useRef<string | null>(null);
   // True while an agent session is writing the model; suppresses the canvas
   // write-back so the agent owns the file and the two don't clobber.
   const agentRunningRef = useRef(false);
@@ -375,7 +402,7 @@ export function useModelStorage(): ModelStorage {
   // updater invocation replaces the entry instead of duplicating it.
   const pendingUserRevs = useRef<{ prev: ScryModel; items: ChangeItem[] }[]>([]);
 
-  // Apply a freshly-read model file to in-memory state: flag the ids the agent
+  // Apply a freshly-read PLAN file to in-memory state: flag the ids the agent
   // introduced (and prune removed ones) for review highlighting, remember the
   // bytes so the watcher doesn't echo them, and diff-merge layout so already-
   // placed cards keep their positions while new nodes stay unplaced for
@@ -418,7 +445,32 @@ export function useModelStorage(): ModelStorage {
     setModel(loaded);
   }, []);
 
-  // File-watcher subscription — re-read model from disk on external writes.
+  // Apply a freshly-read COMMITTED model file (the diff base). The canvas never
+  // writes this layer; it advances only when the agent folds work in or
+  // extracts from code, so there's no review-highlighting to do here — just
+  // load it and remember the bytes for load-dedup.
+  const applyCommittedRaw = useCallback((raw: string) => {
+    lastCommittedRaw.current = raw;
+    setCommitted(JSON.parse(raw) as ScryModel);
+  }, []);
+
+  // Reload the durable history log. Cheap (append-only JSONL), so we just re-read
+  // it wholesale on every model change rather than diffing — the agent op that
+  // produced the new event also wrote a `.scry` file the watcher fired on.
+  const loadHistory = useCallback(async (ref: string) => {
+    try {
+      const raw = await invoke<string>("read_history", { refStr: ref });
+      setHistory(JSON.parse(raw) as HistoryEvent[]);
+    } catch {
+      /* no history yet — leave empty */
+    }
+  }, []);
+
+  // File-watcher subscription — re-read both layers from disk on external
+  // writes. The `model-changed` event fires for any `.scry` write under
+  // `.scryer/` (the agent edits the plan, and commits land in the committed
+  // model), so on each event we reconcile both layers, each deduped against its
+  // own last-seen bytes.
   useEffect(() => {
     if (!modelRef) return;
     let unlisten: (() => void) | null = null;
@@ -432,13 +484,18 @@ export function useModelStorage(): ModelStorage {
       const off = await listen<string>("model-changed", async (event) => {
         if (event.payload !== modelRef) return;
         try {
-          const raw = await invoke<string>("read_model", { refStr: modelRef });
-          if (!active) return;
-          if (raw === lastWrittenRaw.current) return; // our own write echoed back
-          applyLoadedRaw(raw);
+          const planned = await invoke<string>("read_planned", { refStr: modelRef });
+          if (active && planned !== lastWrittenRaw.current) applyLoadedRaw(planned);
         } catch {
           /* transient — ignore */
         }
+        try {
+          const committedRaw = await invoke<string>("read_model", { refStr: modelRef });
+          if (active && committedRaw !== lastCommittedRaw.current) applyCommittedRaw(committedRaw);
+        } catch {
+          /* transient — ignore */
+        }
+        if (active) await loadHistory(modelRef);
       });
       if (active) unlisten = off;
       else off();
@@ -447,7 +504,7 @@ export function useModelStorage(): ModelStorage {
       active = false;
       unlisten?.();
     };
-  }, [modelRef, applyLoadedRaw]);
+  }, [modelRef, applyLoadedRaw, applyCommittedRaw, loadHistory]);
 
   const openProject = useCallback(async (path: string) => {
     setStatus("loading");
@@ -468,31 +525,47 @@ export function useModelStorage(): ModelStorage {
         );
         setModelRef(null);
         setModel(null);
+        setCommitted(null);
         return;
       }
       const ref = `project:${path}`;
       try {
-        const raw = await invoke<string>("read_model", { refStr: ref });
-        const loaded = JSON.parse(raw) as ScryModel;
+        // The committed model decides whether a model exists at all; the plan
+        // is the working layer (it falls back to the committed model when no
+        // draft has diverged yet, so this never throws when the model exists).
+        const committedRaw = await invoke<string>("read_model", { refStr: ref });
+        const committedModel = JSON.parse(committedRaw) as ScryModel;
+        let plannedRaw = committedRaw;
+        try {
+          plannedRaw = await invoke<string>("read_planned", { refStr: ref });
+        } catch {
+          /* no plan layer yet — work straight off the committed model */
+        }
+        const plannedModel = JSON.parse(plannedRaw) as ScryModel;
         // Positions are seeded client-side after card measurement
         // (see autoLayout), not here — we have no DOM to measure against.
         const next = bumpRecent(path);
         writeRecent(next);
         setRecentProjects(next);
         setModelRef(ref);
-        setModel(loaded);
+        setCommitted(committedModel);
+        setModel(plannedModel);
+        lastCommittedRaw.current = committedRaw;
+        lastWrittenRaw.current = plannedRaw;
+        await loadHistory(ref);
         setStatus("ready");
       } catch {
         // No model yet — caller can choose to create blank or generate.
         setModelRef(null);
         setModel(null);
+        setCommitted(null);
         setStatus("needs-model");
       }
     } catch (e) {
       setStatus("error");
       setError(String(e));
     }
-  }, []);
+  }, [loadHistory]);
 
   const createBlankModel = useCallback(
     async (path: string) => {
@@ -518,10 +591,12 @@ export function useModelStorage(): ModelStorage {
     setProjectPath(null);
     setModelRef(null);
     setModel(null);
+    setCommitted(null);
     setError(null);
     setNewNodeIds(new Set());
     setNewRespIds(new Set());
     setChangeLog([]);
+    setHistory([]);
   }, []);
 
   const clearNewNode = useCallback((id: string) => {
@@ -556,13 +631,12 @@ export function useModelStorage(): ModelStorage {
     (updater: (m: ScryModel) => ScryModel) => {
       setModel((cur) => {
         if (!cur || !modelRef) return cur;
-        const raw = updater(cur);
-        if (raw === cur) return cur;
-        // Apply the lifecycle rule before journaling/stamping: reediting an
-        // implemented/verified claim's spec flips it to `changed` — a persistent
-        // "code must catch up" marker that lives in the model until the agent
-        // reconciles it. Done here so the History diff records the flip too.
-        const edited = flagSpecEdits(cur, raw);
+        const edited = updater(cur);
+        if (edited === cur) return cur;
+        // No status/baseline bookkeeping here any more: a canvas edit just
+        // diverges the plan from the committed model, and `diff(committed,
+        // planned)` captures that divergence live — no per-claim `changed`
+        // flag or `changedFrom` snapshot to maintain.
         // Journal the user's commit alongside agent writes — Recent changes
         // shows every editor, attributed. Staged here (idempotently, keyed on
         // `cur`) and flushed to the log by the effect below.
@@ -575,9 +649,9 @@ export function useModelStorage(): ModelStorage {
         }
         // Date any responsibility/property whose truth changed in this edit, so
         // the fossilization clock advances for canvas edits. This is the canvas
-        // mirror of the agent's Rust-side write_model_at stamping; doing it at
-        // this single chokepoint covers every edit path (granular, EditModal
-        // bulk-commit, auto-"changed") and a layout-only edit re-dates nothing.
+        // mirror of the agent's Rust-side write stamping; doing it at this single
+        // chokepoint covers every edit path (granular, EditModal bulk-commit)
+        // and a layout-only edit re-dates nothing.
         const next = stampTouches(cur, edited);
         if (saveTimer.current) clearTimeout(saveTimer.current);
         const ref = modelRef;
@@ -588,7 +662,7 @@ export function useModelStorage(): ModelStorage {
           // reloaded the agent's model from disk) so we don't clobber writes.
           if (agentRunningRef.current) return;
           lastWrittenRaw.current = serialized;
-          invoke("write_model", { refStr: ref, data: serialized }).catch(() => {});
+          invoke("write_planned", { refStr: ref, data: serialized }).catch(() => {});
         }, SAVE_DEBOUNCE_MS);
         return next;
       });
@@ -627,24 +701,42 @@ export function useModelStorage(): ModelStorage {
     const ref = modelRefRef.current;
     if (!ref) return;
     try {
-      const raw = await invoke<string>("read_model", { refStr: ref });
-      if (raw === lastWrittenRaw.current) return; // unchanged since last load/write
-      applyLoadedRaw(raw);
+      const planned = await invoke<string>("read_planned", { refStr: ref });
+      if (planned !== lastWrittenRaw.current) applyLoadedRaw(planned);
     } catch {
       /* transient — ignore */
     }
-  }, [applyLoadedRaw]);
+    try {
+      const committedRaw = await invoke<string>("read_model", { refStr: ref });
+      if (committedRaw !== lastCommittedRaw.current) applyCommittedRaw(committedRaw);
+    } catch {
+      /* transient — ignore */
+    }
+    await loadHistory(ref);
+  }, [applyLoadedRaw, applyCommittedRaw, loadHistory]);
+
+  // The plan: how the working draft diverges from the committed model. Computed
+  // client-side so it tracks every canvas keystroke with no round-trip; the
+  // JSON shape mirrors the agent's `get_unimplemented`, so the two never
+  // disagree about what's pending.
+  const planDiff = useMemo<ModelDiff>(
+    () => (committed && model ? computePlanDiff(committed, model) : EMPTY_DIFF),
+    [committed, model],
+  );
 
   return {
     status,
     projectPath,
     modelRef,
     model,
+    committed,
+    planDiff,
     error,
     recentProjects,
     newNodeIds,
     newRespIds,
     changeLog,
+    history,
     openProject,
     createBlankModel,
     closeProject,
