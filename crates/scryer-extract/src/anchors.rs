@@ -440,7 +440,7 @@ pub fn check_anchors(r: &ModelRef) -> Result<AnchorCheck, String> {
 mod tests {
     use super::*;
     use scryer_core::{
-        drift::SyncState, Kind, Node, Responsibility, ScryModel, SourceLocation, Status,
+        drift::SyncState, Kind, Node, Responsibility, ScryModel, SourceLocation,
     };
 
     fn project_with(file: &str, content: &str) -> (tempfile::TempDir, ModelRef) {
@@ -485,24 +485,16 @@ mod tests {
             responsibilities: vec![Responsibility {
                 id: "r1".into(),
                 statement: "does the thing".into(),
-                status: Some(Status::Implemented),
                 vagrant: None,
                 stale: None,
-                locked: None,
-                relocated_to: None,
-                relocated_from: None,
                 directives: Vec::new(),
                 last_touched_at: None,
-                changed_from: None,
             }],
             properties: Vec::new(),
             icon: None,
             visual: None,
             appearance: None,
-            relocated: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
+            notes: None,
         });
         m.source_map.insert(
             "r1".into(),

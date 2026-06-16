@@ -14,45 +14,16 @@
 //!   external systems are out-of-system — their claims are never code-backed, so
 //!   they are never anchorable either.
 //! - **Coverage rolls up.** Every node reports its own counts and its subtree's
-//!   counts (statuses, vagrant flags, anchorable vs anchored claims, the most
+//!   counts (vagrant flags, anchorable vs anchored claims, the most
 //!   recent truth-bearing edit), so any altitude can answer "how much of what I
 //!   claim reads through to code?".
 //! - **Darkness is per boundary.** Given the project's modelable source files,
 //!   each boundary-owning node reports which of its files no anchor in its
 //!   subtree reaches — the code the lens cannot see.
 
-use crate::{Kind, ScryModel, Status};
+use crate::{Kind, ScryModel};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-
-/// Counts of responsibility/property statuses. `vagrant` is a separate axis (a
-/// flag on top of a status), counted independently.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StatusCounts {
-    pub proposed: u32,
-    pub implemented: u32,
-    pub verified: u32,
-    pub changed: u32,
-}
-
-impl StatusCounts {
-    fn add(&mut self, status: Option<Status>) {
-        match status.unwrap_or(Status::Proposed) {
-            Status::Proposed => self.proposed += 1,
-            Status::Implemented => self.implemented += 1,
-            Status::Verified => self.verified += 1,
-            Status::Changed => self.changed += 1,
-        }
-    }
-
-    fn merge(&mut self, other: &StatusCounts) {
-        self.proposed += other.proposed;
-        self.implemented += other.implemented;
-        self.verified += other.verified;
-        self.changed += other.changed;
-    }
-}
 
 /// Health counters over one scope — a node's own content, or a whole subtree.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -62,17 +33,15 @@ pub struct HealthCounts {
     pub responsibilities: u32,
     /// Data-shape properties in scope.
     pub properties: u32,
-    pub statuses: StatusCounts,
     /// Responsibilities carrying the vagrant flag (undescribed behaviour
     /// awaiting adopt/reject).
     pub vagrant: u32,
     /// Responsibilities carrying the stale flag (the drift check judged the
     /// code no longer discharges them; awaiting a verdict).
     pub stale: u32,
-    /// Claims that are EXPECTED to read through to code: implemented/verified/
-    /// changed content hosted on a leaf (childless, non-external) node. A claim
-    /// on a structural node is discharged through the subtree instead and never
-    /// counts here.
+    /// Claims that are EXPECTED to read through to code: any committed content
+    /// hosted on a leaf (childless, non-external) node. A claim on a structural
+    /// node is discharged through the subtree instead and never counts here.
     pub anchorable: u32,
     /// Of the anchorable claims, how many actually have a source anchor.
     pub anchored: u32,
@@ -94,7 +63,6 @@ impl HealthCounts {
     fn merge(&mut self, other: &HealthCounts) {
         self.responsibilities += other.responsibilities;
         self.properties += other.properties;
-        self.statuses.merge(&other.statuses);
         self.vagrant += other.vagrant;
         self.stale += other.stale;
         self.anchorable += other.anchorable;
@@ -160,7 +128,6 @@ pub fn compute_health(model: &ScryModel, files: Option<&BTreeSet<String>>) -> Mo
 
         for resp in &node.responsibilities {
             h.responsibilities += 1;
-            h.statuses.add(resp.status);
             if resp.vagrant == Some(true) {
                 h.vagrant += 1;
             }
@@ -168,7 +135,7 @@ pub fn compute_health(model: &ScryModel, files: Option<&BTreeSet<String>>) -> Mo
                 h.stale += 1;
             }
             h.touch(resp.last_touched_at);
-            if anchorable_node && claims_code(resp.status) {
+            if anchorable_node {
                 h.anchorable += 1;
                 if model
                     .source_map
@@ -182,16 +149,13 @@ pub fn compute_health(model: &ScryModel, files: Option<&BTreeSet<String>>) -> Mo
             }
         }
 
-        // A data shape is one declaration: if any property claims code, the
-        // shape's definition must anchor — one claim for the whole node.
-        let mut shape_claims = false;
+        // A data shape is one declaration: if the node declares any property,
+        // the shape's definition must anchor — one claim for the whole node.
         for prop in &node.properties {
             h.properties += 1;
-            h.statuses.add(prop.status);
             h.touch(prop.last_touched_at);
-            shape_claims = shape_claims || claims_code(prop.status);
         }
-        if anchorable_node && shape_claims {
+        if anchorable_node && !node.properties.is_empty() {
             h.anchorable += 1;
             if model
                 .source_map
@@ -216,7 +180,6 @@ pub fn compute_health(model: &ScryModel, files: Option<&BTreeSet<String>>) -> Mo
         let mut h = HealthCounts::default();
         for resp in &group.responsibilities {
             h.responsibilities += 1;
-            h.statuses.add(resp.status);
             if resp.vagrant == Some(true) {
                 h.vagrant += 1;
             }
@@ -308,13 +271,6 @@ pub fn compute_health(model: &ScryModel, files: Option<&BTreeSet<String>>) -> Mo
 
 /// Does this status claim that code exists? Those are the claims that must
 /// read through to source on a leaf.
-fn claims_code(status: Option<Status>) -> bool {
-    matches!(
-        status,
-        Some(Status::Implemented) | Some(Status::Verified) | Some(Status::Changed)
-    )
-}
-
 fn children_index(model: &ScryModel) -> HashMap<&str, Vec<&str>> {
     let ids: HashSet<&str> = model.nodes.iter().map(|n| n.id.as_str()).collect();
     let mut idx: HashMap<&str, Vec<&str>> = HashMap::new();
@@ -469,26 +425,18 @@ mod tests {
             icon: None,
             visual: None,
             appearance: None,
-            relocated: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
+            notes: None,
         }
     }
 
-    fn resp(id: &str, status: Status) -> Responsibility {
+    fn resp(id: &str) -> Responsibility {
         Responsibility {
             id: id.into(),
             statement: format!("does {id}"),
-            status: Some(status),
             vagrant: None,
             stale: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
             directives: Vec::new(),
             last_touched_at: Some(100),
-            changed_from: None,
         }
     }
 
@@ -508,10 +456,10 @@ mod tests {
     fn structural_responsibilities_are_never_unmapped() {
         let mut m = ScryModel::new();
         let mut sys = node("sys", Kind::System, None);
-        sys.responsibilities.push(resp("r-sys", Status::Implemented));
+        sys.responsibilities.push(resp("r-sys"));
         m.nodes.push(sys);
         let mut leaf = node("leaf", Kind::Symbol, Some("sys"));
-        leaf.responsibilities.push(resp("r-leaf", Status::Implemented));
+        leaf.responsibilities.push(resp("r-leaf"));
         m.nodes.push(leaf);
 
         let h = compute_health(&m, None);
@@ -530,8 +478,8 @@ mod tests {
     fn person_responsibilities_are_never_unmapped() {
         let mut m = ScryModel::new();
         let mut dev = node("dev", Kind::Person, None);
-        dev.responsibilities.push(resp("r-1", Status::Implemented));
-        dev.responsibilities.push(resp("r-2", Status::Implemented));
+        dev.responsibilities.push(resp("r-1"));
+        dev.responsibilities.push(resp("r-2"));
         m.nodes.push(dev);
 
         let h = compute_health(&m, None);
@@ -541,30 +489,29 @@ mod tests {
         assert_eq!(dev_h.own.responsibilities, 2);
     }
 
-    /// Anchored leaf claims count as coverage; proposed claims aren't expected
-    /// to anchor at all.
+    /// Every committed leaf claim is anchorable; anchored ones count as coverage,
+    /// the rest are blind spots.
     #[test]
-    fn leaf_coverage_counts_anchors_and_ignores_proposed() {
+    fn leaf_coverage_counts_anchors() {
         let mut m = ScryModel::new();
         m.nodes.push(node("c", Kind::Component, None));
         let mut a = node("a", Kind::Symbol, Some("c"));
-        a.responsibilities.push(resp("r-a", Status::Implemented));
+        a.responsibilities.push(resp("r-a"));
         m.nodes.push(a);
         let mut b = node("b", Kind::Symbol, Some("c"));
-        b.responsibilities.push(resp("r-b", Status::Proposed));
+        b.responsibilities.push(resp("r-b"));
         m.nodes.push(b);
         m.source_map.insert("r-a".into(), vec![loc("src/a.ts")]);
 
         let h = compute_health(&m, None);
         let c = &h.nodes["c"];
-        assert_eq!(c.subtree.anchorable, 1, "only the implemented leaf claim");
+        assert_eq!(c.subtree.anchorable, 2, "both committed leaf claims");
         assert_eq!(c.subtree.anchored, 1);
-        assert_eq!(c.subtree.unmapped, 0);
-        assert_eq!(c.subtree.statuses.proposed, 1);
+        assert_eq!(c.subtree.unmapped, 1, "r-b has no anchor");
     }
 
-    /// A data shape (leaf with implemented properties) is one anchorable claim,
-    /// anchored by the node's own definition entry.
+    /// A data shape (leaf with properties) is one anchorable claim, anchored by
+    /// the node's own definition entry.
     #[test]
     fn data_shape_is_one_claim() {
         let mut m = ScryModel::new();
@@ -572,7 +519,6 @@ mod tests {
         shape.properties.push(crate::SchemaProperty {
             label: "field".into(),
             description: String::new(),
-            status: Some(Status::Implemented),
             last_touched_at: Some(50),
         });
         m.nodes.push(shape);
@@ -593,7 +539,7 @@ mod tests {
         let mut m = ScryModel::new();
         m.nodes.push(node("api", Kind::Container, None));
         let mut s = node("s", Kind::Symbol, Some("api"));
-        s.responsibilities.push(resp("r-s", Status::Implemented));
+        s.responsibilities.push(resp("r-s"));
         m.nodes.push(s);
         m.source_map.insert("r-s".into(), vec![loc("api/src/handler.rs")]);
         m.boundaries.insert(
@@ -625,7 +571,7 @@ mod tests {
             member_ids: vec!["c1".into()],
             parent_group_id: None,
             parent_node_id: None,
-            responsibilities: vec![resp("r-g", Status::Implemented)],
+            responsibilities: vec![resp("r-g")],
             icon: None,
         });
 
@@ -640,7 +586,7 @@ mod tests {
         let mut m = ScryModel::new();
         m.nodes.push(node("sys", Kind::System, None));
         let mut leaf = node("leaf", Kind::Symbol, Some("sys"));
-        let mut r = resp("r1", Status::Implemented);
+        let mut r = resp("r1");
         r.vagrant = Some(true);
         r.last_touched_at = Some(999);
         leaf.responsibilities.push(r);

@@ -2,14 +2,10 @@
  * On-disk schema (v0.3) + derived view types.
  *
  * `ScryModel`, `Node`, `Link`, `Group`, `Responsibility`, `Source`,
- * `SchemaProperty`, `Kind`, `Status` mirror the Rust types in
+ * `SchemaProperty`, `Kind`, `RenderState` mirror the Rust types in
  * `crates/scryer-core/src/lib.rs` exactly — what gets read from
  * `{project}/.scryer/model.scry` IS the in-memory model.
  */
-
-import type { Status } from "./statusColors";
-
-export type { Status };
 
 export const SCRY_VERSION = "0.3" as const;
 
@@ -38,8 +34,6 @@ export interface Responsibility {
   id: string;
   /** Verb-led business statement of accountability. No mechanism words. */
   statement: string;
-  status?: Status;
-  locked?: boolean;
   /** Discovered in code with no upstream commitment (drift). The user adopts
    *  it (clear the flag) or rejects it (delete it). */
   vagrant?: boolean;
@@ -47,10 +41,6 @@ export interface Responsibility {
    *  discharges this claim. A flag awaiting a verdict (re-implement, reword,
    *  or drop) — the status is the prescription and stays untouched. */
   stale?: boolean;
-  /** Source side: node ID the responsibility was moved to. */
-  relocatedTo?: string;
-  /** Destination side: node ID the responsibility came from. */
-  relocatedFrom?: string;
   /** Optional prescriptive HOW-constraints ("must"/"never" rules) — not part of conformance. */
   directives?: string[];
   /** Unix seconds of the last truth-bearing edit. Drives the canvas
@@ -58,23 +48,11 @@ export interface Responsibility {
    *  the Rust write path (agent edits) and the mutation helpers below (canvas
    *  edits); never hand-authored. */
   lastTouchedAt?: number;
-  /** Spec as it stood at the last reconcile — captured when a reword flipped an
-   *  implemented/verified claim to `changed`. Drives the persistent "what it
-   *  was → what it is now" diff and is dropped once the claim leaves `changed`
-   *  (the agent reconciled the edit with the code). See {@link flagSpecEdits}. */
-  changedFrom?: SpecSnapshot;
-}
-
-/** A responsibility's spec at its last reconcile — see {@link Responsibility.changedFrom}. */
-export interface SpecSnapshot {
-  statement: string;
-  directives?: string[];
 }
 
 export interface SchemaProperty {
   label: string;
   description?: string;
-  status?: Status;
   /** Unix seconds of the last truth-bearing edit — see {@link Responsibility.lastTouchedAt}. */
   lastTouchedAt?: number;
 }
@@ -95,8 +73,12 @@ export interface SourceLocation {
 
 // --- Appearance (the look of a UI component) ---------------------------------
 
+/** The render-artifact lifecycle of a visual component's look — its own axis,
+ *  independent of the model→code plan diff. Mirrors the Rust `RenderState`. */
+export type RenderState = "proposed" | "implemented" | "changed";
+
 export interface Appearance {
-  status?: Status;
+  status?: RenderState;
   distPath?: string;
   builtAt?: number;
   sourceHash?: string;
@@ -121,10 +103,11 @@ export interface Node {
   icon?: string;
   visual?: boolean;
   appearance?: Appearance;
-  relocated?: boolean;
-  locked?: boolean;
-  relocatedTo?: string;
-  relocatedFrom?: string;
+  /** User-authored freeform notes — self-context and traversal aids, distinct
+   *  from `description` (what the node IS) and a responsibility's `directives`.
+   *  No spec/conformance role. Supports `[[node-id]]` wikilinks. User-only:
+   *  hidden from the agent's write tools. Mirrors Rust `Node.notes`. */
+  notes?: string;
 }
 
 export interface Link {
@@ -225,20 +208,14 @@ function sameDirectives(a?: string[], b?: string[]): boolean {
 export function respTruthChanged(a: Responsibility, b: Responsibility): boolean {
   return (
     a.statement !== b.statement ||
-    a.status !== b.status ||
     a.vagrant !== b.vagrant ||
     a.stale !== b.stale ||
-    a.locked !== b.locked ||
-    a.relocatedTo !== b.relocatedTo ||
-    a.relocatedFrom !== b.relocatedFrom ||
     !sameDirectives(a.directives, b.directives)
   );
 }
 
 function propTruthChanged(a: SchemaProperty, b: SchemaProperty): boolean {
-  return (
-    a.label !== b.label || a.description !== b.description || a.status !== b.status
-  );
+  return a.label !== b.label || a.description !== b.description;
 }
 
 /**
@@ -298,65 +275,6 @@ export function stampTouches(prev: ScryModel, next: ScryModel): ScryModel {
   };
 }
 
-/**
- * Apply the lifecycle rule "editing the spec after implementation flips the
- * claim to `changed`" (see rules.rs `responsibility-status`): for every
- * responsibility whose statement or directives moved relative to `prev` while
- * its status was `implemented`/`verified`, set status to `changed`. This is the
- * persistent, reconcile-scoped marker that the model now describes something the
- * code doesn't yet — it survives reload (it's in the model file) and the agent
- * clears it back to `implemented` when it reconciles the change with the code.
- *
- * Runs at the user-edit chokepoint only (agent writes set status explicitly).
- * An explicit status change in the same edit is respected — we only auto-flip
- * when the user left the status alone and just reworded the claim.
- */
-export function flagSpecEdits(prev: ScryModel, next: ScryModel): ScryModel {
-  const priorResp = new Map<string, Responsibility>();
-  for (const n of prev.nodes)
-    for (const r of n.responsibilities ?? []) priorResp.set(r.id, r);
-  for (const g of prev.groups)
-    for (const r of g.responsibilities ?? []) priorResp.set(r.id, r);
-
-  let touched = false;
-  const flip = (r: Responsibility): Responsibility => {
-    // Reconciled out of `changed` (by hand, or the agent on its next write):
-    // the snapshot has served its purpose — drop it so the diff resolves.
-    if (r.status !== "changed" && r.changedFrom) {
-      touched = true;
-      const { changedFrom: _drop, ...rest } = r;
-      return rest;
-    }
-    const pv = priorResp.get(r.id);
-    if (!pv) return r;
-    const wasImplemented = pv.status === "implemented" || pv.status === "verified";
-    // Status untouched this edit (an explicit pick wins); spec actually moved.
-    if (!wasImplemented || r.status !== pv.status) return r;
-    const specMoved =
-      r.statement !== pv.statement || !sameDirectives(r.directives, pv.directives);
-    if (!specMoved) return r;
-    touched = true;
-    // Snapshot the pre-edit spec once, on the first flip — later rewords keep
-    // comparing against the last reconciled value, not the previous keystroke.
-    return {
-      ...r,
-      status: "changed",
-      changedFrom: r.changedFrom ?? {
-        statement: pv.statement,
-        ...(pv.directives && pv.directives.length > 0 ? { directives: pv.directives } : {}),
-      },
-    };
-  };
-
-  const nodes = next.nodes.map((n) =>
-    n.responsibilities ? { ...n, responsibilities: n.responsibilities.map(flip) } : n,
-  );
-  const groups = next.groups.map((g) =>
-    g.responsibilities ? { ...g, responsibilities: g.responsibilities.map(flip) } : g,
-  );
-  return touched ? { ...next, nodes, groups } : next;
-}
-
 /** Rewrite `[[old]]` / `[[old|label]]` wikilink targets to the new name in one
  *  text. Returns the input unchanged when nothing matches. */
 function rewriteWikilinkText(text: string, oldName: string, newName: string): string {
@@ -369,8 +287,8 @@ function rewriteWikilinkText(text: string, oldName: string, newName: string): st
 }
 
 /** After a node rename, repoint every `[[Old Name]]` prose mention (node and
- *  group descriptions, responsibility statements, directives) at the new name
- *  so wikilinks never dangle. */
+ *  group descriptions, responsibility statements, directives, node notes) at the
+ *  new name so wikilinks never dangle. */
 export function rewriteWikilinks(
   model: ScryModel,
   oldName: string,
@@ -390,6 +308,7 @@ export function rewriteWikilinks(
       ...n,
       description: n.description ? fix(n.description) : n.description,
       responsibilities: fixResps(n.responsibilities),
+      notes: n.notes ? fix(n.notes) : n.notes,
     })),
     groups: model.groups.map((g) => ({
       ...g,
@@ -430,7 +349,7 @@ export function moveNode(
   newParentId: string | null,
 ): ScryModel {
   const node = model.nodes.find((n) => n.id === nodeId);
-  if (!node || node.locked) return model;
+  if (!node) return model;
 
   if (newParentId === null) {
     if (node.kind !== "system" && node.kind !== "person") return model;
@@ -720,8 +639,8 @@ export function addResponsibility(
 ): { model: ScryModel; id: string } {
   const existing = getResponsibilities(model, host, hostId);
   const id = nextResponsibilityId(existing);
-  // New items land as proposed — they're a plan until code backs them.
-  const resp: Responsibility = { id, statement, status: "proposed" };
+  // A new claim is a plan until code backs it — the diff shows it as `added`.
+  const resp: Responsibility = { id, statement };
   return {
     model: setResponsibilities(model, host, hostId, [...existing, resp]),
     id,
@@ -762,16 +681,10 @@ export function removeResponsibility(
 // --- Responsibility relocation ------------------------------------------------
 
 /**
- * Move a responsibility from one node to another.
- *
- * Transition rules — relocation is the relocatedTo/relocatedFrom flag pair,
- * never a status (the claim's lifecycle is unchanged by moving it):
- *  - proposed: just moves, no trace at source (no code to relocate)
- *  - implemented/verified: source keeps a locked ghost pointing to the
- *    destination; destination gets a live copy pointing back, status intact
- *  - vagrant: not movable
- *
- * Deleting the destination copy should unlock the source (see unlockRelocated).
+ * Move a responsibility from one node to another. The claim keeps its id and is
+ * reparented onto the destination node; the plan diff matches it by id and
+ * renders the move as `moved` (R). No ghost/locked copy at the source — the diff
+ * is the record of the relocation, so the claim's lifecycle is unchanged.
  */
 export function moveResponsibility(
   model: ScryModel,
@@ -781,42 +694,8 @@ export function moveResponsibility(
 ): ScryModel {
   const sourceResps = getResponsibilities(model, "node", fromNodeId);
   const resp = sourceResps.find((r) => r.id === respId);
-  if (!resp || resp.locked) return model;
+  if (!resp) return model;
 
-  const status = resp.status ?? "proposed";
-  const hasCode = status === "implemented" || status === "verified";
-
-  const destResps = getResponsibilities(model, "node", toNodeId);
-  const newId = nextResponsibilityId([...sourceResps, ...destResps]);
-
-  if (hasCode) {
-    const sourceCopy: Responsibility = {
-      ...resp,
-      locked: true,
-      relocatedTo: toNodeId,
-    };
-    const destCopy: Responsibility = {
-      ...resp,
-      id: newId,
-      relocatedFrom: fromNodeId,
-    };
-    let next = setResponsibilities(
-      model,
-      "node",
-      fromNodeId,
-      sourceResps.map((r) => (r.id === respId ? sourceCopy : r)),
-    );
-    next = setResponsibilities(
-      next,
-      "node",
-      toNodeId,
-      [...getResponsibilities(next, "node", toNodeId), destCopy],
-    );
-    return next;
-  }
-
-  // proposed: just move, no trace at source
-  const destCopy: Responsibility = { ...resp, id: newId };
   let next = setResponsibilities(
     model,
     "node",
@@ -827,38 +706,9 @@ export function moveResponsibility(
     next,
     "node",
     toNodeId,
-    [...getResponsibilities(next, "node", toNodeId), destCopy],
+    [...getResponsibilities(next, "node", toNodeId), resp],
   );
   return next;
-}
-
-/**
- * When a relocated destination responsibility is deleted, unlock the
- * source copy and revert it to its pre-relocation status.
- */
-export function unlockRelocatedSource(
-  model: ScryModel,
-  deletedResp: Responsibility,
-): ScryModel {
-  if (!deletedResp.relocatedFrom) return model;
-  const sourceNodeId = deletedResp.relocatedFrom;
-  const sourceResps = getResponsibilities(model, "node", sourceNodeId);
-  return setResponsibilities(
-    model,
-    "node",
-    sourceNodeId,
-    sourceResps.map((r) => {
-      if (r.statement === deletedResp.statement && r.locked && r.relocatedTo) {
-        return {
-          ...r,
-          status: "implemented" as Status,
-          locked: undefined,
-          relocatedTo: undefined,
-        };
-      }
-      return r;
-    }),
-  );
 }
 
 // --- Property CRUD (model-kind nodes) ----------------------------------------
@@ -878,7 +728,7 @@ export function addProperty(
         ...n,
         properties: [
           ...existing,
-          { label, description: description ?? "", status: "proposed" },
+          { label, description: description ?? "" },
         ],
       };
     }),

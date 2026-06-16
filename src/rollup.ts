@@ -10,10 +10,9 @@ import type { Node } from "./viewmodel";
  * The `empty` flag — a SYMBOL that carries no semantic content of its own: no
  * responsibilities, no properties, no rendered appearance, and not external.
  *
- * Empty is a FLAG, not a status: it sits beside the proposed→implemented→
- * verified lifecycle, never inside it. `proposed` means planned work; `empty`
- * means the node justifies nothing yet and must either gain a business
- * responsibility or be removed. Derived, never stored.
+ * `empty` means the node justifies nothing yet and must either gain a business
+ * responsibility (or data shape / appearance) or be removed. Derived, never
+ * stored — distinct from the plan diff, which tracks added/reworded content.
  *
  * Scoped to symbols — components/containers/systems are structural and carry
  * their meaning through their children, so an own-responsibility-less parent is

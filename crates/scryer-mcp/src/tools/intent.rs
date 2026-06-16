@@ -23,7 +23,6 @@ use rmcp::{
 use scryer_core::history::{EventKind, EventRow, HistoryEvent};
 use scryer_core::{
     Group, Kind, ModelRef, Node, Responsibility, SchemaProperty, ScryModel, Source, SourceLocation,
-    Status,
 };
 use std::collections::HashMap;
 
@@ -58,15 +57,10 @@ impl RespMinter {
                 Responsibility {
                     id,
                     statement: s.trim().to_string(),
-                    status: Some(Status::Implemented),
                     vagrant: None,
                     stale: None,
-                    locked: None,
-                    relocated_to: None,
-                    relocated_from: None,
                     directives: Vec::new(),
                     last_touched_at: None,
-                    changed_from: None,
                 }
             })
             .collect()
@@ -87,15 +81,10 @@ impl RespMinter {
                 let resp = Responsibility {
                     id,
                     statement: i.statement().trim().to_string(),
-                    status: Some(Status::Implemented),
                     vagrant: None,
                     stale: None,
-                    locked: None,
-                    relocated_to: None,
-                    relocated_from: None,
                     directives: Vec::new(),
                     last_touched_at: None,
-                    changed_from: None,
                 };
                 (resp, i.line(), i.end_line())
             })
@@ -152,10 +141,7 @@ fn blank_node(id: String, kind: Kind, name: String, parent_id: Option<String>) -
         icon: None,
         visual: None,
         appearance: None,
-        relocated: None,
-        locked: None,
-        relocated_to: None,
-        relocated_from: None,
+        notes: None,
     }
 }
 
@@ -445,7 +431,6 @@ impl ScryerServer {
                 .map(|p| SchemaProperty {
                     label: p.label.clone(),
                     description: p.description.clone(),
-                    status: Some(Status::Implemented),
                     last_touched_at: None,
                 })
                 .collect();
@@ -730,9 +715,8 @@ mod tests {
         let container = m.nodes.iter().find(|n| n.kind == Kind::Container).unwrap();
         let container_id = container.id.clone();
         assert_eq!(container.technology.as_deref(), Some("Axum"));
-        // blank statement filtered out; one responsibility, status implemented
+        // blank statement filtered out; one responsibility
         assert_eq!(container.responsibilities.len(), 1);
-        assert_eq!(container.responsibilities[0].status, Some(Status::Implemented));
         // auto boundary glob keyed by the container node id
         assert_eq!(
             m.boundaries.get(&container_id).unwrap()[0].pattern,
@@ -859,7 +843,6 @@ mod tests {
         let g = &m.groups[0];
         assert_eq!(g.parent_node_id.as_deref(), Some(system_id.as_str()));
         assert_eq!(g.member_ids.len(), 2);
-        assert_eq!(g.responsibilities[0].status, Some(Status::Implemented));
 
         // a member that isn't a child of parent_id is rejected (containers are
         // children of the system, not of another container)
@@ -932,7 +915,6 @@ mod tests {
         let container = m.nodes.iter().find(|n| n.id == cid).unwrap();
         let orig = container.responsibilities.iter().find(|r| r.id == rid).unwrap();
         assert_eq!(orig.stale, Some(true));
-        assert_eq!(orig.status, Some(Status::Implemented));
         assert!(
             container.responsibilities.iter().all(|r| r.vagrant != Some(true)),
             "undescribed behaviour must not land in the committed model"

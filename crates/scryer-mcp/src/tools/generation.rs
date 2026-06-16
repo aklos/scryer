@@ -16,7 +16,7 @@ use rmcp::{
 };
 use scryer_core::history::{EventKind, EventRow, HistoryEvent};
 use scryer_core::{
-    Group, Kind, Link, Node, Responsibility, SchemaProperty, SourceLocation, Status,
+    Group, Kind, Link, Node, Responsibility, SchemaProperty, SourceLocation,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -74,15 +74,10 @@ impl IdMinter {
         Responsibility {
             id,
             statement: statement.trim().to_string(),
-            status: Some(Status::Implemented),
             vagrant: None,
             stale: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
             directives: Vec::new(),
             last_touched_at: None,
-            changed_from: None,
         }
     }
 
@@ -115,10 +110,7 @@ fn blank_node(id: String, kind: Kind, name: String, parent_id: String) -> Node {
         icon: None,
         visual: None,
         appearance: None,
-        relocated: None,
-        locked: None,
-        relocated_to: None,
-        relocated_from: None,
+        notes: None,
     }
 }
 
@@ -317,7 +309,6 @@ impl ScryerServer {
                     .map(|property| SchemaProperty {
                         label: property.label.clone(),
                         description: property.description.clone(),
-                        status: Some(Status::Implemented),
                         last_touched_at: None,
                     })
                     .collect();

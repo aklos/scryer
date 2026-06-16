@@ -17,9 +17,10 @@ export interface Editor {
       technology?: string;
       icon?: string;
       visual?: boolean;
-      relocated?: boolean;
       responsibilities?: Responsibility[];
       properties?: SchemaProperty[];
+      /** User-authored freeform notes (gutter). `""`/undefined clears it. */
+      notes?: string;
     },
   ) => void;
   deleteNode: (nodeId: string) => void;

@@ -46,7 +46,6 @@ import {
   removeProperty,
   removeResponsibility,
   setNodeGroup as setNodeGroupHelper,
-  unlockRelocatedSource as unlockRelocatedSourceHelper,
   updateGroup as updateGroupHelper,
   updateNode as updateNodeHelper,
   updateProperty,
@@ -300,6 +299,25 @@ function Workspace({
     [ancestorsToExpand],
   );
 
+  // Selecting a node from within the diagram highlights it (and reveals it in
+  // the tree) without reframing the diagram — unlike `selectNode`, which jumps
+  // the diagram to the selection's level. The diagram drives its own focus via
+  // `drillDiagram`, so a single click should leave the current frame alone.
+  const selectFromDiagram = useCallback(
+    (id: string | null) => {
+      // A pane click passes the level's parent (null at the top level), which
+      // deselects everything on the current view; select it, or clear when null.
+      if (id === null) {
+        setSelected(null);
+        return;
+      }
+      setSelected({ kind: "node", id });
+      setExpanded((prev) => new Set([...prev, ...ancestorsToExpand(id)]));
+      clearNewNode(id);
+    },
+    [ancestorsToExpand, clearNewNode],
+  );
+
   const toggle = useCallback((id: string, expand?: boolean) => {
     setExpanded((prev) => {
       const has = prev.has(id);
@@ -453,16 +471,7 @@ function Workspace({
       updateResponsibility: (host, hostId, respId, patch) =>
         updateModel((m) => updateResponsibility(m, host, hostId, respId, patch)),
       removeResponsibility: (host, hostId, respId) =>
-        updateModel((m) => {
-          const resps =
-            host === "node"
-              ? m.nodes.find((n) => n.id === hostId)?.responsibilities
-              : m.groups.find((g) => g.id === hostId)?.responsibilities;
-          const deleted = resps?.find((r) => r.id === respId);
-          let next = removeResponsibility(m, host, hostId, respId);
-          if (deleted?.relocatedFrom) next = unlockRelocatedSourceHelper(next, deleted);
-          return next;
-        }),
+        updateModel((m) => removeResponsibility(m, host, hostId, respId)),
       moveResponsibility: (fromNodeId, toNodeId, respId) =>
         updateModel((m) => moveResponsibilityHelper(m, fromNodeId, toNodeId, respId)),
       addProperty: (nodeId) => updateModel((m) => addProperty(m, nodeId, "", "")),
@@ -525,7 +534,7 @@ function Workspace({
 
   // The status-bar counters, shared with the special pages so the number and
   // the list can never disagree.
-  const reviewIndex = buildReviewIndex(model, healthReport, driftScopes, newNodeIds, newRespIds);
+  const reviewIndex = buildReviewIndex(model, committed, healthReport, driftScopes, newNodeIds, newRespIds);
 
   return (
     <div className="flex h-screen w-screen flex-col bg-[var(--surface-canvas)]">
@@ -559,7 +568,7 @@ function Workspace({
             focusId={diagramFocus}
             selectedId={selected?.kind === "node" ? selected.id : null}
             onFocus={drillDiagram}
-            onSelectNode={selectNode}
+            onSelectNode={selectFromDiagram}
           />
         ) : selected?.kind === "special" ? (
           selected.id === "changes" ? (
@@ -567,6 +576,7 @@ function Workspace({
           ) : (
             <NeedsReviewPage
               model={model}
+              committed={committed}
               report={healthReport}
               driftScopes={driftScopes}
               newNodeIds={newNodeIds}

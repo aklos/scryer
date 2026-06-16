@@ -60,7 +60,7 @@ once code changes afterward.\n\
 \n\
 ## Knowing where work is needed (health)\n\
 `get_health` is the deterministic observability report — call it BEFORE reading full subtrees to decide where to \
-work. Per node it rolls up statuses, vagrant flags, and anchor coverage: a claim on a LEAF node that says code \
+work. Per node it rolls up vagrant/stale flags and anchor coverage: a claim on a LEAF node that says code \
 exists but has no source anchor is `unmapped` (a blind spot to fix via `update_source_map`); a claim on a \
 structural node is discharged through its subtree and is never unmapped. It also reports anchor observations from the \
 git-free fingerprint check (`changed` / `broken` / `fileMissing` anchors; moved-but-unchanged symbols are \

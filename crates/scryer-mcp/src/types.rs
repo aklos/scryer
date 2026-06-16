@@ -31,7 +31,7 @@ pub(crate) struct SearchModelRequest {
 pub(crate) struct QueryCondition {
     /// Queryable node field. One of:
     /// `kind`, `name`, `description`, `technology` (strings);
-    /// `external`, `relocated`, `visual`, `empty`, `vagrant` (booleans —
+    /// `external`, `visual`, `empty`, `vagrant` (booleans —
     /// `empty` = a symbol with no responsibility/property/appearance, `vagrant` = carries a
     /// discovered-in-code responsibility awaiting review);
     /// `responsibilityCount`, `propertyCount`, `childCount` (numbers).
@@ -110,9 +110,9 @@ pub(crate) struct MarkImplementedRequest {
     pub project: Option<String>,
     /// The node whose outstanding work you just implemented.
     pub node_id: String,
-    /// Optional: specific responsibility ids to mark implemented. Omit to advance EVERYTHING
-    /// outstanding on the node — every `proposed`/`changed` responsibility and property, plus a
-    /// `proposed`/`changed` appearance — to `implemented`.
+    /// Optional: specific responsibility ids to fold into the committed model. Omit to fold
+    /// EVERYTHING outstanding on the node — every planned responsibility and property, plus the
+    /// appearance.
     pub responsibility_ids: Option<Vec<String>>,
 }
 
@@ -191,8 +191,6 @@ pub(crate) struct UpdateNodeItem {
     /// true for a visual/UI component (React component, UI element). Enables
     /// the preview rendering workflow on the node's page.
     pub visual: Option<bool>,
-    /// Mark node as reparented (code needs to move). Set true to flag, false to clear.
-    pub relocated: Option<bool>,
     /// New parent node ID. Changes the node's parent (reparent operation).
     pub parent_id: Option<String>,
 }
@@ -345,7 +343,7 @@ pub(crate) struct SetImplementingRequest {
 // These build nodes from INTENT: the agent supplies meaning (name, plain
 // responsibility statements, the source location it already has from the
 // codebase context), and the tool mints the node id + responsibility ids,
-// fixes the kind from the parent, defaults status to `implemented`, and (for
+// fixes the kind from the parent, and (for
 // symbols) writes the source map. The agent never constructs the JSON shape.
 
 /// Person/actor to add at the top level.
@@ -355,7 +353,7 @@ pub(crate) struct PersonItem {
     pub name: String,
     /// Their identity in a few words (what they ARE), not a re-list of responsibilities. Optional.
     pub description: Option<String>,
-    /// Pure business-responsibility statements — one terse verb-led clause each, no mechanism vocabulary. Status defaults to implemented.
+    /// Pure business-responsibility statements — one terse verb-led clause each, no mechanism vocabulary.
     #[serde(default)]
     pub responsibilities: Vec<String>,
 }
@@ -403,7 +401,7 @@ pub(crate) struct ContainerItem {
     /// true for an external/third-party container.
     #[serde(default)]
     pub external: bool,
-    /// Pure business-responsibility statements. Status defaults to implemented.
+    /// Pure business-responsibility statements.
     #[serde(default)]
     pub responsibilities: Vec<String>,
     /// Project-relative directory this container owns (from the codebase context). Sets a boundary glob "{dir}/**/*" automatically — no separate update_source_map call needed.
@@ -425,7 +423,7 @@ pub(crate) struct ComponentItem {
     pub parent_id: String,
     pub name: String,
     pub description: Option<String>,
-    /// Pure business-responsibility statements. Status defaults to implemented.
+    /// Pure business-responsibility statements.
     #[serde(default)]
     pub responsibilities: Vec<String>,
 }
@@ -451,7 +449,7 @@ pub(crate) struct GroupItem {
     /// Node ids to enclose — all must be children of `parent_id`, same level. 2+ members.
     #[serde(default)]
     pub member_ids: Vec<String>,
-    /// Optional unit-level responsibility statements (e.g. "deploys atomically"). Status defaults to implemented.
+    /// Optional unit-level responsibility statements (e.g. "deploys atomically").
     #[serde(default)]
     pub responsibilities: Vec<String>,
 }
@@ -526,10 +524,10 @@ pub(crate) struct SymbolItem {
     pub line: Option<u32>,
     /// 1-based end line of the definition.
     pub end_line: Option<u32>,
-    /// Responsibilities this symbol discharges. Each can be a plain string or `{statement, line?, endLine?}` with the specific line range within the symbol that does the work. Status defaults to implemented.
+    /// Responsibilities this symbol discharges. Each can be a plain string or `{statement, line?, endLine?}` with the specific line range within the symbol that does the work.
     #[serde(default)]
     pub responsibilities: Vec<ResponsibilityInput>,
-    /// Field declarations when this symbol declares a data shape (struct/class/interface/type/config object). One per field. Status defaults to implemented.
+    /// Field declarations when this symbol declares a data shape (struct/class/interface/type/config object). One per field.
     #[serde(default)]
     pub properties: Vec<PropertyInput>,
     /// true for a visual/UI component (React component, UI element). Enables

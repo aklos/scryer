@@ -20,6 +20,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   Check,
   CircleDashed,
+  CornerDownRight,
   Eye,
   FileClock,
   Flag,
@@ -59,6 +60,7 @@ import {
 } from "./history";
 import { matchPreviewComponent, usePreviewServer } from "./hooks/usePreviewServer";
 import { ClaimSource, respElementId } from "./SourceSection";
+import { PageMenuProvider, usePageMenu, useCopyId, copyIdItem } from "./pageMenu";
 import {
   BTN,
   BTN_DANGER,
@@ -73,6 +75,26 @@ import {
   SectionEditor,
   WikiText,
 } from "./pagekit";
+
+// Row grid for the mono lanes: marker | index | content. The edit controls
+// (CTL) float over the right edge as an absolute overlay (so `relative`), which
+// takes no layout space — read↔edit stays the same width and never reflows.
+const RESP_ROW = "relative grid grid-cols-[18px_22px_1fr] items-baseline";
+const PROP_ROW = "relative grid grid-cols-[18px_22px_1fr] items-baseline";
+
+// The mockup's `.ctl` overlay, scoped to a statement (`/srow`) or directive
+// (`/drow`) line so each line reveals only its own controls on hover. Same
+// gradient float as the shared CTL; `not-italic` keeps buttons upright on the
+// italic directive rows.
+const CTL_BASE =
+  "pointer-events-none invisible absolute inset-y-0 -right-1 z-10 flex items-center gap-1.5 not-italic pl-9 pr-1 [background-image:linear-gradient(90deg,transparent,color-mix(in_srgb,var(--text)_4%,var(--surface-canvas))_28px)]";
+const CTL_SROW = `${CTL_BASE} group-hover/srow:visible`;
+const CTL_DROW = `${CTL_BASE} group-hover/drow:visible`;
+// Full-cell field highlight: dim on line hover, brighter while focused.
+const STMT_HL =
+  "group-hover/srow:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus:bg-[var(--surface-active)]";
+const DIR_HL =
+  "group-hover/drow:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus:bg-[var(--surface-active)]";
 
 export interface VariationState {
   nodeId: string;
@@ -151,11 +173,19 @@ export function NodePage(props: PageProps) {
   if (selected.kind === "group") {
     const group = model.groups.find((g) => g.id === selected.id);
     if (!group) return <Gone />;
-    return <GroupPageBody key={group.id} {...props} group={group} />;
+    return (
+      <PageMenuProvider>
+        <GroupPageBody key={group.id} {...props} group={group} />
+      </PageMenuProvider>
+    );
   }
   const node = model.nodes.find((n) => n.id === selected.id);
   if (!node) return <Gone />;
-  return <NodePageBody key={node.id} {...props} node={node} />;
+  return (
+    <PageMenuProvider>
+      <NodePageBody key={node.id} {...props} node={node} />
+    </PageMenuProvider>
+  );
 }
 
 function Gone() {
@@ -444,6 +474,8 @@ function NodePageBody(props: PageProps & { node: Node }) {
     onDismissDrift,
   } = props;
   const ed = useEditSections();
+  const openMenu = usePageMenu();
+  const copyId = useCopyId();
   const [tab, setTab] = useState<"overview" | "history">("overview");
   // This node's slice of the durable committed-model timeline.
   const nodeEvents = useMemo(
@@ -633,11 +665,16 @@ function NodePageBody(props: PageProps & { node: Node }) {
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="max-w-[900px] px-7 pb-[50px] pt-[18px]">
-          {tab === "history" ? (
+        {tab === "history" ? (
+          <div className="max-w-[900px] px-7 pb-[50px] pt-[18px]">
             <NodeHistory events={nodeEvents} projectPath={projectPath} />
-          ) : (
-            <>
+          </div>
+        ) : (
+          <div className="flex gap-8 px-7 pb-[50px] pt-[18px]">
+            <article
+              className="min-w-0 max-w-[900px] flex-1"
+              onContextMenu={(e) => openMenu(e, [copyIdItem(node.id, copyId)])}
+            >
               {bannerStack && (
                 <div className="mb-5 flex flex-col gap-2">{bannerStack}</div>
               )}
@@ -714,9 +751,17 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 onToggle={() => ed.toggle("connections")}
                 onSelectNode={onSelectNode}
               />
-            </>
-          )}
-        </div>
+            </article>
+            <NotesGutter
+              node={node}
+              model={model}
+              editor={editor}
+              editing={ed.isEditing("notes")}
+              onToggle={() => ed.toggle("notes")}
+              onSelectNode={onSelectNode}
+            />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -727,6 +772,8 @@ function NodePageBody(props: PageProps & { node: Node }) {
 function GroupPageBody(props: PageProps & { group: Group }) {
   const { model, committed, group, editor, projectPath, onSelectNode, newRespIds, onClearNewResp } = props;
   const ed = useEditSections();
+  const openMenu = usePageMenu();
+  const copyId = useCopyId();
   const members = group.memberIds
     .map((id) => model.nodes.find((n) => n.id === id))
     .filter((n): n is Node => Boolean(n));
@@ -775,7 +822,10 @@ function GroupPageBody(props: PageProps & { group: Group }) {
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="max-w-[900px] px-7 pb-[50px] pt-[18px]">
+        <div
+          className="max-w-[900px] px-7 pb-[50px] pt-[18px]"
+          onContextMenu={(e) => openMenu(e, [copyIdItem(group.id, copyId)])}
+        >
             <DescriptionSection
               value={group.description}
               prevValue={committed?.groups.find((g) => g.id === group.id)?.description}
@@ -1022,6 +1072,167 @@ function DescriptionSection({
   );
 }
 
+// --- notes gutter ------------------------------------------------------------
+
+/** Render notes read-only: lines starting with `- ` (or `• `) group into a
+ *  bullet list; everything else is a paragraph. Each line's prose runs through
+ *  WikiText so `[[Name]]` links resolve. */
+function NotesRead({
+  text,
+  nodes,
+  onSelectNode,
+}: {
+  text: string;
+  nodes: readonly Node[];
+  onSelectNode: (id: string) => void;
+}) {
+  const blocks: React.ReactNode[] = [];
+  let bullets: string[] = [];
+  const flush = () => {
+    if (!bullets.length) return;
+    const items = bullets;
+    blocks.push(
+      <ul key={blocks.length} className="list-disc space-y-0.5 pl-4">
+        {items.map((b, i) => (
+          <li key={i}>
+            <WikiText text={b} nodes={nodes} onSelectNode={onSelectNode} />
+          </li>
+        ))}
+      </ul>,
+    );
+    bullets = [];
+  };
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\s*[-•]\s+(.*)$/);
+    if (m) {
+      bullets.push(m[1]);
+    } else {
+      flush();
+      if (line.trim())
+        blocks.push(
+          <p key={blocks.length}>
+            <WikiText text={line} nodes={nodes} onSelectNode={onSelectNode} />
+          </p>,
+        );
+    }
+  }
+  flush();
+  return <div className="flex flex-col gap-1.5">{blocks}</div>;
+}
+
+/** Invisible in-place notes editor: a transparent, borderless, auto-growing
+ *  textarea with the same metrics as the read view (so the swap doesn't
+ *  reflow). Enter on a non-empty bullet line auto-continues the list with a new
+ *  `- `; Shift+Enter is always a plain newline. */
+function NotesEditable({
+  initial,
+  onInput,
+}: {
+  initial: string;
+  onInput: (text: string) => void;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const grow = (el: HTMLTextAreaElement) => {
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  };
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    grow(el);
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, []);
+  return (
+    <textarea
+      ref={ref}
+      defaultValue={initial}
+      rows={2}
+      placeholder="Notes to self. Start a line with “- ” for a bullet. Link nodes with [[Name]]."
+      onInput={(e) => {
+        grow(e.currentTarget);
+        onInput(e.currentTarget.value);
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== "Enter" || e.shiftKey) return;
+        const ta = e.currentTarget;
+        const lineStart = ta.value.lastIndexOf("\n", ta.selectionStart - 1) + 1;
+        const line = ta.value.slice(lineStart, ta.selectionStart);
+        const m = line.match(/^\s*[-•]\s+(.*)$/);
+        if (m && m[1].trim() !== "") {
+          e.preventDefault();
+          ta.setRangeText("\n- ", ta.selectionStart, ta.selectionEnd, "end");
+          grow(ta);
+          onInput(ta.value);
+        }
+      }}
+      className="w-full resize-none whitespace-pre-wrap bg-transparent text-[12.5px] leading-[1.6] text-[var(--text-secondary)] outline-none placeholder:text-[var(--text-muted)]"
+    />
+  );
+}
+
+/**
+ * The right-margin gutter: the user's own freeform notes about this node —
+ * self-context and traversal aids, NOT part of the spec (distinct from the
+ * description and from a responsibility's directives). Supports `[[Name]]`
+ * wikilinks like every prose field. User-only; the agent never authors it.
+ * Node-only (groups carry no `notes`).
+ */
+function NotesGutter({
+  node,
+  model,
+  editor,
+  editing,
+  onToggle,
+  onSelectNode,
+}: {
+  node: Node;
+  model: ScryModel;
+  editor: Editor | undefined;
+  editing: boolean;
+  onToggle: () => void;
+  onSelectNode: (id: string) => void;
+}) {
+  const notes = node.notes;
+  return (
+    <aside className="ml-auto hidden w-[240px] shrink-0 lg:block">
+      <div className="group/gutter sticky top-0">
+        <div className="mb-2 flex items-end justify-between gap-2 border-b border-[var(--border)] pb-[5px]">
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.07em] text-[var(--text-tertiary)]">
+            Notes
+          </h2>
+          {editor && !editing && (
+            <EditLink
+              editing={false}
+              onClick={onToggle}
+              className="invisible group-hover/gutter:visible"
+            />
+          )}
+        </div>
+        {editing && editor ? (
+          <SectionEditor<string>
+            initial={notes ?? ""}
+            onCommit={(v) => editor.updateNode(node.id, { notes: v.trim() || undefined })}
+            onClose={onToggle}
+          >
+            {(_draft, setDraft) => (
+              <NotesEditable initial={notes ?? ""} onInput={setDraft} />
+            )}
+          </SectionEditor>
+        ) : notes ? (
+          <div className="text-[12.5px] leading-[1.6] text-[var(--text-secondary)]">
+            <NotesRead text={notes} nodes={model.nodes} onSelectNode={onSelectNode} />
+          </div>
+        ) : (
+          <p className="text-[12.5px] italic leading-[1.6] text-[var(--text-muted)]">
+            No notes.
+          </p>
+        )}
+      </div>
+    </aside>
+  );
+}
+
 
 // --- responsibilities (the diff view) ---------------------------------------
 
@@ -1219,7 +1430,7 @@ function ResponsibilitiesEditor({
 }) {
   const seededId = seedNewRow ? nextResponsibilityId(initial) : null;
   const start: Responsibility[] = seededId
-    ? [...initial, { id: seededId, statement: "", status: "proposed" }]
+    ? [...initial, { id: seededId, statement: "" }]
     : initial;
 
   const commit = (draft: Responsibility[]) => {
@@ -1248,12 +1459,12 @@ function ResponsibilitiesEditor({
           onClick={() =>
             setDraft((d) => [
               ...d,
-              { id: nextResponsibilityId(d), statement: "", status: "proposed" },
+              { id: nextResponsibilityId(d), statement: "" },
             ])
           }
           className={BTN}
         >
-          <Plus className="h-3 w-3" /> Add responsibility
+          Add responsibility
         </button>
       )}
     >
@@ -1321,6 +1532,8 @@ function RespDiffRow({
   editor: Editor | undefined;
 }) {
   const { resp, kind, prev, index } = row;
+  const openMenu = usePageMenu();
+  const copyId = useCopyId();
   const mark = kind === "unchanged" ? null : RESP_MARK[kind];
   const deleted = kind === "deleted";
   const directives = resp.directives ?? [];
@@ -1334,9 +1547,7 @@ function RespDiffRow({
   // but anchors to no source is a blind spot. Added/vagrant claims are plan-only
   // or code-first, so they're never "unmapped".
   const unmapped = leafHost && locations.length === 0 && (kind === "unchanged" || kind === "reworded");
-  const relocTarget = resp.relocatedTo ? model.nodes.find((n) => n.id === resp.relocatedTo) : undefined;
-  const relocSource = resp.relocatedFrom ? model.nodes.find((n) => n.id === resp.relocatedFrom) : undefined;
-  const hasMeta = resp.stale === true || unmapped || !!relocTarget || !!relocSource;
+  const hasMeta = resp.stale === true || unmapped;
 
   const contentColor = deleted
     ? "text-[var(--text-muted)]"
@@ -1349,7 +1560,8 @@ function RespDiffRow({
     <li
       id={respElementId(resp.id)}
       onMouseEnter={isNew ? onSeen : undefined}
-      className={`grid grid-cols-[18px_22px_1fr] items-baseline rounded-sm py-[1.5px] [&:not(:first-child)]:mt-2.5 ${
+      onContextMenu={(e) => openMenu(e, [copyIdItem(resp.id, copyId)])}
+      className={`${RESP_ROW} rounded-sm py-[1.5px] [&:not(:first-child)]:mt-2.5 ${
         isNew ? "bg-violet-500/10" : ""
       }`}
     >
@@ -1361,7 +1573,7 @@ function RespDiffRow({
       <span className="select-none pr-2.5 text-right font-mono text-[11px] tabular-nums text-[var(--text-ghost)]">
         {index}
       </span>
-      <div className="min-w-0 font-mono text-[12.5px] leading-[1.65]">
+      <div className="min-w-0 pr-[180px] font-mono text-[12.5px] leading-[1.65]">
         <span className={contentColor}>
           {resp.statement ? (
             kind === "reworded" && prev ? (
@@ -1393,26 +1605,6 @@ function RespDiffRow({
               >
                 unmapped
               </span>
-            )}
-            {relocTarget && (
-              <button
-                type="button"
-                onClick={() => onSelectNode(relocTarget.id)}
-                className={`${FLAG_COLORS.relocated.pill} cursor-pointer hover:underline`}
-                title="This claim's code was relocated — jump to where it lives now"
-              >
-                moved to {relocTarget.name || "node"}
-              </button>
-            )}
-            {relocSource && (
-              <button
-                type="button"
-                onClick={() => onSelectNode(relocSource.id)}
-                className={`${FLAG_COLORS.relocated.pill} cursor-pointer hover:underline`}
-                title="This claim arrived from another node — jump to its origin"
-              >
-                moved from {relocSource.name || "node"}
-              </button>
             )}
           </span>
         )}
@@ -1470,7 +1662,7 @@ function RespDiffRow({
       {directives.map((d, i) => {
         const added = !!prev && !prevDirs.includes(d) && !deleted;
         return (
-          <li key={`d${i}`} className="grid grid-cols-[18px_22px_1fr] items-baseline py-[0.5px]">
+          <li key={`d${i}`} className={`${RESP_ROW} py-[0.5px]`}>
             <span
               className={`select-none text-center font-mono text-xs font-bold ${
                 added ? "text-emerald-600 dark:text-emerald-400" : "text-[var(--text-ghost)]"
@@ -1480,25 +1672,27 @@ function RespDiffRow({
             </span>
             <span className="select-none" />
             <div
-              className={`min-w-0 font-mono text-[12.5px] italic leading-[1.65] ${
+              className={`flex min-w-0 items-baseline gap-1.5 pr-[180px] font-mono text-[12.5px] leading-[1.65] ${
                 added ? "text-emerald-600 dark:text-emerald-400" : "text-[var(--text-tertiary)]"
               }`}
             >
-              →{" "}
-              <WikiText text={d} nodes={model.nodes} onSelectNode={onSelectNode}/>
+              <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px not-italic text-[var(--text-ghost)]" />
+              <span className="min-w-0">
+                <WikiText text={d} nodes={model.nodes} onSelectNode={onSelectNode}/>
+              </span>
             </div>
           </li>
         );
       })}
       {removedDirs.map((d, i) => (
-        <li key={`rd${i}`} className="grid grid-cols-[18px_22px_1fr] items-baseline py-[0.5px]">
+        <li key={`rd${i}`} className={`${RESP_ROW} py-[0.5px]`}>
           <span className="select-none text-center font-mono text-xs font-bold text-red-600 dark:text-red-400">
             −
           </span>
           <span className="select-none" />
-          <div className="min-w-0 font-mono text-[12.5px] italic leading-[1.65] text-[var(--text-tertiary)]">
-            →{" "}
-            <del className="decoration-red-400/50">
+          <div className="flex min-w-0 items-baseline gap-1.5 pr-[180px] font-mono text-[12.5px] leading-[1.65] text-[var(--text-tertiary)]">
+            <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px not-italic text-[var(--text-ghost)]" />
+            <del className="min-w-0 decoration-red-400/50">
               <WikiText text={d} nodes={model.nodes} onSelectNode={onSelectNode}/>
             </del>
           </div>
@@ -1526,36 +1720,53 @@ function ResponsibilityEditRow({
   const directives = resp.directives ?? [];
   const setDirectives = (next: string[]) => onPatch(resp.id, { directives: next });
 
-  // In-place edit row: the field is a contentEditable span flowing in the SAME
-  // content cell as the read diff row, with the SAME font/size/line-height — so
-  // read↔edit is pixel-identical (no resize, no reflow). Controls float over
-  // the right edge (CTL) and take no layout space; the field highlights on
-  // row hover.
-  const FIELD_HL =
-    "group-hover/erow:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus:bg-[var(--surface-active)]";
+  // In-place edit row: each line is a contentEditable span flowing in the same
+  // content cell as the read diff row, with the SAME font/size/line-height, so
+  // read↔edit stays the same width. The statement and each directive are their
+  // own hover-scoped line (`/srow`, `/drow`): the full cell highlights on hover
+  // and its controls (CTL) float over the right edge with a gradient fade.
   return (
-    <li className="group/erow relative grid grid-cols-[18px_22px_1fr] items-baseline py-[1.5px] [&:not(:first-child)]:mt-2.5">
+    <li className={`group/erow ${RESP_ROW} py-[1.5px] [&:not(:first-child)]:mt-2.5`}>
       <span className="select-none text-center font-mono text-xs" />
       <span className="select-none pr-2.5 text-right font-mono text-[11px] tabular-nums text-[var(--text-ghost)]">
         {index}
       </span>
       <div className="min-w-0 font-mono text-[12.5px] leading-[1.65]">
-        <Editable
-          initial={resp.statement}
-          autoFocus={autoFocus}
-          placeholder="Verb-led statement of accountability"
-          onInput={(t) => onPatch(resp.id, { statement: t })}
-          className={`block text-[var(--text)] ${FIELD_HL}`}
-        />
+        <div className="group/srow relative">
+          <Editable
+            initial={resp.statement}
+            autoFocus={autoFocus}
+            placeholder="Verb-led statement of accountability"
+            onInput={(t) => onPatch(resp.id, { statement: t })}
+            className={`block !pr-[180px] text-[var(--text)] ${STMT_HL}`}
+          />
+          <span className={CTL_SROW}>
+            <button
+              type="button"
+              onClick={() => setDirectives([...directives, ""])}
+              className={BTN}
+            >
+              Directive
+            </button>
+            <button
+              type="button"
+              title="Delete responsibility"
+              onClick={() => onRemove(resp.id)}
+              className={BTN_DANGER}
+            >
+              Delete
+            </button>
+          </span>
+        </div>
 
         {directives.length > 0 && (
           <div className="mt-0.5 flex flex-col gap-0.5">
             {directives.map((d, i) => (
               <div
                 key={i}
-                className="group/drow relative flex items-baseline gap-1.5 italic text-[var(--text-tertiary)]"
+                className="group/drow relative flex items-baseline gap-1.5 text-[var(--text-tertiary)]"
               >
-                <span className="shrink-0 not-italic text-[var(--text-ghost)]">→</span>
+                <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px not-italic text-[var(--text-ghost)]" />
                 <Editable
                   initial={d}
                   autoFocus={d === ""}
@@ -1565,42 +1776,27 @@ function ResponsibilityEditRow({
                     next[i] = t;
                     setDirectives(next);
                   }}
-                  className={`block min-w-0 flex-1 ${FIELD_HL}`}
+                  className={`block min-w-0 flex-1 !pr-[180px] ${DIR_HL}`}
                 />
-                <button
-                  type="button"
-                  title="Remove directive"
-                  onClick={() => {
-                    const next = directives.slice();
-                    next.splice(i, 1);
-                    setDirectives(next);
-                  }}
-                  className="invisible absolute right-0 top-0 z-10 rounded p-0.5 pl-9 text-[var(--text-ghost)] [background-image:linear-gradient(90deg,transparent,color-mix(in_srgb,var(--text)_4%,var(--surface-canvas))_32px)] hover:text-red-400 group-hover/drow:visible cursor-pointer"
-                >
-                  <X className="h-3 w-3" />
-                </button>
+                <span className={CTL_DROW}>
+                  <button
+                    type="button"
+                    title="Remove directive"
+                    onClick={() => {
+                      const next = directives.slice();
+                      next.splice(i, 1);
+                      setDirectives(next);
+                    }}
+                    className={BTN_DANGER}
+                  >
+                    Delete
+                  </button>
+                </span>
               </div>
             ))}
           </div>
         )}
       </div>
-
-      {/* Statement-level controls — absolute, no layout impact (mockup .ctl). */}
-      <span className={CTL}>
-        <button type="button" onClick={() => setDirectives([...directives, ""])} className={BTN}>
-          <Plus className="h-3 w-3" /> Directive
-        </button>
-        {!resp.locked && (
-          <button
-            type="button"
-            title="Delete responsibility"
-            onClick={() => onRemove(resp.id)}
-            className={BTN_DANGER}
-          >
-            <Trash2 className="h-3 w-3" /> Delete
-          </button>
-        )}
-      </span>
     </li>
   );
 }
@@ -1661,7 +1857,7 @@ function PropDiffRow({
       ? "text-[var(--text-secondary)]"
       : "text-[var(--text)]";
   return (
-    <li className="grid grid-cols-[18px_22px_1fr] items-baseline rounded-sm py-[1.5px]">
+    <li className={`${PROP_ROW} rounded-sm py-[1.5px]`}>
       <span
         className={`select-none text-center font-mono text-xs font-bold ${mark?.color ?? "text-[var(--text-ghost)]"}`}
       >
@@ -1706,11 +1902,11 @@ function PropertyEditRow({
 }) {
   const FIELD_HL =
     "group-hover/erow:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus:bg-[var(--surface-active)]";
-  // Mirrors PropDiffRow's content cell exactly — `label — description` inline
-  // in the mono lane — with the two fields as contentEditable spans and the
-  // delete floated over the right edge (CTL), so read↔edit doesn't reflow.
+  // Mirrors PropDiffRow's content cell — `label — description` inline in the
+  // mono lane — with the two fields as contentEditable spans and the delete in
+  // the row's reserved trailing control column (CTL).
   return (
-    <li className="group/erow relative grid grid-cols-[18px_22px_1fr] items-baseline py-[1.5px]">
+    <li className={`group/erow ${PROP_ROW} py-[1.5px]`}>
       <span className="select-none text-center font-mono text-xs" />
       <span className="select-none pr-2.5 text-right font-mono text-[11px] tabular-nums text-[var(--text-ghost)]">
         {index}
@@ -1783,7 +1979,7 @@ function PropertiesSection({
             <button
               type="button"
               onClick={() =>
-                setDraft((d) => [...d, { label: "", description: "", status: "proposed" }])
+                setDraft((d) => [...d, { label: "", description: "" }])
               }
               className={BTN}
             >

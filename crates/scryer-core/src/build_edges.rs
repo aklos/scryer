@@ -282,7 +282,7 @@ pub fn derive_graph(model: &ScryModel, edges: &BuildEdges) -> DerivedGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Link, Node, Responsibility, Source, SourceLocation, Status};
+    use crate::{Link, Node, Responsibility, Source, SourceLocation};
 
     fn node(id: &str, kind: Kind, parent: Option<&str>) -> Node {
         Node {
@@ -298,10 +298,7 @@ mod tests {
             icon: None,
             visual: None,
             appearance: None,
-            relocated: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
+            notes: None,
         }
     }
 
@@ -428,15 +425,10 @@ mod tests {
         sa.responsibilities.push(Responsibility {
             id: "r1".into(),
             statement: "does".into(),
-            status: Some(Status::Implemented),
             vagrant: None,
             stale: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
             directives: Vec::new(),
             last_touched_at: None,
-            changed_from: None,
         });
         m.nodes.push(sa);
         m.nodes.push(node("symb", Kind::Symbol, Some("sys")));

@@ -478,10 +478,7 @@ mod tests {
             icon: None,
             visual: None,
             appearance: None,
-            relocated: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
+            notes: None,
         }
     }
 
@@ -489,15 +486,10 @@ mod tests {
         Responsibility {
             id: id.to_string(),
             statement: statement.to_string(),
-            status: None,
             vagrant: None,
             stale: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
             directives: Vec::new(),
             last_touched_at: None,
-            changed_from: None,
         }
     }
 
@@ -647,7 +639,6 @@ mod tests {
         crate::SchemaProperty {
             label: label.to_string(),
             description: description.to_string(),
-            status: None,
             last_touched_at: None,
         }
     }

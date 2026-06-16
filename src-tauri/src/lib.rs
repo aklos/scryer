@@ -1297,7 +1297,7 @@ async fn accept_visual_variation(
     if let Ok(mut m) = scryer_core::read_model_at(&parsed_ref) {
         if let Some(n) = m.nodes.iter_mut().find(|n| n.id == node_id) {
             n.appearance = Some(scryer_core::Appearance {
-                status: Some(scryer_core::Status::Changed),
+                status: Some(scryer_core::RenderState::Changed),
                 dist_path: Some(accepted_rel),
                 built_at: Some(scryer_core::drift::now_secs()),
                 source_hash: None,

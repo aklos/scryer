@@ -20,6 +20,8 @@ export interface CardData extends Record<string, unknown> {
   selected: boolean;
   /** Change mark (plan ?? drift) for this node, or null when unchanged. */
   mark?: Mark | null;
+  /** A selection exists elsewhere and this node isn't a neighbour — fade it. */
+  dimmed?: boolean;
 }
 export type RFCard = RFNode<CardData, "card">;
 
@@ -48,13 +50,17 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
   const shape = resolveShape(node.kind);
   const insets = getContentInsets(shape);
   const isExternal = node.external;
-  const expandable = isExpandable(node.kind) && !isExternal;
+  const isGhost = node.reference;
+  // Ghosts live elsewhere — no drill affordance; double-click navigates instead.
+  const expandable = isExpandable(node.kind) && !isExternal && !isGhost;
+  // Subgraph highlight: faded when a selection elsewhere doesn't touch this node.
+  const dimClass = data.dimmed ? "opacity-30" : isGhost ? "opacity-60" : "";
 
   // Person nodes: silhouette above, no background rect, normal text layout.
   if (node.kind === "person") {
     const longDesc = (node.description?.length ?? 0) > 80;
     return (
-      <div className="relative h-[160px] w-[180px]">
+      <div className={`relative h-[160px] w-[180px] transition-opacity ${data.dimmed ? "opacity-30" : ""}`}>
         <NodeHandles />
         <div
           className="absolute flex flex-col items-center justify-center overflow-visible text-[var(--text)]"
@@ -105,22 +111,22 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
   const markStroke = data.mark && !isExternal ? MARK_STROKE[data.mark] : null;
 
   return (
-    <div className="relative w-[180px]">
+    <div className={`relative w-[180px] transition-opacity ${dimClass}`}>
       <div className="relative h-[160px]">
         <ShapeBackground
           shape={shape}
-          fillClass={isExternal ? "fill-[var(--scryer-ext-bg)]" : "fill-[var(--scryer-node-bg)]"}
+          fillClass={isExternal || isGhost ? "fill-[var(--scryer-ext-bg)]" : "fill-[var(--scryer-node-bg)]"}
           strokeClass={
             selected
               ? "stroke-[var(--text)]"
               : markStroke
                 ? markStroke
-                : isExternal
+                : isExternal || isGhost
                   ? "stroke-[var(--scryer-outline-stroke)]"
                   : "stroke-[var(--border)]"
           }
           strokeWidth={selected ? 2.5 : markStroke ? 2 : 1}
-          strokeDasharray={isExternal ? "6 3" : undefined}
+          strokeDasharray={isExternal || isGhost ? "6 3" : undefined}
           kind={node.kind}
           external={!!isExternal}
         />

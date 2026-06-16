@@ -113,8 +113,7 @@ function fieldDiffs(pairs: [string, unknown, unknown][]): FieldDiff[] {
 function nodeFieldDiffs(prev: ScryModel, a: Node, b: Node): FieldDiff[] {
   const parentName = (m: ScryModel, id?: string) =>
     id ? m.nodes.find((n) => n.id === id)?.name ?? id : undefined;
-  const propsSummary = (n: Node) =>
-    (n.properties ?? []).map((p) => `${p.label}${p.status && p.status !== "implemented" ? ` (${p.status})` : ""}`);
+  const propsSummary = (n: Node) => (n.properties ?? []).map((p) => p.label);
   return fieldDiffs([
     ["name", a.name, b.name],
     ["kind", a.kind, b.kind],
@@ -122,7 +121,6 @@ function nodeFieldDiffs(prev: ScryModel, a: Node, b: Node): FieldDiff[] {
     ["technology", a.technology, b.technology],
     ["description", a.description, b.description],
     ["visual", !!a.visual, !!b.visual],
-    ["relocated", !!a.relocated, !!b.relocated],
     ["properties", propsSummary(a), propsSummary(b)],
   ]);
 }
@@ -130,7 +128,6 @@ function nodeFieldDiffs(prev: ScryModel, a: Node, b: Node): FieldDiff[] {
 function respFieldDiffs(a: Responsibility, b: Responsibility): FieldDiff[] {
   return fieldDiffs([
     ["statement", a.statement, b.statement],
-    ["status", a.status ?? "proposed", b.status ?? "proposed"],
     ["directives", a.directives, b.directives],
     ["stale", !!a.stale, !!b.stale],
     ["vagrant", !!a.vagrant, !!b.vagrant],
@@ -307,7 +304,6 @@ function nodeFingerprint(n: Node): string {
     n.technology ?? null,
     n.description ?? null,
     !!n.visual,
-    !!n.relocated,
     n.properties ?? [],
   ]);
 }
@@ -635,8 +631,8 @@ export function useModelStorage(): ModelStorage {
         if (edited === cur) return cur;
         // No status/baseline bookkeeping here any more: a canvas edit just
         // diverges the plan from the committed model, and `diff(committed,
-        // planned)` captures that divergence live — no per-claim `changed`
-        // flag or `changedFrom` snapshot to maintain.
+        // planned)` captures that divergence live — no per-claim baseline
+        // snapshot to maintain.
         // Journal the user's commit alongside agent writes — Recent changes
         // shows every editor, attributed. Staged here (idempotently, keyed on
         // `cur`) and flushed to the log by the effect below.

@@ -16,7 +16,12 @@ import type { Editor } from "./editor";
 import type { ModelHealthReport } from "./health";
 import { linkEvidence } from "./health";
 import { BTN, BTN_DANGER, BTN_GO, CTL, PageSection, SectionEditor } from "./pagekit";
+import { usePageMenu, useCopyId, copyIdItem } from "./pageMenu";
 import { wordDiff } from "./wordDiff";
+
+// Row grid: marker | index | content. The hover control (CTL) floats over the
+// right edge as an absolute overlay (hence `relative`), taking no layout space.
+const CONN_ROW = "relative grid grid-cols-[18px_22px_1fr] items-baseline";
 
 /** How a declared link diverges from the committed model: `added` (new in the
  *  plan), `reworded` (label/method/endpoint changed), `deleted` (committed but
@@ -120,6 +125,8 @@ function ConnRow({
   onSelectNode: (id: string) => void;
 }) {
   const { link, peer, kind, prev } = row;
+  const openMenu = usePageMenu();
+  const copyId = useCopyId();
   // A link the plan drops (committed-but-removed) or one staged for deletion in
   // the editor reads red + struck — deletion is the only thing link colour now
   // encodes. Everything else is a plain blue wikilink to a real page.
@@ -129,7 +136,10 @@ function ConnRow({
     ? "text-red-700 line-through decoration-red-500/60 dark:text-red-400"
     : "text-blue-700 dark:text-blue-400";
   return (
-    <li className="group/erow relative grid grid-cols-[18px_22px_1fr] items-baseline py-[1.5px]">
+    <li
+      className={`group/erow ${CONN_ROW} py-[1.5px]`}
+      onContextMenu={(e) => openMenu(e, [copyIdItem(link.id, copyId)])}
+    >
       <span
         className={`select-none text-center font-mono text-xs font-bold ${mark?.color ?? "text-[var(--text-ghost)]"}`}
       >
@@ -187,7 +197,7 @@ function SuggestedRow({
   onSelectNode: (id: string) => void;
 }) {
   return (
-    <li className="group/erow relative grid grid-cols-[18px_22px_1fr] items-baseline py-[1.5px]">
+    <li className={`group/erow ${CONN_ROW} py-[1.5px]`}>
       <span
         className={`relative top-px flex select-none justify-center ${declared ? "text-emerald-600 dark:text-emerald-400" : "text-[var(--text-ghost)]"}`}
       >

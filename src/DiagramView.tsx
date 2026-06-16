@@ -47,22 +47,35 @@ type RFDot = RFNode<DotData, "dot">;
 function DotNode({ data }: NodeProps<RFDot>) {
   const { node, selected, mark } = data;
   const meta = mark ? MARK_META[mark] : null;
+  const ghost = node.reference;
   // Dot size encodes connection count — a hub symbol reads larger than a leaf.
   const dia = dotDiameter(node.degree);
+  // A ghost (referenced from elsewhere) reads hollow: an outlined ring, no fill.
+  const discClass = ghost
+    ? "border border-dashed border-[var(--text-muted)] bg-transparent"
+    : meta
+      ? `bg-current ${meta.color}`
+      : "bg-[var(--text-ghost)]";
+  // Subgraph highlight: faded when a selection elsewhere doesn't touch this dot.
+  const dimClass = data.dimmed ? "opacity-20" : ghost ? "opacity-70" : "";
   return (
-    <div className="flex items-center gap-1.5">
+    <div className={`flex items-center gap-1.5 transition-opacity ${dimClass}`}>
       <span
         style={{ width: dia, height: dia }}
-        className={`relative shrink-0 rounded-full ${meta ? `bg-current ${meta.color}` : "bg-[var(--text-ghost)]"} ${
+        className={`relative shrink-0 rounded-full ${discClass} ${
           selected ? "ring-2 ring-[var(--border-strong)] ring-offset-1 ring-offset-[var(--surface-canvas)]" : ""
         }`}
-        title={meta?.label}
+        title={ghost ? `${node.name} (referenced — double-click to open)` : meta?.label}
       >
         <CenterHandle />
       </span>
       <span
         className={`max-w-[160px] truncate text-xs ${
-          selected ? "font-medium text-[var(--text)]" : "text-[var(--text-secondary)]"
+          ghost
+            ? "italic text-[var(--text-muted)]"
+            : selected
+              ? "font-medium text-[var(--text)]"
+              : "text-[var(--text-secondary)]"
         }`}
       >
         {node.name || "·"}
@@ -94,7 +107,7 @@ export function DiagramView({
   /** Currently selected node id (drives highlight). */
   selectedId: string | null;
   onFocus: (id: string | null) => void;
-  onSelectNode: (id: string) => void;
+  onSelectNode: (id: string | null) => void;
 }) {
   return (
     <ReactFlowProvider>
@@ -123,7 +136,7 @@ function DiagramInner({
   focusId: string | null;
   selectedId: string | null;
   onFocus: (id: string | null) => void;
-  onSelectNode: (id: string) => void;
+  onSelectNode: (id: string | null) => void;
 }) {
   const [scene, setScene] = useState<DiagramScene | null>(null);
   const { fitView } = useReactFlow();
@@ -161,6 +174,21 @@ function DiagramInner({
     };
   }, [model, diffIndex]);
 
+  // Subgraph highlight: when the selected node is on this level, its incident
+  // edges and neighbour nodes stay lit and everything else dims. Inactive when
+  // the selection lives at another level (nothing here to anchor it).
+  const highlight = useMemo(() => {
+    if (!scene || !selectedId || !scene.nodes.some((n) => n.id === selectedId)) {
+      return { active: false, neighbors: new Set<string>() };
+    }
+    const neighbors = new Set<string>([selectedId]);
+    for (const e of scene.edges) {
+      if (e.source === selectedId) neighbors.add(e.target);
+      else if (e.target === selectedId) neighbors.add(e.source);
+    }
+    return { active: true, neighbors };
+  }, [scene, selectedId]);
+
   const rfNodes = useMemo<Array<RFCard | RFDot>>(() => {
     if (!scene) return [];
     const type = scene.mode === "code" ? "dot" : "card";
@@ -168,9 +196,14 @@ function DiagramInner({
       id: n.id,
       type,
       position: { x: n.x, y: n.y },
-      data: { node: n, selected: n.id === selectedId, mark: markFor(n.id) },
+      data: {
+        node: n,
+        selected: n.id === selectedId,
+        mark: markFor(n.id),
+        dimmed: highlight.active && !highlight.neighbors.has(n.id),
+      },
     })) as Array<RFCard | RFDot>;
-  }, [scene, selectedId, markFor]);
+  }, [scene, selectedId, markFor, highlight]);
 
   const rfEdges = useMemo<RFEdge<EdgeData>[]>(() => {
     if (!scene) return [];
@@ -189,6 +222,7 @@ function DiagramInner({
         : null;
     return scene.edges.map((e) => {
       const h = handles?.get(e.id);
+      const connected = highlight.active && (e.source === selectedId || e.target === selectedId);
       return {
         id: e.id,
         source: e.source,
@@ -196,10 +230,16 @@ function DiagramInner({
         type: "rel" as const,
         sourceHandle: scene.mode === "code" ? "c" : h?.sourceHandle,
         targetHandle: scene.mode === "code" ? "c" : h?.targetHandle,
-        data: { label: e.label || undefined, method: e.method, dot: scene.mode === "code" },
+        data: {
+          label: e.label || undefined,
+          method: e.method,
+          dot: scene.mode === "code",
+          highlighted: connected,
+          dimmed: highlight.active && !connected,
+        },
       };
     });
-  }, [scene]);
+  }, [scene, selectedId, highlight]);
 
   // Refit when the level changes (a fresh scene of a different size/shape).
   const fitKey = `${focusId ?? "root"}:${rfNodes.length}`;
@@ -274,9 +314,21 @@ function DiagramInner({
             minZoom={0.2}
             maxZoom={2}
             onNodeClick={(_, n) => onSelectNode(n.id)}
+            // Clicking the empty canvas selects the parent of this level (the
+            // focus node), which practically deselects every node on screen. At
+            // the top level there's no parent, so it just clears the selection.
+            onPaneClick={() => onSelectNode(focusId)}
             onNodeDoubleClick={(_, n) => {
               const data = n.data as CardData;
-              if (data.node.hasChildren) onFocus(n.id);
+              if (data.node.reference) {
+                // Ghost: jump to where it actually lives — frame its real
+                // parent level and select it there.
+                const real = model.nodes.find((m) => m.id === n.id);
+                onFocus(real?.parentId ?? null);
+                onSelectNode(n.id);
+              } else if (data.node.hasChildren) {
+                onFocus(n.id);
+              }
             }}
             fitView
           >

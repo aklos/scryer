@@ -500,15 +500,10 @@ mod tests {
                     vec![Responsibility {
                         id: rid.into(),
                         statement: "does a thing".into(),
-                        status: None,
                         vagrant: None,
                         stale: None,
-                        locked: None,
-                        relocated_to: None,
-                        relocated_from: None,
                         directives: Vec::new(),
                         last_touched_at: None,
-                        changed_from: None,
                     }]
                 })
                 .unwrap_or_default(),
@@ -516,10 +511,7 @@ mod tests {
             icon: None,
             visual: None,
             appearance: None,
-            relocated: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
+            notes: None,
         }
     }
 

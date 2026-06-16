@@ -34,24 +34,6 @@ pub enum Kind {
     Symbol,
 }
 
-/// The PRESCRIPTIVE lifecycle — what the model says about the work. A status is
-/// moved deliberately (by the user, or by an agent closing out work); it is
-/// never a machine observation. Observations about the lens — vagrant
-/// behaviour, stale claims, broken/missing anchors — are FLAGS (or derived
-/// health data), a separate axis on top of the status.
-///
-/// `Changed` means exactly one thing: the spec was edited after the claim was
-/// implemented, so the code must catch up. (It is NOT a drift verdict — the
-/// drift check sets the `stale` flag instead.)
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum Status {
-    Proposed,
-    Implemented,
-    Verified,
-    Changed,
-}
-
 // --- Responsibility ---
 
 /// A pure business-responsibility statement. The `statement` field is the spec;
@@ -64,8 +46,6 @@ pub struct Responsibility {
     /// Verb-led business statement of accountability. No mechanism words.
     pub statement: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<Status>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vagrant: Option<bool>,
     /// Drift observation: the semantic check judged that the code no longer
     /// discharges this claim. Like `vagrant`, a flag awaiting a human/agent
@@ -74,14 +54,6 @@ pub struct Responsibility {
     /// `mark_implemented` or by editing the claim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stale: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub locked: Option<bool>,
-    /// Source side: node ID the responsibility was moved to.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relocated_to: Option<String>,
-    /// Destination side: node ID the responsibility came from.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relocated_from: Option<String>,
     /// Optional prescriptive HOW-constraints — verb-led "must"/"never" rules
     /// the implementation has to satisfy. User-authored: read-only to the agent,
     /// so hidden from write-tool input schemas (`schemars(skip)`) while still
@@ -98,25 +70,6 @@ pub struct Responsibility {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub last_touched_at: Option<u64>,
-    /// Spec snapshot from the last reconcile — the `statement`/`directives` as
-    /// they stood when the claim was implemented, captured the moment a user
-    /// reword flipped an `implemented`/`verified` claim to `changed`. Drives the
-    /// persistent "what it was → what it is now" diff and is dropped once the
-    /// claim leaves `changed` (the agent reconciled the edit with the code).
-    /// Canvas-authored, hidden from the agent's write schemas.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub changed_from: Option<SpecSnapshot>,
-}
-
-/// Snapshot of a responsibility's spec at its last reconcile — see
-/// [`Responsibility::changed_from`].
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SpecSnapshot {
-    pub statement: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub directives: Vec<String>,
 }
 
 // --- Code-level data ---
@@ -127,10 +80,8 @@ pub struct SchemaProperty {
     pub label: String,
     #[serde(default)]
     pub description: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<Status>,
-    /// Unix seconds of the last truth-bearing edit (label / description /
-    /// status). Drives the fossilization patina, exactly like
+    /// Unix seconds of the last truth-bearing edit (label / description).
+    /// Drives the fossilization patina, exactly like
     /// [`Responsibility::last_touched_at`]; stamped automatically, never authored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
@@ -167,16 +118,27 @@ pub struct SourceLocation {
 
 // --- Appearance (the look of a UI component) ---
 
-/// What a UI component is accountable for in how it LOOKS — a status-bearing
-/// contract alongside `responsibilities` (behavior) and `properties` (data).
-/// Same lifecycle: `implemented` when synced from code, `proposed` when
-/// planned, `changed` when the code drifts from the modeled look. Carries the
-/// built render artifact (`dist_path` + `source_hash`) used to detect that drift.
+/// The render-artifact lifecycle of a visual component's look. Its own axis,
+/// independent of the model→code plan (the diff between committed and planned):
+/// `Proposed` when the look is planned, `Implemented` when synced from / built
+/// off the code, `Changed` when the code drifts from the modeled look.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum RenderState {
+    Proposed,
+    Implemented,
+    Changed,
+}
+
+/// What a UI component is accountable for in how it LOOKS — a contract alongside
+/// `responsibilities` (behavior) and `properties` (data). Carries the built
+/// render artifact (`dist_path` + `source_hash`) used to detect drift from the
+/// look, plus the render lifecycle [`RenderState`].
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Appearance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<Status>,
+    pub status: Option<RenderState>,
     /// Project-relative path to the built render output directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dist_path: Option<String>,
@@ -225,16 +187,15 @@ pub struct Node {
     /// `preview`; the alias keeps older `.scry` files loading.)
     #[serde(default, alias = "preview", skip_serializing_if = "Option::is_none")]
     pub appearance: Option<Appearance>,
+    /// User-authored freeform notes for this node — self-context, traversal
+    /// aids, reminders to self. Distinct from `description` (what the node IS)
+    /// and from a responsibility's `directives` (HOW-constraints): notes carry
+    /// no spec or conformance role. Supports `[[node-id]]` wikilinks. User-only:
+    /// hidden from the agent's write-tool schemas (`schemars(skip)`) but
+    /// serialized and surfaced on read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relocated: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub locked: Option<bool>,
-    /// Ghost at old parent: node ID of the moved node.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relocated_to: Option<String>,
-    /// Moved node: node ID of the ghost left behind.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relocated_from: Option<String>,
+    #[schemars(skip)]
+    pub notes: Option<String>,
 }
 
 /// The `empty` flag — a SYMBOL that carries no semantic content of its own: no
@@ -541,23 +502,19 @@ pub fn write_model_at(r: &ModelRef, model: &ScryModel) -> Result<(), String> {
 }
 
 /// Whether two responsibilities differ in any *truth-bearing* field — the spec
-/// statement, status, refactoring flags, or directives. Excludes `last_touched_at`
+/// statement, drift flags, or directives. Excludes `last_touched_at`
 /// itself (that's the output) so an unchanged responsibility keeps its date.
 fn resp_truth_changed(a: &Responsibility, b: &Responsibility) -> bool {
     a.statement != b.statement
-        || a.status != b.status
         || a.vagrant != b.vagrant
         || a.stale != b.stale
-        || a.locked != b.locked
-        || a.relocated_to != b.relocated_to
-        || a.relocated_from != b.relocated_from
         || a.directives != b.directives
 }
 
-/// Whether two properties differ in any truth-bearing field (label / description
-/// / status). Excludes `last_touched_at`.
+/// Whether two properties differ in any truth-bearing field (label /
+/// description). Excludes `last_touched_at`.
 fn prop_truth_changed(a: &SchemaProperty, b: &SchemaProperty) -> bool {
-    a.label != b.label || a.description != b.description || a.status != b.status
+    a.label != b.label || a.description != b.description
 }
 
 /// Stamp `last_touched_at = now` on every responsibility/property whose
@@ -606,12 +563,6 @@ fn stamp_touches(model: &mut ScryModel, prior: Option<&ScryModel>, now: u64) {
         .unwrap_or_default();
 
     let date_resp = |r: &mut Responsibility, host: Option<&HashMap<&str, &Responsibility>>| {
-        // The reconcile snapshot only lives while the claim is `changed`; once
-        // it returns to any other status the spec edit has been reconciled, so
-        // the diff is resolved and the snapshot is dropped.
-        if r.status != Some(Status::Changed) {
-            r.changed_from = None;
-        }
         let prev = host.and_then(|m| m.get(r.id.as_str()).copied());
         r.last_touched_at = match prev {
             Some(pv) if !resp_truth_changed(pv, r) => pv.last_touched_at,
@@ -1234,24 +1185,16 @@ mod tests {
             responsibilities: vec![Responsibility {
                 id: "r1".into(),
                 statement: statement.into(),
-                status: Some(Status::Implemented),
                 vagrant: None,
                 stale: None,
-                locked: None,
-                relocated_to: None,
-                relocated_from: None,
                 directives: Vec::new(),
                 last_touched_at: None,
-                changed_from: None,
             }],
             properties: Vec::new(),
             icon: None,
             visual: None,
             appearance: None,
-            relocated: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
+            notes: None,
         });
         m
     }
@@ -1353,10 +1296,7 @@ mod lock_tests {
                         icon: None,
                         visual: None,
                         appearance: None,
-                        relocated: None,
-                        locked: None,
-                        relocated_to: None,
-                        relocated_from: None,
+                        notes: None,
                     };
                     m.nodes.push(node);
                     write_model_at(&r, &m).unwrap();
@@ -1390,10 +1330,7 @@ mod lock_tests {
             icon: None,
             visual: None,
             appearance: None,
-            relocated: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
+            notes: None,
         });
         write_model_at(&r, &m).unwrap();
 
@@ -1416,10 +1353,7 @@ mod lock_tests {
             icon: None,
             visual: None,
             appearance: None,
-            relocated: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
+            notes: None,
         });
         write_planned_at(&r, &planned).unwrap();
 
@@ -1443,10 +1377,7 @@ mod lock_tests {
             icon: None,
             visual: None,
             appearance: None,
-            relocated: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
+            notes: None,
         }
     }
 
@@ -1454,15 +1385,10 @@ mod lock_tests {
         Responsibility {
             id: id.into(),
             statement: statement.into(),
-            status: None,
             vagrant: None,
             stale: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
             directives: Vec::new(),
             last_touched_at: None,
-            changed_from: None,
         }
     }
 
@@ -1551,7 +1477,6 @@ mod lock_tests {
         a.properties.push(SchemaProperty {
             label: "email".into(),
             description: "old".into(),
-            status: None,
             last_touched_at: None,
         });
         m.nodes.push(a);

@@ -165,7 +165,6 @@ fn resolve_field(n: &Node, field: &str, child_count: usize) -> Result<FieldVal, 
         "description" => FieldVal::Str(n.description.clone()),
         "technology" => FieldVal::Str(n.technology.clone()),
         "external" => FieldVal::Bool(n.external == Some(true)),
-        "relocated" => FieldVal::Bool(n.relocated == Some(true)),
         "visual" => FieldVal::Bool(n.visual == Some(true)),
         "empty" => FieldVal::Bool(scryer_core::is_node_empty(n)),
         "vagrant" => FieldVal::Bool(n.responsibilities.iter().any(|r| r.vagrant == Some(true))),
@@ -177,7 +176,7 @@ fn resolve_field(n: &Node, field: &str, child_count: usize) -> Result<FieldVal, 
         other => {
             return Err(format!(
                 "Unknown query field '{}'. Valid: kind, name, description, technology, external, \
-                 relocated, visual, empty, vagrant, responsibilityCount, propertyCount, \
+                 visual, empty, vagrant, responsibilityCount, propertyCount, \
                  childCount.",
                 other
             ))
@@ -798,7 +797,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "The model's observability report — deterministic, no semantic judgment. Per node: own + subtree rollups of responsibility/property statuses, vagrant flags, and anchor coverage (anchorable = implemented claims on LEAF nodes; claims on structural nodes are discharged through their subtree and are never 'unmapped'). Plus: anchor observations from the git-free fingerprint check — `changed` (the anchored span's content differs from what the model last saw), `broken` (the symbol is gone), `fileMissing` — with moved-but-unchanged symbols silently re-anchored, and a declared-link audit against the extracted import graph (edge_count 0 = asserted-only; 'unmodeled' = sibling pairs the code connects but no link declares). Pass node_id to scope to one subtree with per-child summaries; omit it for the whole-model summary. Use this to decide WHERE work is needed (unmapped claims, vagrant flags, dark links) before reading full subtrees."
+        description = "The model's observability report — deterministic, no semantic judgment. Per node: own + subtree rollups of responsibility/property counts, vagrant/stale flags, and anchor coverage (anchorable = any committed claim on LEAF nodes; claims on structural nodes are discharged through their subtree and are never 'unmapped'). Plus: anchor observations from the git-free fingerprint check — `changed` (the anchored span's content differs from what the model last saw), `broken` (the symbol is gone), `fileMissing` — with moved-but-unchanged symbols silently re-anchored, and a declared-link audit against the extracted import graph (edge_count 0 = asserted-only; 'unmodeled' = sibling pairs the code connects but no link declares). Pass node_id to scope to one subtree with per-child summaries; omit it for the whole-model summary. Use this to decide WHERE work is needed (unmapped claims, vagrant flags, dark links) before reading full subtrees."
     )]
     fn get_health(
         &self,
@@ -979,7 +978,7 @@ impl ScryerServer {
 mod tests {
     use super::*;
     use rmcp::handler::server::wrapper::Parameters;
-    use scryer_core::{Kind, ModelRef, Node, Responsibility, ScryModel, Status};
+    use scryer_core::{Kind, ModelRef, Node, Responsibility, ScryModel};
 
     fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
         Node {
@@ -995,10 +994,7 @@ mod tests {
             icon: None,
             visual: None,
             appearance: None,
-            relocated: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
+            notes: None,
         }
     }
 
@@ -1006,15 +1002,10 @@ mod tests {
         Responsibility {
             id: id.into(),
             statement: statement.into(),
-            status: Some(Status::Implemented),
             vagrant: None,
             stale: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
             directives: Vec::new(),
             last_touched_at: None,
-            changed_from: None,
         }
     }
 
@@ -1344,30 +1335,20 @@ mod tests {
         sys.responsibilities.push(Responsibility {
             id: "r-sys".into(),
             statement: "orchestrates everything".into(),
-            status: Some(Status::Implemented),
             vagrant: None,
             stale: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
             directives: Vec::new(),
             last_touched_at: None,
-            changed_from: None,
         });
         m.nodes.push(sys);
         let mut leaf = node("leaf", Kind::Symbol, "leafFn", Some("sys"));
         leaf.responsibilities.push(Responsibility {
             id: "r-leaf".into(),
             statement: "does the thing".into(),
-            status: Some(Status::Implemented),
             vagrant: None,
             stale: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
             directives: Vec::new(),
             last_touched_at: None,
-            changed_from: None,
         });
         m.nodes.push(leaf);
         scryer_core::write_model_at(&model_ref, &m).unwrap();

@@ -22,6 +22,10 @@ export interface EdgeData extends Record<string, unknown> {
   method?: string;
   /** Code tier: endpoints are dot centers — inset to the dot rim. */
   dot?: boolean;
+  /** Incident to the selected node — kept lit while the rest of the graph dims. */
+  highlighted?: boolean;
+  /** A selection exists elsewhere — this edge isn't part of it, so it fades. */
+  dimmed?: boolean;
 }
 
 /** Dot radius (h-3 w-3 = 12px) plus a small gap, so the line/arrow kisses the
@@ -75,7 +79,8 @@ export function RelationshipEdge({
   const by = (ay1 + ay2) / 2;
   const far = 10000;
 
-  const edgeOpacity = selected ? 1 : 0.7;
+  // Subgraph highlight: edges touching the selection stay lit, the rest fade.
+  const edgeOpacity = selected || data?.highlighted ? 1 : data?.dimmed ? 0.18 : 0.7;
 
   return (
     <>
@@ -113,6 +118,7 @@ export function RelationshipEdge({
               transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
               zIndex: 1,
               pointerEvents: "all",
+              ...(data?.dimmed ? { opacity: 0.18 } : {}),
             }}
             className="flex flex-col items-center"
           >

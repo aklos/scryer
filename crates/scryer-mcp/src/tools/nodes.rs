@@ -134,10 +134,7 @@ impl ScryerServer {
                 icon: None,
                 visual: None,
                 appearance: None,
-                relocated: None,
-                locked: None,
-                relocated_to: None,
-                relocated_from: None,
+                notes: None,
             };
             model.nodes.push(node);
             added_ids.push(id);
@@ -156,7 +153,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Patch one or more existing nodes by id. Only fields present in each item are changed. Pass `responsibilities` or `properties` to replace the whole array (pass an empty array to clear). When changing `status`, pass `reason` with a short factual explanation. Code-side mapping (line-precise locations per responsibility, and boundary globs per node) is written separately via `update_source_map`."
+        description = "Patch one or more existing nodes by id. Only fields present in each item are changed. Pass `responsibilities` or `properties` to replace the whole array (pass an empty array to clear). Code-side mapping (line-precise locations per responsibility, and boundary globs per node) is written separately via `update_source_map`."
     )]
     fn update_nodes(
         &self,
@@ -211,9 +208,6 @@ impl ScryerServer {
             if let Some(v) = u.visual {
                 n.visual = if v { Some(true) } else { None };
             }
-            if let Some(v) = u.relocated {
-                n.relocated = if v { Some(true) } else { None };
-            }
             if let Some(v) = &u.parent_id {
                 n.parent_id = Some(v.clone());
             }
@@ -233,7 +227,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Mark a node's outstanding work as implemented after you've written the code — the counterpart to `get_unimplemented`, which closes the loop. Advances `proposed`/`changed` items to `implemented` and clears the `stale` drift flag on anything it advances (re-implementation is the verdict that resolves it). With no `responsibilityIds`, advances EVERYTHING outstanding on the node: every proposed/changed/stale responsibility and every proposed/changed property, plus a proposed/changed appearance (the visual). Pass `responsibilityIds` to advance only those responsibilities. Leaves clean `implemented`/`verified` items untouched (advancing to `verified` is a separate, checked step). Call this when you finish implementing, so the model stops reporting the work as outstanding."
+        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_unimplemented`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds EVERYTHING outstanding on the node: every planned responsibility and property, plus the appearance (the visual). Pass `responsibilityIds` to fold only those responsibilities. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding."
     )]
     fn mark_implemented(
         &self,
@@ -384,12 +378,6 @@ impl ScryerServer {
                     mv.node_id
                 ))]));
             };
-            if node.locked == Some(true) {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Node '{}' is locked and cannot be moved",
-                    mv.node_id
-                ))]));
-            }
             let kind = node.kind;
 
             match mv.new_parent_id.as_deref() {
@@ -644,7 +632,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Move responsibilities between nodes. Enforces transition rules: proposed responsibilities just move (no trace at source); implemented/verified responsibilities leave a locked relocated copy at the source and arrive as relocated at the destination. Deleting the destination copy later unlocks the source. Vagrant and locked responsibilities cannot be moved."
+        description = "Move responsibilities between nodes. A responsibility keeps its id and is reparented onto the destination node; the plan diff records the move (shown as `moved`). Vagrant responsibilities cannot be moved."
     )]
     fn move_responsibilities(
         &self,
@@ -681,11 +669,6 @@ impl ScryerServer {
                         "Responsibility '{}' not found on node '{}'", mv.responsibility_id, mv.from_node_id
                     ))]));
                 };
-                if r.locked == Some(true) {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Responsibility '{}' is locked and cannot be moved", mv.responsibility_id
-                    ))]));
-                }
                 if r.vagrant == Some(true) {
                     return Ok(CallToolResult::error(vec![Content::text(format!(
                         "Vagrant responsibility '{}' cannot be moved", mv.responsibility_id
@@ -700,79 +683,23 @@ impl ScryerServer {
                 ))]));
             }
 
-            // Relocated copies keep their lifecycle status (relocation is the
-            // relocated_to/relocated_from flag pair), so status alone tells us
-            // whether code backs the claim.
-            let has_code = matches!(
-                resp.status,
-                Some(scryer_core::Status::Implemented) | Some(scryer_core::Status::Verified)
-            );
-
-            let new_id = {
-                let all_resps: Vec<&scryer_core::Responsibility> = model.nodes.iter()
-                    .flat_map(|n| n.responsibilities.iter())
-                    .collect();
-                let max = all_resps.iter()
-                    .filter_map(|r| r.id.strip_prefix("resp-").and_then(|s| s.parse::<u64>().ok()))
-                    .max()
-                    .unwrap_or(0);
-                format!("resp-{}", max + 1)
-            };
-
-            if has_code {
-                // Relocation is a FLAG pair, never a status: the source becomes
-                // a locked ghost pointing forward; the claim's lifecycle is
-                // untouched by the move.
-                let from = model.nodes.iter_mut().find(|n| n.id == mv.from_node_id).unwrap();
-                if let Some(r) = from.responsibilities.iter_mut().find(|r| r.id == mv.responsibility_id) {
-                    r.locked = Some(true);
-                    r.relocated_to = Some(mv.to_node_id.clone());
-                }
-                // Destination: live copy pointing back, status carried through.
-                let dest_resp = scryer_core::Responsibility {
-                    id: new_id,
-                    statement: resp.statement.clone(),
-                    status: resp.status,
-                    vagrant: None,
-                    stale: None,
-                    locked: None,
-                    relocated_to: None,
-                    relocated_from: Some(mv.from_node_id.clone()),
-                    directives: resp.directives.clone(),
-                    last_touched_at: None,
-                    changed_from: None,
-                };
-                let to = model.nodes.iter_mut().find(|n| n.id == mv.to_node_id).unwrap();
-                to.responsibilities.push(dest_resp);
-            } else {
-                // Proposed: just move
-                let from = model.nodes.iter_mut().find(|n| n.id == mv.from_node_id).unwrap();
-                from.responsibilities.retain(|r| r.id != mv.responsibility_id);
-                let dest_resp = scryer_core::Responsibility {
-                    id: new_id,
-                    statement: resp.statement.clone(),
-                    status: resp.status,
-                    vagrant: None,
-                    stale: None,
-                    locked: None,
-                    relocated_to: None,
-                    relocated_from: None,
-                    directives: resp.directives.clone(),
-                    last_touched_at: None,
-                    changed_from: None,
-                };
-                let to = model.nodes.iter_mut().find(|n| n.id == mv.to_node_id).unwrap();
-                to.responsibilities.push(dest_resp);
-            }
+            // Plain reparent: keep the same id so the plan diff matches the
+            // claim by id and renders the move as `moved` (R). No ghost/locked
+            // copy at the source — the diff is the record of the relocation.
+            let statement = resp.statement.clone();
             let from_name = model
                 .nodes
                 .iter()
                 .find(|n| n.id == mv.from_node_id)
                 .map(|n| n.name.clone())
                 .unwrap_or_else(|| mv.from_node_id.clone());
+            let from = model.nodes.iter_mut().find(|n| n.id == mv.from_node_id).unwrap();
+            from.responsibilities.retain(|r| r.id != mv.responsibility_id);
+            let to = model.nodes.iter_mut().find(|n| n.id == mv.to_node_id).unwrap();
+            to.responsibilities.push(resp);
             reloc_rows.push((
                 mv.to_node_id.clone(),
-                format!("relocated “{}” from {}", resp.statement, from_name),
+                format!("relocated “{}” from {}", statement, from_name),
             ));
             moved += 1;
         }
@@ -804,7 +731,7 @@ fn _kind_check(_k: Kind) {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scryer_core::{Appearance, ModelRef, Responsibility, Status};
+    use scryer_core::{Appearance, ModelRef, RenderState, Responsibility};
 
     fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
         Node {
@@ -820,26 +747,18 @@ mod tests {
             icon: None,
             visual: None,
             appearance: None,
-            relocated: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
+            notes: None,
         }
     }
 
-    fn resp(id: &str, status: Status) -> Responsibility {
+    fn resp(id: &str) -> Responsibility {
         Responsibility {
             id: id.into(),
             statement: format!("does {id}"),
-            status: Some(status),
             vagrant: None,
             stale: None,
-            locked: None,
-            relocated_to: None,
-            relocated_from: None,
             directives: Vec::new(),
             last_touched_at: None,
-            changed_from: None,
         }
     }
 
@@ -859,9 +778,9 @@ mod tests {
         // Plan (draft): the node gains responsibilities and an appearance.
         let mut planned = m.clone();
         planned.nodes[0].responsibilities =
-            vec![resp("r-a", Status::Proposed), resp("r-b", Status::Proposed)];
+            vec![resp("r-a"), resp("r-b")];
         planned.nodes[0].appearance = Some(Appearance {
-            status: Some(Status::Proposed),
+            status: Some(RenderState::Proposed),
             dist_path: None,
             built_at: None,
             source_hash: None,
@@ -904,7 +823,7 @@ mod tests {
         // Committed model: node-1 already owns r-a.
         let mut m = ScryModel::new();
         let mut c = node("node-1", Kind::Component, "Billing", None);
-        c.responsibilities = vec![resp("r-a", Status::Implemented)];
+        c.responsibilities = vec![resp("r-a")];
         m.nodes.push(c);
         scryer_core::write_model_at(&model_ref, &m).unwrap();
 
@@ -913,10 +832,10 @@ mod tests {
         let mut planned = m.clone();
         planned.nodes[0]
             .responsibilities
-            .push(resp("r-b", Status::Proposed));
+            .push(resp("r-b"));
         planned.nodes[0]
             .responsibilities
-            .push(resp("r-c", Status::Proposed));
+            .push(resp("r-c"));
         scryer_core::write_planned_at(&model_ref, &planned).unwrap();
 
         let server = ScryerServer::new();

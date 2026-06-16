@@ -11,10 +11,12 @@
 
 export type WordSeg = { kind: "equal" | "added" | "removed"; text: string };
 
-/** Split into alternating word / whitespace tokens, keeping the whitespace so a
- *  reassembled "equal + added" run preserves the original spacing. */
+/** Split into whitespace runs, word runs (letters/digits/underscore), and
+ *  punctuation runs — keeping punctuation off the word so editing text next to
+ *  it doesn't change the word token, and keeping the whitespace so a reassembled
+ *  "equal + added" run preserves the original spacing. */
 function tokenize(s: string): string[] {
-  return s.match(/\s+|\S+/g) ?? [];
+  return s.match(/\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]+/gu) ?? [];
 }
 
 /** Longest-common-subsequence table over two token arrays (Wagner–Fischer). */

@@ -235,6 +235,7 @@ export interface ReviewIndex {
  *  status-bar counter so the number and the list can never disagree. */
 export function buildReviewIndex(
   model: ScryModel,
+  committed: ScryModel | null,
   report: ModelHealthReport | null,
   driftScopes: DriftScope[],
   newNodeIds: ReadonlySet<string>,
@@ -242,6 +243,11 @@ export function buildReviewIndex(
 ): ReviewIndex {
   const hasChildren = new Set(model.nodes.map((n) => n.parentId).filter(Boolean) as string[]);
   const sourceMap = model.sourceMap ?? {};
+  // Only committed claims are expected to read through to code; a planned-only
+  // (added) claim is outstanding work in the diff, never an "unmapped" blind spot.
+  const committedRespIds = new Set(
+    (committed?.nodes ?? []).flatMap((n) => (n.responsibilities ?? []).map((r) => r.id)),
+  );
   const vagrant: ClaimRef[] = [];
   const stale: ClaimRef[] = [];
   const unmapped: ClaimRef[] = [];
@@ -250,12 +256,11 @@ export function buildReviewIndex(
     for (const resp of node.responsibilities ?? []) {
       if (resp.vagrant) vagrant.push({ node, resp });
       if (resp.stale) stale.push({ node, resp });
-      const s = resp.status ?? "proposed";
       if (
         !hasChildren.has(node.id) &&
         !node.external &&
         node.kind !== "person" &&
-        (s === "implemented" || s === "verified" || s === "changed") &&
+        committedRespIds.has(resp.id) &&
         (sourceMap[resp.id] ?? []).length === 0
       )
         unmapped.push({ node, resp });
@@ -278,6 +283,7 @@ export function buildReviewIndex(
 
 export function NeedsReviewPage({
   model,
+  committed,
   report,
   driftScopes,
   newNodeIds,
@@ -289,6 +295,7 @@ export function NeedsReviewPage({
   onClearAllNew,
 }: {
   model: ScryModel;
+  committed: ScryModel | null;
   report: ModelHealthReport | null;
   driftScopes: DriftScope[];
   newNodeIds: ReadonlySet<string>;
@@ -299,7 +306,7 @@ export function NeedsReviewPage({
   onDismissDrift?: () => void;
   onClearAllNew: () => void;
 }) {
-  const idx = buildReviewIndex(model, report, driftScopes, newNodeIds, newRespIds);
+  const idx = buildReviewIndex(model, committed, report, driftScopes, newNodeIds, newRespIds);
   const anchors = collapseAnchors(report?.anchors ?? []);
 
   // Dropping a stale claim deletes an authored responsibility (and its anchors),

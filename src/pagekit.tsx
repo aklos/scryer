@@ -87,18 +87,20 @@ export function fieldKeys(
 /** One button system for the page (the mockup's `.btn`): bordered, sentence
  *  case, color = role. Set off the mono content in its own lane. */
 const BTN_BASE =
-  "inline-flex items-center gap-1 rounded-[5px] border px-2.5 py-0.5 text-[11px] transition-colors cursor-pointer whitespace-nowrap";
+  "pointer-events-auto inline-flex items-center gap-1 rounded-[5px] border px-2.5 py-0.5 text-[11px] transition-colors cursor-pointer whitespace-nowrap";
 export const BTN = `${BTN_BASE} border-[var(--border-strong)] bg-[var(--surface-hover)] text-[var(--text-secondary)] hover:bg-[var(--surface-active)] hover:text-[var(--text)]`;
 export const BTN_GO = `${BTN_BASE} border-emerald-500/45 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400`;
 export const BTN_DANGER = `${BTN_BASE} border-red-500/45 bg-red-500/10 text-red-600 hover:bg-red-500/20 dark:text-red-400`;
 
 /** Per-row edit controls (the mockup's `.ctl`): floated over the row's right
- *  edge with a gradient fade so they take NO layout space — the field keeps its
- *  full read-mode width and nothing reflows on edit. Pair with a `relative`
- *  row and a `group/erow` ancestor; controls reveal on row hover. The gradient
- *  fades into the editing section's tint. */
+ *  edge, top-aligned to the first line, with a gradient fade so they read over
+ *  the text and take NO layout space — the field keeps its full read-mode width
+ *  and nothing reflows on edit. The gradient is `pointer-events-none` so a click
+ *  just past the text falls through to the field (caret lands at the end); the
+ *  buttons re-enable pointer events themselves. Hidden until row hover; pair
+ *  with a `relative` row and a `group/erow` ancestor. */
 export const CTL =
-  "invisible absolute right-0 top-0 z-10 flex items-center gap-1.5 pl-9 [background-image:linear-gradient(90deg,transparent,color-mix(in_srgb,var(--text)_4%,var(--surface-canvas))_32px)] group-hover/erow:visible";
+  "pointer-events-none invisible absolute right-0 top-0 z-10 flex h-6 items-center gap-1.5 pl-9 [background-image:linear-gradient(90deg,transparent,color-mix(in_srgb,var(--text)_4%,var(--surface-canvas))_28px)] group-hover/erow:visible";
 
 /**
  * An in-place editable field — a `contentEditable` span, NOT a native input.
@@ -161,7 +163,7 @@ export function Editable({
           e.currentTarget.blur();
         }
       }}
-      className={`-mx-1 cursor-text whitespace-pre-wrap break-words rounded-[4px] px-1 outline-none empty:before:text-[var(--text-ghost)] empty:before:content-[attr(data-placeholder)] ${className}`}
+      className={`-mx-1 cursor-text whitespace-pre-wrap break-words rounded-[4px] px-1 outline-none empty:before:text-[var(--text-muted)] empty:before:content-[attr(data-placeholder)] ${className}`}
     />
   );
 }
