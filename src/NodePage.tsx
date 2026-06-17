@@ -50,7 +50,7 @@ import { FLAG_COLORS } from "./statusColors";
 import { isNodeEmpty } from "./rollup";
 import { kindIcon, typeTag } from "./kindIcon";
 import { lookupIcon } from "./IconPicker";
-import { ConnectionsSection } from "./ConnectionsSection";
+import { ConnectionsSection, ImpliedConnectionsSection } from "./ConnectionsSection";
 import type { ChangeRevision } from "./hooks/useModelStorage";
 import {
   EVENT_META,
@@ -792,6 +792,13 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 editor={editor}
                 editing={ed.isEditing("connections")}
                 onToggle={() => ed.toggle("connections")}
+                onSelectNode={onSelectNode}
+              />
+
+              <ImpliedConnectionsSection
+                model={model}
+                node={node}
+                report={report}
                 onSelectNode={onSelectNode}
               />
             </article>

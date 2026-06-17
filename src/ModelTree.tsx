@@ -742,11 +742,13 @@ export function ModelTree({
     const gMark = resolveMark(groupMarks(group, diffIndex));
     // Rolled-up change count across the group's members (their whole subtrees),
     // shown when collapsed so a folder still reads as "has pending work".
-    const memberCount = group.memberIds.reduce(
+    const changeRollup = group.memberIds.reduce(
       (s, id) => s + (subtreePlan.get(id) ?? 0) + (subtreeDrift.get(id) ?? 0),
       0,
     );
-    const rollupCount = row.isOpen ? 0 : memberCount;
+    const rollupCount = row.isOpen ? 0 : changeRollup;
+    // Declared member count, shown (quietly) only when collapsed.
+    const memberCount = row.isOpen ? 0 : group.memberIds.length;
 
     return (
       <div
@@ -793,6 +795,14 @@ export function ModelTree({
             group.name || <span className="text-[var(--text-ghost)]">Group</span>
           )}
         </span>
+        {memberCount > 0 && (
+          <span
+            className="shrink-0 font-mono text-[10px] tabular-nums text-[var(--text-ghost)]"
+            title={`${memberCount} member${memberCount === 1 ? "" : "s"}`}
+          >
+            {memberCount}
+          </span>
+        )}
         {rollupCount > 0 && (
           <span
             className="shrink-0 rounded-full bg-[var(--surface-active)] px-1.5 font-mono text-[10px] tabular-nums text-[var(--text-tertiary)]"

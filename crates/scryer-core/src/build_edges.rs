@@ -89,6 +89,22 @@ pub struct LinkAudit {
     pub edge_count: u32,
 }
 
+/// One leaf code edge with both endpoints resolved to their host node and the
+/// symbol that anchored them, deduped with a `count`. Intra-node and containment
+/// edges (one endpoint an ancestor of the other) are dropped — only cross-subtree
+/// edges carry connection signal. These are the per-symbol rows the aggregate
+/// `link_audit` / `unmodeled` counts are built from; the UI reads them to attribute
+/// a node's "implied connections" and to expand a declared link into its code paths.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedEdge {
+    pub src_node: String,
+    pub src_symbol: String,
+    pub dst_node: String,
+    pub dst_symbol: String,
+    pub count: u32,
+}
+
 #[derive(Debug, Clone, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DerivedGraph {
@@ -98,6 +114,20 @@ pub struct DerivedGraph {
     /// declared link covers in either direction — candidate links the model is
     /// missing. Sorted by (src, dst).
     pub unmodeled: Vec<DerivedEdge>,
+    /// Every cross-subtree leaf edge, resolved to (node, symbol) on both ends and
+    /// deduped. Sorted by (src_node, dst_node, src_symbol, dst_symbol).
+    pub resolved_edges: Vec<ResolvedEdge>,
+}
+
+/// Glob specificity for boundary-fallback ownership — higher wins. `.0` is the
+/// literal-prefix length (chars before the first wildcard), `.1` the pattern
+/// length as a tiebreak. So `crates/acp/**/*` (long literal prefix) outranks a
+/// catch-all `**/*` (zero), and a contested file lands in its real owner.
+fn glob_specificity(pattern: &str) -> (usize, usize) {
+    let prefix = pattern
+        .find(|c| matches!(c, '*' | '?' | '['))
+        .unwrap_or(pattern.len());
+    (prefix, pattern.len())
 }
 
 /// Join the cached import graph onto the model. Deterministic; resolution is
@@ -159,30 +189,38 @@ pub fn derive_graph(model: &ScryModel, edges: &BuildEdges) -> DerivedGraph {
         }
         d
     };
-    let boundary_globs: Vec<(&str, Vec<glob::Pattern>)> = {
-        let mut v: Vec<(&str, Vec<glob::Pattern>)> = model
-            .boundaries
-            .iter()
-            .filter(|(id, _)| node_by_id.contains_key(id.as_str()))
-            .map(|(id, sources)| {
-                (
-                    id.as_str(),
-                    sources
-                        .iter()
-                        .filter_map(|s| glob::Pattern::new(&s.pattern).ok())
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect();
-        // Deepest owner first; id tiebreak keeps it deterministic.
-        v.sort_by(|a, b| depth_of(b.0).cmp(&depth_of(a.0)).then(a.0.cmp(b.0)));
+    // Boundary fallback for symbols the model didn't anchor: which owner's glob
+    // claims the file. One entry per (owner, pattern), each scored by glob
+    // specificity and the owner's tree depth, sorted best-first so the
+    // MOST-SPECIFIC matching boundary wins — a narrow `crates/foo/**/*` beats a
+    // catch-all `**/*`, instead of whichever owner merely sorts first by id. The
+    // file then lands in its real owner, not a repo-wide net swallowing it.
+    let boundary_globs: Vec<(&str, glob::Pattern, (usize, usize), usize)> = {
+        let mut v: Vec<(&str, glob::Pattern, (usize, usize), usize)> = Vec::new();
+        for (id, sources) in &model.boundaries {
+            if !node_by_id.contains_key(id.as_str()) {
+                continue;
+            }
+            let depth = depth_of(id.as_str());
+            for s in sources {
+                if let Ok(pat) = glob::Pattern::new(&s.pattern) {
+                    v.push((id.as_str(), pat, glob_specificity(&s.pattern), depth));
+                }
+            }
+        }
+        // Most-specific glob first, then deepest owner, then id — deterministic.
+        v.sort_by(|a, b| {
+            b.2.cmp(&a.2)
+                .then_with(|| b.3.cmp(&a.3))
+                .then_with(|| a.0.cmp(b.0))
+        });
         v
     };
     let file_owner = |file: &str| -> Option<&str> {
         boundary_globs
             .iter()
-            .find(|(_, pats)| pats.iter().any(|p| p.matches(file)))
-            .map(|(id, _)| *id)
+            .find(|(_, pat, _, _)| pat.matches(file))
+            .map(|(id, _, _, _)| *id)
     };
 
     let resolve = |endpoint: &str| -> Option<&str> {
@@ -210,6 +248,9 @@ pub fn derive_graph(model: &ScryModel, edges: &BuildEdges) -> DerivedGraph {
 
     // --- roll every code edge up both chains ------------------------------------
     let mut pair_counts: BTreeMap<(&str, &str), u32> = BTreeMap::new();
+    // Leaf edges, resolved to (node, symbol) on both ends, deduped — the
+    // per-symbol detail behind the aggregate counts. See `ResolvedEdge`.
+    let mut resolved: BTreeMap<(&str, &str, &str, &str), u32> = BTreeMap::new();
     for edge in &edges.symbol_edges {
         let (Some(src), Some(dst)) = (resolve(&edge.src), resolve(&edge.dst)) else {
             continue;
@@ -221,6 +262,13 @@ pub fn derive_graph(model: &ScryModel, edges: &BuildEdges) -> DerivedGraph {
         let dst_chain = chain(dst);
         let src_set: HashSet<&str> = src_chain.iter().copied().collect();
         let dst_set: HashSet<&str> = dst_chain.iter().copied().collect();
+        // Record the leaf edge unless one endpoint contains the other (then it
+        // is internal to a subtree, not a connection between two of them).
+        if !src_set.contains(dst) && !dst_set.contains(src) {
+            let s_sym = BuildEdges::split_symbol_key(&edge.src).map_or("", |(_, n)| n);
+            let d_sym = BuildEdges::split_symbol_key(&edge.dst).map_or("", |(_, n)| n);
+            *resolved.entry((src, dst, s_sym, d_sym)).or_insert(0) += 1;
+        }
         for &a in &src_chain {
             if dst_set.contains(a) {
                 continue; // a contains dst — containment, not dependency
@@ -273,9 +321,21 @@ pub fn derive_graph(model: &ScryModel, edges: &BuildEdges) -> DerivedGraph {
         })
         .collect();
 
+    let resolved_edges: Vec<ResolvedEdge> = resolved
+        .iter()
+        .map(|((sn, dn, ss, ds), count)| ResolvedEdge {
+            src_node: (*sn).to_string(),
+            src_symbol: (*ss).to_string(),
+            dst_node: (*dn).to_string(),
+            dst_symbol: (*ds).to_string(),
+            count: *count,
+        })
+        .collect();
+
     DerivedGraph {
         link_audit,
         unmodeled,
+        resolved_edges,
     }
 }
 
@@ -379,6 +439,21 @@ mod tests {
         assert!(g.unmodeled.iter().all(|e| !(e.src == "compa" && e.dst == "compb")));
         // Symbol pairs are volume, not architecture — never in unmodeled.
         assert!(g.unmodeled.iter().all(|e| e.src != "syma"));
+
+        // resolved_edges keeps the per-symbol leaf detail the aggregates hide:
+        // both code edges, resolved to (node, symbol) on each end, deduped.
+        let find = |sn: &str, dn: &str| {
+            g.resolved_edges
+                .iter()
+                .find(|e| e.src_node == sn && e.dst_node == dn)
+        };
+        let cross = find("syma", "symb").expect("cross-container leaf edge kept");
+        assert_eq!((cross.src_symbol.as_str(), cross.dst_symbol.as_str()), ("useThing", "thing"));
+        assert_eq!(cross.count, 1);
+        let sib = find("syma", "syma2").expect("cross-component leaf edge kept");
+        assert_eq!((sib.src_symbol.as_str(), sib.dst_symbol.as_str()), ("useThing", "zed"));
+        // Only the two real edges — no containment/self rows.
+        assert_eq!(g.resolved_edges.len(), 2, "{:?}", g.resolved_edges);
     }
 
     /// Endpoints with no symbol anchor fall back to the deepest boundary owner;
@@ -412,6 +487,39 @@ mod tests {
         assert_eq!(
             g.unmodeled,
             vec![DerivedEdge { src: "ca".into(), dst: "cb".into(), count: 1 }]
+        );
+    }
+
+    /// A catch-all `**/*` boundary must NOT outrank a narrower boundary that
+    /// also matches the file: most-specific glob wins, so a contested file lands
+    /// in its real owner, not the repo-wide net. Regression for an App-Frontend
+    /// `**/*` boundary (whose id sorts first) swallowing other crates' symbols.
+    #[test]
+    fn specific_boundary_beats_catch_all() {
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, None));
+        // c0's id sorts first AND its `**/*` matches everything — under the old
+        // depth-then-id ordering it would win every contested file.
+        m.nodes.push(node("c0", Kind::Container, Some("sys")));
+        m.nodes.push(node("c1", Kind::Container, Some("sys")));
+        m.nodes.push(node("c2", Kind::Container, Some("sys")));
+        m.boundaries.insert("c0".into(), vec![Source { pattern: "**/*".into(), comment: None }]);
+        m.boundaries.insert("c1".into(), vec![Source { pattern: "a/**/*".into(), comment: None }]);
+        m.boundaries.insert("c2".into(), vec![Source { pattern: "b/**/*".into(), comment: None }]);
+
+        let edges = BuildEdges {
+            // Both endpoints are also matched by c0's `**/*`; the specific owners
+            // must win, yielding a real c1->c2 edge rather than c0->c0 (self).
+            symbol_edges: vec![CachedEdge {
+                src: "a/m.ts#f@1".into(),
+                dst: "b/n.ts#g@1".into(),
+            }],
+        };
+        let g = derive_graph(&m, &edges);
+        assert_eq!(
+            g.unmodeled,
+            vec![DerivedEdge { src: "c1".into(), dst: "c2".into(), count: 1 }],
+            "narrow boundaries own their files; the `**/*` net never wins a contested file"
         );
     }
 

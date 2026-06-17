@@ -10,11 +10,13 @@
  * and edited.
  */
 
-import { ArrowLeft, ArrowRight, Plus, Trash2 } from "lucide-react";
+import { useMemo, useState } from "react";
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
 import type { ScryModel, Node, Link } from "./viewmodel";
 import type { Editor } from "./editor";
-import type { ModelHealthReport } from "./health";
-import { linkEvidence } from "./health";
+import type { ModelHealthReport, ImpliedConn, LinkPath } from "./health";
+import { linkEvidence, impliedFor, impliedPaths, pathsForLink } from "./health";
+import { kindIcon } from "./kindIcon";
 import { BTN, BTN_DANGER, BTN_GO, CTL, Editable, PageSection, SectionEditor } from "./pagekit";
 import { usePageMenu, useCopyId, copyIdItem } from "./pageMenu";
 import { wordDiff } from "./wordDiff";
@@ -114,6 +116,7 @@ function ConnRow({
   hasAudit,
   removed,
   edit,
+  expand,
   control,
   onSelectNode,
 }: {
@@ -125,6 +128,9 @@ function ConnRow({
   /** When present (edit mode, row not staged for deletion), the label and
    *  protocol render as inline editable fields seeded from these values. */
   edit?: { onLabel: (t: string) => void; onMethod: (t: string) => void };
+  /** When present, a disclosure chevron in the index lane toggles the link's
+   *  underlying code-path ladder (read mode only). */
+  expand?: { open: boolean; onToggle: () => void };
   control?: React.ReactNode;
   onSelectNode: (id: string) => void;
 }) {
@@ -152,7 +158,18 @@ function ConnRow({
       >
         {mark?.glyph}
       </span>
-      <span className="select-none" />
+      {expand ? (
+        <button
+          type="button"
+          onClick={expand.onToggle}
+          title={expand.open ? "Hide code paths" : "Show the code paths behind this link"}
+          className="flex select-none items-center justify-center text-[var(--text-ghost)] hover:text-[var(--text-secondary)] cursor-pointer"
+        >
+          {expand.open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        </button>
+      ) : (
+        <span className="select-none" />
+      )}
       <div className="flex min-w-0 items-baseline font-mono text-[12.5px] leading-[1.65]">
         <button
           type="button"
@@ -198,6 +215,329 @@ function ConnRow({
       </div>
       {control && <span className={CTL}>{control}</span>}
     </li>
+  );
+}
+
+// --- node references & tree scaffolding --------------------------------------
+
+/** A node as an inline reference: its C4 kind icon + clickable name. The icon
+ *  carries the altitude (container vs component vs symbol) at a glance; the name
+ *  navigates. `muted` is for breadcrumb ancestors that frame, not lead. */
+function NodeRef({
+  node,
+  onSelectNode,
+  muted,
+  plain,
+}: {
+  node: Node;
+  onSelectNode: (id: string) => void;
+  muted?: boolean;
+  /** Render as static text, not a link — for endpoints the surrounding row's
+   *  own wikilink already navigates to (the peer of a connection). */
+  plain?: boolean;
+}) {
+  const Icon = kindIcon(node);
+  const label = node.name || "Untitled";
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1">
+      <Icon className="h-3 w-3 shrink-0 text-[var(--text-ghost)]" />
+      {plain ? (
+        <span
+          title={node.name}
+          className={`truncate ${muted ? "text-[var(--text-tertiary)]" : "text-[var(--text-secondary)]"}`}
+        >
+          {label}
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={() => onSelectNode(node.id)}
+          title={node.name}
+          className={`truncate text-left hover:underline cursor-pointer ${
+            muted
+              ? "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+              : "text-blue-700 dark:text-blue-400"
+          }`}
+        >
+          {label}
+        </button>
+      )}
+    </span>
+  );
+}
+
+/** A symbol node's source file: its own definition anchor, else the first of
+ *  its responsibilities' anchors. Undefined when nothing anchors it. */
+function symbolFile(model: ScryModel, node: Node): string | undefined {
+  const sm = model.sourceMap ?? {};
+  return (
+    sm[node.id]?.[0]?.pattern ??
+    node.responsibilities?.map((r) => sm[r.id]?.[0]?.pattern).find(Boolean)
+  );
+}
+
+/** When a symbol shares its name with a sibling symbol (same parent), the bare
+ *  `Host › name` reads identically for two different functions — e.g. two `main`s
+ *  in separate example files. Return a file basename to tell them apart; undefined
+ *  in the common case, so unambiguous symbols stay clean. */
+function symbolDiscriminator(model: ScryModel, node: Node): string | undefined {
+  if (node.kind !== "symbol" || !node.parentId) return undefined;
+  const collides = model.nodes.some(
+    (n) =>
+      n.id !== node.id &&
+      n.parentId === node.parentId &&
+      n.kind === "symbol" &&
+      n.name === node.name,
+  );
+  if (!collides) return undefined;
+  return symbolFile(model, node)?.split("/").pop();
+}
+
+/** Inline breadcrumb arrow — joins a host to its member (and an ancestor to its
+ *  child). An arrow, not a chevron: the chevron is reserved for expand toggles,
+ *  so a static separator never reads as a clickable control. */
+function Sep() {
+  return <span className="shrink-0 select-none px-0.5 text-[var(--text-ghost)]">→</span>;
+}
+
+/** One endpoint of a code path — the host node (component/container, a real node
+ *  → icon + link) and the symbol within it. When the symbol is itself a modeled
+ *  node it links too; otherwise it's a bare code identifier. `relativeTo` is the
+ *  current page node: an endpoint inside it renders abbreviated (host dropped),
+ *  since repeating the page you're on is the noise that makes "is this me?"
+ *  unanswerable. */
+function EndpointRef({
+  id,
+  symbol,
+  model,
+  relativeTo,
+  plainId,
+  byId,
+  onSelectNode,
+}: {
+  id: string;
+  symbol: string;
+  model: ScryModel;
+  /** Current page node id — endpoints within it drop their redundant host. */
+  relativeTo?: string;
+  /** The row's already-linked peer node — a segment equal to it renders as static
+   *  text (re-linking the header's target is noise); finer sub-nodes stay links. */
+  plainId?: string;
+  byId: (id: string) => Node | undefined;
+  onSelectNode: (id: string) => void;
+}) {
+  const node = byId(id);
+  if (!node) return <span className="truncate">{symbol}</span>;
+  // A resolved symbol node: show its host (parent) then the symbol node itself,
+  // plus a file discriminator when a same-named sibling would make it ambiguous.
+  if (node.kind === "symbol") {
+    const parent = node.parentId ? byId(node.parentId) : undefined;
+    // Drop the host when it — or the symbol itself — is the current page node:
+    // redundant, so the symbol reads bare as "yours".
+    const host =
+      parent && parent.id !== relativeTo && node.id !== relativeTo ? parent : undefined;
+    const disc = symbolDiscriminator(model, node);
+    return (
+      <span className="inline-flex min-w-0 items-center gap-1">
+        {host && (
+          <>
+            <NodeRef node={host} onSelectNode={onSelectNode} muted plain={host.id === plainId} />
+            <Sep />
+          </>
+        )}
+        <NodeRef node={node} onSelectNode={onSelectNode} plain={node.id === plainId} />
+        {disc && <span className="shrink-0 italic text-[var(--text-ghost)]">&nbsp;({disc})</span>}
+      </span>
+    );
+  }
+  // Resolved to a component/container (boundary fallback): the symbol is a raw
+  // code identifier, not a modeled node. When the host is the current page node,
+  // show just the bare identifier — the page header already names the host.
+  if (node.id === relativeTo) {
+    return <span className="truncate text-[var(--text-tertiary)]">{symbol || node.name}</span>;
+  }
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1">
+      <NodeRef node={node} onSelectNode={onSelectNode} plain={node.id === plainId} />
+      {symbol && symbol !== node.name && (
+        <>
+          <Sep />
+          <span className="truncate text-[var(--text-tertiary)]">{symbol}</span>
+        </>
+      )}
+    </span>
+  );
+}
+
+/** Collapse leaf paths into a ladder oriented around the CURRENT node: one
+ *  branch per *self* endpoint (the side inside the page's node), its connected
+ *  *peer* endpoints beneath. `selfSide` says which end of each edge is self —
+ *  `src` for a Uses/outgoing connection, `dst` for a Used-by/incoming one. Paths
+ *  that resolve to the same (node, symbol) pair are merged and counts summed. */
+function groupPaths(
+  paths: LinkPath[],
+  selfSide: "src" | "dst",
+): {
+  selfId: string;
+  selfSymbol: string;
+  peers: { peerId: string; peerSymbol: string; count: number }[];
+}[] {
+  const sep = " ";
+  const groups = new Map<
+    string,
+    {
+      selfId: string;
+      selfSymbol: string;
+      peers: Map<string, { peerId: string; peerSymbol: string; count: number }>;
+    }
+  >();
+  for (const p of paths) {
+    const selfId = selfSide === "src" ? p.srcId : p.dstId;
+    const selfSymbol = selfSide === "src" ? p.srcSymbol : p.dstSymbol;
+    const peerId = selfSide === "src" ? p.dstId : p.srcId;
+    const peerSymbol = selfSide === "src" ? p.dstSymbol : p.srcSymbol;
+    const sk = `${selfId}${sep}${selfSymbol}`;
+    let g = groups.get(sk);
+    if (!g) {
+      g = { selfId, selfSymbol, peers: new Map() };
+      groups.set(sk, g);
+    }
+    const pk = `${peerId}${sep}${peerSymbol}`;
+    const cur = g.peers.get(pk);
+    if (cur) cur.count += p.count;
+    else g.peers.set(pk, { peerId, peerSymbol, count: p.count });
+  }
+  return [...groups.values()].map((g) => ({
+    selfId: g.selfId,
+    selfSymbol: g.selfSymbol,
+    peers: [...g.peers.values()].sort((a, b) => b.count - a.count),
+  }));
+}
+
+/** The code paths behind one connection, oriented around the current node: each
+ *  branch is one of *your* symbols (rendered bare via {@link EndpointRef}'s
+ *  `relativeTo`), and beneath it the peer symbols it connects to, each prefixed
+ *  with the relationship verb (`uses` / `used by`) so the direction reads as a
+ *  sentence — "your `slice_container` is *used by* their `main`" — not as a
+ *  containment tree. Shared by declared links and implied connections. */
+function PathLadder({
+  paths,
+  model,
+  nodeId,
+  peerId,
+  selfSide,
+  verb,
+  byId,
+  onSelectNode,
+}: {
+  paths: LinkPath[];
+  model: ScryModel;
+  /** Current page node — your symbols render relative to it (host dropped). */
+  nodeId: string;
+  /** The connection's peer (the row header's wikilink) — rendered plain in the
+   *  ladder, since re-linking it is redundant; sub-nodes below it keep links. */
+  peerId: string;
+  /** Which end of each edge is the self (page) side. */
+  selfSide: "src" | "dst";
+  /** Relationship read from your side: `uses` (outgoing) / `used by` (incoming). */
+  verb: string;
+  byId: (id: string) => Node | undefined;
+  onSelectNode: (id: string) => void;
+}) {
+  const groups = groupPaths(paths, selfSide);
+  return (
+    <li className={`${CONN_ROW} pb-1.5`}>
+      <span className="select-none" />
+      <span className="select-none" />
+      <ul className="flex flex-col gap-2 pl-1 font-mono text-[11.5px] leading-[1.55]">
+        {groups.map((g, i) => (
+          <li key={i} className="flex min-w-0 flex-col">
+            <EndpointRef
+              id={g.selfId}
+              symbol={g.selfSymbol}
+              model={model}
+              relativeTo={nodeId}
+              byId={byId}
+              onSelectNode={onSelectNode}
+            />
+            <ul className="flex flex-col gap-px pl-4">
+              {g.peers.map((p, j) => (
+                <li key={j} className="flex min-w-0 items-center gap-1.5 py-px">
+                  <span className="shrink-0 select-none text-[var(--text-ghost)]">{verb}</span>
+                  <EndpointRef
+                    id={p.peerId}
+                    symbol={p.peerSymbol}
+                    model={model}
+                    plainId={peerId}
+                    byId={byId}
+                    onSelectNode={onSelectNode}
+                  />
+                  {p.count > 1 && (
+                    <span className="shrink-0 italic text-[var(--text-ghost)]">(×{p.count})</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </li>
+  );
+}
+
+/** A read-mode declared-link row with a disclosure: clicking the chevron expands
+ *  the link into its backing code paths. Asserted-only links (no path) render as
+ *  a plain row with no chevron. */
+function ReadConnRow({
+  node,
+  row,
+  evidence,
+  hasAudit,
+  report,
+  model,
+  byId,
+  onSelectNode,
+}: {
+  node: Node;
+  row: ConnDiffRow;
+  evidence: Record<string, number>;
+  hasAudit: boolean;
+  report: ModelHealthReport | null;
+  model: ScryModel;
+  byId: (id: string) => Node | undefined;
+  onSelectNode: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const paths = useMemo(
+    () => pathsForLink(report, model, row.link),
+    [report, model, row.link],
+  );
+  // The page node is one end of the link; which end fixes how the ladder reads.
+  const selfSide: "src" | "dst" = row.link.src === node.id ? "src" : "dst";
+  const verb = selfSide === "src" ? "uses" : "used by";
+  return (
+    <>
+      <ConnRow
+        node={node}
+        row={row}
+        evidence={evidence}
+        hasAudit={hasAudit}
+        expand={paths.length > 0 ? { open, onToggle: () => setOpen((o) => !o) } : undefined}
+        onSelectNode={onSelectNode}
+      />
+      {open && paths.length > 0 && (
+        <PathLadder
+          paths={paths}
+          model={model}
+          nodeId={node.id}
+          peerId={row.peer.id}
+          selfSide={selfSide}
+          verb={verb}
+          byId={byId}
+          onSelectNode={onSelectNode}
+        />
+      )}
+    </>
   );
 }
 
@@ -251,6 +591,106 @@ function SuggestedRow({
       {control && <span className={CTL}>{control}</span>}
     </li>
   );
+}
+
+/** A code-implied connection as an expandable row — the peer rendered as a
+ *  breadcrumb of {@link NodeRef}s (each node its own C4 kind icon, so altitude
+ *  reads per-node and an icon never sits orphaned beside an ancestor of a
+ *  different kind), the summed import count, and a disclosure that expands into
+ *  the same {@link PathLadder} a declared link uses — the leaf code paths behind
+ *  the connection. Direction is carried by the section (Uses vs Used by), so
+ *  there's no per-row arrow. Read-only — no declare control. */
+function ImpliedRow({
+  conn,
+  peer,
+  context,
+  nodeId,
+  model,
+  report,
+  byId,
+  onSelectNode,
+}: {
+  conn: ImpliedConn;
+  peer: Node;
+  /** Peer's ancestors (container down to its parent), so its altitude and
+   *  whereabouts read at a glance — "MCP Server › Model Observability Commands"
+   *  vs a bare top-level "App Frontend". */
+  context: Node[];
+  nodeId: string;
+  model: ScryModel;
+  report: ModelHealthReport | null;
+  byId: (id: string) => Node | undefined;
+  onSelectNode: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const paths = useMemo(
+    () => impliedPaths(report, model, nodeId, conn),
+    [report, model, nodeId, conn],
+  );
+  // `out` = your code reaches the peer (you use it); `in` = the peer reaches you.
+  const selfSide: "src" | "dst" = conn.dir === "out" ? "src" : "dst";
+  const verb = conn.dir === "out" ? "uses" : "used by";
+  return (
+    <>
+      <li className={`group/erow ${CONN_ROW} py-[1.5px]`}>
+        <span className="select-none" />
+        {paths.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            title={open ? "Hide code paths" : "Show the code paths behind this connection"}
+            className="flex select-none items-center justify-center text-[var(--text-ghost)] hover:text-[var(--text-secondary)] cursor-pointer"
+          >
+            {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          </button>
+        ) : (
+          <span className="select-none" />
+        )}
+        <div className="flex min-w-0 items-center font-mono text-[12.5px] leading-[1.65]">
+          {context.map((a) => (
+            <span key={a.id} className="flex min-w-0 shrink items-center">
+              <NodeRef node={a} onSelectNode={onSelectNode} muted />
+              <Sep />
+            </span>
+          ))}
+          <NodeRef node={peer} onSelectNode={onSelectNode} />
+          <span
+            className="ml-1.5 shrink-0 italic text-[var(--text-ghost)]"
+            title={`${conn.count} import edge${conn.count === 1 ? "" : "s"} in the code, below the link altitude`}
+          >
+            (×{conn.count})
+          </span>
+        </div>
+      </li>
+      {open && paths.length > 0 && (
+        <PathLadder
+          paths={paths}
+          model={model}
+          nodeId={nodeId}
+          peerId={conn.peerId}
+          selfSide={selfSide}
+          verb={verb}
+          byId={byId}
+          onSelectNode={onSelectNode}
+        />
+      )}
+    </>
+  );
+}
+
+/** Peer's ancestors from container level down to its parent, top-level system
+ *  dropped (it's the same for every node, so it's noise). Root-first. */
+function peerContext(model: ScryModel, peerId: string): Node[] {
+  const byId = new Map(model.nodes.map((n) => [n.id, n]));
+  const out: Node[] = [];
+  const seen = new Set<string>();
+  let cur = byId.get(peerId)?.parentId ? byId.get(byId.get(peerId)!.parentId!) : undefined;
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    if (cur.kind !== "system") out.unshift(cur);
+    cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+  }
+  return out;
 }
 
 function ConnGroup({ title, children }: { title: string; children: React.ReactNode }) {
@@ -335,12 +775,15 @@ export function ConnectionsSection({
   // Read-mode rows carry no controls — editing is a proper section mode (Edit
   // → form → Cancel/Done in the header), not per-row affordances.
   const readRow = (r: ConnDiffRow) => (
-    <ConnRow
+    <ReadConnRow
       key={r.link.id}
       node={node}
       row={r}
       evidence={evidence}
       hasAudit={hasAudit}
+      report={report}
+      model={model}
+      byId={byId}
       onSelectNode={onSelectNode}
     />
   );
@@ -560,5 +1003,56 @@ function ConnectionsEditor({
         );
       }}
     </SectionEditor>
+  );
+}
+
+/**
+ * Implied Connections — the read-only companion to {@link ConnectionsSection}.
+ * Derived purely from the code's import graph: every cross-LEVEL reach of this
+ * node's subtree (a symbol's callers, a component reaching into another
+ * container), with the peer rolled up to its architectural node and counts
+ * summed. Same-parent siblings are deliberately absent — those are candidate
+ * same-level links, surfaced as "Suggested by the code" in the editable section.
+ * Nothing here is editable: it's a fact about the code, not an authored claim.
+ */
+export function ImpliedConnectionsSection({
+  model,
+  node,
+  report,
+  onSelectNode,
+}: {
+  model: ScryModel;
+  node: Node;
+  report: ModelHealthReport | null;
+  onSelectNode: (id: string) => void;
+}) {
+  const implied = impliedFor(report, model, node.id);
+  if (implied.length === 0) return null;
+  const byId = (id: string) => model.nodes.find((n) => n.id === id);
+  const out = implied.filter((c) => c.dir === "out");
+  const inc = implied.filter((c) => c.dir === "in");
+  const row = (c: ImpliedConn) => {
+    const peer = byId(c.peerId);
+    return peer ? (
+      <ImpliedRow
+        key={`${c.dir}:${c.peerId}`}
+        conn={c}
+        peer={peer}
+        context={peerContext(model, c.peerId)}
+        nodeId={node.id}
+        model={model}
+        report={report}
+        byId={byId}
+        onSelectNode={onSelectNode}
+      />
+    ) : null;
+  };
+  return (
+    <PageSection title="Implied Connections" count={implied.length}>
+      <div className="flex flex-col">
+        {out.length > 0 && <ConnGroup title="Uses">{out.map(row)}</ConnGroup>}
+        {inc.length > 0 && <ConnGroup title="Used by">{inc.map(row)}</ConnGroup>}
+      </div>
+    </PageSection>
   );
 }
