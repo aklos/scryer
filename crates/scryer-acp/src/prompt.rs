@@ -302,11 +302,12 @@ pub fn drift_check_prompt(
         r#"You have the scryer MCP server (schema v0.3). The code inside the container "{node_name}" (id {node_id}) at {project_path} has changed. Decide whether the model still describes what the code DOES — this is SEMANTIC drift, not a byte/line check.
 
 ## What to flag — use ONLY the `flag_drift` tool
-- **Undescribed behaviour:** the code does something that NO responsibility in this subtree describes. Report it under `undescribed` (a terse business statement + the `sourceFile` + the enclosing `symbol`). Each becomes a vagrant responsibility for the user to adopt or reject.
+- **Undescribed behaviour:** the code provides a capability that NO responsibility in this subtree describes *at any altitude*. Report it under `undescribed` (a terse business statement + the `sourceFile` + the enclosing `symbol`). Each becomes a vagrant responsibility for the user to adopt or reject. The `symbol` you cite ROUTES the adoption: it is attached to the node that owns that symbol/file, NOT to this container — so name the enclosing definition precisely and state the behaviour at *that node's* altitude (a symbol-level capability, not a container-level summary).
 - **Stale claims:** an existing responsibility whose code no longer discharges it — the implementation was removed, or now does something materially different. Report its `responsibilityId` under `stale` with a short factual `reason`.
 
 ## What is NOT drift (do not flag)
 - Code that changed but still satisfies an existing responsibility. A refactor that preserves behaviour is not drift. The user does not care that lines moved or bytes changed — only that the model's description still matches reality.
+- **Mechanism beneath an existing responsibility.** A responsibility is described at its own altitude and SUBSUMES its implementation detail. If a node already claims "Validate structural correctness", then each individual check it performs (a length cap, an id-uniqueness rule, a kind constraint) is HOW that claim is discharged — already described, do NOT flag it. Likewise a new branch inside a handler, a new field on a validator, a new helper call. Only flag a behaviour that is a genuinely NEW capability the model names nowhere — never decompose one responsibility into a list of its mechanics.
 
 ## Focus — these files changed
 ```json

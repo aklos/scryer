@@ -35,6 +35,21 @@ const SectionActionsContext = createContext<HTMLElement | null>(null);
 const EMPTY_HINT =
   "Empty — no responsibilities or properties. Give it a business responsibility or remove the node.";
 
+// Field length caps, in characters. The description cap mirrors the backend
+// validator (scryer-core `DESCRIPTION_MAX_CHARS`); the name cap is a UI-only
+// limit on human-authored titles (symbol names are exempt — they're bound to
+// real code identifiers).
+export const DESCRIPTION_MAX = 200;
+export const NAME_MAX = 40;
+
+/** Coerce text to a valid source identifier: drop anything that isn't
+ *  `[A-Za-z0-9_]`, and a leading character that can't start one. Mirrors the
+ *  backend's `is_valid_identifier` (which allows an uppercase start). */
+export function sanitizeIdentifier(text: string): string {
+  const cleaned = text.replace(/[^A-Za-z0-9_]/g, "");
+  return cleaned.replace(/^[0-9]+/, "");
+}
+
 /** The `empty` flag (see rollup.isNodeEmpty) — a symbol with no semantic
  *  content. An attention state, not a lifecycle one, so it carries the drift
  *  orange instead of fading into the chrome. */
@@ -112,10 +127,22 @@ export const CTL =
  * fed back from state (which would yank the caret). Edits report out through
  * `onInput`; the parent's draft stays in sync for the eventual commit.
  */
+/** Move the caret to the end of a contentEditable element. */
+function caretToEnd(el: HTMLElement) {
+  const r = document.createRange();
+  r.selectNodeContents(el);
+  r.collapse(false);
+  const sel = window.getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(r);
+}
+
 export function Editable({
   initial,
   placeholder,
   autoFocus,
+  maxLength,
+  sanitize,
   onInput,
   onCommit,
   className = "",
@@ -123,6 +150,13 @@ export function Editable({
   initial: string;
   placeholder?: string;
   autoFocus?: boolean;
+  /** Hard cap on length, counted in Unicode scalar values (characters, not
+   *  UTF-16 units) to match the backend's `chars().count()`. Input past the cap —
+   *  typed or pasted — is dropped. */
+  maxLength?: number;
+  /** Coerce the text to an allowed shape on every input (e.g. identifier chars).
+   *  Runs before `maxLength`. */
+  sanitize?: (text: string) => string;
   /** Fired on every keystroke — for draft-backed fields. */
   onInput?: (text: string) => void;
   /** Fired on blur — for fields that commit straight to the model. */
@@ -130,18 +164,27 @@ export function Editable({
   className?: string;
 }) {
   const ref = useRef<HTMLSpanElement>(null);
+  // Coerce the live text to the allowed shape/length, rewriting the DOM (and
+  // restoring the caret) only when it actually changed so typing never janks.
+  const enforce = (el: HTMLElement): string => {
+    const raw = el.textContent ?? "";
+    let next = sanitize ? sanitize(raw) : raw;
+    if (maxLength != null && [...next].length > maxLength) {
+      next = [...next].slice(0, maxLength).join("");
+    }
+    if (next !== raw) {
+      el.textContent = next;
+      caretToEnd(el);
+    }
+    return next;
+  };
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     if (el.textContent !== initial) el.textContent = initial;
     if (autoFocus) {
       el.focus();
-      const r = document.createRange();
-      r.selectNodeContents(el);
-      r.collapse(false);
-      const sel = window.getSelection();
-      sel?.removeAllRanges();
-      sel?.addRange(r);
+      caretToEnd(el);
     }
     // Mount-only: stays uncontrolled so typing never resets the caret.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -153,8 +196,8 @@ export function Editable({
       contentEditable
       suppressContentEditableWarning
       data-placeholder={placeholder}
-      onInput={(e) => onInput?.(e.currentTarget.textContent ?? "")}
-      onBlur={(e) => onCommit?.(e.currentTarget.textContent ?? "")}
+      onInput={(e) => onInput?.(enforce(e.currentTarget))}
+      onBlur={(e) => onCommit?.(enforce(e.currentTarget))}
       onKeyDown={(e) => {
         // Plain text only — Enter commits the field (blur) rather than
         // injecting <div>/<br> markup; Escape bails out.
@@ -163,7 +206,7 @@ export function Editable({
           e.currentTarget.blur();
         }
       }}
-      className={`-mx-1 cursor-text whitespace-pre-wrap break-words rounded-[4px] px-1 outline-none empty:before:text-[var(--text-muted)] empty:before:content-[attr(data-placeholder)] ${className}`}
+      className={`-mx-1 cursor-text whitespace-pre-wrap break-words rounded-[4px] px-1 outline-none transition-colors focus:bg-[var(--surface-active)] empty:before:text-[var(--text-muted)] empty:before:content-[attr(data-placeholder)] ${className}`}
     />
   );
 }
@@ -212,7 +255,10 @@ export function PageSection({
   return (
     <SectionActionsContext.Provider value={actionsSlot}>
       <section
-        className={`group/sec mt-[26px] flow-root -mx-3 rounded-md px-3 ${
+        // `py-2` + compensating margins (mt 26→18, -mb-2) bleed the edit-mode
+        // bg 8px above/below the content — the vertical analog of `-mx-3 px-3` —
+        // without moving content or changing inter-section spacing.
+        className={`group/sec mt-[18px] -mb-2 flow-root -mx-3 rounded-md px-3 py-2 ${
           editing
             ? "bg-[color-mix(in_srgb,var(--text)_4%,transparent)] shadow-[inset_2px_0_0_0_var(--border-strong)]"
             : ""

@@ -9,14 +9,7 @@
  */
 
 import { useRef, useState } from "react";
-import {
-  Braces,
-  ChevronRight,
-  Folder,
-  FolderOpen,
-  Loader2,
-  Plus,
-} from "lucide-react";
+import { Braces, ChevronRight, Loader2, Plus } from "lucide-react";
 import type { ScryModel, Node, Group, Kind } from "./viewmodel";
 import { childKindFor } from "./viewmodel";
 import type { Editor } from "./editor";
@@ -32,6 +25,7 @@ import {
 import { kindIcon } from "./kindIcon";
 import { KIND_ICON } from "./kindIcons";
 import { lookupIcon } from "./IconPicker";
+import { NAME_MAX, sanitizeIdentifier } from "./pagekit";
 import { InlineText } from "./InlineText";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { ConfirmPopover } from "./ConfirmPopover";
@@ -81,30 +75,29 @@ interface TreeRow {
   group?: Group;
 }
 
-// Altitude ramp — make the C4 tier *felt*, not inferred from indent alone.
-// Built on weight and value (per NN/G visual-hierarchy guidance) rather than
-// hue. A flat 3-tier value ramp keeps every label readable: the graphite dark
-// palette's lower shades are crushed, so dropping detail rows to --text-muted/
-// -tertiary reads as "disabled", not "subordinate". Structure is carried by
-// WEIGHT between the readable tiers, value only for the true anchors and leaf.
-//   person/system → the anchors     (semibold, full-contrast --text)
-//   container     → structure       (medium,  --text-secondary)
-//   component     → grouping of code (regular, --text-secondary — same value as
-//                                      container, separated by weight not value)
-//   symbol        → the leaf detail  (regular, --text-tertiary — one step down)
+// A single quiet value for every kind icon — the icons are wayfinding, not
+// content, so they read at one calm tier rather than a ramp that makes some
+// glyphs shout and others vanish. Kind is carried by the silhouette; altitude by
+// the label's weight (below).
+const ICON_COLOR = "text-[var(--text-muted)]";
+
+// Altitude ramp — the C4 tier carried by label WEIGHT alone, never by fading.
+// Every row stays at a readable value (the graphite palette's lower shades are
+// crushed, so dropping deep rows to --text-tertiary/-muted reads as "disabled",
+// not "subordinate"); depth is already marked by indent + rail. Weight does the
+// work: anchors stand up, leaves sit back, both fully legible.
+//   person/system → the anchors  (semibold, full-contrast --text)
+//   container     → structure     (medium,  --text-secondary)
+//   component/symbol → the leaves (regular, --text-secondary — same value,
+//                                  separated from container by weight only)
 // `color` is applied only when the row isn't selected (selection drives its own
-// foreground); `weight`/`icon` apply always.
-function altitudeRamp(node: Node): { weight: string; color: string; icon: string } {
+// foreground); `weight` applies always.
+function altitudeRamp(node: Node): { weight: string; color: string } {
   if (node.kind === "person" || node.kind === "system")
-    return { weight: "font-semibold", color: "text-[var(--text)]", icon: "text-[var(--text-secondary)]" };
+    return { weight: "font-semibold", color: "text-[var(--text)]" };
   if (node.kind === "container")
-    return { weight: "font-medium", color: "text-[var(--text-secondary)]", icon: "text-[var(--text-tertiary)]" };
-  if (node.kind === "component")
-    return { weight: "font-normal", color: "text-[var(--text-secondary)]", icon: "text-[var(--text-tertiary)]" };
-  // symbol — the leaf. Indent + rail + icon already mark it subordinate, so the
-  // label only drops one value step to --text-tertiary (still readable); the
-  // icon recedes a touch further.
-  return { weight: "font-normal", color: "text-[var(--text-tertiary)]", icon: "text-[var(--text-muted)]" };
+    return { weight: "font-medium", color: "text-[var(--text-secondary)]" };
+  return { weight: "font-normal", color: "text-[var(--text-secondary)]" };
 }
 
 export function ModelTree({
@@ -159,6 +152,9 @@ export function ModelTree({
   // hierarchy, no cycles), or join a group by dropping onto its folder.
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropKey, setDropKey] = useState<string | null>(null);
+  // The ancestor whose thread-rail is hovered — lights that one line (and only
+  // that line) along its whole length, Reddit-style. Never a mass.
+  const [hoverRail, setHoverRail] = useState<string | null>(null);
 
   const startResize = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -472,31 +468,44 @@ export function ModelTree({
     pushLevel(null, 0, []);
   }
 
-  // The spine of the selected branch lights up: every rail whose ancestor is on
-  // the path to the selection (or the selection itself) brightens.
-  const activeRailIds = (() => {
-    if (!selected) return new Set<string>();
-    const sel = rows.find((r) => r.kind === selected.kind && r.id === selected.id);
-    if (!sel) return new Set<string>();
-    const ids = new Set(sel.ancestors.map((a) => a.id));
-    ids.add(sel.id);
-    return ids;
-  })();
-
-  // Indent guide rails — one 1px vertical line per ancestor depth, aligned to
-  // that ancestor's chevron centre (gutter + base pad 6 + half the 14px
-  // chevron = GUTTER + 13), sitting to the right of the change-letter gutter.
+  // Indent guide rails — one continuous vertical thread-line per ancestor depth,
+  // aligned to that ancestor's chevron centre (gutter + base pad 6 + half the
+  // 14px chevron = GUTTER + 13), sitting to the right of the change-letter
+  // gutter. Reddit-style: each line is its own hoverable, clickable thread — the
+  // whole line lights when hovered (only that one, never the selected spine),
+  // and clicking it collapses that ancestor's subtree. The visible line is 1px;
+  // a wider transparent hit-strip around it makes it easy to grab without
+  // reaching into the row's content.
+  // Rails for one row: one full-height thread-line per ancestor depth, centred at
+  // that ancestor's chevron x (gutter + base pad 6 + half the 14px chevron =
+  // GUTTER + 13). Each line is its own hoverable, clickable thread — hovering any
+  // segment lights the whole line for that ancestor (and its chevron, which keys
+  // off the same id), only that one, never the selected spine; clicking collapses
+  // it. The 8px hit-strip is even-width so the 1px line centres exactly on x.
   const renderRails = (row: TreeRow) =>
-    row.ancestors.map((anc, i) => (
-      <span
-        key={i}
-        aria-hidden
-        className={`pointer-events-none absolute top-0 h-full w-px ${
-          activeRailIds.has(anc.id) ? "bg-[var(--text-muted)]" : "bg-[var(--border)]"
-        }`}
-        style={{ left: GUTTER + 13 + i * INDENT }}
-      />
-    ));
+    row.ancestors.map((anc, i) => {
+      const hot = hoverRail === anc.id;
+      return (
+        <span
+          key={i}
+          title="Collapse"
+          onMouseEnter={() => setHoverRail(anc.id)}
+          onMouseLeave={() => setHoverRail((h) => (h === anc.id ? null : h))}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle(anc.id, false);
+          }}
+          className="absolute top-0 z-10 h-full w-2 cursor-pointer"
+          style={{ left: GUTTER + 13 + i * INDENT - 4 }}
+        >
+          <span
+            className={`absolute inset-y-0 left-1/2 -translate-x-1/2 transition-colors ${
+              hot ? "w-0.5 bg-[var(--text-muted)]" : "w-px bg-[var(--border)]"
+            }`}
+          />
+        </span>
+      );
+    });
 
   // --- drag-to-move ------------------------------------------------------------
 
@@ -656,15 +665,28 @@ export function ModelTree({
         } ${isDrop ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""}`}
       >
         <ChangeGutter mark={ownMark} />
-        {renderRails(row)}
-        <Chevron has={row.hasChildren} open={row.isOpen} onClick={() => onToggle(node.id)} />
-        <Icon className={`h-3.5 w-3.5 shrink-0 ${ramp.icon}`} />
+        {/* Rails are suppressed on the selected row so the ancestor lines pass
+            behind the selection band instead of ticking across it. */}
+        {!isSel && renderRails(row)}
+        <Chevron
+          has={row.hasChildren}
+          open={row.isOpen}
+          sel={isSel}
+          hot={hoverRail === node.id}
+          onHover={(h) => setHoverRail((cur) => (h ? node.id : cur === node.id ? null : cur))}
+          onClick={() => onToggle(node.id)}
+        />
+        <Icon className={`ml-1.5 h-3.5 w-3.5 shrink-0 ${ICON_COLOR}`} />
         <span className={`min-w-0 flex-1 truncate text-sm ${ramp.weight} ${isSel ? "" : ramp.color}`}>
           {renaming === node.id && editor ? (
             <InlineText
               value={node.name}
               autoEdit
               placeholder="name"
+              // Symbol names are code identifiers (shape, not length); other
+              // kinds are human titles with a length cap. Mirrors the page header.
+              maxLength={node.kind === "symbol" ? undefined : NAME_MAX}
+              sanitize={node.kind === "symbol" ? sanitizeIdentifier : undefined}
               onCommit={(v) => {
                 editor.updateNode(node.id, { name: v });
                 setRenaming(null);
@@ -717,7 +739,6 @@ export function ModelTree({
   const renderGroup = (row: TreeRow): React.ReactNode => {
     const group = row.group!;
     const isSel = selected?.kind === "group" && selected.id === group.id;
-    const FolderIcon = row.isOpen ? FolderOpen : Folder;
     const gMark = resolveMark(groupMarks(group, diffIndex));
     // Rolled-up change count across the group's members (their whole subtrees),
     // shown when collapsed so a folder still reads as "has pending work".
@@ -731,27 +752,38 @@ export function ModelTree({
       <div
         key={`group:${group.id}`}
         data-rk={`group:${group.id}`}
-        style={{ paddingLeft: GUTTER + 4 + row.depth * INDENT }}
+        style={{ paddingLeft: GUTTER + 6 + row.depth * INDENT }}
         onClick={() => onSelectGroup(group.id)}
         onDoubleClick={() => row.hasChildren && onToggle(group.id)}
         onContextMenu={(e) => groupMenu(e, group)}
         {...dropProps(row)}
-        className={`${ROW} mt-1 ${
+        className={`${ROW} ${
           isSel
             ? "bg-[var(--surface-active)] text-[var(--text)]"
             : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
         } ${dropKey === `group:${group.id}` ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""}`}
       >
         <ChangeGutter mark={gMark} />
-        {renderRails(row)}
-        <Chevron has={row.hasChildren} open={row.isOpen} onClick={() => onToggle(group.id)} />
-        <FolderIcon className="h-3 w-3 shrink-0 text-[var(--text-ghost)]" />
+        {!isSel && renderRails(row)}
+        <Chevron
+          has={row.hasChildren}
+          open={row.isOpen}
+          sel={isSel}
+          hot={hoverRail === group.id}
+          onHover={(h) => setHoverRail((cur) => (h ? group.id : cur === group.id ? null : cur))}
+          onClick={() => onToggle(group.id)}
+        />
+        {/* No folder glyph — the uppercase label is signal enough; an empty
+            spacer the width of a node icon keeps group labels in the same
+            column as node names so groups read as headers, not a foreign kind. */}
+        <span className="ml-1.5 h-3.5 w-3.5 shrink-0" />
         <span className="min-w-0 flex-1 truncate text-2xs font-medium uppercase tracking-[0.08em] text-[var(--text-tertiary)]">
           {renaming === group.id && editor ? (
             <InlineText
               value={group.name}
               autoEdit
               placeholder="group name"
+              maxLength={NAME_MAX}
               onCommit={(v) => {
                 editor.updateGroup(group.id, { name: v });
                 setRenaming(null);
@@ -929,10 +961,20 @@ function Chevron({
   has,
   open,
   onClick,
+  hot,
+  sel,
+  onHover,
 }: {
   has: boolean;
   open: boolean;
   onClick: () => void;
+  // Lit when its thread-rail is hovered, so the rail and its toggle read as one
+  // control; hovering the chevron lights the rail in turn (onHover).
+  hot?: boolean;
+  // On the selected row the rails are hidden and the active surface swallows the
+  // ghost caret, so brighten it to stay legible.
+  sel?: boolean;
+  onHover?: (hovering: boolean) => void;
 }) {
   if (!has) return <span className="h-3.5 w-3.5 shrink-0" />;
   return (
@@ -942,7 +984,11 @@ function Chevron({
         e.stopPropagation();
         onClick();
       }}
-      className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-[var(--text-ghost)] hover:text-[var(--text-secondary)] cursor-pointer"
+      onMouseEnter={() => onHover?.(true)}
+      onMouseLeave={() => onHover?.(false)}
+      className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center cursor-pointer transition-colors ${
+        hot || sel ? "text-[var(--text-secondary)]" : "text-[var(--text-ghost)] hover:text-[var(--text-secondary)]"
+      }`}
     >
       <ChevronRight
         className={`h-3 w-3 transition-transform ${open ? "rotate-90" : ""}`}

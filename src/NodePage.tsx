@@ -15,7 +15,7 @@
  * New items land as `proposed`. Mutations flow through the Editor intents.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Check,
@@ -66,12 +66,15 @@ import {
   BTN_DANGER,
   BTN_GO,
   CTL,
+  DESCRIPTION_MAX,
   Editable,
   EditLink,
   Empty,
   EmptyFlag,
   jumpTo,
+  NAME_MAX,
   PageSection,
+  sanitizeIdentifier,
   SectionEditor,
   WikiText,
 } from "./pagekit";
@@ -248,6 +251,9 @@ function PageHeader({
   editingName,
   onToggleName,
   onRename,
+  onCancel,
+  nameMaxLength,
+  nameSanitize,
 }: {
   crumbs: React.ReactNode;
   /** Page-level actions, right-aligned on the crumb line. */
@@ -261,6 +267,14 @@ function PageHeader({
   editingName: boolean;
   onToggleName: () => void;
   onRename: (v: string) => void;
+  /** Discard the title/type-line edits made this session and close (reverts to
+   *  the snapshot taken when edit mode opened). Omit to hide the Cancel button. */
+  onCancel?: () => void;
+  /** Hard character cap on the title (omitted for symbol names, which are
+   *  identifier-shaped rather than length-bound). */
+  nameMaxLength?: number;
+  /** Coerce the title's shape on input (symbol names → source identifiers). */
+  nameSanitize?: (text: string) => string;
 }) {
   return (
     <header className="shrink-0 border-b border-[var(--border)] px-7 pt-[13px]">
@@ -270,34 +284,42 @@ function PageHeader({
         {actions}
       </div>
       <div className="mt-[5px] flex items-start gap-4">
-        <div className="flex min-w-0 flex-1 items-baseline gap-3">
-          <div className="min-w-0 flex-1">
-            {editingName ? (
-              // The title edits in place as a contentEditable span (same metrics
-              // as the h1, no reflow), committing on blur. Header edit mode stays
-              // open across fields until Done — so you can edit the type line too.
-              <Editable
-                initial={name}
-                autoFocus
-                placeholder="Untitled"
-                onCommit={(t) => onRename(t)}
-                className="block text-[21px] font-semibold leading-tight text-[var(--text)]"
-              />
-            ) : (
-              <h1 className="truncate text-[21px] font-semibold leading-tight text-[var(--text)]">
-                {name || "Untitled"}
-              </h1>
-            )}
-          </div>
-          {editor &&
-            (editingName ? (
+        {editingName ? (
+          // The title edits in place as a contentEditable span (same metrics as
+          // the h1, no reflow), committing on blur. It's `inline-block` so it
+          // grows with the text rather than spanning the header; the buttons are
+          // pinned right by a flex spacer. Edit mode stays open across fields
+          // until Done/Cancel — so you can edit the type line too.
+          <div className="flex min-w-0 flex-1 items-baseline gap-2">
+            <Editable
+              initial={name}
+              autoFocus
+              maxLength={nameMaxLength}
+              sanitize={nameSanitize}
+              placeholder="Untitled"
+              onCommit={(t) => onRename(t)}
+              className="inline-block max-w-full text-[21px] font-semibold leading-tight text-[var(--text)]"
+            />
+            <span className="flex-1" />
+            <span className="flex shrink-0 items-center gap-2">
+              {onCancel && (
+                <button type="button" onClick={onCancel} className={BTN}>
+                  Cancel
+                </button>
+              )}
               <button type="button" onClick={onToggleName} className={BTN_GO}>
                 Done
               </button>
-            ) : (
-              <EditLink editing={false} onClick={onToggleName} />
-            ))}
-        </div>
+            </span>
+          </div>
+        ) : (
+          <div className="flex min-w-0 flex-1 items-baseline gap-3">
+            <h1 className="min-w-0 flex-1 truncate text-[21px] font-semibold leading-tight text-[var(--text)]">
+              {name || "Untitled"}
+            </h1>
+            {editor && <EditLink editing={false} onClick={onToggleName} />}
+          </div>
+        )}
       </div>
       <div className="mt-[3px] flex items-center gap-2 text-xs text-[var(--text-tertiary)]">
         {typeLine}
@@ -477,6 +499,22 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const openMenu = usePageMenu();
   const copyId = useCopyId();
   const [tab, setTab] = useState<"overview" | "history">("overview");
+  // The header edits (name, technology) commit live on blur, so Cancel needs a
+  // snapshot to revert to. Captured when the title editor opens, restored on
+  // Cancel. See onToggleName / onCancel below.
+  const titleSnapshot = useRef<{ name: string; technology?: string } | null>(null);
+  const openTitleEdit = () => {
+    if (!ed.isEditing("title")) {
+      titleSnapshot.current = { name: node.name, technology: node.technology };
+    }
+    ed.toggle("title");
+  };
+  const cancelTitleEdit = () => {
+    const snap = titleSnapshot.current;
+    if (snap) editor?.updateNode(node.id, { name: snap.name, technology: snap.technology });
+    titleSnapshot.current = null;
+    ed.toggle("title");
+  };
   // This node's slice of the durable committed-model timeline.
   const nodeEvents = useMemo(
     () => history.filter((e) => e.nodeId === node.id),
@@ -659,8 +697,13 @@ function NodePageBody(props: PageProps & { node: Node }) {
         }
         editor={editor}
         editingName={ed.isEditing("title")}
-        onToggleName={() => ed.toggle("title")}
+        onToggleName={openTitleEdit}
+        onCancel={cancelTitleEdit}
         onRename={(v) => editor?.updateNode(node.id, { name: v })}
+        // Symbol names are bound to code identifiers (shape, not length); every
+        // other kind is a human-authored title with a length cap.
+        nameMaxLength={node.kind === "symbol" ? undefined : NAME_MAX}
+        nameSanitize={node.kind === "symbol" ? sanitizeIdentifier : undefined}
         tabs={<PageTabs tab={tab} onTab={setTab} historyCount={nodeEvents.length} />}
       />
 
@@ -774,6 +817,18 @@ function GroupPageBody(props: PageProps & { group: Group }) {
   const ed = useEditSections();
   const openMenu = usePageMenu();
   const copyId = useCopyId();
+  // Snapshot the group name on open so Cancel can revert the live-committed edit.
+  const titleSnapshot = useRef<{ name: string } | null>(null);
+  const openTitleEdit = () => {
+    if (!ed.isEditing("title")) titleSnapshot.current = { name: group.name };
+    ed.toggle("title");
+  };
+  const cancelTitleEdit = () => {
+    const snap = titleSnapshot.current;
+    if (snap) editor?.updateGroup(group.id, { name: snap.name });
+    titleSnapshot.current = null;
+    ed.toggle("title");
+  };
   const members = group.memberIds
     .map((id) => model.nodes.find((n) => n.id === id))
     .filter((n): n is Node => Boolean(n));
@@ -817,8 +872,10 @@ function GroupPageBody(props: PageProps & { group: Group }) {
         }
         editor={editor}
         editingName={ed.isEditing("title")}
-        onToggleName={() => ed.toggle("title")}
+        onToggleName={openTitleEdit}
+        onCancel={cancelTitleEdit}
         onRename={(v) => editor?.updateGroup(group.id, { name: v })}
+        nameMaxLength={NAME_MAX}
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -1032,6 +1089,7 @@ function DescriptionSection({
           <Editable
             initial={value ?? ""}
             autoFocus
+            maxLength={DESCRIPTION_MAX}
             placeholder="Describe what this is. Link other nodes with [[Name]]."
             onInput={setDraft}
             className="block text-[13.5px] leading-[1.6] text-[var(--text-secondary)]"
@@ -1293,19 +1351,29 @@ function WordDiffText({ from, to }: { from: string; to: string }) {
   const segs = wordDiff(from, to);
   return (
     <>
-      {segs.map((s, i) =>
-        s.kind === "equal" ? (
-          <span key={i}>{s.text}</span>
-        ) : s.kind === "added" ? (
-          <span key={i} className="rounded-[2px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
-            {s.text}
-          </span>
-        ) : (
-          <del key={i} className="text-[var(--text-muted)] decoration-red-400/60">
-            {s.text}
-          </del>
-        ),
-      )}
+      {segs.map((s, i) => {
+        // A substitution (removed word immediately followed by its replacement)
+        // glues the two together — "forin" — because the tokenizer keeps the
+        // surrounding spaces in the unchanged runs, leaving none between the
+        // changed words. Reinsert that gap so the strike and the pill read apart.
+        const sep = i > 0 && segs[i - 1].kind !== "equal" && s.kind !== "equal";
+        return (
+          <Fragment key={i}>
+            {sep && " "}
+            {s.kind === "equal" ? (
+              <span>{s.text}</span>
+            ) : s.kind === "added" ? (
+              <span className="rounded-[2px] bg-emerald-500/15 px-px text-emerald-700 dark:text-emerald-300">
+                {s.text}
+              </span>
+            ) : (
+              <del className="text-red-600/90 decoration-red-400/60 dark:text-red-400/90">
+                {s.text}
+              </del>
+            )}
+          </Fragment>
+        );
+      })}
     </>
   );
 }
@@ -1434,9 +1502,11 @@ function ResponsibilitiesEditor({
     : initial;
 
   const commit = (draft: Responsibility[]) => {
-    const existingIds = new Set(initial.map((r) => r.id));
+    // A blank statement is invalid (the backend flags it), so drop any empty
+    // row on commit — new or existing. Clearing a statement deletes the claim;
+    // the removal loop below calls removeResponsibility for dropped existing rows.
     const cleaned = draft
-      .filter((r) => existingIds.has(r.id) || r.statement.trim() !== "")
+      .filter((r) => r.statement.trim() !== "")
       .map((r) => {
         const dirs = (r.directives ?? []).map((s) => s.trim()).filter(Boolean);
         return { ...r, statement: r.statement.trim(), directives: dirs.length ? dirs : undefined };

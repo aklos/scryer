@@ -2,6 +2,11 @@ use crate::{Kind, ScryModel};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+/// Maximum description length, in Unicode scalar values (characters, not bytes).
+/// The frontend hard-caps description editors at the same value, so a UI-authored
+/// description never trips this warning.
+pub const DESCRIPTION_MAX_CHARS: usize = 200;
+
 /// Run structural validation. Returns a list of human-readable warnings.
 pub fn validate(model: &ScryModel) -> Vec<String> {
     let mut warnings: Vec<String> = Vec::new();
@@ -78,10 +83,11 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
         }
 
         if let Some(desc) = &n.description {
-            if desc.len() > 200 {
+            let chars = desc.chars().count();
+            if chars > DESCRIPTION_MAX_CHARS {
                 warnings.push(format!(
-                    "Node {} (\"{}\") description exceeds 200 characters ({})",
-                    n.id, n.name, desc.len()
+                    "Node {} (\"{}\") description exceeds {} characters ({})",
+                    n.id, n.name, DESCRIPTION_MAX_CHARS, chars
                 ));
             }
         }
@@ -183,10 +189,11 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
             },
         }
         if let Some(desc) = &g.description {
-            if desc.len() > 200 {
+            let chars = desc.chars().count();
+            if chars > DESCRIPTION_MAX_CHARS {
                 warnings.push(format!(
-                    "Group {} (\"{}\") description exceeds 200 characters ({})",
-                    g.id, g.name, desc.len()
+                    "Group {} (\"{}\") description exceeds {} characters ({})",
+                    g.id, g.name, DESCRIPTION_MAX_CHARS, chars
                 ));
             }
         }

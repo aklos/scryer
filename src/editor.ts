@@ -38,6 +38,8 @@ export interface Editor {
   /** Declare a directed link (e.g. minted from an import-evidence suggestion).
    *  Duplicate (src,dst) pairs are a no-op. Returns the link id. */
   addLink: (src: string, dst: string, label?: string) => string;
+  /** Patch a link's label and/or protocol. An empty `method` clears it. */
+  updateLink: (linkId: string, patch: { label?: string; method?: string }) => void;
   deleteLink: (linkId: string) => void;
 
   // --- groups ---

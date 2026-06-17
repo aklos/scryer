@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, X } from "lucide-react";
-import { Button, Field, Input, SegmentedControl, Select } from "./ui";
+import { Input, Select } from "./ui";
+import { BTN, BTN_GO } from "./pagekit";
 
 type AgentPref = "auto" | "claudeCode" | "codex";
 
@@ -152,16 +153,16 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           </Field>
 
           <Field label="Agent">
-            <SegmentedControl
+            <SegField<AgentPref>
               options={[
                 { value: "auto", label: "Auto" },
                 { value: "claudeCode", label: "Claude Code" },
                 { value: "codex", label: "Codex" },
               ]}
               value={settings.agent}
-              onChange={(agent) => setSettings((s) => ({ ...s, agent: agent as AgentPref }))}
+              onChange={(agent) => setSettings((s) => ({ ...s, agent }))}
             />
-            <p className="mt-1 text-2xs text-[var(--text-muted)]">
+            <p className="text-2xs text-[var(--text-muted)]">
               {resolvedAgent
                 ? `Fills will use ${resolvedAgent === "claudeCode" ? "Claude Code" : "Codex"}.`
                 : "No agent detected — install Claude Code or Codex."}
@@ -186,16 +187,73 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="flex justify-end gap-2 border-t border-[var(--border)] px-4 py-3">
-          <Button variant="ghost" onClick={onClose}>
+          <button type="button" onClick={onClose} className={BTN}>
             Cancel
-          </Button>
-          <Button variant="primary" onClick={save} disabled={saving}>
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            className={`${BTN_GO} disabled:cursor-default disabled:opacity-50`}
+          >
             {saving ? "Saving…" : "Save"}
-          </Button>
+          </button>
         </div>
       </div>
     </div>,
     document.body,
+  );
+}
+
+/** A neutral segmented toggle in the wiki design's chrome — a bordered track
+ *  whose active segment fills with the selection surface, like the [edit]
+ *  buttons and selected rows on the node pages. The shared ui SegmentedControl
+ *  still carries a solid-zinc active fill (off the neutral interaction
+ *  contract), so the settings panel uses its own. */
+function SegField<T extends string | undefined>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="flex overflow-hidden rounded-[5px] border border-[var(--border-strong)]">
+      {options.map((opt, i) => {
+        const active = value === opt.value;
+        return (
+          <button
+            key={String(opt.value ?? "__none__")}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            className={`flex-1 cursor-pointer px-2 py-1 text-[11px] transition-colors ${
+              i > 0 ? "border-l border-[var(--border)]" : ""
+            } ${
+              active
+                ? "bg-[var(--surface-active)] font-medium text-[var(--text)]"
+                : "bg-[var(--surface-raised)] text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+            }`}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** A labelled field — the label rendered as the wiki design's uppercase eyebrow
+ *  (matching the section headers on the node pages), then its control below. */
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[11px] font-semibold uppercase tracking-[0.07em] text-[var(--text-tertiary)]">
+        {label}
+      </span>
+      {children}
+    </div>
   );
 }
 
@@ -224,10 +282,12 @@ function AgentSettingsGroup({
 }) {
   return (
     <div className="rounded-md border border-[var(--border)] p-3">
-      <div className="mb-2 text-xs font-medium text-[var(--text-secondary)]">{title}</div>
+      <h3 className="mb-2.5 border-b border-[var(--border)] pb-[5px] text-[11px] font-semibold uppercase tracking-[0.07em] text-[var(--text-secondary)]">
+        {title}
+      </h3>
       <div className="flex flex-col gap-3">
         <Field label="Reasoning effort">
-          <SegmentedControl
+          <SegField
             options={efforts.map((e) => ({ value: e, label: cap(e) }))}
             value={value.effort}
             onChange={(effort) => onChange({ ...value, effort })}

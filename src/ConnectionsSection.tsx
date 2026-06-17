@@ -15,7 +15,7 @@ import type { ScryModel, Node, Link } from "./viewmodel";
 import type { Editor } from "./editor";
 import type { ModelHealthReport } from "./health";
 import { linkEvidence } from "./health";
-import { BTN, BTN_DANGER, BTN_GO, CTL, PageSection, SectionEditor } from "./pagekit";
+import { BTN, BTN_DANGER, BTN_GO, CTL, Editable, PageSection, SectionEditor } from "./pagekit";
 import { usePageMenu, useCopyId, copyIdItem } from "./pageMenu";
 import { wordDiff } from "./wordDiff";
 
@@ -113,6 +113,7 @@ function ConnRow({
   evidence,
   hasAudit,
   removed,
+  edit,
   control,
   onSelectNode,
 }: {
@@ -121,6 +122,9 @@ function ConnRow({
   evidence: Record<string, number>;
   hasAudit: boolean;
   removed?: boolean;
+  /** When present (edit mode, row not staged for deletion), the label and
+   *  protocol render as inline editable fields seeded from these values. */
+  edit?: { onLabel: (t: string) => void; onMethod: (t: string) => void };
   control?: React.ReactNode;
   onSelectNode: (id: string) => void;
 }) {
@@ -135,6 +139,9 @@ function ConnRow({
   const peerColor = struck
     ? "text-red-700 line-through decoration-red-500/60 dark:text-red-400"
     : "text-blue-700 dark:text-blue-400";
+  // Inline editing only on live rows; a row staged for deletion keeps its
+  // struck, read-only rendering so the removal still reads at a glance.
+  const editable = edit && !struck;
   return (
     <li
       className={`group/erow ${CONN_ROW} py-[1.5px]`}
@@ -155,22 +162,38 @@ function ConnRow({
         >
           {peer.name || "Untitled"}
         </button>
-        {(link.label || (kind === "reworded" && prev?.label)) && (
-          <span className="shrink-0 text-[var(--text-tertiary)]">
-            &nbsp;—{" "}
-            {kind === "reworded" && prev && prev.label !== link.label ? (
-              <WordDiffText from={prev.label ?? ""} to={link.label ?? ""} />
-            ) : (
-              link.label
+        {editable ? (
+          // Always-present edit slots so a labelless link can gain one.
+          <>
+            <span className="shrink-0 text-[var(--text-tertiary)]">
+              &nbsp;—{" "}
+              <Editable initial={link.label ?? ""} placeholder="label" onInput={edit!.onLabel} />
+            </span>
+            <span className="shrink-0 text-[var(--text-ghost)]">
+              &nbsp;·{" "}
+              <Editable initial={link.method ?? ""} placeholder="method" onInput={edit!.onMethod} />
+            </span>
+          </>
+        ) : (
+          <>
+            {(link.label || (kind === "reworded" && prev?.label)) && (
+              <span className="shrink-0 text-[var(--text-tertiary)]">
+                &nbsp;—{" "}
+                {kind === "reworded" && prev && prev.label !== link.label ? (
+                  <WordDiffText from={prev.label ?? ""} to={link.label ?? ""} />
+                ) : (
+                  link.label
+                )}
+              </span>
             )}
-          </span>
-        )}
-        {link.method && (
-          <span className="shrink-0 text-[var(--text-ghost)]">&nbsp;· {link.method}</span>
+            {link.method && (
+              <span className="shrink-0 text-[var(--text-ghost)]">&nbsp;· {link.method}</span>
+            )}
+          </>
         )}
         <EvidenceTag
           count={evidence[link.id] ?? 0}
-          applicable={!struck && hasAudit && codeBearing(node) && codeBearing(peer)}
+          applicable={!struck && !editable && hasAudit && codeBearing(node) && codeBearing(peer)}
         />
       </div>
       {control && <span className={CTL}>{control}</span>}
@@ -359,7 +382,8 @@ export function ConnectionsSection({
           onClose={onToggle}
         />
       ) : (
-        <>
+        // Same wrapper as the editor body so read↔edit never reflows.
+        <div className="flex flex-col">
           {outgoing.length > 0 && <ConnGroup title="Uses">{outgoing.map(readRow)}</ConnGroup>}
           {incoming.length > 0 && <ConnGroup title="Used by">{incoming.map(readRow)}</ConnGroup>}
           {suggested.length > 0 && (
@@ -367,7 +391,7 @@ export function ConnectionsSection({
               {suggested.map((e) => suggestedRow(e))}
             </ConnGroup>
           )}
-        </>
+        </div>
       )}
     </PageSection>
   );
@@ -404,11 +428,21 @@ function ConnectionsEditor({
 }) {
   const edgeKey = (e: SuggestedEdge) => `${e.src}:${e.dst}`;
   return (
-    <SectionEditor<{ remove: string[]; declare: string[] }>
-      initial={{ remove: [], declare: [] }}
+    <SectionEditor<{
+      remove: string[];
+      declare: string[];
+      /** Per-link label/method edits, keyed by link id; only changed links appear. */
+      patch: Record<string, { label: string; method: string }>;
+    }>
+      initial={{ remove: [], declare: [], patch: {} }}
       onClose={onClose}
-      onCommit={({ remove, declare }) => {
+      onCommit={({ remove, declare, patch }) => {
         for (const id of remove) editor.deleteLink(id);
+        // A link staged for deletion ignores any label edits — deletion wins.
+        for (const [id, p] of Object.entries(patch)) {
+          if (remove.includes(id)) continue;
+          editor.updateLink(id, { label: p.label.trim(), method: p.method.trim() });
+        }
         for (const key of declare) {
           const [src, dst] = key.split(":");
           editor.addLink(src, dst);
@@ -422,6 +456,15 @@ function ConnectionsEditor({
             ...d,
             remove: d.remove.includes(id) ? d.remove.filter((x) => x !== id) : [...d.remove, id],
           }));
+        // Record an edited field, seeding from the link's current values.
+        const setField = (link: Link, field: "label" | "method", val: string) =>
+          setDraft((d) => {
+            const cur = d.patch[link.id] ?? {
+              label: link.label ?? "",
+              method: link.method ?? "",
+            };
+            return { ...d, patch: { ...d.patch, [link.id]: { ...cur, [field]: val } } };
+          });
         const isDeclared = (key: string) => draft.declare.includes(key);
         const toggleDeclare = (key: string) =>
           setDraft((d) => ({
@@ -450,6 +493,10 @@ function ConnectionsEditor({
               evidence={evidence}
               hasAudit={hasAudit}
               removed={isRemoved(r.link.id)}
+              edit={{
+                onLabel: (t) => setField(r.link, "label", t),
+                onMethod: (t) => setField(r.link, "method", t),
+              }}
               control={
                 <button
                   type="button"
@@ -470,7 +517,7 @@ function ConnectionsEditor({
           );
 
         return (
-          <>
+          <div className="flex flex-col">
             {outgoing.length > 0 && <ConnGroup title="Uses">{outgoing.map(editRow)}</ConnGroup>}
             {incoming.length > 0 && <ConnGroup title="Used by">{incoming.map(editRow)}</ConnGroup>}
             {suggested.length > 0 && (
@@ -509,7 +556,7 @@ function ConnectionsEditor({
                 })}
               </ConnGroup>
             )}
-          </>
+          </div>
         );
       }}
     </SectionEditor>

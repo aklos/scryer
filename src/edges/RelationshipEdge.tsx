@@ -22,15 +22,18 @@ export interface EdgeData extends Record<string, unknown> {
   method?: string;
   /** Code tier: endpoints are dot centers — inset to the dot rim. */
   dot?: boolean;
+  /** Code tier: source/target dot radius (px), so the line insets to each rim. */
+  sourceR?: number;
+  targetR?: number;
   /** Incident to the selected node — kept lit while the rest of the graph dims. */
   highlighted?: boolean;
   /** A selection exists elsewhere — this edge isn't part of it, so it fades. */
   dimmed?: boolean;
 }
 
-/** Dot radius (h-3 w-3 = 12px) plus a small gap, so the line/arrow kisses the
- *  rim instead of overlapping the disc. */
-const DOT_INSET = 9;
+/** Gap between a dot's rim and where the line/arrow starts, so it kisses the
+ *  rim instead of overlapping the disc. Added to each end's own radius. */
+const DOT_GAP = 3;
 export type RFRelEdge = RFEdge<EdgeData, "rel">;
 
 export function RelationshipEdge({
@@ -51,14 +54,15 @@ export function RelationshipEdge({
     "#18181b";
   const edgeColor = selected ? selColor : baseColor;
 
-  // For dot-tier edges the endpoints are dot centers; pull both in by the dot
-  // radius so the line starts/ends at the rim and the arrow lands on it.
+  // For dot-tier edges the endpoints are dot centers; pull each end in by its
+  // own dot radius so the line starts/ends at the rim and the arrow lands on it.
   const dx = targetX - sourceX, dy = targetY - sourceY;
   const len = Math.hypot(dx, dy) || 1;
-  const inset = data?.dot ? Math.min(DOT_INSET, len / 2 - 1) : 0;
   const ux = dx / len, uy = dy / len;
-  const sx = sourceX + ux * inset, sy = sourceY + uy * inset;
-  const tx = targetX - ux * inset, ty = targetY - uy * inset;
+  const sInset = data?.dot ? Math.min((data.sourceR ?? 6) + DOT_GAP, len / 2 - 1) : 0;
+  const tInset = data?.dot ? Math.min((data.targetR ?? 6) + DOT_GAP, len / 2 - 1) : 0;
+  const sx = sourceX + ux * sInset, sy = sourceY + uy * sInset;
+  const tx = targetX - ux * tInset, ty = targetY - uy * tInset;
   const edgePath = `M ${sx} ${sy} L ${tx} ${ty}`;
   const labelX = (sx + tx) / 2;
   const labelY = (sy + ty) / 2;

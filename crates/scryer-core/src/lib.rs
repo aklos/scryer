@@ -3,6 +3,7 @@ pub mod diff;
 pub mod drift;
 pub mod health;
 pub mod history;
+pub mod ownership;
 pub mod rules;
 pub mod scan;
 pub mod seed;

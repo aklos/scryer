@@ -10,6 +10,79 @@ use rmcp::{
 use scryer_core::{Node, ScryModel};
 use std::collections::HashSet;
 
+/// Minimum Jaro–Winkler similarity for a query term to count as a fuzzy match
+/// on a field word. Short terms are held to a stricter bar so a 3–4 char term
+/// can't fan out across half the model on prefix similarity alone.
+const FUZZY_THRESHOLD_LONG: f64 = 0.82;
+const FUZZY_THRESHOLD_SHORT: f64 = 0.90;
+
+fn fuzzy_threshold(term: &str) -> f64 {
+    if term.chars().count() <= 4 {
+        FUZZY_THRESHOLD_SHORT
+    } else {
+        FUZZY_THRESHOLD_LONG
+    }
+}
+
+/// Best similarity of `term` against one (already lowercased) field. Substring
+/// containment is the exact signal preserved from the original search and scores
+/// 1.0; otherwise the score is the best Jaro–Winkler similarity of `term`
+/// against any alphanumeric word in the field. Returns `(score, exact)`.
+fn term_field_score(term: &str, field_lower: &str) -> (f64, bool) {
+    if field_lower.contains(term) {
+        return (1.0, true);
+    }
+    let best = field_lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| strsim::jaro_winkler(term, w))
+        .fold(0.0_f64, f64::max);
+    (best, false)
+}
+
+/// Score a node's searchable `fields` against the query `terms`. Returns `None`
+/// unless every term clears its threshold somewhere on the node (AND). On a hit,
+/// returns the summed best-per-term score (the ranking key — exact matches pull
+/// it up) and the per-field match report for the fields that contributed.
+fn score_node(
+    fields: &[(&str, String)],
+    terms: &[String],
+) -> Option<(f64, Vec<serde_json::Value>)> {
+    let lowered: Vec<String> = fields.iter().map(|(_, v)| v.to_lowercase()).collect();
+    // Best (score, exact) seen on each field across all terms, for reporting.
+    let mut field_best: Vec<(f64, bool)> = vec![(0.0, false); fields.len()];
+    let mut total = 0.0;
+    for term in terms {
+        let mut term_best = 0.0_f64;
+        for (i, fl) in lowered.iter().enumerate() {
+            let (s, exact) = term_field_score(term, fl);
+            if s > field_best[i].0 {
+                field_best[i] = (s, exact);
+            }
+            term_best = term_best.max(s);
+        }
+        if term_best < fuzzy_threshold(term) {
+            return None; // this term matched nothing — node fails the AND
+        }
+        total += term_best;
+    }
+    let matched: Vec<serde_json::Value> = fields
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| field_best[*i].0 >= FUZZY_THRESHOLD_LONG)
+        .map(|(i, (where_, v))| {
+            let (s, exact) = field_best[i];
+            serde_json::json!({
+                "in": where_,
+                "text": v,
+                "match": if exact { "exact" } else { "fuzzy" },
+                "score": (s * 100.0).round() / 100.0,
+            })
+        })
+        .collect();
+    Some((total, matched))
+}
+
 /// The architecture overview: the model tree down to components (symbols
 /// excluded) with responsibility/property counts. Always small enough to read
 /// whole, so an unqualified `read_model` can never bury the agent's context.
@@ -329,7 +402,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Search the model for nodes matching free text. Case-insensitive; space-separated terms must ALL match somewhere on the node (name, description, technology, responsibility statements, or property labels). Returns each hit's id, kind, breadcrumb path, and the fields that matched — so you can locate a concept in a large model and then `read_model {node}` into it. Optional `kind` filter. Capped at 50 hits."
+        description = "Search the model for nodes matching free text. Case-insensitive and fuzzy: space-separated terms must ALL match somewhere on the node (name, description, technology, responsibility statements, or property labels), where a term matches either as a substring or by close edit-distance similarity — so `authentication` finds `authenticate` and typos still hit. Results are ranked by match quality (exact substrings rank above fuzzy), each carrying a `score` and a per-field `match` of `exact` or `fuzzy`. Returns each hit's id, kind, breadcrumb path, score, and matched fields — so you can locate a concept in a large model and then `read_model {node}` into it. Optional `kind` filter. Top 50 hits by score."
     )]
     fn search_model(
         &self,
@@ -363,8 +436,9 @@ impl ScryerServer {
         }
 
         const CAP: usize = 50;
-        let mut hits: Vec<serde_json::Value> = Vec::new();
-        let mut truncated = false;
+        // Collect every matching node with its rank score, then sort and cap —
+        // fuzzy matches mean node order is no longer a good proxy for relevance.
+        let mut scored: Vec<(f64, serde_json::Value)> = Vec::new();
         for n in &model.nodes {
             if kind_filter.as_ref().is_some_and(|k| &n.kind != k) {
                 continue;
@@ -383,40 +457,33 @@ impl ScryerServer {
             for p in &n.properties {
                 fields.push(("property", p.label.clone()));
             }
-            // AND across terms: every term must appear in at least one field.
-            let hay: Vec<String> = fields.iter().map(|(_, v)| v.to_lowercase()).collect();
-            let all_match = terms
-                .iter()
-                .all(|t| hay.iter().any(|h| h.contains(t)));
-            if !all_match {
+            // AND across terms: every term must match (exactly or fuzzily) somewhere.
+            let Some((score, matched)) = score_node(&fields, &terms) else {
                 continue;
-            }
-            if hits.len() >= CAP {
-                truncated = true;
-                break;
-            }
-            // Report the specific fields that contained any term.
-            let matched: Vec<serde_json::Value> = fields
-                .iter()
-                .filter(|(_, v)| {
-                    let lv = v.to_lowercase();
-                    terms.iter().any(|t| lv.contains(t))
-                })
-                .map(|(where_, v)| serde_json::json!({ "in": where_, "text": v }))
-                .collect();
-            hits.push(serde_json::json!({
-                "id": n.id,
-                "kind": kind_str(&n.kind),
-                "path": breadcrumb(&model, &n.id),
-                "matched": matched,
-            }));
+            };
+            scored.push((
+                score,
+                serde_json::json!({
+                    "id": n.id,
+                    "kind": kind_str(&n.kind),
+                    "path": breadcrumb(&model, &n.id),
+                    "score": (score * 100.0).round() / 100.0,
+                    "matched": matched,
+                }),
+            ));
         }
+
+        let truncated = scored.len() > CAP;
+        // Stable sort by descending score keeps model order for ties.
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let results: Vec<serde_json::Value> =
+            scored.into_iter().take(CAP).map(|(_, v)| v).collect();
 
         let payload = serde_json::json!({
             "query": req.query,
-            "hits": hits.len(),
+            "hits": results.len(),
             "truncated": truncated,
-            "results": hits,
+            "results": results,
         });
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
@@ -1275,6 +1342,70 @@ mod tests {
             }))
             .unwrap();
         assert_eq!(result_json(&r)["hits"], 0);
+    }
+
+    #[test]
+    fn search_fuzzy_matches_typo_and_tags_match_kind() {
+        let (server, _dir, project) = temp_project();
+        // "verfy" is a typo of the symbol name "verify_token" — no substring hit,
+        // so it only lands via edit-distance similarity.
+        let r = server
+            .search_model(Parameters(SearchModelRequest {
+                project: Some(project),
+                query: "verfy".into(),
+                kind: None,
+            }))
+            .unwrap();
+        let v = result_json(&r);
+        assert_eq!(v["hits"], 1);
+        assert_eq!(v["results"][0]["id"], "node-4");
+        assert_eq!(v["results"][0]["matched"][0]["in"], "name");
+        assert_eq!(v["results"][0]["matched"][0]["match"], "fuzzy");
+    }
+
+    #[test]
+    fn search_unrelated_term_does_not_fuzzy_match() {
+        let (server, _dir, project) = temp_project();
+        let r = server
+            .search_model(Parameters(SearchModelRequest {
+                project: Some(project),
+                query: "elephant".into(),
+                kind: None,
+            }))
+            .unwrap();
+        assert_eq!(result_json(&r)["hits"], 0);
+    }
+
+    #[test]
+    fn search_ranks_exact_above_fuzzy() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::System, "Acme", None));
+        // Exact substring hit on a responsibility statement.
+        let mut exact = node("node-2", Kind::Component, "Billing", Some("node-1"));
+        exact.responsibilities = vec![resp("r1", "charges the card")];
+        m.nodes.push(exact);
+        // Fuzzy-only hit: the name "charge" is one edit from the query "charges".
+        m.nodes
+            .push(node("node-3", Kind::Component, "charge", Some("node-1")));
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        let project = dir.path().to_string_lossy().to_string();
+        let server = ScryerServer::new();
+
+        let r = server
+            .search_model(Parameters(SearchModelRequest {
+                project: Some(project),
+                query: "charges".into(),
+                kind: None,
+            }))
+            .unwrap();
+        let v = result_json(&r);
+        assert_eq!(v["hits"], 2);
+        assert_eq!(v["results"][0]["id"], "node-2");
+        assert_eq!(v["results"][0]["matched"][0]["match"], "exact");
+        assert_eq!(v["results"][1]["id"], "node-3");
+        assert_eq!(v["results"][1]["matched"][0]["match"], "fuzzy");
     }
 
     #[test]

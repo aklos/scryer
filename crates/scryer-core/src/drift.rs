@@ -205,18 +205,16 @@ pub fn drifted_scopes(model: &ScryModel, project: &Path, sync: &SyncState) -> Ve
     // and share one anchor, so cache the changed-file set per distinct anchor to
     // avoid re-walking the tree per node.
     let mut override_cache: HashMap<(u64, Option<String>), BTreeSet<String>> = HashMap::new();
+    // Resolve changed files to their most-specific boundary owner, so a broad
+    // glob (a root container's `**/*`) isn't flagged as drifted by changes that
+    // a nested container actually owns.
+    let ownership = crate::ownership::BoundaryOwnership::new(model);
 
     let mut scopes: Vec<DriftScope> = Vec::new();
     for node in &model.nodes {
-        let Some(sources) = model.boundaries.get(&node.id) else {
-            continue;
-        };
-        let patterns: Vec<glob::Pattern> = sources
-            .iter()
-            .filter_map(|s| glob::Pattern::new(&s.pattern).ok())
-            .collect();
-        if patterns.is_empty() {
-            continue;
+        match model.boundaries.get(&node.id) {
+            Some(sources) if !sources.is_empty() => {}
+            _ => continue,
         }
         let changed: &BTreeSet<String> = match sync.nodes.get(&node.id) {
             Some(anchor) => override_cache
@@ -235,7 +233,7 @@ pub fn drifted_scopes(model: &ScryModel, project: &Path, sync: &SyncState) -> Ve
         };
         let hits: Vec<String> = changed
             .iter()
-            .filter(|f| patterns.iter().any(|p| p.matches(f)))
+            .filter(|f| ownership.owns(&node.id, f))
             .cloned()
             .collect();
         if !hits.is_empty() {

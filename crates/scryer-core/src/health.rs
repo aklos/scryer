@@ -247,13 +247,21 @@ pub fn compute_health(model: &ScryModel, files: Option<&BTreeSet<String>>) -> Mo
 
     // --- boundary coverage -------------------------------------------------------
     let anchored_files = files.map(|_| anchored_files_per_subtree(model, &children));
+    // Resolve file ownership by the most-specific matching boundary, so a broad
+    // glob (e.g. a root container's `**/*`) only counts the files no nested
+    // boundary claims — matching how the extractor slices containers.
+    let ownership = crate::ownership::BoundaryOwnership::new(model);
 
     let mut nodes: BTreeMap<String, NodeHealth> = BTreeMap::new();
     for node in &model.nodes {
         let boundary = match (files, &anchored_files) {
-            (Some(files), Some(anchored)) => {
-                boundary_coverage(model, &node.id, files, anchored.get(node.id.as_str()))
-            }
+            (Some(files), Some(anchored)) => boundary_coverage(
+                model,
+                &ownership,
+                &node.id,
+                files,
+                anchored.get(node.id.as_str()),
+            ),
             _ => None,
         };
         nodes.insert(
@@ -364,23 +372,18 @@ fn anchored_files_per_subtree<'a>(
 
 fn boundary_coverage(
     model: &ScryModel,
+    ownership: &crate::ownership::BoundaryOwnership,
     node_id: &str,
     files: &BTreeSet<String>,
     anchored: Option<&BTreeSet<&str>>,
 ) -> Option<BoundaryCoverage> {
-    let sources = model.boundaries.get(node_id)?;
-    let patterns: Vec<glob::Pattern> = sources
-        .iter()
-        .filter_map(|s| glob::Pattern::new(&s.pattern).ok())
-        .collect();
-    if patterns.is_empty() {
-        return None;
-    }
+    // A node with no boundary glob has no coverage figure.
+    model.boundaries.get(node_id).filter(|s| !s.is_empty())?;
     let mut total = 0u32;
     let mut hit = 0u32;
     let mut dark: Vec<String> = Vec::new();
     for file in files {
-        if !patterns.iter().any(|p| p.matches(file)) {
+        if !ownership.owns(node_id, file) {
             continue;
         }
         total += 1;

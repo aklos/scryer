@@ -9,7 +9,6 @@
  */
 
 import type { NodeProps, Node as RFNode } from "@xyflow/react";
-import { Layers } from "lucide-react";
 import type { DiagramNode } from "../diagramLayout";
 import type { Mark } from "../changeMarks";
 import { NodeHandles } from "./NodeHandles";
@@ -95,7 +94,7 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
               strokeWidth={selected ? 2.5 : 1}
             />
           </svg>
-          <div className="w-full break-all text-center text-sm font-semibold leading-tight">
+          <div className="w-full break-words text-center text-sm font-semibold leading-tight">
             {node.name || "Untitled"}
           </div>
           {node.description && (
@@ -151,10 +150,10 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
           </div>
         )}
 
-        {/* Has-children indicator. */}
-        {expandable && node.hasChildren && (
-          <div className="pointer-events-none absolute bottom-2 right-2.5 z-10 text-[var(--text-ghost)]">
-            <Layers size={12} strokeWidth={1.5} />
+        {/* Direct-child count. */}
+        {expandable && node.childCount > 0 && (
+          <div className="pointer-events-none absolute bottom-1.5 right-2.5 z-10 text-[11px] font-medium tabular-nums text-[var(--text-ghost)]">
+            {node.childCount}
           </div>
         )}
 
@@ -163,7 +162,7 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
           className="absolute flex flex-col items-center justify-center overflow-hidden text-[var(--text)]"
           style={{ top: insets.top, bottom: insets.bottom, left: insets.left, right: insets.right }}
         >
-          <div className="w-full break-all text-center text-sm font-semibold leading-tight">
+          <div className="w-full break-words text-center text-sm font-semibold leading-tight">
             {node.name || "Untitled"}
           </div>
           {node.technology && (

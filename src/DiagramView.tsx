@@ -36,7 +36,7 @@ import { assignAllHandles } from "./edgeRouting";
 import { DiagramCard, type CardData, type RFCard } from "./nodes/DiagramCard";
 import { CenterHandle } from "./nodes/NodeHandles";
 import { RelationshipEdge, type EdgeData } from "./edges/RelationshipEdge";
-import { buildDiagramScene, dotDiameter, type DiagramScene } from "./diagramLayout";
+import { buildDiagramScene, type DiagramScene } from "./diagramLayout";
 
 type DotData = CardData;
 type RFDot = RFNode<DotData, "dot">;
@@ -48,8 +48,9 @@ function DotNode({ data }: NodeProps<RFDot>) {
   const { node, selected, mark } = data;
   const meta = mark ? MARK_META[mark] : null;
   const ghost = node.reference;
-  // Dot size encodes connection count — a hub symbol reads larger than a leaf.
-  const dia = dotDiameter(node.degree);
+  // Dot size encodes fan-in — the more depended-upon a symbol, the larger it
+  // reads. Sized relative to the busiest hub on this level (see diagramLayout).
+  const dia = node.dotSize;
   // A ghost (referenced from elsewhere) reads hollow: an outlined ring, no fill.
   const discClass = ghost
     ? "border border-dashed border-[var(--text-muted)] bg-transparent"
@@ -220,6 +221,12 @@ function DiagramInner({
             scene.edges,
           )
         : null;
+    // Dot radius per node, so the edge insets to the rim of each (now variable-
+    // sized) dot instead of a fixed guess.
+    const radius =
+      scene.mode === "code"
+        ? new Map(scene.nodes.map((n) => [n.id, n.dotSize / 2] as const))
+        : null;
     return scene.edges.map((e) => {
       const h = handles?.get(e.id);
       const connected = highlight.active && (e.source === selectedId || e.target === selectedId);
@@ -234,6 +241,8 @@ function DiagramInner({
           label: e.label || undefined,
           method: e.method,
           dot: scene.mode === "code",
+          sourceR: radius?.get(e.source),
+          targetR: radius?.get(e.target),
           highlighted: connected,
           dimmed: highlight.active && !connected,
         },

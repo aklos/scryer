@@ -112,20 +112,27 @@ export function Powerline({
         </span>
       </div>
 
-      <div className="grow" />
+      {/* Center: the live transient stream (tool calls, prose, status) while the
+          agent works — plain, unstyled text so it stays clearly distinct from
+          the violet "what it's doing" label on the right. Doubles as the flex
+          spacer that pushes the right segments to the window edge when idle. */}
+      <div className="pl-msg">
+        {busy && agentActivity && (
+          <span className="max-w-full truncate text-[var(--text-tertiary)]" title={agentActivity}>
+            {agentActivity}
+          </span>
+        )}
+      </div>
 
       {busy ? (
         <>
           <div
             className="rseg r-agent min-w-0"
             style={sb("color-mix(in srgb, var(--color-violet-500) 14%, var(--surface-active))")}
-            title={agentActivity ?? undefined}
+            title={agentLabel ?? undefined}
           >
             <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
             <span className="shrink-0">{agentLabel}</span>
-            {agentActivity && (
-              <span className="min-w-0 truncate opacity-70">· {agentActivity}</span>
-            )}
           </div>
           <button
             type="button"

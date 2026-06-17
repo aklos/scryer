@@ -3647,6 +3647,7 @@ dependencies = [
  "scryer-extract",
  "serde",
  "serde_json",
+ "strsim",
  "tempfile",
  "tokio",
  "toml_edit 0.22.27",

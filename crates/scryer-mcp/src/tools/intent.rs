@@ -524,12 +524,34 @@ impl ScryerServer {
             );
         }
         let flagged = resps.len();
-        // Build the timeline rows now, while the freshly-minted adoptions and their
-        // source map are still in hand (they're about to be moved onto the node).
-        let undescribed_rows: Vec<EventRow> =
-            resps.iter().map(|r| resp_event_row("+", &planned, r)).collect();
-        if let Some(node) = planned.nodes.iter_mut().find(|n| n.id == req.node_id) {
-            node.responsibilities.extend(resps);
+        // Route each finding to the FINEST node that owns its source file — the
+        // symbol/component the source map already ties the file to — so an
+        // undescribed behaviour lands at its true altitude instead of bubbling up
+        // to the reviewed container. Unmapped files fall back to the reviewed node.
+        let targets: Vec<String> = items
+            .iter()
+            .map(|item| {
+                scryer_core::ownership::owning_node_for_location(
+                    &planned,
+                    &req.node_id,
+                    &item.source_file,
+                    item.symbol.as_deref(),
+                )
+            })
+            .collect();
+        // Build the timeline rows now (while the adoptions and their source map are
+        // still in hand), grouped by the node each lands on.
+        let mut rows_by_node: HashMap<String, Vec<EventRow>> = HashMap::new();
+        for (target, r) in targets.iter().zip(resps.iter()) {
+            rows_by_node
+                .entry(target.clone())
+                .or_default()
+                .push(resp_event_row("+", &planned, r));
+        }
+        for (target, r) in targets.into_iter().zip(resps.into_iter()) {
+            if let Some(node) = planned.nodes.iter_mut().find(|n| n.id == target) {
+                node.responsibilities.push(r);
+            }
         }
         if flagged > 0 {
             enforce_readonly_directives(&mut planned, &prior_plan);
@@ -600,22 +622,21 @@ impl ScryerServer {
         }
 
         // Timeline: undescribed behaviours adopted from code read as a "took code"
-        // drift event on the node they were proposed onto.
-        if !undescribed_rows.is_empty() {
-            record_event(
-                &model_ref,
-                HistoryEvent::new(
-                    scryer_core::drift::now_secs(),
-                    EventKind::Drift,
-                    &req.node_id,
-                    "took code",
-                )
-                .with_rows(undescribed_rows),
-            );
+        // drift event on EACH node they were routed onto (not just the reviewed
+        // container).
+        if !rows_by_node.is_empty() {
+            let now_code = scryer_core::drift::now_secs();
+            for (node_id, rows) in rows_by_node {
+                record_event(
+                    &model_ref,
+                    HistoryEvent::new(now_code, EventKind::Drift, &node_id, "took code")
+                        .with_rows(rows),
+                );
+            }
         }
 
         let mut msg = format!(
-            "Proposed {flagged} undescribed behaviour(s) into the plan as adoptions and flagged {staled} stale responsibility(ies) on '{}'.",
+            "Proposed {flagged} undescribed behaviour(s) into the plan as adoptions (routed to the nodes that own their code) and flagged {staled} stale responsibility(ies) under '{}'.",
             req.node_id
         );
         for s in &req.stale {
@@ -938,6 +959,61 @@ mod tests {
         assert_eq!(anchor.symbol.as_deref(), Some("admin_handler"));
         assert_eq!(anchor.line, Some(42));
         assert_eq!(anchor.end_line, Some(58));
+    }
+
+    #[test]
+    fn flag_drift_routes_undescribed_to_the_owning_symbol() {
+        let (server, dir, _sys) = temp_project();
+        let project = dir.path().to_string_lossy().to_string();
+        let mref = scryer_core::ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        // Plan: container `c` → component `comp` → symbol `admin_handler`, the
+        // symbol mapped to api/admin.rs via its responsibility.
+        let mut m = scryer_core::ScryModel::new();
+        let node = |v: serde_json::Value| serde_json::from_value::<scryer_core::Node>(v).unwrap();
+        m.nodes.push(node(serde_json::json!({ "id": "c", "kind": "container", "name": "API" })));
+        m.nodes
+            .push(node(serde_json::json!({ "id": "comp", "kind": "component", "name": "Admin", "parentId": "c" })));
+        m.nodes.push(node(serde_json::json!({
+            "id": "sym", "kind": "symbol", "name": "admin_handler", "parentId": "comp",
+            "responsibilities": [{ "id": "r-sym", "statement": "handle admin requests" }],
+        })));
+        m.source_map.insert(
+            "r-sym".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "api/admin.rs" })).unwrap()],
+        );
+        m.boundaries.insert(
+            "c".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "api/**/*" })).unwrap()],
+        );
+        scryer_core::write_planned_at(&mref, &m).unwrap();
+
+        server
+            .flag_drift(Parameters(FlagDriftRequest {
+                project: Some(project),
+                node_id: "c".into(), // reviewed at the container, as always
+                undescribed: vec![UndescribedItem {
+                    statement: "exposes an undocumented admin endpoint".into(),
+                    source_file: "api/admin.rs".into(),
+                    symbol: Some("admin_handler".into()),
+                    line: Some(42),
+                    end_line: Some(58),
+                }],
+                stale: vec![],
+            }))
+            .unwrap();
+
+        let plan = scryer_core::read_planned_at(&mref).unwrap();
+        let sym = plan.nodes.iter().find(|n| n.id == "sym").unwrap();
+        assert!(
+            sym.responsibilities.iter().any(|r| r.vagrant == Some(true)),
+            "the finding is routed to the symbol that owns api/admin.rs"
+        );
+        let cont = plan.nodes.iter().find(|n| n.id == "c").unwrap();
+        assert!(
+            cont.responsibilities.iter().all(|r| r.vagrant != Some(true)),
+            "the finding must NOT land on the reviewed container"
+        );
     }
 
     #[test]

@@ -556,6 +556,29 @@ export function removeLink(model: ScryModel, linkId: string): ScryModel {
   return { ...model, links: model.links.filter((l) => l.id !== linkId) };
 }
 
+/** Patch a declared link's label and/or protocol. An empty `method` clears it
+ *  back to undefined (the field is optional). */
+export function updateLink(
+  model: ScryModel,
+  linkId: string,
+  patch: { label?: string; method?: string },
+): ScryModel {
+  return {
+    ...model,
+    links: model.links.map((l) =>
+      l.id === linkId
+        ? {
+            ...l,
+            ...(patch.label !== undefined ? { label: patch.label } : {}),
+            ...(patch.method !== undefined
+              ? { method: patch.method || undefined }
+              : {}),
+          }
+        : l,
+    ),
+  };
+}
+
 // --- Add / remove groups -----------------------------------------------------
 
 /** Add a new group. Members start empty. */

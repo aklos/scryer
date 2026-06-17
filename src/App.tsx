@@ -47,6 +47,7 @@ import {
   removeResponsibility,
   setNodeGroup as setNodeGroupHelper,
   updateGroup as updateGroupHelper,
+  updateLink as updateLinkHelper,
   updateNode as updateNodeHelper,
   updateProperty,
   updateResponsibility,
@@ -54,6 +55,15 @@ import {
   type ScryModel,
 } from "./viewmodel";
 import type { Editor } from "./editor";
+
+/** Whether a keydown landed inside an editable field (input, textarea, or an
+ *  in-place contentEditable). Global shortcuts that overlap with text entry
+ *  (Ctrl+Space) bail out when this is true. */
+function isEditableTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable;
+}
 
 export default function App() {
   useEffect(() => {
@@ -223,19 +233,39 @@ function Workspace({
     localStorage.setItem("scryer:view", v);
     setView(v);
   }, []);
+  // Flip wiki↔diagram in one step (the Ctrl+Space shortcut). Functional update
+  // so it reads the current view without the keydown handler closing over it.
+  const toggleView = useCallback(() => {
+    setView((v) => {
+      const next: WorkspaceView = v === "diagram" ? "wiki" : "diagram";
+      localStorage.setItem("scryer:view", next);
+      return next;
+    });
+  }, []);
   const [diagramFocus, setDiagramFocus] = useState<string | null>(null);
 
-  // Ctrl/Cmd+K — jump to any node or group by name.
+  // Global shortcuts: Ctrl/Cmd+K jumps to any node by name; Ctrl+Space flips
+  // wiki↔diagram (skipped while typing in a field, so it can't yank you out of
+  // an in-place edit).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         setSearchOpen((o) => !o);
+      } else if (
+        e.code === "Space" &&
+        e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !isEditableTarget(e.target)
+      ) {
+        e.preventDefault();
+        toggleView();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [toggleView]);
 
   const modelRef = useRef(model);
   modelRef.current = model;
@@ -456,6 +486,8 @@ function Workspace({
         });
         return newId;
       },
+      updateLink: (linkId, patch) =>
+        updateModel((m) => updateLinkHelper(m, linkId, patch)),
       deleteLink: (linkId) => updateModel((m) => removeLinkHelper(m, linkId)),
       setNodeGroup: (nodeId, groupId) =>
         updateModel((m) => setNodeGroupHelper(m, nodeId, groupId)),

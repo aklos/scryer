@@ -1954,11 +1954,13 @@ async fn start_model_build(
             return;
         }
 
-        // Every container proposal is committed without an intermediate
-        // baseline snapshot. Validate the merged model once. The fast path
-        // snapshots immediately; only an invalid model pays for one targeted
-        // repair session.
-        let mut completed_model = match scryer_core::read_model_at(&model_ref) {
+        // The assembled model lives in the PLANNED draft: container commits land
+        // their subtrees there and the system-level session writes its enrichment
+        // (persons, externals, system responsibilities, labels) there ONLY. The
+        // committed layer has every container's components but not that
+        // enrichment, so the planned draft is the full picture to validate,
+        // repair, and ultimately fold back into the committed model below.
+        let mut completed_model = match scryer_core::read_planned_at(&model_ref) {
             Ok(model) => model,
             Err(e) => {
                 let _ = app.emit(
@@ -2036,7 +2038,9 @@ async fn start_model_build(
                 }
             }
 
-            completed_model = match scryer_core::read_model_at(&model_ref) {
+            // The repair session also authors into the planned draft (its
+            // add_links/update_nodes write planned only), so re-read it there.
+            completed_model = match scryer_core::read_planned_at(&model_ref) {
                 Ok(model) => model,
                 Err(e) => {
                     let _ = app.emit(
@@ -2064,6 +2068,20 @@ async fn start_model_build(
                 );
                 return;
             }
+        }
+        // Fold the assembled draft into the committed model: a from-code build is
+        // extracted truth, so model and planned end equal and no spurious pending
+        // plan remains. This is what lands the system-level enrichment (and any
+        // repair-session edits, which were authored into the planned draft) into
+        // the committed model the wiki reads.
+        if let Err(e) = scryer_core::write_model_at(&model_ref, &completed_model) {
+            let _ = app.emit(
+                "agent-event",
+                &scryer_acp::AgentEvent::Failed {
+                    error: format!("Could not fold the completed model into the committed layer: {e}"),
+                },
+            );
+            return;
         }
         if let Err(e) = scryer_core::save_baseline_at(&model_ref, &completed_model) {
             emit_msg(format!("⚠ Could not save the final model baseline: {e}"));

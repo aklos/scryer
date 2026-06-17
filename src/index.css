@@ -200,6 +200,17 @@
 .pl .grow {
   flex: 1;
 }
+/* Center stream — the agent's live transient line, plainly styled (no chevron,
+   no barber-pole) and centered in the gap. Also acts as the flex spacer. */
+.pl .pl-msg {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 16px;
+}
 .pl .rseg {
   display: flex;
   align-items: center;
@@ -268,19 +279,44 @@
   100% { background-position: 145% 0; }
 }
 .pl .r-agent {
-  color: var(--color-violet-400);
-  background-image: repeating-linear-gradient(
+  /* Shared so the left chevron (::before) can reuse the exact same fill — both
+     resolve `--sb` to this segment's inherited value, keeping the stripes
+     identical across the seam. */
+  --barber: repeating-linear-gradient(
     45deg,
     color-mix(in srgb, var(--color-violet-500) 16%, var(--sb)) 0,
     color-mix(in srgb, var(--color-violet-500) 16%, var(--sb)) 9px,
     color-mix(in srgb, var(--color-violet-500) 30%, var(--sb)) 9px,
     color-mix(in srgb, var(--color-violet-500) 30%, var(--sb)) 18px
   );
+  color: var(--color-violet-400);
+  background-image: var(--barber);
   background-size: 25.5px 100%;
   animation: barber 0.7s linear infinite;
 }
+/* The other segments' chevrons are flat border-triangles (solid --sb), but the
+   agent segment's left chevron must continue the barber-pole rather than read as
+   a flat wedge. Rebuild it as a clip-path triangle carrying the same striped
+   fill; the +10px background offset (its right edge sits 10px right of its own
+   origin, flush with the body's left edge) keeps the stripes continuous across
+   the seam, and its keyframe travels the same 25.5px so it stays phase-locked to
+   the body. */
+.pl .r-agent::before {
+  border: none;
+  width: 10px;
+  height: 100%;
+  background-color: var(--sb);
+  background-image: var(--barber);
+  background-size: 25.5px 100%;
+  clip-path: polygon(100% 0, 100% 100%, 0 50%);
+  animation: barber-chevron 0.7s linear infinite;
+}
 @keyframes barber {
   to { background-position: 25.5px 0; }
+}
+@keyframes barber-chevron {
+  from { background-position: 10px 0; }
+  to { background-position: 35.5px 0; }
 }
 
 /* Thin scrollbars */

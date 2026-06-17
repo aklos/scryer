@@ -62,6 +62,41 @@ impl IdMinter {
         }
     }
 
+    /// Bump every counter so it also clears the max id present in `other`. Used
+    /// to mint against the UNION of the committed model and the planned draft: a
+    /// container commit reads the committed layer, but a concurrent system-level
+    /// session may have minted ids into the planned draft that aren't in
+    /// committed yet. Seeding from one layer alone would re-mint those ids and
+    /// collide when this commit's subtree is mirrored into planned.
+    fn absorb(&mut self, other: &scryer_core::ScryModel) {
+        let node_max = other
+            .nodes
+            .iter()
+            .filter_map(|n| n.id.strip_prefix("node-")?.parse::<u64>().ok())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        self.next_node = self.next_node.max(node_max);
+        let resp_max = other
+            .nodes
+            .iter()
+            .flat_map(|n| n.responsibilities.iter())
+            .chain(other.groups.iter().flat_map(|g| g.responsibilities.iter()))
+            .filter_map(|r| r.id.strip_prefix("resp-")?.parse::<u64>().ok())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        self.next_resp = self.next_resp.max(resp_max);
+        let group_max = other
+            .groups
+            .iter()
+            .filter_map(|g| g.id.strip_prefix("group-")?.parse::<u64>().ok())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        self.next_group = self.next_group.max(group_max);
+    }
+
     fn node(&mut self) -> String {
         let id = format!("node-{}", self.next_node);
         self.next_node += 1;
@@ -256,7 +291,15 @@ impl ScryerServer {
                 "Local key '{key}' conflicts with an existing model node id"
             )));
         }
+        // The planned draft is read under the same lock. A concurrent
+        // system-level session writes its enrichment (persons, externals, system
+        // responsibilities, group/link labels) to the planned layer ONLY, so we
+        // must (a) mint ids that don't collide with it and (b) preserve it by
+        // appending this subtree to the existing draft rather than overwriting.
+        let planned_before = scryer_core::read_planned_at(&model_ref).unwrap_or_else(|_| model.clone());
+
         let mut minter = IdMinter::new(&model);
+        minter.absorb(&planned_before);
         let mut local_ids: HashMap<&str, String> = HashMap::new();
         let mut component_ids: HashMap<&str, String> = HashMap::new();
         let mut minted_components = Vec::new();
@@ -268,6 +311,10 @@ impl ScryerServer {
         let mut ambiguous_locs: HashSet<(String, String)> = HashSet::new();
         // symbol node id → its owning component node id.
         let mut symbol_component: HashMap<String, String> = HashMap::new();
+        // Mark where this commit's additions begin so the same subtree can be
+        // mirrored into the planned draft after all wiring is done.
+        let node_start = model.nodes.len();
+        let mut new_sm_keys: Vec<String> = Vec::new();
 
         for component in &req.components {
             let component_id = minter.node();
@@ -318,6 +365,7 @@ impl ScryerServer {
                         continue;
                     }
                     let responsibility = minter.resp(input.statement());
+                    new_sm_keys.push(responsibility.id.clone());
                     model.source_map.insert(
                         responsibility.id.clone(),
                         vec![SourceLocation {
@@ -331,6 +379,7 @@ impl ScryerServer {
                     node.responsibilities.push(responsibility);
                 }
                 if !node.properties.is_empty() {
+                    new_sm_keys.push(symbol_id.clone());
                     model.source_map.insert(
                         symbol_id.clone(),
                         vec![SourceLocation {
@@ -358,6 +407,7 @@ impl ScryerServer {
         // valuable, hard-won output, and links are derivable. Anything that can't
         // be wired legally is dropped and reported, not allowed to reject the
         // whole proposal (which forced the agent into expensive regeneration).
+        let link_start = model.links.len();
         let mut seen_pairs: HashSet<(String, String)> =
             model.links.iter().map(|l| (l.src.clone(), l.dst.clone())).collect();
         let mut agent_pairs: HashSet<(String, String)> = HashSet::new();
@@ -389,6 +439,7 @@ impl ScryerServer {
             });
         }
 
+        let group_start = model.groups.len();
         for proposed in &req.groups {
             let member_ids: Vec<String> = proposed
                 .member_keys
@@ -476,9 +527,28 @@ impl ScryerServer {
             dropped_links.push(msg.clone());
         }
 
-        // Codebase→model generation: write the plan, then commit it (planned and
-        // model land equal, so an extracted container carries no pending plan).
-        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
+        // Codebase→model generation lands in BOTH layers so an extracted
+        // container carries no pending plan. The committed model takes the full
+        // rebuilt value; the planned draft is APPENDED to (not overwritten) so a
+        // concurrent system-level session's planned-only enrichment survives.
+        // Ids were minted against the union of both layers, so the mirrored
+        // subtree can't collide with anything already in the draft.
+        let mut planned = planned_before;
+        planned.nodes.extend(model.nodes[node_start..].iter().cloned());
+        let planned_pairs: HashSet<(String, String)> =
+            planned.links.iter().map(|l| (l.src.clone(), l.dst.clone())).collect();
+        for link in &model.links[link_start..] {
+            if !planned_pairs.contains(&(link.src.clone(), link.dst.clone())) {
+                planned.links.push(link.clone());
+            }
+        }
+        planned.groups.extend(model.groups[group_start..].iter().cloned());
+        for key in &new_sm_keys {
+            if let Some(locs) = model.source_map.get(key) {
+                planned.source_map.insert(key.clone(), locs.clone());
+            }
+        }
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &planned) {
             return Ok(err(e));
         }
         if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
@@ -659,6 +729,50 @@ mod tests {
                 .exists(),
             "atomic generation defers the baseline snapshot"
         );
+    }
+
+    #[test]
+    fn commit_preserves_concurrent_planned_only_enrichment() {
+        // Reproduces the lost-system-nodes bug: a system-level session writes a
+        // person (and an extra id) to the planned draft ONLY; a container commit
+        // running beside it must not clobber that draft.
+        let (server, dir, container_id) = temp_project();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        // System pass: append a person to the planned layer, minting an id beyond
+        // the committed max (node-2) exactly as the live authoring tools do.
+        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        let person = blank_node("node-3".into(), Kind::Person, "Developer".into(), String::new());
+        planned.nodes.push(person);
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let project = dir.path().to_string_lossy().to_string();
+        server
+            .commit_container_model(Parameters(request(project, container_id.clone())))
+            .unwrap();
+
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert!(
+            planned.nodes.iter().any(|n| n.id == "node-3" && n.kind == Kind::Person),
+            "the concurrent planned-only person must survive the container commit"
+        );
+        assert_eq!(
+            planned
+                .nodes
+                .iter()
+                .filter(|n| n.parent_id.as_deref() == Some(container_id.as_str()))
+                .count(),
+            2,
+            "the commit's components must also be appended to the planned draft"
+        );
+        // No two nodes share an id — the union minter skipped node-3.
+        let ids: HashSet<&str> = planned.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids.len(), planned.nodes.len(), "ids must stay unique across layers");
+
+        // The committed layer carries the container subtree but not the
+        // planned-only person (that lands at the build-end fold).
+        let model = scryer_core::read_model_at(&model_ref).unwrap();
+        assert!(!model.nodes.iter().any(|n| n.id == "node-3"));
     }
 
     #[test]

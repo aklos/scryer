@@ -5,10 +5,11 @@
  * is app chrome only.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { ChevronDown, FileText, Network, Search } from "lucide-react";
+import { ChevronDown, FileText, Moon, Network, Search, Sun } from "lucide-react";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { applyColorMode, loadTheme, saveTheme, type ColorMode } from "./theme";
 
 export type WorkspaceView = "wiki" | "diagram";
 
@@ -63,12 +64,12 @@ export function TopBar({
       </button>
 
       {projectPath && (
-        <>
-          <div className="mx-2 h-4 w-px shrink-0 bg-[var(--border-strong)]" />
-          <span className="hidden truncate font-mono text-[11px] text-[var(--text-tertiary)] sm:inline">
-            .scryer/model.scry
-          </span>
-        </>
+        <span
+          title={projectPath}
+          className="ml-2 hidden max-w-[340px] truncate font-mono text-[11px] text-[var(--text-ghost)] sm:inline-block"
+        >
+          {projectPath}
+        </span>
       )}
 
       <div className="flex-1" />
@@ -77,18 +78,18 @@ export function TopBar({
         type="button"
         onClick={onOpenSearch}
         title="Search the model (Ctrl+K)"
-        className="flex h-6 w-[230px] items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--surface-canvas)] px-2.5 text-xs text-[var(--text-tertiary)] hover:border-[var(--border-strong)] cursor-text"
+        className="flex h-7 w-[240px] items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-canvas)] px-3 text-xs text-[var(--text-secondary)] hover:border-[var(--border-strong)] cursor-text"
       >
-        <Search className="h-3.5 w-3.5 shrink-0" />
+        <Search className="h-4 w-4 shrink-0" />
         <span className="truncate">Search the model</span>
-        <span className="ml-auto shrink-0 rounded border border-[var(--border-strong)] px-1 font-mono text-[10px] text-[var(--text-ghost)]">
+        <span className="ml-auto shrink-0 rounded border border-[var(--border-strong)] px-1 font-mono text-2xs text-[var(--text-tertiary)]">
           ⌘K
         </span>
       </button>
 
-      {/* Wiki / Map view toggle — the diagram is the secondary nav surface onto
-          the same model and selection. */}
-      <div className="ml-1.5 flex items-center gap-0.5 rounded-md border border-[var(--border)] bg-[var(--surface-canvas)] p-0.5">
+      {/* Wiki / Map view toggle — a primary nav surface onto the same model and
+          selection, so it reads big and high-contrast. Ctrl+Space flips it. */}
+      <div className="ml-2 flex items-center gap-0.5 rounded-md border border-[var(--border)] bg-[var(--surface-canvas)] p-0.5">
         {([
           { id: "wiki", label: "Wiki", Icon: FileText },
           { id: "diagram", label: "Map", Icon: Network },
@@ -96,20 +97,22 @@ export function TopBar({
           <button
             key={id}
             type="button"
-            title={`${label} view`}
+            title={`${label} view (Ctrl+Space to switch)`}
             aria-pressed={view === id}
             onClick={() => onSetView(id)}
-            className={`flex items-center gap-1 rounded px-2.5 py-0.5 text-2xs font-medium transition-colors cursor-pointer ${
+            className={`flex items-center gap-1.5 rounded px-3 py-1 text-xs font-medium transition-colors cursor-pointer ${
               view === id
-                ? "bg-[var(--surface-active)] text-[var(--text)]"
-                : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                ? "bg-[var(--surface-raised)] text-[var(--text)] shadow-sm"
+                : "text-[var(--text-tertiary)] hover:text-[var(--text)]"
             }`}
           >
-            <Icon className="h-3.5 w-3.5" />
+            <Icon className="h-4 w-4" />
             {label}
           </button>
         ))}
       </div>
+
+      <ThemeToggle />
 
       {menu && (
         <ContextMenu
@@ -121,5 +124,43 @@ export function TopBar({
         />
       )}
     </div>
+  );
+}
+
+/** Binary light/dark switch for the top bar. Flips the currently-resolved mode
+ *  to an explicit choice (so it overrides "system" on first click), persists it,
+ *  and applies it. The icon mirrors `<html>.dark` via an observer, staying honest
+ *  if the OS flips while still on "system" mode (the theme's own listener toggles
+ *  that class). */
+function ThemeToggle() {
+  const [isDark, setIsDark] = useState(() =>
+    document.documentElement.classList.contains("dark"),
+  );
+
+  useEffect(() => {
+    const el = document.documentElement;
+    const obs = new MutationObserver(() => setIsDark(el.classList.contains("dark")));
+    obs.observe(el, { attributes: true, attributeFilter: ["class"] });
+    return () => obs.disconnect();
+  }, []);
+
+  const toggle = () => {
+    const next: ColorMode = isDark ? "light" : "dark";
+    const theme = loadTheme();
+    theme.colorMode = next;
+    saveTheme(theme);
+    applyColorMode(next);
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+      aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+      className="ml-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] cursor-pointer"
+    >
+      {isDark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+    </button>
   );
 }

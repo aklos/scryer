@@ -33,6 +33,12 @@ export interface InlineTextProps {
   emptyMuted?: boolean;
   /** Prevent click from bubbling into the surface's pickup detection. */
   stopPropagation?: boolean;
+  /** Hard cap on length in Unicode scalar values (characters), matching the
+   *  backend's `chars().count()` — enforced on input, not via the native
+   *  `maxLength` attribute (which counts UTF-16 units). */
+  maxLength?: number;
+  /** Coerce the text to an allowed shape on every input; runs before `maxLength`. */
+  sanitize?: (text: string) => string;
 }
 
 export function InlineText({
@@ -46,6 +52,8 @@ export function InlineText({
   title,
   emptyMuted = true,
   stopPropagation = true,
+  maxLength,
+  sanitize,
 }: InlineTextProps) {
   const [editing, setEditing] = useState(autoEdit);
   const [draft, setDraft] = useState(value);
@@ -120,7 +128,12 @@ export function InlineText({
       onChange: (
         e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
       ) => {
-        setDraft(e.target.value);
+        let v = e.target.value;
+        if (sanitize) v = sanitize(v);
+        if (maxLength != null && [...v].length > maxLength) {
+          v = [...v].slice(0, maxLength).join("");
+        }
+        setDraft(v);
         if (multiline) autoresize(e.target as HTMLTextAreaElement);
       },
       onKeyDown: handleKey,
