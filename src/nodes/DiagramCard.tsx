@@ -114,7 +114,13 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
       <div className="relative h-[160px]">
         <ShapeBackground
           shape={shape}
-          fillClass={isExternal || isGhost ? "fill-[var(--scryer-ext-bg)]" : "fill-[var(--scryer-node-bg)]"}
+          fillClass={
+            isGhost
+              ? "fill-transparent"
+              : isExternal
+                ? "fill-[var(--scryer-ext-bg)]"
+                : "fill-[var(--scryer-node-bg)]"
+          }
           strokeClass={
             selected
               ? "stroke-[var(--text)]"
@@ -125,7 +131,7 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
                   : "stroke-[var(--border)]"
           }
           strokeWidth={selected ? 2.5 : markStroke ? 2 : 1}
-          strokeDasharray={isExternal || isGhost ? "6 3" : undefined}
+          strokeDasharray={isExternal ? "6 3" : undefined}
           kind={node.kind}
           external={!!isExternal}
         />

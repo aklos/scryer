@@ -63,10 +63,24 @@ export function RelationshipEdge({
   const tInset = data?.dot ? Math.min((data.targetR ?? 6) + DOT_GAP, len / 2 - 1) : 0;
   const sx = sourceX + ux * sInset, sy = sourceY + uy * sInset;
   const tx = targetX - ux * tInset, ty = targetY - uy * tInset;
-  const edgePath = `M ${sx} ${sy} L ${tx} ${ty}`;
-  const labelX = (sx + tx) / 2;
-  const labelY = (sy + ty) / 2;
-  const arrowAngle = Math.atan2(ty - sy, tx - sx);
+
+  const isDot = !!data?.dot;
+  // Dot tier: bow the edge into a quadratic arc (gitnexus's curved edges) so
+  // crossing/parallel spokes separate instead of stacking as straight lines. A
+  // consistent perpendicular offset makes A→B and B→A bow to opposite sides.
+  const CURVE = 0.07; // arc height as a fraction of the chord — a gentle bow,
+  // just enough to split A→B / B→A so cycles stay visible without reading busy
+  const cx = (sx + tx) / 2 - (ty - sy) * CURVE;
+  const cy = (sy + ty) / 2 + (tx - sx) * CURVE;
+  const edgePath = isDot
+    ? `M ${sx} ${sy} Q ${cx} ${cy} ${tx} ${ty}`
+    : `M ${sx} ${sy} L ${tx} ${ty}`;
+  // Quadratic midpoint (t=0.5) for the label/hover dot; end tangent for the arrow.
+  const labelX = isDot ? 0.25 * sx + 0.5 * cx + 0.25 * tx : (sx + tx) / 2;
+  const labelY = isDot ? 0.25 * sy + 0.5 * cy + 0.25 * ty : (sy + ty) / 2;
+  const arrowAngle = isDot
+    ? Math.atan2(ty - cy, tx - cx)
+    : Math.atan2(ty - sy, tx - sx);
 
   // Arrowhead polygon from explicit geometry.
   const arrowSize = 8;
@@ -84,7 +98,8 @@ export function RelationshipEdge({
   const far = 10000;
 
   // Subgraph highlight: edges touching the selection stay lit, the rest fade.
-  const edgeOpacity = selected || data?.highlighted ? 1 : data?.dimmed ? 0.18 : 0.7;
+  // Dot-tier edges sit fainter at rest so the constellation reads as nodes, not lines.
+  const edgeOpacity = selected || data?.highlighted ? 1 : data?.dimmed ? 0.18 : isDot ? 0.5 : 0.7;
 
   return (
     <>
@@ -104,9 +119,11 @@ export function RelationshipEdge({
             path={edgePath}
             style={{
               stroke: edgeColor,
-              strokeWidth: selected ? 2.5 : 1.5,
-              strokeDasharray: "6 3",
-              animation: "dash-flow 0.5s linear infinite",
+              strokeWidth: selected ? 2.5 : isDot ? 1 : 1.5,
+              // Dot tier: thin, solid, static curves (sigma-style). Arch tier keeps
+              // the animated dashed C4 line.
+              strokeDasharray: isDot ? undefined : "6 3",
+              animation: isDot ? undefined : "dash-flow 0.5s linear infinite",
             }}
           />
         </g>
@@ -114,7 +131,7 @@ export function RelationshipEdge({
       </g>
       {/* Midpoint dot — visible on edge hover. */}
       <circle cx={labelX} cy={labelY} r={4} fill={edgeColor} className="edge-handle-dot" />
-      {(label || method) && (
+      {(label || method) && (!isDot || selected || data?.highlighted) && (
         <EdgeLabelRenderer>
           <div
             style={{

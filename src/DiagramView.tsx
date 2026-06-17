@@ -37,6 +37,7 @@ import { DiagramCard, type CardData, type RFCard } from "./nodes/DiagramCard";
 import { CenterHandle } from "./nodes/NodeHandles";
 import { RelationshipEdge, type EdgeData } from "./edges/RelationshipEdge";
 import { buildDiagramScene, type DiagramScene } from "./diagramLayout";
+import type { ModelHealthReport } from "./health";
 
 type DotData = CardData;
 type RFDot = RFNode<DotData, "dot">;
@@ -51,9 +52,11 @@ function DotNode({ data }: NodeProps<RFDot>) {
   // Dot size encodes fan-in — the more depended-upon a symbol, the larger it
   // reads. Sized relative to the busiest hub on this level (see diagramLayout).
   const dia = node.dotSize;
-  // A ghost (referenced from elsewhere) reads hollow: an outlined ring, no fill.
+  // A ghost (lives elsewhere) reads hollow: an outlined ring, no fill. The dash
+  // is reserved for true externals, so an external ghost is hollow + dashed, an
+  // internal ghost hollow + solid.
   const discClass = ghost
-    ? "border border-dashed border-[var(--text-muted)] bg-transparent"
+    ? `border ${node.external ? "border-dashed" : ""} border-[var(--text-muted)] bg-transparent`
     : meta
       ? `bg-current ${meta.color}`
       : "bg-[var(--text-ghost)]";
@@ -95,6 +98,7 @@ const CARD_H = 160;
 export function DiagramView({
   model,
   planDiff,
+  report,
   focusId,
   selectedId,
   onFocus,
@@ -103,6 +107,8 @@ export function DiagramView({
   model: ScryModel;
   /** Live plan diff — colors each node/dot by its change mark. */
   planDiff: ModelDiff;
+  /** Health report — its derived edges drive the implied-connection ghosts. */
+  report: ModelHealthReport | null;
   /** The level being shown: children of this node, or top-level when null. */
   focusId: string | null;
   /** Currently selected node id (drives highlight). */
@@ -115,6 +121,7 @@ export function DiagramView({
       <DiagramInner
         model={model}
         planDiff={planDiff}
+        report={report}
         focusId={focusId}
         selectedId={selectedId}
         onFocus={onFocus}
@@ -127,6 +134,7 @@ export function DiagramView({
 function DiagramInner({
   model,
   planDiff,
+  report,
   focusId,
   selectedId,
   onFocus,
@@ -134,6 +142,7 @@ function DiagramInner({
 }: {
   model: ScryModel;
   planDiff: ModelDiff;
+  report: ModelHealthReport | null;
   focusId: string | null;
   selectedId: string | null;
   onFocus: (id: string | null) => void;
@@ -146,13 +155,13 @@ function DiagramInner({
   // is async; guard against a stale build landing after a newer one.
   useEffect(() => {
     let live = true;
-    void buildDiagramScene(model, focusId).then((s) => {
+    void buildDiagramScene(model, focusId, report).then((s) => {
       if (live) setScene(s);
     });
     return () => {
       live = false;
     };
-  }, [model, focusId]);
+  }, [model, focusId, report]);
 
   // A card's ↗ button drills in via a window event (mirrors main's decoupling).
   useEffect(() => {
@@ -227,19 +236,26 @@ function DiagramInner({
       scene.mode === "code"
         ? new Map(scene.nodes.map((n) => [n.id, n.dotSize / 2] as const))
         : null;
+    // Edges touching a ghost (cross-boundary reference) node carry a ×n count
+    // label that isn't useful — drop it on every tier.
+    const ghostIds = new Set(
+      scene.nodes.filter((n) => n.reference).map((n) => n.id),
+    );
     return scene.edges.map((e) => {
       const h = handles?.get(e.id);
       const connected = highlight.active && (e.source === selectedId || e.target === selectedId);
+      const ghostEdge = ghostIds.has(e.source) || ghostIds.has(e.target);
       return {
         id: e.id,
         source: e.source,
         target: e.target,
         type: "rel" as const,
+        selectable: false,
         sourceHandle: scene.mode === "code" ? "c" : h?.sourceHandle,
         targetHandle: scene.mode === "code" ? "c" : h?.targetHandle,
         data: {
-          label: e.label || undefined,
-          method: e.method,
+          label: ghostEdge ? undefined : e.label || undefined,
+          method: ghostEdge ? undefined : e.method,
           dot: scene.mode === "code",
           sourceR: radius?.get(e.source),
           targetR: radius?.get(e.target),

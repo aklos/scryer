@@ -11,7 +11,6 @@
  *
  * FPP works on any triangulated planar graph (no 3-connectivity needed).
  * Kamada-Kawai adjusts spacing proportionally to graph-theoretic distance.
- * d3-force (in layout.ts) handles final collision resolution.
  *
  * All algorithms are O(n²) or better, which is instant for n ≤ 50.
  */

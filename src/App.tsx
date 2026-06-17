@@ -597,6 +597,7 @@ function Workspace({
           <DiagramView
             model={model}
             planDiff={planDiff}
+            report={healthReport}
             focusId={diagramFocus}
             selectedId={selected?.kind === "node" ? selected.id : null}
             onFocus={drillDiagram}
