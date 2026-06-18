@@ -13,6 +13,7 @@
 import { useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
 import type { ScryModel, Node, Link } from "./viewmodel";
+import { effectiveSourceMap } from "./viewmodel";
 import type { Editor } from "./editor";
 import type { ModelHealthReport, ImpliedConn, LinkPath } from "./health";
 import { linkEvidence, impliedFor, impliedPaths, pathsForLink } from "./health";
@@ -705,7 +706,7 @@ function ConnGroup({ title, children }: { title: string; children: React.ReactNo
 }
 
 export function ConnectionsSection({
-  model,
+  model: rawModel,
   committed,
   node,
   report,
@@ -724,6 +725,11 @@ export function ConnectionsSection({
   onToggle: () => void;
   onSelectNode: (id: string) => void;
 }) {
+  // Code-side anchors live in the committed model; the plan overlays only the
+  // anchors it adds. Merge for display so symbol files resolve regardless of
+  // which layer owns the anchor (the dedup invariant) — display-only, never
+  // persisted back to the plan.
+  const model = { ...rawModel, sourceMap: effectiveSourceMap(committed, rawModel) };
   const byId = (id: string) => model.nodes.find((n) => n.id === id);
   const committedLinks = committed?.links ?? [];
   const committedById = new Map(committedLinks.map((l) => [l.id, l]));

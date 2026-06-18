@@ -183,6 +183,19 @@ export function isDataShape(node: {
   );
 }
 
+/** The anchors visible in the working view. Code-side mapping has a single
+ *  home: the committed model owns every committed element's anchor; the plan
+ *  overlays anchors only for the elements it *adds* (not yet committed, so they
+ *  live in the draft until they fold in). Merging committed under the plan gives
+ *  the effective map for display without the draft having to mirror committed —
+ *  see the dedup invariant. Display-only: never written back to the plan. */
+export function effectiveSourceMap(
+  committed: ScryModel | null,
+  working: ScryModel,
+): Record<string, SourceLocation[]> {
+  return { ...(committed?.sourceMap ?? {}), ...(working.sourceMap ?? {}) };
+}
+
 /** Child kind for a parent kind (used when adding a new node). */
 export function childKindFor(parentKind: Kind | "root"): Kind {
   switch (parentKind) {

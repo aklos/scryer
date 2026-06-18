@@ -103,31 +103,101 @@ impl ScryerServer {
             }
         }
 
+        // Code-side mapping has a SINGLE home, keyed by element: the committed
+        // model owns every committed element's anchor; the planned draft holds
+        // anchors only for elements it ADDS (not yet committed). So route by
+        // element residence — a committed element's anchor is written to
+        // committed and kept OUT of the draft (no shadow copy to drift); a
+        // plan-added element's anchor stays in the draft and folds into committed
+        // later (auto_commit carries it across). The working view merges the two
+        // layers for display (see `effectiveSourceMap`), so a committed-side
+        // write surfaces immediately without the draft mirroring it.
+        let mut committed = scryer_core::read_model_at(&model_ref).ok();
+        let (committed_resp_ids, committed_node_ids): (HashSet<String>, HashSet<String>) =
+            match committed.as_ref() {
+                Some(c) => (
+                    c.nodes
+                        .iter()
+                        .flat_map(|n| n.responsibilities.iter())
+                        .chain(c.groups.iter().flat_map(|g| g.responsibilities.iter()))
+                        .map(|r| r.id.clone())
+                        .collect(),
+                    c.nodes.iter().map(|n| n.id.clone()).collect(),
+                ),
+                None => (HashSet::new(), HashSet::new()),
+            };
+        let mut committed_dirty = false;
+
         let count = req.entries.len() + req.schemas.len() + req.boundaries.len();
         for entry in req.entries {
+            let key = entry.responsibility_id;
             if entry.locations.is_empty() {
-                model.source_map.remove(&entry.responsibility_id);
+                model.source_map.remove(&key);
+                if committed_resp_ids.contains(&key) {
+                    if let Some(c) = committed.as_mut() {
+                        committed_dirty |= c.source_map.remove(&key).is_some();
+                    }
+                }
+            } else if committed_resp_ids.contains(&key) {
+                model.source_map.remove(&key);
+                if let Some(c) = committed.as_mut() {
+                    c.source_map.insert(key, entry.locations);
+                    committed_dirty = true;
+                }
             } else {
-                model.source_map.insert(entry.responsibility_id, entry.locations);
+                model.source_map.insert(key, entry.locations);
             }
         }
         for s in req.schemas {
+            let key = s.node_id;
             if s.locations.is_empty() {
-                model.source_map.remove(&s.node_id);
+                model.source_map.remove(&key);
+                if committed_node_ids.contains(&key) {
+                    if let Some(c) = committed.as_mut() {
+                        committed_dirty |= c.source_map.remove(&key).is_some();
+                    }
+                }
+            } else if committed_node_ids.contains(&key) {
+                model.source_map.remove(&key);
+                if let Some(c) = committed.as_mut() {
+                    c.source_map.insert(key, s.locations);
+                    committed_dirty = true;
+                }
             } else {
-                model.source_map.insert(s.node_id, s.locations);
+                model.source_map.insert(key, s.locations);
             }
         }
         for b in req.boundaries {
+            let key = b.node_id;
             if b.sources.is_empty() {
-                model.boundaries.remove(&b.node_id);
+                model.boundaries.remove(&key);
+                if committed_node_ids.contains(&key) {
+                    if let Some(c) = committed.as_mut() {
+                        committed_dirty |= c.boundaries.remove(&key).is_some();
+                    }
+                }
+            } else if committed_node_ids.contains(&key) {
+                model.boundaries.remove(&key);
+                if let Some(c) = committed.as_mut() {
+                    c.boundaries.insert(key, b.sources);
+                    committed_dirty = true;
+                }
             } else {
-                model.boundaries.insert(b.node_id, b.sources);
+                model.boundaries.insert(key, b.sources);
             }
         }
 
         if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
+        }
+        // Persist the committed-side writes in the same lock so the single home
+        // is updated atomically with the draft.
+        if committed_dirty {
+            if let Some(c) = committed {
+                if let Err(e) = scryer_core::write_model_at(&model_ref, &c) {
+                    return Ok(CallToolResult::error(vec![Content::text(e)]));
+                }
+            }
         }
         let mut msg = format!("Updated code-side mapping ({} entr(ies))", count);
         if !normalized.is_empty() {

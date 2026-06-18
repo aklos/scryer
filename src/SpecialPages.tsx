@@ -7,9 +7,13 @@
  *  - Needs review: the maintenance-category index. Every observation awaiting
  *    a human verdict, grouped by kind, with the verdict actions inline. An
  *    empty page means the model is trustworthy.
- *  - Dark code: the inverse of coverage — every file under a node's boundary
- *    that no claim reads into, grouped by the owning node. Where you eyeball
- *    how much is boilerplate versus something load-bearing the lens is missing.
+ *  - Dark code: the inverse of coverage from the code's side — every file under
+ *    a node's boundary that no claim reads into, grouped by the owning node.
+ *    Where you eyeball how much is boilerplate versus something load-bearing the
+ *    lens is missing.
+ *  - Unmapped claims: the same gap from the model's side — committed leaf claims
+ *    that say code exists but anchor to nothing. The list behind the coverage
+ *    percentage; its complement.
  *
  * All are pages, not panels — reached from the status bar counters, left via
  * any link, exactly like Wikipedia's Special:RecentChanges and cleanup
@@ -220,11 +224,53 @@ interface ClaimRef {
   resp: Responsibility;
 }
 
+/** One claim row: the statement (opens the claim on its own page, flashing it
+ *  once rendered) and the node it sits on. Shared by Needs review and the
+ *  Unmapped claims page so the two render claims identically. */
+function ClaimRow({
+  claim,
+  onSelectNode,
+  actions,
+}: {
+  claim: ClaimRef;
+  onSelectNode: (id: string) => void;
+  actions?: React.ReactNode;
+}) {
+  const goToClaim = () => {
+    onSelectNode(claim.node.id);
+    window.setTimeout(() => jumpTo(respElementId(claim.resp.id)), 250);
+  };
+  return (
+    <li className="flex items-start gap-2 border-b border-[var(--border-subtle)] py-2 last:border-b-0">
+      <div className="min-w-0 flex-1">
+        <button
+          type="button"
+          onClick={goToClaim}
+          className="block w-full truncate text-left text-sm text-[var(--text-secondary)] hover:text-[var(--text)] hover:underline cursor-pointer"
+          title="Open on its page"
+        >
+          {claim.resp.statement || "Untitled responsibility"}
+        </button>
+        <span className="text-2xs text-[var(--text-muted)]">
+          on{" "}
+          <button
+            type="button"
+            onClick={() => onSelectNode(claim.node.id)}
+            className="text-blue-700 hover:underline dark:text-blue-400 cursor-pointer"
+          >
+            {claim.node.name || "Untitled"}
+          </button>
+        </span>
+      </div>
+      {actions}
+    </li>
+  );
+}
+
 export interface ReviewIndex {
   vagrant: ClaimRef[];
   stale: ClaimRef[];
   staleNodes: Node[];
-  unmapped: ClaimRef[];
   emptySymbols: Node[];
   unseenNodes: Node[];
   unseenClaims: ClaimRef[];
@@ -235,22 +281,13 @@ export interface ReviewIndex {
  *  status-bar counter so the number and the list can never disagree. */
 export function buildReviewIndex(
   model: ScryModel,
-  committed: ScryModel | null,
   report: ModelHealthReport | null,
   driftScopes: DriftScope[],
   newNodeIds: ReadonlySet<string>,
   newRespIds: ReadonlySet<string>,
 ): ReviewIndex {
-  const hasChildren = new Set(model.nodes.map((n) => n.parentId).filter(Boolean) as string[]);
-  const sourceMap = model.sourceMap ?? {};
-  // Only committed claims are expected to read through to code; a planned-only
-  // (added) claim is outstanding work in the diff, never an "unmapped" blind spot.
-  const committedRespIds = new Set(
-    (committed?.nodes ?? []).flatMap((n) => (n.responsibilities ?? []).map((r) => r.id)),
-  );
   const vagrant: ClaimRef[] = [];
   const stale: ClaimRef[] = [];
-  const unmapped: ClaimRef[] = [];
   const unseenClaims: ClaimRef[] = [];
   // Whole nodes whose backing code is gone — verdicted as a subtree, so their
   // own stale claims are subsumed (don't also list them as individual claims).
@@ -260,14 +297,6 @@ export function buildReviewIndex(
     for (const resp of node.responsibilities ?? []) {
       if (resp.vagrant) vagrant.push({ node, resp });
       if (resp.stale && !staleNodeIds.has(node.id)) stale.push({ node, resp });
-      if (
-        !hasChildren.has(node.id) &&
-        !node.external &&
-        node.kind !== "person" &&
-        committedRespIds.has(resp.id) &&
-        (sourceMap[resp.id] ?? []).length === 0
-      )
-        unmapped.push({ node, resp });
       if (newRespIds.has(resp.id)) unseenClaims.push({ node, resp });
     }
   }
@@ -277,18 +306,16 @@ export function buildReviewIndex(
     vagrant.length +
     stale.length +
     staleNodes.length +
-    unmapped.length +
     emptySymbols.length +
     unseenNodes.length +
     unseenClaims.length +
     driftScopes.length +
     collapseAnchors(report?.anchors ?? []).length;
-  return { vagrant, stale, staleNodes, unmapped, emptySymbols, unseenNodes, unseenClaims, total };
+  return { vagrant, stale, staleNodes, emptySymbols, unseenNodes, unseenClaims, total };
 }
 
 export function NeedsReviewPage({
   model,
-  committed,
   report,
   driftScopes,
   newNodeIds,
@@ -300,7 +327,6 @@ export function NeedsReviewPage({
   onClearAllNew,
 }: {
   model: ScryModel;
-  committed: ScryModel | null;
   report: ModelHealthReport | null;
   driftScopes: DriftScope[];
   newNodeIds: ReadonlySet<string>;
@@ -311,7 +337,7 @@ export function NeedsReviewPage({
   onDismissDrift?: () => void;
   onClearAllNew: () => void;
 }) {
-  const idx = buildReviewIndex(model, committed, report, driftScopes, newNodeIds, newRespIds);
+  const idx = buildReviewIndex(model, report, driftScopes, newNodeIds, newRespIds);
   const anchors = collapseAnchors(report?.anchors ?? []);
 
   // Dropping a stale claim deletes an authored responsibility (and its anchors),
@@ -321,41 +347,6 @@ export function NeedsReviewPage({
     label: string;
     run: () => void;
   } | null>(null);
-
-  // Open the claim's page and flash its row once it has rendered.
-  const goToClaim = (nodeId: string, respId: string) => {
-    onSelectNode(nodeId);
-    window.setTimeout(() => jumpTo(respElementId(respId)), 250);
-  };
-
-  const claimRow = (ref: ClaimRef, actions?: React.ReactNode) => (
-    <li
-      key={ref.resp.id}
-      className="flex items-start gap-2 border-b border-[var(--border-subtle)] py-2 last:border-b-0"
-    >
-      <div className="min-w-0 flex-1">
-        <button
-          type="button"
-          onClick={() => goToClaim(ref.node.id, ref.resp.id)}
-          className="block w-full truncate text-left text-sm text-[var(--text-secondary)] hover:text-[var(--text)] hover:underline cursor-pointer"
-          title="Open on its page"
-        >
-          {ref.resp.statement || "Untitled responsibility"}
-        </button>
-        <span className="text-2xs text-[var(--text-muted)]">
-          on{" "}
-          <button
-            type="button"
-            onClick={() => onSelectNode(ref.node.id)}
-            className="text-blue-700 hover:underline dark:text-blue-400 cursor-pointer"
-          >
-            {ref.node.name || "Untitled"}
-          </button>
-        </span>
-      </div>
-      {actions}
-    </li>
-  );
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -406,7 +397,9 @@ export function NeedsReviewPage({
                       />
                     </li>
                   ))}
-                  {idx.unseenClaims.map((ref) => claimRow(ref))}
+                  {idx.unseenClaims.map((ref) => (
+                    <ClaimRow key={ref.resp.id} claim={ref} onSelectNode={onSelectNode} />
+                  ))}
                 </ul>
               </PageSection>
             )}
@@ -418,29 +411,33 @@ export function NeedsReviewPage({
                   reject to mark the code for deletion.
                 </p>
                 <ul className="flex flex-col">
-                  {idx.vagrant.map((ref) =>
-                    claimRow(
-                      ref,
-                      editor && (
-                        <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
-                          <button
-                            type="button"
-                            onClick={() => editor.adoptResponsibility(ref.resp.id)}
-                            className="font-medium text-indigo-600 hover:underline dark:text-indigo-400 cursor-pointer"
-                          >
-                            Adopt
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => editor.rejectResponsibility(ref.resp.id)}
-                            className="font-medium text-[var(--text-tertiary)] hover:text-red-500 hover:underline dark:hover:text-red-400 cursor-pointer"
-                          >
-                            Reject
-                          </button>
-                        </span>
-                      ),
-                    ),
-                  )}
+                  {idx.vagrant.map((ref) => (
+                    <ClaimRow
+                      key={ref.resp.id}
+                      claim={ref}
+                      onSelectNode={onSelectNode}
+                      actions={
+                        editor && (
+                          <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
+                            <button
+                              type="button"
+                              onClick={() => editor.adoptResponsibility(ref.resp.id)}
+                              className="font-medium text-indigo-600 hover:underline dark:text-indigo-400 cursor-pointer"
+                            >
+                              Adopt
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => editor.rejectResponsibility(ref.resp.id)}
+                              className="font-medium text-[var(--text-tertiary)] hover:text-red-500 hover:underline dark:hover:text-red-400 cursor-pointer"
+                            >
+                              Reject
+                            </button>
+                          </span>
+                        )
+                      }
+                    />
+                  ))}
                 </ul>
               </PageSection>
             )}
@@ -452,35 +449,39 @@ export function NeedsReviewPage({
                   rebuild the code, or drop the claim if the behaviour was removed on purpose.
                 </p>
                 <ul className="flex flex-col">
-                  {idx.stale.map((ref) =>
-                    claimRow(
-                      ref,
-                      editor && (
-                        <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
-                          <button
-                            type="button"
-                            onClick={() => editor.reimplementResponsibility(ref.resp.id)}
-                            className="font-medium text-indigo-600 hover:underline dark:text-indigo-400 cursor-pointer"
-                          >
-                            Re-implement
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) =>
-                              setConfirmDrop({
-                                rect: e.currentTarget.getBoundingClientRect(),
-                                label: "Drop this claim?",
-                                run: () => editor.dropResponsibility(ref.resp.id),
-                              })
-                            }
-                            className="font-medium text-[var(--text-tertiary)] hover:text-red-500 hover:underline dark:hover:text-red-400 cursor-pointer"
-                          >
-                            Drop
-                          </button>
-                        </span>
-                      ),
-                    ),
-                  )}
+                  {idx.stale.map((ref) => (
+                    <ClaimRow
+                      key={ref.resp.id}
+                      claim={ref}
+                      onSelectNode={onSelectNode}
+                      actions={
+                        editor && (
+                          <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
+                            <button
+                              type="button"
+                              onClick={() => editor.reimplementResponsibility(ref.resp.id)}
+                              className="font-medium text-indigo-600 hover:underline dark:text-indigo-400 cursor-pointer"
+                            >
+                              Re-implement
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) =>
+                                setConfirmDrop({
+                                  rect: e.currentTarget.getBoundingClientRect(),
+                                  label: "Drop this claim?",
+                                  run: () => editor.dropResponsibility(ref.resp.id),
+                                })
+                              }
+                              className="font-medium text-[var(--text-tertiary)] hover:text-red-500 hover:underline dark:hover:text-red-400 cursor-pointer"
+                            >
+                              Drop
+                            </button>
+                          </span>
+                        )
+                      }
+                    />
+                  ))}
                 </ul>
               </PageSection>
             )}
@@ -619,16 +620,6 @@ export function NeedsReviewPage({
               </PageSection>
             )}
 
-            {idx.unmapped.length > 0 && (
-              <PageSection title="Unmapped claims" count={idx.unmapped.length}>
-                <p className="mb-2 text-2xs text-[var(--text-muted)]">
-                  These claims say code exists but anchor to nothing — they can't be read
-                  through to source. Have the agent re-map, or fix the claim.
-                </p>
-                <ul className="flex flex-col">{idx.unmapped.map((ref) => claimRow(ref))}</ul>
-              </PageSection>
-            )}
-
             {idx.emptySymbols.length > 0 && (
               <PageSection title="Empty symbols" count={idx.emptySymbols.length}>
                 <p className="mb-2 text-2xs text-[var(--text-muted)]">
@@ -735,6 +726,109 @@ export function DarkCodePage({
                 );
               })}
             </div>
+          </>
+        )}
+      </SpecialBody>
+    </div>
+  );
+}
+
+// --- unmapped claims ------------------------------------------------------------
+
+/** Unmapped claims — the list behind the coverage percentage's complement:
+ *  committed leaf claims the model asserts but that read through to no code.
+ *  Symmetric with dark code, which is the same blind spot seen from the code's
+ *  side.
+ *
+ *  Computed over the COMMITTED model and its source map — NOT the working draft —
+ *  exactly as Rust's `compute_health` is, so the count agrees with the
+ *  powerline's "N% claims mapped". (A claim already re-anchored in the pending
+ *  plan still shows here until the work folds in; the percentage is committed-
+ *  side too, so the two stay consistent.)
+ *
+ *  Anchorable = a leaf, non-external, non-person node. Each contributes its
+ *  responsibilities (keyed by resp id), plus — if it declares any properties —
+ *  one data-shape claim keyed by the node id. */
+export function findUnmappedClaims(committed: ScryModel | null): {
+  claims: ClaimRef[];
+  shapes: Node[];
+} {
+  const claims: ClaimRef[] = [];
+  const shapes: Node[] = [];
+  if (!committed) return { claims, shapes };
+  const hasChildren = new Set(
+    committed.nodes.map((n) => n.parentId).filter(Boolean) as string[],
+  );
+  const sourceMap = committed.sourceMap ?? {};
+  const anchored = (id: string) => (sourceMap[id] ?? []).length > 0;
+  for (const node of committed.nodes) {
+    if (hasChildren.has(node.id) || node.external || node.kind === "person") continue;
+    for (const resp of node.responsibilities ?? []) {
+      if (!anchored(resp.id)) claims.push({ node, resp });
+    }
+    if ((node.properties?.length ?? 0) > 0 && !anchored(node.id)) shapes.push(node);
+  }
+  return { claims, shapes };
+}
+
+export function UnmappedClaimsPage({
+  committed,
+  report,
+  onSelectNode,
+}: {
+  committed: ScryModel | null;
+  report: ModelHealthReport | null;
+  onSelectNode: (id: string) => void;
+}) {
+  const { claims, shapes } = findUnmappedClaims(committed);
+  const total = claims.length + shapes.length;
+  const totals = report?.health.totals;
+  const coverage =
+    totals && totals.anchorable > 0
+      ? Math.round((totals.anchored / totals.anchorable) * 100)
+      : null;
+
+  return (
+    <div className="flex min-w-0 flex-1 flex-col">
+      <SpecialHeader
+        title="Unmapped claims"
+        subtitle={
+          total === 0
+            ? "Every claim reads through to code"
+            : `${total} claim${total === 1 ? "" : "s"} that say code exists but anchor to nothing${
+                coverage != null ? ` — ${coverage}% mapped` : ""
+              }`
+        }
+      />
+      <SpecialBody>
+        {total === 0 ? (
+          <div className="flex flex-col items-center gap-3 px-6 py-16">
+            <Check className="h-6 w-6 text-emerald-500 dark:text-emerald-400" />
+            <p className="text-xs text-[var(--text-muted)]">
+              No unmapped claims — every committed claim on a leaf reads through to source.
+            </p>
+          </div>
+        ) : (
+          <>
+            <p className="mb-4 mt-1 text-2xs text-[var(--text-muted)]">
+              These claims say code exists but anchor to nothing — they can't be read through to
+              source. Have the agent re-map, or fix the claim. A claim already re-anchored in a
+              pending plan clears once the work is folded into the committed model.
+            </p>
+            <ul className="flex flex-col">
+              {claims.map((ref) => (
+                <ClaimRow key={ref.resp.id} claim={ref} onSelectNode={onSelectNode} />
+              ))}
+              {shapes.map((n) => (
+                <li
+                  key={n.id}
+                  className="flex items-center gap-2 border-b border-[var(--border-subtle)] py-2 last:border-b-0"
+                >
+                  <WikiLink name={n.name} Icon={kindIcon(n)} onClick={() => onSelectNode(n.id)} />
+                  <span className="text-2xs text-[var(--text-ghost)]">data shape</span>
+                </li>
+              ))}
+            </ul>
           </>
         )}
       </SpecialBody>

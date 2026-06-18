@@ -710,7 +710,13 @@ pub fn ensure_planned_at(r: &ModelRef) -> Result<(), String> {
     if r.planned_path().exists() {
         return Ok(());
     }
-    let model = read_model_at(r)?;
+    let mut model = read_model_at(r)?;
+    // Code-side mapping has a single home: the committed model owns every
+    // committed element's anchor, and the plan overlays anchors only for the
+    // elements it later adds. A fresh plan adds nothing, so it starts with no
+    // anchors of its own — the working view reads committed's directly.
+    model.source_map.clear();
+    model.boundaries.clear();
     let json = serde_json::to_string_pretty(&model).map_err(|e| e.to_string())?;
     write_planned_raw_at(r, &json)
 }
@@ -849,37 +855,41 @@ pub fn commit_element(
         }
     }
 
-    // Keep the code-side anchor in lockstep with the element being folded. The
-    // source map is keyed by responsibility id and by schema/symbol node id; an
-    // upsert carries the planned anchor into the committed model, a purge drops
-    // it. Without this an adopted claim lands unanchored and a deletion work item
-    // points at no code.
+    // Keep the code-side anchor in lockstep with the element being folded.
+    // Anchors have a single home: committed owns committed elements', the draft
+    // owns only the elements it adds. So folding MOVES a plan-added element's
+    // anchor into committed and strips it from the draft; a committed element
+    // already keeps its anchor in committed, so it's left untouched — NOT removed
+    // just because the draft doesn't carry it (that would silently unanchor a
+    // reworded claim). A deletion drops the anchor from committed outright.
+    let mut planned_anchor_strip: Vec<String> = Vec::new();
     match kind {
-        diff::ElementKind::Responsibility => match planned.source_map.get(id) {
-            Some(locs) => {
-                model.source_map.insert(id.to_string(), locs.clone());
-            }
-            None => {
+        diff::ElementKind::Responsibility => {
+            if purge_from_planned {
                 model.source_map.remove(id);
+            } else if let Some(locs) = planned.source_map.get(id) {
+                model.source_map.insert(id.to_string(), locs.clone());
+                planned_anchor_strip.push(id.to_string());
             }
-        },
+        }
         diff::ElementKind::Node => {
-            if let Some(n) = planned.nodes.iter().find(|n| n.id == id) {
-                // The node's own declaration anchor, plus every responsibility it
-                // carries — committing the node moves them all across.
-                for k in std::iter::once(id.to_string())
-                    .chain(n.responsibilities.iter().map(|r| r.id.clone()))
-                {
-                    if let Some(locs) = planned.source_map.get(&k) {
-                        model.source_map.insert(k, locs.clone());
-                    }
-                }
-            } else {
+            if purge_from_planned {
                 // Deletion: drop the node's own declaration anchor AND the
                 // anchors of every responsibility it carried (orphaned otherwise).
                 model.source_map.remove(id);
                 for rid in &deleted_node_resp_ids {
                     model.source_map.remove(rid);
+                }
+            } else if let Some(n) = planned.nodes.iter().find(|n| n.id == id) {
+                // The node's own declaration anchor, plus every responsibility it
+                // carries — committing the node moves the draft's across.
+                for k in std::iter::once(id.to_string())
+                    .chain(n.responsibilities.iter().map(|r| r.id.clone()))
+                {
+                    if let Some(locs) = planned.source_map.get(&k) {
+                        model.source_map.insert(k.clone(), locs.clone());
+                        planned_anchor_strip.push(k);
+                    }
                 }
             }
         }
@@ -888,21 +898,29 @@ pub fn commit_element(
 
     write_model_at(r, &model)?;
 
-    if purge_from_planned {
+    // Rewrite the draft when the fold removes the element (a committed deletion)
+    // OR when it moved an anchor out of the draft into committed — either way the
+    // draft must no longer carry it, so the single-home invariant holds.
+    if purge_from_planned || !planned_anchor_strip.is_empty() {
         let mut p = planned;
-        match kind {
-            diff::ElementKind::Node => p.nodes.retain(|n| n.id != id),
-            diff::ElementKind::Link => p.links.retain(|l| l.id != id),
-            diff::ElementKind::Group => p.groups.retain(|g| g.id != id),
-            diff::ElementKind::Responsibility => {
-                for n in &mut p.nodes {
-                    n.responsibilities.retain(|x| x.id != id);
+        if purge_from_planned {
+            match kind {
+                diff::ElementKind::Node => p.nodes.retain(|n| n.id != id),
+                diff::ElementKind::Link => p.links.retain(|l| l.id != id),
+                diff::ElementKind::Group => p.groups.retain(|g| g.id != id),
+                diff::ElementKind::Responsibility => {
+                    for n in &mut p.nodes {
+                        n.responsibilities.retain(|x| x.id != id);
+                    }
+                    for g in &mut p.groups {
+                        g.responsibilities.retain(|x| x.id != id);
+                    }
                 }
-                for g in &mut p.groups {
-                    g.responsibilities.retain(|x| x.id != id);
-                }
+                diff::ElementKind::Property => {}
             }
-            diff::ElementKind::Property => {}
+        }
+        for k in &planned_anchor_strip {
+            p.source_map.remove(k);
         }
         let json = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?;
         write_planned_raw_at(r, &json)?;
@@ -1623,6 +1641,60 @@ mod lock_tests {
             "api/admin.rs"
         );
         assert!(plan_diff_at(&r).unwrap().is_empty(), "plan and model agree after the fold");
+    }
+
+    /// Dedup invariant: a committed claim's anchor lives only in committed, so
+    /// the draft does not carry it. Folding a reworded version of that claim must
+    /// KEEP the committed anchor — not drop it just because the draft has no copy
+    /// (pre-dedup the draft mirrored every anchor, which masked this path).
+    #[test]
+    fn fold_keeps_committed_anchor_when_draft_does_not_carry_it() {
+        let (_dir, r) = temp_ref();
+        let node = |v: serde_json::Value| serde_json::from_value::<Node>(v).unwrap();
+
+        // Committed: a leaf symbol with an anchored claim.
+        let mut m = ScryModel::new();
+        m.nodes.push(node(serde_json::json!({
+            "id": "sym", "kind": "symbol", "name": "h",
+            "responsibilities": [{ "id": "r1", "statement": "old wording" }],
+        })));
+        m.source_map.insert(
+            "r1".into(),
+            vec![serde_json::from_value(serde_json::json!({
+                "pattern": "src/h.rs", "symbol": "h"
+            }))
+            .unwrap()],
+        );
+        write_model_at(&r, &m).unwrap();
+
+        // Draft: the SAME claim reworded (an authored change) but with NO anchor
+        // of its own — committed owns it; the draft overlays only what it adds.
+        let mut planned = m.clone();
+        planned.source_map.clear();
+        for n in &mut planned.nodes {
+            for resp in &mut n.responsibilities {
+                if resp.id == "r1" {
+                    resp.statement = "new wording".into();
+                }
+            }
+        }
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Responsibility, None, "r1").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        let resp = model
+            .nodes
+            .iter()
+            .flat_map(|n| &n.responsibilities)
+            .find(|x| x.id == "r1")
+            .expect("claim still committed");
+        assert_eq!(resp.statement, "new wording", "the reword folded in");
+        assert_eq!(
+            model.source_map.get("r1").expect("committed anchor preserved")[0].pattern,
+            "src/h.rs",
+            "folding the reword must not unanchor the committed claim"
+        );
     }
 
     /// Deleting a node folds out its own anchor AND the anchors of the

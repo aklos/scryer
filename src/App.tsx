@@ -16,7 +16,13 @@ import { ModelTree } from "./ModelTree";
 import { TopBar, type WorkspaceView } from "./TopBar";
 import { DiagramView } from "./DiagramView";
 import { NodePage, type Selected, type SpecialPage } from "./NodePage";
-import { buildReviewIndex, DarkCodePage, NeedsReviewPage, RecentChangesPage } from "./SpecialPages";
+import {
+  buildReviewIndex,
+  DarkCodePage,
+  NeedsReviewPage,
+  RecentChangesPage,
+  UnmappedClaimsPage,
+} from "./SpecialPages";
 import { ProjectPicker } from "./ProjectPicker";
 import { SearchPalette } from "./SearchPalette";
 import { Powerline } from "./Powerline";
@@ -601,7 +607,7 @@ function Workspace({
 
   // The status-bar counters, shared with the special pages so the number and
   // the list can never disagree.
-  const reviewIndex = buildReviewIndex(model, committed, healthReport, driftScopes, newNodeIds, newRespIds);
+  const reviewIndex = buildReviewIndex(model, healthReport, driftScopes, newNodeIds, newRespIds);
 
   return (
     <div className="flex h-screen w-screen flex-col bg-[var(--surface-canvas)]">
@@ -642,10 +648,15 @@ function Workspace({
             <RecentChangesPage changeLog={changeLog} onSelectNode={selectNode} />
           ) : selected.id === "dark" ? (
             <DarkCodePage model={model} report={healthReport} onSelectNode={selectNode} />
+          ) : selected.id === "unmapped" ? (
+            <UnmappedClaimsPage
+              committed={committed}
+              report={healthReport}
+              onSelectNode={selectNode}
+            />
           ) : (
             <NeedsReviewPage
               model={model}
-              committed={committed}
               report={healthReport}
               driftScopes={driftScopes}
               newNodeIds={newNodeIds}

@@ -44,7 +44,7 @@ import type {
   SourceLocation,
   DriftScope,
 } from "./viewmodel";
-import { isDataShape, nextResponsibilityId } from "./viewmodel";
+import { effectiveSourceMap, isDataShape, nextResponsibilityId } from "./viewmodel";
 import { wordDiff } from "./wordDiff";
 import type { Editor } from "./editor";
 import type { ModelHealthReport } from "./health";
@@ -110,12 +110,13 @@ export interface VariationState {
   selectedIdx: number | null;
 }
 
-export type SpecialPage = "changes" | "review" | "dark";
+export type SpecialPage = "changes" | "review" | "dark" | "unmapped";
 
 export type Selected =
   | { kind: "node"; id: string }
   | { kind: "group"; id: string }
-  // Wiki special pages — Recent changes, Needs review, Dark code (App routes these).
+  // Wiki special pages — Recent changes, Needs review, Dark code, Unmapped
+  // claims (App routes these).
   | { kind: "special"; id: SpecialPage };
 
 interface PageProps {
@@ -524,7 +525,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const tag = typeTag(node);
   const KindIcon = lookupIcon(node.icon) ?? kindIcon(node);
 
-  const sourceMap = model.sourceMap ?? {};
+  const sourceMap = effectiveSourceMap(committed, model);
   const dataShape = isDataShape(node);
   const resps = node.responsibilities ?? [];
   // The committed copy of this node's claims — the diff base for the Overview.
@@ -849,7 +850,7 @@ function GroupPageBody(props: PageProps & { group: Group }) {
     .map((id) => model.nodes.find((n) => n.id === id))
     .filter((n): n is Node => Boolean(n));
 
-  const sourceMap = model.sourceMap ?? {};
+  const sourceMap = effectiveSourceMap(committed, model);
   const resps = group.responsibilities ?? [];
   const committedResps =
     committed?.groups.find((g) => g.id === group.id)?.responsibilities ?? [];

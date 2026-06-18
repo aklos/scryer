@@ -27,7 +27,7 @@ interface PowerlineProps {
   model: ScryModel;
   agent: AgentSession;
   build: ModelBuild;
-  /** Everything awaiting a human verdict (vagrant / stale / unmapped …). */
+  /** Everything awaiting a human verdict (vagrant / stale / agent edits …). */
   reviewIndex: ReviewIndex;
   /** Coverage + flag totals; null until the first health fetch lands. */
   health: ModelHealthReport | null;
@@ -94,8 +94,16 @@ export function Powerline({
         )}
       </button>
 
-      {/* Coverage — anchored / anchorable claims (the model→code direction). */}
-      <div className="seg" style={sb("color-mix(in srgb, var(--text) 4%, var(--surface-canvas))")}>
+      {/* Coverage — anchored / anchorable claims (the model→code direction).
+          Click to list the unmapped claims (the inverse; symmetric with the
+          dark-code segment that follows). */}
+      <button
+        type="button"
+        onClick={() => onOpenSpecial("unmapped")}
+        className="seg cursor-pointer"
+        style={sb("color-mix(in srgb, var(--text) 4%, var(--surface-canvas))")}
+        title="Claims mapped — committed claims that read through to code. Click to list the ones that map to nothing."
+      >
         {coverage != null ? (
           <>
             <span className="pl-strong font-medium">{coverage}%</span>
@@ -104,7 +112,7 @@ export function Powerline({
         ) : (
           <span className="text-[var(--text-secondary)]">claims mapped —</span>
         )}
-      </div>
+      </button>
 
       {/* Dark code — files under a node's boundary that no claim reads into (the
           code→model direction). Click to list them on the special page. */}
@@ -174,7 +182,7 @@ export function Powerline({
               onClick={() => onOpenSpecial("review")}
               className="rseg cursor-pointer"
               style={sb("color-mix(in srgb, var(--color-orange-500) 18%, var(--surface-canvas))")}
-              title="Open Needs review — flags awaiting a human verdict (drift, unmapped claims, agent edits, empty symbols …)"
+              title="Open Needs review — flags awaiting a human verdict (drift, stale claims, agent edits, empty symbols …)"
             >
               <Flag className="h-3 w-3 shrink-0 text-orange-600 dark:text-orange-400" />
               <span className="font-medium text-orange-600 dark:text-orange-400">
