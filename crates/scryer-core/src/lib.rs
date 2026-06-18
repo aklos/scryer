@@ -167,6 +167,29 @@ pub struct Node {
     pub technology: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Drift adoption marker: this node was MINTED by a drift check to home
+    /// code-discovered behaviour that no existing node described — it lives in
+    /// the PLAN only, awaiting a human verdict. Like a vagrant responsibility
+    /// ("code already does this, adopt?"), NOT planned intent ahead of code
+    /// ("implement this!"): a vagrant node is excluded from the implement queue
+    /// and folds into the committed model when its responsibility is adopted
+    /// (which clears this flag). Hidden from the agent's write-tool schemas —
+    /// vagrancy is set only by `flag_drift`, never authored directly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub vagrant: Option<bool>,
+    /// Drift regression marker (the mirror of `vagrant`): the code that backed
+    /// this whole node — a symbol, a component, an entire container subtree — is
+    /// GONE, but the model still asserts it. Set by `flag_drift` on the PLAN node
+    /// (where the UI reads it) when a deleted folder/file leaves a modeled node
+    /// with no code; it rides the working claim until the user gives a verdict —
+    /// re-implement (rebuild the subtree → it becomes a to-do) or drop (the area
+    /// was removed on purpose → the subtree leaves the model). `diff` ignores the
+    /// flag, so a stale node awaiting a verdict is not itself a plan work item.
+    /// Hidden from the agent's write-tool schemas — set only by `flag_drift`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub stale: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub responsibilities: Vec<Responsibility>,
     /// Field declarations, when this symbol defines a data shape (struct,
@@ -745,9 +768,20 @@ pub fn commit_element(
     let mut model = read_model_at(r)?;
     let planned = read_planned_at(r)?;
     let mut purge_from_planned = false;
+    // Responsibility ids carried by a committed node we're about to DELETE — held
+    // so the anchor-lockstep step below can GC their orphaned source-map entries
+    // (the responsibilities vanish with the node, but their anchors are keyed
+    // separately and would otherwise leak).
+    let mut deleted_node_resp_ids: Vec<String> = Vec::new();
 
     match kind {
         diff::ElementKind::Node => {
+            if !planned.nodes.iter().any(|n| n.id == id) {
+                if let Some(n) = model.nodes.iter().find(|n| n.id == id) {
+                    deleted_node_resp_ids =
+                        n.responsibilities.iter().map(|r| r.id.clone()).collect();
+                }
+            }
             model.nodes.retain(|n| n.id != id);
             match planned.nodes.iter().find(|n| n.id == id) {
                 Some(n) => model.nodes.push(n.clone()),
@@ -813,6 +847,43 @@ pub fn commit_element(
                 node.properties.push(p.clone());
             }
         }
+    }
+
+    // Keep the code-side anchor in lockstep with the element being folded. The
+    // source map is keyed by responsibility id and by schema/symbol node id; an
+    // upsert carries the planned anchor into the committed model, a purge drops
+    // it. Without this an adopted claim lands unanchored and a deletion work item
+    // points at no code.
+    match kind {
+        diff::ElementKind::Responsibility => match planned.source_map.get(id) {
+            Some(locs) => {
+                model.source_map.insert(id.to_string(), locs.clone());
+            }
+            None => {
+                model.source_map.remove(id);
+            }
+        },
+        diff::ElementKind::Node => {
+            if let Some(n) = planned.nodes.iter().find(|n| n.id == id) {
+                // The node's own declaration anchor, plus every responsibility it
+                // carries — committing the node moves them all across.
+                for k in std::iter::once(id.to_string())
+                    .chain(n.responsibilities.iter().map(|r| r.id.clone()))
+                {
+                    if let Some(locs) = planned.source_map.get(&k) {
+                        model.source_map.insert(k, locs.clone());
+                    }
+                }
+            } else {
+                // Deletion: drop the node's own declaration anchor AND the
+                // anchors of every responsibility it carried (orphaned otherwise).
+                model.source_map.remove(id);
+                for rid in &deleted_node_resp_ids {
+                    model.source_map.remove(rid);
+                }
+            }
+        }
+        _ => {}
     }
 
     write_model_at(r, &model)?;
@@ -1179,6 +1250,8 @@ mod tests {
             id: "n1".into(),
             kind: Kind::Component,
             name: "C".into(),
+            vagrant: None,
+            stale: None,
             parent_id: None,
             external: None,
             technology: None,
@@ -1288,6 +1361,8 @@ mod lock_tests {
                         id,
                         kind: Kind::System,
                         name: format!("n{i}"),
+                        vagrant: None,
+                        stale: None,
                         parent_id: None,
                         external: None,
                         technology: None,
@@ -1322,6 +1397,8 @@ mod lock_tests {
             id: "n1".into(),
             kind: Kind::System,
             name: "Auth".into(),
+            vagrant: None,
+            stale: None,
             parent_id: None,
             external: None,
             technology: None,
@@ -1345,6 +1422,8 @@ mod lock_tests {
             id: "n2".into(),
             kind: Kind::System,
             name: "Billing".into(),
+            vagrant: None,
+            stale: None,
             parent_id: None,
             external: None,
             technology: None,
@@ -1369,6 +1448,8 @@ mod lock_tests {
             id: id.into(),
             kind: Kind::Component,
             name: name.into(),
+            vagrant: None,
+            stale: None,
             parent_id: parent.map(|s| s.into()),
             external: None,
             technology: None,
@@ -1493,5 +1574,93 @@ mod lock_tests {
         let model = read_model_at(&r).unwrap();
         assert_eq!(model.nodes[0].properties[0].description, "new");
         assert!(plan_diff_at(&r).unwrap().is_empty());
+    }
+
+    /// Folding a minted chain (component → symbol) then its responsibility — the
+    /// adopt path — lands every rung in the committed model AND carries the code
+    /// anchor across, so the adopted claim is mapped (and a later deletion work
+    /// item could point at the code).
+    #[test]
+    fn commit_folds_chain_and_carries_source_anchor() {
+        let (_dir, r) = temp_ref();
+        let node = |v: serde_json::Value| serde_json::from_value::<Node>(v).unwrap();
+
+        // Committed: just a container.
+        let mut m = ScryModel::new();
+        m.nodes.push(node(serde_json::json!({ "id": "c", "kind": "container", "name": "API" })));
+        write_model_at(&r, &m).unwrap();
+
+        // Plan: container + a new component + a new symbol carrying a claim,
+        // anchored to code in the plan's source map.
+        let mut planned = m.clone();
+        planned.nodes.push(node(serde_json::json!({
+            "id": "comp", "kind": "component", "name": "Admin", "parentId": "c"
+        })));
+        planned.nodes.push(node(serde_json::json!({
+            "id": "sym", "kind": "symbol", "name": "admin_handler", "parentId": "comp",
+            "responsibilities": [{ "id": "r1", "statement": "exposes admin endpoint" }],
+        })));
+        planned.source_map.insert(
+            "r1".into(),
+            vec![serde_json::from_value(serde_json::json!({
+                "pattern": "api/admin.rs", "symbol": "admin_handler"
+            }))
+            .unwrap()],
+        );
+        write_planned_at(&r, &planned).unwrap();
+
+        // Fold root→leaf, then the responsibility — the host node must exist first.
+        commit_element(&r, diff::ElementKind::Node, None, "comp").unwrap();
+        commit_element(&r, diff::ElementKind::Node, None, "sym").unwrap();
+        commit_element(&r, diff::ElementKind::Responsibility, None, "r1").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        assert!(model.nodes.iter().any(|n| n.id == "comp"), "component folded in");
+        let sym = model.nodes.iter().find(|n| n.id == "sym").expect("symbol folded in");
+        assert!(sym.responsibilities.iter().any(|x| x.id == "r1"), "claim on the symbol");
+        assert_eq!(
+            model.source_map.get("r1").expect("anchor carried into committed")[0].pattern,
+            "api/admin.rs"
+        );
+        assert!(plan_diff_at(&r).unwrap().is_empty(), "plan and model agree after the fold");
+    }
+
+    /// Deleting a node folds out its own anchor AND the anchors of the
+    /// responsibilities it carried — none are left orphaned in the committed
+    /// source map.
+    #[test]
+    fn commit_node_deletion_gcs_responsibility_anchors() {
+        let (_dir, r) = temp_ref();
+        let node = |v: serde_json::Value| serde_json::from_value::<Node>(v).unwrap();
+
+        // Committed: a symbol carrying a claim, both anchored to code.
+        let mut m = ScryModel::new();
+        m.nodes.push(node(serde_json::json!({ "id": "c", "kind": "container", "name": "API" })));
+        m.nodes.push(node(serde_json::json!({
+            "id": "sym", "kind": "symbol", "name": "admin_handler", "parentId": "c",
+            "responsibilities": [{ "id": "r1", "statement": "exposes admin endpoint" }],
+        })));
+        let loc = |p: &str| vec![serde_json::from_value::<SourceLocation>(
+            serde_json::json!({ "pattern": p }),
+        )
+        .unwrap()];
+        m.source_map.insert("sym".into(), loc("api/admin.rs")); // the node's decl anchor
+        m.source_map.insert("r1".into(), loc("api/admin.rs")); // the claim's anchor
+        write_model_at(&r, &m).unwrap();
+
+        // Plan drops the symbol → committing the deletion must GC both anchors.
+        let mut planned = m.clone();
+        planned.nodes.retain(|n| n.id != "sym");
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Node, None, "sym").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        assert!(!model.nodes.iter().any(|n| n.id == "sym"), "symbol deleted");
+        assert!(model.source_map.get("sym").is_none(), "node anchor GC'd");
+        assert!(
+            model.source_map.get("r1").is_none(),
+            "the deleted node's responsibility anchor must not be left orphaned"
+        );
     }
 }

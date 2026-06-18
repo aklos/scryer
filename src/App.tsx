@@ -16,7 +16,7 @@ import { ModelTree } from "./ModelTree";
 import { TopBar, type WorkspaceView } from "./TopBar";
 import { DiagramView } from "./DiagramView";
 import { NodePage, type Selected, type SpecialPage } from "./NodePage";
-import { buildReviewIndex, NeedsReviewPage, RecentChangesPage } from "./SpecialPages";
+import { buildReviewIndex, DarkCodePage, NeedsReviewPage, RecentChangesPage } from "./SpecialPages";
 import { ProjectPicker } from "./ProjectPicker";
 import { SearchPalette } from "./SearchPalette";
 import { Powerline } from "./Powerline";
@@ -365,15 +365,6 @@ function Workspace({
     if (top) selectNode(top.id);
   }, [model, selected, selectNode]);
 
-  const onFill = useCallback(
-    (nodeId: string) => {
-      if (!projectPath || !modelRefStr) return;
-      const node = modelRef.current.nodes.find((n) => n.id === nodeId);
-      agent.startFill(projectPath, modelRefStr, nodeId, node?.name ?? "node");
-    },
-    [agent, projectPath, modelRefStr],
-  );
-
   const onFixture = useCallback(
     (nodeId: string, renderStatus: string, renderError: string | null) => {
       if (!projectPath || !modelRefStr || writing) return;
@@ -504,6 +495,50 @@ function Workspace({
         updateModel((m) => updateResponsibility(m, host, hostId, respId, patch)),
       removeResponsibility: (host, hostId, respId) =>
         updateModel((m) => removeResponsibility(m, host, hostId, respId)),
+      adoptResponsibility: (respId) => {
+        if (!projectPath) return;
+        // Backend folds the claim into the committed model (the code already
+        // exists); the file watcher then re-reads both layers into the UI.
+        invoke("adopt_responsibility", { cwd: projectPath, respId })
+          .then(() => refreshHealth())
+          .catch((e) => console.error("adopt_responsibility failed", e));
+      },
+      rejectResponsibility: (respId) => {
+        if (!projectPath) return;
+        // Backend folds the claim into the committed model then drops it from the
+        // plan, leaving a deletion work item; the watcher re-reads both layers.
+        invoke("reject_responsibility", { cwd: projectPath, respId })
+          .then(() => refreshHealth())
+          .catch((e) => console.error("reject_responsibility failed", e));
+      },
+      dropResponsibility: (respId) => {
+        if (!projectPath) return;
+        // Code is right: delete the stale claim from both layers; watcher refreshes.
+        invoke("drop_responsibility", { cwd: projectPath, respId })
+          .then(() => refreshHealth())
+          .catch((e) => console.error("drop_responsibility failed", e));
+      },
+      reimplementResponsibility: (respId) => {
+        if (!projectPath) return;
+        // Model is right: remove from committed so it reads as an Added to-do.
+        invoke("reimplement_responsibility", { cwd: projectPath, respId })
+          .then(() => refreshHealth())
+          .catch((e) => console.error("reimplement_responsibility failed", e));
+      },
+      dropNode: (nodeId) => {
+        if (!projectPath) return;
+        // Code is right: delete the stale node + subtree from both layers.
+        invoke("drop_node", { cwd: projectPath, nodeId })
+          .then(() => refreshHealth())
+          .catch((e) => console.error("drop_node failed", e));
+      },
+      reimplementNode: (nodeId) => {
+        if (!projectPath) return;
+        // Model is right: keep the subtree in the plan as a rebuild to-do.
+        invoke("reimplement_node", { cwd: projectPath, nodeId })
+          .then(() => refreshHealth())
+          .catch((e) => console.error("reimplement_node failed", e));
+      },
       moveResponsibility: (fromNodeId, toNodeId, respId) =>
         updateModel((m) => moveResponsibilityHelper(m, fromNodeId, toNodeId, respId)),
       addProperty: (nodeId) => updateModel((m) => addProperty(m, nodeId, "", "")),
@@ -511,7 +546,7 @@ function Workspace({
         updateModel((m) => updateProperty(m, nodeId, index, patch)),
       removeProperty: (nodeId, index) => updateModel((m) => removeProperty(m, nodeId, index)),
     }),
-    [updateModel],
+    [updateModel, projectPath, refreshHealth],
   );
 
   const pageEditor = writing ? undefined : editor;
@@ -589,7 +624,6 @@ function Workspace({
           onSelectGroup={selectGroup}
           onToggle={toggle}
           editor={pageEditor}
-          onFill={projectPath && !writing ? onFill : undefined}
           activeNodeIds={build.active ? build.activeNodeIds : EMPTY_IDS}
           newNodeIds={newNodeIds}
         />
@@ -606,6 +640,8 @@ function Workspace({
         ) : selected?.kind === "special" ? (
           selected.id === "changes" ? (
             <RecentChangesPage changeLog={changeLog} onSelectNode={selectNode} />
+          ) : selected.id === "dark" ? (
+            <DarkCodePage model={model} report={healthReport} onSelectNode={selectNode} />
           ) : (
             <NeedsReviewPage
               model={model}
@@ -632,7 +668,6 @@ function Workspace({
             editor={pageEditor}
             onSelectNode={selectNode}
             onSelectGroup={selectGroup}
-            onFill={projectPath && !writing ? onFill : undefined}
             onFixture={projectPath && !writing ? onFixture : undefined}
             variationState={variationState}
             onStartVariation={!writing || variationState ? onStartVariation : undefined}

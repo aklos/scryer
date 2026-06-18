@@ -276,6 +276,8 @@ mod tests {
             id: id.into(),
             kind,
             name: name.into(),
+            vagrant: None,
+            stale: None,
             parent_id: None,
             external: None,
             technology: None,

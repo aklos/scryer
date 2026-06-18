@@ -109,7 +109,6 @@ export function ModelTree({
   onSelectGroup,
   onToggle,
   editor,
-  onFill,
   activeNodeIds,
   newNodeIds,
 }: {
@@ -122,7 +121,6 @@ export function ModelTree({
   onSelectGroup: (id: string) => void;
   onToggle: (id: string, expand?: boolean) => void;
   editor: Editor | undefined;
-  onFill?: (nodeId: string) => void;
   activeNodeIds: ReadonlySet<string>;
   newNodeIds: ReadonlySet<string>;
 }) {
@@ -339,13 +337,6 @@ export function ModelTree({
         id: "add",
         label: `Add ${KIND_ICON[childKind].label.toLowerCase()}`,
         onSelect: () => addChild(node),
-      });
-    }
-    if (canHaveChildren && onFill && !node.external) {
-      items.push({
-        id: "fill",
-        label: "Generate children",
-        onSelect: () => onFill(node.id),
       });
     }
     items.push({ id: "rename", label: "Rename", onSelect: () => setRenaming(node.id) });

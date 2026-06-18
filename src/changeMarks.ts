@@ -84,9 +84,13 @@ function driftOf(resps: { vagrant?: boolean; stale?: boolean }[] | undefined): M
  *  can filter on either axis. Vagrant claims feed the drift mark, not the plan
  *  mark (they're code-first, not a planned edit). */
 export function nodeMarks(node: Node, idx: DiffIndex): { plan: Mark | null; drift: Mark | null } {
+  // The node ITSELF can be vagrant — a rung the drift check minted to home
+  // code-discovered behaviour — on top of any vagrant responsibilities it holds.
   const vagrantIds = new Set<string>();
-  let vagrant = false;
-  let stale = false;
+  let vagrant = !!node.vagrant;
+  // The node ITSELF can be stale — its whole backing code is gone (mirror of a
+  // vagrant node) — on top of any stale responsibilities it holds.
+  let stale = !!node.stale;
   for (const r of node.responsibilities ?? []) {
     if (r.vagrant) {
       vagrant = true;
@@ -99,8 +103,11 @@ export function nodeMarks(node: Node, idx: DiffIndex): { plan: Mark | null; drif
     if (ec.kind === "responsibility" && vagrantIds.has(ec.id)) continue; // drift, not plan
     childChanges.push(...ec.changes);
   }
+  // A vagrant node is code-first ("adopt?"), not a planned edit — its own
+  // plan-only "added" diff is drift, not a plan mark, so it reads as Q not A.
+  const own = node.vagrant ? undefined : idx.nodeOwn.get(node.id);
   return {
-    plan: classifyPlan(idx.nodeOwn.get(node.id), childChanges),
+    plan: classifyPlan(own, childChanges),
     drift: vagrant ? "Q" : stale ? "X" : null,
   };
 }

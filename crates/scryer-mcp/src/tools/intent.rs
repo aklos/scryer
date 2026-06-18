@@ -96,12 +96,6 @@ fn err(msg: impl Into<String>) -> CallToolResult {
     CallToolResult::error(vec![Content::text(msg.into())])
 }
 
-/// Read the committed model or return an error result.
-fn read_model(model_ref: &ModelRef) -> Result<ScryModel, CallToolResult> {
-    scryer_core::read_model_at(model_ref)
-        .map_err(|e| err(format!("Failed to read model at {}: {}", model_ref, e)))
-}
-
 /// Read the planned (draft) model — the authoring base. Falls back to the
 /// committed model when no plan has diverged yet. Agent authoring proposes into
 /// the plan; the committed model only changes when the work is implemented and
@@ -132,6 +126,8 @@ fn blank_node(id: String, kind: Kind, name: String, parent_id: Option<String>) -
         id,
         kind,
         name,
+        vagrant: None,
+        stale: None,
         parent_id,
         external: None,
         technology: None,
@@ -475,7 +471,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Record SEMANTIC drift for a node after comparing its code against its responsibilities — the model↔code reconcile, where each finding gets a DIRECTION. `undescribed` is the *take-code* direction: behaviours the code has that NO responsibility describes — each is proposed into the PLAN as a vagrant adoption (a code-discovered `added` claim), which the user adopts (commit — the code already exists) or rejects (drop from the plan); do NOT report code that changed but still satisfies an existing responsibility. `stale` is the *take-model* direction: existing committed responsibilities the model still asserts but whose code regressed — flagged `stale` so the code is brought back in line (resolved by re-implementing via `mark_implemented`, rewording, or deletion). Call with empty arrays (or don't call) when the code and the model still agree."
+        description = "Record SEMANTIC drift for a node after comparing its code against its responsibilities — the model↔code reconcile, where each finding gets a DIRECTION. `undescribed` is the *take-code* direction: behaviours the code has that NO responsibility describes — each is proposed into the PLAN as a vagrant adoption (a code-discovered `added` claim), which the user adopts (commit — the code already exists) or rejects (mark the code for deletion); do NOT report code that changed but still satisfies an existing responsibility. Each undescribed finding is HOMED on a node: it routes automatically to the node that already owns its `symbol`/file (or set `nodeId` to force an existing node). When the model has NO node for the code, MINT the missing rungs in `newNodes` (a `key`, `kind`, `name`, and a parent via `parentId` on an existing node or `parentKey` on a shallower mint — list ancestors first) and point the finding at the leaf with `nodeKey`, so it lands at its true altitude instead of bubbling up to the reviewed container. `stale` is the *take-model* direction: existing responsibilities the model still asserts but whose code regressed — flagged `stale` so the user can give a verdict: re-implement (the model is right, the code is rebuilt) or drop (the behaviour was removed on purpose, so the claim leaves the model). `staleNodes` is the node-level version of the same direction: when a deleted file or folder wipes out a whole modeled node — a symbol, a component, an entire container subtree — flag the NODE (by `nodeId`) instead of listing each of its claims; the verdict then applies to the whole subtree. Use `staleNodes` when the node's backing code is gone entirely, `stale` when only one of a still-present node's claims regressed. Call with empty arrays (or don't call) when the code and the model still agree."
     )]
     fn flag_drift(
         &self,
@@ -500,6 +496,73 @@ impl ScryerServer {
             return Ok(err(format!("Node '{}' not found", req.node_id)));
         }
         let prior_plan = planned.clone();
+
+        // 1. MINT vagrant nodes for code the model has no node for — the agent's
+        //    declared missing rungs (a new component, a symbol for a new
+        //    definition, or a whole chain). Resolve each parent (an existing node
+        //    id, or an earlier-minted node's key), assign an id, and push it
+        //    vagrant. `key_to_id` lets later items reference a mint before its
+        //    real id exists.
+        let mut key_to_id: HashMap<String, String> = HashMap::new();
+        let mut minted_node_ids: Vec<String> = Vec::new();
+        for nn in &req.new_nodes {
+            let kind = match parse_kind(&nn.kind) {
+                Ok(k) => k,
+                Err(_) => {
+                    return Ok(err(format!(
+                        "newNode '{}' has invalid kind '{}'",
+                        nn.key, nn.kind
+                    )))
+                }
+            };
+            if key_to_id.contains_key(&nn.key) {
+                return Ok(err(format!("duplicate newNode key '{}'", nn.key)));
+            }
+            let parent_id = match (&nn.parent_id, &nn.parent_key) {
+                (Some(_), Some(_)) => {
+                    return Ok(err(format!(
+                        "newNode '{}' sets both parentId and parentKey — set exactly one",
+                        nn.key
+                    )))
+                }
+                (None, None) => {
+                    return Ok(err(format!(
+                        "newNode '{}' needs a parentId or parentKey",
+                        nn.key
+                    )))
+                }
+                (Some(pid), None) => {
+                    if !planned.nodes.iter().any(|n| &n.id == pid) {
+                        return Ok(err(format!(
+                            "newNode '{}' parentId '{}' not found",
+                            nn.key, pid
+                        )));
+                    }
+                    pid.clone()
+                }
+                (None, Some(pk)) => match key_to_id.get(pk) {
+                    Some(id) => id.clone(),
+                    None => {
+                        return Ok(err(format!(
+                            "newNode '{}' parentKey '{}' is not a node minted earlier in this call \
+                             (list ancestors before descendants)",
+                            nn.key, pk
+                        )))
+                    }
+                },
+            };
+            let id = scryer_core::next_node_id(&planned);
+            let mut node = blank_node(id.clone(), kind, nn.name.clone(), Some(parent_id));
+            node.vagrant = Some(true);
+            node.description = nn.description.clone();
+            node.technology = nn.technology.clone();
+            planned.nodes.push(node);
+            key_to_id.insert(nn.key.clone(), id.clone());
+            minted_node_ids.push(id);
+        }
+
+        // 2. A vagrant responsibility per undescribed behaviour, anchored to its
+        //    source.
         let items: Vec<&UndescribedItem> = req
             .undescribed
             .iter()
@@ -524,21 +587,41 @@ impl ScryerServer {
             );
         }
         let flagged = resps.len();
-        // Route each finding to the FINEST node that owns its source file — the
-        // symbol/component the source map already ties the file to — so an
-        // undescribed behaviour lands at its true altitude instead of bubbling up
-        // to the reviewed container. Unmapped files fall back to the reviewed node.
-        let targets: Vec<String> = items
-            .iter()
-            .map(|item| {
+        // 3. Route each finding to its host node. An explicit `nodeKey` (a mint)
+        //    or `nodeId` (an existing node) wins; otherwise fall back to the
+        //    FINEST node the source map already ties the file to, so the finding
+        //    lands at its true altitude instead of bubbling up to the reviewed
+        //    container.
+        let mut targets: Vec<String> = Vec::with_capacity(items.len());
+        for item in &items {
+            let target = if let Some(k) = &item.node_key {
+                match key_to_id.get(k) {
+                    Some(id) => id.clone(),
+                    None => {
+                        return Ok(err(format!(
+                            "undescribed item references nodeKey '{}' with no matching newNode",
+                            k
+                        )))
+                    }
+                }
+            } else if let Some(nid) = &item.node_id {
+                if !planned.nodes.iter().any(|n| &n.id == nid) {
+                    return Ok(err(format!(
+                        "undescribed item references nodeId '{}' not in the model",
+                        nid
+                    )));
+                }
+                nid.clone()
+            } else {
                 scryer_core::ownership::owning_node_for_location(
                     &planned,
                     &req.node_id,
                     &item.source_file,
                     item.symbol.as_deref(),
                 )
-            })
-            .collect();
+            };
+            targets.push(target);
+        }
         // Build the timeline rows now (while the adoptions and their source map are
         // still in hand), grouped by the node each lands on.
         let mut rows_by_node: HashMap<String, Vec<EventRow>> = HashMap::new();
@@ -553,52 +636,65 @@ impl ScryerServer {
                 node.responsibilities.push(r);
             }
         }
-        if flagged > 0 {
+        // TAKE MODEL — stale claims → the `stale` observation flag written to the
+        // PLANNED draft (the working layer the UI reads), exactly where `vagrant`
+        // lives. The committed model is untouched; the flag rides the working
+        // claim until the user gives a verdict (re-implement / drop). `diff`
+        // compares only statement/directives, so a stale claim awaiting a verdict
+        // is NOT itself a plan work item. Applied here so it rides the SAME write
+        // as the take-code findings below.
+        let mut staled = 0usize;
+        for s in &req.stale {
+            let r = planned
+                .nodes
+                .iter_mut()
+                .flat_map(|n| n.responsibilities.iter_mut())
+                .chain(planned.groups.iter_mut().flat_map(|g| g.responsibilities.iter_mut()))
+                .find(|r| r.id == s.responsibility_id);
+            match r {
+                Some(r) => {
+                    r.stale = Some(true);
+                    staled += 1;
+                }
+                None => {
+                    return Ok(err(format!(
+                        "Responsibility '{}' not found",
+                        s.responsibility_id
+                    )));
+                }
+            }
+        }
+
+        // Node-level stale — a whole subtree's backing code is gone. Flag the
+        // named node itself; the verdict (re-implement / drop) cascades to its
+        // descendants, so only the top of the gone subtree needs flagging.
+        let mut staled_nodes = 0usize;
+        for sn in &req.stale_nodes {
+            match planned.nodes.iter_mut().find(|n| n.id == sn.node_id) {
+                Some(n) => {
+                    n.stale = Some(true);
+                    staled_nodes += 1;
+                }
+                None => {
+                    return Ok(err(format!("Node '{}' not found", sn.node_id)));
+                }
+            }
+        }
+
+        if flagged > 0 || !minted_node_ids.is_empty() || staled > 0 || staled_nodes > 0 {
             enforce_readonly_directives(&mut planned, &prior_plan);
             if let Err(e) = scryer_core::write_planned_at(&model_ref, &planned) {
                 return Ok(err(e));
             }
         }
 
-        // TAKE MODEL — stale claims → the `stale` observation flag on the
-        // COMMITTED model claim: the model is right, the code regressed and must
-        // be brought back in line. The status (the prescription) stays put.
-        let mut staled = 0usize;
-        if !req.stale.is_empty() {
-            let mut model = match read_model(&model_ref) {
-                Ok(m) => m,
-                Err(e) => return Ok(e),
-            };
-            for s in &req.stale {
-                let found = model
-                    .nodes
-                    .iter_mut()
-                    .flat_map(|n| n.responsibilities.iter_mut())
-                    .find(|r| r.id == s.responsibility_id);
-                match found {
-                    Some(r) => {
-                        r.stale = Some(true);
-                        staled += 1;
-                    }
-                    None => {
-                        return Ok(err(format!(
-                            "Responsibility '{}' not found",
-                            s.responsibility_id
-                        )));
-                    }
-                }
-            }
-            if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
-                return Ok(err(e));
-            }
-            let _ = scryer_core::save_baseline_at(&model_ref, &model);
-
-            // Timeline: group stale findings by their host node — each reads as a
-            // "took model" drift event (the model is right, the code regressed).
+        // Timeline: each stale finding reads as a "took model" drift event on its
+        // host node (the model is right, the code regressed).
+        if staled > 0 {
             let now = scryer_core::drift::now_secs();
             let mut stale_by_node: HashMap<String, Vec<EventRow>> = HashMap::new();
             for s in &req.stale {
-                if let Some(node) = model
+                if let Some(node) = planned
                     .nodes
                     .iter()
                     .find(|n| n.responsibilities.iter().any(|r| r.id == s.responsibility_id))
@@ -609,7 +705,7 @@ impl ScryerServer {
                         stale_by_node
                             .entry(node.id.clone())
                             .or_default()
-                            .push(resp_event_row("!", &model, r));
+                            .push(resp_event_row("!", &planned, r));
                     }
                 }
             }
@@ -618,6 +714,21 @@ impl ScryerServer {
                     &model_ref,
                     HistoryEvent::new(now, EventKind::Drift, &node_id, "took model").with_rows(rows),
                 );
+            }
+        }
+
+        // Timeline: each stale NODE reads as a "took model" drift event on itself
+        // (its whole backing code is gone).
+        if staled_nodes > 0 {
+            let now = scryer_core::drift::now_secs();
+            for sn in &req.stale_nodes {
+                if let Some(node) = planned.nodes.iter().find(|n| n.id == sn.node_id) {
+                    record_event(
+                        &model_ref,
+                        HistoryEvent::new(now, EventKind::Drift, &node.id, "took model")
+                            .with_rows(vec![EventRow::new("!", node.name.clone())]),
+                    );
+                }
             }
         }
 
@@ -636,11 +747,22 @@ impl ScryerServer {
         }
 
         let mut msg = format!(
-            "Proposed {flagged} undescribed behaviour(s) into the plan as adoptions (routed to the nodes that own their code) and flagged {staled} stale responsibility(ies) under '{}'.",
+            "Proposed {flagged} undescribed behaviour(s) into the plan as adoptions (routed to the nodes that own their code{}) and flagged {staled} stale responsibility(ies) under '{}'.",
+            if minted_node_ids.is_empty() {
+                String::new()
+            } else {
+                format!(", minting {} vagrant node(s): {}", minted_node_ids.len(), minted_node_ids.join(", "))
+            },
             req.node_id
         );
         for s in &req.stale {
             msg.push_str(&format!("\n  stale {}: {}", s.responsibility_id, s.reason));
+        }
+        if staled_nodes > 0 {
+            msg.push_str(&format!("\nFlagged {staled_nodes} stale node subtree(s):"));
+            for sn in &req.stale_nodes {
+                msg.push_str(&format!("\n  stale node {}: {}", sn.node_id, sn.reason));
+            }
         }
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
@@ -915,39 +1037,45 @@ mod tests {
             .flag_drift(Parameters(FlagDriftRequest {
                 project: Some(project.clone()),
                 node_id: cid.clone(),
+                new_nodes: vec![],
                 undescribed: vec![UndescribedItem {
                     statement: "exposes an undocumented admin endpoint".into(),
                     source_file: "api/admin.rs".into(),
                     symbol: Some("admin_handler".into()),
                     line: Some(42),
                     end_line: Some(58),
+                    node_id: None,
+                    node_key: None,
                 }],
                 stale: vec![StaleResponsibility {
                     responsibility_id: rid.clone(),
                     reason: "endpoint was removed".into(),
                 }],
+                stale_nodes: vec![],
             }))
             .unwrap();
 
-        // TAKE MODEL — the committed model: the original claim is flagged stale,
-        // its status (the prescription) untouched; the undescribed behaviour is
-        // NOT silently adopted into the model.
+        // TAKE MODEL — the committed model is UNTOUCHED: stale (like vagrant)
+        // rides the working draft, never the source of truth.
         let m = read_back(&dir);
         let container = m.nodes.iter().find(|n| n.id == cid).unwrap();
         let orig = container.responsibilities.iter().find(|r| r.id == rid).unwrap();
-        assert_eq!(orig.stale, Some(true));
+        assert_ne!(orig.stale, Some(true), "committed claim is not flagged stale");
         assert!(
             container.responsibilities.iter().all(|r| r.vagrant != Some(true)),
             "undescribed behaviour must not land in the committed model"
         );
 
-        // TAKE CODE — the plan (draft): the undescribed behaviour is proposed as
-        // a vagrant adoption, source-anchored, awaiting the user's verdict.
+        // The plan (draft) carries BOTH findings: the original claim is flagged
+        // stale, and the undescribed behaviour is a vagrant adoption awaiting a
+        // verdict, source-anchored.
         let plan = scryer_core::read_planned_at(&scryer_core::ModelRef::ProjectLocal(
             dir.path().to_path_buf(),
         ))
         .unwrap();
         let pc = plan.nodes.iter().find(|n| n.id == cid).unwrap();
+        let staled = pc.responsibilities.iter().find(|r| r.id == rid).unwrap();
+        assert_eq!(staled.stale, Some(true), "stale flag rides the working draft");
         let vagrant = pc
             .responsibilities
             .iter()
@@ -992,14 +1120,18 @@ mod tests {
             .flag_drift(Parameters(FlagDriftRequest {
                 project: Some(project),
                 node_id: "c".into(), // reviewed at the container, as always
+                new_nodes: vec![],
                 undescribed: vec![UndescribedItem {
                     statement: "exposes an undocumented admin endpoint".into(),
                     source_file: "api/admin.rs".into(),
                     symbol: Some("admin_handler".into()),
                     line: Some(42),
                     end_line: Some(58),
+                    node_id: None,
+                    node_key: None,
                 }],
                 stale: vec![],
+                stale_nodes: vec![],
             }))
             .unwrap();
 
@@ -1014,6 +1146,115 @@ mod tests {
             cont.responsibilities.iter().all(|r| r.vagrant != Some(true)),
             "the finding must NOT land on the reviewed container"
         );
+    }
+
+    #[test]
+    fn flag_drift_mints_a_vagrant_chain_for_unmodeled_code() {
+        let (server, dir, _sys) = temp_project();
+        let project = dir.path().to_string_lossy().to_string();
+        let mref = scryer_core::ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        // Plan: a container `c` with NO component/symbol for the new file — the
+        // case that used to dump findings on the container.
+        let mut m = scryer_core::ScryModel::new();
+        let node = |v: serde_json::Value| serde_json::from_value::<scryer_core::Node>(v).unwrap();
+        m.nodes.push(node(serde_json::json!({ "id": "c", "kind": "container", "name": "API" })));
+        m.boundaries.insert(
+            "c".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "api/**/*" })).unwrap()],
+        );
+        scryer_core::write_planned_at(&mref, &m).unwrap();
+
+        // The agent mints the missing rungs: a component under the container, and
+        // a symbol under it, then hangs the finding on the symbol via nodeKey.
+        server
+            .flag_drift(Parameters(FlagDriftRequest {
+                project: Some(project),
+                node_id: "c".into(),
+                new_nodes: vec![
+                    NewNode {
+                        key: "k-comp".into(),
+                        kind: "component".into(),
+                        name: "Admin".into(),
+                        parent_id: Some("c".into()),
+                        parent_key: None,
+                        description: None,
+                        technology: None,
+                    },
+                    NewNode {
+                        key: "k-sym".into(),
+                        kind: "symbol".into(),
+                        name: "admin_handler".into(),
+                        parent_id: None,
+                        parent_key: Some("k-comp".into()),
+                        description: None,
+                        technology: None,
+                    },
+                ],
+                undescribed: vec![UndescribedItem {
+                    statement: "exposes an undocumented admin endpoint".into(),
+                    source_file: "api/admin.rs".into(),
+                    symbol: Some("admin_handler".into()),
+                    line: Some(42),
+                    end_line: Some(58),
+                    node_id: None,
+                    node_key: Some("k-sym".into()),
+                }],
+                stale: vec![],
+                stale_nodes: vec![],
+            }))
+            .unwrap();
+
+        let plan = scryer_core::read_planned_at(&mref).unwrap();
+        // Both minted nodes exist, are vagrant, and form a chain under `c`.
+        let comp = plan.nodes.iter().find(|n| n.name == "Admin").expect("component minted");
+        let sym = plan.nodes.iter().find(|n| n.name == "admin_handler").expect("symbol minted");
+        assert_eq!(comp.vagrant, Some(true), "minted component is vagrant");
+        assert_eq!(sym.vagrant, Some(true), "minted symbol is vagrant");
+        assert_eq!(comp.parent_id.as_deref(), Some("c"));
+        assert_eq!(sym.parent_id.as_deref(), Some(comp.id.as_str()));
+        // The finding lands on the minted symbol, vagrant + anchored, NOT on `c`.
+        assert!(sym.responsibilities.iter().any(|r| r.vagrant == Some(true)));
+        let rid = &sym.responsibilities[0].id;
+        assert_eq!(plan.source_map.get(rid).unwrap()[0].pattern, "api/admin.rs");
+        let cont = plan.nodes.iter().find(|n| n.id == "c").unwrap();
+        assert!(cont.responsibilities.is_empty(), "nothing parks on the container");
+    }
+
+    #[test]
+    fn flag_drift_flags_a_whole_stale_node() {
+        let (server, dir, _sys) = temp_project();
+        let project = dir.path().to_string_lossy().to_string();
+        let mref = scryer_core::ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        // Plan: a container with a component whose backing folder was deleted.
+        let mut m = scryer_core::ScryModel::new();
+        let node = |v: serde_json::Value| serde_json::from_value::<scryer_core::Node>(v).unwrap();
+        m.nodes.push(node(serde_json::json!({ "id": "c", "kind": "container", "name": "API" })));
+        m.nodes.push(node(serde_json::json!({
+            "id": "comp", "kind": "component", "name": "Admin", "parentId": "c"
+        })));
+        scryer_core::write_planned_at(&mref, &m).unwrap();
+
+        server
+            .flag_drift(Parameters(FlagDriftRequest {
+                project: Some(project),
+                node_id: "c".into(),
+                new_nodes: vec![],
+                undescribed: vec![],
+                stale: vec![],
+                stale_nodes: vec![StaleNode {
+                    node_id: "comp".into(),
+                    reason: "the admin/ folder was deleted".into(),
+                }],
+            }))
+            .unwrap();
+
+        let plan = scryer_core::read_planned_at(&mref).unwrap();
+        let comp = plan.nodes.iter().find(|n| n.id == "comp").unwrap();
+        assert_eq!(comp.stale, Some(true), "the node itself is flagged stale");
+        let cont = plan.nodes.iter().find(|n| n.id == "c").unwrap();
+        assert_ne!(cont.stale, Some(true), "the reviewed container is not flagged");
     }
 
     #[test]

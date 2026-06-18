@@ -302,8 +302,11 @@ pub fn drift_check_prompt(
         r#"You have the scryer MCP server (schema v0.3). The code inside the container "{node_name}" (id {node_id}) at {project_path} has changed. Decide whether the model still describes what the code DOES — this is SEMANTIC drift, not a byte/line check.
 
 ## What to flag — use ONLY the `flag_drift` tool
-- **Undescribed behaviour:** the code provides a capability that NO responsibility in this subtree describes *at any altitude*. Report it under `undescribed` (a terse business statement + the `sourceFile` + the enclosing `symbol`). Each becomes a vagrant responsibility for the user to adopt or reject. The `symbol` you cite ROUTES the adoption: it is attached to the node that owns that symbol/file, NOT to this container — so name the enclosing definition precisely and state the behaviour at *that node's* altitude (a symbol-level capability, not a container-level summary).
+- **Undescribed behaviour:** the code provides a capability that NO responsibility in this subtree describes *at any altitude*. Report it under `undescribed` (a terse business statement + the `sourceFile` + the enclosing `symbol`). Each becomes a vagrant adoption the user adopts (commit — the code exists) or rejects (mark the code for deletion). State the behaviour at the altitude of the node it lands on (a symbol-level capability on a symbol, never a container-level summary). HOME each finding on the right node:
+  - **An existing node already models this symbol/file** → cite the `symbol` precisely and it routes there automatically; or set `nodeId` to force a specific existing node.
+  - **The model has NO node for this code** (a new function, a new file, a whole new area) → MINT the missing rungs in `newNodes` and point the finding at the leaf with `nodeKey`. Give each new node a `key`, `kind` ("component"/"symbol"), and `name` (a symbol's name is the exact identifier); hang the shallowest new rung off an existing node with `parentId`, and chain deeper rungs with `parentKey` (list ancestors before descendants). You know how this code is organised — define the structure it belongs in. NEVER let a symbol-level finding bubble up to this container because no finer node exists: mint the node instead.
 - **Stale claims:** an existing responsibility whose code no longer discharges it — the implementation was removed, or now does something materially different. Report its `responsibilityId` under `stale` with a short factual `reason`.
+- **Stale nodes (code gone entirely):** when a deleted file or folder wipes out a whole modeled node — a symbol whose definition is gone, a component or container subtree whose directory no longer exists — flag the NODE itself under `staleNodes` (its `nodeId` + a short `reason`) instead of listing each of its claims. The verdict then applies to the whole subtree. This is the mirror of minting a `newNodes` chain for code the model has no node for: here the model has a node for code that's gone.
 
 ## What is NOT drift (do not flag)
 - Code that changed but still satisfies an existing responsibility. A refactor that preserves behaviour is not drift. The user does not care that lines moved or bytes changed — only that the model's description still matches reality.
@@ -325,7 +328,7 @@ Read them, and read enough surrounding code to judge behaviour. Compare against 
 {scope_json}
 ```
 
-Call `flag_drift` for "{node_id}" with everything you found. If the code and the model still agree, call it with empty arrays. Do not add components or symbols and do not edit existing responsibilities — only `flag_drift`.
+Call `flag_drift` for "{node_id}" with everything you found. If the code and the model still agree, call it with empty arrays. Do not call the `add_*` tools and do not edit existing responsibilities — express any new structure through `flag_drift`'s `newNodes`, nothing else.
 "#
     )
 }
@@ -492,6 +495,8 @@ mod tests {
             id: id.into(),
             kind,
             name: id.into(),
+            vagrant: None,
+            stale: None,
             parent_id: parent.map(|s| s.into()),
             external: None,
             technology: None,
@@ -559,158 +564,4 @@ mod tests {
         assert_eq!(a_prefix, b_prefix);
         assert!(a_prefix.len() > 3_000, "shared prefix should contain the rules");
     }
-}
-
-/// Prompt for DESIGNING the children of a node that has no code behind it —
-/// greenfield design, or proposing a not-yet-built addition to an existing
-/// model. There is no codebase to extract from, so the agent IS the source of
-/// truth: it must model the structure AND every relationship completely, and
-/// everything it adds is `proposed` (intent, not yet implemented in code).
-/// Strict: nothing floats, every link is labeled, the model validates clean.
-/// `node_kind` is one of "system", "container", "component".
-pub fn node_design_prompt(
-    project_path: &str,
-    node_id: &str,
-    node_name: &str,
-    node_kind: &str,
-    model_json: &str,
-) -> String {
-    let (child_kind_label, child_guidance) = match node_kind {
-        "system" => (
-            "containers (web apps, APIs, workers, data stores, queues)",
-            r#"   - Each container's `name` describes the role; `technology` says what it IS as software (the stack you intend to build it on).
-   - Write 2–6 pure business responsibilities per container.
-   - Link the containers to each other and to the persons/externals that interact with them, per the legal-link rule below.
-   - Group containers that deploy together using `set_groups`."#,
-        ),
-        "container" => (
-            "components (logical modules inside the container)",
-            r#"   - Components are cohesive logical modules, not one-per-file. Name each by the responsibility it owns.
-   - Write 2–5 pure business responsibilities per component.
-   - Link components to each other and to the references the container passes down (other containers/externals the container connects to), per the legal-link rule below.
-   - Optionally group components into modules (`set_groups`)."#,
-        ),
-        "component" => (
-            "symbols (the code definitions you intend to build — functions, classes, configs, data types)",
-            r#"   - A symbol is one addressable definition you plan to build: a function, class, hook, React component, struct, interface, type, or config object. ONE symbol = ONE definition. Set `"visual": true` on symbols that will render UI.
-   - Give each symbol 1–3 responsibilities (the behavior it will discharge) and/or `properties` (the data fields it will declare — one property per field). A pure data type carries only properties. Every symbol must carry one or the other: if a planned definition would carry neither — a trivial wrapper, a UI leaf — don't model it as its own symbol; fold it into the parent that uses it.
-   - Link symbols to their sibling symbols and to the references the component passes down, per the legal-link rule below."#,
-        ),
-        _ => ("child nodes", ""),
-    };
-
-    format!(
-        r#"You have access to the scryer MCP server (schema v0.3). DESIGN the internals of node "{node_name}" (id {node_id}) at {project_path}.
-
-There is NO code behind "{node_name}" — you are not extracting an existing system, you are designing one. Everything you add is **proposed** intent the user means to build later. Because nothing can be read from code, YOU are responsible for modeling the structure AND every relationship correctly and completely.
-
-## Current model state
-
-The model is provided here so you can avoid calling `read_model`:
-
-```json
-{model_json}
-```
-
-## Core principles
-
-- **You are the source of truth.** Do NOT call `read_codebase` or read source files — there is nothing to read. Design from the user's intent and the surrounding model.
-- **Everything you add is `proposed`.** Set responsibility status to `proposed` on every responsibility you write (this is unbuilt intent, not implemented code).
-- **Responsibilities are pure business statements.** Terse, verb-led, one clause each. No mechanism/technology words in the statement. A `description` is the node's identity in a few words, not a summary of its responsibilities. (`directives` are user-authored — never set them.)
-- **Mention other nodes as wikilinks, by id.** When a statement or description mentions another node, write it as `[[node-id]]` — the UI resolves it to the node's current name — or `[[node-id|shown text]]` to fit the sentence. The mention still requires a structural link; declare both.
-- **Responsibilities sit at the node's own altitude.** Each child discharges a subset of "{node_name}"'s responsibilities; a parent's responsibilities are fewer and broader than the union of its children's, never a per-child enumeration.
-
-## Model EVERY relationship — this is the point of designing here
-
-A node that connects to nothing is a design error. For every node you add:
-- Link it to the things it actually relates to, and give EVERY link a clear **label** ("reads from", "sends events to", "authenticates against"). No bare, unlabeled arrows.
-- **Legal links only.** A link connects two nodes that share a diagram: either two nodes with the SAME parent (true siblings), or a node and a *reference passed down to this level* — i.e. something the parent already links to, which therefore appears on this inner view. There are NO cross-level links: a child may only link outside its parent to a reference the parent surfaced. If you need a child to reach something the parent doesn't yet connect to, first add the parent→target link (one level up) so it becomes a reference here.
-- A person or external that related to "{node_name}" must be re-pointed to the specific child it actually uses, or it floats when you drill in.
-
-## Procedure
-
-1. Call `get_rules` to load the modeling rules.
-2. Call `read_model` with node "{node_id}" to see this node's context (its responsibilities and the references — persons/externals/siblings — its parent passes down).
-3. Decide the {child_kind_label}. Add only nodes whose responsibilities ladder up to "{node_name}".
-{child_guidance}
-4. Call `set_node` on "{node_id}" with the new subtree: the child nodes AND the labeled links among them and to the passed-down references. Every child gets at least one labeled relationship at this level.
-5. Set every responsibility's status to `proposed`.
-6. Call `validate_model` and fix EVERY warning — especially "appears disconnected", which means a node has no relationship at this level. Re-link (legally) and re-validate until it is completely clean. Do not stop with warnings outstanding.
-7. Call `read_model` with node "{node_id}" to confirm the subtree, then summarize the proposed design for the user.
-
-Stay within the "{node_name}" subtree. Do not modify nodes outside this scope.
-"#
-    )
-}
-
-/// Prompt for filling out the children of an existing node from the codebase.
-/// `node_kind` is one of "system", "container", "component".
-pub fn node_fill_prompt(
-    project_path: &str,
-    node_id: &str,
-    node_name: &str,
-    node_kind: &str,
-    model_json: &str,
-) -> String {
-    let (child_kind_label, child_guidance) = match node_kind {
-        "system" => (
-            "containers (web apps, APIs, workers, data stores, queues)",
-            r#"   - Each container's `name` describes the role; `technology` says what it IS as software.
-   - Write 2–6 pure business responsibilities per container. No mechanism vocabulary in the statement.
-   - Add container-level links between the containers and to externals.
-   - Group containers that deploy together using `set_groups`."#,
-        ),
-        "container" => (
-            "components (logical code modules inside the container)",
-            r#"   - Identify cohesive modules from the source directories. Components are logical groupings, not one-per-file.
-   - Write 2–5 pure business responsibilities per component.
-   - Add component-level links between components and to other containers / externals.
-   - Optionally group components into modules (`set_groups`); nested groups can mirror directory organization."#,
-        ),
-        "component" => (
-            "symbols (code definitions — functions, classes, configs, and data types)",
-            r#"   - The code level uses ONE kind: `symbol`. A symbol is exactly one addressable code definition — a function, method, handler, hook, React component, class, struct, interface, type, or config object. The `name` is the identifier as it appears in the source. ONE symbol node = ONE definition; do not collapse a whole multi-function file into a single symbol. Set `"visual": true` on React components, Vue components, Svelte components, or any symbol that renders UI — anything whose output is visual and would benefit from a rendered preview. Model the PUBLIC surface only: a class is ONE symbol carrying its public operations as responsibilities — do NOT add its private/internal helper methods (e.g. `_rpc`, `_get_uid`, `_execute`) as their own symbols. And a generated/mirror type file (a `*-types` file, a `*.d.ts`, or any file that just re-declares a definition that already lives in real source) is a derived artifact — do NOT create a parallel symbol for it; fold its fields into the source-of-truth symbol so each record is modeled exactly once. Every symbol must carry semantic content of its own — a business responsibility or declared properties. A definition with neither (a trivial wrapper, a UI leaf like a `Chevron`, a re-export, a bare entry point) does NOT earn a node: omit it and let the parent symbol's responsibility cover it. Never emit an empty symbol, and never fabricate filler to justify one.
-   - A symbol has two facets. Most have one; some have both. Populate whichever the definition actually has:
-     - **responsibilities** — the behavior it discharges (1–3, pure business statements). Map each to the SPECIFIC LINES that do its work via `update_source_map`'s `entries`: `pattern` = file, `line`/`endLine` = the exact line range, `symbol` = the enclosing definition's name (anchor + context frame). A line range must be a PROPER subset of the symbol — when one responsibility is the whole definition's work, omit `line`/`endLine` entirely (a symbol-only anchor means "this whole definition"). The tool enforces this: a range covering the whole symbol is stripped to the symbol anchor. Two responsibilities on the same line range are one responsibility — merge them.
-     - **properties** — if the definition DECLARES A DATA SHAPE (a struct/class/interface/type, OR a config object that defines a field schema — e.g. an ORM/CMS collection, a settings object), you MUST enumerate its fields as `properties`: one property per field, `label` = field name, `description` = what it holds, each with a status. For a framework registration object (a Payload CollectionConfig, an ORM model) descend INTO the `fields[]` array and emit one property per entry — those are the record's COLUMNS — NOT the sibling config wrapper keys (`slug`, `admin`, `hooks`, `access`, …), which are framework plumbing and must never appear as properties. Map the declaration block to the symbol's node id via `update_source_map`'s `schemas` array: `nodeId` = the symbol, `pattern` = file, `symbol` = the type/object name, `line`/`endLine` = the declaration range.
-   - CRITICAL: NEVER fold a data shape into a responsibility. A responsibility like "Defines the lead record schema with status, qualification, and booking fields" is WRONG — delete that prose and list `status`, `qualification`, `booking`, … as actual `properties`. If a definition both wires behavior and declares fields (the common case for a CMS collection: it registers admin UI + lifecycle hooks AND defines the record's columns), give it BOTH — behavioral responsibilities for the hooks/UI and a property per declared field. A pure data type (a plain interface/struct) carries only properties and no responsibilities.
-   - **Scoping**: determine parentage from the import/usage graph, not from file co-location. A code-level node belongs to whichever component actually owns/defines it. If sibling components import the same code, parent it to its owner and add links from the consumers — the cross-boundary dependency is valuable signal the user needs to see. Don't restructure to hide it.
-   - Add links between symbols and to other components / containers / externals as needed."#,
-        ),
-        _ => ("child nodes", ""),
-    };
-
-    format!(
-        r#"You have access to the scryer MCP server (schema v0.3). Fill out the internals of node "{node_name}" (id {node_id}) at {project_path}.
-
-## Current model state
-
-The model is provided here so you can avoid calling `read_model`:
-
-```json
-{model_json}
-```
-
-## Core principles
-
-- **The codebase is evidence, not source of truth.** Read code to elicit responsibilities; don't transcribe.
-- **Responsibilities are pure business statements.** No mechanism vocabulary, no technology names, no specific protocols. (`directives` carry required mechanisms, but they're user-authored — never set them.)
-- **Write terse, scannable statements — not prose.** One verb-led clause per responsibility; lead with the distinguishing verb + object and stop. No trailing "by/where/so that …" tails, no repeating the obvious domain on every line. A `description` is the node's identity in a few words, not a summary of the responsibilities beneath it.
-- **Mention other nodes as wikilinks, by id.** When a statement or description mentions another node, write it as `[[node-id]]` — the UI resolves it to the node's current name — or `[[node-id|shown text]]` to fit the sentence. The mention still requires a structural link; declare both.
-- **Responsibilities sit at the node's own altitude.** Each child discharges a subset of "{node_name}"'s responsibilities — but a node's own responsibilities name what IT is accountable for, never what a child does to discharge it. A parent's responsibilities are fewer and broader than the union of its children's, never a per-child enumeration; if a line reads as describing a single child, it's one altitude too low. Verify after writing: every child maps back to something its parent is accountable for, or it's vagrant.
-
-## Procedure
-
-1. Call `get_rules` to load the modeling rules.
-2. Call `read_model` with node "{node_id}" to see this node's full context (description, responsibilities, sources, existing links).
-3. Use `read_codebase` with path "{project_path}" if you need to inspect source files. Open relevant files to identify {child_kind_label}.4. Call `set_node` on "{node_id}" with the new subtree (nodes + links). Add only nodes whose responsibilities ladder up to "{node_name}". Relationships must connect nodes at THIS level: link the new children to each other and to the reference nodes that surround "{node_name}" (the persons/externals/siblings that link to it). A person or external that used "{node_name}" should now link to the specific child it actually uses — otherwise it appears disconnected when you drill in. Every child needs at least one relationship at this level.
-{child_guidance}
-5. Set responsibility status to `implemented` on responsibilities derived from existing code; `proposed` on speculative ones.
-6. Call `update_source_map` to write the code-side mapping. `boundaries`: node-level directory globs. `entries`: for each responsibility, the **specific lines** that do its work — `pattern` = file, `line`/`endLine` = the exact range of the statements implementing it, `symbol` = the enclosing definition's name (anchor + context). A line range must be a PROPER subset of the symbol; when one responsibility is the whole definition's work, omit `line`/`endLine` (a symbol-only anchor means the whole definition — the tool strips whole-symbol ranges and tells you). A responsibility may map to several ranges, possibly across files. `schemas`: for each symbol that declares a data shape (carries `properties`), its declaration block — `nodeId` = the symbol, one location with `pattern` = file, `symbol` = the type/object name, `line`/`endLine` = the declaration range.
-7. Call `validate_model` and fix every warning — especially "appears disconnected", which means a node (or a reference node) has no relationship at this level. Re-link and re-validate until clean.
-8. Call `read_model` with node "{node_id}" to confirm the subtree you built, then summarize it for the user.
-
-Stay within the "{node_name}" subtree. Do not modify nodes outside this scope.
-"#
-    )
 }

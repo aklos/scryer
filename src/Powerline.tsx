@@ -14,10 +14,10 @@
  */
 
 import type { CSSProperties } from "react";
-import { History, Loader2, Sparkles, X } from "lucide-react";
+import { Flag, History, Loader2, Sparkles, X } from "lucide-react";
 import type { AgentSession } from "./hooks/useAgentSession";
 import type { ModelBuild } from "./hooks/useModelBuild";
-import type { ModelHealthReport } from "./health";
+import { darkBoundaries, type ModelHealthReport } from "./health";
 import type { ReviewIndex } from "./SpecialPages";
 import { AGENT_LABEL, type ResolvedLaunch } from "./SettingsPanel";
 import type { ScryModel } from "./viewmodel";
@@ -55,6 +55,8 @@ export function Powerline({
     totals && totals.anchorable > 0
       ? Math.round((totals.anchored / totals.anchorable) * 100)
       : null;
+  // The other failure mode: code under a boundary that no claim reads into.
+  const dark = darkBoundaries(health).total;
 
   const busy = agent.running || build.active;
   const runLabel = build.building
@@ -92,18 +94,38 @@ export function Powerline({
         )}
       </button>
 
-      {/* Coverage — anchored / anchorable claims. */}
+      {/* Coverage — anchored / anchorable claims (the model→code direction). */}
       <div className="seg" style={sb("color-mix(in srgb, var(--text) 4%, var(--surface-canvas))")}>
         {coverage != null ? (
           <>
-            <span className="text-[var(--text-secondary)]">coverage</span>
             <span className="pl-strong font-medium">{coverage}%</span>
-            <span className="text-[var(--text-tertiary)]">claims mapped</span>
+            <span className="text-[var(--text-secondary)]">claims mapped</span>
           </>
         ) : (
-          <span className="text-[var(--text-secondary)]">coverage —</span>
+          <span className="text-[var(--text-secondary)]">claims mapped —</span>
         )}
       </div>
+
+      {/* Dark code — files under a node's boundary that no claim reads into (the
+          code→model direction). Click to list them on the special page. */}
+      <button
+        type="button"
+        onClick={() => onOpenSpecial("dark")}
+        className="seg cursor-pointer"
+        style={sb("color-mix(in srgb, var(--text) 4%, var(--surface-canvas))")}
+        title="Dark code — files under a node's boundary that no claim reads into. Click to list them."
+      >
+        {health == null ? (
+          <span className="text-[var(--text-secondary)]">dark code —</span>
+        ) : dark > 0 ? (
+          <>
+            <span className="pl-strong font-medium">{dark}</span>
+            <span className="text-[var(--text-secondary)]">dark file{dark === 1 ? "" : "s"}</span>
+          </>
+        ) : (
+          <span className="text-[var(--text-secondary)]">no dark code</span>
+        )}
+      </button>
 
       {/* Model size + schema. */}
       <div className="seg" style={sb("color-mix(in srgb, var(--text) 2.5%, var(--surface-canvas))")}>
@@ -154,8 +176,9 @@ export function Powerline({
               style={sb("color-mix(in srgb, var(--color-orange-500) 18%, var(--surface-canvas))")}
               title="Open Needs review — flags awaiting a human verdict (drift, unmapped claims, agent edits, empty symbols …)"
             >
+              <Flag className="h-3 w-3 shrink-0 text-orange-600 dark:text-orange-400" />
               <span className="font-medium text-orange-600 dark:text-orange-400">
-                {reviewIndex.total} flag{reviewIndex.total === 1 ? "" : "s"}
+                {reviewIndex.total} to review
               </span>
             </button>
           )}

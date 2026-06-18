@@ -96,6 +96,18 @@ export interface Node {
   technology?: string;
   /** 1–2 sentence prose about what this node is. */
   description?: string;
+  /** Drift adoption marker: this node was MINTED by a drift check to home
+   *  code-discovered behaviour no existing node described — it lives in the PLAN
+   *  only, awaiting a verdict. Like a vagrant responsibility ("code already does
+   *  this, adopt?"), NOT planned intent ("implement this!"): it reads as a drift
+   *  mark (Q), not a plan add (A). Mirrors Rust `Node.vagrant`. */
+  vagrant?: boolean;
+  /** Drift regression marker (mirror of `vagrant`): this whole node's backing
+   *  code is GONE but the model still asserts it. Set on the PLAN node by a drift
+   *  check when a deleted file/folder leaves the node codeless; reads as a drift
+   *  mark (X). The user re-implements the subtree or drops it. Mirrors Rust
+   *  `Node.stale`. */
+  stale?: boolean;
   responsibilities?: Responsibility[];
   /** Field declarations, when this symbol defines a data shape. */
   properties?: SchemaProperty[];

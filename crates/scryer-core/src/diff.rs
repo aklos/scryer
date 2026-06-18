@@ -469,6 +469,8 @@ mod tests {
             id: id.to_string(),
             kind: Kind::Component,
             name: name.to_string(),
+            vagrant: None,
+            stale: None,
             parent_id: parent.map(|s| s.to_string()),
             external: None,
             technology: None,

@@ -36,13 +36,22 @@ import { assignAllHandles } from "./edgeRouting";
 import { DiagramCard, type CardData, type RFCard } from "./nodes/DiagramCard";
 import { CenterHandle } from "./nodes/NodeHandles";
 import { RelationshipEdge, type EdgeData } from "./edges/RelationshipEdge";
-import { buildDiagramScene, type DiagramScene } from "./diagramLayout";
+import { buildDiagramScene, type DiagramScene, type DiagramNode } from "./diagramLayout";
 import type { ModelHealthReport } from "./health";
 
 type DotData = CardData;
 type RFDot = RFNode<DotData, "dot">;
 
-/** A code-tier dot (symbol): a change-mark-colored disc with a label beside it.
+/** The C4-style class word shown under each dot — the three things a symbol can
+ *  be (mirrors `kindIcon`/`typeTag`). */
+const SYMBOL_CLASS_LABEL: Record<DiagramNode["symbolClass"], string> = {
+  code: "Code",
+  model: "Model",
+  visual: "Visual",
+};
+
+/** A code-tier dot (symbol): a change-mark-colored disc with its name and class
+ *  centered beneath it — the constellation cousin of the arch tiers' C4 cards.
  *  Unchanged symbols read ghost-grey; a plan/drift mark tints the disc via
  *  `bg-current` inheriting the mark's hue. */
 function DotNode({ data }: NodeProps<RFDot>) {
@@ -63,7 +72,7 @@ function DotNode({ data }: NodeProps<RFDot>) {
   // Subgraph highlight: faded when a selection elsewhere doesn't touch this dot.
   const dimClass = data.dimmed ? "opacity-20" : ghost ? "opacity-70" : "";
   return (
-    <div className={`flex items-center gap-1.5 transition-opacity ${dimClass}`}>
+    <div className={`flex flex-col items-center transition-opacity ${dimClass}`}>
       <span
         style={{ width: dia, height: dia }}
         className={`relative shrink-0 rounded-full ${discClass} ${
@@ -73,17 +82,22 @@ function DotNode({ data }: NodeProps<RFDot>) {
       >
         <CenterHandle />
       </span>
-      <span
-        className={`max-w-[160px] truncate text-xs ${
-          ghost
-            ? "italic text-[var(--text-muted)]"
-            : selected
-              ? "font-medium text-[var(--text)]"
-              : "text-[var(--text-secondary)]"
-        }`}
-      >
-        {node.name || "·"}
-      </span>
+      <div className="mt-1.5 flex flex-col items-center leading-tight">
+        <span
+          className={`max-w-[130px] truncate text-center text-xs ${
+            ghost
+              ? "italic text-[var(--text-muted)]"
+              : selected
+                ? "font-medium text-[var(--text)]"
+                : "text-[var(--text-secondary)]"
+          }`}
+        >
+          {node.name || "·"}
+        </span>
+        <span className="text-[10px] tracking-wider text-[var(--text-ghost)]">
+          {SYMBOL_CLASS_LABEL[node.symbolClass]}
+        </span>
+      </div>
     </div>
   );
 }
@@ -241,10 +255,20 @@ function DiagramInner({
     const ghostIds = new Set(
       scene.nodes.filter((n) => n.reference).map((n) => n.id),
     );
+    // Count edges per unordered node pair on the (straight) code tier, so a
+    // reverse edge between the same two dots can be split into parallel lanes.
+    const pairCount = new Map<string, number>();
+    if (scene.mode === "code") {
+      for (const e of scene.edges) {
+        const k = e.source < e.target ? `${e.source}\0${e.target}` : `${e.target}\0${e.source}`;
+        pairCount.set(k, (pairCount.get(k) ?? 0) + 1);
+      }
+    }
     return scene.edges.map((e) => {
       const h = handles?.get(e.id);
       const connected = highlight.active && (e.source === selectedId || e.target === selectedId);
       const ghostEdge = ghostIds.has(e.source) || ghostIds.has(e.target);
+      const pairKey = e.source < e.target ? `${e.source}\0${e.target}` : `${e.target}\0${e.source}`;
       return {
         id: e.id,
         source: e.source,
@@ -261,6 +285,7 @@ function DiagramInner({
           targetR: radius?.get(e.target),
           highlighted: connected,
           dimmed: highlight.active && !connected,
+          parallel: (pairCount.get(pairKey) ?? 0) > 1,
         },
       };
     });

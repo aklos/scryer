@@ -136,6 +136,8 @@ fn blank_node(id: String, kind: Kind, name: String, parent_id: String) -> Node {
         id,
         kind,
         name,
+        vagrant: None,
+        stale: None,
         parent_id: Some(parent_id),
         external: None,
         technology: None,

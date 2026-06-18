@@ -79,8 +79,12 @@ ${cssImports}
 import * as Mod from ${JSON.stringify("/" + file)};
 
 const meta = { file: ${JSON.stringify(file)}, exportName: ${JSON.stringify(exportName)} };
+// Whether this render has real data behind it: an agent-written per-node
+// fixture, or any type-keyed shared fixture matched by the component's props.
+// Drives the "Generate preview data" affordance even when the render is "ok".
+const __hasFixture = ${fixture ? "true" : comp?.fixtureRefs?.length ? "true" : "false"};
 function report(status, error) {
-  try { parent.postMessage({ type: "scryer-render", ...meta, status, error: error ?? null }, "*"); } catch {}
+  try { parent.postMessage({ type: "scryer-render", ...meta, status, error: error ?? null, hasFixture: __hasFixture }, "*"); } catch {}
 }
 
 // Portal components render into document.body instead of #root — measure both.
@@ -155,14 +159,17 @@ if (!Component) {
         if (url.pathname === "/__preview") {
           const file = url.searchParams.get("file") ?? "";
           const exportName = url.searchParams.get("export") ?? "default";
-          const dark = url.searchParams.get("theme") === "dark";
-          const bg = sanitizeColor(url.searchParams.get("bg"));
-          const fg = sanitizeColor(url.searchParams.get("fg"));
+          // Two independent themes: `theme` is the previewed COMPONENT's
+          // theme (a best-effort .dark class on the iframe — see previewHtml);
+          // `canvas` is scryer's chrome theme, which drives the checkerboard
+          // backdrop only. They are decoupled on purpose.
+          const componentDark = url.searchParams.get("theme") === "dark";
+          const canvasDark = url.searchParams.get("canvas") === "dark";
           const entryParams = new URLSearchParams({ file, export: exportName });
           const fixture = url.searchParams.get("fixture");
           if (fixture) entryParams.set("fixture", fixture);
           const entry = `${ENTRY_PREFIX}?${entryParams}`;
-          const html = await server.transformIndexHtml(req.url, previewHtml(entry, dark, bg, fg));
+          const html = await server.transformIndexHtml(req.url, previewHtml(entry, componentDark, canvasDark));
           res.setHeader("Content-Type", "text/html");
           res.end(html);
           return;
@@ -221,28 +228,126 @@ function detectGlobalCss(projectRoot) {
   return [];
 }
 
-/** Accept only simple hex/rgb(a) color literals from the URL — these land
- *  inside an inline <style>, so reject anything that could break out of it. */
-function sanitizeColor(value) {
-  if (!value) return null;
-  return /^#[0-9a-fA-F]{3,8}$|^rgba?\([\d.,\s%/]+\)$/.test(value) ? value : null;
-}
-
-function previewHtml(entrySrc, dark = false, bg = null, fg = null) {
-  // Fall back to the caller's resolved theme colors so the first paint matches
-  // scryer's chrome; only then to neutral light/dark defaults. The project's
-  // own --surface-canvas (loaded async via the CSS module) still wins once ready.
-  const bgFallback = bg ?? (dark ? "#0a0a0a" : "#ffffff");
-  const fgFallback = fg ?? (dark ? "#f5f5f5" : "#111111");
+// `componentDark` themes the previewed component (best-effort: a .dark class +
+// color-scheme on the iframe — works for class-based theming like Tailwind, a
+// no-op for prefers-color-scheme / provider-based theming we can't reach from an
+// isolated iframe). `canvasDark` is scryer's chrome theme and drives ONLY the
+// checkerboard backdrop, so the two stay decoupled.
+function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
+  const fgFallback = componentDark ? "#f5f5f5" : "#111111";
+  // The component mounts into #root (entry contract unchanged); #root is nested
+  // in a transform layer (#stage) inside a clipped viewport (#canvas). The
+  // viewport paints a low-contrast transparency checkerboard so the component
+  // reads as clearly separate from it. A small harness centers the component at
+  // 100%; when (and only when) it is larger than the pane you can zoom OUT
+  // (never above 100%, anchored to the centre so it stays centred) and pan.
+  // Variation thumbnails set pointer-events:none on the iframe element, so they
+  // get the static centred view only.
+  // Two near-equal greys per theme — subtle texture, not a loud checker.
+  const checkA = canvasDark ? "#202020" : "#dcdcdc";
+  const checkB = canvasDark ? "#181818" : "#f1f1f1";
   return `<!doctype html>
-<html${dark ? ` class="dark"` : ""}>
+<html${componentDark ? ` class="dark"` : ""}>
   <head>
     <meta charset="utf-8" />
-    <style>html, body { margin: 0; } body { padding: 12px; background: var(--surface-canvas, ${bgFallback}); color: var(--text, ${fgFallback}); }</style>
+    <style>
+      html, body { margin: 0; height: 100%; }
+      html { color-scheme: ${componentDark ? "dark" : "light"}; }
+      body { color: var(--text, ${fgFallback}); overflow: hidden; }
+      #canvas {
+        position: fixed; inset: 0; overflow: hidden;
+        background-color: ${checkB};
+        background-image: repeating-conic-gradient(${checkA} 0% 25%, ${checkB} 0% 50%);
+        background-size: 16px 16px;
+        cursor: default;
+      }
+      #canvas.pannable { cursor: grab; }
+      #canvas.grabbing { cursor: grabbing; }
+      #stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; will-change: transform; }
+      #root { display: inline-block; }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="canvas"><div id="stage"><div id="root"></div></div></div>
     <script type="module" src="${entrySrc}"></script>
+    <script>
+      (function () {
+        var canvas = document.getElementById("canvas");
+        var stage = document.getElementById("stage");
+        var root = document.getElementById("root");
+        var FIT_PAD = 24;
+        var scale = 1, tx = 0, ty = 0, touched = false;
+
+        function dims() {
+          return { cw: canvas.clientWidth, ch: canvas.clientHeight, rw: root.scrollWidth, rh: root.scrollHeight };
+        }
+        // The component is larger than the pane at its natural size — the sole
+        // case where zooming out (and panning) is meaningful.
+        function overflowsNatural() {
+          var d = dims();
+          return d.rw > d.cw || d.rh > d.ch;
+        }
+        // Smallest scale we allow: just enough to fit with a margin (never up).
+        function fitScale() {
+          var d = dims();
+          if (!d.rw || !d.rh || !d.cw || !d.ch) return 1;
+          return Math.min(1, (d.cw - FIT_PAD * 2) / d.rw, (d.ch - FIT_PAD * 2) / d.rh);
+        }
+        // Pannable only while the scaled component currently overflows the pane.
+        function overflows() {
+          var d = dims();
+          return d.rw * scale > d.cw || d.rh * scale > d.ch;
+        }
+        function center() {
+          var d = dims();
+          tx = (d.cw - d.rw * scale) / 2;
+          ty = (d.ch - d.rh * scale) / 2;
+        }
+        function apply() {
+          stage.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + scale + ")";
+          canvas.classList.toggle("pannable", overflows());
+        }
+
+        // Initial / on content resize (until the user takes over): 100%,
+        // centered. A larger-than-pane component thus starts cropped-but-centred
+        // and can be zoomed out to reveal the whole of it.
+        function reset() { scale = 1; center(); apply(); }
+        var ro = new ResizeObserver(function () { if (!touched) reset(); });
+        ro.observe(root);
+        window.addEventListener("resize", function () { if (!touched) reset(); });
+
+        // Wheel: zoom OUT only — never above 100%, only when the component is
+        // larger than the pane, and anchored to the pane centre so it stays
+        // centred (not toward the cursor).
+        canvas.addEventListener("wheel", function (e) {
+          if (!overflowsNatural()) return; // fits — let the page scroll
+          e.preventDefault();
+          var min = fitScale();
+          var factor = Math.exp(-e.deltaY * 0.0015);
+          var next = Math.min(1, Math.max(min, scale * factor));
+          if (next === scale) return;
+          touched = true;
+          var d = dims(), ax = d.cw / 2, ay = d.ch / 2;
+          tx = ax - (ax - tx) * (next / scale);
+          ty = ay - (ay - ty) * (next / scale);
+          scale = next;
+          apply();
+        }, { passive: false });
+
+        // Drag: pan — only while the scaled content overflows the pane.
+        var dragging = false, sx = 0, sy = 0;
+        canvas.addEventListener("mousedown", function (e) {
+          if (!overflows()) return;
+          dragging = true; touched = true; sx = e.clientX - tx; sy = e.clientY - ty;
+          canvas.classList.add("grabbing");
+        });
+        window.addEventListener("mousemove", function (e) {
+          if (!dragging) return;
+          tx = e.clientX - sx; ty = e.clientY - sy; apply();
+        });
+        window.addEventListener("mouseup", function () { dragging = false; canvas.classList.remove("grabbing"); });
+      })();
+    </script>
   </body>
 </html>`;
 }

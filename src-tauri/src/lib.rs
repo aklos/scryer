@@ -802,101 +802,9 @@ async fn start_initial_model_session(
         .await
 }
 
-/// Does this node have real code behind it? True when it owns a boundary glob
-/// or any of its responsibilities are anchored to source — i.e. it was built
-/// from / maps to a codebase. False for a node the user just designed (no
-/// boundary, no source anchors), which routes to strict design mode.
-fn node_has_code(model: &scryer_core::ScryModel, node_id: &str) -> bool {
-    if model.boundaries.get(node_id).is_some_and(|s| !s.is_empty()) {
-        return true;
-    }
-    if let Some(node) = model.nodes.iter().find(|n| n.id == node_id) {
-        if node
-            .responsibilities
-            .iter()
-            .any(|r| model.source_map.contains_key(&r.id))
-        {
-            return true;
-        }
-    }
-    model.source_map.contains_key(node_id)
-}
-
-#[tauri::command]
-async fn start_node_fill_session(
-    cwd: String,
-    model_ref: String,
-    node_id: String,
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AcpState>,
-) -> Result<String, String> {
-    let mcp_binary = find_scryer_mcp()
-        .ok_or("scryer-mcp binary not found")?;
-
-    let settings = scryer_core::read_subagent_settings();
-    let launch = scryer_acp::detect_available_agent_pref(&settings.agent)
-        .ok_or("No AI agent found. Install Claude Code or Codex first.")?;
-
-    let parsed_ref = scryer_core::ModelRef::parse(&model_ref)?;
-    let model = scryer_core::read_model_at(&parsed_ref)?;
-    let node = model
-        .nodes
-        .iter()
-        .find(|n| n.id == node_id)
-        .ok_or_else(|| format!("Node '{}' not found in model", node_id))?;
-    let node_name = node.name.clone();
-    let node_kind = serde_json::to_value(node.kind)
-        .ok()
-        .and_then(|v| v.as_str().map(String::from))
-        .unwrap_or_default();
-
-    let model_json = scryer_acp::prompt::serialize_model_for_prompt(&model);
-    // Auto-select by code presence: a node backed by real code (a boundary glob,
-    // or source-anchored responsibilities) is EXTRACTED from that code; a node
-    // with no code behind it — greenfield design, or a not-yet-built addition —
-    // is DESIGNED strictly: the agent models every relationship itself and marks
-    // everything `proposed`, since there is nothing to extract.
-    let prompt = if node_has_code(&model, &node_id) {
-        scryer_acp::prompt::node_fill_prompt(&cwd, &node_id, &node_name, &node_kind, &model_json)
-    } else {
-        scryer_acp::prompt::node_design_prompt(&cwd, &node_id, &node_name, &node_kind, &model_json)
-    };
-    let (model_name, effort) = config_for_launch(&settings, &launch);
-
-    let runtime = {
-        let mut rt = state.0.lock().unwrap();
-        if rt.is_none() {
-            *rt = Some(scryer_acp::AcpRuntime::new());
-        }
-        rt.clone().unwrap()
-    };
-
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
-
-    let handle = app.clone();
-    tokio::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            let _ = handle.emit("agent-event", &event);
-        }
-    });
-
-    let (agent_binary, mode) = match launch {
-        scryer_acp::AgentLaunch::Cli { binary, kind } => {
-            (binary, scryer_acp::runtime::LaunchMode::Cli { kind })
-        }
-        scryer_acp::AgentLaunch::Acp { binary } => {
-            (binary, scryer_acp::runtime::LaunchMode::Acp)
-        }
-    };
-
-    runtime
-        .start_session(agent_binary, mode, cwd, model_name, effort, mcp_binary, prompt, vec!["mcp__scryer__*".into()], event_tx)
-        .await
-}
-
 /// Fast semantic pass: enrich an already-structured subtree (the deterministic
-/// extractor built the structure; this adds the meaning). Mirrors
-/// `start_node_fill_session` but uses the enrich-only prompt.
+/// extractor built the structure; this adds the meaning), using the enrich-only
+/// prompt.
 #[tauri::command]
 async fn start_enrich_session(
     cwd: String,
@@ -2255,10 +2163,482 @@ fn reconcile_drift_node(cwd: String, node_id: String) -> Result<(), String> {
     scryer_core::write_sync_state(&model_ref, &sync)
 }
 
+/// The minted vagrant chain at and above `host_id`: the host plus each ancestor
+/// that is itself vagrant, ordered root→leaf. Walks up while nodes are vagrant,
+/// stopping at the first committed ancestor. Empty when the host is already a
+/// committed node (the finding was routed onto an existing node, not a fresh
+/// mint).
+fn vagrant_chain(planned: &scryer_core::ScryModel, host_id: &str) -> Vec<String> {
+    let mut chain = Vec::new();
+    let mut cur = Some(host_id.to_string());
+    while let Some(id) = cur {
+        match planned.nodes.iter().find(|n| n.id == id) {
+            Some(n) if n.vagrant == Some(true) => {
+                chain.push(n.id.clone());
+                cur = n.parent_id.clone();
+            }
+            _ => break,
+        }
+    }
+    chain.reverse();
+    chain
+}
+
+/// What a vagrant fold captured — the host node, the claim's text and source
+/// anchor for the timeline, and the minted chain it committed (for reject's plan
+/// cleanup).
+struct FoldedVagrant {
+    host_id: String,
+    statement: String,
+    source: Option<scryer_core::SourceLocation>,
+    chain: Vec<String>,
+}
+
+/// Clear the vagrant flags on a code-discovered responsibility and its minted
+/// host chain, then FOLD the chain (root→leaf) and the responsibility into the
+/// committed model. Shared by adopt (which keeps it) and reject (which then
+/// schedules its deletion). The chain must commit before the responsibility, per
+/// `commit_element`'s host-must-exist rule — a freshly minted symbol/component
+/// has no committed home until its rungs are folded first.
+fn fold_vagrant(
+    model_ref: &scryer_core::ModelRef,
+    resp_id: &str,
+) -> Result<FoldedVagrant, String> {
+    use scryer_core::diff::ElementKind;
+
+    // Clear the vagrant flag in the plan and capture host + statement, so the
+    // copy `commit_element` folds is a clean, adopted claim (it folds verbatim).
+    let mut planned = scryer_core::read_planned_at(model_ref)?;
+    let mut host_id = None;
+    let mut statement = None;
+    for n in &mut planned.nodes {
+        if let Some(r) = n.responsibilities.iter_mut().find(|r| r.id == resp_id) {
+            r.vagrant = None;
+            host_id = Some(n.id.clone());
+            statement = Some(r.statement.clone());
+            break;
+        }
+    }
+    if host_id.is_none() {
+        for g in &mut planned.groups {
+            if let Some(r) = g.responsibilities.iter_mut().find(|r| r.id == resp_id) {
+                r.vagrant = None;
+                host_id = Some(g.id.clone());
+                statement = Some(r.statement.clone());
+                break;
+            }
+        }
+    }
+    let (Some(host_id), Some(statement)) = (host_id, statement) else {
+        return Err(format!("Responsibility '{resp_id}' not found in the plan"));
+    };
+    let source = planned
+        .source_map
+        .get(resp_id)
+        .and_then(|locs| locs.first())
+        .cloned();
+    // The minted rungs above the responsibility (a new component, the symbol for
+    // a new function, …) — clear their vagrant flag so they fold as clean nodes.
+    let chain = vagrant_chain(&planned, &host_id);
+    for id in &chain {
+        if let Some(n) = planned.nodes.iter_mut().find(|n| &n.id == id) {
+            n.vagrant = None;
+        }
+    }
+    scryer_core::write_planned_at(model_ref, &planned)?;
+
+    // Fold the chain root→leaf (each parent committed before its child), then the
+    // responsibility onto its now-committed host.
+    for id in &chain {
+        scryer_core::commit_element(model_ref, ElementKind::Node, None, id)?;
+    }
+    scryer_core::commit_element(model_ref, ElementKind::Responsibility, None, resp_id)?;
+
+    Ok(FoldedVagrant { host_id, statement, source, chain })
+}
+
+/// Adopt a code-discovered (vagrant) responsibility: clear its `vagrant` flag in
+/// the plan and FOLD it — together with any minted host chain (a new component,
+/// the symbol for a new function) — straight into the committed model. Ordinary
+/// plan edits are committed only by the agent (`mark_implemented`), but a vagrant
+/// claim is source-anchored to code that ALREADY EXISTS — adopting it IS the
+/// commit, there is nothing left to implement. This is the one sanctioned case of
+/// the canvas writing the committed model, because it is itself a
+/// reconcile-to-existing-code (the same direction as `reconcile_drift`), not the
+/// human authoring intent ahead of the code. The file watcher then refreshes both
+/// layers in the UI.
+#[tauri::command]
+fn adopt_responsibility(cwd: String, resp_id: String) -> Result<(), String> {
+    let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    let folded = fold_vagrant(&model_ref, &resp_id)?;
+
+    // Keep the legacy baseline in step and log the fold as a "took code" event,
+    // mirroring `mark_implemented`'s Impl event so it lands on the History tab.
+    if let Ok(after) = scryer_core::read_model_at(&model_ref) {
+        let _ = scryer_core::save_baseline_at(&model_ref, &after);
+    }
+    let mut row = scryer_core::history::EventRow::new("+", folded.statement);
+    if let Some(loc) = folded.source {
+        row = row.with_source(loc);
+    }
+    let _ = scryer_core::history::append_event(
+        &model_ref,
+        &scryer_core::history::HistoryEvent::new(
+            scryer_core::drift::now_secs(),
+            scryer_core::history::EventKind::Impl,
+            &folded.host_id,
+            "took code",
+        )
+        .with_rows(vec![row]),
+    );
+    Ok(())
+}
+
+/// Reject a code-discovered (vagrant) responsibility: the behaviour should not be
+/// in the model. Rather than silently dropping it from the plan — which leaves the
+/// code untouched for the next drift check to re-propose — we FOLD it (and any
+/// minted host chain) into the committed model, then remove it from the plan.
+/// That turns it into an ordinary deletion work item (committed has it, the plan
+/// does not → `toDelete`), anchored to the code the agent should remove. Folding
+/// it also stops drift re-surfacing it: the committed model now describes the
+/// behaviour, so it is no longer "undescribed".
+#[tauri::command]
+fn reject_responsibility(cwd: String, resp_id: String) -> Result<(), String> {
+    let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    let folded = fold_vagrant(&model_ref, &resp_id)?;
+
+    // Schedule the deletion: drop the responsibility and the minted chain from the
+    // plan, so the committed-vs-plan diff reads as a deletion to carry out.
+    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+    for n in &mut planned.nodes {
+        n.responsibilities.retain(|r| r.id != resp_id);
+    }
+    for g in &mut planned.groups {
+        g.responsibilities.retain(|r| r.id != resp_id);
+    }
+    planned.source_map.remove(&resp_id);
+    for id in &folded.chain {
+        planned.nodes.retain(|n| &n.id != id);
+        planned.source_map.remove(id);
+    }
+    scryer_core::write_planned_at(&model_ref, &planned)?;
+
+    if let Ok(after) = scryer_core::read_model_at(&model_ref) {
+        let _ = scryer_core::save_baseline_at(&model_ref, &after);
+    }
+    let mut row = scryer_core::history::EventRow::new("−", folded.statement);
+    if let Some(loc) = folded.source {
+        row = row.with_source(loc);
+    }
+    let _ = scryer_core::history::append_event(
+        &model_ref,
+        &scryer_core::history::HistoryEvent::new(
+            scryer_core::drift::now_secs(),
+            scryer_core::history::EventKind::Impl,
+            &folded.host_id,
+            "rejected — marked for deletion",
+        )
+        .with_rows(vec![row]),
+    );
+    Ok(())
+}
+
+// ---- Stale (take-model) verdicts: the mirror of adopt/reject. ----
+//
+// A stale claim/node means the model still asserts something the code stopped
+// doing. The flag rides the PLANNED draft (where the UI reads it). Two verdicts,
+// mirroring the take-code pair:
+//   • DROP        — the code is right (removed on purpose) → delete the claim /
+//                   subtree from BOTH layers. Mirror of adopt: the model gives
+//                   way to reality.
+//   • RE-IMPLEMENT — the model is right (code regressed) → remove from committed
+//                   while the plan keeps it, so the diff reads it as an `Added`
+//                   to-do the agent rebuilds (folding back via mark_implemented).
+//                   Mirror of reject's toDelete, but in the build direction.
+
+/// Remove a responsibility wherever it lives (a node or a group), returning
+/// (host_id, statement) and GC'ing its source anchor. None if absent.
+fn take_responsibility(
+    model: &mut scryer_core::ScryModel,
+    resp_id: &str,
+) -> Option<(String, String)> {
+    for n in &mut model.nodes {
+        if let Some(pos) = n.responsibilities.iter().position(|r| r.id == resp_id) {
+            let r = n.responsibilities.remove(pos);
+            model.source_map.remove(resp_id);
+            return Some((n.id.clone(), r.statement));
+        }
+    }
+    for g in &mut model.groups {
+        if let Some(pos) = g.responsibilities.iter().position(|r| r.id == resp_id) {
+            let r = g.responsibilities.remove(pos);
+            model.source_map.remove(resp_id);
+            return Some((g.id.clone(), r.statement));
+        }
+    }
+    None
+}
+
+/// Remove a set of nodes and everything that hangs off them — descendant claims'
+/// anchors, the nodes' own declaration anchors and boundaries, links touching
+/// them, and dead group memberships. Mirrors the MCP `delete_nodes` cleanup.
+fn prune_nodes(model: &mut scryer_core::ScryModel, ids: &std::collections::HashSet<String>) {
+    let resp_ids: std::collections::HashSet<String> = model
+        .nodes
+        .iter()
+        .filter(|n| ids.contains(&n.id))
+        .flat_map(|n| n.responsibilities.iter().map(|r| r.id.clone()))
+        .collect();
+    model.source_map.retain(|k, _| !resp_ids.contains(k) && !ids.contains(k));
+    model.boundaries.retain(|k, _| !ids.contains(k));
+    model.nodes.retain(|n| !ids.contains(&n.id));
+    model.links.retain(|l| !ids.contains(&l.src) && !ids.contains(&l.dst));
+    for g in &mut model.groups {
+        g.member_ids.retain(|m| !ids.contains(m));
+    }
+}
+
+/// Append a take-model resolution event (the committed model changed). `marker`
+/// is the diff glyph for the row (`−` dropped, `+` re-implement to-do).
+fn log_take_model(
+    model_ref: &scryer_core::ModelRef,
+    host_id: &str,
+    driver: &str,
+    marker: &str,
+    text: String,
+    source: Option<scryer_core::SourceLocation>,
+) {
+    let mut row = scryer_core::history::EventRow::new(marker, text);
+    if let Some(loc) = source {
+        row = row.with_source(loc);
+    }
+    let _ = scryer_core::history::append_event(
+        model_ref,
+        &scryer_core::history::HistoryEvent::new(
+            scryer_core::drift::now_secs(),
+            scryer_core::history::EventKind::Impl,
+            host_id,
+            driver,
+        )
+        .with_rows(vec![row]),
+    );
+}
+
+/// DROP a stale responsibility: the code legitimately no longer does this, so the
+/// claim leaves the model entirely (both layers) and its anchor is GC'd. Mirror
+/// of `adopt_responsibility`.
+#[tauri::command]
+fn drop_responsibility(cwd: String, resp_id: String) -> Result<(), String> {
+    let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    let mut committed = scryer_core::read_model_at(&model_ref)?;
+    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+
+    let source = committed
+        .source_map
+        .get(&resp_id)
+        .or_else(|| planned.source_map.get(&resp_id))
+        .and_then(|l| l.first())
+        .cloned();
+
+    let from_c = take_responsibility(&mut committed, &resp_id);
+    let from_p = take_responsibility(&mut planned, &resp_id);
+    let (host_id, statement) =
+        from_c.or(from_p).ok_or_else(|| format!("Responsibility '{resp_id}' not found"))?;
+
+    scryer_core::write_model_at(&model_ref, &committed)?;
+    scryer_core::write_planned_at(&model_ref, &planned)?;
+    let _ = scryer_core::save_baseline_at(&model_ref, &committed);
+    log_take_model(&model_ref, &host_id, "dropped — removed from code", "−", statement, source);
+    Ok(())
+}
+
+/// RE-IMPLEMENT a stale responsibility: the model is right and the code must be
+/// rebuilt. Remove it from the committed model (which should only hold claims the
+/// code satisfies) while the plan keeps a clean, anchored copy — so the diff
+/// reads it as an `Added` to-do the agent implements, folding it back in via
+/// `mark_implemented`. Mirror of `reject_responsibility`, in the build direction.
+#[tauri::command]
+fn reimplement_responsibility(cwd: String, resp_id: String) -> Result<(), String> {
+    let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    let mut committed = scryer_core::read_model_at(&model_ref)?;
+    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+
+    let source = committed
+        .source_map
+        .get(&resp_id)
+        .or_else(|| planned.source_map.get(&resp_id))
+        .and_then(|l| l.first())
+        .cloned();
+    let committed_anchor = committed.source_map.get(&resp_id).cloned();
+
+    // Remove from committed — the code regressed, so it no longer holds.
+    let removed = take_responsibility(&mut committed, &resp_id);
+
+    // Keep a clean to-do in the plan: clear stale, ensure it's present + anchored.
+    let mut host_id = None;
+    let mut statement = None;
+    let in_plan = planned
+        .nodes
+        .iter_mut()
+        .flat_map(|n| {
+            let nid = n.id.clone();
+            n.responsibilities.iter_mut().map(move |r| (nid.clone(), r))
+        })
+        .chain(planned.groups.iter_mut().flat_map(|g| {
+            let gid = g.id.clone();
+            g.responsibilities.iter_mut().map(move |r| (gid.clone(), r))
+        }))
+        .find(|(_, r)| r.id == resp_id);
+    if let Some((hid, r)) = in_plan {
+        r.stale = None;
+        host_id = Some(hid);
+        statement = Some(r.statement.clone());
+    } else if let Some((chost, cstmt)) = &removed {
+        // The plan had dropped it — reconstruct from committed so the to-do exists.
+        if let Some(n) = planned.nodes.iter_mut().find(|n| &n.id == chost) {
+            n.responsibilities.push(scryer_core::Responsibility {
+                id: resp_id.clone(),
+                statement: cstmt.clone(),
+                vagrant: None,
+                stale: None,
+                directives: Vec::new(),
+                last_touched_at: None,
+            });
+            host_id = Some(chost.clone());
+            statement = Some(cstmt.clone());
+        }
+    }
+    if let Some(anchor) = committed_anchor {
+        planned.source_map.entry(resp_id.clone()).or_insert(anchor);
+    }
+
+    let (Some(host_id), Some(statement)) = (host_id, statement) else {
+        return Err(format!("Responsibility '{resp_id}' not found"));
+    };
+
+    scryer_core::write_model_at(&model_ref, &committed)?;
+    scryer_core::write_planned_at(&model_ref, &planned)?;
+    let _ = scryer_core::save_baseline_at(&model_ref, &committed);
+    log_take_model(&model_ref, &host_id, "re-implement — code regressed", "+", statement, source);
+    Ok(())
+}
+
+/// DROP a stale node: the whole subtree's backing code is gone on purpose, so the
+/// node and every descendant (claims, links, group memberships, anchors) leaves
+/// both layers. The node-level mirror of `drop_responsibility`.
+#[tauri::command]
+fn drop_node(cwd: String, node_id: String) -> Result<(), String> {
+    let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    let mut committed = scryer_core::read_model_at(&model_ref)?;
+    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+
+    let in_c = committed.nodes.iter().any(|n| n.id == node_id);
+    let in_p = planned.nodes.iter().any(|n| n.id == node_id);
+    if !in_c && !in_p {
+        return Err(format!("Node '{node_id}' not found"));
+    }
+
+    // Name + parent for the timeline (the node itself is about to disappear).
+    let (name, parent_id) = committed
+        .nodes
+        .iter()
+        .chain(planned.nodes.iter())
+        .find(|n| n.id == node_id)
+        .map(|n| (n.name.clone(), n.parent_id.clone()))
+        .unwrap_or_else(|| (node_id.clone(), None));
+
+    // Subtree from each layer it lives in (a node may exist in only one).
+    let mut ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if in_c {
+        ids.extend(scryer_core::drift::subtree_ids(&committed, &node_id));
+    }
+    if in_p {
+        ids.extend(scryer_core::drift::subtree_ids(&planned, &node_id));
+    }
+
+    prune_nodes(&mut committed, &ids);
+    prune_nodes(&mut planned, &ids);
+
+    scryer_core::write_model_at(&model_ref, &committed)?;
+    scryer_core::write_planned_at(&model_ref, &planned)?;
+    let _ = scryer_core::save_baseline_at(&model_ref, &committed);
+    // Attach to the parent — the node id is gone.
+    let host = parent_id.unwrap_or_else(|| node_id.clone());
+    log_take_model(
+        &model_ref,
+        &host,
+        "dropped — removed from code",
+        "−",
+        format!("{name} (subtree)"),
+        None,
+    );
+    Ok(())
+}
+
+/// RE-IMPLEMENT a stale node: the model is right and the whole subtree must be
+/// rebuilt. Remove the subtree from the committed model while the plan keeps it
+/// (stale cleared), so each node/claim reads as an `Added` to-do. The node-level
+/// mirror of `reimplement_responsibility`.
+#[tauri::command]
+fn reimplement_node(cwd: String, node_id: String) -> Result<(), String> {
+    let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    let mut committed = scryer_core::read_model_at(&model_ref)?;
+    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+
+    let in_c = committed.nodes.iter().any(|n| n.id == node_id);
+    let in_p = planned.nodes.iter().any(|n| n.id == node_id);
+    if !in_c && !in_p {
+        return Err(format!("Node '{node_id}' not found"));
+    }
+
+    let name = planned
+        .nodes
+        .iter()
+        .chain(committed.nodes.iter())
+        .find(|n| n.id == node_id)
+        .map(|n| n.name.clone())
+        .unwrap_or_else(|| node_id.clone());
+
+    let mut ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if in_c {
+        ids.extend(scryer_core::drift::subtree_ids(&committed, &node_id));
+    }
+    if in_p {
+        ids.extend(scryer_core::drift::subtree_ids(&planned, &node_id));
+    }
+
+    // Remove the subtree from committed → it becomes `Added` in the plan diff.
+    prune_nodes(&mut committed, &ids);
+    // Clear stale on the surviving plan subtree (nodes AND their claims) so it
+    // reads as clean pending work, not drift.
+    for n in &mut planned.nodes {
+        if ids.contains(&n.id) {
+            n.stale = None;
+            for r in &mut n.responsibilities {
+                r.stale = None;
+            }
+        }
+    }
+
+    scryer_core::write_model_at(&model_ref, &committed)?;
+    scryer_core::write_planned_at(&model_ref, &planned)?;
+    let _ = scryer_core::save_baseline_at(&model_ref, &committed);
+    log_take_model(
+        &model_ref,
+        &node_id,
+        "re-implement — code regressed",
+        "+",
+        format!("{name} (subtree)"),
+        None,
+    );
+    Ok(())
+}
+
 /// Run a semantic drift check: find the boundary-owning nodes whose code changed
 /// since the last reconcile, then for each, an agent compares what the code DOES
 /// against the node's responsibilities and records findings via `flag_drift`
-/// (undescribed behaviour → vagrant responsibilities; stale claims → `changed`).
+/// (undescribed behaviour → vagrant responsibilities; stale claims/nodes → the
+/// `stale` flag on the working draft).
 /// Returns immediately; progress + findings stream via "agent-event". The
 /// reconcile anchor advances when the check finishes so the next run sees only
 /// newer changes.
@@ -2434,7 +2814,6 @@ pub fn run() {
             get_subagent_settings,
             set_subagent_settings,
             start_initial_model_session,
-            start_node_fill_session,
             start_enrich_session,
             ensure_preview_server,
             start_preview_fixture_session,
@@ -2447,6 +2826,12 @@ pub fn run() {
             get_model_health,
             reconcile_drift,
             reconcile_drift_node,
+            adopt_responsibility,
+            reject_responsibility,
+            drop_responsibility,
+            reimplement_responsibility,
+            drop_node,
+            reimplement_node,
             cancel_agent_session,
         ])
         .run(tauri::generate_context!())

@@ -17,9 +17,15 @@ import forceAtlas2 from "graphology-layout-forceatlas2";
 import { layoutGraph } from "./layout/planar";
 import type { EdgePair } from "./layout/planar";
 import type { ScryModel, Kind } from "./viewmodel";
+import { isDataShape } from "./viewmodel";
 import type { ModelHealthReport } from "./health";
 
 export type DiagramMode = "arch" | "code";
+
+/** How a code-tier symbol reads at a glance — the three things a symbol can be
+ *  (mirrors `kindIcon`/`typeTag`): a data shape (`model`), a UI piece (`visual`),
+ *  or plain `code`. Drives the muted class line under each dot. */
+export type SymbolClass = "code" | "model" | "visual";
 
 export interface DiagramNode {
   id: string;
@@ -40,6 +46,8 @@ export interface DiagramNode {
   /** A ghost: a node referenced from this level but living outside it. Rendered
    *  hollow; double-click navigates to where it actually lives. */
   reference: boolean;
+  /** Code-tier classification — drives the muted class line under the dot. */
+  symbolClass: SymbolClass;
   x: number;
   y: number;
 }
@@ -70,21 +78,27 @@ const CELL_H = 180;
 
 // Relative dot sizing: the most depended-upon symbol fills MAX_DOT, a leaf sits
 // at MIN_DOT, scaled against the graph's own busiest hub (not an absolute count)
-// so the contrast is dramatic without ever producing a sun-sized dot.
-const MIN_DOT = 7;
-const MAX_DOT = 34;
+// so the contrast is dramatic without ever producing a sun-sized dot. Sized to
+// read like the C4 arch tiers — substantial circles, not pinpricks.
+const MIN_DOT = 18;
+const MAX_DOT = 64;
 function dotSizeFor(inDegree: number, maxInDegree: number): number {
   if (maxInDegree <= 0) return MIN_DOT;
   const t = Math.min(1, inDegree / maxInDegree);
   return MIN_DOT + (MAX_DOT - MIN_DOT) * Math.pow(t, 0.85);
 }
 
+// Label geometry for the centered-below layout: the disc sits on top, the name
+// (and a muted class line) stack beneath it, all horizontally centered. The
+// collision box is the union of the disc and that text block.
+const DISC_LABEL_GAP = 5; // vertical gap between disc bottom and the name
+const NAME_H = 15; // text-xs name line
+const SUB_H = 12; // text-[10px] class line
+const LABEL_BLOCK_H = NAME_H + SUB_H; // both label lines stack under the disc
 // Estimated rendered label width (px): text-xs ≈ 6.2px/glyph, capped at the
-// 160px truncate the dot label uses.
-const LABEL_GAP = 6; // gap-1.5 between dot and label
-const ROW_H = 18; // dot+label row height
+// 130px truncate the dot label uses.
 const estLabelWidth = (name: string) =>
-  Math.min(160, (name || "·").length * 6.2 + 6);
+  Math.min(130, (name || "·").length * 6.2 + 6);
 
 const pairKey = (a: string, b: string) =>
   a < b ? `${a}\0${b}` : `${b}\0${a}`;
@@ -224,6 +238,7 @@ export async function buildDiagramScene(
       childCount: childCounts.get(n.id) ?? 0,
       degree: degree.get(n.id) ?? 0,
       reference,
+      symbolClass: n.visual ? "visual" : isDataShape(n) ? "model" : "code",
     };
   };
 
@@ -437,12 +452,17 @@ function dotLayout(
     return out;
   }
 
-  // Row box per node (disc + label-to-the-right). Half its width is the radius
-  // FA2 uses to pre-spread; the full box is what the final pass separates.
+  // Stacked box per node (disc on top, label block centered beneath). Width is
+  // the wider of the disc and the label; height is the disc plus the label
+  // block. Half the larger dimension is the radius FA2 uses to pre-spread; the
+  // full box is what the final pass separates.
   const boxes = new Map<string, Box>(
     descriptors.map((d) => [
       d.id,
-      { w: d.size + LABEL_GAP + estLabelWidth(d.name), h: Math.max(d.size, ROW_H) },
+      {
+        w: Math.max(d.size, estLabelWidth(d.name)),
+        h: d.size + DISC_LABEL_GAP + LABEL_BLOCK_H,
+      },
     ]),
   );
 
@@ -453,10 +473,11 @@ function dotLayout(
   const seedR = 40 + n * 12;
   descriptors.forEach((d, i) => {
     const a = (2 * Math.PI * i) / n;
+    const b = boxes.get(d.id)!;
     graph.addNode(d.id, {
       x: seedR * Math.cos(a),
       y: seedR * Math.sin(a),
-      size: boxes.get(d.id)!.w / 2,
+      size: Math.max(b.w, b.h) / 2,
     });
   });
   for (const e of edges) {

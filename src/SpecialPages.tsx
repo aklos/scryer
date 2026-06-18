@@ -1,6 +1,5 @@
 /**
- * Wiki special pages — the two cross-cutting surfaces that aren't model
- * content:
+ * Wiki special pages — the cross-cutting surfaces that aren't model content:
  *
  *  - Recent changes: the session journal of external (agent) writes, newest
  *    first, with per-field before → after diffs. This is what you watch while
@@ -8,8 +7,11 @@
  *  - Needs review: the maintenance-category index. Every observation awaiting
  *    a human verdict, grouped by kind, with the verdict actions inline. An
  *    empty page means the model is trustworthy.
+ *  - Dark code: the inverse of coverage — every file under a node's boundary
+ *    that no claim reads into, grouped by the owning node. Where you eyeball
+ *    how much is boilerplate versus something load-bearing the lens is missing.
  *
- * Both are pages, not panels — reached from the status bar counters, left via
+ * All are pages, not panels — reached from the status bar counters, left via
  * any link, exactly like Wikipedia's Special:RecentChanges and cleanup
  * categories.
  */
@@ -21,7 +23,7 @@ import type { ChangeItem, ChangeRevision } from "./hooks/useModelStorage";
 import type { ScryModel, Node, Responsibility, DriftScope } from "./viewmodel";
 import type { Editor } from "./editor";
 import type { ModelHealthReport } from "./health";
-import { ANCHOR_STATE_LABEL, collapseAnchors } from "./health";
+import { ANCHOR_STATE_LABEL, collapseAnchors, darkBoundaries } from "./health";
 import { kindIcon } from "./kindIcon";
 import { isNodeEmpty } from "./rollup";
 import { respElementId } from "./SourceSection";
@@ -31,11 +33,8 @@ import { BTN, jumpTo, PageSection, WikiLink } from "./pagekit";
 
 function SpecialHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
-    <header className="shrink-0 border-b border-[var(--border)] px-7 pb-3 pt-[13px]">
-      <div className="min-h-[15px] font-mono text-[11px] text-[var(--text-tertiary)]">
-        Special page
-      </div>
-      <h1 className="mt-[5px] text-[21px] font-semibold leading-tight text-[var(--text)]">{title}</h1>
+    <header className="shrink-0 border-b border-[var(--border)] px-7 pb-3 pt-[18px]">
+      <h1 className="text-[21px] font-semibold leading-tight text-[var(--text)]">{title}</h1>
       <div className="mt-[3px] text-xs text-[var(--text-tertiary)]">{subtitle}</div>
     </header>
   );
@@ -224,6 +223,7 @@ interface ClaimRef {
 export interface ReviewIndex {
   vagrant: ClaimRef[];
   stale: ClaimRef[];
+  staleNodes: Node[];
   unmapped: ClaimRef[];
   emptySymbols: Node[];
   unseenNodes: Node[];
@@ -252,10 +252,14 @@ export function buildReviewIndex(
   const stale: ClaimRef[] = [];
   const unmapped: ClaimRef[] = [];
   const unseenClaims: ClaimRef[] = [];
+  // Whole nodes whose backing code is gone — verdicted as a subtree, so their
+  // own stale claims are subsumed (don't also list them as individual claims).
+  const staleNodes = model.nodes.filter((n) => n.stale);
+  const staleNodeIds = new Set(staleNodes.map((n) => n.id));
   for (const node of model.nodes) {
     for (const resp of node.responsibilities ?? []) {
       if (resp.vagrant) vagrant.push({ node, resp });
-      if (resp.stale) stale.push({ node, resp });
+      if (resp.stale && !staleNodeIds.has(node.id)) stale.push({ node, resp });
       if (
         !hasChildren.has(node.id) &&
         !node.external &&
@@ -272,13 +276,14 @@ export function buildReviewIndex(
   const total =
     vagrant.length +
     stale.length +
+    staleNodes.length +
     unmapped.length +
     emptySymbols.length +
     unseenNodes.length +
     unseenClaims.length +
     driftScopes.length +
     collapseAnchors(report?.anchors ?? []).length;
-  return { vagrant, stale, unmapped, emptySymbols, unseenNodes, unseenClaims, total };
+  return { vagrant, stale, staleNodes, unmapped, emptySymbols, unseenNodes, unseenClaims, total };
 }
 
 export function NeedsReviewPage({
@@ -409,8 +414,8 @@ export function NeedsReviewPage({
             {idx.vagrant.length > 0 && (
               <PageSection title="Undescribed behaviour" count={idx.vagrant.length}>
                 <p className="mb-2 text-2xs text-[var(--text-muted)]">
-                  Found in the code with no claim describing it. Adopt into the contract or
-                  reject (delete).
+                  Found in the code with no claim describing it. Adopt into the contract, or
+                  reject to mark the code for deletion.
                 </p>
                 <ul className="flex flex-col">
                   {idx.vagrant.map((ref) =>
@@ -420,20 +425,14 @@ export function NeedsReviewPage({
                         <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
                           <button
                             type="button"
-                            onClick={() =>
-                              editor.updateResponsibility("node", ref.node.id, ref.resp.id, {
-                                vagrant: undefined,
-                              })
-                            }
+                            onClick={() => editor.adoptResponsibility(ref.resp.id)}
                             className="font-medium text-indigo-600 hover:underline dark:text-indigo-400 cursor-pointer"
                           >
                             Adopt
                           </button>
                           <button
                             type="button"
-                            onClick={() =>
-                              editor.removeResponsibility("node", ref.node.id, ref.resp.id)
-                            }
+                            onClick={() => editor.rejectResponsibility(ref.resp.id)}
                             className="font-medium text-[var(--text-tertiary)] hover:text-red-500 hover:underline dark:hover:text-red-400 cursor-pointer"
                           >
                             Reject
@@ -449,8 +448,8 @@ export function NeedsReviewPage({
             {idx.stale.length > 0 && (
               <PageSection title="Stale claims" count={idx.stale.length}>
                 <p className="mb-2 text-2xs text-[var(--text-muted)]">
-                  The drift check judged the code no longer discharges these. Confirm each is
-                  still valid, drop it, or reword it on its page.
+                  The model asserts these but the code stopped doing them. Re-implement to
+                  rebuild the code, or drop the claim if the behaviour was removed on purpose.
                 </p>
                 <ul className="flex flex-col">
                   {idx.stale.map((ref) =>
@@ -460,14 +459,10 @@ export function NeedsReviewPage({
                         <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
                           <button
                             type="button"
-                            onClick={() =>
-                              editor.updateResponsibility("node", ref.node.id, ref.resp.id, {
-                                stale: undefined,
-                              })
-                            }
-                            className="font-medium text-[var(--text-tertiary)] hover:text-[var(--text)] hover:underline cursor-pointer"
+                            onClick={() => editor.reimplementResponsibility(ref.resp.id)}
+                            className="font-medium text-indigo-600 hover:underline dark:text-indigo-400 cursor-pointer"
                           >
-                            Still valid
+                            Re-implement
                           </button>
                           <button
                             type="button"
@@ -475,12 +470,7 @@ export function NeedsReviewPage({
                               setConfirmDrop({
                                 rect: e.currentTarget.getBoundingClientRect(),
                                 label: "Drop this claim?",
-                                run: () =>
-                                  editor.removeResponsibility(
-                                    "node",
-                                    ref.node.id,
-                                    ref.resp.id,
-                                  ),
+                                run: () => editor.dropResponsibility(ref.resp.id),
                               })
                             }
                             className="font-medium text-[var(--text-tertiary)] hover:text-red-500 hover:underline dark:hover:text-red-400 cursor-pointer"
@@ -491,6 +481,51 @@ export function NeedsReviewPage({
                       ),
                     ),
                   )}
+                </ul>
+              </PageSection>
+            )}
+
+            {idx.staleNodes.length > 0 && (
+              <PageSection title="Code removed" count={idx.staleNodes.length}>
+                <p className="mb-2 text-2xs text-[var(--text-muted)]">
+                  These nodes lost their backing code entirely (a deleted file or folder).
+                  Re-implement to rebuild the whole subtree, or drop it from the model.
+                </p>
+                <ul className="flex flex-col">
+                  {idx.staleNodes.map((n) => (
+                    <li
+                      key={n.id}
+                      className="flex items-center gap-2 border-b border-[var(--border-subtle)] py-2 last:border-b-0"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <WikiLink name={n.name} Icon={kindIcon(n)} onClick={() => onSelectNode(n.id)} />
+                      </div>
+                      {editor && (
+                        <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
+                          <button
+                            type="button"
+                            onClick={() => editor.reimplementNode(n.id)}
+                            className="font-medium text-indigo-600 hover:underline dark:text-indigo-400 cursor-pointer"
+                          >
+                            Re-implement
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) =>
+                              setConfirmDrop({
+                                rect: e.currentTarget.getBoundingClientRect(),
+                                label: "Drop this node and its subtree?",
+                                run: () => editor.dropNode(n.id),
+                              })
+                            }
+                            className="font-medium text-[var(--text-tertiary)] hover:text-red-500 hover:underline dark:hover:text-red-400 cursor-pointer"
+                          >
+                            Drop
+                          </button>
+                        </span>
+                      )}
+                    </li>
+                  ))}
                 </ul>
               </PageSection>
             )}
@@ -628,6 +663,81 @@ export function NeedsReviewPage({
           onCancel={() => setConfirmDrop(null)}
         />
       )}
+    </div>
+  );
+}
+
+// --- dark code ------------------------------------------------------------------
+
+export function DarkCodePage({
+  model,
+  report,
+  onSelectNode,
+}: {
+  model: ScryModel;
+  report: ModelHealthReport | null;
+  onSelectNode: (id: string) => void;
+}) {
+  const { groups, total } = darkBoundaries(report);
+  const nodeById = new Map(model.nodes.map((n) => [n.id, n] as const));
+
+  return (
+    <div className="flex min-w-0 flex-1 flex-col">
+      <SpecialHeader
+        title="Dark code"
+        subtitle={
+          total === 0
+            ? "Every file under a boundary reads through to a claim"
+            : `${total} file${total === 1 ? "" : "s"} under a node's boundary that no claim reads into`
+        }
+      />
+      <SpecialBody>
+        {total === 0 ? (
+          <div className="flex flex-col items-center gap-3 px-6 py-16">
+            <Check className="h-6 w-6 text-emerald-500 dark:text-emerald-400" />
+            <p className="text-xs text-[var(--text-muted)]">
+              No dark code — every file under a node's boundary is read by some claim.
+            </p>
+          </div>
+        ) : (
+          <>
+            <p className="mb-4 mt-1 text-2xs text-[var(--text-muted)]">
+              These files sit inside a node's boundary, but no claim in its subtree anchors to
+              them — the lens can't see them. Most will be boilerplate (generated code, config,
+              glue); scan for anything load-bearing the model is missing.
+            </p>
+            <div className="flex flex-col gap-5">
+              {groups.map((g) => {
+                const node = nodeById.get(g.nodeId);
+                return (
+                  <section key={g.nodeId}>
+                    <div className="mb-1 flex items-baseline gap-2 border-b border-[var(--border-subtle)] pb-1">
+                      <WikiLink
+                        name={node?.name ?? g.nodeId}
+                        Icon={node ? kindIcon(node) : undefined}
+                        onClick={() => onSelectNode(g.nodeId)}
+                      />
+                      <span className="font-mono text-2xs text-[var(--text-ghost)]">
+                        {g.files.length} dark
+                      </span>
+                    </div>
+                    <ul className="flex flex-col gap-px pl-1">
+                      {g.files.map((f) => (
+                        <li
+                          key={f}
+                          className="truncate font-mono text-2xs text-[var(--text-muted)]"
+                        >
+                          {f}
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </SpecialBody>
     </div>
   );
 }

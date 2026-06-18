@@ -20,7 +20,6 @@ export interface AgentSession {
   /** Most recent human-readable line from the agent stream (tool calls,
    *  message snippets, status) — drives the live activity readout. */
   activity: string | null;
-  startFill: (cwd: string, modelRef: string, nodeId: string, nodeName: string) => void;
   /** B5 repair path: write realistic fixture props for a component whose
    *  deterministic preview rendered empty or crashed. */
   startFixture: (
@@ -106,13 +105,6 @@ export function useAgentSession(): AgentSession {
     [running, toast],
   );
 
-  const startFill = useCallback(
-    (cwd: string, modelRef: string, nodeId: string, nodeName: string) => {
-      startSession("start_node_fill_session", `Filling ${nodeName || "node"}`, { cwd, modelRef, nodeId });
-    },
-    [startSession],
-  );
-
   const startFixture = useCallback(
     (cwd: string, modelRef: string, nodeId: string, nodeName: string, renderStatus: string, renderError: string | null) => {
       startSession(
@@ -143,5 +135,5 @@ export function useAgentSession(): AgentSession {
     }
   }, []);
 
-  return { running, label, lastTool, activity, startFill, startFixture, startVariation, cancel };
+  return { running, label, lastTool, activity, startFixture, startVariation, cancel };
 }

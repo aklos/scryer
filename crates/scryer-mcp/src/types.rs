@@ -633,6 +633,45 @@ pub(crate) struct UndescribedItem {
     /// 1-based end line.
     #[serde(alias = "endLine")]
     pub end_line: Option<u32>,
+    /// Attach this behaviour's responsibility to an EXISTING node, by id — when a
+    /// symbol/component already models this code. Leave node_id AND node_key
+    /// unset to route automatically to the finest node the source map already
+    /// ties the file to (falling back to the reviewed container).
+    #[serde(default, alias = "nodeId")]
+    pub node_id: Option<String>,
+    /// Attach to a node MINTED in this call — the `key` of a `newNodes` entry.
+    /// Use when the behaviour is a brand-new definition the model has no node
+    /// for. Takes precedence over node_id.
+    #[serde(default, alias = "nodeKey")]
+    pub node_key: Option<String>,
+}
+
+/// A node the drift check MINTS to home code the model has no node for — a
+/// missing rung in the tree (a component, or a symbol for a brand-new
+/// definition). Minted vagrant in the PLAN: it folds into the committed model
+/// when a responsibility hung on it is adopted, and is dropped on reject.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct NewNode {
+    /// Temporary key, unique within THIS call — referenced before the real id is
+    /// assigned, from an `undescribed` item's `nodeKey` or a deeper node's
+    /// `parentKey`.
+    pub key: String,
+    /// Node kind — typically "component" or "symbol".
+    pub kind: String,
+    /// The node's name. For a symbol, the EXACT code identifier.
+    pub name: String,
+    /// Parent: an EXISTING node id to nest under. Mutually exclusive with
+    /// `parentKey` — set exactly one.
+    #[serde(default, alias = "parentId")]
+    pub parent_id: Option<String>,
+    /// Parent: the `key` of another node minted in THIS call (a shallower rung).
+    /// List ancestors before descendants so the parent is declared first.
+    #[serde(default, alias = "parentKey")]
+    pub parent_key: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub technology: Option<String>,
 }
 
 /// An existing responsibility whose code no longer discharges it.
@@ -641,6 +680,18 @@ pub(crate) struct StaleResponsibility {
     /// ID of the responsibility that no longer matches its code.
     pub responsibility_id: String,
     /// Short factual note on how the code diverged (for the review queue).
+    pub reason: String,
+}
+
+/// An existing NODE whose backing code is GONE — a symbol, a component, or a
+/// whole container subtree the model still asserts but a deleted file/folder
+/// wiped out. The node and everything under it is flagged stale as a unit; the
+/// user re-implements the subtree or drops it.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct StaleNode {
+    /// ID of the node whose backing code no longer exists.
+    pub node_id: String,
+    /// Short factual note on what was removed (for the review queue).
     pub reason: String,
 }
 
@@ -655,8 +706,22 @@ pub(crate) struct FlagDriftRequest {
     /// responsibility.
     #[serde(default)]
     pub undescribed: Vec<UndescribedItem>,
+    /// Nodes to MINT (vagrant) to home undescribed behaviour the model has no
+    /// node for — e.g. a new component plus the symbol for a new function. Each
+    /// carries a temp `key` referenced from `undescribed.nodeKey`; build whole
+    /// chains by pointing a node's `parentKey` at a shallower one (list ancestors
+    /// first). Omit when every finding already has a home node.
+    #[serde(default, alias = "newNodes")]
+    pub new_nodes: Vec<NewNode>,
     /// Existing responsibilities whose code no longer discharges them — marked
     /// `changed` for review.
     #[serde(default)]
     pub stale: Vec<StaleResponsibility>,
+    /// Existing NODES whose backing code is entirely GONE (a deleted file/folder
+    /// wiped out a symbol, component, or container subtree). Each is flagged
+    /// stale as a unit — the whole subtree — for the user to re-implement or
+    /// drop. Use this instead of `stale` when it's the node, not just one of its
+    /// claims, that lost its code.
+    #[serde(default, alias = "staleNodes")]
+    pub stale_nodes: Vec<StaleNode>,
 }

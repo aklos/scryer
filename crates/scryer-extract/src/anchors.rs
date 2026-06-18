@@ -478,6 +478,8 @@ mod tests {
             id: "sym".into(),
             kind: Kind::Symbol,
             name: anchor_symbol.into(),
+            vagrant: None,
+            stale: None,
             parent_id: None,
             external: None,
             technology: None,

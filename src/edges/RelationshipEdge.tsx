@@ -29,11 +29,17 @@ export interface EdgeData extends Record<string, unknown> {
   highlighted?: boolean;
   /** A selection exists elsewhere — this edge isn't part of it, so it fades. */
   dimmed?: boolean;
+  /** A reverse edge runs between the same two nodes — offset to a parallel lane
+   *  so the two straight chords don't overlap. */
+  parallel?: boolean;
 }
 
 /** Gap between a dot's rim and where the line/arrow starts, so it kisses the
  *  rim instead of overlapping the disc. Added to each end's own radius. */
 const DOT_GAP = 3;
+/** Sideways shift (px) for an edge that shares a node pair with its reverse, so
+ *  the two land as separate parallel lanes instead of on top of each other. */
+const PARALLEL_GAP = 5;
 export type RFRelEdge = RFEdge<EdgeData, "rel">;
 
 export function RelationshipEdge({
@@ -61,26 +67,22 @@ export function RelationshipEdge({
   const ux = dx / len, uy = dy / len;
   const sInset = data?.dot ? Math.min((data.sourceR ?? 6) + DOT_GAP, len / 2 - 1) : 0;
   const tInset = data?.dot ? Math.min((data.targetR ?? 6) + DOT_GAP, len / 2 - 1) : 0;
-  const sx = sourceX + ux * sInset, sy = sourceY + uy * sInset;
-  const tx = targetX - ux * tInset, ty = targetY - uy * tInset;
+  // A reverse edge between the same two nodes would land exactly on top of this
+  // one now that the line is straight — shift the whole chord sideways by its
+  // perpendicular. The perpendicular flips with direction, so A→B and B→A push
+  // to opposite sides and read as two parallel lanes.
+  const off = data?.parallel ? PARALLEL_GAP : 0;
+  const ox = -uy * off, oy = ux * off;
+  const sx = sourceX + ux * sInset + ox, sy = sourceY + uy * sInset + oy;
+  const tx = targetX - ux * tInset + ox, ty = targetY - uy * tInset + oy;
 
   const isDot = !!data?.dot;
-  // Dot tier: bow the edge into a quadratic arc (gitnexus's curved edges) so
-  // crossing/parallel spokes separate instead of stacking as straight lines. A
-  // consistent perpendicular offset makes A→B and B→A bow to opposite sides.
-  const CURVE = 0.07; // arc height as a fraction of the chord — a gentle bow,
-  // just enough to split A→B / B→A so cycles stay visible without reading busy
-  const cx = (sx + tx) / 2 - (ty - sy) * CURVE;
-  const cy = (sy + ty) / 2 + (tx - sx) * CURVE;
-  const edgePath = isDot
-    ? `M ${sx} ${sy} Q ${cx} ${cy} ${tx} ${ty}`
-    : `M ${sx} ${sy} L ${tx} ${ty}`;
-  // Quadratic midpoint (t=0.5) for the label/hover dot; end tangent for the arrow.
-  const labelX = isDot ? 0.25 * sx + 0.5 * cx + 0.25 * tx : (sx + tx) / 2;
-  const labelY = isDot ? 0.25 * sy + 0.5 * cy + 0.25 * ty : (sy + ty) / 2;
-  const arrowAngle = isDot
-    ? Math.atan2(ty - cy, tx - cx)
-    : Math.atan2(ty - sy, tx - sx);
+  // Straight chord rim-to-rim — same edge as before (arrowhead, label, and the
+  // arch tier's animated dash all kept below), just no longer bowed.
+  const edgePath = `M ${sx} ${sy} L ${tx} ${ty}`;
+  const labelX = (sx + tx) / 2;
+  const labelY = (sy + ty) / 2;
+  const arrowAngle = Math.atan2(ty - sy, tx - sx);
 
   // Arrowhead polygon from explicit geometry.
   const arrowSize = 8;

@@ -713,6 +713,25 @@ impl ScryerServer {
         use scryer_core::diff::{Change, ElementKind};
         let plan = scryer_core::diff::diff(&model, &planned);
 
+        // Vagrant elements are code-discovered drift ("adopt?"), not planned
+        // intent ahead of code ("implement!") — they belong in the drift review
+        // queue, never the implement queue. A vagrant node and any responsibility
+        // it (or an existing node) carries are filtered out here.
+        let is_vagrant_node = |id: &str| {
+            planned
+                .nodes
+                .iter()
+                .any(|n| n.id == id && n.vagrant == Some(true))
+        };
+        let is_vagrant_resp = |id: &str| {
+            planned
+                .nodes
+                .iter()
+                .flat_map(|n| n.responsibilities.iter())
+                .chain(planned.groups.iter().flat_map(|g| g.responsibilities.iter()))
+                .any(|r| r.id == id && r.vagrant == Some(true))
+        };
+
         // Resolve a node's breadcrumb against whichever side actually holds it:
         // the draft for added/existing nodes, the committed model for a deletion.
         let breadcrumb_of = |id: &str| -> String {
@@ -728,6 +747,14 @@ impl ScryerServer {
         let mut changes_out: Vec<serde_json::Value> = Vec::new();
 
         for ch in &plan.changes {
+            let vagrant = match ch.kind {
+                ElementKind::Node => is_vagrant_node(&ch.id),
+                ElementKind::Responsibility => is_vagrant_resp(&ch.id),
+                _ => false,
+            };
+            if vagrant {
+                continue;
+            }
             for c in &ch.changes {
                 match c {
                     Change::Added => to_implement += 1,
@@ -1052,6 +1079,8 @@ mod tests {
             id: id.into(),
             kind,
             name: name.into(),
+            vagrant: None,
+            stale: None,
             parent_id: parent.map(|p| p.into()),
             external: None,
             technology: None,

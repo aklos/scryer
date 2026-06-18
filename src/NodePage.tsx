@@ -26,9 +26,11 @@ import {
   Flag,
   GitCompare,
   Loader2,
+  Moon,
   Plus,
   Send,
   Sparkles,
+  Sun,
   Trash2,
   Undo2,
   X,
@@ -59,6 +61,7 @@ import {
   relativeTime,
 } from "./history";
 import { matchPreviewComponent, usePreviewServer } from "./hooks/usePreviewServer";
+import { useDarkMode } from "./hooks/useDarkMode";
 import { ClaimSource, respElementId } from "./SourceSection";
 import { PageMenuProvider, usePageMenu, useCopyId, copyIdItem } from "./pageMenu";
 import {
@@ -107,12 +110,12 @@ export interface VariationState {
   selectedIdx: number | null;
 }
 
-export type SpecialPage = "changes" | "review";
+export type SpecialPage = "changes" | "review" | "dark";
 
 export type Selected =
   | { kind: "node"; id: string }
   | { kind: "group"; id: string }
-  // Wiki special pages — Recent changes and Needs review (App routes these).
+  // Wiki special pages — Recent changes, Needs review, Dark code (App routes these).
   | { kind: "special"; id: SpecialPage };
 
 interface PageProps {
@@ -127,7 +130,6 @@ interface PageProps {
   editor: Editor | undefined;
   onSelectNode: (id: string) => void;
   onSelectGroup: (id: string) => void;
-  onFill?: (nodeId: string) => void;
   /** B5 repair path: agent writes realistic fixture props after a failed
    *  deterministic render. */
   onFixture?: (nodeId: string, renderStatus: string, renderError: string | null) => void;
@@ -486,7 +488,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
     editor,
     projectPath,
     onSelectNode,
-    onFill,
     onFixture,
     newRespIds,
     onClearNewResp,
@@ -532,12 +533,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const definition = sourceMap[node.id] ?? [];
   const hasChildren = model.nodes.some((n) => n.parentId === node.id);
 
-  // "Model from code" is for nodes that are still undefined — a structural
-  // node with no children and no claims of its own. A defined node never
-  // shows it: there's nothing to fill.
-  const fillable = node.kind !== "symbol" && node.kind !== "person" && !node.external;
-  const undefinedNode = fillable && !hasChildren && resps.length === 0;
-
   // Leaf claims must read through to code; structural nodes discharge through
   // their subtree, so their claims are never "unmapped". Persons (actors) and
   // externals are out-of-system — their claims are never code-backed.
@@ -553,8 +548,36 @@ function NodePageBody(props: PageProps & { node: Node }) {
   // Maintenance notices — full-width amboxes stacked at the top of the article
   // body (the wiki hatnote pattern), not chips crammed beside the title.
   const bannerStack =
-    drift || staleCount > 0 || vagrantCount > 0 || isNodeEmpty(node) ? (
+    drift || node.stale || staleCount > 0 || vagrantCount > 0 || isNodeEmpty(node) ? (
       <>
+        {node.stale && editor && (
+          <Ambox
+            tone="danger"
+            icon={<Flag className="h-3 w-3" />}
+            actions={
+              <>
+                <button
+                  type="button"
+                  onClick={() => editor.reimplementNode(node.id)}
+                  title="The model is right — rebuild this whole subtree. Becomes a to-do the agent implements."
+                  className={NOTICE_ACTION}
+                >
+                  Re-implement
+                </button>
+                <button
+                  type="button"
+                  onClick={() => editor.dropNode(node.id)}
+                  title="The code was removed on purpose — drop this node and its subtree from the model."
+                  className={NOTICE_ACTION}
+                >
+                  Drop
+                </button>
+              </>
+            }
+          >
+            Backing code removed — this node and its subtree have no code
+          </Ambox>
+        )}
         {drift && (
           <Ambox
             tone="warning"
@@ -640,20 +663,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
     <div className="flex min-w-0 flex-1 flex-col">
       <PageHeader
         crumbs={<Crumbs chain={ancestorChain(model, node.parentId)} onSelectNode={onSelectNode} />}
-        actions={
-          <>
-            {undefinedNode && onFill && (
-              <button
-                type="button"
-                onClick={() => onFill(node.id)}
-                title="Have the agent model this node from the codebase — children, responsibilities, source mapping"
-                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs font-medium text-violet-600 hover:bg-violet-500/10 dark:text-violet-400 cursor-pointer"
-              >
-                <Sparkles className="h-3 w-3" /> Model from code
-              </button>
-            )}
-          </>
-        }
         name={node.name}
         typeLine={
           <>
@@ -1465,7 +1474,6 @@ function ResponsibilitiesSection({
               model={model}
               row={row}
               host={host}
-              hostId={hostId}
               locations={sourceMap[row.resp.id] ?? []}
               projectPath={projectPath}
               leafHost={leafHost}
@@ -1584,7 +1592,6 @@ function RespDiffRow({
   model,
   row,
   host,
-  hostId,
   locations,
   projectPath,
   leafHost,
@@ -1597,7 +1604,6 @@ function RespDiffRow({
   model: ScryModel;
   row: RespDiffRow;
   host: "node" | "group";
-  hostId: string;
   /** This claim's source locations — rendered inline with expandable peeks. */
   locations: SourceLocation[];
   projectPath: string | null;
@@ -1690,16 +1696,23 @@ function RespDiffRow({
             own lane, off the mono content. */}
         {resp.stale && editor && (
           <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
-            <span className="text-[var(--text-tertiary)]">Drift says this no longer holds —</span>
+            <span className="text-[var(--text-tertiary)]">Drift says the code no longer does this —</span>
             <button
               type="button"
-              onClick={() => editor.updateResponsibility(host, hostId, resp.id, { stale: undefined })}
-              className={BTN}
-              title="The claim still holds as written — clear the stale flag"
+              onClick={() => editor.reimplementResponsibility(resp.id)}
+              className={BTN_GO}
+              title="The model is right — rebuild the code. Becomes a to-do the agent implements (folds back when done)."
             >
-              Still valid
+              Re-implement
             </button>
-            <span className="text-[var(--text-ghost)]">or reword / delete via Edit</span>
+            <button
+              type="button"
+              onClick={() => editor.dropResponsibility(resp.id)}
+              className={BTN_DANGER}
+              title="The behaviour was removed on purpose — drop the claim from the model."
+            >
+              Drop
+            </button>
           </div>
         )}
         {reviewable && (
@@ -1707,17 +1720,17 @@ function RespDiffRow({
             <span className="text-[var(--text-tertiary)]">In the code, not in the model —</span>
             <button
               type="button"
-              onClick={() => editor!.updateResponsibility(host, hostId, resp.id, { vagrant: undefined })}
+              onClick={() => editor!.adoptResponsibility(resp.id)}
               className={BTN_GO}
-              title="Accept this discovered behaviour into the contract — it stays in the plan and the agent commits it"
+              title="Accept this discovered behaviour into the contract — commits it to the model now (the code already exists)"
             >
               Adopt
             </button>
             <button
               type="button"
-              onClick={() => editor!.removeResponsibility(host, hostId, resp.id)}
+              onClick={() => editor!.rejectResponsibility(resp.id)}
               className={BTN_DANGER}
-              title="Drop it from the plan — the code it describes is not wanted behaviour"
+              title="Mark the code for deletion — this behaviour is not wanted (folds it in, then schedules its removal)"
             >
               Reject
             </button>
@@ -2138,16 +2151,15 @@ function PreviewSection({
   const entry = server.components
     ? matchPreviewComponent(server.components, node.name, sourceFile)
     : null;
-  const isDark = document.documentElement.classList.contains("dark");
-  const theme = isDark ? "dark" : "light";
-  // Pass scryer's resolved canvas/text colors so the iframe shell paints the
-  // matching background on its very first frame — before the target project's
-  // global CSS (imported as an async module) loads and supplies its own
-  // --surface-canvas. Without this the shell flashes its hardcoded white
-  // fallback, even in dark mode.
-  const rootStyle = getComputedStyle(document.documentElement);
-  const fallbackBg = rootStyle.getPropertyValue("--surface-canvas").trim();
-  const fallbackFg = rootStyle.getPropertyValue("--text").trim();
+  // Scryer's chrome theme drives the checkerboard backdrop (the `canvas` param).
+  const isDark = useDarkMode();
+  // The previewed component has its OWN theme, decoupled from scryer's chrome:
+  // it defaults to the chrome theme when the page opens, then is independent so
+  // toggling scryer no longer drags the component with it. Best-effort — see the
+  // preview server's `previewHtml` for what this can and can't theme.
+  const [componentDark, setComponentDark] = useState(isDark);
+  const theme = componentDark ? "dark" : "light";
+  const canvasTheme = isDark ? "dark" : "light";
 
   // An accepted variation (design intent, status `changed`) overrides the
   // live component until the real code catches up.
@@ -2158,8 +2170,7 @@ function PreviewSection({
     `${server.url}/__preview?file=${encodeURIComponent(file)}&export=${encodeURIComponent(exportName)}` +
     (fixture ? `&fixture=${encodeURIComponent(fixture)}` : "") +
     `&theme=${theme}` +
-    (fallbackBg ? `&bg=${encodeURIComponent(fallbackBg)}` : "") +
-    (fallbackFg ? `&fg=${encodeURIComponent(fallbackFg)}` : "");
+    `&canvas=${canvasTheme}`;
 
   const watched: { file: string; exportName: string } | null = accepted
     ? { file: accepted, exportName: "default" }
@@ -2173,13 +2184,13 @@ function PreviewSection({
 
   // The preview entry posts its render verdict (ok/empty/error) to the parent
   // window — this drives the B5 "generate preview data" repair path.
-  const [report, setReport] = useState<{ status: string; error: string | null } | null>(null);
+  const [report, setReport] = useState<{ status: string; error: string | null; hasFixture: boolean } | null>(null);
   useEffect(() => setReport(null), [watched?.file, watched?.exportName]);
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       const d = e.data;
       if (d?.type !== "scryer-render" || !watched || d.file !== watched.file || d.exportName !== watched.exportName) return;
-      setReport({ status: d.status, error: d.error ?? null });
+      setReport({ status: d.status, error: d.error ?? null, hasFixture: !!d.hasFixture });
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
@@ -2194,6 +2205,10 @@ function PreviewSection({
 
   const canEdit = iframeSrc && onStartVariation;
   const needsRepair = report != null && (report.status === "empty" || report.status === "error");
+  // No real data behind the preview (no per-node fixture, no type-keyed shared
+  // fixture) — offer to generate one even when the render is "ok". Skipped for
+  // accepted variations, which render from their own module without fixtures.
+  const noFixture = report != null && report.hasFixture === false && !accepted;
 
   const variationSrcFor = (idx: number) =>
     previewUrl(`.scryer/preview/variations/${node.id}/${idx}.tsx`, "default");
@@ -2204,6 +2219,18 @@ function PreviewSection({
       editable={!!canEdit}
       editing={modalOpen}
       onToggleEdit={() => setModalOpen(!modalOpen)}
+      right={
+        iframeSrc ? (
+          <button
+            type="button"
+            onClick={() => setComponentDark((d) => !d)}
+            title={`Preview the component in ${componentDark ? "light" : "dark"} mode`}
+            className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] cursor-pointer"
+          >
+            {componentDark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+          </button>
+        ) : undefined
+      }
     >
       {iframeSrc ? (
         <div className="flex flex-col gap-2">
@@ -2224,12 +2251,14 @@ function PreviewSection({
               </div>
             )}
           </div>
-          {needsRepair && onFixture && (
+          {(needsRepair || noFixture) && onFixture && (
             <div className="flex items-center gap-3 self-start">
               <span className="text-2xs text-[var(--text-muted)]">
                 {report!.status === "empty"
                   ? "Rendered empty with placeholder props."
-                  : "Render failed with placeholder props."}
+                  : report!.status === "error"
+                    ? "Render failed with placeholder props."
+                    : "Showing placeholder props — no fixture data yet."}
               </span>
               <button
                 type="button"

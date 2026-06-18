@@ -126,6 +126,36 @@ export function linkEvidence(report: ModelHealthReport | null): Record<string, n
   return out;
 }
 
+// --- Dark code: files under a boundary that no claim reads into ---------------
+
+/** One boundary node's blind spots — the files it owns that no anchor in its
+ *  subtree reaches. */
+export interface DarkBoundary {
+  nodeId: string;
+  files: string[];
+}
+
+/** Every dark file in the model, grouped by the boundary node that owns it.
+ *  Boundary ownership is most-specific (see `BoundaryOwnership` in core), so each
+ *  file is dark under exactly one node — the groups partition the dark set with
+ *  no double-counting, and `total` is the project-wide dark-file count. Sorted by
+ *  dark-file count, descending. */
+export function darkBoundaries(report: ModelHealthReport | null): {
+  groups: DarkBoundary[];
+  total: number;
+} {
+  const groups: DarkBoundary[] = [];
+  let total = 0;
+  for (const [nodeId, h] of Object.entries(report?.health.nodes ?? {})) {
+    const files = h.boundary?.darkFiles ?? [];
+    if (files.length === 0) continue;
+    groups.push({ nodeId, files });
+    total += files.length;
+  }
+  groups.sort((a, b) => b.files.length - a.files.length);
+  return { groups, total };
+}
+
 // --- Implied connections: the per-symbol detail behind the aggregates --------
 
 /** One derived (code-only) connection of a node, with the peer rolled up to its

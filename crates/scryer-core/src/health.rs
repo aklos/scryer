@@ -419,6 +419,8 @@ mod tests {
             id: id.into(),
             kind,
             name: id.into(),
+            vagrant: None,
+            stale: None,
             parent_id: parent.map(Into::into),
             external: None,
             technology: None,
