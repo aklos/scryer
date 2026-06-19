@@ -500,7 +500,7 @@ fn check_mcp_json(project_path: &str) -> bool {
 const SCRYER_READ_TOOLS: &[&str] = &[
     "mcp__scryer__read_model",
     "mcp__scryer__search_model",
-    "mcp__scryer__get_unimplemented",
+    "mcp__scryer__get_pending",
     "mcp__scryer__get_rules",
     "mcp__scryer__read_codebase",
     "mcp__scryer__validate_model",
@@ -1488,7 +1488,7 @@ async fn start_model_build(
         extraction.source_files, extraction.parsed_files, extraction.cache_hits,
     );
     // Cache the deterministic symbol dependency graph so the MCP
-    // `commit_container_model` tool (a separate process) wires code-level links
+    // `fill_container` tool (a separate process) wires code-level links
     // from the same edges the agent saw, instead of having the agent author
     // them by hand and fight the same-level link validator. Best-effort.
     let build_edges = scryer_core::build_edges::BuildEdges {

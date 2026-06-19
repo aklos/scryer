@@ -110,7 +110,6 @@ function AppBody() {
       newNodeIds={storage.newNodeIds}
       clearNewNode={storage.clearNewNode}
       newRespIds={storage.newRespIds}
-      clearNewResp={storage.clearNewResp}
       changeLog={storage.changeLog}
       history={storage.history}
       clearAllNew={storage.clearAllNew}
@@ -133,7 +132,6 @@ function Workspace({
   newNodeIds,
   clearNewNode,
   newRespIds,
-  clearNewResp,
   changeLog,
   history,
   clearAllNew,
@@ -152,7 +150,6 @@ function Workspace({
   newNodeIds: ReadonlySet<string>;
   clearNewNode: (id: string) => void;
   newRespIds: ReadonlySet<string>;
-  clearNewResp: (id: string) => void;
   changeLog: ReturnType<typeof useModelStorage>["changeLog"];
   history: ReturnType<typeof useModelStorage>["history"];
   clearAllNew: () => void;
@@ -631,7 +628,6 @@ function Workspace({
           onToggle={toggle}
           editor={pageEditor}
           activeNodeIds={build.active ? build.activeNodeIds : EMPTY_IDS}
-          newNodeIds={newNodeIds}
         />
         {view === "diagram" ? (
           <DiagramView
@@ -685,8 +681,6 @@ function Workspace({
             onAcceptVariation={onAcceptVariation}
             onDiscardVariations={onDiscardVariations}
             onSelectVariation={onSelectVariation}
-            newRespIds={newRespIds}
-            onClearNewResp={clearNewResp}
             changeLog={changeLog}
             history={history}
             driftScopes={driftScopes}

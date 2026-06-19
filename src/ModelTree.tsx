@@ -4,7 +4,7 @@
  * rendered as folders that wrap their members. Every node is reachable and
  * first-class. A change-letter gutter (A/M/D/R from the plan diff, Q/X for
  * drift) marks each row at a glance and rolls up onto collapsed branches; agent
- * activity and fresh arrivals are reflected on the rows. Right-click for
+ * activity is reflected on the rows. Right-click for
  * structural edits (add child, rename, delete, group membership).
  */
 
@@ -110,7 +110,6 @@ export function ModelTree({
   onToggle,
   editor,
   activeNodeIds,
-  newNodeIds,
 }: {
   model: ScryModel;
   /** Live `diff(committed, planned)` — drives the change-letter gutter. */
@@ -122,7 +121,6 @@ export function ModelTree({
   onToggle: (id: string, expand?: boolean) => void;
   editor: Editor | undefined;
   activeNodeIds: ReadonlySet<string>;
-  newNodeIds: ReadonlySet<string>;
 }) {
   const [width, setWidth] = useState(() => {
     const saved = Number(localStorage.getItem("scryer:treeWidth"));
@@ -624,7 +622,6 @@ export function ModelTree({
     const ramp = altitudeRamp(node);
     const Icon = lookupIcon(node.icon) ?? kindIcon(node);
     const active = activeNodeIds.has(node.id);
-    const fresh = newNodeIds.has(node.id);
     const hiddenSyms =
       !filterActive && node.kind === "component" ? hiddenSymbolCount(node.id) : 0;
     const isDrop = dropKey === `node:${node.id}`;
@@ -684,9 +681,7 @@ export function ModelTree({
               }}
             />
           ) : (
-            // Indigo = the agent: this node arrived from an agent write and
-            // hasn't been reviewed yet (cleared on selection).
-            <span className={fresh ? "text-indigo-600 dark:text-indigo-400" : ""}>
+            <span>
               {node.name || <span className="italic text-[var(--text-ghost)]">Untitled</span>}
             </span>
           )}

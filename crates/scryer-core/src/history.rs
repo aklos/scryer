@@ -26,7 +26,7 @@ pub enum EventKind {
     Drift,
     /// Structural move — reparent / repoint (`move_nodes`, `move_responsibilities`).
     Move,
-    /// A node first entered the committed model (`commit_container_model`).
+    /// A node first entered the committed model (`fill_container`).
     Born,
 }
 

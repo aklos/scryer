@@ -11,7 +11,7 @@
  *
  * Computed client-side so the diff updates live as you edit, with no async
  * round-trip. The JSON shape mirrors the Rust `ModelDiff` exactly (the agent
- * consumes the same diff via `get_unimplemented`), so the two never disagree.
+ * consumes the same diff via `get_pending`), so the two never disagree.
  * Identity is carried by stable ids, so a reparent reads as `Moved` and a
  * relabel as `Reworded`, never as a spurious delete-plus-add.
  */

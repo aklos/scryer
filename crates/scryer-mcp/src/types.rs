@@ -1,6 +1,29 @@
 use scryer_core::{Responsibility, SchemaProperty, Source, SourceLocation};
 use serde::Deserialize;
 
+/// Which layer of the model a read returns.
+#[derive(Debug, Clone, Copy, Default, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Layer {
+    /// The editable draft — what you author and what the canvas shows. The default,
+    /// and what you almost always want: a read reflects your own pending edits.
+    #[default]
+    Plan,
+    /// The committed model the code is currently believed to satisfy. Read this only
+    /// to inspect the source of truth behind the plan (e.g. to see what's not yet built).
+    Committed,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct DescopeRequest {
+    /// Absolute path to the project root. If omitted, uses the current working directory.
+    pub project: Option<String>,
+    /// Node ids to remove from the MODEL because they shouldn't be modeled — the code stays.
+    /// Each node's own responsibilities relocate to its parent (anchors preserved); the node and
+    /// its descendants are then removed. Operates on both the plan and the committed model at once.
+    pub node_ids: Vec<String>,
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct ReadModelRequest {
     /// Absolute path to the project root. If omitted, uses the current working directory.
@@ -10,6 +33,11 @@ pub(crate) struct ReadModelRequest {
     /// THAT node's full subtree: its descendants (including symbols), responsibilities, properties,
     /// links, and source anchors. Drill into a component to see its symbols.
     pub node: Option<String>,
+    /// Which layer to read: "plan" (default — your editable draft, what the canvas shows) or
+    /// "committed" (the model the code currently satisfies). Leave unset unless you specifically
+    /// need the committed source of truth.
+    #[serde(default)]
+    pub layer: Layer,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -22,6 +50,10 @@ pub(crate) struct SearchModelRequest {
     pub query: String,
     /// Optional kind filter: "person", "system", "container", "component", or "symbol".
     pub kind: Option<String>,
+    /// Which layer to search: "plan" (default — your editable draft) or "committed" (the model
+    /// the code currently satisfies). Leave unset unless you specifically need committed.
+    #[serde(default)]
+    pub layer: Layer,
 }
 
 /// One predicate in a `query_model` request: a `field`, a comparison `op`, and
@@ -59,10 +91,14 @@ pub(crate) struct QueryModelRequest {
     /// Restrict results to the subtree rooted at this node id (the node and its
     /// descendants). Omit to query the whole model.
     pub under: Option<String>,
+    /// Which layer to query: "plan" (default — your editable draft) or "committed" (the model
+    /// the code currently satisfies). Leave unset unless you specifically need committed.
+    #[serde(default)]
+    pub layer: Layer,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct GetUnimplementedRequest {
+pub(crate) struct GetPendingRequest {
     /// Absolute path to the project root. If omitted, uses the current working directory.
     pub project: Option<String>,
 }
@@ -145,33 +181,26 @@ pub(crate) struct SetModelRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct AddNodeItem {
-    /// Display name for the node.
-    pub name: String,
-    /// The node's identity in a few words — what it IS as software, NOT a summary of its responsibilities (those are a
-    /// separate field). If it reads as a comma-list of the responsibilities, omit it. Optional.
+pub(crate) struct UpdateGroupItem {
+    /// ID of the group to patch.
+    pub group_id: String,
+    /// New display name. Omit to leave unchanged.
+    pub name: Option<String>,
+    /// New description. Omit to leave unchanged.
     pub description: Option<String>,
-    /// Node kind: "person", "system", "container", "component", or "symbol".
-    pub kind: String,
-    /// ID of the parent node. Required for container/component/symbol; omit for person/system.
-    pub parent_id: Option<String>,
-    /// Technology label — what the node IS as software (e.g. "Payload 3.0", "PostgreSQL 16"). Not for persons.
-    pub technology: Option<String>,
-    /// Whether this is an external system (systems/containers only).
-    pub external: Option<bool>,
-    /// Pure business-responsibility statements — one terse verb-led clause each. Lead with the distinguishing verb + object,
-    /// then stop: no mechanism vocabulary, no trailing "by/where/so that" tails, no repeating the obvious domain on every line.
+    /// Replacement member node ids (2+, all children of the group's parent node — same C4 level).
+    /// Omit to leave the membership unchanged.
+    pub member_ids: Option<Vec<String>>,
+    /// Replacement responsibilities for the group. Omit to leave unchanged; pass an empty array to clear.
     pub responsibilities: Option<Vec<Responsibility>>,
-    /// Field declarations, when this symbol defines a data shape (struct, class,
-    /// interface, type). A symbol may carry both responsibilities and properties.
-    pub properties: Option<Vec<SchemaProperty>>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct AddNodeRequest {
+pub(crate) struct UpdateGroupRequest {
+    /// Absolute path to the project root. If omitted, uses the current working directory.
     pub project: Option<String>,
-    /// Array of nodes to add.
-    pub nodes: Vec<AddNodeItem>,
+    /// Groups to patch by id. Only fields present in each item are changed.
+    pub items: Vec<UpdateGroupItem>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -332,7 +361,7 @@ pub(crate) struct DeleteGroupRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct SetImplementingRequest {
+pub(crate) struct SetDriftWatchRequest {
     pub project: Option<String>,
     /// true to suppress drift detection while implementing, false to resume.
     pub active: bool,

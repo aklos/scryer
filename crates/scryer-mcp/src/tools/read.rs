@@ -321,10 +321,20 @@ fn eval_condition(n: &Node, c: &QueryCondition, child_count: usize) -> Result<bo
     }
 }
 
+/// Read the model layer a request asked for. The plan is the default everywhere —
+/// reads reflect pending edits, matching what the canvas shows — and `read_planned_at`
+/// falls back to committed when no plan exists yet, so this is always safe.
+fn read_layer(model_ref: &scryer_core::ModelRef, layer: Layer) -> Result<ScryModel, String> {
+    match layer {
+        Layer::Plan => scryer_core::read_planned_at(model_ref),
+        Layer::Committed => scryer_core::read_model_at(model_ref),
+    }
+}
+
 #[tool_router(router = tool_router_read, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "Read the architecture model. With NO `node`, returns the OVERVIEW: the whole tree down to components (symbols excluded) with responsibility/property counts — small and safe, the right first read. Pass a `node` id to read THAT node's full subtree: its descendants (including symbols), responsibilities, properties, links, `referencesForChildren` (the only nodes its children may link to), and the subtree's source map + boundaries. Drill into a component to see its symbols. If a requested subtree is too large to return whole, you get its direct-child skeleton plus guidance to drill further. The MCP baseline is updated on every call."
+        description = "Read the architecture model. With NO `node`, returns the OVERVIEW: the whole tree down to components (symbols excluded) with responsibility/property counts — small and safe, the right first read. Pass a `node` id to read THAT node's full subtree: its descendants (including symbols), responsibilities, properties, links, `referencesForChildren` (the only nodes its children may link to), and the subtree's source map + boundaries. Drill into a component to see its symbols. If a requested subtree is too large to return whole, you get its direct-child skeleton plus guidance to drill further. Reads the PLAN by default — your editable draft, the same state the canvas shows, including your pending edits — so what you read back reflects what you just authored. Pass `layer: \"committed\"` only to inspect the source of truth the code currently satisfies."
     )]
     fn read_model(
         &self,
@@ -333,7 +343,7 @@ impl ScryerServer {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
         *self.active_model.lock().unwrap() = Some(model_ref.clone());
 
-        let model = match scryer_core::read_model_at(&model_ref) {
+        let model = match read_layer(&model_ref, req.layer) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -342,7 +352,11 @@ impl ScryerServer {
                 ))]));
             }
         };
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
+        // Keep the legacy committed-model baseline fresh only when committed was actually
+        // read; reading the plan (the default) must never overwrite the committed snapshot.
+        if matches!(req.layer, Layer::Committed) {
+            let _ = scryer_core::save_baseline_at(&model_ref, &model);
+        }
 
         // Above this serialized size a subtree risks blowing the agent's
         // context, so it degrades to a child skeleton instead of dumping.
@@ -409,7 +423,7 @@ impl ScryerServer {
         Parameters(req): Parameters<SearchModelRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
-        let model = match scryer_core::read_model_at(&model_ref) {
+        let model = match read_layer(&model_ref, req.layer) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -418,7 +432,11 @@ impl ScryerServer {
                 ))]));
             }
         };
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
+        // Keep the legacy committed-model baseline fresh only when committed was actually
+        // read; reading the plan (the default) must never overwrite the committed snapshot.
+        if matches!(req.layer, Layer::Committed) {
+            let _ = scryer_core::save_baseline_at(&model_ref, &model);
+        }
 
         let kind_filter = match req.kind.as_deref() {
             Some(k) => Some(parse_kind(k)?),
@@ -498,7 +516,7 @@ impl ScryerServer {
         Parameters(req): Parameters<QueryModelRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
-        let model = match scryer_core::read_model_at(&model_ref) {
+        let model = match read_layer(&model_ref, req.layer) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -507,7 +525,11 @@ impl ScryerServer {
                 ))]));
             }
         };
-        let _ = scryer_core::save_baseline_at(&model_ref, &model);
+        // Keep the legacy committed-model baseline fresh only when committed was actually
+        // read; reading the plan (the default) must never overwrite the committed snapshot.
+        if matches!(req.layer, Layer::Committed) {
+            let _ = scryer_core::save_baseline_at(&model_ref, &model);
+        }
 
         if req.conditions.is_empty() {
             return Ok(CallToolResult::error(vec![Content::text(
@@ -682,11 +704,11 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "What model intent is NOT yet reflected in code — the model→code work outstanding. This is the PLAN diff: how the draft (`planned`) diverges from the committed `model`. Each entry names an element (node / responsibility / property / link / group) and what to do: `added` (implement new code), `reworded` (re-implement to the new spec), `moved` (move the code), `repointed` (re-point the relationship), `deleted` (remove the code) — with a breadcrumb path and, for responsibilities, source anchors. Implementing an entry and calling `mark_implemented` commits it (folds it from the plan into the model). Call this to find what needs implementing or syncing to the codebase."
+        description = "What model intent is NOT yet reflected in code — the model→code work outstanding. This is the PLAN diff: how the draft (`planned`) diverges from the committed `model`. Each entry names an element (node / responsibility / property / link / group) and what to do: `added` (implement new code), `reworded` (re-implement to the new spec), `moved` (move the code), `repointed` (re-point the relationship), `deleted` (remove the code) — with a breadcrumb path and, for responsibilities, source anchors. Implementing an entry and calling `mark_implemented` folds it from the plan into the committed model. Call this to find what needs implementing or syncing to the codebase."
     )]
-    fn get_unimplemented(
+    fn get_pending(
         &self,
-        Parameters(req): Parameters<GetUnimplementedRequest>,
+        Parameters(req): Parameters<GetPendingRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
         let model = match scryer_core::read_model_at(&model_ref) {
@@ -1138,6 +1160,7 @@ mod tests {
             .read_model(Parameters(ReadModelRequest {
                 project: Some(project.clone()),
                 node: None,
+                layer: Layer::Plan,
             }))
             .unwrap();
         let v = result_json(&r);
@@ -1154,6 +1177,7 @@ mod tests {
             .read_model(Parameters(ReadModelRequest {
                 project: Some(project),
                 node: Some("node-3".into()),
+                layer: Layer::Plan,
             }))
             .unwrap();
         let v = result_json(&r);
@@ -1169,6 +1193,7 @@ mod tests {
             .read_model(Parameters(ReadModelRequest {
                 project: Some(project),
                 node: Some("node-999".into()),
+                layer: Layer::Plan,
             }))
             .unwrap();
         assert!(serde_json::to_string(&r.content).unwrap().contains("not found"));
@@ -1201,6 +1226,7 @@ mod tests {
             .read_model(Parameters(ReadModelRequest {
                 project: Some(project),
                 node: Some("node-2".into()),
+                layer: Layer::Plan,
             }))
             .unwrap();
         let v = result_json(&r);
@@ -1219,6 +1245,7 @@ mod tests {
                 project: Some(project),
                 query: "forged".into(),
                 kind: None,
+                layer: Layer::Plan,
             }))
             .unwrap();
         let v = result_json(&r);
@@ -1229,7 +1256,7 @@ mod tests {
     }
 
     #[test]
-    fn get_unimplemented_reports_the_plan_diff() {
+    fn get_pending_reports_the_plan_diff() {
         let dir = tempfile::tempdir().unwrap();
         let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
 
@@ -1269,7 +1296,7 @@ mod tests {
 
         let server = ScryerServer::new();
         let r = server
-            .get_unimplemented(Parameters(GetUnimplementedRequest {
+            .get_pending(Parameters(GetPendingRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
             }))
             .unwrap();
@@ -1359,6 +1386,7 @@ mod tests {
                 project: Some(project.clone()),
                 query: "verify hash".into(),
                 kind: None,
+                layer: Layer::Plan,
             }))
             .unwrap();
         assert_eq!(result_json(&r)["hits"], 0);
@@ -1368,6 +1396,7 @@ mod tests {
                 project: Some(project),
                 query: "Auth".into(),
                 kind: Some("symbol".into()),
+                layer: Layer::Plan,
             }))
             .unwrap();
         assert_eq!(result_json(&r)["hits"], 0);
@@ -1383,6 +1412,7 @@ mod tests {
                 project: Some(project),
                 query: "verfy".into(),
                 kind: None,
+                layer: Layer::Plan,
             }))
             .unwrap();
         let v = result_json(&r);
@@ -1400,6 +1430,7 @@ mod tests {
                 project: Some(project),
                 query: "elephant".into(),
                 kind: None,
+                layer: Layer::Plan,
             }))
             .unwrap();
         assert_eq!(result_json(&r)["hits"], 0);
@@ -1427,6 +1458,7 @@ mod tests {
                 project: Some(project),
                 query: "charges".into(),
                 kind: None,
+                layer: Layer::Plan,
             }))
             .unwrap();
         let v = result_json(&r);

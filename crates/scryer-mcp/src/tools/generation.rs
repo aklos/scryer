@@ -242,9 +242,9 @@ fn validate_request(req: &CommitContainerModelRequest) -> Result<(), String> {
 #[tool_router(router = tool_router_generation, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "Atomically commit the complete component + symbol model for ONE existing container. Use this during codebase-to-model generation instead of separate add_component/add_symbol/add_group calls. Components and nested mandatory symbols use unique request-local `key` values; group memberKeys are local component keys. You do NOT author code-level links: the server wires component→component and symbol→symbol links automatically from the deterministic dependency graph. The optional `links` field is only for cross-boundary relationships (to an external/other-container node id) that the dependency graph can't infer; any link it can't place legally is dropped and reported, never fatal. The server validates the proposal, mints ids, resolves references, derives links, and performs one model write. Structural problems (missing symbols, duplicate keys) reject the whole proposal with a specific reason; fix exactly that and retry."
+        description = "GENERATION-PIPELINE primitive — atomically fill in the complete component + symbol model for ONE existing container in a single write (the agent never assembles ids by hand). Used during codebase→model generation instead of separate add_component/add_symbol/add_group calls. Components and nested mandatory symbols use unique request-local `key` values; group memberKeys are local component keys. You do NOT author code-level links: the server wires component→component and symbol→symbol links automatically from the deterministic dependency graph. The optional `links` field is only for cross-boundary relationships (to an external/other-container node id) that the dependency graph can't infer; any link it can't place legally is dropped and reported, never fatal. The server validates the proposal, mints ids, resolves references, derives links, and performs one model write. Structural problems (missing symbols, duplicate keys) reject the whole proposal with a specific reason; fix exactly that and retry."
     )]
-    fn commit_container_model(
+    fn fill_container(
         &self,
         Parameters(req): Parameters<CommitContainerModelRequest>,
     ) -> Result<CallToolResult, McpError> {
@@ -274,7 +274,7 @@ impl ScryerServer {
             n.parent_id.as_deref() == Some(req.container_id.as_str()) && n.kind == Kind::Component
         }) {
             return Ok(err(format!(
-                "Container '{}' already has components; atomic generation only commits an empty subtree",
+                "Container '{}' already has components; atomic generation only fills an empty subtree",
                 req.container_id
             )));
         }
@@ -699,7 +699,7 @@ mod tests {
         let (server, dir, container_id) = temp_project();
         let project = dir.path().to_string_lossy().to_string();
         server
-            .commit_container_model(Parameters(request(project, container_id.clone())))
+            .fill_container(Parameters(request(project, container_id.clone())))
             .unwrap();
 
         let model =
@@ -750,7 +750,7 @@ mod tests {
 
         let project = dir.path().to_string_lossy().to_string();
         server
-            .commit_container_model(Parameters(request(project, container_id.clone())))
+            .fill_container(Parameters(request(project, container_id.clone())))
             .unwrap();
 
         let planned = scryer_core::read_planned_at(&model_ref).unwrap();
@@ -783,7 +783,7 @@ mod tests {
         let project = dir.path().to_string_lossy().to_string();
         let mut req = request(project, container_id);
         req.components[0].symbols.clear();
-        server.commit_container_model(Parameters(req)).unwrap();
+        server.fill_container(Parameters(req)).unwrap();
 
         let model =
             scryer_core::read_model_at(&ModelRef::ProjectLocal(dir.path().to_path_buf())).unwrap();
@@ -809,7 +809,7 @@ mod tests {
         let mut req = request(project, container_id);
         req.links.clear(); // the agent authors nothing; the server must wire it
 
-        server.commit_container_model(Parameters(req)).unwrap();
+        server.fill_container(Parameters(req)).unwrap();
 
         let model =
             scryer_core::read_model_at(&ModelRef::ProjectLocal(dir.path().to_path_buf())).unwrap();
@@ -845,7 +845,7 @@ mod tests {
             label: "calls".into(),
             method: None,
         }];
-        server.commit_container_model(Parameters(req)).unwrap();
+        server.fill_container(Parameters(req)).unwrap();
 
         let model =
             scryer_core::read_model_at(&ModelRef::ProjectLocal(dir.path().to_path_buf())).unwrap();
@@ -874,7 +874,7 @@ mod tests {
         let project = dir.path().to_string_lossy().to_string();
         let mut req = request(project, container_id);
         req.components[0].symbols[0].key = "sessions".into();
-        server.commit_container_model(Parameters(req)).unwrap();
+        server.fill_container(Parameters(req)).unwrap();
 
         let model =
             scryer_core::read_model_at(&ModelRef::ProjectLocal(dir.path().to_path_buf())).unwrap();

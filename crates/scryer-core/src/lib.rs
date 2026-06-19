@@ -391,7 +391,7 @@ impl ModelRef {
     }
 
     /// Where the deterministic codebase dependency graph is cached for the
-    /// duration of a model build, so the MCP `commit_container_model` tool (a
+    /// duration of a model build, so the MCP `fill_container` tool (a
     /// separate process from the build orchestrator) can wire code-level links
     /// from the same edges the agent saw — without re-parsing the project.
     pub fn build_edges_path(&self) -> PathBuf {

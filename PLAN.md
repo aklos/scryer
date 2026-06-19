@@ -26,7 +26,7 @@ by default, with the LLM demoted to a repair path.
   with ~10% overlap — is directly reusable (A3). The 340-repo study (arXiv
   2603.21178) found free-roaming general-purpose agents were the *worst*
   configuration; tightly-constrained pipelines win — which is what our
-  intent-tool + `commit_container_model` bottleneck already is.
+  intent-tool + `fill_container` bottleneck already is.
 - **Zero-fixture component rendering is proven** by Preview.js (archived
   2026-03): TS-compiler prop synthesis + one shared Vite dev server + virtual
   entry modules per component. Its prop-inference package
@@ -53,7 +53,7 @@ multiple permits; the biggest container is the long pole.
 ### A1. Embed the code evidence in the Wave 2 payload
 Extend `compact_scope` so each symbol carries an excerpt: signature + doc
 comment + body, truncated past a size cap. The Wave 2 session becomes
-think → one `commit_container_model` call (~2 turns instead of 5–15).
+think → one `fill_container` call (~2 turns instead of 5–15).
 Touches: `scryer-extract` (excerpt extraction), `prompt.rs` (payload format),
 payload-size guard. **Biggest single win.**
 
@@ -69,7 +69,7 @@ container-minting function.
 ### A3. Split oversized containers into chunked jobs
 Token-bounded DFS partition over the file dependency graph, ~10% overlap
 (ArchAgent recipe). Each chunk gets its own session. Requires an append mode on
-`commit_container_model` (or per-chunk commits + one cheap merge turn for
+`fill_container` (or per-chunk commits + one cheap merge turn for
 naming/altitude). Kills the long-pole container.
 Touches: partitioner in `scryer-extract`, commit semantics in `generation.rs`,
 orchestrator.
@@ -154,5 +154,5 @@ Each step is a checkpoint: measure, report, decide before the next.
 - Pool cap: is 4 grounded in actual rate-limit pain, or untested caution?
   (Decides how hard to push A4.)
 - Target number: what first-build wall-clock counts as success — <60s? ~90s?
-- A3 commit semantics: append mode on `commit_container_model` vs per-chunk
+- A3 commit semantics: append mode on `fill_container` vs per-chunk
   commits + merge turn (pick when we get there, after A1/A2 measurements).

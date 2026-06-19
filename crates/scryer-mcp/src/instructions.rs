@@ -7,7 +7,7 @@ canvas, you through these MCP tools.\n\
 ## Two layers: the committed model and the plan\n\
 Scryer holds two layers on disk: the committed `model` (`.scryer/model.scry`, the source of truth — what the code \
 is believed to satisfy) and the `planned` draft (`.scryer/planned.scry`, the intent you and the canvas edit). Their \
-difference is the PLAN — the model→code work queue (`get_unimplemented`). Every authoring tool writes the PLAN; the \
+difference is the PLAN — the model→code work queue (`get_pending`). Every authoring tool writes the PLAN; the \
 committed model changes only when work is implemented and folds in (`mark_implemented`), or when you extract from \
 code that already exists. Each tool's own description tells you how to call it; this is the cross-cutting picture.\n\
 \n\
@@ -35,20 +35,21 @@ infer the conventions from existing nodes. Run `validate_model` and fix every wa
 \n\
 ## Building from a codebase (preferred flow)\n\
 1. `read_codebase {path}` to see deployable units, data stores, and external services on disk.\n\
-2. Build top-down. When you are EXTRACTING a model from code that already exists, use `commit_container_model` to \
+2. Build top-down. When you are EXTRACTING a model from code that already exists, use `fill_container` to \
 commit a whole container's subtree at once (it writes the plan and immediately folds it into the committed model — \
 the code is already there, so it is committed, not pending). The INTENT tools — `add_person` / `add_system` / \
 `add_container` / `add_component` / `add_symbol` — mint ids from plain responsibility statements and return the \
 nodes they create; they write the PLAN, so when you build with them from existing code, `mark_implemented` what you \
 authored to commit it (the code already discharges it).\n\
 3. `add_links` to connect nodes, then `validate_model`.\n\
-The raw tools — `set_model` (commits the whole state), `add_nodes` / `update_nodes` / `delete_nodes`, `set_node`, \
-`update_source_map` — remain for whole-model edits and refinement; the granular ones write the plan. To find \
-things: `search_model` by text, `query_model` by structure, `get_unimplemented` for the plan (outstanding \
+`set_model` and `set_node` are generation-pipeline primitives (whole-model / whole-subtree writes used during \
+codebase→model generation) — interactive editing uses the typed tools above. `update_nodes` / `delete_nodes` / \
+`descope` / `update_source_map` refine and write the plan. To find \
+things: `search_model` by text, `query_model` by structure, `get_pending` for the plan (outstanding \
 model→code work), `mark_implemented` to commit it after you write code.\n\
 \n\
 ## Keeping the model in sync with the code (drift)\n\
-Two directions. Model→code: `get_unimplemented` lists spec not yet built; `mark_implemented` closes it. \
+Two directions. Model→code: `get_pending` lists spec not yet built; `mark_implemented` closes it. \
 Code→model: `get_drift` reports the boundary-owning nodes whose code CHANGED since the last reconcile (cheap, \
 deterministic — mtimes + git, no verdict). For each scope it returns, `read_model {node}` to load the claims, \
 compare them against what the changed code now does, and `flag_drift` to record undescribed behaviour and stale \

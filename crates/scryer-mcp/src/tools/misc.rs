@@ -213,7 +213,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Create or replace one or more groups. Pass a single group object or an array of groups in `data`. Groups are organizational: at container level they represent deployment units, at component level they represent modules. Each group MUST list its `memberIds` and set `parentNodeId` to the node whose children those members are — parentNodeId anchors the group to that node's level so it renders inside that node's diagram (a memberless or parentNodeId-less group renders empty at the top level). Members must all be at the same C4 level. Groups can carry their own responsibilities."
+        description = "GENERATION-PIPELINE primitive — create or replace groups in bulk from raw `Group` JSON (used during codebase→model generation). Pass a single group object or an array of groups in `data`. Groups are organizational: at container level they represent deployment units, at component level they represent modules. Each group MUST list its `memberIds` and set `parentNodeId` to the node whose children those members are — parentNodeId anchors the group to that node's level so it renders inside that node's diagram (a memberless or parentNodeId-less group renders empty at the top level). Members must all be at the same C4 level. Groups can carry their own responsibilities. For interactive editing, use the typed `add_group` / `update_group` / `delete_group` instead."
     )]
     fn set_groups(
         &self,
@@ -298,6 +298,99 @@ impl ScryerServer {
         ))]))
     }
 
+    #[tool(
+        description = "Patch an existing group by id — change its name, description, members, or responsibilities. Only fields present in each item are changed; omit a field to leave it. `memberIds`, if given, replaces the membership (2+ nodes, all children of the group's parent node — same C4 level). This is the typed counterpart to `add_group`/`delete_group` for EDITING a group without reassembling raw JSON."
+    )]
+    fn update_group(
+        &self,
+        Parameters(req): Parameters<UpdateGroupRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read model at {}: {}",
+                    model_ref, e
+                ))]));
+            }
+        };
+
+        let prior = model.clone();
+        let mut updated = 0usize;
+        for item in &req.items {
+            // Validate a replacement membership against the group's own level
+            // before mutating, so a bad member leaves the model untouched.
+            if let Some(members) = &item.member_ids {
+                if members.len() < 2 {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Group '{}' needs at least 2 members",
+                        item.group_id
+                    ))]));
+                }
+                let parent_node = match model.groups.iter().find(|g| g.id == item.group_id) {
+                    Some(g) => g.parent_node_id.clone(),
+                    None => {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Group '{}' not found",
+                            item.group_id
+                        ))]))
+                    }
+                };
+                for mid in members {
+                    match model.nodes.iter().find(|n| &n.id == mid) {
+                        None => {
+                            return Ok(CallToolResult::error(vec![Content::text(format!(
+                                "Group member '{}' is not a node",
+                                mid
+                            ))]))
+                        }
+                        Some(n) if parent_node.is_some() && n.parent_id != parent_node => {
+                            return Ok(CallToolResult::error(vec![Content::text(format!(
+                                "Group member '{}' is not a child of the group's parent node",
+                                mid
+                            ))]))
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            let Some(g) = model.groups.iter_mut().find(|g| g.id == item.group_id) else {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Group '{}' not found",
+                    item.group_id
+                ))]));
+            };
+            if let Some(v) = &item.name {
+                g.name = v.clone();
+            }
+            if let Some(v) = &item.description {
+                g.description = Some(v.clone());
+            }
+            if let Some(v) = &item.member_ids {
+                g.member_ids = v.clone();
+            }
+            if let Some(v) = &item.responsibilities {
+                g.responsibilities = v.clone();
+            }
+            updated += 1;
+        }
+        enforce_readonly_directives(&mut model, &prior);
+
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Updated {} group(s)",
+            updated
+        ))]))
+    }
+
     #[tool(description = "Delete a group by id.")]
     fn delete_group(
         &self,
@@ -345,9 +438,9 @@ impl ScryerServer {
     #[tool(
         description = "Pause or resume drift detection for this project's model. Call with active=true before implementing code; active=false after."
     )]
-    fn set_implementing(
+    fn set_drift_watch(
         &self,
-        Parameters(req): Parameters<SetImplementingRequest>,
+        Parameters(req): Parameters<SetDriftWatchRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
         if let Err(e) = scryer_core::set_implementing_at(&model_ref, req.active) {
@@ -357,5 +450,92 @@ impl ScryerServer {
             "Implementing flag = {}",
             req.active
         ))]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmcp::handler::server::wrapper::Parameters;
+    use scryer_core::{Group, Kind, ModelRef, Node, ScryModel};
+
+    fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
+        Node {
+            id: id.into(),
+            kind,
+            name: name.into(),
+            vagrant: None,
+            stale: None,
+            parent_id: parent.map(|p| p.into()),
+            external: None,
+            technology: None,
+            description: None,
+            responsibilities: Vec::new(),
+            properties: Vec::new(),
+            icon: None,
+            visual: None,
+            appearance: None,
+            notes: None,
+        }
+    }
+
+    /// update_group patches an existing group by id: rename + clear
+    /// responsibilities, leaving membership intact when memberIds is omitted;
+    /// an unknown id is rejected.
+    #[test]
+    fn update_group_patches_fields_by_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::System, "Acme", None));
+        m.nodes.push(node("node-2", Kind::Container, "Web", Some("node-1")));
+        m.nodes.push(node("node-3", Kind::Container, "Worker", Some("node-1")));
+        m.groups.push(Group {
+            id: "group-1".into(),
+            name: "Backend".into(),
+            description: None,
+            member_ids: vec!["node-2".into(), "node-3".into()],
+            parent_group_id: None,
+            parent_node_id: Some("node-1".into()),
+            responsibilities: vec![],
+            icon: None,
+        });
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+
+        let server = ScryerServer::new();
+        let project = dir.path().to_string_lossy().to_string();
+
+        server
+            .update_group(Parameters(UpdateGroupRequest {
+                project: Some(project.clone()),
+                items: vec![UpdateGroupItem {
+                    group_id: "group-1".into(),
+                    name: Some("Platform".into()),
+                    description: Some("deployable backend".into()),
+                    member_ids: None,
+                    responsibilities: Some(vec![]),
+                }],
+            }))
+            .unwrap();
+
+        let g = scryer_core::read_planned_at(&model_ref).unwrap().groups[0].clone();
+        assert_eq!(g.name, "Platform");
+        assert_eq!(g.description.as_deref(), Some("deployable backend"));
+        assert_eq!(g.member_ids.len(), 2, "membership unchanged when memberIds omitted");
+        assert!(g.responsibilities.is_empty(), "responsibilities cleared");
+
+        let res = server
+            .update_group(Parameters(UpdateGroupRequest {
+                project: Some(project),
+                items: vec![UpdateGroupItem {
+                    group_id: "group-999".into(),
+                    name: Some("X".into()),
+                    description: None,
+                    member_ids: None,
+                    responsibilities: None,
+                }],
+            }))
+            .unwrap();
+        assert!(res.is_error.unwrap_or(false), "unknown group id rejected");
     }
 }

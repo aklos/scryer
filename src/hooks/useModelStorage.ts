@@ -713,7 +713,7 @@ export function useModelStorage(): ModelStorage {
 
   // The plan: how the working draft diverges from the committed model. Computed
   // client-side so it tracks every canvas keystroke with no round-trip; the
-  // JSON shape mirrors the agent's `get_unimplemented`, so the two never
+  // JSON shape mirrors the agent's `get_pending`, so the two never
   // disagree about what's pending.
   const planDiff = useMemo<ModelDiff>(
     () => (committed && model ? computePlanDiff(committed, model) : EMPTY_DIFF),

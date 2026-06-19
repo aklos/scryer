@@ -1,6 +1,6 @@
 //! The deterministic codebase dependency graph, cached to disk for one model
 //! build. The build orchestrator (in the Tauri app) extracts it once; the MCP
-//! `commit_container_model` tool — which runs in a separate process and has no
+//! `fill_container` tool — which runs in a separate process and has no
 //! parser of its own — reads it back to wire code-level links from the same
 //! edges the modeling agent was shown, instead of asking the agent to author
 //! (and mis-author) them by hand.

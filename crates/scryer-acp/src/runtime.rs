@@ -307,7 +307,7 @@ fn start_cli_session(
 
     // Tee the raw agent stream to disk. Sessions run with
     // `--no-session-persistence`, so without this nothing records what the agent
-    // actually did — every tool call, every commit_container_model argument, and
+    // actually did — every tool call, every fill_container argument, and
     // every validator rejection is in this stdout stream. One file per session.
     let log_dir = std::path::Path::new(cwd).join(".scryer").join("build-logs");
     let _ = std::fs::create_dir_all(&log_dir);

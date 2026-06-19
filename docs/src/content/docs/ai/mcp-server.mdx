@@ -3,67 +3,94 @@ title: MCP Server
 description: The scryer MCP server — how AI agents read and modify your architecture model.
 ---
 
-The MCP (Model Context Protocol) server is what makes scryer a two-way tool. You edit the visual diagram, and AI agents read and modify the same model programmatically.
+The MCP (Model Context Protocol) server is what makes scryer a two-way tool. You edit the visual canvas, and AI agents read and modify the same model programmatically.
 
 ## How it works
 
 The `scryer-mcp` binary ships bundled with the desktop app. When configured, your AI agent spawns it as a subprocess and communicates over stdio.
 
-Everything the agent does through MCP shows up on your canvas in real-time. Add a node through the API? It appears in the editor. Move things around in the editor? The agent sees the updated positions on its next read.
+Everything the agent does through MCP shows up on your canvas. Author a node through a tool and it appears in the editor; rearrange things in the editor and the agent sees the update on its next read.
+
+## Two layers: the plan and the committed model
+
+Scryer keeps the model in two layers on disk:
+
+- The **committed** model (`.scryer/model.scry`) — the source of truth: what the code is believed to satisfy.
+- The **plan** (`.scryer/planned.scry`) — the editable draft you and the canvas author.
+
+Their difference is the **pending** work queue (`get_pending`): model intent not yet reflected in code. A separate axis, **drift** (`get_drift`), tracks the opposite — code that changed out from under the committed model.
+
+You rarely think about layers when calling tools: the editing tools write the plan, the reconcile tools fold or anchor the right layer for you, and reads return the plan by default (so you see your own edits). The one knob is `layer: "committed"` on a read, when you specifically want the source of truth.
 
 ## Available tools
 
-### Reading
+An agent picks a tool by asking one question: *am I describing the architecture (**model**), or closing a gap between model and code (**reconcile**)?* The reads serve both.
+
+### Understand
 
 | Tool | What it does |
 |------|-------------|
-| `list_models` | List all saved models |
-| `get_model` | Full model — all nodes, edges, flows, groups, source map |
-| `get_node` | Scoped read of one node + its descendants + internal/external edges |
-| `get_rules` | C4 modeling rules and workflow guidance |
-| `get_changes` | Diff since the agent last read the model |
-| `get_structure` | Annotated project directory tree — manifests, infra configs, env templates |
-| `validate_model` | Check the model against C4 rules — disconnected nodes, bad edges, mentions without edges |
+| `read_model` | The model — overview, or one node's subtree. Defaults to the **plan**; pass `layer: "committed"` for the source of truth |
+| `search_model` | Fuzzy text search across names, descriptions, technology, and responsibilities |
+| `query_model` | Structural query by node shape (kind, empty, responsibility/child counts…) |
+| `get_health` | Observability rollup — anchor coverage, drift flags, and darkness (code the model doesn't describe) |
+| `validate_model` | Structural validator — parent-kind mismatches, dangling links, coverage gaps |
+| `get_pending` | The **model→code** work queue: how the plan diverges from the committed model |
+| `get_drift` | The **code→model** divergence: which committed scopes changed on disk since the last reconcile |
+| `get_rules` | The binding modeling rules — what earns a symbol, responsibility altitude, when a group is right |
+| `read_codebase` | Annotated project tree — deployable units, data stores, manifests, infra configs |
 
-### Writing
+### Model — author the architecture
 
-| Tool | What it does |
-|------|-------------|
-| `set_model` | Create or replace a full model |
-| `set_node` | Set a node's full subtree (children, edges) |
-| `add_nodes` | Add new nodes |
-| `update_nodes` | Update existing node properties |
-| `delete_nodes` | Remove nodes (cascading to children) |
-| `add_edges` | Add new edges |
-| `update_edges` | Update edge properties |
-| `delete_edges` | Remove edges |
-| `set_flows` | Define behavioral flows with steps and branches |
-| `delete_flow` | Remove a flow |
-| `set_groups` | Organize nodes into groups (system, container, or component level) |
-| `delete_group` | Remove a group — members are ungrouped, not deleted |
-| `update_source_map` | Link nodes/flows to source files |
-| `set_implementing` | Pause or resume drift detection while implementing |
-
-### Implementation
+Typed and self-documenting; each writes the **plan**.
 
 | Tool | What it does |
 |------|-------------|
-| `get_task` | Get the next piece of implementation work — dependency-ordered, with inherited contracts |
+| `add_person` / `add_system` / `add_container` / `add_component` / `add_symbol` | Create a node of each C4 kind — mints ids, validates parentage, anchors symbols to source |
+| `update_nodes` | Patch node fields and responsibilities by id |
+| `move_nodes` | Re-parent a node and its whole subtree |
+| `move_responsibilities` | Move a responsibility from one node to another |
+| `add_links` / `update_links` / `delete_links` | Same-level relationships between nodes |
+| `add_group` / `update_group` / `delete_group` | Group sibling nodes (a secondary, packaging axis): create / patch / remove |
+| `delete_nodes` | Remove a node because its **code** should go away — stages real removal work in the plan |
+| `update_source_map` | Anchor responsibilities and nodes to source (file + symbol + line range) |
+
+### Reconcile — keep model and code in agreement
+
+| Tool | What it does |
+|------|-------------|
+| `mark_implemented` | Fold implemented plan work into the committed model (including folding a deletion once you've removed the code) |
+| `descope` | Drop a node from the **model** while leaving its code untouched — relocates its responsibilities to the parent; model-only, no pending work |
+| `reconcile_drift` | Accept the current code as the truth and advance the drift anchor, so the same changes stop surfacing |
+| `set_drift_watch` | Pause or resume drift detection while you're mid-implementation |
+
+### Generation pipeline
+
+Primitives scryer's own driven sessions use during codebase→model generation and drift checks — **not** for interactive editing (use the typed tools above).
+
+| Tool | What it does |
+|------|-------------|
+| `fill_container` | Fill a whole container's component + symbol subtree from code in one atomic write |
+| `set_model` | Seed the entire model (system node + container skeleton) |
+| `set_node` | Write a node's whole subtree at once |
+| `set_groups` | Create or replace groups in bulk from raw JSON |
+| `flag_drift` | Record the drift-check verdicts (undescribed behaviour → vagrant, regressed claims → stale) into the plan |
 
 ## Reading strategies
 
-Agents don't always need the full model. The MCP server provides three levels of detail:
+Agents don't need the whole model at once:
 
-- **`get_model`** — everything. Use once at the start of a session to understand the full picture.
-- **`get_node`** — a focused subtree. Use when working on one container or component. Returns the target node, its descendants, internal edges, and external edges with context.
-- **`get_changes`** — just the diff. After the initial read, use this to see what changed since the last read. Efficient for keeping track of user edits.
+- **`read_model`** with no node returns the small overview (tree down to components, symbols excluded). Pass a node id to drill into that subtree, including its symbols. Oversized subtrees degrade to a child skeleton so the agent can drill further.
+- **`search_model`** to locate a concept by text, **`query_model`** to find nodes by shape (e.g. every empty symbol).
+- **`get_health`** before reading full subtrees, to decide *where* work is needed.
 
-## The modeling workflow
+## The working loop — plan first, then code
 
-When an agent models your architecture through MCP, it follows a level-by-level approach:
+The model leads; the code follows. When a change will alter behaviour, capture the intent in the plan **before** writing code:
 
-1. **System level first** — persons, systems, external systems, and system-level edges
-2. **Container level** — all containers inside a system, plus container-level edges
-3. **Component level** — only when asked for deeper detail
+1. **Consult** the area — `get_health`, then `search_model` / `read_model` for the governing nodes and their responsibilities.
+2. **Author the intended change** into the plan with the typed `add_*` / `update_*` tools. It shows up on the canvas as pending plan.
+3. **Implement** the code to that plan, then `mark_implemented` to fold it into the committed model.
+4. **Reconcile** anything the code does that the plan didn't capture: `get_drift` → examine → `flag_drift` / `reconcile_drift`, or `descope` what shouldn't be modeled.
 
-Each level is validated for edge completeness. The agent builds top-down and fixes any warnings before going deeper.
+When building a model from an existing codebase, structure is extracted into the committed model directly (the generation pipeline), and `get_rules` governs every modeling judgment — call it and follow it, then `validate_model` and fix every warning.

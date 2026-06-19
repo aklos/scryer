@@ -29,10 +29,85 @@ fn prune_code_map(model: &mut ScryModel, removed_node_ids: &HashSet<String>) {
     model.boundaries.retain(|k, _| !removed_node_ids.contains(k));
 }
 
+/// Fold a set of target nodes out of ONE model layer: relocate each target's own
+/// non-vagrant responsibilities (keeping their ids and source anchors) up to its
+/// parent, then remove the target and its descendants along with their links,
+/// boundaries, and remaining anchors. Relocating BEFORE pruning is what keeps the
+/// parent's coverage of that code intact — `prune_code_map` only drops anchors of
+/// responsibilities still owned by a removed node, so a relocated claim survives
+/// and the file never goes dark. Code on disk is never touched.
+///
+/// Returns `(relocated, removed, dropped_descendant_resps)` — the last is the count
+/// of responsibilities on removed DESCENDANTS that are lost (a target's own claims
+/// are relocated, never dropped), surfaced so the loss is never silent.
+fn fold_out_layer(model: &mut ScryModel, target_ids: &[String]) -> (usize, usize, usize) {
+    let mut relocated = 0usize;
+
+    // 1) Relocate each present target's own non-vagrant responsibilities to its parent.
+    for id in target_ids {
+        let Some(idx) = model.nodes.iter().position(|n| &n.id == id) else {
+            continue;
+        };
+        let Some(parent_id) = model.nodes[idx].parent_id.clone() else {
+            continue; // top-level node: no parent to carry the claims
+        };
+        let mut moving = Vec::new();
+        model.nodes[idx].responsibilities.retain(|r| {
+            if r.vagrant == Some(true) {
+                true
+            } else {
+                moving.push(r.clone());
+                false
+            }
+        });
+        if moving.is_empty() {
+            continue;
+        }
+        match model.nodes.iter_mut().find(|n| n.id == parent_id) {
+            Some(parent) => {
+                relocated += moving.len();
+                parent.responsibilities.extend(moving);
+            }
+            // Parent absent (shouldn't happen) — restore rather than lose the claims.
+            None => model.nodes[idx].responsibilities.extend(moving),
+        }
+    }
+
+    // 2) Expand to the full subtree of every target.
+    let mut to_remove: HashSet<String> = target_ids.iter().cloned().collect();
+    let mut frontier: Vec<String> = target_ids.to_vec();
+    while let Some(id) = frontier.pop() {
+        for child in model.nodes.iter().filter(|n| n.parent_id.as_deref() == Some(&id)) {
+            if to_remove.insert(child.id.clone()) {
+                frontier.push(child.id.clone());
+            }
+        }
+    }
+
+    // Claims on removed descendants (not the targets themselves) are lost — count them.
+    let dropped = model
+        .nodes
+        .iter()
+        .filter(|n| to_remove.contains(&n.id) && !target_ids.iter().any(|t| t == &n.id))
+        .map(|n| n.responsibilities.len())
+        .sum();
+
+    let before = model.nodes.len();
+    prune_code_map(model, &to_remove);
+    model.nodes.retain(|n| !to_remove.contains(&n.id));
+    model
+        .links
+        .retain(|l| !to_remove.contains(&l.src) && !to_remove.contains(&l.dst));
+    for g in model.groups.iter_mut() {
+        g.member_ids.retain(|m| !to_remove.contains(m));
+    }
+    (relocated, before - model.nodes.len(), dropped)
+}
+
 #[tool_router(router = tool_router_nodes, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "Replace the entire model. The JSON payload must include `version: \"0.3\"`, `nodes`, `links`, and optional `groups` and `sourceMap`. Validation warnings are returned but the write is committed regardless — fix the warnings in a follow-up call."
+        description = "GENERATION-PIPELINE primitive — replace the ENTIRE model in one write (used during codebase→model generation to seed the system + container skeleton). Writes both the plan and the committed model. The JSON payload must include `version: \"0.3\"`, `nodes`, `links`, and optional `groups` and `sourceMap`. Validation warnings are returned but the write is committed regardless — fix the warnings in a follow-up call. For interactive editing, use the typed add_*/update_*/move_* tools instead."
     )]
     fn set_model(
         &self,
@@ -92,66 +167,6 @@ impl ScryerServer {
             }
         }
         Ok(CallToolResult::success(vec![Content::text(msg)]))
-    }
-
-    #[tool(
-        description = "Add one or more nodes to the model. Pass an array of node items. IDs are auto-assigned. Use set_node or set_model when adding many nodes at once with their links."
-    )]
-    fn add_nodes(
-        &self,
-        Parameters(req): Parameters<AddNodeRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        let model_ref = resolve_model_ref(req.project.as_deref())?;
-        let _lock = match lock_or_err(&model_ref) {
-            Ok(l) => l,
-            Err(e) => return Ok(e),
-        };
-        let mut model = match scryer_core::read_planned_at(&model_ref) {
-            Ok(m) => m,
-            Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
-            }
-        };
-
-        let prior = model.clone();
-        let mut added_ids: Vec<String> = Vec::new();
-        for item in &req.nodes {
-            let kind = parse_kind(&item.kind)?;
-            let id = scryer_core::next_node_id(&model);
-            let node = Node {
-                id: id.clone(),
-                kind,
-                name: item.name.clone(),
-                vagrant: None,
-                stale: None,
-                parent_id: item.parent_id.clone(),
-                external: item.external,
-                technology: item.technology.clone(),
-                description: item.description.clone(),
-                responsibilities: item.responsibilities.clone().unwrap_or_default(),
-                properties: item.properties.clone().unwrap_or_default(),
-                icon: None,
-                visual: None,
-                appearance: None,
-                notes: None,
-            };
-            model.nodes.push(node);
-            added_ids.push(id);
-        }
-        enforce_readonly_directives(&mut model, &prior);
-
-        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
-            return Ok(CallToolResult::error(vec![Content::text(e)]));
-        }
-
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Added {} node(s): {}",
-            added_ids.len(),
-            added_ids.join(", ")
-        ))]))
     }
 
     #[tool(
@@ -229,7 +244,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_unimplemented`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds EVERYTHING outstanding on the node: every planned responsibility and property, plus the appearance (the visual). Pass `responsibilityIds` to fold only those responsibilities. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding."
+        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds EVERYTHING outstanding on the node: every planned responsibility and property, plus the appearance (the visual). Pass `responsibilityIds` to fold only those responsibilities. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
     )]
     fn mark_implemented(
         &self,
@@ -255,6 +270,26 @@ impl ScryerServer {
             }
         };
         if !planned.nodes.iter().any(|n| n.id == req.node_id) {
+            // Gone from the plan but still in committed = a planned DELETION to fold:
+            // you removed the code, now remove the claim from the committed model.
+            // `commit_element` deletes a committed node whose planned copy is absent.
+            let in_committed = scryer_core::read_model_at(&model_ref)
+                .map(|m| m.nodes.iter().any(|n| n.id == req.node_id))
+                .unwrap_or(false);
+            if in_committed {
+                if let Err(e) =
+                    scryer_core::commit_element(&model_ref, ElementKind::Node, None, &req.node_id)
+                {
+                    return Ok(CallToolResult::error(vec![Content::text(e)]));
+                }
+                if let Ok(after) = scryer_core::read_model_at(&model_ref) {
+                    let _ = scryer_core::save_baseline_at(&model_ref, &after);
+                }
+                return Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Committed the removal of '{}' from the model.",
+                    req.node_id
+                ))]));
+            }
             return Ok(CallToolResult::error(vec![Content::text(format!(
                 "Node '{}' not found in the plan",
                 req.node_id
@@ -484,7 +519,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Replace a node's subtree. The data payload is JSON `{ \"nodes\": [...], \"links\": [...] }` where every node in `nodes` has a parent chain rooted at `node_id`. All existing descendants of `node_id` are removed before the new subtree is inserted. Links replace any link whose endpoints are inside the subtree; links connecting to nodes outside the subtree are also accepted."
+        description = "GENERATION-PIPELINE primitive — replace a node's whole subtree in one write (used during codebase→model generation to attach a container's structure to the seeded skeleton). The data payload is JSON `{ \"nodes\": [...], \"links\": [...] }` where every node in `nodes` has a parent chain rooted at `node_id`. All existing descendants of `node_id` are removed before the new subtree is inserted. Links replace any link whose endpoints are inside the subtree; links connecting to nodes outside the subtree are also accepted. For interactive editing, use the typed add_*/update_*/move_* tools instead."
     )]
     fn set_node(
         &self,
@@ -580,7 +615,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Delete one or more nodes. Each node's descendants, connected links, and source-map entries are also removed."
+        description = "Delete one or more nodes because the CODE they model should go away — a forward modeling intent. Each node's descendants, connected links, and source-map entries are also removed. This stages real removal work in the plan: it shows up as pending until you delete the code and call `mark_implemented`. If instead the code is fine and you just shouldn't be MODELING it (an entry-point `main`, boilerplate), use `descope` — that's a code-untouched, model-only correction."
     )]
     fn delete_nodes(
         &self,
@@ -631,6 +666,82 @@ impl ScryerServer {
             "Deleted {} node(s) (including descendants)",
             before - model.nodes.len()
         ))]))
+    }
+
+    #[tool(
+        description = "Descope nodes: remove them from the MODEL because they shouldn't be modeled — the CODE is fine and stays untouched (e.g. an entry-point `main`, a trivial wrapper, generated boilerplate). Each target's own responsibilities relocate up to its parent component, keeping their source anchors, so the parent still covers that code and no darkness appears; the node and its descendants are then removed. This is a model-only correction — it writes BOTH the plan and the committed model at once, so there is NO code work to do and it never shows up in the pending work queue. Reach for this when the model over-claims relative to code reality. To instead remove the CODE itself, use `delete_nodes`, which stages real removal work."
+    )]
+    fn descope(
+        &self,
+        Parameters(req): Parameters<DescopeRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
+
+        let mut planned = match scryer_core::read_planned_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read plan at {}: {}",
+                    model_ref, e
+                ))]));
+            }
+        };
+        let mut committed = match scryer_core::read_model_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read model at {}: {}",
+                    model_ref, e
+                ))]));
+            }
+        };
+
+        // Every target must exist in at least one layer.
+        for id in &req.node_ids {
+            let present = planned.nodes.iter().any(|n| &n.id == id)
+                || committed.nodes.iter().any(|n| &n.id == id);
+            if !present {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Node '{}' not found",
+                    id
+                ))]));
+            }
+        }
+
+        // Fold the targets out of both layers identically — descope is true in both.
+        // Report whichever layer actually changed: when the plan was already folded
+        // (e.g. the canvas removed them first), committed is where the work lands, so
+        // take the max rather than letting a clean plan report a misleading 0.
+        let (rp, remp, dp) = fold_out_layer(&mut planned, &req.node_ids);
+        let (rc, remc, dc) = fold_out_layer(&mut committed, &req.node_ids);
+        let (relocated, removed, dropped) = (rp.max(rc), remp.max(remc), dp.max(dc));
+
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &planned) {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
+        }
+        if let Err(e) = scryer_core::write_model_at(&model_ref, &committed) {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
+        }
+        let _ = scryer_core::save_baseline_at(&model_ref, &committed);
+
+        let mut msg = format!(
+            "Descoped {} node(s) from the model — code untouched. Relocated {} responsibilit{} to parent component(s).",
+            removed,
+            relocated,
+            if relocated == 1 { "y" } else { "ies" }
+        );
+        if dropped > 0 {
+            msg.push_str(&format!(
+                " Note: {} responsibilit{} on removed descendants were dropped.",
+                dropped,
+                if dropped == 1 { "y" } else { "ies" }
+            ));
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     #[tool(
@@ -764,6 +875,92 @@ mod tests {
             directives: Vec::new(),
             last_touched_at: None,
         }
+    }
+
+    /// Descope: a symbol that shouldn't be modeled is removed from BOTH layers, its
+    /// responsibility relocates to the parent with its source anchor intact (so the
+    /// file stays lit and no darkness appears), and the code is never consulted.
+    #[test]
+    fn descope_relocates_responsibility_and_writes_both_layers() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::Component, "Harness", None));
+        let mut main = node("node-2", Kind::Symbol, "main", Some("node-1"));
+        main.responsibilities = vec![resp("r-main")];
+        m.nodes.push(main);
+        m.source_map.insert(
+            "r-main".into(),
+            vec![scryer_core::SourceLocation {
+                pattern: "examples/bench.rs".into(),
+                symbol: Some("main".into()),
+                line: None,
+                end_line: None,
+                command: None,
+            }],
+        );
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        scryer_core::write_planned_at(&model_ref, &m).unwrap(); // plan mirrors committed
+
+        let server = ScryerServer::new();
+        server
+            .descope(Parameters(DescopeRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                node_ids: vec!["node-2".into()],
+            }))
+            .unwrap();
+
+        // Both layers must show the same model-only correction.
+        for layer in [
+            scryer_core::read_model_at(&model_ref).unwrap(),
+            scryer_core::read_planned_at(&model_ref).unwrap(),
+        ] {
+            assert!(layer.nodes.iter().all(|n| n.id != "node-2"), "main removed");
+            let parent = layer.nodes.iter().find(|n| n.id == "node-1").unwrap();
+            assert!(
+                parent.responsibilities.iter().any(|r| r.id == "r-main"),
+                "responsibility relocated to parent"
+            );
+            assert_eq!(
+                layer.source_map.get("r-main").unwrap()[0].pattern,
+                "examples/bench.rs",
+                "source anchor preserved — file stays lit"
+            );
+        }
+    }
+
+    /// mark_implemented folds a planned DELETION: a node removed from the plan (its
+    /// code now gone) is dropped from the committed model.
+    #[test]
+    fn mark_implemented_folds_a_planned_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::Component, "Root", None));
+        m.nodes.push(node("node-2", Kind::Symbol, "gone", Some("node-1")));
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        // Plan no longer has node-2 (the agent deleted it, then removed the code).
+        let mut planned = m.clone();
+        planned.nodes.retain(|n| n.id != "node-2");
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        let r = server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                node_id: "node-2".into(),
+                responsibility_ids: None,
+            }))
+            .unwrap();
+        assert!(serde_json::to_string(&r.content).unwrap().contains("removal"));
+
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        assert!(
+            committed.nodes.iter().all(|n| n.id != "node-2"),
+            "deletion folded into the committed model"
+        );
     }
 
     /// Whole-node: marking implemented folds the node's entire planned state

@@ -139,8 +139,6 @@ interface PageProps {
   onAcceptVariation?: (nodeId: string, variationIdx: number) => void;
   onDiscardVariations?: (nodeId: string) => void;
   onSelectVariation?: (idx: number | null) => void;
-  newRespIds: ReadonlySet<string>;
-  onClearNewResp: (id: string) => void;
   /** Session-local journal of every edit (yours and the agent's), newest
    *  first — filtered per node to drive the History tab. */
   changeLog: readonly ChangeRevision[];
@@ -490,8 +488,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
     projectPath,
     onSelectNode,
     onFixture,
-    newRespIds,
-    onClearNewResp,
     history,
     driftScopes,
     onCheckDrift,
@@ -777,8 +773,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   editing={ed.isEditing("responsibilities")}
                   onToggle={() => ed.toggle("responsibilities")}
                   onSelectNode={onSelectNode}
-                  newRespIds={newRespIds}
-                  onClearNewResp={onClearNewResp}
                 />
               )}
 
@@ -830,7 +824,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
 // --- group page -------------------------------------------------------------
 
 function GroupPageBody(props: PageProps & { group: Group }) {
-  const { model, committed, group, editor, projectPath, onSelectNode, newRespIds, onClearNewResp } = props;
+  const { model, committed, group, editor, projectPath, onSelectNode } = props;
   const ed = useEditSections();
   const openMenu = usePageMenu();
   const copyId = useCopyId();
@@ -924,8 +918,6 @@ function GroupPageBody(props: PageProps & { group: Group }) {
               editing={ed.isEditing("responsibilities")}
               onToggle={() => ed.toggle("responsibilities")}
               onSelectNode={onSelectNode}
-              newRespIds={newRespIds}
-              onClearNewResp={onClearNewResp}
             />
 
             <PageSection
@@ -1408,8 +1400,6 @@ function ResponsibilitiesSection({
   editing,
   onToggle,
   onSelectNode,
-  newRespIds,
-  onClearNewResp,
 }: {
   model: ScryModel;
   host: "node" | "group";
@@ -1427,8 +1417,6 @@ function ResponsibilitiesSection({
   editing: boolean;
   onToggle: () => void;
   onSelectNode: (id: string) => void;
-  newRespIds: ReadonlySet<string>;
-  onClearNewResp: (id: string) => void;
 }) {
   const diffRows = buildRespDiff(resps, prevResps);
   /** Restore a dropped claim by putting the committed copy back into the plan. */
@@ -1478,8 +1466,6 @@ function ResponsibilitiesSection({
               locations={sourceMap[row.resp.id] ?? []}
               projectPath={projectPath}
               leafHost={leafHost}
-              isNew={newRespIds.has(row.resp.id)}
-              onSeen={() => onClearNewResp(row.resp.id)}
               onSelectNode={onSelectNode}
               onRestore={() => restore(row.resp)}
               editor={editor}
@@ -1596,8 +1582,6 @@ function RespDiffRow({
   locations,
   projectPath,
   leafHost,
-  isNew,
-  onSeen,
   onSelectNode,
   onRestore,
   editor,
@@ -1609,8 +1593,6 @@ function RespDiffRow({
   locations: SourceLocation[];
   projectPath: string | null;
   leafHost: boolean;
-  isNew: boolean;
-  onSeen: () => void;
   onSelectNode: (id: string) => void;
   onRestore: () => void;
   editor: Editor | undefined;
@@ -1643,11 +1625,8 @@ function RespDiffRow({
     <>
     <li
       id={respElementId(resp.id)}
-      onMouseEnter={isNew ? onSeen : undefined}
       onContextMenu={(e) => openMenu(e, [copyIdItem(resp.id, copyId)])}
-      className={`${RESP_ROW} rounded-sm py-[1.5px] [&:not(:first-child)]:mt-2.5 ${
-        isNew ? "bg-violet-500/10" : ""
-      }`}
+      className={`${RESP_ROW} rounded-sm py-[1.5px] [&:not(:first-child)]:mt-2.5`}
     >
       <span
         className={`select-none text-center font-mono text-xs font-bold ${mark?.color ?? "text-[var(--text-ghost)]"}`}
