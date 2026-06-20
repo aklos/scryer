@@ -46,13 +46,13 @@ Built on an opinionated [C4](https://c4model.com/) hierarchy (person, system, co
 
 - **Wiki-style node pages** — Every node, down to individual symbols, gets a page that leads with whatever helps you plan changes to that kind of thing: responsibilities for handlers and services (each mapped to source lines), properties for data types, a live rendered preview for visual components. Source code shows as reference, and an infobox carries the structured metadata (kind, technology, connections, boundary globs). Edit any section in place.
 - **Model tree** — An IDE-style explorer for defining the model: create, rename, move, group, and delete nodes. Groups are folders. Rolled-up plan and drift marks show per row, so you see the model's health at a glance.
-- **Responsibilities & directives** — Each node states what it's responsible for (responsibilities) and, optionally, how the agent should implement it (directives, e.g. "authenticate with JWTs"). Responsibilities are language-independent and survive a rewrite. There's no stored status: where a claim stands is read live from its diff against the committed model (added / reworded / moved / deleted) and from drift flags — vagrant (code the model doesn't describe) and stale (code that backed a claim is gone).
+- **Responsibilities & directives** — Each node states what it's responsible for (responsibilities) and, optionally, how the agent should implement it (directives, e.g. "authenticate with JWTs"). Responsibilities are language-independent and survive a rewrite. Each one is mapped to the source lines that implement it.
 - **The plan** — Scryer holds a committed model (what the code satisfies) and a planned draft (what you and the agent edit). Their difference is the plan: the model→code work queue, shown as add/move/delete/reword marks until the agent implements them and they fold into the committed model.
 - **Live component previews** — Visual components (React/TSX) render deterministically through a per-project Vite dev server, with no agent and no per-component build. Prompt for variations, compare live renders, and accept the one you want.
 - **Observability layer** — An always-on, deterministic health report over the model↔code relationship (no LLM): plan and drift rollup, source-anchor coverage, and an import-graph audit of declared links against actual imports. The import graph is parsed across Rust, TypeScript/JavaScript, Python, Go, Java, Ruby, C/C++, C#, and PHP. It tells you where work is needed before you read a single page.
 - **Drift detection & sync** — Scryer tracks when source files change relative to the model. When code diverges, the agent reads the changed files and reconciles the model, adopting new behavior or flagging stale claims.
 - **Source mapping** — Responsibilities and nodes link to files and line ranges. Click to open in your editor.
-- **Build from a codebase** — Point an agent at a project and it scans the code to populate the model. Per-node "fill" does the same one node at a time.
+- **Build from a codebase** — Point an agent at a project and it scans the code to populate the model.
 - **Diagram view** — A read-only diagram renders the model one level at a time for spatial navigation.
 - **MCP server** — Agents connect to read, modify, and build from the model in real time.
 - **AI tool setup** — Detects Claude Code and Codex and writes MCP config and auto-approve permissions.
@@ -88,7 +88,7 @@ This is how the model stays ahead of the code: intent is captured as a plan befo
 Scryer is built to work with **Claude Code** and **Codex** first.
 
 - **MCP** (Model Context Protocol) — how agents read and write architecture models. Required for any agent integration.
-- **CLI spawning** — how Scryer launches agents for automated builds, fills, and sync. Claude Code is spawned via `claude -p` (uses your subscription), Codex via `codex exec` (uses your API key). Both get the Scryer MCP server attached automatically.
+- **CLI spawning** — how Scryer launches agents for automated model builds and drift sync. Claude Code is spawned via `claude -p` (uses your subscription), Codex via `codex exec` (uses your API key). Both get the Scryer MCP server attached automatically.
 - **ACP** (Agent Client Protocol) — for agents that implement the full ACP handshake (e.g. via [claude-agent-acp](https://github.com/zed-industries/claude-agent-acp)). Scryer falls back to ACP if a `{name}-acp` binary is found on PATH.
 
 When an agent connects via MCP, Scryer captures its identity from the protocol handshake. When a build or sync is triggered, Scryer resolves that identity to a binary and launches it with the right flags. Claude Code and Codex are mapped automatically. For other agents, Scryer tries ACP conventions.
