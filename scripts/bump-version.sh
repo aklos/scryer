@@ -33,8 +33,10 @@ echo "  updated package.json"
 sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" "$ROOT/src-tauri/tauri.conf.json"
 echo "  updated tauri.conf.json"
 
-# Regenerate Cargo.lock
-(cd "$ROOT" && cargo generate-lockfile 2>/dev/null)
+# Update only the workspace members' versions in Cargo.lock. Do NOT use
+# `cargo generate-lockfile` here: it re-resolves the whole tree and silently
+# bumps third-party deps (e.g. tauri-runtime), which has broken the build.
+(cd "$ROOT" && cargo update --workspace --offline 2>/dev/null)
 echo "  updated Cargo.lock"
 
 echo ""
