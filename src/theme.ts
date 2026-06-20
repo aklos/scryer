@@ -6,15 +6,7 @@
  * automatically pick up the new colors — no component code changes needed.
  */
 
-import { createContext } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-
-/**
- * Tick counter that increments on every theme change.
- * ReactFlow node/edge components consume this context so they re-render
- * when the theme changes (their inline hex styles need recalculation).
- */
-export const ThemeContext = createContext(0);
 
 // ---------------------------------------------------------------------------
 // Palette data — Tailwind's default hex values for each color family
@@ -32,6 +24,10 @@ export const PALETTES: Record<string, PaletteValues> = {
   zinc:    { 50: "#fafafa", 100: "#f4f4f5", 200: "#e4e4e7", 300: "#d4d4d8", 400: "#a1a1aa", 500: "#71717a", 600: "#52525b", 700: "#3f3f46", 800: "#27272a", 900: "#18181b", 950: "#09090b" },
   neutral: { 50: "#fafafa", 100: "#f5f5f5", 200: "#e5e5e5", 300: "#d4d4d4", 400: "#a3a3a3", 500: "#737373", 600: "#525252", 700: "#404040", 800: "#262626", 900: "#171717", 950: "#0a0a0a" },
   stone:   { 50: "#fafaf9", 100: "#f5f5f4", 200: "#e7e5e4", 300: "#d6d3d1", 400: "#a8a29e", 500: "#78716c", 600: "#57534e", 700: "#44403c", 800: "#292524", 900: "#1c1917", 950: "#0c0a09" },
+  // The scryer house neutral — a cool blue-grey ramp (the mockup palette). In
+  // dark mode it gives canvas (#0c0e12) / panels (#14171d) / borders (#20262f)
+  // real separation; the light shades carry the cool cast through too.
+  graphite:{ 50: "#f5f7fa", 100: "#eef2f6", 200: "#e6edf3", 300: "#a9b2be", 400: "#717b89", 500: "#5b6573", 600: "#4d5663", 700: "#3a4453", 800: "#20262f", 900: "#14171d", 950: "#0c0e12" },
   red:     { 50: "#fef2f2", 100: "#fee2e2", 200: "#fecaca", 300: "#fca5a5", 400: "#f87171", 500: "#ef4444", 600: "#dc2626", 700: "#b91c1c", 800: "#991b1b", 900: "#7f1d1d", 950: "#450a0a" },
   orange:  { 50: "#fff7ed", 100: "#ffedd5", 200: "#fed7aa", 300: "#fdba74", 400: "#fb923c", 500: "#f97316", 600: "#ea580c", 700: "#c2410c", 800: "#9a3412", 900: "#7c2d12", 950: "#431407" },
   amber:   { 50: "#fffbeb", 100: "#fef3c7", 200: "#fde68a", 300: "#fcd34d", 400: "#fbbf24", 500: "#f59e0b", 600: "#d97706", 700: "#b45309", 800: "#92400e", 900: "#78350f", 950: "#451a03" },
@@ -55,7 +51,7 @@ export const PALETTES: Record<string, PaletteValues> = {
 // Palette metadata — human-readable labels and grouping for the UI
 // ---------------------------------------------------------------------------
 
-export const GRAY_PALETTES = ["slate", "gray", "zinc", "neutral", "stone"] as const;
+export const GRAY_PALETTES = ["graphite", "slate", "gray", "zinc", "neutral", "stone"] as const;
 export const CHROMATIC_PALETTES = [
   "red", "orange", "amber", "yellow", "lime", "green", "emerald",
   "teal", "cyan", "sky", "blue", "indigo", "violet", "purple", "fuchsia", "pink", "rose",
@@ -83,7 +79,7 @@ export interface ThemeConfig {
   blue: PaletteName;
   /** Implemented status, process kind, success toast (default: emerald) */
   emerald: PaletteName;
-  /** Changed status, model kind, warning (default: amber) */
+  /** Changed status, warning (default: amber) */
   amber: PaletteName;
   /** Deprecated status, danger, error (default: red) */
   red: PaletteName;
@@ -111,24 +107,25 @@ export interface ThemeConfig {
   nodeDark: number;
 }
 
-/** Role metadata for the theme editor UI. */
+/** Role metadata for a future theme editor UI. Matches the color contract in
+ *  index.css: one hue, one meaning; interaction chrome is neutral. */
 export const THEME_ROLES: { key: PaletteRole; label: string; description: string; palettes: readonly string[] }[] = [
   { key: "zinc",    label: "Neutral",     description: "Chrome, backgrounds, borders, text",        palettes: GRAY_PALETTES },
-  { key: "slate",   label: "Structural",  description: "System kind, edges",                        palettes: ALL_PALETTE_NAMES },
-  { key: "blue",    label: "Accent",      description: "Buttons, selection, proposed status",        palettes: CHROMATIC_PALETTES },
-  { key: "emerald", label: "Success",     description: "Implemented status, process kind",           palettes: CHROMATIC_PALETTES },
-  { key: "amber",   label: "Warning",     description: "Changed status, model kind",                 palettes: CHROMATIC_PALETTES },
-  { key: "red",     label: "Danger",      description: "Deprecated status, errors",                  palettes: CHROMATIC_PALETTES },
-  { key: "violet",  label: "Secondary",   description: "Component kind, accent alt",                 palettes: CHROMATIC_PALETTES },
-  { key: "indigo",  label: "Tertiary",    description: "Secondary buttons, focus rings",             palettes: CHROMATIC_PALETTES },
-  { key: "cyan",    label: "Container",   description: "Container kind",                             palettes: CHROMATIC_PALETTES },
-  { key: "orange",  label: "Hint warning", description: "Hint warning badges",                       palettes: CHROMATIC_PALETTES },
-  { key: "teal",    label: "Hint info",   description: "Hint info badges",                           palettes: CHROMATIC_PALETTES },
+  { key: "blue",    label: "Proposed",    description: "Proposed status",                            palettes: CHROMATIC_PALETTES },
+  { key: "amber",   label: "Implemented", description: "Implemented status, code-focus highlight",   palettes: CHROMATIC_PALETTES },
+  { key: "emerald", label: "Verified",    description: "Verified status, success toasts",            palettes: CHROMATIC_PALETTES },
+  { key: "orange",  label: "Drift",       description: "Changed status, drift nudges, empty symbols", palettes: CHROMATIC_PALETTES },
+  { key: "red",     label: "Vagrant",     description: "Vagrant status, destructive actions, errors", palettes: CHROMATIC_PALETTES },
+  { key: "violet",  label: "Relocated",   description: "Relocated status, syntax keywords",           palettes: CHROMATIC_PALETTES },
+  { key: "indigo",  label: "Agent",       description: "Agent activity, new arrivals, accept actions", palettes: CHROMATIC_PALETTES },
+  { key: "cyan",    label: "Syntax",      description: "Syntax type names",                           palettes: CHROMATIC_PALETTES },
+  { key: "slate",   label: "Unused",      description: "Reserved",                                    palettes: ALL_PALETTE_NAMES },
+  { key: "teal",    label: "Unused",      description: "Reserved",                                    palettes: CHROMATIC_PALETTES },
 ];
 
 export const DEFAULT_THEME: ThemeConfig = {
   colorMode: "system",
-  zinc: "zinc",
+  zinc: "graphite",
   blue: "blue",
   emerald: "emerald",
   amber: "amber",
@@ -142,7 +139,7 @@ export const DEFAULT_THEME: ThemeConfig = {
   offsets: {},
   canvasLight: 1,
   nodeLight: -1,
-  canvasDark: 9,
+  canvasDark: 10,
   nodeDark: 8,
 };
 
@@ -151,6 +148,12 @@ export const DEFAULT_THEME: ThemeConfig = {
 // ---------------------------------------------------------------------------
 
 const STORAGE_KEY = "scryer:theme";
+
+// Bumped when the default chrome changes so existing installs adopt it. v2 =
+// the graphite (mockup) cool blue-grey neutral + its canvas/node shades.
+const THEME_VERSION = 2;
+/** The neutral-chrome fields a version migration re-seeds from the defaults. */
+const CHROME_KEYS = ["zinc", "canvasLight", "nodeLight", "canvasDark", "nodeDark"] as const;
 
 /** Resolve a shade after applying an offset, clamping to valid range. */
 function shiftShade(shade: Shade, offset: number): Shade {
@@ -222,8 +225,9 @@ export function applyTheme(theme: ThemeConfig): void {
     }
   }
 
-  // Derive canvas/node CSS variables from the neutral palette via a dynamic stylesheet.
-  // (Cannot use inline styles — they'd override the .dark selector.)
+  // Derive surface/text/border CSS variables from the neutral palette via a
+  // dynamic stylesheet. (Cannot use inline styles — they'd override the .dark
+  // selector.)
   const np = PALETTES[theme.zinc];
   const nOff = theme.offsets.zinc ?? 0;
   const clamp = (v: number) => Math.max(0, Math.min(SHADES.length - 1, v));
@@ -232,22 +236,10 @@ export function applyTheme(theme: ThemeConfig): void {
   // Light mode
   const canvasLightHex = sh(theme.canvasLight);
   const nodeLightHex = theme.nodeLight < 0 ? "#ffffff" : sh(theme.nodeLight);
-  const gridLightIdx = Math.min(theme.canvasLight + 3, SHADES.length - 1);
 
   // Dark mode
   const canvasDarkHex = sh(theme.canvasDark);
   const nodeDarkHex = sh(theme.nodeDark);
-  const gridDarkIdx = Math.max(theme.canvasDark - 3, 0);
-
-  // External & reference fills: darker in light mode, lighter in dark mode
-  const extLightHex = mixHex(canvasLightHex, sh(5), 0.3);   // 30% toward darker
-  const extDarkHex = mixHex(canvasDarkHex, sh(7), 0.3);     // 30% toward slightly lighter
-  const refLightHex = mixHex(canvasLightHex, sh(5), 0.15);  // 15% toward darker
-  const refDarkHex = mixHex(canvasDarkHex, sh(7), 0.15);    // 15% toward slightly lighter
-
-  // Person silhouette: same as external fill
-  const personLightHex = extLightHex;
-  const personDarkHex = extDarkHex;
 
   let themeStyle = document.getElementById("scryer-theme-vars") as HTMLStyleElement | null;
   if (!themeStyle) {
@@ -256,15 +248,6 @@ export function applyTheme(theme: ThemeConfig): void {
     document.head.appendChild(themeStyle);
   }
   themeStyle.textContent = `:root {
-  --grid-color: ${sh(gridLightIdx)};
-  --xy-background-color: ${canvasLightHex};
-  --selection-color: ${sh(10)};
-  --scryer-node-bg: ${nodeLightHex};
-  --scryer-ext-bg: ${extLightHex};
-  --scryer-ref-bg: ${refLightHex};
-  --scryer-person-fill: ${personLightHex};
-  --scryer-select-stroke: ${sh(10)};
-  --scryer-outline-stroke: ${sh(4)};
   --surface-canvas: ${canvasLightHex};
   --surface: ${sh(clamp(theme.canvasLight - 1))};
   --surface-raised: ${nodeLightHex};
@@ -284,17 +267,8 @@ export function applyTheme(theme: ThemeConfig): void {
   --border-overlay: ${hexAlpha(sh(clamp(theme.canvasLight + 1)), 0.8)};
 }
 .dark {
-  --xy-background-color: ${canvasDarkHex};
-  --selection-color: ${sh(2)};
-  --grid-color: ${mixHex(sh(gridDarkIdx), canvasDarkHex, 0.5)};
-  --scryer-node-bg: ${nodeDarkHex};
-  --scryer-ext-bg: ${extDarkHex};
-  --scryer-ref-bg: ${refDarkHex};
-  --scryer-person-fill: ${personDarkHex};
-  --scryer-select-stroke: ${sh(2)};
-  --scryer-outline-stroke: ${sh(7)};
   --surface-canvas: ${canvasDarkHex};
-  --surface: ${sh(theme.canvasDark)};
+  --surface: ${sh(clamp(theme.canvasDark - 1))};
   --surface-raised: ${nodeDarkHex};
   --surface-overlay: ${hexAlpha(sh(theme.canvasDark), 0.8)};
   --surface-inset: ${hexAlpha(nodeDarkHex, 0.6)};
@@ -343,6 +317,13 @@ export function loadTheme(): ThemeConfig {
       if (typeof parsed.nodeLight === "number") theme.nodeLight = Math.max(-1, Math.min(SHADES.length - 1, Math.round(parsed.nodeLight)));
       if (typeof parsed.canvasDark === "number") theme.canvasDark = Math.max(0, Math.min(SHADES.length - 1, Math.round(parsed.canvasDark)));
       if (typeof parsed.nodeDark === "number") theme.nodeDark = Math.max(0, Math.min(SHADES.length - 1, Math.round(parsed.nodeDark)));
+      // One-time migration: an install saved before the graphite default keeps
+      // its old (flat-gray) neutral. Re-seed the chrome fields from the current
+      // defaults so the mockup palette lands, then persist the new version.
+      if (parsed.v !== THEME_VERSION) {
+        for (const k of CHROME_KEYS) (theme[k] as ThemeConfig[typeof k]) = DEFAULT_THEME[k];
+        saveTheme(theme);
+      }
       return theme;
     }
   } catch { /* ignore */ }
@@ -351,7 +332,7 @@ export function loadTheme(): ThemeConfig {
 
 /** Save theme to localStorage. */
 export function saveTheme(theme: ThemeConfig): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(theme));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...theme, v: THEME_VERSION }));
 }
 
 /** Check if a theme is the default (no customizations). */
@@ -370,20 +351,6 @@ export function isDefaultTheme(theme: ThemeConfig): boolean {
 /** Get the current resolved hex for a Tailwind color variable. */
 export function getCssColor(varName: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
-}
-
-/** Simple hex color mixing. */
-function mixHex(a: string, b: string, t: number): string {
-  const pa = parseHex(a), pb = parseHex(b);
-  const r = Math.round(pa[0] + (pb[0] - pa[0]) * t);
-  const g = Math.round(pa[1] + (pb[1] - pa[1]) * t);
-  const bl = Math.round(pa[2] + (pb[2] - pa[2]) * t);
-  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${bl.toString(16).padStart(2, "0")}`;
-}
-
-function parseHex(hex: string): [number, number, number] {
-  const h = hex.replace("#", "");
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
 }
 
 /** Append hex alpha channel (0–1 → 00–ff). */

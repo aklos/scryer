@@ -1,18 +1,21 @@
 <div align="center">
 
-  <img width="100px" src="public/logo.png" alt="Scryer logo" />
-
-  <h1>scryer</h1>
+  <h1>
+    <img width="50" src="public/logo.png" alt="Scryer logo" align="absmiddle" />
+    &nbsp;scryer
+  </h1>
 
   <p>
-    <b>MDD for AI agents.</b>
+    <b>Model-driven development for coding agents.</b>
     <br />
-    Scryer is a visual C4 modeling tool where you and your AI agent work from the same architecture model.
+    A shared model you and your agent plan from. The model leads; the code follows.
     <br />
     <br />
     <a href="#features">Features</a>
     <span>&nbsp;&nbsp;&bull;&nbsp;&nbsp;</span>
     <a href="#getting-started">Getting started</a>
+    <span>&nbsp;&nbsp;&bull;&nbsp;&nbsp;</span>
+    <a href="#the-model-as-a-plan">The model as a plan</a>
     <span>&nbsp;&nbsp;&bull;&nbsp;&nbsp;</span>
     <a href="#mcp-server">MCP server</a>
     <span>&nbsp;&nbsp;&bull;&nbsp;&nbsp;</span>
@@ -29,40 +32,30 @@
 <video src="https://github.com/user-attachments/assets/a67f5159-aac1-49b7-abba-dae11aad9499" width="100%" autoplay loop muted></video>
 </p>
 
-AI agents can write code, but what you describe and what gets implemented tends to drift. Scryer gives you a shared visual model: you edit it in a drag-and-drop editor, the agent reads and modifies it through MCP. Once the model looks right, the agent generates code from it — `get_task` feeds work one unit at a time with dependency ordering, inherited contracts, and progress tracking.
+Coding agents write faster than you can review. You end up shipping code you don't fully understand, and what you meant drifts from what got built. Scryer keeps a model next to your code: a graph of what each part of the system is responsible for, mapped to the source lines that implement it. Use it to see how the code matches your intent, and to plan changes against that intent before the agent writes them.
 
-Works with <b>Claude Code</b> and <b>Codex</b> out of the box. Any agent that supports [MCP](https://modelcontextprotocol.io/) can read and write models. Agents that support [ACP](https://agentclientprotocol.com/get-started/introduction) can also be spawned by Scryer for automated sync.
+The model sits above the code. It describes what each part is responsible for, not its class-by-class structure. The code stays the source of truth for how the system works; the model is the source of truth for what it must do and why. Responsibilities are written to outlive a rewrite in another language, because they describe intent rather than implementation. It isn't UML, and it isn't your code redrawn as boxes.
 
-Opinionated [C4](https://c4model.com/) hierarchy (system, container, component, operation/process/model), typed relationships, behavioral flows, contracts.
+The model leads. You plan a change in the model first; the agent reads it over MCP and builds code to match, keeping the two mapped line by line, so the model stays ahead of the code rather than lagging behind it. Underneath, a deterministic observability layer (no LLM) reads how the code actually measures up: what's built versus planned, source coverage, and drift in both directions.
+
+Works with <b>Claude Code</b> and <b>Codex</b> out of the box. Any agent that supports [MCP](https://modelcontextprotocol.io/) can read and write the model. Agents that support [ACP](https://agentclientprotocol.com/get-started/introduction) can also be spawned by Scryer for automated builds and sync.
+
+Built on an opinionated [C4](https://c4model.com/) hierarchy (person, system, container, component, symbol), with responsibilities, implementation directives, typed relationships, and source mapping.
 
 ## Features
 
-- **C4 Architecture Diagrams**
-  - Drag-and-drop editor for systems, containers, components, and operations. Drill down through levels.
-  - Code-level nodes (operations, processes, models) show in a compact list view.
-  - **Fill with AI** — point an agent at an empty system or container and it scans the codebase to populate the next level.
-- **Behavioral Flows**
-  - Model user journeys, data pipelines, deploy sequences. Supports branching and decision points.
-  - Flows serve as integration test specs — link them to test files via source mapping.
-- **Contracts**
-  - Expect/ask/never rules that tell AI agents how to implement your code. Inherited down the hierarchy.
-  - Expect items have pass/fail flags that control when a node can be marked "verified".
-- **Status Tracking**
-  - Four statuses: proposed (planned), implemented (code exists), verified (contracts satisfied), vagrant (discovered during sync).
-  - During implementation, agents mark nodes as implemented. "Verified" is a separate step — the implementation must be complete (no stubs or TODOs), existing tests must pass, and all expect contract items must be satisfied.
-- **Source Mapping**
-  - Link architecture nodes to files in your codebase with file patterns and line ranges.
-  - Click to open in your editor.
-- **MCP Server**
-  - AI agents connect to read, modify, and build from your architecture model in real-time.
-- **Drift Detection & Sync**
-  - Scryer tracks when source files change relative to the model. When drift is detected, click sync to have Scryer spawn the connected agent to update the model.
-- **AI Advisor**
-  - Optional LLM-powered review that flags structural issues in your diagrams. Supports OpenAI, Anthropic, Google, Groq, Mistral, DeepSeek, and Ollama.
-- **Implementation Workflow**
-  - `get_task` gives AI agents one piece of work at a time, ordered by dependencies, with contracts inherited from parent nodes. Build, mark implemented, repeat.
-- **AI Tool Setup**
-  - Detects Claude Code and Codex, writes MCP config and auto-approve permissions for your project.
+- **Wiki-style node pages** — Every node, down to individual symbols, gets a page that leads with whatever helps you plan changes to that kind of thing: responsibilities for handlers and services (each mapped to source lines), properties for data types, a live rendered preview for visual components. Source code shows as reference, and an infobox carries the structured metadata (kind, technology, connections, boundary globs). Edit any section in place.
+- **Model tree** — An IDE-style explorer for defining the model: create, rename, move, group, and delete nodes. Groups are folders. Rolled-up plan and drift marks show per row, so you see the model's health at a glance.
+- **Responsibilities & directives** — Each node states what it's responsible for (responsibilities) and, optionally, how the agent should implement it (directives, e.g. "authenticate with JWTs"). Responsibilities are language-independent and survive a rewrite. There's no stored status: where a claim stands is read live from its diff against the committed model (added / reworded / moved / deleted) and from drift flags — vagrant (code the model doesn't describe) and stale (code that backed a claim is gone).
+- **The plan** — Scryer holds a committed model (what the code satisfies) and a planned draft (what you and the agent edit). Their difference is the plan: the model→code work queue, shown as add/move/delete/reword marks until the agent implements them and they fold into the committed model.
+- **Live component previews** — Visual components (React/TSX) render deterministically through a per-project Vite dev server, with no agent and no per-component build. Prompt for variations, compare live renders, and accept the one you want.
+- **Observability layer** — An always-on, deterministic health report over the model↔code relationship (no LLM): plan and drift rollup, source-anchor coverage, and an import-graph audit of declared links against actual imports. The import graph is parsed across Rust, TypeScript/JavaScript, Python, Go, Java, Ruby, C/C++, C#, and PHP. It tells you where work is needed before you read a single page.
+- **Drift detection & sync** — Scryer tracks when source files change relative to the model. When code diverges, the agent reads the changed files and reconciles the model, adopting new behavior or flagging stale claims.
+- **Source mapping** — Responsibilities and nodes link to files and line ranges. Click to open in your editor.
+- **Build from a codebase** — Point an agent at a project and it scans the code to populate the model. Per-node "fill" does the same one node at a time.
+- **Diagram view** — A read-only diagram renders the model one level at a time for spatial navigation.
+- **MCP server** — Agents connect to read, modify, and build from the model in real time.
+- **AI tool setup** — Detects Claude Code and Codex and writes MCP config and auto-approve permissions.
 
 ## Getting started
 
@@ -70,25 +63,35 @@ Download the latest release for your platform from the [releases page](https://g
 
 ### Typical workflow
 
-1. Link your project directory in the app and enable AI tool integration when prompted (or run `scryer-mcp init`)
-2. Tell your AI agent: *"Use scryer to model this project's architecture"*
-3. The AI calls MCP tools — nodes appear in the visual editor in real-time
-4. Review, drag things around, rename, remove, restructure
-5. Tell the AI: *"Implement this model"*
-6. The AI builds each piece one at a time, marking nodes as implemented as it goes
-7. When you're satisfied, ask the AI to verify: check for stubs, run any existing tests, and confirm contract items pass before marking nodes as verified
+1. Link your project directory in the app and enable AI tool integration when prompted (or run `scryer-mcp init`).
+2. Tell your agent: *"Use scryer to model this project's architecture."* It scans the code and the model fills in, with nodes appearing in the tree and on their pages in real time.
+3. Review the model: read the node pages, rename, regroup, restructure, and refine responsibilities.
+4. To make a change, plan it in the model first: add or edit the responsibilities and links it implies. These land in the plan as pending work.
+5. Tell the agent to implement the plan. It builds each piece and marks nodes implemented as it goes, folding the plan into the committed model.
+6. Check the model's health any time. `get_health` reports the plan and drift rollup, source-anchor coverage, and where code and model have parted ways.
 
-As you work on code, Scryer detects when source files drift from the model. Click the sync button to have Scryer spawn your agent to update the model.
+As you work on code, Scryer detects when source files drift from the model. Trigger a drift check to have the agent reconcile: adopting new behavior into the model, or flagging where the code regressed from what the model claims.
+
+## The model as a plan
+
+Scryer keeps two layers on disk in `.scryer/`:
+
+- **`model.scry`** — the committed model, the source of truth: what the code is believed to satisfy.
+- **`planned.scry`** — the draft you and the agent edit on the canvas.
+
+The difference between them is the **plan**: the outstanding model→code work. When you add a responsibility or a node, it shows in the plan as an `added` mark in the tree. When the agent writes the code, `mark_implemented` folds that work into the committed model. Drift works the other way: when code changes, the agent reconciles undescribed behavior back into the model.
+
+This is how the model stays ahead of the code: intent is captured as a plan before the code exists, and the committed model only ever reflects what's actually been built.
 
 ## Agent support
 
 Scryer is built to work with **Claude Code** and **Codex** first.
 
 - **MCP** (Model Context Protocol) — how agents read and write architecture models. Required for any agent integration.
-- **CLI spawning** — how Scryer launches agents for automated sync. Claude Code is spawned via `claude -p` (uses your subscription), Codex via `codex exec` (uses your API key). Both get the Scryer MCP server attached automatically.
+- **CLI spawning** — how Scryer launches agents for automated builds, fills, and sync. Claude Code is spawned via `claude -p` (uses your subscription), Codex via `codex exec` (uses your API key). Both get the Scryer MCP server attached automatically.
 - **ACP** (Agent Client Protocol) — for agents that implement the full ACP handshake (e.g. via [claude-agent-acp](https://github.com/zed-industries/claude-agent-acp)). Scryer falls back to ACP if a `{name}-acp` binary is found on PATH.
 
-When an agent connects via MCP, Scryer captures its identity from the protocol handshake. When sync is triggered, Scryer resolves that identity to a binary and launches it with the right flags. Claude Code and Codex are mapped automatically. For other agents, Scryer tries ACP conventions.
+When an agent connects via MCP, Scryer captures its identity from the protocol handshake. When a build or sync is triggered, Scryer resolves that identity to a binary and launches it with the right flags. Claude Code and Codex are mapped automatically. For other agents, Scryer tries ACP conventions.
 
 ## MCP server
 
@@ -127,18 +130,18 @@ If you prefer to configure MCP manually, add Scryer to your project config:
 command = "/path/to/scryer-mcp"
 ```
 
-For Claude Code, you can also auto-approve Scryer's read tools so the agent doesn't prompt for every `get_model` call. The app can set this up for you, or add them manually to `.claude/settings.local.json`:
+For Claude Code, you can also auto-approve Scryer's read tools so the agent doesn't prompt for every read. The app can set this up for you, or add them manually to `.claude/settings.local.json`:
 
 ```json
 {
   "permissions": {
     "allow": [
-      "mcp__scryer__list_models",
-      "mcp__scryer__get_model",
-      "mcp__scryer__get_node",
+      "mcp__scryer__read_model",
+      "mcp__scryer__search_model",
+      "mcp__scryer__get_pending",
       "mcp__scryer__get_rules",
-      "mcp__scryer__get_changes",
-      "mcp__scryer__get_structure"
+      "mcp__scryer__read_codebase",
+      "mcp__scryer__validate_model"
     ]
   }
 }
@@ -146,38 +149,46 @@ For Claude Code, you can also auto-approve Scryer's read tools so the agent does
 
 ### What the MCP server provides
 
-**Reading:**
-- `get_model` — full model with all nodes, edges, flows, groups, source map. Name is optional — auto-resolves the model linked to the current working directory
-- `get_node` — scoped read of a subtree with internal/external edges and context
-- `get_changes` — diff against baseline (what changed since you last looked)
-- `get_rules` — full C4 modeling rules and workflow guidance
-- `get_structure` — annotated project directory tree (manifests, infrastructure, environments)
+**Reading & observability:**
+- `read_model` — the model, or a scoped subtree, with responsibilities, links, and context. Auto-resolves the model linked to the current working directory.
+- `search_model` / `query_model` — find nodes by text or by structure.
+- `get_health` — deterministic observability: rolled-up plan and drift marks, vagrant/stale flags, source-anchor coverage, and an import-graph audit of declared links.
+- `get_pending` — the plan: model→code work not yet built.
+- `get_drift` — boundary-owning nodes whose code changed since the last reconcile (cheap, deterministic — no LLM verdict).
+- `get_rules` — the authoritative C4 modeling rules and workflow guidance.
+- `read_codebase` — annotated project tree: deployable units, data stores, external services.
+- `validate_model` — check the model against C4 rules.
 
-**Implementation:**
-- `get_task` — next implementation task. When multiple containers are available, presents a choice menu with groups. Scaffold tasks fire first for deployment groups. The model is the spec — agents must build exactly what it describes and clean up anything templates add that isn't in the model
-- Add, update, and remove nodes and edges
-- Define behavioral flows with branching (`set_flows`)
-- Organize systems, containers, or components into groups (`set_groups`)
-- Link nodes and flows to source code (`update_source_map`)
-- Validate the model against C4 rules (`validate_model`)
-- Pause drift detection while implementing (`set_implementing`)
+**Authoring (writes the plan):**
+- `add_person` / `add_system` / `add_container` / `add_component` / `add_symbol` — mint nodes from plain responsibility statements.
+- `add_group` / `update_group` / `delete_group` — group sibling nodes (a secondary packaging axis).
+- `add_links` / `update_links` / `delete_links` — typed relationships between nodes.
+- `update_source_map` — link nodes and responsibilities to files and line ranges.
+
+**Building & reconciliation:**
+- `fill_container` — fill in a whole container's subtree at once when extracting from existing code (generation pipeline).
+- `mark_implemented` — fold implemented work from the plan into the committed model.
+- `flag_drift` / `reconcile_drift` — record undescribed behavior or stale claims, then advance the drift anchor.
+- `update_nodes` / `delete_nodes` / `descope` / `move_nodes` / `move_responsibilities` — interactive edits and refinement (`descope` drops a node from the model while leaving its code in place).
+- `set_model` / `set_node` / `set_groups` — generation-pipeline primitives for whole-model / whole-subtree / bulk-group writes.
+- `set_drift_watch` — pause drift detection while implementing.
 
 ## Drift detection & sync
 
-Architecture models go stale as code changes. Scryer detects drift two ways: source-mapped nodes whose files changed since last sync, and new files appearing in the project that aren't covered by the model yet.
+Architecture models go stale as code changes. Scryer detects drift deterministically — no LLM — two ways: source-mapped nodes whose files changed since the last reconcile, and new files appearing in the project that the model doesn't cover yet.
 
 When drift is detected:
 
-1. A **sync bar** appears at the bottom of the editor showing potentially drifted nodes — click any node name to navigate to it on the canvas
-2. Click **Sync** to spawn your agent (Claude Code via `claude -p`, Codex via `codex exec`) with Scryer's MCP server attached. The canvas is locked during sync — cancel rolls back all agent changes
-3. The agent receives a list of potentially drifted nodes, reads the changed source files, and updates the model only where code has actually diverged
-4. Model changes appear in the editor in real-time. If nothing actually drifted, dismiss the notification to reset the baseline
+1. A review surface and drift indicators flag the potentially drifted scopes — click through to the affected node pages.
+2. Trigger a drift check to spawn your agent (Claude Code via `claude -p`, Codex via `codex exec`) with Scryer's MCP server attached. The agent reads the changed source files and updates the model only where code has actually diverged.
+3. Undescribed behavior is proposed into the plan as a **vagrant** claim for you to adopt or reject; a **stale** claim is flagged on the committed model where the code regressed from what was claimed.
+4. Model changes appear in the editor in real time. When every scope has been examined, the drift anchor advances so the same changes stop surfacing.
 
-For Claude Code, the MCP server config is passed inline via `--mcp-config`. For Codex, the project must have MCP already configured (via `scryer-mcp init` or the app's setup flow) since Codex reads MCP config from `.codex/config.toml`.
+For Claude Code, the MCP server config is passed inline via `--mcp-config`. For Codex, the project must have MCP already configured (via `scryer-mcp init` or the app's setup flow), since Codex reads MCP config from `.codex/config.toml`.
 
 ## Tech
 
-Scryer is a [Tauri](https://tauri.app/) desktop app. The UI is written in [React](https://react.dev/) with [TypeScript](https://www.typescriptlang.org/) and the backend is written in [Rust](https://www.rust-lang.org/). Canvas rendering uses [ReactFlow](https://reactflow.dev/) with a custom planar auto-layout engine.
+Scryer is a [Tauri](https://tauri.app/) desktop app. The UI is written in [React](https://react.dev/) with [TypeScript](https://www.typescriptlang.org/) — a two-pane workspace of a model tree and wiki-style node pages, with a secondary [ReactFlow](https://reactflow.dev/) diagram for spatial navigation. The backend is written in [Rust](https://www.rust-lang.org/): the core model, diff, drift, and health engines (`scryer-core`), the tree-sitter code-extraction and import-graph engine (`scryer-extract`), the MCP server (`scryer-mcp`), and ACP integration (`scryer-acp`). Live component previews run through a per-project [Vite](https://vite.dev/) dev server.
 
 ## Building from source
 

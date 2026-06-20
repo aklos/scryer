@@ -16,7 +16,7 @@ When drift is detected, a **sync bar** appears at the bottom of the editor.
 
 ## Implementation pauses drift
 
-While an AI agent is actively building from the model, it calls `set_implementing` to pause drift detection — otherwise every file it writes would immediately register as drift. Detection resumes automatically when the agent finishes.
+While an AI agent is actively building from the model, it calls `set_drift_watch` to pause drift detection — otherwise every file it writes would immediately register as drift. Detection resumes automatically when the agent finishes.
 
 ## The sync bar
 

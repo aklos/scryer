@@ -1,4 +1,12 @@
-import type { C4Kind, C4Shape } from "../types";
+/**
+ * The C4 card chrome — an SVG fill+stroke that follows the node's shape
+ * contour, with kind-specific decorations (container hat, system outer frame,
+ * component side-tabs). Ported from the pre-pivot canvas; the `kind` type is
+ * the v0.3 `Kind`.
+ */
+
+import type { Kind } from "../viewmodel";
+import type { C4Shape } from "./index";
 import {
   baseRectPath,
   rectanglePath,
@@ -20,11 +28,10 @@ interface Props {
   strokeWidth?: number;
   strokeDasharray?: string;
   opacity?: number;
-  kind?: C4Kind;
+  kind?: Kind;
   external?: boolean;
   changed?: boolean;
-  /** When true, skip cap paths on shapes that occlude a back curve (cylinder/pipe/bucket).
-   *  Use for unfilled silhouettes — the body path already includes the back curve. */
+  /** When true, skip cap paths on shapes that occlude a back curve. */
   hollow?: boolean;
 }
 
@@ -67,8 +74,10 @@ export function ShapeBackground({
       />
       {kind === "system" && shape === "rectangle" && (
         <rect
-          x={-6} y={-6}
-          width={W + 12} height={H + 12}
+          x={-6}
+          y={-6}
+          width={W + 12}
+          height={H + 12}
           rx={6}
           fill="none"
           className={strokeClass}
@@ -78,23 +87,35 @@ export function ShapeBackground({
       )}
       {kind === "component" && shape === "rectangle" && (
         <>
-          <rect x={-8} y={47} width={12} height={20} rx={2}
+          <rect
+            x={-8}
+            y={47}
+            width={12}
+            height={20}
+            rx={2}
             className={`${fillClass} ${strokeClass ?? ""}`}
-            strokeWidth={strokeWidth} strokeDasharray={strokeDasharray} />
-          <rect x={-8} y={93} width={12} height={20} rx={2}
+            strokeWidth={strokeWidth}
+            strokeDasharray={strokeDasharray}
+          />
+          <rect
+            x={-8}
+            y={93}
+            width={12}
+            height={20}
+            rx={2}
             className={`${fillClass} ${strokeClass ?? ""}`}
-            strokeWidth={strokeWidth} strokeDasharray={strokeDasharray} />
+            strokeWidth={strokeWidth}
+            strokeDasharray={strokeDasharray}
+          />
         </>
       )}
-      {changed && (
-        <GlowOverlay shape={shape} kind={kind} />
-      )}
+      {changed && <GlowOverlay shape={shape} kind={kind} />}
     </svg>
   );
 }
 
-/** Pulsing glow overlay that follows the shape contour */
-function GlowOverlay({ shape, kind }: { shape: C4Shape; kind?: C4Kind }) {
+/** Pulsing glow overlay that follows the shape contour. */
+function GlowOverlay({ shape, kind }: { shape: C4Shape; kind?: Kind }) {
   const glowProps = {
     fill: "none",
     stroke: "var(--color-violet-400)",
@@ -109,17 +130,32 @@ function GlowOverlay({ shape, kind }: { shape: C4Shape; kind?: C4Kind }) {
         return <path d={personPath(W, H)} {...glowProps} />;
       case "cylinder": {
         const c = cylinderParts(W, H);
-        return <><path d={c.bodyPath} {...glowProps} /><path d={c.topCapPath} {...glowProps} /></>;
+        return (
+          <>
+            <path d={c.bodyPath} {...glowProps} />
+            <path d={c.topCapPath} {...glowProps} />
+          </>
+        );
       }
       case "pipe": {
         const p = pipeParts(W, H);
-        return <><path d={p.bodyPath} {...glowProps} /><path d={p.rightCapPath} {...glowProps} /></>;
+        return (
+          <>
+            <path d={p.bodyPath} {...glowProps} />
+            <path d={p.rightCapPath} {...glowProps} />
+          </>
+        );
       }
       case "trapezoid":
         return <path d={trapezoidPath(W, H)} {...glowProps} />;
       case "bucket": {
         const b = bucketParts(W, H);
-        return <><path d={b.bodyPath} {...glowProps} /><path d={b.topCapPath} {...glowProps} /></>;
+        return (
+          <>
+            <path d={b.bodyPath} {...glowProps} />
+            <path d={b.topCapPath} {...glowProps} />
+          </>
+        );
       }
       case "hexagon":
         return <path d={hexagonPath(W, H)} {...glowProps} />;
@@ -162,11 +198,8 @@ function ShapePaths({
   skipBaseFill?: boolean;
   hollow?: boolean;
 }) {
-  // Base fill: sharp rect always covers the full content area
-  // Skipped when semi-transparent to avoid overlap artifacts
   const baseFill = skipBaseFill ? null : <path d={baseRectPath(W, H)} className={fillClass} />;
 
-  // Shape outline: stroke follows the shape contour
   const outline = {
     className: `${fillClass} ${strokeClass ?? ""}`.trim(),
     strokeWidth,

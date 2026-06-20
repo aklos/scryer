@@ -1,5 +1,6 @@
 /**
  * Pure SVG geometry for each shape. All functions take (w, h) content box.
+ * Ported verbatim from the pre-pivot canvas.
  *
  * Every node has a sharp base rect (w x h) that is always filled.
  * Shape decorations extend OUTSIDE that rect — never inside it.
@@ -46,7 +47,6 @@ export function cylinderParts(w: number, h: number): CylinderParts {
   const capRy = 16;
   const rx = w / 2;
 
-  // Body: straight sides, elliptical top and bottom edges extending outside
   const bodyPath =
     `M0,0` +
     ` V${h}` +
@@ -54,7 +54,6 @@ export function cylinderParts(w: number, h: number): CylinderParts {
     ` V0` +
     ` A${rx},${capRy} 0 0,0 0,0 Z`;
 
-  // Top cap: full ellipse at y=0 (visible "lid")
   const topCapPath =
     `M0,0` +
     ` A${rx},${capRy} 0 0,1 ${w},0` +
@@ -74,7 +73,6 @@ export function pipeParts(w: number, h: number): PipeParts {
   const capRx = 16;
   const ry = h / 2;
 
-  // Body: straight top/bottom, elliptical left and right edges extending outside
   const bodyPath =
     `M0,0` +
     ` H${w}` +
@@ -82,7 +80,6 @@ export function pipeParts(w: number, h: number): PipeParts {
     ` H0` +
     ` A${capRx},${ry} 0 0,1 0,0 Z`;
 
-  // Right cap: full ellipse at x=w (visible "lid")
   const rightCapPath =
     `M${w},0` +
     ` A${capRx},${ry} 0 0,1 ${w},${h}` +
@@ -94,12 +91,7 @@ export function pipeParts(w: number, h: number): PipeParts {
 /** Trapezoid: angled sides extend outside the base rect at the bottom. */
 export function trapezoidPath(w: number, h: number): string {
   const extend = 24;
-  return (
-    `M0,0 H${w}` +
-    ` L${w + extend},${h}` +
-    ` H${-extend}` +
-    ` Z`
-  );
+  return `M0,0 H${w}` + ` L${w + extend},${h}` + ` H${-extend}` + ` Z`;
 }
 
 export interface BucketParts {
@@ -114,7 +106,6 @@ export function bucketParts(w: number, h: number): BucketParts {
   const extend = 24;
   const rx = (w + 2 * extend) / 2;
 
-  // Body: elliptical back-arc at top, sides narrow down, elliptical bottom edge
   const bottomRx = w / 2;
   const bodyPath =
     `M${-extend},0` +
@@ -123,7 +114,6 @@ export function bucketParts(w: number, h: number): BucketParts {
     ` A${bottomRx},${capRy} 0 0,1 0,${h}` +
     ` Z`;
 
-  // Top cap: full ellipse at y=0 (visible rim / opening)
   const topCapPath =
     `M${-extend},0` +
     ` A${rx},${capRy} 0 0,0 ${w + extend},0` +

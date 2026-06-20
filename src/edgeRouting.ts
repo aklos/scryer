@@ -1,5 +1,9 @@
 /**
  * Edge handle assignment — picks the shortest-distance handle pair.
+ * Ported verbatim from the pre-pivot canvas: for each edge it chooses the
+ * source/target handles (sides or, in a narrow diagonal window, corners) that
+ * minimize length while spreading congested handles and respecting the
+ * dominant axis between two nodes.
  */
 
 interface EdgeInput {
@@ -39,54 +43,39 @@ function getHandlePositions(node: NodeInput): Record<HandleId, { x: number; y: n
 }
 
 // Penalty added per existing edge on a handle (squared-pixel units).
-// Strong enough to push a second edge to an adjacent handle, so multiple
-// edges arriving at the same node spread across different connection points.
 const CONGESTION_PENALTY = 160 ** 2;
 
-// Corners are only allowed when the angle between node centers falls within a
-// narrow window around one of the four diagonal directions (±15° of 45/135/
-// 225/315°). Outside those windows, only side handles are considered.
+// Corners are only allowed within ±15° of a diagonal direction.
 const CORNER_HALF_WINDOW_DEG = 15;
 
-// Returns the source/target corner handle pair for the diagonal window the
-// angle falls into, or null if it falls outside all four windows.
 function diagonalCornerPair(dx: number, dy: number): [HandleId, HandleId] | null {
-  const angle = (Math.atan2(dy, dx) * 180) / Math.PI; // -180..180, 0 = +x
+  const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
   const within = (target: number) => {
     let d = Math.abs(angle - target);
     if (d > 180) d = 360 - d;
     return d <= CORNER_HALF_WINDOW_DEG;
   };
-  if (within(45))   return ["bottom-right", "top-left"];     // target down-right of source
-  if (within(135))  return ["bottom-left",  "top-right"];    // target down-left of source
-  if (within(-45))  return ["top-right",    "bottom-left"];  // target up-right of source
-  if (within(-135)) return ["top-left",     "bottom-right"]; // target up-left of source
+  if (within(45))   return ["bottom-right", "top-left"];
+  if (within(135))  return ["bottom-left",  "top-right"];
+  if (within(-45))  return ["top-right",    "bottom-left"];
+  if (within(-135)) return ["top-left",     "bottom-right"];
   return null;
 }
 
 // Penalty for handles that fight the dominant direction between nodes.
-// When one node is clearly above another, edges should flow top→bottom,
-// not exit sideways. This makes vertical relationships use top/bottom handles
-// and horizontal relationships use left/right handles.
 const AXIS_PENALTY = 60 ** 2;
 
-// Returns how misaligned a handle is with the direction to the other node.
-// 0 = well-aligned, 1 = perpendicular to the dominant axis.
 function axisMisalignment(handle: HandleId, dx: number, dy: number): number {
   const ax = Math.abs(dx);
   const ay = Math.abs(dy);
-  // If nodes are close on both axes, no preference
   if (ax < 40 && ay < 40) return 0;
   const ratio = Math.max(ax, ay) === 0 ? 0 : Math.abs(ax - ay) / Math.max(ax, ay);
-  // ratio is 0 when perfectly diagonal, 1 when purely vertical/horizontal
-  if (ratio < 0.3) return 0; // roughly diagonal — no preference
+  if (ratio < 0.3) return 0;
 
   const vertical = ay > ax;
   if (vertical) {
-    // Dominant axis is vertical — penalize left/right handles
     if (handle === "left" || handle === "right") return ratio;
   } else {
-    // Dominant axis is horizontal — penalize top/bottom handles
     if (handle === "top" || handle === "bottom") return ratio;
   }
   return 0;
@@ -99,7 +88,6 @@ export function assignAllHandles(
   const nodeMap = new Map(nodes.map((n) => [n.id, n]));
   const result = new Map<string, { sourceHandle: string; targetHandle: string }>();
 
-  // Track how many edges already use each handle on each node
   const usage = new Map<string, number>();
   const getUsage = (nodeId: string, h: HandleId) => usage.get(`${nodeId}:${h}`) ?? 0;
   const addUsage = (nodeId: string, h: HandleId) => {
@@ -107,15 +95,10 @@ export function assignAllHandles(
     usage.set(k, (usage.get(k) ?? 0) + 1);
   };
 
-  // Detect bidirectional pairs: if A→B and B→A both exist, the reverse edge
-  // must use the swapped handles of its counterpart so RelationshipEdge's
-  // perpendicular offset renders correctly.
   const edgeKey = (src: string, tgt: string) => `${src}::${tgt}`;
   const edgeSet = new Set(edges.map((e) => edgeKey(e.source, e.target)));
   const biPairProcessed = new Map<string, { sourceHandle: HandleId; targetHandle: HandleId }>();
 
-  // Sort edges by distance so closer edges claim optimal handles first.
-  // Farther edges then spread to adjacent handles via congestion penalty.
   const sorted = [...edges].map((e) => {
     const s = nodeMap.get(e.source);
     const t = nodeMap.get(e.target);
@@ -134,8 +117,6 @@ export function assignAllHandles(
     const tgt = nodeMap.get(e.target);
     if (!src || !tgt) continue;
 
-    // If this is the reverse edge of an already-processed bidirectional pair,
-    // force it to use the swapped handles so both edges share the same endpoints.
     const reverseKey = edgeKey(e.target, e.source);
     const isBiDirectional = edgeSet.has(reverseKey);
     const reverseHandles = biPairProcessed.get(reverseKey);
@@ -155,7 +136,6 @@ export function assignAllHandles(
     let bestTgt: HandleId = "left";
     let bestCost = Infinity;
 
-    // Direction between node centers (for axis alignment penalty)
     const srcW = src.measured?.width ?? (typeof src.style?.width === "number" ? src.style.width : NODE_W);
     const srcH = src.measured?.height ?? (typeof src.style?.height === "number" ? src.style.height : NODE_H);
     const tgtW = tgt.measured?.width ?? (typeof tgt.style?.width === "number" ? tgt.style.width : NODE_W);
@@ -163,9 +143,6 @@ export function assignAllHandles(
     const dx = (tgt.position.x + tgtW / 2) - (src.position.x + srcW / 2);
     const dy = (tgt.position.y + tgtH / 2) - (src.position.y + srcH / 2);
 
-    // Decide which handles are eligible based on the angle between centers.
-    // If the angle falls in one of the four diagonal windows, the matching
-    // corner pair is included; otherwise only side handles are considered.
     const cornerPair = diagonalCornerPair(dx, dy);
     const sideHandles: HandleId[] = ["top", "bottom", "left", "right"];
     const srcCandidates: HandleId[] = cornerPair ? [...sideHandles, cornerPair[0]] : sideHandles;
@@ -193,7 +170,6 @@ export function assignAllHandles(
     addUsage(e.source, bestSrc);
     addUsage(e.target, bestTgt);
 
-    // Record for bidirectional pair detection
     if (isBiDirectional) {
       biPairProcessed.set(edgeKey(e.source, e.target), { sourceHandle: bestSrc, targetHandle: bestTgt });
     }

@@ -1,272 +1,253 @@
+pub mod build_edges;
+pub mod diff;
 pub mod drift;
+pub mod health;
+pub mod history;
+pub mod ownership;
 pub mod rules;
 pub mod scan;
+pub mod seed;
+pub mod validate;
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Deserialize status leniently — unknown values become None instead of failing.
-fn deserialize_status_lenient<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Status>, D::Error> {
-    let opt: Option<String> = Option::deserialize(deserializer)?;
-    Ok(opt.and_then(|s| match s.as_str() {
-        "proposed" => Some(Status::Proposed),
-        "implemented" => Some(Status::Implemented),
-        "verified" => Some(Status::Verified),
-        "vagrant" => Some(Status::Vagrant),
-        _ => None,
-    }))
-}
+/// On-disk schema version. Files with a different `version` field are refused at load time.
+pub const SCRY_VERSION: &str = "0.3";
 
-/// Deserialize notes from either a single string (old format) or array of strings (new format).
-fn deserialize_notes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum NotesCompat {
-        Single(String),
-        List(Vec<String>),
-    }
-    match NotesCompat::deserialize(deserializer)? {
-        NotesCompat::Single(s) => {
-            if s.is_empty() { Ok(Vec::new()) }
-            else { Ok(s.lines().map(|l| l.to_string()).collect()) }
-        }
-        NotesCompat::List(v) => Ok(v),
-    }
-}
+// --- Core enums ---
 
-// --- Types (matching src/types.ts) ---
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub enum C4Kind {
+pub enum Kind {
     Person,
     System,
     Container,
     Component,
-    Operation,
-    Process,
-    Model,
+    /// A single addressable code definition — function, method, handler, hook,
+    /// React component, class, struct, interface, or type. One leaf = one
+    /// symbol. A symbol may discharge responsibilities, declare a data shape
+    /// (via `properties`), or both. A pure data type is a symbol that carries
+    /// only properties.
+    #[serde(alias = "schema")]
+    Symbol,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub enum C4Shape {
-    Rectangle,
-    Person,
-    Cylinder,
-    Pipe,
-    Trapezoid,
-    Bucket,
-    Hexagon,
-}
+// --- Responsibility ---
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub enum Status {
-    Proposed,
-    Implemented,
-    Verified,
-    Vagrant,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub struct Position {
-    pub x: f64,
-    pub y: f64,
-}
-
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct Reference {
-    /// Glob pattern for matching files, e.g. "src/auth/**/*.rs"
-    pub pattern: String,
-    /// What these files do in the context of this node
-    pub comment: String,
-}
-
+/// A pure business-responsibility statement. The `statement` field is the spec;
+/// `directives` are optional prescriptive HOW-constraints and have no
+/// conformance role.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
-#[serde(untagged)]
-pub enum ContractItem {
-    /// New format: { text, passed?, url?, image? }
-    Full {
-        text: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        passed: Option<bool>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        url: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        image: Option<ContractImage>,
-    },
-    /// Legacy format: plain string
-    Plain(String),
-}
-
-impl std::fmt::Display for ContractItem {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let prefix = match self.passed() {
-            Some(true) => "[x] ",
-            Some(false) => "[ ] ",
-            None => "",
-        };
-        write!(f, "{}{}", prefix, self.text())?;
-        if let ContractItem::Full { url: Some(url), .. } = self {
-            if self.text().is_empty() {
-                write!(f, "{}", url)?;
-            } else {
-                write!(f, " ({})", url)?;
-            }
-        }
-        if let ContractItem::Full { image: Some(img), .. } = self {
-            write!(f, " [image: {}]", img.filename)?;
-        }
-        Ok(())
-    }
-}
-
-impl ContractItem {
-    pub fn text(&self) -> &str {
-        match self {
-            ContractItem::Full { text, .. } => text,
-            ContractItem::Plain(s) => s,
-        }
-    }
-    pub fn passed(&self) -> Option<bool> {
-        match self {
-            ContractItem::Full { passed, .. } => *passed,
-            ContractItem::Plain(_) => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, schemars::JsonSchema)]
-pub struct Contract {
-    #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "always")]
-    pub expect: Vec<ContractItem>,
+#[serde(rename_all = "camelCase")]
+pub struct Responsibility {
+    pub id: String,
+    /// Verb-led business statement of accountability. No mechanism words.
+    pub statement: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vagrant: Option<bool>,
+    /// Drift observation: the semantic check judged that the code no longer
+    /// discharges this claim. Like `vagrant`, a flag awaiting a human/agent
+    /// verdict (re-implement, reword, or drop) — the status itself is the
+    /// prescription and stays untouched until that verdict. Cleared by
+    /// `mark_implemented` or by editing the claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale: Option<bool>,
+    /// Optional prescriptive HOW-constraints — verb-led "must"/"never" rules
+    /// the implementation has to satisfy. User-authored: read-only to the agent,
+    /// so hidden from write-tool input schemas (`schemars(skip)`) while still
+    /// serialized for storage and surfaced on read. Not part of conformance.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ask: Vec<ContractItem>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub never: Vec<ContractItem>,
+    #[schemars(skip)]
+    pub directives: Vec<String>,
+    /// Unix seconds of the last truth-bearing edit (statement / status / flags /
+    /// directives). Drives the canvas "fossilization" patina: a fresh edit
+    /// glistens, long-untouched code-backed responsibilities weather to stone.
+    /// Stamped automatically by the write path (agent edits) and the canvas
+    /// mutation helpers (user edits) — never hand-authored, so it's hidden from
+    /// the agent's write-tool input schemas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub last_touched_at: Option<u64>,
 }
 
-impl Contract {
-    pub fn is_empty(&self) -> bool {
-        self.expect.is_empty() && self.ask.is_empty() && self.never.is_empty()
-    }
-}
+// --- Code-level data ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ContractImage {
-    pub filename: String,
-    pub mime_type: String,
-    pub data: String, // base64-encoded
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct C4NodeData {
-    pub name: String,
+pub struct SchemaProperty {
+    pub label: String,
     #[serde(default)]
     pub description: String,
-    #[serde(default = "default_kind")]
-    pub kind: C4Kind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub technology: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub external: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expanded: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub shape: Option<C4Shape>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sources: Vec<Reference>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_status_lenient")]
-    pub status: Option<Status>,
-    /// Reason the agent gave for the current status (e.g. "Scaffolded handler with TODO for auth")
+    /// Unix seconds of the last truth-bearing edit (label / description).
+    /// Drives the fossilization patina, exactly like
+    /// [`Responsibility::last_touched_at`]; stamped automatically, never authored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status_reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Contract::is_empty")]
-    pub contract: Contract,
-    /// Freeform notes: conventions, context, rationale
-    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "deserialize_notes")]
-    pub notes: Vec<String>,
-    /// Properties for Model-kind nodes (label/description pairs)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub properties: Vec<ModelProperty>,
+    #[schemars(skip)]
+    pub last_touched_at: Option<u64>,
 }
 
-/// A node in the model. Matches ReactFlow's Node structure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct C4Node {
-    pub id: String,
-    #[serde(rename = "type", default = "default_node_type")]
-    pub node_type: String,
+/// A source-file pointer attached to a node. Wide glob + optional comment;
+/// distinct from [`SourceLocation`], which carries precise line numbers.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Source {
+    /// Glob pattern for matching files, e.g. "src/auth/**/*.rs"
+    pub pattern: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
-    pub data: C4NodeData,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>,
-}
-
-fn default_node_type() -> String {
-    "c4".to_string()
-}
-
-fn default_kind() -> C4Kind {
-    C4Kind::System
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct C4EdgeData {
-    pub label: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub method: Option<String>,
-}
-
-/// An edge in the model. Matches ReactFlow's Edge structure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct C4Edge {
-    pub id: String,
-    pub source: String,
-    pub target: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<C4EdgeData>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub enum StartingLevel {
-    System,
-    Container,
-    Component,
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceLocation {
+    /// File path (relative to the project) the responsibility maps into.
     pub pattern: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Durable anchor: the identifier (function/handler/type/component name)
+    /// that discharges the responsibility. The exact line range is resolved
+    /// from this on demand, so it survives edits that shift line numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_line: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+// --- Appearance (the look of a UI component) ---
+
+/// The render-artifact lifecycle of a visual component's look. Its own axis,
+/// independent of the model→code plan (the diff between committed and planned):
+/// `Proposed` when the look is planned, `Implemented` when synced from / built
+/// off the code, `Changed` when the code drifts from the modeled look.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ModelProperty {
-    pub label: String,
-    #[serde(default)]
-    pub description: String,
+pub enum RenderState {
+    Proposed,
+    Implemented,
+    Changed,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// What a UI component is accountable for in how it LOOKS — a contract alongside
+/// `responsibilities` (behavior) and `properties` (data). Carries the built
+/// render artifact (`dist_path` + `source_hash`) used to detect drift from the
+/// look, plus the render lifecycle [`RenderState`].
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Appearance {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<RenderState>,
+    /// Project-relative path to the built render output directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dist_path: Option<String>,
+    /// Unix seconds when the render was last built.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub built_at: Option<u64>,
+    /// Hash of the source at render time — used to detect drift from the look.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_hash: Option<String>,
+}
+
+// --- Nodes, links, groups ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Node {
+    pub id: String,
+    pub kind: Kind,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub technology: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Drift adoption marker: this node was MINTED by a drift check to home
+    /// code-discovered behaviour that no existing node described — it lives in
+    /// the PLAN only, awaiting a human verdict. Like a vagrant responsibility
+    /// ("code already does this, adopt?"), NOT planned intent ahead of code
+    /// ("implement this!"): a vagrant node is excluded from the implement queue
+    /// and folds into the committed model when its responsibility is adopted
+    /// (which clears this flag). Hidden from the agent's write-tool schemas —
+    /// vagrancy is set only by `flag_drift`, never authored directly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub vagrant: Option<bool>,
+    /// Drift regression marker (the mirror of `vagrant`): the code that backed
+    /// this whole node — a symbol, a component, an entire container subtree — is
+    /// GONE, but the model still asserts it. Set by `flag_drift` on the PLAN node
+    /// (where the UI reads it) when a deleted folder/file leaves a modeled node
+    /// with no code; it rides the working claim until the user gives a verdict —
+    /// re-implement (rebuild the subtree → it becomes a to-do) or drop (the area
+    /// was removed on purpose → the subtree leaves the model). `diff` ignores the
+    /// flag, so a stale node awaiting a verdict is not itself a plan work item.
+    /// Hidden from the agent's write-tool schemas — set only by `flag_drift`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub stale: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub responsibilities: Vec<Responsibility>,
+    /// Field declarations, when this symbol defines a data shape (struct,
+    /// class, interface, type). Empty for behavior-only symbols.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub properties: Vec<SchemaProperty>,
+    /// Optional lucide-react icon name override. Falls back to a deterministic
+    /// icon picked from `id` when unset. Frontend-only meaning; backend just
+    /// passes the string through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// Marks this node as a visual component (React component, UI element):
+    /// the flag that says "this node has a look the render tool can build."
+    /// Set by the agent during model generation or toggled by the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visual: Option<bool>,
+    /// What the component is accountable for in how it LOOKS — a status-bearing
+    /// contract like a responsibility, but visual instead of textual. (Formerly
+    /// `preview`; the alias keeps older `.scry` files loading.)
+    #[serde(default, alias = "preview", skip_serializing_if = "Option::is_none")]
+    pub appearance: Option<Appearance>,
+    /// User-authored freeform notes for this node — self-context, traversal
+    /// aids, reminders to self. Distinct from `description` (what the node IS)
+    /// and from a responsibility's `directives` (HOW-constraints): notes carry
+    /// no spec or conformance role. Supports `[[node-id]]` wikilinks. User-only:
+    /// hidden from the agent's write-tool schemas (`schemars(skip)`) but
+    /// serialized and surfaced on read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub notes: Option<String>,
+}
+
+/// The `empty` flag — a SYMBOL that carries no semantic content of its own: no
+/// responsibilities, no properties, no rendered appearance, and not external.
+/// Derived, never stored. Mirrors `isNodeEmpty` in the frontend (`src/rollup.ts`)
+/// — keep the two in lockstep. Scoped to symbols: structural nodes
+/// (system/container/component) carry their meaning through their children, so a
+/// parent without its own responsibilities is not "empty" in this sense.
+pub fn is_node_empty(node: &Node) -> bool {
+    node.kind == Kind::Symbol
+        && node.external != Some(true)
+        && node.responsibilities.is_empty()
+        && node.properties.is_empty()
+        && node.appearance.as_ref().and_then(|a| a.status).is_none()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Link {
+    pub id: String,
+    pub src: String,
+    pub dst: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Group {
     pub id: String,
@@ -277,158 +258,170 @@ pub struct Group {
     pub member_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_group_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Contract::is_empty")]
-    pub contract: Contract,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub collapsed: bool,
-}
-
-fn is_false(b: &bool) -> bool {
-    !*b
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct FlowBranch {
-    #[serde(default)]
-    pub condition: String,
-    #[serde(default)]
-    pub steps: Vec<FlowStep>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct FlowStep {
-    pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Backward compat: kept for deserialization of old files, not serialized.
-    #[serde(default, skip_serializing)]
-    pub position: Option<Position>,
-    /// If present, this step is a decision point with branching paths.
+    pub parent_node_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub branches: Vec<FlowBranch>,
+    pub responsibilities: Vec<Responsibility>,
+    /// Optional lucide-react icon name override. Frontend-only meaning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct FlowTransition {
-    pub source: String,
-    pub target: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-}
+// --- Model ---
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct Flow {
-    pub id: String,
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+pub struct ScryModel {
+    pub version: String,
+    pub nodes: Vec<Node>,
+    pub links: Vec<Link>,
     #[serde(default)]
-    pub steps: Vec<FlowStep>,
-    /// Backward compat: kept for deserialization of old files, not serialized.
-    #[serde(default, skip_serializing)]
-    pub transitions: Vec<FlowTransition>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct C4ModelData {
-    pub nodes: Vec<C4Node>,
-    pub edges: Vec<C4Edge>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub starting_level: Option<StartingLevel>,
+    pub groups: Vec<Group>,
+    /// Maps **responsibility id** → line-precise source locations (where reality
+    /// discharges that responsibility — the conformance numerator), or **schema
+    /// node id** → that type's declaration location. Agent-produced and
+    /// regenerable; never hand-authored.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub source_map: HashMap<String, Vec<SourceLocation>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project_path: Option<String>,
+    /// Maps **node id** → boundary globs: the region of code a node owns (the
+    /// coverage denominator + extraction scope). A child's boundary should sit
+    /// within its parent's. Agent-produced and regenerable; never hand-authored.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub ref_positions: HashMap<String, Position>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub groups: Vec<Group>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "scenarios")]
-    pub flows: Vec<Flow>,
+    pub boundaries: HashMap<String, Vec<Source>>,
 }
 
-// --- Model Reference ---
+impl ScryModel {
+    pub fn new() -> Self {
+        Self {
+            version: SCRY_VERSION.to_string(),
+            nodes: Vec::new(),
+            links: Vec::new(),
+            groups: Vec::new(),
+            source_map: HashMap::new(),
+            boundaries: HashMap::new(),
+        }
+    }
+}
 
-/// Identifies a model's storage location: either a named global model in
-/// `~/.scryer/` or a project-local model at `{project}/.scryer/model.scry`.
+impl Default for ScryModel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// --- ModelRef (project-local only in v0.3) ---
+
+/// Identifies a model's storage location. v0.3 supports project-local models only;
+/// the global `~/.scryer/{name}.scry` location from v0.2.x is gone.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ModelRef {
-    /// Global model stored at `~/.scryer/{name}.scry`
-    Global(String),
-    /// Project-local model stored at `{path}/.scryer/model.scry`
     ProjectLocal(PathBuf),
 }
 
 impl ModelRef {
-    /// Parse a ref string. Bare name → Global, `project:{path}` → ProjectLocal.
-    pub fn parse(s: &str) -> Self {
+    /// Parse a ref string. Only `project:{path}` is accepted in v0.3.
+    pub fn parse(s: &str) -> Result<Self, String> {
         if let Some(path) = s.strip_prefix("project:") {
-            ModelRef::ProjectLocal(PathBuf::from(path))
+            Ok(ModelRef::ProjectLocal(PathBuf::from(path)))
         } else {
-            ModelRef::Global(s.to_string())
+            Err(format!(
+                "Invalid model ref '{}'. Expected 'project:<path>'",
+                s
+            ))
         }
     }
 
-    /// Serialize to a ref string for API boundaries.
     pub fn to_ref_string(&self) -> String {
         match self {
-            ModelRef::Global(name) => name.clone(),
             ModelRef::ProjectLocal(path) => format!("project:{}", path.display()),
         }
     }
 
-    /// Path to the `.scry` model file.
+    pub fn project_path(&self) -> &Path {
+        match self {
+            ModelRef::ProjectLocal(path) => path,
+        }
+    }
+
     pub fn model_path(&self) -> PathBuf {
         match self {
-            ModelRef::Global(name) => models_dir().join(format!("{}.scry", name)),
             ModelRef::ProjectLocal(path) => path.join(".scryer").join("model.scry"),
         }
     }
 
-    /// Path to the baseline snapshot file.
     pub fn baseline_path(&self) -> PathBuf {
         match self {
-            ModelRef::Global(name) => models_dir().join(format!("{}.baseline.scry", name)),
             ModelRef::ProjectLocal(path) => path.join(".scryer").join("model.baseline.scry"),
         }
     }
 
-    /// Path to the implementing lock file.
+    /// The PLANNED (draft) model — the intent the canvas and agent edit. The
+    /// diff against `model.scry` (the committed source of truth) is the planning
+    /// substrate. Absent until the first edit diverges from the model.
+    pub fn planned_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join("planned.scry"),
+        }
+    }
+
     pub fn implementing_path(&self) -> PathBuf {
         match self {
-            ModelRef::Global(name) => models_dir().join(format!(".implementing-{}", name)),
             ModelRef::ProjectLocal(path) => path.join(".scryer").join(".implementing"),
         }
     }
 
-    /// The `.scryer/` directory containing this model's files.
+    pub fn lock_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".lock"),
+        }
+    }
+
+    pub fn sync_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".sync"),
+        }
+    }
+
+    /// The durable committed-model event log (append-only JSONL). Git-tracked
+    /// like the model — see [`crate::history`].
+    pub fn history_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join("history.jsonl"),
+        }
+    }
+
+    /// Where the deterministic codebase dependency graph is cached for the
+    /// duration of a model build, so the MCP `fill_container` tool (a
+    /// separate process from the build orchestrator) can wire code-level links
+    /// from the same edges the agent saw — without re-parsing the project.
+    pub fn build_edges_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".build_edges.json"),
+        }
+    }
+
+    /// The anchor fingerprint baseline — what every sourceMap anchor's span
+    /// contained at the last reconcile (see `scryer_extract::anchors`).
+    /// Regenerable, git-free, never hand-authored.
+    pub fn anchors_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".anchors.json"),
+        }
+    }
+
     pub fn dir(&self) -> PathBuf {
         match self {
-            ModelRef::Global(_) => models_dir(),
             ModelRef::ProjectLocal(path) => path.join(".scryer"),
         }
     }
 
-    /// Human-readable display name.
     pub fn display_name(&self) -> String {
         match self {
-            ModelRef::Global(name) => name.clone(),
             ModelRef::ProjectLocal(path) => path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| path.display().to_string()),
         }
-    }
-
-    pub fn is_project_local(&self) -> bool {
-        matches!(self, ModelRef::ProjectLocal(_))
     }
 }
 
@@ -438,269 +431,510 @@ impl std::fmt::Display for ModelRef {
     }
 }
 
-/// Entry in the combined model list (global + project-local).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelListEntry {
-    /// Ref string: bare name (global) or `project:{path}` (project-local)
-    pub ref_str: String,
-    /// Human-readable name for display
-    pub display_name: String,
-    /// Project path if known
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project_path: Option<String>,
-    /// Whether this is a project-local model
-    pub is_local: bool,
-}
-
 // --- Storage ---
 
-/// Resolve the global models directory (~/.scryer/).
-pub fn models_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".scryer")
-}
-
-/// Path to the implementing lock file for a model.
-pub fn implementing_path(model_name: &str) -> PathBuf {
-    models_dir().join(format!(".implementing-{}", model_name))
-}
-
-/// Check if a model is currently being implemented by an agent.
-pub fn is_implementing(model_name: &str) -> bool {
-    implementing_path(model_name).exists()
-}
-
-/// Set or clear the implementing flag for a model.
-pub fn set_implementing(model_name: &str, active: bool) -> Result<(), String> {
-    let path = implementing_path(model_name);
-    if active {
-        fs::write(&path, "").map_err(|e| format!("Failed to set implementing flag: {}", e))
-    } else {
-        if path.exists() {
-            fs::remove_file(&path).map_err(|e| format!("Failed to clear implementing flag: {}", e))
-        } else {
-            Ok(())
-        }
-    }
-}
-
-/// List all model names (without .scry extension), sorted.
-pub fn list_models() -> Result<Vec<String>, String> {
-    let dir = models_dir();
-    if !dir.exists() {
-        return Ok(vec![]);
-    }
-    let mut names: Vec<String> = fs::read_dir(&dir)
-        .map_err(|e| e.to_string())?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let name = entry.file_name().to_string_lossy().to_string();
-            name.strip_suffix(".scry")
-                .filter(|n| !n.ends_with(".baseline"))
-                .map(|n| n.to_string())
-        })
-        .collect();
-    names.sort();
-    Ok(names)
-}
-
-/// Find the model linked to a given project path.
-/// Scans all models and returns the name of the first one whose `project_path`
-/// matches (via canonical path comparison).
-pub fn resolve_model_for_project(project_path: &std::path::Path) -> Option<String> {
-    let canonical = std::fs::canonicalize(project_path).ok()?;
-    let names = list_models().ok()?;
-    for name in names {
-        if let Ok(model) = read_model(&name) {
-            if let Some(ref pp) = model.project_path {
-                if let Ok(model_canonical) = std::fs::canonicalize(pp) {
-                    if model_canonical == canonical {
-                        return Some(name);
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Read a model as raw JSON string (for Tauri frontend compatibility).
-pub fn read_model_raw(name: &str) -> Result<String, String> {
-    let path = models_dir().join(format!("{}.scry", name));
-    fs::read_to_string(&path).map_err(|e| e.to_string())
-}
-
-/// Read a model as typed C4ModelData.
-pub fn read_model(name: &str) -> Result<C4ModelData, String> {
-    let raw = read_model_raw(name)?;
-    serde_json::from_str(&raw).map_err(|e| e.to_string())
-}
-
-/// Write a model from raw JSON string (for Tauri frontend compatibility).
-///
-/// Uses atomic write (temp file + rename) so the file watcher sees a single
-/// inotify event instead of truncate + write, which lets `SelfWrites`
-/// reliably suppress UI-initiated saves without a timestamp window that
-/// could accidentally suppress MCP writes.
-pub fn write_model_raw(name: &str, data: &str) -> Result<(), String> {
-    let dir = models_dir();
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let tmp = dir.join(format!(".{}.scry.tmp", name));
-    let path = dir.join(format!("{}.scry", name));
-    fs::write(&tmp, data).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &path).map_err(|e| e.to_string())
-}
-
-/// Write a model from typed C4ModelData.
-pub fn write_model(name: &str, model: &C4ModelData) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(model).map_err(|e| e.to_string())?;
-    write_model_raw(name, &json)
-}
-
-// --- Baseline snapshots (for MCP diff) ---
-
-/// Save a baseline snapshot of a model (used by MCP to track what the AI last saw).
-pub fn save_baseline(name: &str, model: &C4ModelData) -> Result<(), String> {
-    let dir = models_dir();
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let json = serde_json::to_string_pretty(model).map_err(|e| e.to_string())?;
-    let path = dir.join(format!("{}.baseline.scry", name));
-    fs::write(&path, json).map_err(|e| e.to_string())
-}
-
-/// Read the baseline snapshot for a model. Returns None if no baseline exists.
-pub fn read_baseline(name: &str) -> Option<C4ModelData> {
-    let path = models_dir().join(format!("{}.baseline.scry", name));
-    let raw = fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&raw).ok()
-}
-
-// --- AI Settings ---
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct AiSettings {
-    pub provider: String,
-    pub api_key: String,
-    pub model: String,
-}
-
-fn settings_path() -> PathBuf {
-    models_dir().join("settings.json")
-}
-
-pub fn read_settings() -> AiSettings {
-    let path = settings_path();
-    if !path.exists() {
-        return AiSettings::default();
-    }
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-pub fn write_settings(settings: &AiSettings) -> Result<(), String> {
-    let dir = models_dir();
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-    fs::write(settings_path(), json).map_err(|e| e.to_string())
-}
-
-pub fn ai_configured(settings: &AiSettings) -> bool {
-    !settings.provider.is_empty()
-        && !settings.model.is_empty()
-        && (settings.provider == "ollama" || !settings.api_key.is_empty())
-}
-
-/// Delete a model by name.
-pub fn delete_model(name: &str) -> Result<(), String> {
-    let dir = models_dir();
-    let path = dir.join(format!("{}.scry", name));
-    if path.exists() {
-        fs::remove_file(&path).map_err(|e| e.to_string())?;
-    }
-    // Clean up baseline snapshot if present
-    let baseline = dir.join(format!("{}.baseline.scry", name));
-    if baseline.exists() {
-        let _ = fs::remove_file(&baseline);
-    }
-    Ok(())
-}
-
-// --- ModelRef-based Storage ---
-
-/// Ensure the `.scryer/.gitignore` exists for a project-local model directory.
-/// Only `model.scry` should be committed; transient files are ignored.
 fn ensure_project_gitignore(scryer_dir: &Path) -> Result<(), String> {
     let gitignore = scryer_dir.join(".gitignore");
     if !gitignore.exists() {
         fs::write(
             &gitignore,
-            "*.baseline.scry\n.implementing\n.sync\n.tmp.*\n",
+            "*.baseline.scry\n.implementing\n.sync\n.tmp.*\n.lock\n.anchors.json\n.build_edges.json\npreview/\n",
         )
         .map_err(|e| format!("Failed to create .gitignore: {}", e))?;
     }
     Ok(())
 }
 
-/// Read a model as raw JSON string from a ModelRef location.
+/// Check the `version` field on a raw model JSON; return Err with a clear
+/// message if it isn't `SCRY_VERSION`.
+fn check_version(v: &serde_json::Value) -> Result<(), String> {
+    let version = v.get("version").and_then(|x| x.as_str()).unwrap_or("");
+    if version != SCRY_VERSION {
+        return Err(format!(
+            "Model file uses schema version '{}', but this version of scryer requires '{}'. Legacy models cannot be loaded.",
+            if version.is_empty() { "<missing>" } else { version },
+            SCRY_VERSION
+        ));
+    }
+    Ok(())
+}
+
 pub fn read_model_raw_at(r: &ModelRef) -> Result<String, String> {
     fs::read_to_string(&r.model_path()).map_err(|e| e.to_string())
 }
 
-/// Read a model as typed C4ModelData from a ModelRef location.
-pub fn read_model_at(r: &ModelRef) -> Result<C4ModelData, String> {
+pub fn read_model_at(r: &ModelRef) -> Result<ScryModel, String> {
     let raw = read_model_raw_at(r)?;
-    serde_json::from_str(&raw).map_err(|e| e.to_string())
+    let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    check_version(&v)?;
+    serde_json::from_value(v).map_err(|e| e.to_string())
 }
 
-/// Write a model from raw JSON string to a ModelRef location.
-/// Uses atomic write (temp file + rename). Auto-creates `.gitignore` for project-local models.
+/// RAII guard holding the exclusive write lock for a model. The lock is an
+/// advisory OS file lock on `.scryer/.lock`; it is released when this guard is
+/// dropped (or the process exits, so a crash never strands it).
+///
+/// Hold it across the WHOLE read-modify-write cycle of a model edit. That
+/// serializes concurrent writers — parallel agent sessions (each its own MCP
+/// process) and the canvas — so they can't clobber each other, and it makes the
+/// `max+1` id minters correct (the read and the write are atomic together, so
+/// two writers can never observe the same max).
+#[must_use = "the lock is released as soon as the guard is dropped"]
+pub struct ModelLock {
+    _file: fs::File,
+}
+
+/// Acquire the exclusive write lock for a model, blocking until it is available.
+/// Creates the `.scryer` directory and lock file if absent.
+pub fn lock_model(r: &ModelRef) -> Result<ModelLock, String> {
+    let dir = r.dir();
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(r.lock_path())
+        .map_err(|e| format!("Failed to open model lock: {}", e))?;
+    file.lock()
+        .map_err(|e| format!("Failed to acquire model lock: {}", e))?;
+    Ok(ModelLock { _file: file })
+}
+
+/// Write raw JSON to the model path. Uses an atomic temp-file + rename so the
+/// frontend file watcher sees a single inotify event.
 pub fn write_model_raw_at(r: &ModelRef, data: &str) -> Result<(), String> {
     let dir = r.dir();
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    if r.is_project_local() {
-        ensure_project_gitignore(&dir)?;
-    }
+    ensure_project_gitignore(&dir)?;
     let model_path = r.model_path();
-    let tmp_name = match r {
-        ModelRef::Global(name) => format!(".{}.scry.tmp", name),
-        ModelRef::ProjectLocal(_) => ".tmp.model.scry".to_string(),
-    };
-    let tmp = dir.join(&tmp_name);
+    let tmp = dir.join(".tmp.model.scry");
     fs::write(&tmp, data).map_err(|e| e.to_string())?;
     fs::rename(&tmp, &model_path).map_err(|e| e.to_string())
 }
 
-/// Write a model from typed C4ModelData to a ModelRef location.
-pub fn write_model_at(r: &ModelRef, model: &C4ModelData) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(model).map_err(|e| e.to_string())?;
+pub fn write_model_at(r: &ModelRef, model: &ScryModel) -> Result<(), String> {
+    // Date each responsibility/property against the version currently on disk
+    // (the prior, read under the same lock the caller holds), then write. This
+    // is the agent-side fossilization clock; the canvas stamps its own edits in
+    // the frontend mutation helpers before it writes raw JSON.
+    let prior = read_model_at(r).ok();
+    let mut stamped = model.clone();
+    stamp_touches(&mut stamped, prior.as_ref(), drift::now_secs());
+    let json = serde_json::to_string_pretty(&stamped).map_err(|e| e.to_string())?;
     write_model_raw_at(r, &json)
 }
 
-/// Save a baseline snapshot at a ModelRef location.
-pub fn save_baseline_at(r: &ModelRef, model: &C4ModelData) -> Result<(), String> {
+/// Whether two responsibilities differ in any *truth-bearing* field — the spec
+/// statement, drift flags, or directives. Excludes `last_touched_at`
+/// itself (that's the output) so an unchanged responsibility keeps its date.
+fn resp_truth_changed(a: &Responsibility, b: &Responsibility) -> bool {
+    a.statement != b.statement
+        || a.vagrant != b.vagrant
+        || a.stale != b.stale
+        || a.directives != b.directives
+}
+
+/// Whether two properties differ in any truth-bearing field (label /
+/// description). Excludes `last_touched_at`.
+fn prop_truth_changed(a: &SchemaProperty, b: &SchemaProperty) -> bool {
+    a.label != b.label || a.description != b.description
+}
+
+/// Stamp `last_touched_at = now` on every responsibility/property whose
+/// truth-bearing content is new or changed relative to `prior`; carry the prior
+/// date forward when the content is unchanged. With no prior (the very first
+/// write of a model file) everything is stamped. Responsibilities are matched
+/// per host (node/group) by id — ids are only unique within a host — and
+/// properties per node by label. No layout lives on a responsibility/property,
+/// so a pure position change can't reach here and won't re-date anything.
+fn stamp_touches(model: &mut ScryModel, prior: Option<&ScryModel>, now: u64) {
+    let node_resps: HashMap<&str, HashMap<&str, &Responsibility>> = prior
+        .map(|p| {
+            p.nodes
+                .iter()
+                .map(|n| {
+                    let m: HashMap<&str, &Responsibility> =
+                        n.responsibilities.iter().map(|r| (r.id.as_str(), r)).collect();
+                    (n.id.as_str(), m)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let node_props: HashMap<&str, HashMap<&str, &SchemaProperty>> = prior
+        .map(|p| {
+            p.nodes
+                .iter()
+                .map(|n| {
+                    let m: HashMap<&str, &SchemaProperty> =
+                        n.properties.iter().map(|pr| (pr.label.as_str(), pr)).collect();
+                    (n.id.as_str(), m)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let group_resps: HashMap<&str, HashMap<&str, &Responsibility>> = prior
+        .map(|p| {
+            p.groups
+                .iter()
+                .map(|g| {
+                    let m: HashMap<&str, &Responsibility> =
+                        g.responsibilities.iter().map(|r| (r.id.as_str(), r)).collect();
+                    (g.id.as_str(), m)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let date_resp = |r: &mut Responsibility, host: Option<&HashMap<&str, &Responsibility>>| {
+        let prev = host.and_then(|m| m.get(r.id.as_str()).copied());
+        r.last_touched_at = match prev {
+            Some(pv) if !resp_truth_changed(pv, r) => pv.last_touched_at,
+            _ => Some(now),
+        };
+    };
+
+    for n in &mut model.nodes {
+        let hr = node_resps.get(n.id.as_str());
+        for r in &mut n.responsibilities {
+            date_resp(r, hr);
+        }
+        let hp = node_props.get(n.id.as_str());
+        for pr in &mut n.properties {
+            let prev = hp.and_then(|m| m.get(pr.label.as_str()).copied());
+            pr.last_touched_at = match prev {
+                Some(pv) if !prop_truth_changed(pv, pr) => pv.last_touched_at,
+                _ => Some(now),
+            };
+        }
+    }
+    for g in &mut model.groups {
+        let hr = group_resps.get(g.id.as_str());
+        for r in &mut g.responsibilities {
+            date_resp(r, hr);
+        }
+    }
+}
+
+// --- Baseline snapshots (for MCP diff) ---
+
+pub fn save_baseline_at(r: &ModelRef, model: &ScryModel) -> Result<(), String> {
     let dir = r.dir();
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let json = serde_json::to_string_pretty(model).map_err(|e| e.to_string())?;
     fs::write(&r.baseline_path(), json).map_err(|e| e.to_string())
 }
 
-/// Read the baseline snapshot at a ModelRef location.
-pub fn read_baseline_at(r: &ModelRef) -> Option<C4ModelData> {
-    let raw = fs::read_to_string(&r.baseline_path()).ok()?;
-    serde_json::from_str(&raw).ok()
+// --- Reconcile (drift) sync anchor ---
+
+/// Read the drift reconcile anchor (`.scryer/.sync`). Returns the default
+/// (epoch 0, no commit) when absent or unparseable — which makes a first drift
+/// check examine everything.
+pub fn read_sync_state(r: &ModelRef) -> drift::SyncState {
+    fs::read_to_string(r.sync_path())
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
 }
 
-/// Check if a model is being implemented (by ModelRef).
+/// Write the drift reconcile anchor. Best-effort, non-atomic (like the baseline).
+pub fn write_sync_state(r: &ModelRef, state: &drift::SyncState) -> Result<(), String> {
+    let dir = r.dir();
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(state).map_err(|e| e.to_string())?;
+    fs::write(r.sync_path(), json).map_err(|e| e.to_string())
+}
+
+/// Read the baseline snapshot. Returns None if absent or version-mismatched.
+pub fn read_baseline_at(r: &ModelRef) -> Option<ScryModel> {
+    let raw = fs::read_to_string(&r.baseline_path()).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    if check_version(&v).is_err() {
+        return None;
+    }
+    serde_json::from_value(v).ok()
+}
+
+// --- Planned (draft) layer + plan diff ---
+
+/// Write raw JSON to the planned path. Atomic temp-file + rename, like the model
+/// write, so the frontend watcher sees a single event.
+pub fn write_planned_raw_at(r: &ModelRef, data: &str) -> Result<(), String> {
+    let dir = r.dir();
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    ensure_project_gitignore(&dir)?;
+    let tmp = dir.join(".tmp.planned.scry");
+    fs::write(&tmp, data).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &r.planned_path()).map_err(|e| e.to_string())
+}
+
+/// Read the raw planned JSON, byte-for-byte. Falls back to the committed model's
+/// raw bytes when no planned file exists yet (planned == model), so the frontend
+/// can echo-dedup its own writes against exactly what it wrote.
+pub fn read_planned_raw_at(r: &ModelRef) -> Result<String, String> {
+    let path = r.planned_path();
+    if !path.exists() {
+        return read_model_raw_at(r);
+    }
+    fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+/// Read the planned (draft) model. Falls back to the committed model when no
+/// planned file exists yet — a fresh project has an empty plan (planned == model),
+/// so the plan diff is empty.
+pub fn read_planned_at(r: &ModelRef) -> Result<ScryModel, String> {
+    let path = r.planned_path();
+    if !path.exists() {
+        return read_model_at(r);
+    }
+    let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    check_version(&v)?;
+    serde_json::from_value(v).map_err(|e| e.to_string())
+}
+
+/// Write the planned (draft) model, stamping fossilization dates against the
+/// prior planned version (mirrors [`write_model_at`]). Hold the model lock across
+/// the read-modify-write, exactly as for the committed model.
+pub fn write_planned_at(r: &ModelRef, model: &ScryModel) -> Result<(), String> {
+    let prior = read_planned_at(r).ok();
+    let mut stamped = model.clone();
+    stamp_touches(&mut stamped, prior.as_ref(), drift::now_secs());
+    let json = serde_json::to_string_pretty(&stamped).map_err(|e| e.to_string())?;
+    write_planned_raw_at(r, &json)
+}
+
+/// Seed the planned file from the committed model when absent, so the plan starts
+/// empty (planned == model). No-op if planned already exists.
+pub fn ensure_planned_at(r: &ModelRef) -> Result<(), String> {
+    if r.planned_path().exists() {
+        return Ok(());
+    }
+    let mut model = read_model_at(r)?;
+    // Code-side mapping has a single home: the committed model owns every
+    // committed element's anchor, and the plan overlays anchors only for the
+    // elements it later adds. A fresh plan adds nothing, so it starts with no
+    // anchors of its own — the working view reads committed's directly.
+    model.source_map.clear();
+    model.boundaries.clear();
+    let json = serde_json::to_string_pretty(&model).map_err(|e| e.to_string())?;
+    write_planned_raw_at(r, &json)
+}
+
+/// The plan diff: how the draft (`planned`) diverges from the committed `model` —
+/// the planning substrate. Empty when there is no pending plan.
+pub fn plan_diff_at(r: &ModelRef) -> Result<diff::ModelDiff, String> {
+    let model = read_model_at(r)?;
+    let planned = read_planned_at(r)?;
+    Ok(diff::diff(&model, &planned))
+}
+
+/// Locate a responsibility by id anywhere in a model, returning its host id
+/// (node or group) and a clone. Responsibility ids are globally unique (the
+/// minters seed past every node- and group-owned id), so this is unambiguous.
+fn find_responsibility(model: &ScryModel, id: &str) -> Option<(String, Responsibility)> {
+    for n in &model.nodes {
+        if let Some(r) = n.responsibilities.iter().find(|r| r.id == id) {
+            return Some((n.id.clone(), r.clone()));
+        }
+    }
+    for g in &model.groups {
+        if let Some(r) = g.responsibilities.iter().find(|r| r.id == id) {
+            return Some((g.id.clone(), r.clone()));
+        }
+    }
+    None
+}
+
+/// Auto-commit a single planned element into the committed model — the fold that
+/// fires when an element's code is implemented (planned → model). Remove-then-
+/// insert, so one path handles add, update, move, AND delete:
+///
+///   - planned still holds the element → upsert it into the model at its planned
+///     home (a reparent/move comes along for free: the planned copy carries its
+///     new `parent_id` / host).
+///   - planned no longer holds it → a committed deletion: drop it from the model.
+///
+/// On a committed deletion the element is also purged from the planned mirror, so
+/// the plan clears. On an upsert, planned already mirrors the element, so it is
+/// left as-is (the diff for it goes empty automatically).
+///
+/// `owner_id` is required only for properties (their `(owner node, label)`
+/// identity); for responsibilities the host is derived from planned. Hold the
+/// model lock across the call.
+///
+/// (When the explicit delete tombstone lands, a tombstoned element routes through
+/// the same delete branch — one added `.filter(|x| !deleted)` at each lookup.)
+pub fn commit_element(
+    r: &ModelRef,
+    kind: diff::ElementKind,
+    owner_id: Option<&str>,
+    id: &str,
+) -> Result<(), String> {
+    let mut model = read_model_at(r)?;
+    let planned = read_planned_at(r)?;
+    let mut purge_from_planned = false;
+    // Responsibility ids carried by a committed node we're about to DELETE — held
+    // so the anchor-lockstep step below can GC their orphaned source-map entries
+    // (the responsibilities vanish with the node, but their anchors are keyed
+    // separately and would otherwise leak).
+    let mut deleted_node_resp_ids: Vec<String> = Vec::new();
+
+    match kind {
+        diff::ElementKind::Node => {
+            if !planned.nodes.iter().any(|n| n.id == id) {
+                if let Some(n) = model.nodes.iter().find(|n| n.id == id) {
+                    deleted_node_resp_ids =
+                        n.responsibilities.iter().map(|r| r.id.clone()).collect();
+                }
+            }
+            model.nodes.retain(|n| n.id != id);
+            match planned.nodes.iter().find(|n| n.id == id) {
+                Some(n) => model.nodes.push(n.clone()),
+                None => purge_from_planned = true,
+            }
+        }
+        diff::ElementKind::Link => {
+            model.links.retain(|l| l.id != id);
+            match planned.links.iter().find(|l| l.id == id) {
+                Some(l) => model.links.push(l.clone()),
+                None => purge_from_planned = true,
+            }
+        }
+        diff::ElementKind::Group => {
+            model.groups.retain(|g| g.id != id);
+            match planned.groups.iter().find(|g| g.id == id) {
+                Some(g) => model.groups.push(g.clone()),
+                None => purge_from_planned = true,
+            }
+        }
+        diff::ElementKind::Responsibility => {
+            for n in &mut model.nodes {
+                n.responsibilities.retain(|x| x.id != id);
+            }
+            for g in &mut model.groups {
+                g.responsibilities.retain(|x| x.id != id);
+            }
+            match find_responsibility(&planned, id) {
+                Some((host, resp)) => {
+                    if let Some(n) = model.nodes.iter_mut().find(|n| n.id == host) {
+                        n.responsibilities.push(resp);
+                    } else if let Some(g) = model.groups.iter_mut().find(|g| g.id == host) {
+                        g.responsibilities.push(resp);
+                    } else {
+                        return Err(format!(
+                            "cannot commit responsibility '{id}': its host '{host}' is not in \
+                             the committed model yet (commit the host node/group first)"
+                        ));
+                    }
+                }
+                None => purge_from_planned = true,
+            }
+        }
+        diff::ElementKind::Property => {
+            let owner = owner_id
+                .ok_or_else(|| "committing a property requires its owner node id".to_string())?;
+            let node = model
+                .nodes
+                .iter_mut()
+                .find(|n| n.id == owner)
+                .ok_or_else(|| {
+                    format!("cannot commit property '{id}': owner node '{owner}' not in the model")
+                })?;
+            node.properties.retain(|p| p.label != id);
+            // Upsert from planned if present there; absence is a committed delete,
+            // already handled by the retain above.
+            if let Some(p) = planned
+                .nodes
+                .iter()
+                .find(|n| n.id == owner)
+                .and_then(|n| n.properties.iter().find(|p| p.label == id))
+            {
+                node.properties.push(p.clone());
+            }
+        }
+    }
+
+    // Keep the code-side anchor in lockstep with the element being folded.
+    // Anchors have a single home: committed owns committed elements', the draft
+    // owns only the elements it adds. So folding MOVES a plan-added element's
+    // anchor into committed and strips it from the draft; a committed element
+    // already keeps its anchor in committed, so it's left untouched — NOT removed
+    // just because the draft doesn't carry it (that would silently unanchor a
+    // reworded claim). A deletion drops the anchor from committed outright.
+    let mut planned_anchor_strip: Vec<String> = Vec::new();
+    match kind {
+        diff::ElementKind::Responsibility => {
+            if purge_from_planned {
+                model.source_map.remove(id);
+            } else if let Some(locs) = planned.source_map.get(id) {
+                model.source_map.insert(id.to_string(), locs.clone());
+                planned_anchor_strip.push(id.to_string());
+            }
+        }
+        diff::ElementKind::Node => {
+            if purge_from_planned {
+                // Deletion: drop the node's own declaration anchor AND the
+                // anchors of every responsibility it carried (orphaned otherwise).
+                model.source_map.remove(id);
+                for rid in &deleted_node_resp_ids {
+                    model.source_map.remove(rid);
+                }
+            } else if let Some(n) = planned.nodes.iter().find(|n| n.id == id) {
+                // The node's own declaration anchor, plus every responsibility it
+                // carries — committing the node moves the draft's across.
+                for k in std::iter::once(id.to_string())
+                    .chain(n.responsibilities.iter().map(|r| r.id.clone()))
+                {
+                    if let Some(locs) = planned.source_map.get(&k) {
+                        model.source_map.insert(k.clone(), locs.clone());
+                        planned_anchor_strip.push(k);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    write_model_at(r, &model)?;
+
+    // Rewrite the draft when the fold removes the element (a committed deletion)
+    // OR when it moved an anchor out of the draft into committed — either way the
+    // draft must no longer carry it, so the single-home invariant holds.
+    if purge_from_planned || !planned_anchor_strip.is_empty() {
+        let mut p = planned;
+        if purge_from_planned {
+            match kind {
+                diff::ElementKind::Node => p.nodes.retain(|n| n.id != id),
+                diff::ElementKind::Link => p.links.retain(|l| l.id != id),
+                diff::ElementKind::Group => p.groups.retain(|g| g.id != id),
+                diff::ElementKind::Responsibility => {
+                    for n in &mut p.nodes {
+                        n.responsibilities.retain(|x| x.id != id);
+                    }
+                    for g in &mut p.groups {
+                        g.responsibilities.retain(|x| x.id != id);
+                    }
+                }
+                diff::ElementKind::Property => {}
+            }
+        }
+        for k in &planned_anchor_strip {
+            p.source_map.remove(k);
+        }
+        let json = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?;
+        write_planned_raw_at(r, &json)?;
+    }
+
+    Ok(())
+}
+
+// --- Implementing flag ---
+
 pub fn is_implementing_at(r: &ModelRef) -> bool {
     r.implementing_path().exists()
 }
 
-/// Set or clear the implementing flag (by ModelRef).
 pub fn set_implementing_at(r: &ModelRef, active: bool) -> Result<(), String> {
     let path = r.implementing_path();
     if active {
@@ -714,7 +948,6 @@ pub fn set_implementing_at(r: &ModelRef, active: bool) -> Result<(), String> {
     }
 }
 
-/// Delete a model at a ModelRef location (model file + baseline).
 pub fn delete_model_at(r: &ModelRef) -> Result<(), String> {
     let model_path = r.model_path();
     if model_path.exists() {
@@ -724,152 +957,45 @@ pub fn delete_model_at(r: &ModelRef) -> Result<(), String> {
     if baseline.exists() {
         let _ = fs::remove_file(&baseline);
     }
-    // Clean up implementing lock and sync marker
     let imp = r.implementing_path();
     if imp.exists() {
         let _ = fs::remove_file(&imp);
     }
-    Ok(())
-}
-
-// --- Projects Registry ---
-
-fn projects_registry_path() -> PathBuf {
-    models_dir().join("projects.json")
-}
-
-/// Register a project path so the desktop app can discover its model.
-pub fn register_project(project_path: &Path) -> Result<(), String> {
-    let canonical = fs::canonicalize(project_path)
-        .map_err(|e| format!("Cannot canonicalize project path: {}", e))?;
-    let mut projects = registered_projects();
-    if !projects.iter().any(|p| p == &canonical) {
-        projects.push(canonical);
-        let json = serde_json::to_string_pretty(&projects).map_err(|e| e.to_string())?;
-        let dir = models_dir();
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        fs::write(projects_registry_path(), json).map_err(|e| e.to_string())?;
+    let sync = r.sync_path();
+    if sync.exists() {
+        let _ = fs::remove_file(&sync);
     }
     Ok(())
 }
 
-/// Read the list of registered project paths, pruning any whose `.scryer/model.scry` no longer exists.
-pub fn registered_projects() -> Vec<PathBuf> {
-    let path = projects_registry_path();
-    let raw = match fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(_) => return vec![],
+// --- Project model resolution ---
+
+/// Returns `Some(ProjectLocal)` if `{project}/.scryer/model.scry` exists.
+/// Does NOT validate the file's version — use [`is_legacy_model`] for that.
+pub fn resolve_project_model(project_path: &Path) -> Option<ModelRef> {
+    if project_path.join(".scryer").join("model.scry").exists() {
+        Some(ModelRef::ProjectLocal(project_path.to_path_buf()))
+    } else {
+        None
+    }
+}
+
+/// True iff `{project}/.scryer/model.scry` exists with a version other than the
+/// current `SCRY_VERSION` (or no version field at all, or unparseable JSON).
+pub fn is_legacy_model(project_path: &Path) -> bool {
+    let model_path = project_path.join(".scryer").join("model.scry");
+    let Ok(raw) = fs::read_to_string(&model_path) else {
+        return false;
     };
-    let all: Vec<PathBuf> = serde_json::from_str(&raw).unwrap_or_default();
-    let valid: Vec<PathBuf> = all
-        .into_iter()
-        .filter(|p| p.join(".scryer").join("model.scry").exists())
-        .collect();
-    // Lazily prune invalid entries
-    if let Ok(json) = serde_json::to_string_pretty(&valid) {
-        let _ = fs::write(&path, json);
-    }
-    valid
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return true;
+    };
+    v.get("version").and_then(|x| x.as_str()).unwrap_or("") != SCRY_VERSION
 }
 
-/// List all models: global models from `~/.scryer/` + project-local models from registry.
-pub fn list_all_models() -> Result<Vec<ModelListEntry>, String> {
-    let mut entries = Vec::new();
+// --- ID helpers ---
 
-    // Global models — those with a project_path are project models (not yet migrated),
-    // those without are templates.
-    for name in list_models()? {
-        let project_path = read_model(&name)
-            .ok()
-            .and_then(|m| m.project_path);
-        let has_project = project_path.is_some();
-        entries.push(ModelListEntry {
-            ref_str: name.clone(),
-            display_name: name,
-            project_path,
-            is_local: has_project,
-        });
-    }
-
-    // Project-local models from registry
-    for project_path in registered_projects() {
-        let display = project_path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| project_path.display().to_string());
-        let ref_str = format!("project:{}", project_path.display());
-        let pp_str = project_path.to_string_lossy().to_string();
-
-        // Skip if there's already a global model pointing to this project
-        // (avoids duplicates during migration period)
-        if entries.iter().any(|e| e.project_path.as_deref() == Some(&pp_str)) {
-            continue;
-        }
-
-        entries.push(ModelListEntry {
-            ref_str,
-            display_name: display,
-            project_path: Some(pp_str),
-            is_local: true,
-        });
-    }
-
-    Ok(entries)
-}
-
-// --- Model Resolution ---
-
-/// Find the model for a project path. Checks project-local first, then global.
-/// Returns a ModelRef if found.
-pub fn resolve_model_for_project_ref(project_path: &Path) -> Option<ModelRef> {
-    // Check project-local first
-    let local_model = project_path.join(".scryer").join("model.scry");
-    if local_model.exists() {
-        return Some(ModelRef::ProjectLocal(project_path.to_path_buf()));
-    }
-
-    // Fall back to scanning global models for project_path match
-    let canonical = fs::canonicalize(project_path).ok()?;
-    let names = list_models().ok()?;
-    for name in names {
-        if let Ok(model) = read_model(&name) {
-            if let Some(ref pp) = model.project_path {
-                if let Ok(model_canonical) = fs::canonicalize(pp) {
-                    if model_canonical == canonical {
-                        return Some(ModelRef::Global(name));
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Migrate a global model to its project directory.
-/// Reads the model's `project_path`, copies to `{project}/.scryer/model.scry`,
-/// registers the project, and removes the global copy.
-pub fn migrate_to_local(name: &str) -> Result<ModelRef, String> {
-    let model = read_model(name)?;
-    let project_path = model.project_path.as_deref()
-        .ok_or_else(|| format!("Model '{}' has no project_path set", name))?;
-    let project = PathBuf::from(project_path);
-    if !project.exists() {
-        return Err(format!("Project path '{}' does not exist", project_path));
-    }
-    let model_ref = ModelRef::ProjectLocal(project.clone());
-    write_model_at(&model_ref, &model)?;
-    register_project(&project)?;
-    // Copy baseline if it exists
-    if let Some(baseline) = read_baseline(name) {
-        let _ = save_baseline_at(&model_ref, &baseline);
-    }
-    delete_model(name)?;
-    Ok(model_ref)
-}
-
-/// Generate the next node ID by scanning existing nodes.
-/// Follows the frontend pattern: "node-{N}" with N incrementing.
-pub fn next_node_id(model: &C4ModelData) -> String {
+pub fn next_node_id(model: &ScryModel) -> String {
     let max = model
         .nodes
         .iter()
@@ -879,44 +1005,744 @@ pub fn next_node_id(model: &C4ModelData) -> String {
     format!("node-{}", max + 1)
 }
 
-/// Generate an edge ID from source and target node IDs.
-pub fn make_edge_id(source: &str, target: &str) -> String {
-    format!("edge-{}-{}", source, target)
+pub fn make_link_id(src: &str, dst: &str) -> String {
+    format!("link-{}-{}", src, dst)
 }
 
-/// Generate the next flow ID by scanning existing flows.
-/// Preserves "scenario-N" prefix for backward compatibility with existing .scry files.
-pub fn next_flow_id(model: &C4ModelData) -> String {
+pub fn next_link_id(model: &ScryModel) -> String {
     let max = model
-        .flows
+        .links
         .iter()
-        .filter_map(|s| s.id.strip_prefix("scenario-").and_then(|n| n.parse::<u64>().ok()))
+        .filter_map(|l| l.id.strip_prefix("link-").and_then(|s| s.parse::<u64>().ok()))
         .max()
         .unwrap_or(0);
-    format!("scenario-{}", max + 1)
+    format!("link-{}", max + 1)
 }
 
-/// Collect all step IDs recursively (including branch sub-steps).
-pub fn collect_step_ids(steps: &[FlowStep]) -> Vec<&str> {
-    let mut ids = Vec::new();
-    for step in steps {
-        ids.push(step.id.as_str());
-        for branch in &step.branches {
-            ids.extend(collect_step_ids(&branch.steps));
+pub fn next_group_id(model: &ScryModel) -> String {
+    let max = model
+        .groups
+        .iter()
+        .filter_map(|g| g.id.strip_prefix("group-").and_then(|s| s.parse::<u64>().ok()))
+        .max()
+        .unwrap_or(0);
+    format!("group-{}", max + 1)
+}
+
+pub fn next_responsibility_id(existing: &[Responsibility]) -> String {
+    let max = existing
+        .iter()
+        .filter_map(|r| r.id.strip_prefix("resp-").and_then(|s| s.parse::<u64>().ok()))
+        .max()
+        .unwrap_or(0);
+    format!("resp-{}", max + 1)
+}
+
+// --- Wikilinks ---
+
+/// Rewrite `[[old]]` / `[[old|label]]` wikilink targets in one text. Target
+/// match is trimmed, case-insensitive — the same resolution the UI renderer
+/// uses. Returns the input unchanged when nothing matches.
+fn rewrite_wikilink_text(text: &str, old_name: &str, new_name: &str) -> String {
+    let target = old_name.trim().to_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("[[") {
+        let Some(end_rel) = rest[start + 2..].find("]]") else { break };
+        let inner = &rest[start + 2..start + 2 + end_rel];
+        out.push_str(&rest[..start]);
+        let (name, label) = match inner.split_once('|') {
+            Some((n, l)) => (n, Some(l)),
+            None => (inner, None),
+        };
+        if !inner.contains('[') && !inner.contains(']') && name.trim().to_lowercase() == target {
+            out.push_str("[[");
+            out.push_str(new_name);
+            if let Some(l) = label {
+                out.push('|');
+                out.push_str(l);
+            }
+            out.push_str("]]");
+        } else {
+            out.push_str(&rest[start..start + 2 + end_rel + 2]);
+        }
+        rest = &rest[start + 2 + end_rel + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Diff node names by id against `prior` and rewrite wikilinks for every
+/// rename found — the post-write hook for any tool that can rename nodes.
+pub fn rewrite_renamed_wikilinks(model: &mut ScryModel, prior: &ScryModel) {
+    let renames: Vec<(String, String)> = prior
+        .nodes
+        .iter()
+        .filter_map(|p| {
+            let n = model.nodes.iter().find(|n| n.id == p.id)?;
+            (n.name != p.name).then(|| (p.name.clone(), n.name.clone()))
+        })
+        .collect();
+    for (old, new) in renames {
+        rewrite_wikilinks(model, &old, &new);
+    }
+}
+
+/// After a node rename, repoint every `[[Old Name]]` prose mention — node and
+/// group descriptions, responsibility statements, directives — at the new
+/// name so wikilinks never dangle.
+pub fn rewrite_wikilinks(model: &mut ScryModel, old_name: &str, new_name: &str) {
+    if old_name.trim().is_empty() || new_name.trim().is_empty() || old_name == new_name {
+        return;
+    }
+    let fix = |t: &mut String| {
+        let next = rewrite_wikilink_text(t, old_name, new_name);
+        if next != *t {
+            *t = next;
+        }
+    };
+    let fix_resps = |resps: &mut Vec<Responsibility>| {
+        for r in resps {
+            fix(&mut r.statement);
+            for d in &mut r.directives {
+                fix(d);
+            }
+        }
+    };
+    for n in &mut model.nodes {
+        if let Some(d) = &mut n.description {
+            fix(d);
+        }
+        fix_resps(&mut n.responsibilities);
+    }
+    for g in &mut model.groups {
+        if let Some(d) = &mut g.description {
+            fix(d);
+        }
+        fix_resps(&mut g.responsibilities);
+    }
+}
+
+// --- Subagent settings (global, ~/.scryer/settings.json) ---
+
+/// Global scryer config directory (`~/.scryer`). Distinct from each project's
+/// own `.scryer/` directory, which holds that project's `model.scry`.
+pub fn global_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".scryer")
+}
+
+/// Per-agent model + reasoning effort. An empty model means "use the agent
+/// CLI's own default". Effort values are agent-specific (Claude accepts
+/// low/medium/high/xhigh/max; Codex accepts minimal/low/medium/high).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSettings {
+    #[serde(default)]
+    pub model: String,
+    #[serde(default = "default_effort")]
+    pub effort: String,
+}
+
+impl Default for AgentSettings {
+    fn default() -> Self {
+        Self {
+            model: String::new(),
+            effort: default_effort(),
         }
     }
-    ids
 }
 
-/// Generate the next step ID by scanning all steps across all flows.
-pub fn next_step_id(model: &C4ModelData) -> String {
-    let max = model
-        .flows
-        .iter()
-        .flat_map(|f| collect_step_ids(&f.steps))
-        .filter_map(|id| id.strip_prefix("step-").and_then(|n| n.parse::<u64>().ok()))
-        .max()
-        .unwrap_or(0);
-    format!("step-{}", max + 1)
+/// Agent preference + each agent's own settings, applied to spawned fill
+/// sessions. Field-level serde defaults keep older/partial settings.json files
+/// loadable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentSettings {
+    /// Which agent to launch: "auto" | "claudeCode" | "codex".
+    #[serde(default = "default_agent")]
+    pub agent: String,
+    #[serde(default)]
+    pub claude: AgentSettings,
+    #[serde(default)]
+    pub codex: AgentSettings,
+    /// Confirm before any UI action launches an agent (a billable run). Lets the
+    /// user see which agent + model + effort will run; "don't ask again" clears
+    /// it. Defaults to true so the gate is opt-out, not opt-in.
+    #[serde(default = "default_confirm_launch")]
+    pub confirm_launch: bool,
 }
 
+impl Default for SubagentSettings {
+    fn default() -> Self {
+        Self {
+            agent: default_agent(),
+            claude: AgentSettings::default(),
+            codex: AgentSettings::default(),
+            confirm_launch: default_confirm_launch(),
+        }
+    }
+}
+
+fn default_agent() -> String {
+    "auto".to_string()
+}
+
+fn default_confirm_launch() -> bool {
+    true
+}
+
+fn default_effort() -> String {
+    "medium".to_string()
+}
+
+fn settings_path() -> PathBuf {
+    global_dir().join("settings.json")
+}
+
+pub fn read_subagent_settings() -> SubagentSettings {
+    let path = settings_path();
+    if !path.exists() {
+        return SubagentSettings::default();
+    }
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+pub fn write_subagent_settings(settings: &SubagentSettings) -> Result<(), String> {
+    let dir = global_dir();
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    fs::write(settings_path(), json).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wikilink_rewrite_handles_plain_label_and_case() {
+        let t = "Talks to [[Auth Service]] and [[auth service|the auth layer]], not [[Billing]].";
+        let out = rewrite_wikilink_text(t, "Auth Service", "Identity Service");
+        assert_eq!(
+            out,
+            "Talks to [[Identity Service]] and [[Identity Service|the auth layer]], not [[Billing]]."
+        );
+        // No match → unchanged, including unclosed/malformed brackets.
+        assert_eq!(rewrite_wikilink_text("see [[Other]]", "Auth", "X"), "see [[Other]]");
+        assert_eq!(rewrite_wikilink_text("broken [[Auth", "Auth", "X"), "broken [[Auth");
+    }
+
+    /// Legacy `.scry` files written before the schema/symbol merge stored data
+    /// shapes as `"kind":"schema"`. The serde alias must load them as symbols
+    /// with their properties intact — there is no migration step.
+    #[test]
+    fn legacy_schema_kind_loads_as_symbol() {
+        let json = r#"{
+            "id": "n1",
+            "kind": "schema",
+            "name": "LeadData",
+            "properties": [{ "label": "phone", "status": "implemented" }]
+        }"#;
+        let node: Node = serde_json::from_str(json).unwrap();
+        assert_eq!(node.kind, Kind::Symbol);
+        assert_eq!(node.properties.len(), 1);
+        assert_eq!(node.properties[0].label, "phone");
+        // And it re-serializes under the canonical name.
+        let out = serde_json::to_string(&node).unwrap();
+        assert!(out.contains("\"kind\":\"symbol\""));
+        assert!(!out.contains("schema"));
+    }
+
+    #[test]
+    fn symbol_carries_both_responsibilities_and_properties() {
+        let json = r#"{
+            "id": "n2",
+            "kind": "symbol",
+            "name": "Projects",
+            "responsibilities": [{ "id": "r1", "statement": "configures projects" }],
+            "properties": [{ "label": "odooMapping" }]
+        }"#;
+        let node: Node = serde_json::from_str(json).unwrap();
+        assert_eq!(node.kind, Kind::Symbol);
+        assert_eq!(node.responsibilities.len(), 1);
+        assert_eq!(node.properties.len(), 1);
+    }
+
+    fn one_resp_model(statement: &str) -> ScryModel {
+        let mut m = ScryModel::new();
+        m.nodes.push(Node {
+            id: "n1".into(),
+            kind: Kind::Component,
+            name: "C".into(),
+            vagrant: None,
+            stale: None,
+            parent_id: None,
+            external: None,
+            technology: None,
+            description: None,
+            responsibilities: vec![Responsibility {
+                id: "r1".into(),
+                statement: statement.into(),
+                vagrant: None,
+                stale: None,
+                directives: Vec::new(),
+                last_touched_at: None,
+            }],
+            properties: Vec::new(),
+            icon: None,
+            visual: None,
+            appearance: None,
+            notes: None,
+        });
+        m
+    }
+
+    /// The fossilization clock: a responsibility is dated when first written and
+    /// when its truth changes, but a cosmetic edit carries the date forward.
+    #[test]
+    fn stamp_touches_dates_only_truth_changes() {
+        // First write (no prior): the responsibility gets dated.
+        let mut m = one_resp_model("does X");
+        stamp_touches(&mut m, None, 100);
+        assert_eq!(m.nodes[0].responsibilities[0].last_touched_at, Some(100));
+
+        // Re-write with identical truth but a cosmetic change (icon): the date is
+        // carried forward, not bumped — a non-truth edit is not a touch.
+        let prior = m.clone();
+        let mut moved = m.clone();
+        moved.nodes[0].icon = Some("Box".into());
+        stamp_touches(&mut moved, Some(&prior), 200);
+        assert_eq!(
+            moved.nodes[0].responsibilities[0].last_touched_at,
+            Some(100),
+            "a cosmetic-only change must not re-date the responsibility"
+        );
+
+        // Edit the statement: the responsibility is re-dated to now.
+        let prior = moved.clone();
+        let mut edited = one_resp_model("does Y");
+        stamp_touches(&mut edited, Some(&prior), 300);
+        assert_eq!(
+            edited.nodes[0].responsibilities[0].last_touched_at,
+            Some(300),
+            "a changed statement re-dates the responsibility"
+        );
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    fn temp_ref() -> (tempfile::TempDir, ModelRef) {
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        (dir, r)
+    }
+
+    /// A second independent handle must fail to take the lock while a guard is
+    /// held, and succeed once it is released.
+    #[test]
+    fn lock_is_exclusive_across_handles() {
+        let (_dir, r) = temp_ref();
+        let guard = lock_model(&r).unwrap();
+        let other = fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(r.lock_path())
+            .unwrap();
+        assert!(
+            other.try_lock().is_err(),
+            "a second handle must not acquire the lock while it is held"
+        );
+        drop(guard);
+        assert!(
+            other.try_lock().is_ok(),
+            "the lock is free once the guard is dropped"
+        );
+    }
+
+    /// Concurrent read-modify-write under the lock never loses an update: N
+    /// writers each add one node, and all N land with unique ids — exactly the
+    /// parallel-agent-writes case that clobbered without the lock (two writers
+    /// reading the same model would both mint the same `next_node_id`).
+    #[test]
+    fn concurrent_writes_do_not_clobber() {
+        let (_dir, r) = temp_ref();
+        write_model_at(&r, &ScryModel::new()).unwrap();
+
+        const N: usize = 12;
+        std::thread::scope(|s| {
+            for i in 0..N {
+                let r = r.clone();
+                s.spawn(move || {
+                    let _lock = lock_model(&r).unwrap();
+                    let mut m = read_model_at(&r).unwrap();
+                    let id = next_node_id(&m);
+                    let node = Node {
+                        id,
+                        kind: Kind::System,
+                        name: format!("n{i}"),
+                        vagrant: None,
+                        stale: None,
+                        parent_id: None,
+                        external: None,
+                        technology: None,
+                        description: None,
+                        responsibilities: Vec::new(),
+                        properties: Vec::new(),
+                        icon: None,
+                        visual: None,
+                        appearance: None,
+                        notes: None,
+                    };
+                    m.nodes.push(node);
+                    write_model_at(&r, &m).unwrap();
+                });
+            }
+        });
+
+        let m = read_model_at(&r).unwrap();
+        assert_eq!(m.nodes.len(), N, "every concurrent write landed (no lost updates)");
+        let ids: std::collections::HashSet<&str> =
+            m.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids.len(), N, "all minted ids are unique (no collision)");
+    }
+
+    /// With no planned file, the plan diff is empty (planned falls back to model).
+    /// After seeding and diverging the draft, the diff reports the change.
+    #[test]
+    fn plan_diff_tracks_draft_divergence() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        m.nodes.push(Node {
+            id: "n1".into(),
+            kind: Kind::System,
+            name: "Auth".into(),
+            vagrant: None,
+            stale: None,
+            parent_id: None,
+            external: None,
+            technology: None,
+            description: None,
+            responsibilities: Vec::new(),
+            properties: Vec::new(),
+            icon: None,
+            visual: None,
+            appearance: None,
+            notes: None,
+        });
+        write_model_at(&r, &m).unwrap();
+
+        // No planned file yet → empty plan.
+        assert!(plan_diff_at(&r).unwrap().is_empty());
+
+        // Seed the draft from the model, then add a node to the draft.
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes.push(Node {
+            id: "n2".into(),
+            kind: Kind::System,
+            name: "Billing".into(),
+            vagrant: None,
+            stale: None,
+            parent_id: None,
+            external: None,
+            technology: None,
+            description: None,
+            responsibilities: Vec::new(),
+            properties: Vec::new(),
+            icon: None,
+            visual: None,
+            appearance: None,
+            notes: None,
+        });
+        write_planned_at(&r, &planned).unwrap();
+
+        let d = plan_diff_at(&r).unwrap();
+        assert_eq!(d.changes.len(), 1);
+        assert_eq!(d.changes[0].id, "n2");
+        assert_eq!(d.changes[0].changes, vec![diff::Change::Added]);
+    }
+
+    fn mk_node(id: &str, name: &str, parent: Option<&str>) -> Node {
+        Node {
+            id: id.into(),
+            kind: Kind::Component,
+            name: name.into(),
+            vagrant: None,
+            stale: None,
+            parent_id: parent.map(|s| s.into()),
+            external: None,
+            technology: None,
+            description: None,
+            responsibilities: Vec::new(),
+            properties: Vec::new(),
+            icon: None,
+            visual: None,
+            appearance: None,
+            notes: None,
+        }
+    }
+
+    fn mk_resp(id: &str, statement: &str) -> Responsibility {
+        Responsibility {
+            id: id.into(),
+            statement: statement.into(),
+            vagrant: None,
+            stale: None,
+            directives: Vec::new(),
+            last_touched_at: None,
+        }
+    }
+
+    /// Committing an added/renamed node folds the draft into the model; once
+    /// committed the plan diff for it goes empty.
+    #[test]
+    fn commit_node_add_and_update() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        m.nodes.push(mk_node("n1", "Old", None));
+        write_model_at(&r, &m).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes[0].name = "New".into(); // rename n1
+        planned.nodes.push(mk_node("n2", "Billing", None)); // add n2
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Node, None, "n1").unwrap();
+        commit_element(&r, diff::ElementKind::Node, None, "n2").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        assert_eq!(model.nodes.iter().find(|n| n.id == "n1").unwrap().name, "New");
+        assert!(model.nodes.iter().any(|n| n.id == "n2"));
+        assert!(plan_diff_at(&r).unwrap().is_empty(), "plan clears after commit");
+    }
+
+    /// Committing a node that the draft dropped removes it from the model and
+    /// purges it from the plan.
+    #[test]
+    fn commit_node_delete() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        m.nodes.push(mk_node("n1", "Keep", None));
+        m.nodes.push(mk_node("n2", "Drop", None));
+        write_model_at(&r, &m).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes.retain(|n| n.id != "n2"); // delete n2 in the draft
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Node, None, "n2").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        assert!(model.nodes.iter().any(|n| n.id == "n1"));
+        assert!(!model.nodes.iter().any(|n| n.id == "n2"), "n2 removed from model");
+        assert!(plan_diff_at(&r).unwrap().is_empty());
+    }
+
+    /// Committing a responsibility that the draft moved to another host lands it
+    /// under the new host in the model and removes it from the old one.
+    #[test]
+    fn commit_responsibility_move() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        let mut a = mk_node("a", "A", None);
+        a.responsibilities.push(mk_resp("resp-1", "do the thing"));
+        m.nodes.push(a);
+        m.nodes.push(mk_node("b", "B", None));
+        write_model_at(&r, &m).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        // move resp-1 from a to b in the draft
+        let resp = planned.nodes[0].responsibilities.remove(0);
+        planned.nodes[1].responsibilities.push(resp);
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Responsibility, None, "resp-1").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        let a = model.nodes.iter().find(|n| n.id == "a").unwrap();
+        let b = model.nodes.iter().find(|n| n.id == "b").unwrap();
+        assert!(a.responsibilities.is_empty(), "resp left the old host");
+        assert_eq!(b.responsibilities.len(), 1, "resp landed on the new host");
+        assert!(plan_diff_at(&r).unwrap().is_empty());
+    }
+
+    /// Committing a property upserts it by `(owner, label)`.
+    #[test]
+    fn commit_property_update() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        let mut a = mk_node("a", "A", None);
+        a.properties.push(SchemaProperty {
+            label: "email".into(),
+            description: "old".into(),
+            last_touched_at: None,
+        });
+        m.nodes.push(a);
+        write_model_at(&r, &m).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes[0].properties[0].description = "new".into();
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Property, Some("a"), "email").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        assert_eq!(model.nodes[0].properties[0].description, "new");
+        assert!(plan_diff_at(&r).unwrap().is_empty());
+    }
+
+    /// Folding a minted chain (component → symbol) then its responsibility — the
+    /// adopt path — lands every rung in the committed model AND carries the code
+    /// anchor across, so the adopted claim is mapped (and a later deletion work
+    /// item could point at the code).
+    #[test]
+    fn commit_folds_chain_and_carries_source_anchor() {
+        let (_dir, r) = temp_ref();
+        let node = |v: serde_json::Value| serde_json::from_value::<Node>(v).unwrap();
+
+        // Committed: just a container.
+        let mut m = ScryModel::new();
+        m.nodes.push(node(serde_json::json!({ "id": "c", "kind": "container", "name": "API" })));
+        write_model_at(&r, &m).unwrap();
+
+        // Plan: container + a new component + a new symbol carrying a claim,
+        // anchored to code in the plan's source map.
+        let mut planned = m.clone();
+        planned.nodes.push(node(serde_json::json!({
+            "id": "comp", "kind": "component", "name": "Admin", "parentId": "c"
+        })));
+        planned.nodes.push(node(serde_json::json!({
+            "id": "sym", "kind": "symbol", "name": "admin_handler", "parentId": "comp",
+            "responsibilities": [{ "id": "r1", "statement": "exposes admin endpoint" }],
+        })));
+        planned.source_map.insert(
+            "r1".into(),
+            vec![serde_json::from_value(serde_json::json!({
+                "pattern": "api/admin.rs", "symbol": "admin_handler"
+            }))
+            .unwrap()],
+        );
+        write_planned_at(&r, &planned).unwrap();
+
+        // Fold root→leaf, then the responsibility — the host node must exist first.
+        commit_element(&r, diff::ElementKind::Node, None, "comp").unwrap();
+        commit_element(&r, diff::ElementKind::Node, None, "sym").unwrap();
+        commit_element(&r, diff::ElementKind::Responsibility, None, "r1").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        assert!(model.nodes.iter().any(|n| n.id == "comp"), "component folded in");
+        let sym = model.nodes.iter().find(|n| n.id == "sym").expect("symbol folded in");
+        assert!(sym.responsibilities.iter().any(|x| x.id == "r1"), "claim on the symbol");
+        assert_eq!(
+            model.source_map.get("r1").expect("anchor carried into committed")[0].pattern,
+            "api/admin.rs"
+        );
+        assert!(plan_diff_at(&r).unwrap().is_empty(), "plan and model agree after the fold");
+    }
+
+    /// Dedup invariant: a committed claim's anchor lives only in committed, so
+    /// the draft does not carry it. Folding a reworded version of that claim must
+    /// KEEP the committed anchor — not drop it just because the draft has no copy
+    /// (pre-dedup the draft mirrored every anchor, which masked this path).
+    #[test]
+    fn fold_keeps_committed_anchor_when_draft_does_not_carry_it() {
+        let (_dir, r) = temp_ref();
+        let node = |v: serde_json::Value| serde_json::from_value::<Node>(v).unwrap();
+
+        // Committed: a leaf symbol with an anchored claim.
+        let mut m = ScryModel::new();
+        m.nodes.push(node(serde_json::json!({
+            "id": "sym", "kind": "symbol", "name": "h",
+            "responsibilities": [{ "id": "r1", "statement": "old wording" }],
+        })));
+        m.source_map.insert(
+            "r1".into(),
+            vec![serde_json::from_value(serde_json::json!({
+                "pattern": "src/h.rs", "symbol": "h"
+            }))
+            .unwrap()],
+        );
+        write_model_at(&r, &m).unwrap();
+
+        // Draft: the SAME claim reworded (an authored change) but with NO anchor
+        // of its own — committed owns it; the draft overlays only what it adds.
+        let mut planned = m.clone();
+        planned.source_map.clear();
+        for n in &mut planned.nodes {
+            for resp in &mut n.responsibilities {
+                if resp.id == "r1" {
+                    resp.statement = "new wording".into();
+                }
+            }
+        }
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Responsibility, None, "r1").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        let resp = model
+            .nodes
+            .iter()
+            .flat_map(|n| &n.responsibilities)
+            .find(|x| x.id == "r1")
+            .expect("claim still committed");
+        assert_eq!(resp.statement, "new wording", "the reword folded in");
+        assert_eq!(
+            model.source_map.get("r1").expect("committed anchor preserved")[0].pattern,
+            "src/h.rs",
+            "folding the reword must not unanchor the committed claim"
+        );
+    }
+
+    /// Deleting a node folds out its own anchor AND the anchors of the
+    /// responsibilities it carried — none are left orphaned in the committed
+    /// source map.
+    #[test]
+    fn commit_node_deletion_gcs_responsibility_anchors() {
+        let (_dir, r) = temp_ref();
+        let node = |v: serde_json::Value| serde_json::from_value::<Node>(v).unwrap();
+
+        // Committed: a symbol carrying a claim, both anchored to code.
+        let mut m = ScryModel::new();
+        m.nodes.push(node(serde_json::json!({ "id": "c", "kind": "container", "name": "API" })));
+        m.nodes.push(node(serde_json::json!({
+            "id": "sym", "kind": "symbol", "name": "admin_handler", "parentId": "c",
+            "responsibilities": [{ "id": "r1", "statement": "exposes admin endpoint" }],
+        })));
+        let loc = |p: &str| vec![serde_json::from_value::<SourceLocation>(
+            serde_json::json!({ "pattern": p }),
+        )
+        .unwrap()];
+        m.source_map.insert("sym".into(), loc("api/admin.rs")); // the node's decl anchor
+        m.source_map.insert("r1".into(), loc("api/admin.rs")); // the claim's anchor
+        write_model_at(&r, &m).unwrap();
+
+        // Plan drops the symbol → committing the deletion must GC both anchors.
+        let mut planned = m.clone();
+        planned.nodes.retain(|n| n.id != "sym");
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Node, None, "sym").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        assert!(!model.nodes.iter().any(|n| n.id == "sym"), "symbol deleted");
+        assert!(model.source_map.get("sym").is_none(), "node anchor GC'd");
+        assert!(
+            model.source_map.get("r1").is_none(),
+            "the deleted node's responsibility anchor must not be left orphaned"
+        );
+    }
+}

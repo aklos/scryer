@@ -1,0 +1,173 @@
+/*
+ * Kinetic treatment — the per-scene motion + overlay look for the trailer.
+ * A quick push-in on the lifted UI, a bottom scrim for legibility, and a
+ * headline that slides up behind a growing accent bar. Snappy easing for the
+ * "launch video" feel. Per-scene knobs (push-in origin/intensity, headline
+ * placement) come in through CSS variables + modifier classes.
+ */
+
+.kroot {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  overflow: hidden;
+}
+
+/* Cross-fade: the incoming beat fades in over the outgoing one. */
+.klayer {
+  position: absolute;
+  inset: 0;
+}
+.klayer--in {
+  animation: k-fadein 0.45s ease both;
+}
+@keyframes k-fadein {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.kscene {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--surface-canvas);
+}
+
+/* The lifted UI, pushed in slowly over the beat (origin + scale via vars). */
+.kstage {
+  position: absolute;
+  inset: 0;
+  animation: k-pushin 6s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+@keyframes k-pushin {
+  from { transform: scale(var(--k-from, 1.04)); }
+  to   { transform: scale(var(--k-to, 1.13)); }
+}
+
+/* Darken the bottom so white headline text stays legible over any UI. */
+.kscrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to top,
+    rgba(0, 0, 0, 0.78) 0%,
+    rgba(0, 0, 0, 0.42) 16%,
+    rgba(0, 0, 0, 0) 38%
+  );
+}
+
+.koverlay {
+  position: absolute;
+  left: 4.5rem;
+  right: 4.5rem;
+  bottom: 4rem;
+  display: flex;
+}
+/* Headline parked at vertical centre (used by the powerline beat, whose strip
+ *  owns the bottom of the frame). */
+.koverlay--center {
+  top: 0;
+  bottom: 0;
+  align-items: center;
+}
+
+/* The bar + headline as one block, so the accent bar always sizes to the text
+ *  height (not the overlay's). */
+.khead {
+  display: flex;
+  align-items: stretch;
+  gap: 1.25rem;
+  animation: k-slideup 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.35s both;
+}
+
+.kbar {
+  width: 6px;
+  flex: none;
+  border-radius: 3px;
+  background: var(--color-blue-500, #3b82f6);
+  box-shadow: 0 0 24px var(--color-blue-500, #3b82f6);
+  transform-origin: bottom;
+  animation: k-bargrow 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.35s both;
+}
+@keyframes k-bargrow {
+  from { transform: scaleY(0); }
+  to   { transform: scaleY(1); }
+}
+
+.kheadline {
+  font-family: "Space Grotesk Variable", system-ui, sans-serif;
+  text-transform: uppercase;
+  font-weight: 700;
+  font-size: 3.2rem;
+  line-height: 1.03;
+  letter-spacing: -0.015em;
+  color: #fff;
+  text-shadow: 0 2px 28px rgba(0, 0, 0, 0.55);
+  max-width: 58%;
+  text-wrap: balance;
+  margin: 0;
+}
+
+/* --- Title / end cards (cold open + close) -------------------------------- */
+
+.kcenter {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 1.25rem;
+  animation: k-rise 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.2s both;
+}
+@keyframes k-rise {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.kbrand {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  font-family: "Space Grotesk Variable", system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 3.4rem;
+  letter-spacing: -0.02em;
+  color: #fff;
+}
+.klogo { width: 3.2rem; height: 3.2rem; }
+
+.khook {
+  font-family: "Space Grotesk Variable", system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 2rem;
+  line-height: 1.18;
+  color: #fff;
+  text-shadow: 0 2px 28px rgba(0, 0, 0, 0.6);
+  margin: 0;
+}
+.ktag {
+  font-family: "Space Grotesk Variable", system-ui, sans-serif;
+  font-weight: 500;
+  font-size: 1.5rem;
+  color: var(--color-blue-400, #60a5fa);
+  margin: 0;
+}
+.kurl {
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 1.05rem;
+  letter-spacing: 0.02em;
+  color: var(--text-muted, #8a93a2);
+  margin: 0.5rem 0 0;
+}
+
+/* The faint diagram behind the cold-open title. */
+.kbackdrop {
+  position: absolute;
+  inset: 0;
+  opacity: 0.18;
+  filter: blur(2px);
+  pointer-events: none;
+}

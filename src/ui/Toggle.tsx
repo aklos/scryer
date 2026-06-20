@@ -9,8 +9,10 @@ export function Toggle({ value, onChange }: {
       role="switch"
       aria-checked={value}
       onClick={() => onChange(!value)}
-      className={`h-4 w-7 rounded-full transition-colors cursor-pointer flex items-center ${
-        value ? "bg-blue-500 justify-end" : "bg-[var(--border-strong)] justify-start"
+      className={`h-4 w-7 rounded-full transition-colors flex items-center ${
+        value
+          ? "bg-zinc-800 dark:bg-zinc-300 justify-end"
+          : "bg-[var(--border-strong)] justify-start"
       }`}
     >
       <div className="h-3 w-3 rounded-full bg-white shadow-sm mx-0.5" />

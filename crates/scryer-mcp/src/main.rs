@@ -3,7 +3,11 @@ mod instructions;
 mod server;
 mod tools;
 mod types;
-mod validate;
+
+// Validation lives in scryer-core so the deterministic extractor and any
+// orchestrator share one definition of "valid". Re-exported here as
+// `crate::validate` so the tool handlers' `use crate::validate;` stays put.
+pub use scryer_core::validate;
 
 use rmcp::ServiceExt;
 use server::ScryerServer;
@@ -65,7 +69,7 @@ fn init_project() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("\nDone. {} will use scryer in this project.", tools.join(" and "));
         if has_claude {
             eprintln!("\nTo auto-approve scryer read tools in Claude Code, add to .claude/settings.local.json:");
-            eprintln!("  \"permissions\": {{ \"allow\": [\"mcp__scryer__list_models\", \"mcp__scryer__get_model\", \"mcp__scryer__get_node\", \"mcp__scryer__get_rules\", \"mcp__scryer__get_changes\", \"mcp__scryer__get_structure\"] }}");
+            eprintln!("  \"permissions\": {{ \"allow\": [\"mcp__scryer__read_model\", \"mcp__scryer__search_model\", \"mcp__scryer__get_rules\", \"mcp__scryer__get_pending\", \"mcp__scryer__read_codebase\", \"mcp__scryer__validate_model\"] }}");
         }
     }
 

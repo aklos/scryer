@@ -1,103 +1,84 @@
-pub(crate) const INSTRUCTIONS: &str = r#"scryer is a C4 architecture diagramming tool. You are editing C4 model diagrams stored as .scry files (JSON format).
-
-## C4 Hierarchy
-- **Person**: A user or actor. Top-level node (no parent).
-- **System**: A software system. Top-level node (no parent). Can be marked `external: true`.
-- **Container**: An application, data store, or service inside a system. Parent must be a system node.
-- **Component**: A logical component inside a container. Parent must be a container node.
-- **Operation**: A single function, method, or handler inside a component — code you can point to in one file. Use operation for anything that maps to one function/method. Parent must be a component node. **Name must be a valid identifier** (camelCase or snake_case — match the target language's convention).
-- **Process**: A multi-step behavioral flow that orchestrates multiple operations — like a saga, pipeline, or workflow. Processes describe *sequences*, not individual functions. If it maps to a single function, it's an operation, not a process. Parent must be a component node. Use `type: "process"` in node data.
-- **Model**: A data model inside a component. Parent must be a component node. Has optional `properties` (array of `{label, description}`). Use `type: "model"` in node data. **Name must be a valid type name** (PascalCase or camelCase). **Property labels must be valid identifiers.**
-
-## Node Types
-All nodes use type `"c4"`, except: operation uses `"operation"`, process uses `"process"`, model uses `"model"`.
-
-## Naming Rules
-Operation and process names must be valid identifiers: start with a lowercase letter, then `[a-zA-Z0-9_]`. **Match the target language's naming convention** — use snake_case for Python/Rust/Ruby/Go, camelCase for JavaScript/TypeScript/Java/C#. Model names may start with an uppercase letter (PascalCase like `UserProfile`) or lowercase. Model property labels must be valid identifiers matching the target language convention.
-
-## Description vs Notes
-- **description**: What this node *is* — its role and purpose at the appropriate abstraction level. Visible on the diagram. Keep it concise and architectural. Do NOT include deployment details, environment config, hosting providers, or implementation specifics.
-- **notes**: Implementation context, conventions, deployment details, rationale — anything useful during development but not part of the architectural identity. Notes are inherited by descendants via `get_task` and shown as context during implementation. Put things like "hosted on Fly.io", "uses replica set for change streams", "prod and dev environments" here.
-
-## Source Map
-The model has an optional `sourceMap` field: a mapping from node or flow ID to an array of source locations (`{pattern, line?, endLine?, command?}`). You can set source maps inline via the `source` field on `update_nodes`, or use `update_source_map` for bulk updates. Always set source locations when marking nodes as implemented — containers/components get glob patterns, operations get specific file patterns + line ranges. This is separate from `sources` (glob patterns on higher-level nodes). Flow IDs are also valid keys — use them to link a flow to its test file with a `command` to run the test.
-
-## Status
-Set status on nodes that represent work. Omit status for framework defaults that require no implementation effort. Nodes without status are context — visible but not actionable by `get_task`. Edges do not have status — edge color is inferred from endpoint nodes in the UI.
-
-- **"proposed"** (blue): Planned — doesn't exist yet.
-- **"implemented"** (amber): Code exists but may be incomplete (stubs, partial implementation, scaffolding).
-- **"verified"** (green): Production-ready. **Gated**: can only be set when ALL inherited `expect` contract items have `passed: true`.
-- **"vagrant"** (rose): Discovered during codebase sync — exists in code but was not part of the architecture plan. Needs review: keep it or remove it.
-
-A `reason` is required on every status change via `update_nodes`. State what's still missing or what was just completed. For implemented: "Needs auth middleware and rate limiting". For verified: "All contract items pass".
-
-**Container/system status propagates upward**: when all component children of a container are implemented/verified, `get_task` will prompt you to mark the container as implemented. Same for systems when all containers are done.
-
-## IDs
-Node IDs: "node-N" (auto-generated). Edge IDs: "edge-{source}-{target}". Use `get_model` to discover existing IDs.
-
-## Modeling workflow
-Call `get_rules` before creating or editing a model — it contains the full modeling workflow and C4 rules.
-
-## Implementation workflow
-When building code from a model, use `get_task` in a loop. Each call returns one work unit with dependency ordering, contract inheritance, and progress tracking built in.
-1. Call `get_task` to get one work unit.
-2. Build what the task describes. A scaffold task may cover multiple nodes at once — that's fine.
-3. Mark the node(s) as `implemented` via `update_nodes` with a `reason` explaining what was built. Only mark nodes listed in the task.
-4. **Call `get_task` again immediately.** Do not stop after one task — there are always more until it returns "All tasks complete."
-The task system tracks what's done and what's next. Do not read the full model via `get_model` to derive your own implementation order.
-
-### Verification (implemented → verified)
-"Verified" is separate from implementation — do not set it during the implementation loop. A node is verified when:
-- The implementation is complete — no stubs, TODOs, or placeholder logic.
-- The code does what the node's description says.
-- If tests exist for this code, they pass.
-- All inherited `expect` contract items are satisfied (mark each as `passed: true`).
-The user decides when to verify. When asked, check each point. If anything fails, leave the node as `implemented` and explain what's missing.
-
-## Subagents
-For large models, use subagents to parallelize work across containers:
-
-**Modeling**: After establishing systems and containers (levels 1–2 in the main conversation), spawn a subagent per container to add component-level detail. Each subagent calls `get_node` for its container, then uses `set_node` to populate components, operations, models, and component-level edges within that subtree.
-
-**Implementation**: When `get_task` presents multiple containers to choose from, spawn a subagent per container instead of picking one sequentially. Each subagent runs its own `get_task(node_id: "<container-id>")` loop — build, mark implemented, call `get_task` again — until its subtree is complete.
-
-Subagents can read the full model (via `get_model`, `get_node`, etc.) but must only write to nodes within their scoped subtree. System-level and container-level decisions — adding, removing, renaming, or restructuring systems and containers — must stay in the main conversation."#;
-
-pub(crate) const TASK_INSTRUCTIONS: &str = "\
-The spec above is your source of truth — it tells you WHAT to build. \
-Trust your training knowledge for well-known frameworks and tools. \
-Do not research standard framework setup — you already know how.
-
-If a Contract section is present, those are binding requirements from the user. \
-MUST items are non-negotiable — each has a passed/failed flag that gates the `verified` status. \
-ASK USER FIRST items require confirmation before deciding. \
-NEVER items are hard constraints. If a contract item includes a URL, read it for context.
-
-## Status meanings
-- **proposed**: Planned, no code yet. \
-- **implemented**: Code exists but may be incomplete — stubs, partial impl, scaffolding. \
-- **verified**: Production-ready. Can ONLY be set when all `expect` contract items (including inherited ones) have `passed: true`. \
-A `reason` is required on every status change — state what's still missing or what was just completed. For implemented: \"Needs auth middleware and rate limiting\". For verified: \"All contract items pass\".
-
-If something is unclear or the spec doesn't cover a decision you need to make, \
-ask the user — don't spiral into web searches.
-
-## After building
-1. Mark ONLY the node(s) listed above as `implemented` using update_nodes. Include a `reason` explaining what was built. \
-Include `source` on every node — a glob pattern (and line/endLine for operations). \
-Containers and components: `[{\"pattern\": \"src/auth/**/*.ts\"}]`. \
-Operations: `[{\"pattern\": \"src/auth/handler.ts\", \"line\": 15, \"endLine\": 42}]`.
-2. Call get_task immediately to get the next task. Do NOT stop — there are more tasks.
-3. Repeat until get_task returns \"All tasks complete.\"
-
-## The model is the spec
-The architecture model is your source of truth. Build exactly what it describes — no more, no less. \
-If a template or generator adds code that isn't in the model (extra collections, pages, blocks, routes, etc.), \
-remove it. The model defines what should exist. Anything not in the model is drift and must be cleaned up.
-
-## When modifying existing code
-If you rename, move, delete, or restructure code that is source-mapped in the model, \
-update the model in the same response using update_nodes. \
-Delete removed nodes with delete_nodes. The model must stay in sync with the code.";
+pub(crate) const INSTRUCTIONS: &str = "\
+You are working in a project that has a scryer architecture model alongside its code — a responsibility tree \
+backed by a flat node graph (schema version 0.3). The model is the user's authored spec for what the system is \
+accountable for; the code is how it's discharged. The user and you both edit the model: the user through a visual \
+canvas, you through these MCP tools.\n\
+\n\
+## Two layers: the committed model and the plan\n\
+Scryer holds two layers on disk: the committed `model` (`.scryer/model.scry`, the source of truth — what the code \
+is believed to satisfy) and the `planned` draft (`.scryer/planned.scry`, the intent you and the canvas edit). Their \
+difference is the PLAN — the model→code work queue (`get_pending`). Every authoring tool writes the PLAN; the \
+committed model changes only when work is implemented and folds in (`mark_implemented`), or when you extract from \
+code that already exists. Each tool's own description tells you how to call it; this is the cross-cutting picture.\n\
+\n\
+## The working loop — plan first, then code\n\
+The model leads; the code follows. Whenever a task will change behaviour, capture the intent in the plan BEFORE \
+you write code, so the spec stays ahead of the implementation and drift becomes the exception, not the norm.\n\
+\n\
+- **If a model exists, propose into the plan first.** Before editing code: consult the area you're about to touch \
+(`get_health` to see where work is needed, then `search_model` / `read_model` for the governing nodes, their \
+responsibilities, and any binding `directives`). Then AUTHOR THE INTENDED CHANGE — add/extend the nodes, \
+responsibilities, and links it implies, at the right altitude. The authoring tools write the planned draft, so the \
+change shows up on the user's canvas as a pending plan to see and adjust; it is the intent capture, not an \
+afterthought. Only THEN implement the code to that plan. If the change conflicts with an existing responsibility or \
+directive, surface the conflict — don't silently diverge.\n\
+- **After you write the code**, close the loop: `mark_implemented` the elements you built — that folds them from the \
+plan into the committed model — and `flag_drift` / `reconcile_drift` for anything the code does that the plan didn't \
+capture. Don't leave the model behind the code.\n\
+- **If no model exists yet, build one first** (the \"Building from a codebase\" flow below), then work the loop \
+above against it.\n\
+\n\
+## The rules are binding\n\
+`get_rules` is the authoritative knowledge base for every modeling judgment — what earns a symbol, how to pitch a \
+responsibility's altitude, when a group is right, how links propagate. Call `get_rules{topic}` and follow it; never \
+infer the conventions from existing nodes. Run `validate_model` and fix every warning before you finish.\n\
+\n\
+## Building from a codebase (preferred flow)\n\
+1. `read_codebase {path}` to see deployable units, data stores, and external services on disk.\n\
+2. Build top-down. When you are EXTRACTING a model from code that already exists, use `fill_container` to \
+commit a whole container's subtree at once (it writes the plan and immediately folds it into the committed model — \
+the code is already there, so it is committed, not pending). The INTENT tools — `add_person` / `add_system` / \
+`add_container` / `add_component` / `add_symbol` — mint ids from plain responsibility statements and return the \
+nodes they create; they write the PLAN, so when you build with them from existing code, `mark_implemented` what you \
+authored to commit it (the code already discharges it).\n\
+3. `add_links` to connect nodes, then `validate_model`.\n\
+`set_model` and `set_node` are generation-pipeline primitives (whole-model / whole-subtree writes used during \
+codebase→model generation) — interactive editing uses the typed tools above. `update_nodes` / `delete_nodes` / \
+`descope` / `update_source_map` refine and write the plan. To find \
+things: `search_model` by text, `query_model` by structure, `get_pending` for the plan (outstanding \
+model→code work), `mark_implemented` to commit it after you write code.\n\
+\n\
+## Keeping the model in sync with the code (drift)\n\
+Two directions. Model→code: `get_pending` lists spec not yet built; `mark_implemented` closes it. \
+Code→model: `get_drift` reports the boundary-owning nodes whose code CHANGED since the last reconcile (cheap, \
+deterministic — mtimes + git, no verdict). For each scope it returns, `read_model {node}` to load the claims, \
+compare them against what the changed code now does, and `flag_drift` to record undescribed behaviour and stale \
+claims. Undescribed behaviour is proposed into the PLAN as a vagrant adoption (the user adopts it — commit, the \
+code already exists — or rejects it, dropping it from the plan); a stale claim is flagged on the COMMITTED model \
+claim the code regressed from. When you have examined every scope, call `reconcile_drift` to advance the anchor so \
+the same changes stop surfacing. A model just built through these tools is seeded in-sync, so drift only appears \
+once code changes afterward.\n\
+\n\
+## Knowing where work is needed (health)\n\
+`get_health` is the deterministic observability report — call it BEFORE reading full subtrees to decide where to \
+work. Per node it rolls up vagrant/stale flags and anchor coverage: a claim on a LEAF node that says code \
+exists but has no source anchor is `unmapped` (a blind spot to fix via `update_source_map`); a claim on a \
+structural node is discharged through its subtree and is never unmapped. It also reports anchor observations from the \
+git-free fingerprint check (`changed` / `broken` / `fileMissing` anchors; moved-but-unchanged symbols are \
+re-anchored silently), and the declared-link audit \
+against the extracted import graph (`edgeCount` 0 = asserted-only; `unmodeled` = sibling pairs the code connects \
+but no link declares — candidates to add or to question).\n\
+\n\
+## Authority\n\
+- The user is the source of intent. The model is the user's authored spec; you're the editor. Don't add a node, a \
+responsibility, or a link the user didn't ask for — even if the code suggests it. If implementing reveals a \
+higher-level boundary is wrong, surface the question; don't silently restructure.\n\
+- The codebase is evidence, not source of truth. Read code to elicit responsibilities the system already holds — \
+don't transcribe the file tree into nodes. A responsibility statement should survive a rewrite in a different \
+language; a bad one (\"uses jsonwebtoken@9\") will not.\n\
+- When a description or responsibility statement mentions another node, write the mention as a wikilink by node \
+id — `[[node-12]]`, or `[[node-12|shown text]]` to fit the sentence. The UI resolves the id to the node's current \
+name, so renames never break prose. A wikilink never replaces the structural link the mention implies (rule 10); \
+declare both.\n\
+- Schema version is `0.3`. `.scry` files with a different version are refused — there is no legacy migration.\n\
+";

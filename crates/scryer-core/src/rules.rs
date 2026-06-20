@@ -1,197 +1,222 @@
-/// C4 modeling rules — single source of truth for AI review prompts and MCP instructions.
-pub const RULES: &str = "\
-1. One edge per relationship. Edges represent relationships, not individual data flows. \
-Do NOT split a single interaction into separate \"send\" and \"receive\" edges — one edge captures \
-the full interaction. Two edges between the same pair of nodes are only valid when they represent \
-genuinely independent relationships (different purpose, different data, could exist without each other). \
-If in doubt, use one edge.\n\
-2. Arrow direction = dependency. The arrow points from the initiator/requester toward the \
-provider/dependency (e.g. \"Web App\" → \"API Server\" → \"Database\").\n\
-3. Descriptions match abstraction level. System = high-level purpose (\"Handles user authentication\"). \
-Container = what it deploys as (\"Spring Boot REST API\"). Component = specific responsibility \
-(\"Password hashing service\").\n\
-4. Technology labels must be accurate and concise (max 28 characters). Don't label a database container with \"React\" or a \
-frontend with \"PostgreSQL\". Technology describes the implementation, not what it talks to.\n\
-5. External systems are opaque. They should not have child nodes. They represent third-party \
-systems the team doesn't control.\n\
-6. No frontend-to-database shortcuts. A frontend container should talk to an API/backend, \
-not directly to a data store. If the diagram shows this, flag it.\n\
-7. One node per real thing. Don't duplicate nodes at the same level to represent the same \
-system/container/component.\n\
-8. Cross-level edges are intentional. The model stores all abstraction levels together. \
-A Person→System edge (system level) and a Person→Container edge (container level) can coexist — \
-the system-level edge is correct at that zoom level, and the container-level edge adds detail. \
-Similarly, a Container→System deployment edge is not redundant with a System→System edge. \
-Do not flag cross-level edges as duplicates or suggest removing them.\n\
-9. Containers are runtime boundaries. Start with process boundaries — each separately deployable \
-process is at least one container. Within a single runtime, split further when a single component \
-view would force the viewer to context-switch between unrelated concerns. The test: if you would \
-give two separate tours of the internals (\"here is how the CMS works\" / \"here is how the website \
-works\"), those are separate containers. Components in each container can still reference the other \
-via container-level edges — the split gives each a focused component view. Use a deployment group \
-when split containers share a runtime. Example: a Next.js app with Payload CMS should be two \
-containers (\"Website\" + \"CMS Admin\") grouped together, because their components serve different \
-audiences and you would explain them independently.\n\
-10. Framework internals are not containers. Auto-generated or framework-provided layers (e.g. \
-Django admin ORM, Rails ActiveRecord) that exist only as implementation details of another container \
-are components, not containers. A framework layer warrants its own container only when it has a \
-distinct user-facing surface that you would tour independently — Payload CMS has admin panels, \
-content schemas, and API routes that deserve their own component view, so it is a separate container \
-grouped with the app it is embedded in. If you would not explain it on its own, it is a component.\n\
-11. Components map to code structures. A component should correspond to a concrete code unit \
-in your codebase: a class in OOP languages (C#, C++, Java), a module or package in Go/Rust/Python, \
-or a folder/file boundary in JavaScript/TypeScript. Third-party libraries your code imports are not \
-components — they are implementation details of the component that uses them. Mention them in the \
-technology field or description instead. If a component is too abstract to point at a specific place \
-in your codebase, it is probably a container or a vague grouping that should be rethought.\n\
-12. Message queues and topics are explicit. A queue, topic, or event bus (e.g. RabbitMQ, Kafka, \
-SQS) should be its own container node — not hidden inside an edge label. If service A publishes \
-to a queue and service B consumes from it, model as A → Queue → B, not A → B with a \"via queue\" \
-label. The queue is infrastructure that can fail, scale, and be monitored independently. \
-**Avoid fan traps**: when multiple producers and consumers connect through a single broker node, \
-the specific communication paths are lost — it looks like every producer talks to every consumer. \
-Resolve this by decomposing the broker into its topics or queues as components (broker = container, \
-each topic = component), then route edges through the specific topics. At the system level a fan \
-through the broker is fine — that is the right abstraction. The detail lives one level down.\n\
-13. Node names describe roles, not technology stacks. A node name should say what it IS \
-(\"Website\", \"CMS\", \"API Gateway\"), not list its technologies with \"+\" or \"&\". \
-Technology details belong in the technology field. If a container uses multiple frameworks \
-that run as a single unit (e.g. a CMS embedded in a web framework), suggest a clearer role-based \
-name rather than suggesting a split.\n\
-14. Parent-child nesting IS the system-to-container relationship. In C4, expanding a system \
-reveals its containers — the parent_id field captures this. A system node should NOT have edges \
-to its own child containers. Such edges are redundant with nesting and are not a modeling \
-omission. Do not suggest adding them.\n\
-15. Do not suggest reorganizing valid decompositions. If the author has separated concerns into \
-distinct containers with clear role-based names and different responsibilities, that decomposition \
-is intentional. Do not suggest splitting or merging containers based on technology assumptions \
-about how the underlying code is structured.\n\
-16. System boundary = ownership boundary. A system in C4 represents a codebase or product owned by one \
-team. Everything you build and deploy from that codebase — web apps, APIs, Lambda functions, workers, \
-cron jobs, CLI tools — are containers INSIDE that system, not separate systems. A Lambda function in your \
-repo is a container. An S3 bucket you provision is a container (shape: cylinder). Only model something as \
-a separate system if it's a genuinely independent product with its own team, repo, and lifecycle. External \
-systems (external: true) are third-party services you don't control (e.g. Stripe, AWS Rekognition, \
-Twilio). \"Separate deployment unit\" does NOT mean \"separate system.\"\n\
-17. Mentions imply edges. If a node's description references another node with @[Name], there must \
-be an edge connecting them (directly, or between their parent containers at the appropriate level). \
-A mention without a corresponding edge means the graph is incomplete — the description claims a \
-relationship that the diagram doesn't show. Add the missing edge or remove the mention.\n\
-18. No cross-container component edges. Components are internal to their container. An edge from a \
-component in container A to a component in container B is invalid — it reaches inside B's boundary. \
-Instead, edge from A's component to container B itself. The container is the public interface; its \
-components are implementation details.\n\
-19. The C4 hierarchy is an authority hierarchy. System-level decisions (which systems exist, their \
-boundaries and responsibilities) constrain what containers can exist inside them. Container decisions \
-constrain components. Component decisions constrain operations. If implementing at a lower level reveals \
-that a higher-level boundary is wrong, that is an architectural decision requiring human review — not \
-a refactoring detail an agent should resolve silently.\n\
-\n\
-## Workflow\n\
-1. `list_models` to see existing diagrams.\n\
-2. **Call `get_structure` with the project path** to get an annotated directory tree. This shows manifests \
-(`[manifest]`), infrastructure configs (`[infrastructure]`), and environment templates (`[environment]`) at their \
-location in the tree. Read the manifests it surfaces to identify runtime dependencies (external services, \
-databases, frameworks). Each directory with its own manifest + infrastructure config is likely a separate \
-deployable unit → a container in C4. Do NOT manually explore the codebase — `get_structure` provides the \
-complete picture.\n\
-3. **Model one level at a time.** Each call creates one view that gets validated for edge completeness.\n\
-   - **First call (`set_model`):** persons, the system, external systems, and system-level edges only. \
-No containers yet. This establishes the system landscape. Fix any warnings before proceeding.\n\
-   - **Second call (`set_node` on the system):** add all containers plus container-level edges \
-(Person→Container, Container→Container, Container→ExternalSystem). Fix any warnings. \
-**Then group containers that deploy together** using `set_groups` — e.g. if Website, CMS Admin, and API \
-are all part of one Next.js app, group them. If two S3 buckets are provisioned together, group them. \
-Containers split for inner-graph clarity (rule 9) should almost always be grouped.\n\
-   - **Later (`set_node` per container):** add components only when the user asks for deeper detail, \
-plus component-level edges. Fix warnings. **When detailing multiple containers, spawn a subagent per \
-container** — each subagent calls `get_node` for its container, then `set_node` to populate components, \
-operations, models, and edges within that subtree. This parallelizes the work and keeps each agent's \
-context small and focused.\n\
-   Do NOT dump all levels into a single `set_model` call — the tool validates edges per view level, and \
-creating everything at once makes it easy to miss gaps that leave nodes disconnected.\n\
-   Do NOT add components unless the user explicitly asks for deeper detail.\n\
-   **Model for production, not for demos.** Look for cross-cutting concerns: authentication, input validation, \
-data migrations, background jobs, observability. Model them explicitly — do not leave them implied.\n\
-   **Set status on every node.** When modeling an existing codebase, set `status: \"verified\"` on all nodes \
-that already exist and work in production. Set `status: \"proposed\"` on new nodes being added as part of a feature or change. \
-Nodes without status appear grey and unactionable in the UI — always be explicit.\n\
-   **When you do add components** to a container (because the user asked for component-level detail or you're \
-adding a feature), model ALL components in that container — not just the new ones. Use `set_node` to populate \
-the full component set. Partial component views are misleading.\n\
-4. **Edges must exist at every abstraction level.** The UI shows one level at a time. Always include:\n\
-   - System-level edges: Person→System, System→System\n\
-   - Container-level edges: Person→Container, Container→Container, Container→ExternalSystem\n\
-   - Component-level edges (when components exist): Component→Component, Component→ExternalSystem\n\
-   When adding components to containers, ALWAYS also add component-level edges that reflect the container-level \
-relationships. If container A→B and A→ExternalDB exist, then when you detail A with components via `set_node`, \
-include edges in the subtree data from the relevant components to B, ExternalDB, etc. The `set_node` tool \
-accepts edges to any node in the model, not just nodes within the subtree. If you forget, the tool will \
-warn you — fix missing edges immediately with `add_edges`.\n\
-5. **Do NOT create flows during initial modeling.** Flows are added later by the user or on explicit request. \
-Focus on the structural model (persons, systems, containers, components, operations).\n\
-   **When creating flows, structure branches correctly:**\n\
-   - Steps are sequential — each step follows the previous one in the normal (happy) path.\n\
-   - **Branches represent decision points where the flow diverges.** A step with branches means \
-\"at this point, one of these paths is taken.\" Every branch must have a condition.\n\
-   - **Use branches only for true if/else or switch logic** — where different conditions lead to \
-genuinely different paths. If a step has branches, provide at least two (e.g. success + failure). \
-A single branch with no alternative is not a decision — it is just the next step.\n\
-   - **The happy path should be sequential steps, not a branch.** If step 10 is \"Router passes \
-response to Sender\" and step 11 is \"Sender delivers the message,\" that is two sequential steps. \
-Do NOT wrap step 11 in an \"if: success\" branch unless there is also an \"if: failure\" branch \
-with a different path.\n\
-   - After branches, the flow resumes at the next sequential step. Branches do not need to \
-reconverge explicitly — the next step after the branching step is the continuation.\n\
-6. **When adding components, populate them with all three code-level node kinds:**\n\
-   - **model** nodes for data structures. **Always include the `properties` array** — each property has a `label` \
-(valid identifier) and `description`. Do NOT just describe fields in the description text. Example: a `todo` model \
-with `properties: [{label: \"id\", description: \"unique identifier\"}, {label: \"title\", description: \"todo text\"}, \
-{label: \"completed\", description: \"whether the todo is done\"}]`. Models are the nouns of the system.\n\
-   - **operation** nodes for individual functions, methods, or handlers — anything that maps to one function in code. \
-**Name using the target language's convention** — e.g. `handle_create`, `validate_input` for Python/Rust/Go, or \
-`handleCreate`, `validateInput` for JS/TS/Java. Most code-level nodes are operations. If you \
-can point to a single function/method, it's an operation.\n\
-   - **process** nodes for multi-step behavioral flows that orchestrate multiple operations — sagas, pipelines, or \
-workflows (e.g. `orderFulfillment` — validate payment, reserve inventory, send confirmation). If it maps to a single \
-function, it's an operation, not a process.\n\
-   Use **@[Name]** mentions in descriptions to cross-reference sibling nodes: \"Validates the @[todo] model before \
-persisting\", \"Calls @[insertRecord] then returns the created @[todo]\". The square bracket syntax is required — \
-`@[todo]` renders as a clickable pill, `@todo` does not. This creates a navigable web of relationships at code level. \
-Use `update_source_map` to link operations to source files.\n\
-7. **Default workflow: model first, then wait.** After modeling proposed changes, stop and let the user review \
-the diagram before implementing. Don't automatically call `get_task` and start writing code — the point of \
-scryer is visual verification before implementation. If the user asks you to implement, build, or code in the \
-same request, go ahead.\n\
-8. **Implementation loop.** Use `get_task` to get the next implementation task. Build it, mark nodes as \
-implemented via `update_nodes` (with a reason), then call `get_task` again. **Repeat this loop until `get_task` returns \
-\"All tasks complete.\"** Do not read the full model and plan your own work order — `get_task` handles dependency \
-ordering, contract inheritance, and progress tracking. Parent containers and systems are marked implemented via \
-completion hints from `get_task` once all their children are done. **When multiple containers are ready, spawn a \
-subagent per container** instead of working through them sequentially. Each subagent runs its own \
-`get_task(node_id: \"<container-id>\")` loop independently. This is faster and more efficient — each subagent \
-only reads the code relevant to its container.\n\
-9. **Verification (implemented → verified).** \"Verified\" is a separate step from implementation — do not set it during the \
-implementation loop. A node is verified when:\n\
-   - The implementation is complete — no stubs, no TODOs, no placeholder logic.\n\
-   - The code does what the node's description says it does.\n\
-   - If tests exist for this code, they pass.\n\
-   - All inherited `expect` contract items are satisfied (mark each as `passed: true`).\n\
-The user decides when to verify. When asked, check each point above. If anything fails, leave the node as \
-`implemented` and explain what's missing.\n\
-\n\
-## Authority Hierarchy\n\
-The model is a specification, not just documentation. Higher-level nodes have authority over lower-level ones.\n\
-\n\
-**Changes flow down.** System boundaries constrain containers. Container definitions constrain components. \
-When implementing code, the model above is the spec — work within it.\n\
-\n\
-**Questions flow up.** If implementation reveals a higher-level boundary is wrong, do NOT silently modify \
-the model. Flag the conflict and wait for human approval.\n\
-\n\
-Requires human approval: adding/removing/renaming systems, restructuring containers, moving components \
-between containers, any change that alters boundaries at a higher level than where you're working.\n\
-\n\
-Does not require approval: adding/modifying components and operations within existing boundaries, adding \
-edges between existing nodes, updating descriptions/technology/status/source map, detailing a node's \
-internals when the user explicitly asked you to.";
+//! Modeling rules — the single source of truth for MCP instructions and AI
+//! review prompts. Each rule is an addressable entry (`id`, `title`, `tags`,
+//! `body`) so an agent can pull just the guidance it needs via
+//! `get_rules{topic}` instead of carrying the whole set in context. The full
+//! text is rendered for review prompts via [`rules_full`]; a compact, drillable
+//! index is rendered for connect-time instructions via [`rules_index`].
+
+/// One modeling rule. `title` is the headline (also the first match target),
+/// `tags` are the curated lookup keywords surfaced in the index, `body` is the
+/// full guidance returned when the rule is pulled.
+pub struct Rule {
+    pub id: u8,
+    pub title: &'static str,
+    pub tags: &'static [&'static str],
+    pub body: &'static str,
+}
+
+pub const RULES: &[Rule] = &[
+    Rule {
+        id: 1,
+        title: "Responsibilities are pure business statements",
+        tags: &["responsibility", "business", "mechanism", "directives", "wording"],
+        body: r#"A responsibility says what a node is accountable for in business terms — not how it does it. "restricts access to private content" — yes. "restricts access via JWT" — no, the "via JWT" is mechanism. Same for technology names, library calls, specific protocols. Keep mechanism out of the statement entirely. The `directives` field beside a responsibility holds prescriptive "must"/"never" constraints ("must verify ownership server-side", "never trust a client-supplied role") — but directives are authored by the user, not the agent. Treat any directives present as binding constraints you must satisfy when implementing; never write, edit, or delete them. Where reality discharges a responsibility belongs in the source map, not in directives."#,
+    },
+    Rule {
+        id: 2,
+        title: "Every node justifies its existence through responsibilities it serves",
+        tags: &["node", "responsibility", "vagrant", "prune", "empty", "justification"],
+        body: r#"A child node exists to discharge a subset of its parent's responsibilities. A node with no responsibility, or whose responsibilities serve no ancestor commitment, is structurally vagrant — prune it or restate its purpose."#,
+    },
+    Rule {
+        id: 3,
+        title: "Decompose for checkability — keep each node's responsibilities at its OWN altitude",
+        tags: &["decomposition", "altitude", "scope", "responsibility", "parent", "child", "tree"],
+        body: r#"A responsibility names one accountability the node holds, never the handler that discharges it; the handlers are the children one level down (a container's components, a component's symbols). A parent provides the HIGHER-LEVEL responsibilities that DECOMPOSE INTO its children's — it never simply iterates or restates them. So a parent's responsibilities are FEWER and BROADER than the union of its children's, never a per-child enumeration of what each child does ("Provides themed form controls" — yes; "Provides Button, Input, Select, Checkbox…" — no, that is the children listed, not an accountability). Test each line: if it reads as describing a single child, or as a roster of them, it is one altitude too low — lift it to the accountability those children collectively serve, or push it down onto the child. A parent that enumerates its children is the PARENT mis-scoped: lift its responsibilities. Do NOT conclude the children are redundant just because the parent lists them — whether each child earns its own node is a separate test (rule 8). If a responsibility is too coarse to verify at the parent's altitude, add child nodes whose responsibilities together discharge it. The node tree IS the responsibility tree, refined downward."#,
+    },
+    Rule {
+        id: 4,
+        title: "Groups organize peers along a secondary axis — never a substitute for parent/child decomposition",
+        tags: &["group", "grouping", "logical", "architectural", "deployment", "peers"],
+        body: r#"If the members only make sense as parts of the group, not as independent entities, the group is a missing parent node — promote it and make the members children. Two flavors: **Logical** (no responsibilities) — organizational signal like team ownership, feature areas, or module colocation. Agents should respect these when structuring code (e.g. keeping grouped components in the same directory) even though the group carries no explicit commitments. **Architectural** (has responsibilities) — a cross-cutting concern like a deployment boundary. Responsibilities describe what the *grouping relationship* enforces, not what individual members do."#,
+    },
+    Rule {
+        id: 5,
+        title: "One link per relationship",
+        tags: &["link", "relationship", "direction", "edge"],
+        body: r#"Direction points from initiator/requester toward provider/dependency. Two links between the same pair of nodes are valid only when they represent independent relationships."#,
+    },
+    Rule {
+        id: 6,
+        title: "Containers are runtime boundaries",
+        tags: &["container", "runtime", "deployment", "process", "boundary", "webview"],
+        body: r#"Each separately deployable process is at least one container. An embedded runtime (e.g. a webview inside a native shell, a scripting engine inside a host process) is NOT a separate container — it is a component of the host container. Group containers that deploy together."#,
+    },
+    Rule {
+        id: 7,
+        title: "Components map to code structures (classes, modules, packages, folders)",
+        tags: &["component", "code", "module", "package", "library", "third-party"],
+        body: r#"Third-party libraries are not components — they're implementation details mentioned in `technology`. Cluster components from code cohesion and the dependency graph, NOT one component per file."#,
+    },
+    Rule {
+        id: 8,
+        title: "Code level uses only the `symbol` kind",
+        tags: &[
+            "symbol", "code", "definition", "function", "class", "struct", "interface",
+            "type", "properties", "data", "schema", "wrapper", "scoping", "empty", "config",
+            "main", "entry-point", "binary", "bootstrap",
+        ],
+        body: r#"A `symbol` is exactly one addressable code definition — a function, method, handler, hook, React component, class, struct, interface, type, or config object. One symbol node = one definition in the source; its name must be the identifier as it appears in the code. A definition earns a symbol node only when it carries architecture — a behavioral responsibility at its OWN altitude, or a declared data shape. A cross-boundary link alone does NOT justify a symbol: a link is a relationship between nodes that already exist for their own reasons, never a reason to mint one. So an otherwise-empty symbol (no responsibility, no data shape) is never kept just because something links to it — fold it away. Being a real, public definition is NOT sufficient either: a wrapper, re-export, getter/setter, or test stub that discharges NO distinct responsibility folds into its component's responsibilities rather than minting a leaf. An executable entry point is one of these: `main` (or any top-level binary entry that only wires up and dispatches the program's work) carries the binary's behavior at the COMPONENT's altitude, not a sub-altitude — fold its responsibility into the component that represents that binary (the example, CLI, or bootstrap IS that single unit of architecture) rather than minting a `main` leaf; helper definitions in the same binary that hold their own distinct responsibility still earn their nodes. But the fold test is about ARCHITECTURE, not implementation size: thinness of the body is NEVER by itself grounds to fold — a three-line function that crosses a boundary (an IPC command, an API endpoint, a contract surface) or holds any distinct own-altitude accountability earns its node however few lines it is. And the two operations are NOT symmetric: declining to MINT a node for an empty definition at extraction time is cheap and reversible; DELETING an existing symbol that carries — or, mapping to real code, SHOULD carry — a distinct responsibility destroys authored architecture and its source anchor, so it demands a far higher bar. A symbol that maps to real own-altitude behavior is DEFINED — give it the responsibility — never deleted; an empty model slot for such a symbol means not-yet-authored, not absent, so "define or delete" resolves to DEFINE. A parent responsibility that enumerates the symbol ("reads, writes, and deletes …") is NOT evidence the symbol is covered: that is the parent mis-scoped (rule 3), never a license to prune the child. Fold generated mirror types (`*-types`, `*.d.ts`) into the source-of-truth symbol and leave private helper methods out. Prefer a component with a handful of meaningful symbols over one mirroring every definition in its files. A symbol has two independent facets; most carry one, some carry both:
+- **responsibilities** — the behavior the definition discharges. Map each to the specific LINE RANGE that does its work (with the enclosing `symbol` named as anchor and context). A line range must be a PROPER subset of the symbol; when one responsibility is the whole definition's work, omit `line`/`endLine` entirely — a symbol-only anchor means "this whole definition". `update_source_map` enforces this: a range covering the whole symbol is stripped to the symbol anchor and reported. Two responsibilities sharing an enclosing symbol must point at different line ranges; if they point at the identical range they are one responsibility.
+- **properties** — when the definition DECLARES A DATA SHAPE (a struct/class/interface/type, or a config object that defines a field schema), list its fields here: one property per field. Map the declaration to the symbol's node id via the `schemas` source array (not `entries`).
+NEVER describe a data shape in a responsibility statement. "Defines the lead record schema with status, qualification, and booking fields" is WRONG — that prose belongs nowhere; enumerate `status`, `qualification`, `booking`, … as actual `properties`. A config object that both wires behavior and declares fields (e.g. an ORM/CMS collection that registers admin UI and lifecycle hooks AND defines the record's fields) gets BOTH facets: behavioral responsibilities for the hooks/UI, and a property per declared field — and those properties are the declared FIELDS (the record's columns), never the config wrapper keys (slug/admin/hooks/access). A pure data type carries only properties. Symbols carry no boundary glob (that is a container/component concept). **Scoping**: determine parentage from the import/usage graph, not from file co-location. A code-level node belongs to whichever component actually consumes it. If multiple components import the same code, parent it to the one that owns/defines it and add links from the others — the cross-boundary dependency is valuable signal."#,
+    },
+    Rule {
+        id: 9,
+        title: "External systems (`external: true`) are opaque, no children",
+        tags: &["external", "system", "third-party", "opaque"],
+        body: r#"Any responsibilities listed on an external are read as expectations of that external, not commitments by your system."#,
+    },
+    Rule {
+        id: 10,
+        title: "Mentions imply links — and are written as wikilinks",
+        tags: &["link", "mention", "responsibility", "reference", "wikilink", "description"],
+        body: r#"A responsibility statement that names another node requires a link to it. Write the mention itself as a wikilink by node id: `[[node-12]]` — the UI resolves it to the node's current name, so renames never break prose — or `[[node-12|shown text]]` when the sentence needs different wording ("publishes events to the [[node-12|billing pipeline]]"). Prose becomes navigation. Use wikilinks in `description` text too whenever it names another node. A wikilink is the prose-level mention; it never replaces the structural link — declare both."#,
+    },
+    Rule {
+        id: 11,
+        title: "System boundary = ownership boundary",
+        tags: &["system", "boundary", "ownership", "deployment"],
+        body: r#"Everything you build and deploy from one codebase is containers inside one system. "Separate deployment unit" does NOT mean "separate system.""#,
+    },
+    Rule {
+        id: 12,
+        title: "`technology` is node identity",
+        tags: &["technology", "identity", "directives"],
+        body: r#"`technology` is what the node IS as software ("Payload 3.0", "PostgreSQL 16", "S3 Bucket"). Separate from `directives` on responsibilities, which are user-authored constraints prescribing how a responsibility must be discharged — never set by the agent. Do not put technology vocabulary inside responsibility statements."#,
+    },
+    Rule {
+        id: 14,
+        title: "Observation flags: vagrant and stale",
+        tags: &["vagrant", "stale", "drift", "discovered", "flag", "observation"],
+        body: r#"Flags are machine/agent observations awaiting the user's verdict — a separate axis from the model→code plan (which the diff between the committed model and the planned draft already captures). `vagrant`: marks responsibilities discovered in code that no upstream commitment justifies; added by automation as a code-discovered claim flagged `vagrant: true`; the user adopts it (clear the flag) or rejects it (delete it, signaling the agent to remove the code). `stale`: set by the drift check on a responsibility whose code no longer discharges it; awaiting a verdict — re-implement (`mark_implemented` clears it), reword, or delete."#,
+    },
+    Rule {
+        id: 15,
+        title: "Write for scanning, not prose",
+        tags: &["responsibility", "wording", "scanning", "description", "concise"],
+        body: r#"A responsibility is ONE verb-led clause: lead with the specific verb + object that distinguishes it, then stop. Cut words that merely restate the node's own domain — in an architecture tool every line is about "the architecture model", so naming it adds nothing — and cut trailing "by/through/where/so that …" clauses (mechanism belongs out per rule 1; the obvious belongs cut). "Renders the node/link/group canvas" — yes. "Renders the visual architecture editor where users arrange nodes, links, and groups on a canvas" — no. A `description` is the node's IDENTITY in a few words (what it IS as software), never a summary of the responsibilities listed beneath it; if it reads as a comma-list of those responsibilities, drop it."#,
+    },
+    Rule {
+        id: 16,
+        title: "Relationships connect nodes at the same C4 level",
+        tags: &["link", "level", "reference", "propagate", "external", "validate", "disconnected"],
+        body: r#"Each diagram tells one level of the story, and `add_links` ENFORCES this (an illegal link is rejected, not saved). A link is legal only when src and dst are siblings (same parent), OR the deeper node's parent already links to the other node — which makes that node a *reference* on the deeper node's surface. References thus propagate DOWN from higher-level links: at system context a person/external links to the SYSTEM; to also wire it to a specific container or component, the relationship must exist at every level in between. So when an external is used deep inside your system, add the link at EACH level: system→external, then container→external, then component→external — each one authorizes the next. Two consequences: (a) you cannot link a deep node straight to a top-level external without the intervening links — add them parent-first (a single `add_links` batch may include all the levels at once); (b) every node still needs a relationship at its OWN level, or it appears disconnected on its own diagram. You may model a relationship only as deep as it is useful — a `container → external` link need not be refined to the component that calls it; the external simply won't appear inside the container view until a component links to it, and that is fine. Never link a node to its own ancestor/descendant — nesting already expresses containment. Run `validate_model` and fix every warning before finishing."#,
+    },
+    Rule {
+        id: 17,
+        title: "Names and language: simple, clear, concise — clarity is paramount",
+        tags: &[
+            "naming", "names", "clarity", "language", "simple", "concise", "wording",
+            "description", "terminology", "jargon", "readable",
+        ],
+        body: r#"The model exists to make the architecture understood, so clarity of understanding is the highest goal — every name, description, and responsibility must be immediately legible to a reader who does NOT already know the system. Prefer the plainest word that is still precise: simple over clever, concrete over abstract, short over long. A name says what the thing IS in the domain's own vocabulary — no cute coinages, no internal codenames, no needless abbreviations or acronyms; use the SAME term for the same concept everywhere (consistent vocabulary beats variety). Cut every word that doesn't change the meaning. The test: if a reader has to pause to decode a name or read a sentence twice, rewrite it until they don't. This principle governs all authored text — rule 15 gives the responsibility-statement mechanics, rule 1 keeps mechanism out of responsibilities, and symbol names are the exception that proves it: they must be the exact code identifier (rule 8), clarity there coming from the code itself."#,
+    },
+];
+
+/// The full ruleset as one numbered block — for AI-review prompts and any
+/// consumer that wants the complete text rather than a lookup.
+pub fn rules_full() -> String {
+    let mut s = String::new();
+    for r in RULES {
+        s.push_str(&format!("{}. {}. {}\n", r.id, r.title, r.body));
+    }
+    s
+}
+
+/// A compact, drillable index — one line per rule (`id`, title, tags) — for
+/// connect-time instructions. Small enough to ship every session; the agent
+/// pulls a rule's full `body` on demand with `get_rules{topic}`.
+pub fn rules_index() -> String {
+    let mut s = String::new();
+    for r in RULES {
+        s.push_str(&format!("{}. {} [{}]\n", r.id, r.title, r.tags.join(", ")));
+    }
+    s
+}
+
+/// Look up rules by free-text topic. Space-separated terms match (case-insensitive
+/// substring) against each rule's title and tags first — the curated, high-signal
+/// surface — and fall back to the body only when nothing matches there, so a
+/// common word doesn't drag in every rule. Returns the matches in rule order.
+pub fn lookup(topic: &str) -> Vec<&'static Rule> {
+    let terms: Vec<String> = topic.split_whitespace().map(|t| t.to_lowercase()).collect();
+    if terms.is_empty() {
+        return Vec::new();
+    }
+    let matches = |hay: &str| {
+        let h = hay.to_lowercase();
+        terms.iter().any(|t| h.contains(t.as_str()))
+    };
+
+    // Primary pass: title + tags.
+    let titled: Vec<&Rule> = RULES
+        .iter()
+        .filter(|r| matches(r.title) || r.tags.iter().any(|t| matches(t)))
+        .collect();
+    if !titled.is_empty() {
+        return titled;
+    }
+    // Fallback: full body text.
+    RULES.iter().filter(|r| matches(r.body)).collect()
+}
+
+/// Render a set of pulled rules as full text for a tool response.
+pub fn render(rules: &[&Rule]) -> String {
+    let mut s = String::new();
+    for r in rules {
+        s.push_str(&format!("{}. {}\n{}\n\n", r.id, r.title, r.body));
+    }
+    s.trim_end().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lookup_resolves_topics_via_title_and_tags() {
+        // The empty-symbol incident: "symbol" must reach rule 8 (the bar).
+        let hits = lookup("symbol");
+        assert!(hits.iter().any(|r| r.id == 8), "symbol → rule 8");
+
+        // "empty" is tagged on both the prune rule (2) and the symbol rule (8).
+        let empty = lookup("empty");
+        assert!(empty.iter().any(|r| r.id == 2));
+        assert!(empty.iter().any(|r| r.id == 8));
+
+        // Curated tags resolve domain words to the right rule.
+        assert!(lookup("group").iter().any(|r| r.id == 4));
+        assert!(lookup("altitude").iter().any(|r| r.id == 3));
+        assert!(lookup("vagrant stale").iter().any(|r| r.id == 14));
+        assert!(lookup("naming").iter().any(|r| r.id == 17));
+    }
+
+    #[test]
+    fn lookup_misses_return_empty_not_everything() {
+        // A word in no title/tag and no body must not drag in the whole set.
+        assert!(lookup("kubernetes helm istio").is_empty());
+    }
+
+    #[test]
+    fn index_lists_every_rule_full_renders_all() {
+        let idx = rules_index();
+        for r in RULES {
+            assert!(idx.contains(r.title), "index lists '{}'", r.title);
+        }
+        // index is the compact surface — no full bodies in it
+        assert!(!idx.contains(RULES[7].body));
+        // full render carries the bodies
+        assert!(rules_full().contains(RULES[7].body));
+    }
+}

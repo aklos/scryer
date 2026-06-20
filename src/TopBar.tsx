@@ -1,387 +1,166 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { invoke } from "@tauri-apps/api/core";
+/**
+ * The application top bar: the scryer logo on the left is the app action menu
+ * (open / close project, settings); the project name sits beside it for
+ * context, and search lives on the right. Page content lives below; this bar
+ * is app chrome only.
+ */
+
+import { useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Minus, Square, X, Settings, Keyboard, FolderX, Menu, FolderOpen, Save } from "lucide-react";
-import type { C4Kind, AiToolsState } from "./types";
+import { ChevronDown, FileText, Moon, Network, Search, Sun } from "lucide-react";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { applyColorMode, loadTheme, saveTheme, type ColorMode } from "./theme";
 
-interface TopBarProps {
-  currentModel: string | null;
-  onOpenPalette: () => void;
-  onNavigateToRoot: () => void;
-  onOpenSettings: () => void;
-  onCloseModel: () => void;
-  onSaveAs: (name: string) => void;
-  hasModel: boolean;
+export type WorkspaceView = "wiki" | "diagram";
 
-  breadcrumbs: { id: string; name: string; kind: C4Kind }[];
-  currentParentKind: C4Kind | undefined;
-  navigateToBreadcrumb: (targetId: string | null) => void;
-  activeFlowId: string | null;
-  activeFlowName: string | null;
-
-  projectPath?: string;
-  aiTools: AiToolsState;
-  onAiToolsChange: (tools: AiToolsState) => void;
-  onSetProjectPath: (path: string | undefined) => void;
-}
-
-const appWindow = getCurrentWindow();
-
-function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors ${
-        checked ? "bg-blue-500" : "bg-[var(--border-strong)]"
-      }`}
-      onClick={() => onChange(!checked)}
-    >
-      <span
-        className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform mt-0.5 ${
-          checked ? "translate-x-[18px]" : "translate-x-0.5"
-        }`}
-      />
-    </button>
-  );
-}
-
-function ProjectMenu({
-  onClose,
+export function TopBar({
   projectPath,
-  aiTools,
-  onAiToolsChange,
-  triggerRef,
-  onSetProjectPath,
+  view,
+  onSetView,
+  onOpenProject,
+  onCloseProject,
+  onOpenSearch,
+  onOpenSettings,
 }: {
-  onClose: () => void;
-  projectPath?: string;
-  aiTools: AiToolsState;
-  onAiToolsChange: (tools: AiToolsState) => void;
-  triggerRef: React.RefObject<HTMLButtonElement | null>;
-  onSetProjectPath: (path: string | undefined) => void;
+  projectPath: string | null;
+  view: WorkspaceView;
+  onSetView: (view: WorkspaceView) => void;
+  onOpenProject: (path: string) => void;
+  onCloseProject: () => void;
+  onOpenSearch: () => void;
+  onOpenSettings: () => void;
 }) {
-  const menuRef = useRef<HTMLDivElement>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const projectName = projectPath?.split("/").filter(Boolean).pop() ?? "scryer";
 
-  useEffect(() => {
-    const handler = (e: PointerEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)
-          && !(triggerRef.current && triggerRef.current.contains(e.target as Node))) {
-        onClose();
-      }
-    };
-    document.addEventListener("pointerdown", handler, true);
-    return () => document.removeEventListener("pointerdown", handler, true);
-  }, [onClose, triggerRef]);
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
-
-  const showClaude = aiTools.claude && !!projectPath;
-  const showCodex = aiTools.codex && !!projectPath;
-
-  const handleToggle = async (field: "claudeMcpEnabled" | "codexMcpEnabled" | "claudeReadApproved", checked: boolean) => {
-    const actionMap: Record<string, string> = {
-      claudeMcpEnabled: "mcp",
-      codexMcpEnabled: "mcp_codex",
-      claudeReadApproved: "claude_read_approve",
-    };
-    try {
-      await invoke<string>("setup_mcp_integration", {
-        action: actionMap[field],
-        projectPath: projectPath ?? null,
-      });
-      onAiToolsChange({ ...aiTools, [field]: checked });
-    } catch {
-      // silently fail — user will see toggle didn't change
-    }
-  };
-
-  return (
-    <div
-      ref={menuRef}
-      className="absolute top-full left-0 mt-1 z-50 min-w-[240px] rounded-lg border border-[var(--border-overlay)] bg-[var(--surface-overlay)] shadow-sm backdrop-blur-sm py-1"
-    >
-      <button
-        type="button"
-        className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-tint)] cursor-pointer transition-colors"
-        onClick={async () => {
-          const selected = await openDialog({ directory: true, title: "Select project folder", defaultPath: projectPath });
-          if (selected) onSetProjectPath(selected);
-        }}
-      >
-        <FolderOpen className="h-3.5 w-3.5 text-[var(--text-muted)]" />
-        <span className="flex-1 text-left truncate">{projectPath ? "Change codebase" : "Link codebase"}</span>
-      </button>
-      {projectPath && (
-        <div className="px-3 py-1 text-[10px] text-[var(--text-muted)] truncate max-w-[240px]" title={projectPath}>
-          {projectPath}
-        </div>
-      )}
-
-      {(showClaude || showCodex) && (
-        <>
-          <div className="my-1 border-t border-[var(--border-subtle)]" />
-          <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
-            MCP Server
-          </div>
-          {showClaude && (
-            <>
-              <div className="flex items-center justify-between px-3 py-1.5">
-                <div>
-                  <div className="text-xs text-[var(--text-secondary)]">Claude Code</div>
-                  <div className="text-[10px] text-[var(--text-muted)] max-w-[160px]">.mcp.json</div>
-                </div>
-                <Toggle
-                  checked={aiTools.claudeMcpEnabled}
-                  onChange={(checked) => { if (checked) handleToggle("claudeMcpEnabled", checked); }}
-                />
-              </div>
-              {aiTools.claudeMcpEnabled && (
-                <div className="flex items-center justify-between px-3 py-1.5 pl-6">
-                  <div>
-                    <div className="text-xs text-[var(--text-secondary)]">Auto-approve reads</div>
-                    <div className="text-[10px] text-[var(--text-muted)] max-w-[140px]">settings.local.json</div>
-                  </div>
-                  <Toggle
-                    checked={aiTools.claudeReadApproved}
-                    onChange={(checked) => { if (checked) handleToggle("claudeReadApproved", checked); }}
-                  />
-                </div>
-              )}
-            </>
-          )}
-          {showCodex && (
-            <div className="flex items-center justify-between px-3 py-1.5">
-              <div>
-                <div className="text-xs text-[var(--text-secondary)]">Codex</div>
-                <div className="text-[10px] text-[var(--text-muted)] max-w-[160px]">.codex/config.toml</div>
-              </div>
-              <Toggle
-                checked={aiTools.codexMcpEnabled}
-                onChange={(checked) => { if (checked) handleToggle("codexMcpEnabled", checked); }}
-              />
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-function AppMenu({ onClose, onOpenSettings, onOpenPalette, onCloseModel, onSaveAs, hasModel, canSaveAs, triggerRef }: { onClose: () => void; onOpenSettings: () => void; onOpenPalette: () => void; onCloseModel: () => void; onSaveAs: (name: string) => void; hasModel: boolean; canSaveAs: boolean; triggerRef: React.RefObject<HTMLButtonElement | null> }) {
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handler = (e: PointerEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)
-          && !(triggerRef.current && triggerRef.current.contains(e.target as Node))) {
-        onClose();
-      }
-    };
-    document.addEventListener("pointerdown", handler, true);
-    return () => document.removeEventListener("pointerdown", handler, true);
-  }, [onClose, triggerRef]);
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
-
-  const items: { label: string; icon: typeof Settings; shortcut?: string; onClick: () => void; disabled?: boolean; active?: boolean }[] = [
-    { label: "Open model", icon: Keyboard, shortcut: "Ctrl+K", onClick: () => { onOpenPalette(); onClose(); } },
-    { label: "Save as\u2026", icon: Save, onClick: () => {
-      const name = window.prompt("Model name:");
-      if (!name) return;
-      const sanitized = name.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
-      if (!sanitized) return;
-      onSaveAs(sanitized);
-      onClose();
-    }, disabled: !canSaveAs },
-    { label: "Close model", icon: FolderX, onClick: () => { onCloseModel(); onClose(); }, disabled: !hasModel },
-    { label: "Settings", icon: Settings, onClick: () => { onOpenSettings(); onClose(); } },
+  const items: ContextMenuItem[] = [
+    {
+      id: "open",
+      label: "Open project…",
+      onSelect: () => {
+        void openDialog({ directory: true }).then((p) => {
+          if (typeof p === "string") onOpenProject(p);
+        });
+      },
+    },
+    { id: "close", label: "Close project", onSelect: onCloseProject },
+    { id: "settings", label: "Settings", onSelect: onOpenSettings },
   ];
 
   return (
-    <div
-      ref={menuRef}
-      className="absolute top-full left-0 mt-1 z-50 min-w-[180px] rounded-lg border border-[var(--border-overlay)] bg-[var(--surface-overlay)] shadow-sm backdrop-blur-sm py-1"
-    >
-      {items.map((item) => (
-        <button
-          key={item.label}
-          type="button"
-          className={`flex items-center gap-2 w-full px-3 py-1.5 text-xs transition-colors ${item.disabled ? "text-[var(--text-ghost)] cursor-default" : "text-[var(--text-secondary)] hover:bg-[var(--surface-tint)] cursor-pointer"}`}
-          onClick={item.disabled ? undefined : item.onClick}
+    <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-[var(--border)] bg-[var(--surface)] px-2 select-none">
+      <button
+        type="button"
+        onClick={(e) => {
+          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          setMenu({ x: r.left, y: r.bottom + 2 });
+        }}
+        title={projectPath ?? undefined}
+        className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface-hover)]"
+      >
+        <img src="/logo.png" alt="scryer" className="h-3.5 w-3.5 shrink-0 rounded" />
+        <span className="truncate">{projectName}</span>
+        <ChevronDown className="h-3 w-3 shrink-0 text-[var(--text-ghost)]" />
+      </button>
+
+      {projectPath && (
+        <span
+          title={projectPath}
+          className="ml-2 hidden max-w-[340px] truncate font-mono text-[11px] text-[var(--text-ghost)] sm:inline-block"
         >
-          <item.icon className={`h-3.5 w-3.5 ${item.active ? "text-blue-500 dark:text-blue-400" : "text-[var(--text-muted)]"}`} />
-          <span className="flex-1 text-left">{item.label}</span>
-          {item.active !== undefined && (
-            <span className={`text-[10px] ${item.active ? "text-blue-500 dark:text-blue-400" : "text-[var(--text-muted)]"}`}>
-              {item.active ? "on" : "off"}
-            </span>
-          )}
-          {item.shortcut && (
-            <span className="text-[10px] text-[var(--text-muted)]">{item.shortcut}</span>
-          )}
-        </button>
-      ))}
+          {projectPath}
+        </span>
+      )}
+
+      <div className="flex-1" />
+
+      <button
+        type="button"
+        onClick={onOpenSearch}
+        title="Search the model (Ctrl+K)"
+        className="flex h-7 w-[240px] items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-canvas)] px-3 text-xs text-[var(--text-secondary)] hover:border-[var(--border-strong)] cursor-text"
+      >
+        <Search className="h-4 w-4 shrink-0" />
+        <span className="truncate">Search the model</span>
+        <span className="ml-auto shrink-0 rounded border border-[var(--border-strong)] px-1 font-mono text-2xs text-[var(--text-tertiary)]">
+          ⌘K
+        </span>
+      </button>
+
+      {/* Wiki / Map view toggle — a primary nav surface onto the same model and
+          selection, so it reads big and high-contrast. Ctrl+Space flips it. */}
+      <div className="ml-2 flex items-center gap-0.5 rounded-md border border-[var(--border)] bg-[var(--surface-canvas)] p-0.5">
+        {([
+          { id: "wiki", label: "Wiki", Icon: FileText },
+          { id: "diagram", label: "Map", Icon: Network },
+        ] as const).map(({ id, label, Icon }) => (
+          <button
+            key={id}
+            type="button"
+            title={`${label} view (Ctrl+Space to switch)`}
+            aria-pressed={view === id}
+            onClick={() => onSetView(id)}
+            className={`flex items-center gap-1.5 rounded px-3 py-1 text-xs font-medium transition-colors ${
+              view === id
+                ? "bg-[var(--surface-raised)] text-[var(--text)] shadow-sm"
+                : "text-[var(--text-tertiary)] hover:text-[var(--text)]"
+            }`}
+          >
+            <Icon className="h-4 w-4" />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <ThemeToggle />
+
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={items}
+          searchable={false}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
 }
 
-export function TopBar({
-  currentModel, onOpenPalette, onNavigateToRoot, onOpenSettings, onCloseModel, onSaveAs, hasModel,
-  breadcrumbs, currentParentKind, navigateToBreadcrumb,
-  activeFlowId, activeFlowName,
-  projectPath, aiTools, onAiToolsChange, onSetProjectPath,
-}: TopBarProps) {
-  const isFlow = !!activeFlowId;
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
-  const projectMenuTriggerRef = useRef<HTMLButtonElement>(null);
-  const appMenuTriggerRef = useRef<HTMLButtonElement>(null);
-  const toggleMenu = useCallback(() => setMenuOpen((prev) => !prev), []);
+/** Binary light/dark switch for the top bar. Flips the currently-resolved mode
+ *  to an explicit choice (so it overrides "system" on first click), persists it,
+ *  and applies it. The icon mirrors `<html>.dark` via an observer, staying honest
+ *  if the OS flips while still on "system" mode (the theme's own listener toggles
+ *  that class). */
+function ThemeToggle() {
+  const [isDark, setIsDark] = useState(() =>
+    document.documentElement.classList.contains("dark"),
+  );
+
+  useEffect(() => {
+    const el = document.documentElement;
+    const obs = new MutationObserver(() => setIsDark(el.classList.contains("dark")));
+    obs.observe(el, { attributes: true, attributeFilter: ["class"] });
+    return () => obs.disconnect();
+  }, []);
+
+  const toggle = () => {
+    const next: ColorMode = isDark ? "light" : "dark";
+    const theme = loadTheme();
+    theme.colorMode = next;
+    saveTheme(theme);
+    applyColorMode(next);
+  };
 
   return (
-    <div
-      className="flex items-center h-9 shrink-0 border-b border-[var(--border)] bg-[var(--surface)] select-none"
-      data-tauri-drag-region
+    <button
+      type="button"
+      onClick={toggle}
+      title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+      aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+      className="ml-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
     >
-      {/* Logo + app menu */}
-      <div className="relative shrink-0 flex items-center">
-        <button
-          ref={appMenuTriggerRef}
-          type="button"
-          className="h-9 w-10 flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--surface-hover)] cursor-pointer transition-colors"
-          onClick={toggleMenu}
-          title="Menu"
-        >
-          <Menu className="h-4 w-4" />
-        </button>
-        {menuOpen && (
-          <AppMenu
-            onClose={() => setMenuOpen(false)}
-            onOpenSettings={onOpenSettings}
-            onOpenPalette={onOpenPalette}
-            onCloseModel={onCloseModel}
-            onSaveAs={onSaveAs}
-            hasModel={hasModel}
-            canSaveAs={hasModel}
-            triggerRef={appMenuTriggerRef}
-          />
-        )}
-      </div>
-
-      {/* Left: model name */}
-      <div
-        className="w-50 shrink-0 flex items-center gap-1 px-2 border-r border-[var(--border)] h-full"
-        data-tauri-drag-region
-      >
-        <span
-          className="truncate flex-1 text-xs font-semibold text-[var(--text-secondary)] cursor-pointer"
-          onClick={onNavigateToRoot}
-        >
-          {currentModel?.startsWith("project:") ? currentModel.replace(/^project:.*[/\\]/, "") : currentModel ?? "Untitled"}
-        </span>
-        {hasModel && (
-          <div className="relative shrink-0">
-            <button
-              ref={projectMenuTriggerRef}
-              type="button"
-              className="rounded px-1.5 py-0.5 text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] text-xs shrink-0 cursor-pointer transition-colors"
-              onClick={() => setProjectMenuOpen((prev) => !prev)}
-            >
-              &#8943;
-            </button>
-            {projectMenuOpen && (
-              <ProjectMenu
-                onClose={() => setProjectMenuOpen(false)}
-                projectPath={projectPath}
-                aiTools={aiTools}
-                onAiToolsChange={onAiToolsChange}
-                onSetProjectPath={onSetProjectPath}
-                triggerRef={projectMenuTriggerRef}
-              />
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Center: level indicator + toolbar */}
-      <div className="flex-1 flex items-center gap-2 px-3 h-full min-w-0" data-tauri-drag-region>
-        {hasModel && !isFlow && (
-          <div className="flex items-baseline gap-1.5 text-[11px] shrink-0">
-            {breadcrumbs.length > 0 && (
-              <button
-                type="button"
-                className="text-[var(--text-muted)] hover:text-[var(--text)] cursor-pointer transition-colors"
-                onClick={() => {
-                  const parent = breadcrumbs.length >= 2 ? breadcrumbs[breadcrumbs.length - 2].id : null;
-                  navigateToBreadcrumb(parent);
-                }}
-                title="Go up"
-              >
-                &larr;
-              </button>
-            )}
-            {breadcrumbs.length > 0 && (
-              <span className="text-[var(--text-secondary)] font-medium">
-                {breadcrumbs[breadcrumbs.length - 1].name}
-              </span>
-            )}
-            <span className="text-[10px] text-[var(--text-muted)]">
-              {currentParentKind === "component" ? "Code"
-                : currentParentKind === "container" ? "Components"
-                : currentParentKind === "system" ? "Containers"
-                : "System context"}
-            </span>
-          </div>
-        )}
-        {hasModel && isFlow && activeFlowName && (
-          <span className="text-[11px] text-[var(--text-muted)] shrink-0">
-            Flow: {activeFlowName}
-          </span>
-        )}
-      </div>
-
-      {/* Right: window controls */}
-      <div className="flex items-center gap-1.5 shrink-0 pr-2.5">
-        <button
-          type="button"
-          className="h-6 w-6 flex items-center justify-center rounded-full text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors cursor-pointer"
-          onClick={() => appWindow.minimize()}
-          title="Minimize"
-        >
-          <Minus className="h-3 w-3" />
-        </button>
-        <button
-          type="button"
-          className="h-6 w-6 flex items-center justify-center rounded-full text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors cursor-pointer"
-          onClick={() => appWindow.toggleMaximize()}
-          title="Maximize"
-        >
-          <Square className="h-2.5 w-2.5" />
-        </button>
-        <button
-          type="button"
-          className="h-6 w-6 flex items-center justify-center rounded-full text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors cursor-pointer"
-          onClick={() => appWindow.close()}
-          title="Close"
-        >
-          <X className="h-3 w-3" />
-        </button>
-      </div>
-    </div>
+      {isDark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+    </button>
   );
 }

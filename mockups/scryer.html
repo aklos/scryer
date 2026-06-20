@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>scryer</title>
+<style>
+/* ============================================================ TOKENS */
+:root{
+  --bg:#0c0e12; --surface:#14171d; --surface-2:#181c23; --surface-hi:#1f2530;
+  --border:#20262f; --border-2:#2c333f; --border-strong:#3a4453;
+  --text:#e6edf3; --text-2:#a9b2be; --text-3:#717b89; --ghost:#4d5663;
+  --A:#4ec27a; --M:#d9a441; --D:#ef5f57; --R:#5fa8ff; --Q:#b98cff; --X:#e0843c; --ok:#3a8c5a;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
+body{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+.body{flex:1;display:flex;min-height:0}
+.A{color:var(--A)} .M{color:var(--M)} .D{color:var(--D)} .R{color:var(--R)} .Q{color:var(--Q)} .X{color:var(--X)}
+.mono{font-family:var(--mono)} .gid{color:var(--ghost)}
+kbd{font-family:var(--mono);font-size:10px;color:var(--text-3)}
+.wdel{color:var(--D);text-decoration:line-through;text-decoration-color:#ef5f5588}
+.wadd{color:var(--A);background:#4ec27a1f;border-radius:2px;padding:0 1px}
+
+/* ============================================================ TOP BAR */
+.tb{display:flex;align-items:center;height:36px;flex-shrink:0;background:var(--surface);border-bottom:1px solid var(--border);padding:0 8px;gap:2px}
+.tb .app{display:flex;align-items:center;gap:7px;padding:4px 8px;border-radius:5px;cursor:pointer}
+.tb .app:hover{background:var(--surface-2)}
+.tb .logo{width:14px;height:14px;border-radius:4px;background:linear-gradient(135deg,#5fa8ff,#b98cff)}
+.tb .app .nm{font-weight:600;color:var(--text)}
+.tb .app .cv{font-size:10px;color:var(--ghost)}
+.tb .div{width:1px;height:16px;background:var(--border-2);margin:0 8px}
+.tb .path{font-size:11px;color:var(--text-3);font-family:var(--mono)}
+.tb .spacer{flex:1}
+.tb .search{display:flex;align-items:center;gap:7px;width:230px;height:24px;padding:0 9px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--text-3);font-size:12px;cursor:text}
+.tb .search .k{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ghost);border:1px solid var(--border-2);border-radius:3px;padding:0 4px}
+.tb .views{display:flex;gap:2px;margin-left:6px;background:var(--bg);border:1px solid var(--border);border-radius:5px;padding:2px}
+.tb .views button{font:inherit;font-size:12px;color:var(--text-3);background:transparent;border:0;border-radius:3px;padding:3px 12px;cursor:pointer}
+.tb .views button.on{background:var(--surface-hi);color:var(--text)}
+
+/* ============================================================ TREE */
+.tree{width:264px;flex-shrink:0;display:flex;flex-direction:column;background:var(--surface);border-right:1px solid var(--border)}
+.tree .head{display:flex;align-items:center;height:30px;padding:0 6px 0 12px}
+.tree .head .lbl{font-size:10px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3)}
+.tree .head .tools{margin-left:auto;display:flex;gap:1px}
+.tree .head .tools button{font:inherit;font-size:11px;color:var(--ghost);background:transparent;border:0;padding:4px 6px;border-radius:4px;cursor:pointer}
+.tree .head .tools button:hover{background:var(--surface-2);color:var(--text-3)}
+.tree .head .tools button.on{color:var(--text-2);background:var(--surface-hi)}
+.tree .filt{padding:0 8px 8px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid var(--border)}
+.tree .find{height:24px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--text-3);font-size:12px;padding:0 9px;display:flex;align-items:center}
+.tree .lens{display:flex}
+.tree .lens button{flex:1;font:inherit;font-size:11px;color:var(--text-3);background:transparent;border:1px solid var(--border);padding:3px 0;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px}
+.tree .lens button:not(:first-child){border-left:0}
+.tree .lens button:first-child{border-radius:5px 0 0 5px}
+.tree .lens button:last-child{border-radius:0 5px 5px 0}
+.tree .lens button.on{color:var(--text);background:var(--surface-hi);border-color:var(--border-2)}
+.tree .lens .ct{font-family:var(--mono);font-size:10px}
+.tree .scroll{flex:1;overflow-y:auto;padding:5px 0 14px}
+.nd{display:grid;grid-template-columns:14px 1fr auto;align-items:center;gap:7px;height:28px;padding-right:8px;cursor:pointer;position:relative}
+.nd:hover{background:var(--surface-2)}
+.nd.sel{background:var(--surface-hi)}
+.nd.sel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--text-2)}
+.nd .chg{text-align:center;font-family:var(--mono);font-weight:700;font-size:11px}
+.nd .label{display:flex;align-items:center;gap:6px;min-width:0}
+.nd .chev{width:12px;color:var(--ghost);flex-shrink:0;font-size:10px}
+.nd .kic{flex-shrink:0;font-size:11px;width:13px;text-align:center}
+.nd .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nd.sys .nm{font-weight:600;color:var(--text)} .nd.sys .kic{color:var(--text-2)}
+.nd.con .nm{font-weight:500;color:var(--text-2)} .nd.con .kic{color:var(--text-3)}
+.nd.com .nm{color:var(--text-2)} .nd.com .kic{color:var(--text-3)}
+.nd.grp .nm{font-size:11px;letter-spacing:.04em;color:var(--text-3);text-transform:uppercase} .nd.grp .kic{color:var(--ghost)}
+.nd.ext .nm{color:var(--text-3);font-style:italic}
+.nd.fresh .nm{color:var(--A)}
+.nd.sel .nm{color:var(--text)}
+.nd .badge{font-family:var(--mono);font-size:10px;padding:0 5px;border-radius:8px;background:var(--surface-hi);color:var(--text-3)}
+.nd .spin{width:11px;height:11px;border:1.5px solid var(--Q);border-right-color:transparent;border-radius:50%;animation:sp .7s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.nd .tag{font-family:var(--mono);font-size:10px;color:var(--ghost)}
+.rail{position:absolute;top:0;bottom:0;width:1px;background:var(--border)}
+
+/* ============================================================ MAIN */
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.mh{padding:13px 28px 0;border-bottom:1px solid var(--border)}
+.crumb{font-family:var(--mono);font-size:11px;color:var(--text-3)} .crumb b{color:var(--text-2)}
+.mh h1{font-size:21px;font-weight:600;margin:5px 0 3px}
+.tl{font-size:12px;color:var(--text-3)} .tl .mono{font-family:var(--mono)}
+.modes{display:flex;margin-top:11px}
+.modes button{font:inherit;font-size:12px;color:var(--text-3);background:transparent;border:0;border-bottom:2px solid transparent;padding:6px 0;margin-right:18px;cursor:pointer}
+.modes button.on{color:var(--text);border-bottom-color:var(--text)}
+.scrollA{flex:1;overflow-y:auto}
+.pad{padding:18px 28px 50px;max-width:820px}
+.lede{font-size:13.5px;color:var(--text-2);line-height:1.6;margin:4px 0 8px}
+h2{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--text-3);border-bottom:1px solid var(--border);padding-bottom:5px;margin:26px 0 8px}
+
+/* diff rows (Overview) */
+.row{display:grid;grid-template-columns:18px 20px 1fr;align-items:baseline;position:relative}
+.row .m{text-align:center;color:var(--ghost);font-family:var(--mono);font-weight:700;font-size:12px;user-select:none}
+.row .n{text-align:right;padding-right:10px;color:var(--ghost);font-family:var(--mono);font-size:11px;user-select:none}
+.row .c{font-family:var(--mono);font-size:12.5px;line-height:1.65;color:var(--text-2);padding:1.5px 0}
+.row.add .m{color:var(--A)} .row.add .c{color:var(--text)}
+.row.del .m{color:var(--D)} .row.del .c{color:var(--text-3)}
+.row.chg .m{color:var(--M)} .row.chg .c{color:var(--text)}
+.row.vag .m{color:var(--Q)}
+.row.dir .c{color:var(--text-3)} .row.dir.add .c{color:var(--A)}
+
+/* source mapping + inspection peek */
+.src{grid-column:3;font-family:var(--mono);font-size:11px;color:var(--text-3);padding:1px 0 3px;display:flex;align-items:center;gap:6px}
+.src.has-peek{cursor:pointer}
+.src .tw{display:inline-block;color:var(--ghost);transition:transform .12s}
+.src.exp .tw{transform:rotate(90deg)}
+.src a{color:var(--R);text-decoration:none}
+.src.gone a{color:var(--text-3);text-decoration:line-through;text-decoration-color:#e0843c66}
+.src .vchk{color:var(--ok)}
+/* ACTIONS are controls, not content: sans-serif buttons, set apart from the
+   mono diff in their own lane. */
+/* ONE button system — every action: bordered, sentence case, color = role */
+.btn{font-family:var(--sans);font-size:11px;color:var(--text-2);background:var(--surface-2);border:1px solid var(--border-2);border-radius:5px;padding:2.5px 10px;cursor:pointer;white-space:nowrap}
+.btn:hover{border-color:var(--border-strong);color:var(--text);background:var(--surface-hi)}
+.btn.go{color:var(--A);border-color:#4ec27a55;background:#4ec27a12} .btn.go:hover{background:#4ec27a20}
+.btn.danger{color:var(--D);border-color:#ef5f5755;background:#ef5f5710} .btn.danger:hover{background:#ef5f5720}
+.actions{grid-column:3;display:flex;align-items:center;gap:6px;margin:5px 0 2px}
+.actions .ask{font-family:var(--sans);font-size:11px;color:var(--text-3);margin-right:4px}
+
+/* EDITING — wiki-style. Hover a section to highlight it + reveal its [edit];
+   editing swaps that section to a minimal form. Controls stay sans, off the diff. */
+.lede-wrap{position:relative}
+.lede-edit{position:absolute;right:0;top:-2px;display:none}
+.lede-wrap:hover .lede-edit{display:inline-block}
+/* identical geometry read↔edit — editing only paints (bg + accent bar), so the
+   swap never reflows */
+.sec{border-radius:7px;margin:16px -12px 0;padding:8px 12px}
+.sec.editing{background:#aeb6c209;box-shadow:inset 2px 0 0 var(--border-strong)}
+.h2row{display:flex;align-items:flex-end;justify-content:space-between;border-bottom:1px solid var(--border);margin:0 0 8px}
+.h2row h2{border:0;margin:0;padding-bottom:5px}
+.sec-edit{visibility:hidden;margin-bottom:2px}
+.sec:hover .sec-edit{visibility:visible}
+.editbtns{display:flex;gap:6px;padding-bottom:2px}
+/* edit uses the SAME .row + .c span (contenteditable) — no element swap, so the
+   read↔edit toggle is pixel-identical. Markers/numbers/source inherit from .row. */
+.erow .c{border-radius:4px;padding:1.5px 4px;margin:0 -4px}
+.erow .c[contenteditable]{outline:none;cursor:text}
+.erow:hover .c{background:#aeb6c20d}
+.c[contenteditable]:focus{background:var(--surface-hi)}
+.erow .ctl{position:absolute;right:0;top:0;height:24px;display:flex;align-items:center;gap:6px;opacity:0;padding-left:34px;background:linear-gradient(90deg,transparent,var(--bg) 28px)}
+.erow:hover .ctl{opacity:1}
+.addresp{margin:10px 0 0 38px}
+.peek{grid-column:3;display:none;margin:3px 0 8px;border:1px solid var(--border-2);border-radius:5px;overflow:hidden;background:#090b0e}
+.peek.open{display:block}
+.peek .ph{display:flex;gap:8px;padding:5px 10px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:10px;color:var(--text-3)}
+.peek .ph .file{color:var(--text-2)} .peek .ph .open-ext{margin-left:auto;color:var(--R)}
+.peek .pl2{display:grid;grid-template-columns:44px 1fr;font-family:var(--mono);font-size:11.5px;line-height:1.6}
+.peek .pl2 .gl{text-align:right;padding-right:12px;color:var(--ghost);user-select:none}
+.peek .pl2 .cd{white-space:pre;color:var(--text-3)}
+.peek .pl2.hot{background:#5fa8ff14;box-shadow:inset 2px 0 0 var(--R)}
+.peek .pl2.hot .cd{color:var(--text)} .peek .pl2.hot .gl{color:var(--R)}
+.tok-kw{color:#ff9d6b} .tok-fn{color:#7fd1ff} .tok-str{color:#9bdc8a}
+
+/* History timeline */
+.ev{position:relative;padding:0 0 26px 24px;margin-left:5px;border-left:1px solid var(--border)}
+.ev:last-child{border-left-color:transparent}
+.ev::before{content:"";position:absolute;left:-5px;top:4px;width:9px;height:9px;border-radius:50%;background:var(--surface-hi);border:1px solid var(--border-strong)}
+.ev.impl::before{background:var(--ok);border-color:var(--ok)}
+.ev.drift::before,.ev.move::before{background:var(--R);border-color:var(--R)}
+.ev.born::before{background:var(--ghost)}
+.ev-h{display:flex;align-items:baseline;gap:9px;margin-bottom:7px}
+.ev-h .when{font-family:var(--mono);font-size:11px;color:var(--text-2)}
+.drv{font-family:var(--mono);font-size:10px;padding:1px 7px;border-radius:3px;border:1px solid var(--border-2);color:var(--text-3)}
+.drv.impl{color:var(--ok);border-color:#3a8c5a55} .drv.drift,.drv.move{color:var(--R);border-color:#5fa8ff44}
+.ev-h .who{font-size:11px;color:var(--text-3)} .ev-h .who .ag{color:var(--Q)}
+.hrow{display:grid;grid-template-columns:16px 1fr;align-items:baseline}
+.hrow .m{text-align:center;color:var(--ghost);font-family:var(--mono);font-weight:700;font-size:12px}
+.hrow .c{font-family:var(--mono);font-size:12.5px;line-height:1.6;color:var(--text-2);padding:1px 0}
+.hrow.add .m{color:var(--A)} .hrow.add .c{color:var(--text)}
+.hrow.stl .m{color:var(--X)} .hrow.mov .m{color:var(--R)}
+.hsrc{grid-column:2;font-family:var(--mono);font-size:11px;color:var(--text-3);padding:1px 0 2px}
+.hsrc a{color:var(--R);text-decoration:none} .hsrc .vchk{color:var(--ok)}
+
+/* ============================================================ POWERLINE */
+.pl{display:flex;align-items:stretch;height:24px;flex-shrink:0;font-family:var(--mono);font-size:11px;background:var(--bg);position:relative}
+.pl.working::before{content:"";position:absolute;left:0;right:0;top:0;height:2px;z-index:5;background:linear-gradient(90deg,transparent 0,var(--Q) 50%,transparent 100%);background-size:40% 100%;background-repeat:no-repeat;animation:plslide 1.5s ease-in-out infinite}
+@keyframes plslide{0%{background-position:-45% 0}100%{background-position:145% 0}}
+.pl .seg{display:flex;align-items:center;gap:6px;padding:0 14px 0 13px;position:relative;color:var(--text-2);white-space:nowrap}
+.pl .seg::after{content:"";position:absolute;right:-10px;top:0;z-index:2;border-style:solid;border-width:12px 0 12px 10px;border-color:transparent transparent transparent var(--sb)}
+.pl .s0{--sb:#1d222b;background:#1d222b} .pl .s1{--sb:#171b22;background:#171b22} .pl .s2{--sb:#14171d;background:#14171d}
+.pl .grow{flex:1}
+.pl .rseg{display:flex;align-items:center;gap:6px;padding:0 13px;position:relative;color:var(--text-2);white-space:nowrap}
+.pl .rseg::before{content:"";position:absolute;left:-10px;top:0;border-style:solid;border-width:12px 10px 12px 0;border-color:transparent var(--sb) transparent transparent}
+.pl .r-agent{--sb:#2a2140;color:var(--Q);background-image:repeating-linear-gradient(45deg,#241b38 0,#241b38 9px,#312552 9px,#312552 18px);background-size:25.5px 100%;animation:barber .7s linear infinite}
+@keyframes barber{to{background-position:25.5px 0}}
+.pl .r-hint{--sb:#171b22;background:#171b22;color:var(--text-3)}
+.pl b{color:var(--text)}
+</style>
+</head>
+<body>
+
+<!-- ===================== TOP BAR ===================== -->
+<div class="tb">
+  <div class="app"><span class="logo"></span><span class="nm">checkout-svc</span><span class="cv">▾</span></div>
+  <span class="div"></span>
+  <span class="path">.scryer/model.scry</span>
+  <span class="spacer"></span>
+  <div class="search"><span>⌕</span><span>Search the model</span><span class="k">⌘K</span></div>
+  <div class="views"><button class="on">▤ Wiki</button><button>◈ Map</button></div>
+</div>
+
+<div class="body">
+  <!-- ===================== TREE ===================== -->
+  <aside class="tree">
+    <div class="head">
+      <span class="lbl">Model</span>
+      <div class="tools"><button title="Collapse all">⊟</button><button class="on" title="Show symbols">{ }</button></div>
+    </div>
+    <div class="filt">
+      <div class="find">⌕ <span style="margin-left:7px">Filter…</span></div>
+      <div class="lens"><button class="on">All</button><button>Changes <span class="ct M">6</span></button><button>Drift <span class="ct Q">2</span></button></div>
+    </div>
+    <div class="scroll">
+      <div class="nd sys"><span class="chg"></span><span class="label"><span class="chev">▾</span><span class="kic">◆</span><span class="nm">Checkout</span></span><span></span></div>
+      <div class="nd con"><span class="chg"></span><span class="label" style="padding-left:14px"><span class="rail" style="left:13px"></span><span class="chev">▾</span><span class="kic">▣</span><span class="nm">api</span></span><span></span></div>
+      <div class="nd com sel"><span class="chg M">M</span><span class="label" style="padding-left:28px"><span class="rail" style="left:13px"></span><span class="rail" style="left:27px"></span><span class="chev"></span><span class="kic">◈</span><span class="nm">PaymentHandler</span></span><span></span></div>
+      <div class="nd com fresh"><span class="chg A">A</span><span class="label" style="padding-left:28px"><span class="rail" style="left:13px"></span><span class="rail" style="left:27px"></span><span class="chev"></span><span class="kic">◈</span><span class="nm">RefundHandler</span></span><span></span></div>
+      <div class="nd grp"><span class="chg"></span><span class="label" style="padding-left:28px"><span class="rail" style="left:13px"></span><span class="rail" style="left:27px"></span><span class="chev">▸</span><span class="kic">▤</span><span class="nm">Mailers</span></span><span class="badge">2</span></div>
+      <div class="nd com"><span class="chg"></span><span class="label" style="padding-left:28px"><span class="rail" style="left:13px"></span><span class="rail" style="left:27px"></span><span class="chev"></span><span class="kic">◈</span><span class="nm">PriceBook</span></span><span></span></div>
+      <div class="nd con"><span class="chg"></span><span class="label" style="padding-left:14px"><span class="rail" style="left:13px"></span><span class="chev">▾</span><span class="kic">▣</span><span class="nm">worker</span></span><span></span></div>
+      <div class="nd com"><span class="chg R">R</span><span class="label" style="padding-left:28px"><span class="rail" style="left:13px"></span><span class="rail" style="left:27px"></span><span class="chev"></span><span class="kic">◈</span><span class="nm">ReceiptMailer</span></span><span class="spin" title="agent filling…"></span></div>
+      <div class="nd sys ext"><span class="chg"></span><span class="label"><span class="chev">▸</span><span class="kic">◆</span><span class="nm">Stripe</span></span><span class="tag">ext</span></div>
+      <div class="nd sys"><span class="chg"></span><span class="label"><span class="chev"></span><span class="kic">○</span><span class="nm">Customer</span></span><span class="tag">actor</span></div>
+    </div>
+  </aside>
+
+  <!-- ===================== MAIN ===================== -->
+  <main class="main">
+    <div class="mh">
+      <div class="crumb">Checkout / api / <b>PaymentHandler</b></div>
+      <h1>PaymentHandler</h1>
+      <div class="tl">Component · <span class="mono">Rust · axum</span> · <span class="mono">payment/handler.rs</span></div>
+      <div class="modes"><button class="on" data-tab="ov">Overview</button><button data-tab="hi">History</button></div>
+    </div>
+
+    <div class="scrollA">
+      <!-- OVERVIEW (always the diff) -->
+      <div class="pad" data-body="ov">
+        <div class="lede-wrap">
+          <p class="lede">Owns the act of taking money for a confirmed cart — the single point where the system touches the payment processor.</p>
+          <button class="btn lede-edit">Edit</button>
+        </div>
+
+        <!-- Responsibilities: diff by default; [edit] toggles the wiki form -->
+        <section class="sec" data-sec="resp">
+          <div class="h2row"><h2>Responsibilities</h2>
+            <button class="btn sec-edit">Edit</button>
+            <div class="editbtns" style="display:none"><button class="btn">Cancel</button><button class="btn go">Done</button></div>
+          </div>
+
+          <div class="secread">
+            <div class="row">
+              <span class="m"></span><span class="n">1</span>
+              <span class="c">Validates the cart total against the price book.</span>
+              <div class="src has-peek"><span class="tw">▸</span>↳ <a>api/payment/validate.rs:14–39</a> <span class="vchk">✓</span></div>
+              <div class="peek">
+                <div class="ph"><span class="file">api/payment/validate.rs</span><span>14–39</span><span class="open-ext">open ⌝</span></div>
+                <div class="pl2 hot"><span class="gl">14</span><span class="cd">    <span class="tok-kw">for</span> line <span class="tok-kw">in</span> &cart.lines {</span></div>
+                <div class="pl2 hot"><span class="gl">15</span><span class="cd">        <span class="tok-kw">let</span> want = book.<span class="tok-fn">price</span>(line.sku)?;</span></div>
+              </div>
+            </div>
+            <div class="row chg">
+              <span class="m">~</span><span class="n">2</span>
+              <span class="c">Charges the <span class="wdel">card </span><span class="wadd">customer </span>via Stripe<span class="wadd">, retrying once on a 5xx</span>.</span>
+              <div class="src has-peek"><span class="tw">▸</span>↳ <a>api/payment/handler.rs:40–78</a></div>
+              <div class="peek">
+                <div class="ph"><span class="file">api/payment/handler.rs</span><span>40–78</span><span class="open-ext">open ⌝</span></div>
+                <div class="pl2 hot"><span class="gl">41</span><span class="cd">    <span class="tok-kw">let</span> res = stripe.<span class="tok-fn">charges</span>()</span></div>
+                <div class="pl2 hot"><span class="gl">42</span><span class="cd">        .<span class="tok-fn">create</span>(amount, pm).<span class="tok-kw">await</span>?;  <span style="color:var(--X)">// no retry</span></span></div>
+              </div>
+            </div>
+            <div class="row add dir"><span class="m">+</span><span class="n"></span><span class="c">→ must be idempotent on the cart id</span></div>
+            <div class="row add"><span class="m">+</span><span class="n">3</span><span class="c">Emits an order.paid event.</span></div>
+            <div class="row del">
+              <span class="m">−</span><span class="n"></span><span class="c">Caches the price book in Redis.</span>
+              <div class="src gone has-peek"><span class="tw">▸</span>↳ <a>api/payment/cache.rs:5–20</a></div>
+              <div class="peek">
+                <div class="ph"><span class="file">api/payment/cache.rs</span><span>5–20 · removed on next implement</span></div>
+                <div class="pl2 hot"><span class="gl">5</span><span class="cd"><span class="tok-kw">pub fn</span> <span class="tok-fn">warm_price_book</span>(r: &Redis) {</span></div>
+              </div>
+            </div>
+            <div class="row vag">
+              <span class="m">?</span><span class="n"></span><span class="c">Writes a PCI audit-trail line per charge.</span>
+              <div class="src has-peek"><span class="tw">▸</span>↳ <a>api/payment/audit.rs:8–22</a></div>
+              <div class="peek">
+                <div class="ph"><span class="file">api/payment/audit.rs</span><span>8–22 · in code, no claim</span></div>
+                <div class="pl2 hot"><span class="gl">8</span><span class="cd">    <span class="tok-kw">let</span> line = <span class="tok-fn">format!</span>(<span class="tok-str">"PCI {} {} {}"</span>, ..);</span></div>
+              </div>
+              <div class="actions"><span class="ask">In code, not in the model —</span><button class="btn go">Adopt</button><button class="btn danger">Reject</button></div>
+            </div>
+          </div>
+
+          <div class="secedit" style="display:none">
+            <div class="row erow"><span class="m"></span><span class="n">1</span>
+              <span class="c" contenteditable>Validates the cart total against the price book.</span>
+              <div class="src">↳ <a>api/payment/validate.rs:14–39</a> <span class="vchk">✓</span></div>
+              <span class="ctl"><button class="btn">Add directive</button><button class="btn danger">Delete</button></span>
+            </div>
+            <div class="row erow chg"><span class="m">~</span><span class="n">2</span>
+              <span class="c" contenteditable>Charges the customer via Stripe, retrying once on a 5xx.</span>
+              <div class="src">↳ <a>api/payment/handler.rs:40–78</a></div>
+              <span class="ctl"><button class="btn">Add directive</button><button class="btn danger">Delete</button></span>
+            </div>
+            <div class="row erow add dir"><span class="m">+</span><span class="n"></span>
+              <span class="c" contenteditable>→ must be idempotent on the cart id</span>
+              <span class="ctl"><button class="btn danger">Delete</button></span>
+            </div>
+            <div class="row erow add"><span class="m">+</span><span class="n">3</span>
+              <span class="c" contenteditable>Emits an order.paid event.</span>
+              <span class="ctl"><button class="btn">Add directive</button><button class="btn danger">Delete</button></span>
+            </div>
+            <div class="row erow del"><span class="m">−</span><span class="n"></span>
+              <span class="c">Caches the price book in Redis.</span>
+              <div class="src gone">↳ <a>api/payment/cache.rs:5–20</a></div>
+              <span class="ctl"><button class="btn go">Restore</button></span>
+            </div>
+            <button class="btn addresp">Add responsibility</button>
+          </div>
+        </section>
+
+        <!-- Depends on: read/diff with hover-revealed section [edit] + highlight -->
+        <section class="sec" data-sec="dep">
+          <div class="h2row"><h2>Depends on</h2><button class="btn sec-edit">Edit</button></div>
+          <div class="secread"><div class="row chg"><span class="m">~</span><span class="n"></span><span class="c">Stripe — charge API <span class="wdel">(StripeV1) </span><span class="wadd">(StripeV2)</span></span></div></div>
+        </section>
+      </div>
+
+      <!-- HISTORY (committed-model timeline) -->
+      <div class="pad" data-body="hi" style="display:none">
+        <div class="ev impl">
+          <div class="ev-h"><span class="when">2 days ago</span><span class="drv impl">implemented</span><span class="who"><span class="ag">⌁</span> agent · fill</span></div>
+          <div class="hrow add"><span class="m">+</span><span class="c">Validates the cart total against the price book.</span><div class="hsrc">↳ <a>api/payment/validate.rs:14–39</a> <span class="vchk">✓</span></div></div>
+          <div class="hrow add"><span class="m">+</span><span class="c">Charges the card via Stripe.</span><div class="hsrc">↳ <a>api/payment/handler.rs:40–78</a> <span class="vchk">✓</span></div></div>
+        </div>
+        <div class="ev drift">
+          <div class="ev-h"><span class="when">6 days ago</span><span class="drv drift">drift reconciled</span><span class="who"><span class="ag">⌁</span> agent · took code</span></div>
+          <div class="hrow stl"><span class="m">!</span><span class="c"><span class="wdel">Holds an in-memory nonce cache.</span></span><div class="hsrc">↳ <span class="gid">code removed it — claim dropped</span></div></div>
+        </div>
+        <div class="ev move">
+          <div class="ev-h"><span class="when">11 days ago</span><span class="drv move">moved</span><span class="who">you</span></div>
+          <div class="hrow mov"><span class="m">→</span><span class="c">reparented <span class="wdel">gateway </span>→ <span class="wadd">api</span></span></div>
+          <div class="hrow mov"><span class="m">→</span><span class="c">depends on Stripe — repointed <span class="wdel">Billing </span>→ <span class="wadd">Stripe</span></span></div>
+        </div>
+        <div class="ev born">
+          <div class="ev-h"><span class="when">18 days ago</span><span class="drv">created from code</span><span class="who"><span class="ag">⌁</span> agent · build</span></div>
+          <div class="hrow add"><span class="m">+</span><span class="c">3 responsibilities · 2 links · component</span></div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ===================== POWERLINE ===================== -->
+<div class="pl working">
+  <div class="seg s0"><span class="A">plan +6</span> <span class="gid">ahead of code</span></div>
+  <div class="seg s1"><span class="gid">drift</span> <span class="Q">1 unmodeled</span> · <span class="X">1 stale</span></div>
+  <div class="seg s2">coverage <b>87%</b> <span class="gid">claims mapped</span></div>
+  <div class="seg s1"><span class="gid">24 nodes · v0.3</span></div>
+  <div class="seg s2" style="--sb:var(--bg);background:var(--bg)"></div>
+  <div class="grow"></div>
+  <div class="rseg r-agent">⌁ filling <b style="color:var(--Q)">ReceiptMailer</b>…</div>
+  <div class="rseg r-hint">⌘K search</div>
+</div>
+
+<script>
+  // source-map inspection
+  document.querySelectorAll('.src.has-peek').forEach(s=>{
+    s.addEventListener('click',e=>{
+      if(e.target.closest('.open-ext'))return;
+      const peek=s.parentElement.querySelector('.peek');
+      if(peek){peek.classList.toggle('open');s.classList.toggle('exp');}
+    });
+  });
+  // wiki-style section editing: [edit] swaps read↔form
+  function setEdit(sec,on){
+    const read=sec.querySelector('.secread'), form=sec.querySelector('.secedit');
+    const edit=sec.querySelector('.sec-edit'), btns=sec.querySelector('.editbtns');
+    sec.classList.toggle('editing',on);
+    if(read)read.style.display=on?'none':'block';
+    if(form)form.style.display=on?'block':'none';
+    if(edit)edit.style.display=on?'none':'';
+    if(btns)btns.style.display=on?'flex':'none';
+  }
+  document.querySelectorAll('.sec').forEach(sec=>{
+    const edit=sec.querySelector('.sec-edit');
+    if(edit && sec.querySelector('.secedit')) edit.addEventListener('click',()=>setEdit(sec,true));
+    sec.querySelectorAll('.editbtns button').forEach(b=>b.addEventListener('click',()=>setEdit(sec,false)));
+  });
+
+  // Overview / History tabs
+  document.querySelectorAll('.modes button').forEach(b=>{
+    b.addEventListener('click',()=>{
+      document.querySelectorAll('.modes button').forEach(x=>x.classList.remove('on'));
+      b.classList.add('on');
+      const t=b.dataset.tab;
+      document.querySelectorAll('[data-body]').forEach(el=>{el.style.display=el.dataset.body===t?'block':'none';});
+    });
+  });
+</script>
+</body>
+</html>

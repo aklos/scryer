@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 /// File categories for annotation.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Category {
     Manifest,
     Infrastructure,
@@ -276,6 +276,49 @@ pub fn is_codebase(path: &Path) -> bool {
         }
     }
     false
+}
+
+/// Return relative paths of directories containing manifest files, excluding the
+/// project root. Each entry is `(dir_relative_path, manifest_filename)`.
+pub fn manifest_dirs(path: &Path) -> Vec<(String, String)> {
+    let mut results: Vec<(String, String)> = Vec::new();
+
+    let walker = ignore::WalkBuilder::new(path)
+        .hidden(false)
+        .filter_entry(|entry| {
+            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                let name = entry.file_name().to_string_lossy();
+                if SKIP_DIRS.iter().any(|&s| name == s) {
+                    return false;
+                }
+                if SKIP_BUILD_DIRS.iter().any(|&s| name == s) {
+                    return false;
+                }
+            }
+            true
+        })
+        .build();
+
+    for entry in walker.flatten() {
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+        let rel = match entry.path().strip_prefix(path) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let file_name = rel.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if classify_file(file_name, rel) == Some(Category::Manifest) {
+            let dir = rel.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+            if !dir.is_empty() {
+                results.push((dir, file_name.to_string()));
+            }
+        }
+    }
+
+    results.sort();
+    results.dedup();
+    results
 }
 
 pub fn project_structure(path: &Path) -> Result<String, String> {

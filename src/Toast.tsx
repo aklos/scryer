@@ -53,10 +53,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           {toasts.map((t) => (
             <div
               key={t.id}
-              className="flex items-center gap-1.5 rounded border border-[var(--border-overlay)] bg-[var(--surface-overlay)] backdrop-blur-md px-2.5 py-1.5 text-[11px] shadow-sm cursor-pointer animate-in slide-in-from-bottom-2"
+              className="flex items-center gap-1.5 rounded border border-[var(--border-overlay)] bg-[var(--surface-overlay)] backdrop-blur-md px-2.5 py-1.5 text-2xs shadow-sm cursor-pointer animate-in slide-in-from-bottom-2"
               onClick={() => dismiss(t.id)}
             >
-              <span className={`shrink-0 text-[10px] font-medium ${VARIANT_CLASSES[t.variant]}`}>{VARIANT_ICON[t.variant]}</span>
+              <span className={`shrink-0 text-2xs font-medium ${VARIANT_CLASSES[t.variant]}`}>{VARIANT_ICON[t.variant]}</span>
               <span className="text-[var(--text-secondary)]">{t.message}</span>
             </div>
           ))}

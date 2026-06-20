@@ -1,32 +1,38 @@
+/**
+ * Connection handles on a diagram card — four sides plus four corners, all
+ * source-type, matching the handle ids `assignAllHandles` chooses. Ported from
+ * the pre-pivot canvas. In the read-only diagram they carry no editing
+ * affordance: they're the anchor points edges attach to and stay invisible
+ * (CSS hides `.react-flow__handle`).
+ */
+
 import { Handle, Position } from "@xyflow/react";
 
-const hiddenStyle = { opacity: 0, pointerEvents: "none" as const };
+const base = { opacity: 0 } as const;
 
-export function NodeHandles({ hidden }: { hidden?: boolean } = {}) {
-  const s = hidden ? hiddenStyle : undefined;
+export function NodeHandles() {
   return (
     <>
-      <Handle type="source" position={Position.Top} id="top" isConnectable={!hidden} style={s} />
-      <Handle type="source" position={Position.Bottom} id="bottom" isConnectable={!hidden} style={s} />
-      <Handle type="source" position={Position.Left} id="left" isConnectable={!hidden} style={s} />
-      <Handle type="source" position={Position.Right} id="right" isConnectable={!hidden} style={s} />
-      <Handle type="source" position={Position.Top} id="top-left" isConnectable={!hidden} style={hidden ? { ...hiddenStyle, left: 0 } : { left: 0 }} />
-      <Handle type="source" position={Position.Top} id="top-right" isConnectable={!hidden} style={hidden ? { ...hiddenStyle, left: "100%" } : { left: "100%" }} />
-      <Handle type="source" position={Position.Bottom} id="bottom-left" isConnectable={!hidden} style={hidden ? { ...hiddenStyle, left: 0 } : { left: 0 }} />
-      <Handle type="source" position={Position.Bottom} id="bottom-right" isConnectable={!hidden} style={hidden ? { ...hiddenStyle, left: "100%" } : { left: "100%" }} />
+      <Handle type="source" position={Position.Top} id="top" style={base} />
+      <Handle type="source" position={Position.Bottom} id="bottom" style={base} />
+      <Handle type="source" position={Position.Left} id="left" style={base} />
+      <Handle type="source" position={Position.Right} id="right" style={base} />
+      <Handle type="source" position={Position.Top} id="top-left" style={{ ...base, left: 0 }} />
+      <Handle type="source" position={Position.Top} id="top-right" style={{ ...base, left: "100%" }} />
+      <Handle type="source" position={Position.Bottom} id="bottom-left" style={{ ...base, left: 0 }} />
+      <Handle type="source" position={Position.Bottom} id="bottom-right" style={{ ...base, left: "100%" }} />
     </>
   );
 }
 
-/** Single centered handle — for nodes that only need mention edge anchoring. */
+/** Single centered handle — for dot-tier nodes that connect center-to-center. */
 export function CenterHandle() {
   return (
     <Handle
       type="source"
       position={Position.Top}
-      id="top"
-      isConnectable={false}
-      style={{ opacity: 0, pointerEvents: "none", left: "50%", top: "50%" }}
+      id="c"
+      style={{ opacity: 0, left: "50%", top: "50%" }}
     />
   );
 }

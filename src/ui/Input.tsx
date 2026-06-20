@@ -1,35 +1,30 @@
 import type { InputHTMLAttributes } from "react";
 
-type InputVariant = "title" | "inline" | "bordered";
-type FocusColor = "blue" | "indigo";
+type InputVariant = "title" | "inline" | "bordered" | "ghost";
 
-const focusClasses: Record<FocusColor, string> = {
-  blue: "focus:border-blue-400",
-  indigo: "focus:border-indigo-400",
-};
+// One consistent field treatment: raised surface, visible border, neutral
+// focus ring (the focused border darkens instead of borrowing a status hue).
+const base =
+  "w-full rounded-md border border-[var(--border)] bg-[var(--surface-raised)] text-[var(--text)] outline-none transition-colors placeholder:text-[var(--text-ghost)] focus:border-[var(--border-strong)] focus:ring-1 focus:ring-[var(--border-strong)]";
 
 const variants: Record<InputVariant, string> = {
-  title:
-    "w-full rounded border border-[var(--border)] bg-[var(--surface-raised)] text-xs font-medium text-[var(--text)] outline-none placeholder:text-[var(--text-ghost)] px-2 py-1 transition-colors focus:ring-1 focus:ring-blue-400/30",
-  inline:
-    "w-0 flex-1 text-right rounded border border-[var(--border)] bg-[var(--surface-raised)] text-xs text-[var(--text-secondary)] outline-none px-1.5 py-0.5 transition-colors focus:ring-1 focus:ring-blue-400/30",
-  bordered:
-    "mt-0.5 w-full rounded border border-[var(--border-strong)] bg-[var(--surface-raised)] px-2 py-1.5 text-xs text-[var(--text)] outline-none focus:ring-1 focus:ring-blue-400/30",
+  /** Page-title rename field — matches the h1 metrics so nothing jumps. */
+  title: `${base} px-2 py-1 text-xl font-semibold leading-tight`,
+  /** Compact field for tight rows (infobox, meta lines). */
+  inline: `${base} px-2 py-1 text-xs`,
+  /** The default form field. */
+  bordered: `${base} px-2.5 py-1.5 text-sm`,
+  /** Borderless, transparent — for in-place wiki edit rows (directives etc.). */
+  ghost:
+    "-mx-1 w-full rounded border-0 bg-transparent px-1 text-[var(--text)] outline-none transition-colors placeholder:text-[var(--text-ghost)] hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] focus:bg-[var(--surface-active)] focus:hover:bg-[var(--surface-active)]",
 };
 
 export function Input({
   variant = "bordered",
-  focusColor = "blue",
   className,
   ...props
 }: {
   variant?: InputVariant;
-  focusColor?: FocusColor;
 } & Omit<InputHTMLAttributes<HTMLInputElement>, "color">) {
-  return (
-    <input
-      {...props}
-      className={`${variants[variant]} ${focusClasses[focusColor]} ${className ?? ""}`}
-    />
-  );
+  return <input {...props} className={`${variants[variant]} ${className ?? ""}`} />;
 }

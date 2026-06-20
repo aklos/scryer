@@ -1,33 +1,126 @@
 use crate::helpers::*;
 use crate::server::ScryerServer;
 use crate::types::*;
-use crate::validate::*;
+use crate::validate;
 use rmcp::{
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content},
     tool, tool_router, ErrorData as McpError,
 };
-use scryer_core::{
-    C4Edge, C4Kind, C4ModelData, C4Node, C4NodeData,
-    Status,
-};
-use serde::Deserialize;
-use std::collections::HashSet;
+use scryer_core::{Kind, Link, Node, ScryModel};
+use scryer_core::history::{EventKind, EventRow, HistoryEvent};
+use std::collections::{HashMap, HashSet};
+
+/// Remove code-side mapping for a set of nodes about to be deleted: their
+/// boundary globs (keyed by node id) and the source-map locations of every
+/// responsibility they own (keyed by responsibility id). Call before the nodes
+/// are retained out of the model, since it reads their responsibilities.
+fn prune_code_map(model: &mut ScryModel, removed_node_ids: &HashSet<String>) {
+    let removed_resp_ids: HashSet<String> = model
+        .nodes
+        .iter()
+        .filter(|n| removed_node_ids.contains(&n.id))
+        .flat_map(|n| n.responsibilities.iter().map(|r| r.id.clone()))
+        .collect();
+    // source_map keys are responsibility ids or schema node ids — drop both.
+    model
+        .source_map
+        .retain(|k, _| !removed_resp_ids.contains(k) && !removed_node_ids.contains(k));
+    model.boundaries.retain(|k, _| !removed_node_ids.contains(k));
+}
+
+/// Fold a set of target nodes out of ONE model layer: relocate each target's own
+/// non-vagrant responsibilities (keeping their ids and source anchors) up to its
+/// parent, then remove the target and its descendants along with their links,
+/// boundaries, and remaining anchors. Relocating BEFORE pruning is what keeps the
+/// parent's coverage of that code intact — `prune_code_map` only drops anchors of
+/// responsibilities still owned by a removed node, so a relocated claim survives
+/// and the file never goes dark. Code on disk is never touched.
+///
+/// Returns `(relocated, removed, dropped_descendant_resps)` — the last is the count
+/// of responsibilities on removed DESCENDANTS that are lost (a target's own claims
+/// are relocated, never dropped), surfaced so the loss is never silent.
+fn fold_out_layer(model: &mut ScryModel, target_ids: &[String]) -> (usize, usize, usize) {
+    let mut relocated = 0usize;
+
+    // 1) Relocate each present target's own non-vagrant responsibilities to its parent.
+    for id in target_ids {
+        let Some(idx) = model.nodes.iter().position(|n| &n.id == id) else {
+            continue;
+        };
+        let Some(parent_id) = model.nodes[idx].parent_id.clone() else {
+            continue; // top-level node: no parent to carry the claims
+        };
+        let mut moving = Vec::new();
+        model.nodes[idx].responsibilities.retain(|r| {
+            if r.vagrant == Some(true) {
+                true
+            } else {
+                moving.push(r.clone());
+                false
+            }
+        });
+        if moving.is_empty() {
+            continue;
+        }
+        match model.nodes.iter_mut().find(|n| n.id == parent_id) {
+            Some(parent) => {
+                relocated += moving.len();
+                parent.responsibilities.extend(moving);
+            }
+            // Parent absent (shouldn't happen) — restore rather than lose the claims.
+            None => model.nodes[idx].responsibilities.extend(moving),
+        }
+    }
+
+    // 2) Expand to the full subtree of every target.
+    let mut to_remove: HashSet<String> = target_ids.iter().cloned().collect();
+    let mut frontier: Vec<String> = target_ids.to_vec();
+    while let Some(id) = frontier.pop() {
+        for child in model.nodes.iter().filter(|n| n.parent_id.as_deref() == Some(&id)) {
+            if to_remove.insert(child.id.clone()) {
+                frontier.push(child.id.clone());
+            }
+        }
+    }
+
+    // Claims on removed descendants (not the targets themselves) are lost — count them.
+    let dropped = model
+        .nodes
+        .iter()
+        .filter(|n| to_remove.contains(&n.id) && !target_ids.iter().any(|t| t == &n.id))
+        .map(|n| n.responsibilities.len())
+        .sum();
+
+    let before = model.nodes.len();
+    prune_code_map(model, &to_remove);
+    model.nodes.retain(|n| !to_remove.contains(&n.id));
+    model
+        .links
+        .retain(|l| !to_remove.contains(&l.src) && !to_remove.contains(&l.dst));
+    for g in model.groups.iter_mut() {
+        g.member_ids.retain(|m| !to_remove.contains(m));
+    }
+    (relocated, before - model.nodes.len(), dropped)
+}
 
 #[tool_router(router = tool_router_nodes, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "Create or overwrite a model with complete data in one call. Use for initial model creation or full rewrites. Pass the full model JSON with all nodes and edges. Node positions are handled automatically by the UI — do not include position data.\n\nJSON format:\n- Containers MUST have `parentId` set to a system node's ID. Components MUST have `parentId` set to a container's ID. Without `parentId`, nodes render as flat siblings instead of nested.\n- Include `sources`, `technology`, `shape`, and `status` directly in each node's data — do NOT add them in a separate pass.\n- `position` and `type` can be omitted (default to auto-layout and \"c4\").\n- Edge IDs follow the pattern `edge-{source}-{target}`.\n- Edge labels MUST be short (max 30 characters). One verb phrase per edge.\n\nExample:\n{\"nodes\": [\n  {\"id\": \"node-1\", \"data\": {\"name\": \"User\", \"description\": \"End user\", \"kind\": \"person\", \"status\": \"proposed\"}},\n  {\"id\": \"node-2\", \"data\": {\"name\": \"My System\", \"description\": \"Main system\", \"kind\": \"system\", \"status\": \"proposed\"}},\n  {\"id\": \"node-3\", \"parentId\": \"node-2\", \"data\": {\"name\": \"Web App\", \"description\": \"Frontend SPA\", \"kind\": \"container\", \"technology\": \"React\", \"status\": \"proposed\"}},\n  {\"id\": \"node-4\", \"parentId\": \"node-2\", \"data\": {\"name\": \"Database\", \"description\": \"Primary data store\", \"kind\": \"container\", \"technology\": \"PostgreSQL\", \"shape\": \"cylinder\", \"status\": \"proposed\"}}\n], \"edges\": [\n  {\"id\": \"edge-node-1-node-2\", \"source\": \"node-1\", \"target\": \"node-2\", \"data\": {\"label\": \"uses\"}},\n  {\"id\": \"edge-node-3-node-4\", \"source\": \"node-3\", \"target\": \"node-4\", \"data\": {\"label\": \"reads from\", \"method\": \"SQL\"}}\n]}"
+        description = "GENERATION-PIPELINE primitive — replace the ENTIRE model in one write (used during codebase→model generation to seed the system + container skeleton). Writes both the plan and the committed model. The JSON payload must include `version: \"0.3\"`, `nodes`, `links`, and optional `groups` and `sourceMap`. Validation warnings are returned but the write is committed regardless — fix the warnings in a follow-up call. For interactive editing, use the typed add_*/update_*/move_* tools instead."
     )]
     fn set_model(
         &self,
         Parameters(req): Parameters<SetModelRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let model_ref = match self.resolve_model(req.name) {
-            Ok(r) => r,
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        *self.active_model.lock().unwrap() = Some(model_ref.clone());
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model: C4ModelData = match serde_json::from_str(&req.data) {
+
+        let mut model: ScryModel = match serde_json::from_str(&req.data) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -36,294 +129,433 @@ impl ScryerServer {
                 ))]));
             }
         };
-
-        // Validate nodes
-        for node in &model.nodes {
-            if node.data.description.len() > 200
-                && !matches!(
-                    node.data.kind,
-                    C4Kind::Operation | C4Kind::Process | C4Kind::Model
-                )
-            {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Description for '{}' must be 200 characters or less",
-                    node.data.name
-                ))]));
-            }
-            if let Some(tech) = &node.data.technology {
-                if tech.len() > 28 {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Technology '{}' on '{}' exceeds 28 character limit",
-                        tech, node.data.name
-                    ))]));
-                }
-            }
-            if node.data.kind == C4Kind::Operation {
-                if let Err(e) = validate_identifier(
-                    &node.data.name,
-                    &format!("{:?} '{}'", node.data.kind, node.id),
-                ) {
-                    return Ok(CallToolResult::error(vec![Content::text(e)]));
-                }
-            }
-            if node.data.kind == C4Kind::Model {
-                if let Err(e) = validate_type_name(
-                    &node.data.name,
-                    &format!("{:?} '{}'", node.data.kind, node.id),
-                ) {
-                    return Ok(CallToolResult::error(vec![Content::text(e)]));
-                }
-            }
-            if !node.data.properties.is_empty() {
-                if let Err(e) =
-                    validate_property_labels(&node.data.properties, &format!("node '{}'", node.id))
-                {
-                    return Ok(CallToolResult::error(vec![Content::text(e)]));
-                }
-            }
+        if let Ok(prior) = scryer_core::read_model_at(&model_ref) {
+            enforce_readonly_directives(&mut model, &prior);
+        } else {
+            enforce_readonly_directives(&mut model, &ScryModel::default());
+        }
+        if model.version != scryer_core::SCRY_VERSION {
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "Model version '{}' does not match expected '{}'",
+                model.version,
+                scryer_core::SCRY_VERSION
+            ))]));
         }
 
-        // Validate no children under external systems
-        if let Err(e) = validate_no_children_of_external(&model.nodes) {
+        // A full-state set is code→model generation: write the plan, then commit
+        // it (planned and model land equal, so the plan diff is empty afterward).
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
+        if let Err(e) = scryer_core::write_model_at(&model_ref, &model) {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
+        }
+        let _ = scryer_core::save_baseline_at(&model_ref, &model);
 
-        // Validate edge labels
-        for edge in &model.edges {
-            if let Some(data) = &edge.data {
-                if data.label.len() > 30 {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Edge label '{}' exceeds 30 character limit",
-                        data.label
-                    ))]));
-                }
+        let warnings = validate::validate(&model);
+        let mut msg = format!(
+            "Wrote model to {} — {} nodes, {} links, {} groups",
+            model_ref,
+            model.nodes.len(),
+            model.links.len(),
+            model.groups.len()
+        );
+        if !warnings.is_empty() {
+            msg.push_str(&format!("\n\n{} warning(s):", warnings.len()));
+            for w in warnings {
+                msg.push_str(&format!("\n- {}", w));
             }
         }
-
-        // Set project_path to cwd if not already set — needed for source map → editor linking
-        if model.project_path.is_none() {
-            if let Ok(cwd) = std::env::current_dir() {
-                model.project_path = Some(cwd.to_string_lossy().to_string());
-            }
-        }
-
-        // Strip all positions — layout is a UI concern
-        for node in &mut model.nodes {
-            node.position = None;
-        }
-
-        // Deduplicate edges by ID (keep first occurrence)
-        {
-            let mut seen = HashSet::new();
-            model.edges.retain(|e| seen.insert(e.id.clone()));
-        }
-
-        let node_count = model.nodes.len();
-        let edge_count = model.edges.len();
-        let cross_level_warnings = check_disconnected_nodes(&model);
-        let bidir_warnings = check_bidirectional_edges(&model);
-        let mention_warnings = check_mention_edges(&model);
-        let cross_container_warnings = check_cross_container_edges(&model);
-        match scryer_core::write_model_at(&model_ref, &model) {
-            Ok(()) => {
-                let _ = scryer_core::save_baseline_at(&model_ref, &model);
-                // Register the project if project-local
-                if let scryer_core::ModelRef::ProjectLocal(ref path) = model_ref {
-                    let _ = scryer_core::register_project(path);
-                }
-                let mut msg = format!(
-                    "Set model '{}' ({} nodes, {} edges)",
-                    model_ref, node_count, edge_count
-                );
-                if !cross_level_warnings.is_empty() {
-                    msg.push_str(&format!(
-                        "\n\n⚠️ DISCONNECTED NODES: The UI shows one abstraction level at a time. \
-                        These nodes will appear disconnected at their viewing level. \
-                        Use add_edges to fix:\n- {}",
-                        cross_level_warnings.join("\n- ")
-                    ));
-                }
-                if !bidir_warnings.is_empty() {
-                    msg.push_str(&format!(
-                        "\n\n⚠️ BIDIRECTIONAL EDGES: \
-                        Review these and merge into a single edge if they represent the same interaction. \
-                        Use delete_edges to remove the redundant edge:\n- {}",
-                        bidir_warnings.join("\n- ")
-                    ));
-                }
-                if !mention_warnings.is_empty() {
-                    msg.push_str(&format!(
-                        "\n\n⚠️ MENTIONS WITHOUT EDGES: Descriptions reference nodes with @[Name] \
-                        but no edge exists between them. Add the missing edges:\n- {}",
-                        mention_warnings.join("\n- ")
-                    ));
-                }
-                if !cross_container_warnings.is_empty() {
-                    msg.push_str(&format!(
-                        "\n\n⚠️ CROSS-CONTAINER COMPONENT EDGES: Components are internal to their container. \
-                        These edges reach inside another container's boundary. \
-                        Re-target them to the container node instead:\n- {}",
-                        cross_container_warnings.join("\n- ")
-                    ));
-                }
-                Ok(CallToolResult::success(vec![Content::text(msg)]))
-            }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
-        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     #[tool(
-        description = "Add one or more nodes to a model. Hierarchy: person/system (top-level), container (parent=system), component (parent=container), operation/process/model (parent=component). All nodes use type 'c4'."
+        description = "Patch one or more existing nodes by id. Only fields present in each item are changed. Pass `responsibilities` or `properties` to replace the whole array (pass an empty array to clear). Code-side mapping (line-precise locations per responsibility, and boundary globs per node) is written separately via `update_source_map`."
     )]
-    fn add_nodes(
+    fn update_nodes(
         &self,
-        Parameters(req): Parameters<AddNodeRequest>,
+        Parameters(req): Parameters<UpdateNodeRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let model_ref = match self.resolve_model(req.model) {
-            Ok(r) => r,
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_model_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model '{}': {}",
+                    "Failed to read model at {}: {}",
                     model_ref, e
                 ))]));
             }
         };
 
-        let mut added_ids = Vec::new();
-        for item in &req.nodes {
-            let kind = parse_kind(&item.kind)?;
-
-            if item.description.len() > 200
-                && !matches!(kind, C4Kind::Operation | C4Kind::Process | C4Kind::Model)
-            {
+        let prior = model.clone();
+        let mut updated = 0usize;
+        for u in &req.nodes {
+            let Some(n) = model.nodes.iter_mut().find(|n| n.id == u.node_id) else {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Description for '{}' must be 200 characters or less",
-                    item.name
+                    "Node '{}' not found",
+                    u.node_id
                 ))]));
-            }
-            if let Some(tech) = &item.technology {
-                if tech.len() > 28 {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Technology '{}' on '{}' exceeds 28 character limit",
-                        tech, item.name
-                    ))]));
-                }
-            }
-
-            if kind == C4Kind::Operation {
-                if let Err(e) = validate_identifier(&item.name, &format!("{:?}", kind)) {
-                    return Ok(CallToolResult::error(vec![Content::text(e)]));
-                }
-            }
-            if kind == C4Kind::Model {
-                if let Err(e) = validate_type_name(&item.name, &format!("{:?}", kind)) {
-                    return Ok(CallToolResult::error(vec![Content::text(e)]));
-                }
-            }
-            if let Some(props) = &item.properties {
-                if let Err(e) = validate_property_labels(props, &format!("node '{}'", item.name)) {
-                    return Ok(CallToolResult::error(vec![Content::text(e)]));
-                }
-            }
-
-            if let Err(e) = validate_parent(&model, &kind, item.parent_id.as_deref()) {
-                return Ok(CallToolResult::error(vec![Content::text(e)]));
-            }
-
-            let id = scryer_core::next_node_id(&model);
-            let shape = item.shape.as_deref().and_then(parse_shape);
-            let status = if kind == C4Kind::Person {
-                None
-            } else {
-                item.status.as_deref().and_then(parse_status)
             };
 
-            let node_type = match kind {
-                C4Kind::Operation => "operation",
-                C4Kind::Process => "process",
-                C4Kind::Model => "model",
-                _ => "c4",
-            };
-            model.nodes.push(C4Node {
-                id: id.clone(),
-                node_type: node_type.to_string(),
-                position: None,
-                data: C4NodeData {
-                    name: item.name.clone(),
-                    description: item.description.clone(),
-                    kind,
-                    technology: item.technology.clone(),
-                    external: item.external,
-                    expanded: None,
-                    shape,
-                    sources: item.sources.clone().unwrap_or_default(),
-                    status,
-                    status_reason: None,
-                    contract: item.contract.clone().unwrap_or_default(),
-                    notes: item.notes.clone().unwrap_or_default(),
-                    properties: item.properties.clone().unwrap_or_default(),
-                },
-                parent_id: item.parent_id.clone(),
-            });
-            added_ids.push(id);
+            if let Some(v) = &u.kind {
+                n.kind = parse_kind(v)?;
+            }
+            if let Some(v) = &u.name {
+                n.name = v.clone();
+            }
+            if let Some(v) = &u.description {
+                n.description = Some(v.clone());
+            }
+            if let Some(v) = &u.technology {
+                n.technology = Some(v.clone());
+            }
+            if let Some(v) = u.external {
+                n.external = Some(v);
+            }
+            if let Some(v) = &u.responsibilities {
+                n.responsibilities = v.clone();
+            }
+            if let Some(v) = &u.properties {
+                n.properties = v.clone();
+            }
+            if let Some(v) = u.visual {
+                n.visual = if v { Some(true) } else { None };
+            }
+            if let Some(v) = &u.parent_id {
+                n.parent_id = Some(v.clone());
+            }
+            updated += 1;
+        }
+        enforce_readonly_directives(&mut model, &prior);
+        scryer_core::rewrite_renamed_wikilinks(&mut model, &prior);
+
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
 
-        match scryer_core::write_model_at(&model_ref, &model) {
-            Ok(()) => {
-                let _ = scryer_core::save_baseline_at(&model_ref, &model);
-                Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Added {} node(s): {}",
-                    added_ids.len(),
-                    added_ids.join(", ")
-                ))]))
-            }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
-        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Updated {} node(s)",
+            updated
+        ))]))
     }
 
     #[tool(
-        description = "Replace all descendants of an existing node in one call. Removes existing children and their edges, then inserts the provided nodes and edges. Use this to detail a system (add containers), a container (add components), etc. without calling add_node repeatedly. The target node must already exist. All nodes in data must have parentId chains leading back to node_id. Edges can reference any node in the model."
+        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds EVERYTHING outstanding on the node: every planned responsibility and property, plus the appearance (the visual). Pass `responsibilityIds` to fold only those responsibilities. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
+    )]
+    fn mark_implemented(
+        &self,
+        Parameters(req): Parameters<MarkImplementedRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        use scryer_core::diff::ElementKind;
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
+
+        // The plan (draft) is the source of the work being closed out: marking
+        // implemented FOLDS the named elements from `planned` into the committed
+        // `model` via the auto-commit fold. The element must exist in the plan.
+        let planned = match scryer_core::read_planned_at(&model_ref) {
+            Ok(p) => p,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read plan at {}: {}",
+                    model_ref, e
+                ))]));
+            }
+        };
+        if !planned.nodes.iter().any(|n| n.id == req.node_id) {
+            // Gone from the plan but still in committed = a planned DELETION to fold:
+            // you removed the code, now remove the claim from the committed model.
+            // `commit_element` deletes a committed node whose planned copy is absent.
+            let in_committed = scryer_core::read_model_at(&model_ref)
+                .map(|m| m.nodes.iter().any(|n| n.id == req.node_id))
+                .unwrap_or(false);
+            if in_committed {
+                if let Err(e) =
+                    scryer_core::commit_element(&model_ref, ElementKind::Node, None, &req.node_id)
+                {
+                    return Ok(CallToolResult::error(vec![Content::text(e)]));
+                }
+                if let Ok(after) = scryer_core::read_model_at(&model_ref) {
+                    let _ = scryer_core::save_baseline_at(&model_ref, &after);
+                }
+                return Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Committed the removal of '{}' from the model.",
+                    req.node_id
+                ))]));
+            }
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "Node '{}' not found in the plan",
+                req.node_id
+            ))]));
+        }
+
+        // Snapshot the node's committed responsibilities so the history event can
+        // show exactly what THIS fold added or reworded, not claims committed in a
+        // prior pass (a whole-node commit re-folds the node's full planned state).
+        let before_stmts: HashMap<String, String> = scryer_core::read_model_at(&model_ref)
+            .ok()
+            .map(|m| {
+                m.nodes
+                    .iter()
+                    .flat_map(|n| n.responsibilities.iter())
+                    .map(|r| (r.id.clone(), r.statement.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let summary = match &req.responsibility_ids {
+            // Scoped: commit exactly the named responsibilities. Their host node
+            // must already be committed (commit the whole node first otherwise).
+            Some(ids) => {
+                for id in ids {
+                    if let Err(e) = scryer_core::commit_element(
+                        &model_ref,
+                        ElementKind::Responsibility,
+                        None,
+                        id,
+                    ) {
+                        return Ok(CallToolResult::error(vec![Content::text(e)]));
+                    }
+                }
+                let n = ids.len();
+                format!(
+                    "Committed {} responsibilit{} on '{}' into the model.",
+                    n,
+                    if n == 1 { "y" } else { "ies" },
+                    req.node_id
+                )
+            }
+            // Whole node: commit the node, folding its whole planned state
+            // (responsibilities, properties, appearance) into the model.
+            None => {
+                if let Err(e) =
+                    scryer_core::commit_element(&model_ref, ElementKind::Node, None, &req.node_id)
+                {
+                    return Ok(CallToolResult::error(vec![Content::text(e)]));
+                }
+                format!("Committed '{}' into the model.", req.node_id)
+            }
+        };
+
+        // Keep the legacy baseline snapshot in step with the committed model, and
+        // record the fold as an `impl` event listing the claims it discharged.
+        if let Ok(after) = scryer_core::read_model_at(&model_ref) {
+            let _ = scryer_core::save_baseline_at(&model_ref, &after);
+            if let Some(node) = after.nodes.iter().find(|n| n.id == req.node_id) {
+                let target: Vec<&scryer_core::Responsibility> = match &req.responsibility_ids {
+                    Some(ids) => node.responsibilities.iter().filter(|r| ids.contains(&r.id)).collect(),
+                    // Whole-node: only the responsibilities this fold newly added or
+                    // reworded relative to the committed snapshot above.
+                    None => node
+                        .responsibilities
+                        .iter()
+                        .filter(|r| before_stmts.get(&r.id) != Some(&r.statement))
+                        .collect(),
+                };
+                let rows: Vec<EventRow> = target
+                    .iter()
+                    .map(|r| {
+                        let marker = if before_stmts.contains_key(&r.id) { "~" } else { "+" };
+                        resp_event_row(marker, &after, r)
+                    })
+                    .collect();
+                if !rows.is_empty() {
+                    record_event(
+                        &model_ref,
+                        HistoryEvent::new(
+                            scryer_core::drift::now_secs(),
+                            EventKind::Impl,
+                            &req.node_id,
+                            "fill",
+                        )
+                        .with_rows(rows),
+                    );
+                }
+            }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(summary)]))
+    }
+
+    #[tool(
+        description = "Re-parent nodes — move a node (and its whole subtree) to a different parent, e.g. a component to another container. Validated: the new parent must satisfy the kind hierarchy (system→container→component→symbol; omit newParentId only for top-level systems/persons), must not be external, and must not sit inside the moved node's own subtree. The node leaves any group at its old level (groups organize siblings). Links to former siblings may become invalid — run `validate_model` after structural moves."
+    )]
+    fn move_nodes(
+        &self,
+        Parameters(req): Parameters<MoveNodesRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read model at {}: {}",
+                    model_ref, e
+                ))]));
+            }
+        };
+        let prior = model.clone();
+
+        let mut moved = 0usize;
+        for mv in &req.moves {
+            let Some(node) = model.nodes.iter().find(|n| n.id == mv.node_id) else {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Node '{}' not found",
+                    mv.node_id
+                ))]));
+            };
+            let kind = node.kind;
+
+            match mv.new_parent_id.as_deref() {
+                None => {
+                    if !matches!(kind, Kind::System | Kind::Person) {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Node '{}' ({:?}) cannot be top-level — only person/system are",
+                            mv.node_id, kind
+                        ))]));
+                    }
+                }
+                Some(pid) => {
+                    let Some(parent) = model.nodes.iter().find(|n| n.id == pid) else {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "New parent '{}' not found",
+                            pid
+                        ))]));
+                    };
+                    let valid = matches!(
+                        (parent.kind, kind),
+                        (Kind::System, Kind::Container)
+                            | (Kind::Container, Kind::Component)
+                            | (Kind::Component, Kind::Symbol)
+                    );
+                    if !valid {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "A {:?} cannot be parented by a {:?}",
+                            kind, parent.kind
+                        ))]));
+                    }
+                    if parent.external == Some(true) {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "External node '{}' cannot have children",
+                            pid
+                        ))]));
+                    }
+                    // The new parent must not be the node itself or inside its
+                    // own subtree (that would orphan the chain into a cycle).
+                    let mut cur = Some(pid.to_string());
+                    while let Some(id) = cur {
+                        if id == mv.node_id {
+                            return Ok(CallToolResult::error(vec![Content::text(format!(
+                                "Cannot move '{}' under its own subtree",
+                                mv.node_id
+                            ))]));
+                        }
+                        cur = model
+                            .nodes
+                            .iter()
+                            .find(|n| n.id == id)
+                            .and_then(|n| n.parent_id.clone());
+                    }
+                }
+            }
+
+            let node = model.nodes.iter_mut().find(|n| n.id == mv.node_id).unwrap();
+            node.parent_id = mv.new_parent_id.clone();
+            // Groups organize siblings at one level — leaving the level leaves
+            // the group.
+            for g in model.groups.iter_mut() {
+                g.member_ids.retain(|m| m != &mv.node_id);
+            }
+            moved += 1;
+        }
+
+        enforce_readonly_directives(&mut model, &prior);
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
+        }
+
+        // Timeline: a `move` event per node that actually changed parent.
+        let name_of = |m: &ScryModel, id: &str| {
+            m.nodes.iter().find(|n| n.id == id).map(|n| n.name.clone()).unwrap_or_else(|| id.to_string())
+        };
+        let now = scryer_core::drift::now_secs();
+        for mv in &req.moves {
+            let old_parent = prior.nodes.iter().find(|n| n.id == mv.node_id).and_then(|n| n.parent_id.clone());
+            if old_parent == mv.new_parent_id {
+                continue;
+            }
+            let from = old_parent.as_deref().map(|p| name_of(&prior, p)).unwrap_or_else(|| "top level".into());
+            let to = mv.new_parent_id.as_deref().map(|p| name_of(&model, p)).unwrap_or_else(|| "top level".into());
+            record_event(
+                &model_ref,
+                HistoryEvent::new(now, EventKind::Move, &mv.node_id, "reorganize")
+                    .with_rows(vec![EventRow::new("→", format!("reparented {from} → {to}"))]),
+            );
+        }
+
+        let warnings = validate::validate(&model);
+        let mut msg = format!("Moved {moved} node(s).");
+        if !warnings.is_empty() {
+            msg.push_str(&format!(
+                " {} validation warning(s) — run validate_model:",
+                warnings.len()
+            ));
+            for w in warnings.iter().take(5) {
+                msg.push_str(&format!("\n- {}", w));
+            }
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
+    }
+
+    #[tool(
+        description = "GENERATION-PIPELINE primitive — replace a node's whole subtree in one write (used during codebase→model generation to attach a container's structure to the seeded skeleton). The data payload is JSON `{ \"nodes\": [...], \"links\": [...] }` where every node in `nodes` has a parent chain rooted at `node_id`. All existing descendants of `node_id` are removed before the new subtree is inserted. Links replace any link whose endpoints are inside the subtree; links connecting to nodes outside the subtree are also accepted. For interactive editing, use the typed add_*/update_*/move_* tools instead."
     )]
     fn set_node(
         &self,
         Parameters(req): Parameters<SetNodeRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let model_ref = match self.resolve_model(req.model) {
-            Ok(r) => r,
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_model_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model '{}': {}",
+                    "Failed to read model at {}: {}",
                     model_ref, e
                 ))]));
             }
         };
 
-        // Verify target node exists
         if !model.nodes.iter().any(|n| n.id == req.node_id) {
             return Ok(CallToolResult::error(vec![Content::text(format!(
                 "Node '{}' not found",
                 req.node_id
             ))]));
         }
+        let prior = model.clone();
 
-        // Parse incoming subtree
-        #[derive(Deserialize)]
-        struct SubtreeData {
+        #[derive(serde::Deserialize)]
+        struct SubtreePayload {
+            nodes: Vec<Node>,
             #[serde(default)]
-            nodes: Vec<C4Node>,
-            #[serde(default)]
-            edges: Vec<C4Edge>,
+            links: Vec<Link>,
         }
-        let subtree: SubtreeData = match serde_json::from_str(&req.data) {
-            Ok(s) => s,
+        let payload: SubtreePayload = match serde_json::from_str(&req.data) {
+            Ok(p) => p,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Invalid subtree JSON: {}",
@@ -332,472 +564,559 @@ impl ScryerServer {
             }
         };
 
-        // Validate subtree nodes
-        for node in &subtree.nodes {
-            if node.data.description.len() > 200
-                && !matches!(
-                    node.data.kind,
-                    C4Kind::Operation | C4Kind::Process | C4Kind::Model
-                )
-            {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Description for '{}' must be 200 characters or less",
-                    node.data.name
-                ))]));
-            }
-            if let Some(tech) = &node.data.technology {
-                if tech.len() > 28 {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Technology '{}' on '{}' exceeds 28 character limit",
-                        tech, node.data.name
-                    ))]));
-                }
-            }
-            if node.data.kind == C4Kind::Operation {
-                if let Err(e) = validate_identifier(
-                    &node.data.name,
-                    &format!("{:?} '{}'", node.data.kind, node.id),
-                ) {
-                    return Ok(CallToolResult::error(vec![Content::text(e)]));
-                }
-            }
-            if node.data.kind == C4Kind::Model {
-                if let Err(e) = validate_type_name(
-                    &node.data.name,
-                    &format!("{:?} '{}'", node.data.kind, node.id),
-                ) {
-                    return Ok(CallToolResult::error(vec![Content::text(e)]));
-                }
-            }
-            if !node.data.properties.is_empty() {
-                if let Err(e) =
-                    validate_property_labels(&node.data.properties, &format!("node '{}'", node.id))
-                {
-                    return Ok(CallToolResult::error(vec![Content::text(e)]));
+        // Compute current descendants
+        let mut to_remove: HashSet<String> = HashSet::new();
+        let mut frontier = vec![req.node_id.clone()];
+        while let Some(id) = frontier.pop() {
+            for child in model.nodes.iter().filter(|n| n.parent_id.as_deref() == Some(&id)) {
+                if to_remove.insert(child.id.clone()) {
+                    frontier.push(child.id.clone());
                 }
             }
         }
 
-        // Validate edge labels
-        for edge in &subtree.edges {
-            if let Some(data) = &edge.data {
-                if data.label.len() > 30 {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Edge label '{}' exceeds 30 character limit",
-                        data.label
-                    ))]));
-                }
+        // Drop descendants + their links + their code-side mapping
+        prune_code_map(&mut model, &to_remove);
+        model.nodes.retain(|n| !to_remove.contains(&n.id));
+        model
+            .links
+            .retain(|l| !to_remove.contains(&l.src) && !to_remove.contains(&l.dst));
+
+        // Append new subtree nodes (skip node_id itself if accidentally included)
+        for n in payload.nodes {
+            if n.id == req.node_id {
+                continue;
+            }
+            model.nodes.push(n);
+        }
+        // Append links, skipping any whose endpoints don't exist
+        let node_ids: HashSet<&str> = model.nodes.iter().map(|n| n.id.as_str()).collect();
+        for l in payload.links {
+            if node_ids.contains(l.src.as_str()) && node_ids.contains(l.dst.as_str()) {
+                model.links.push(l);
             }
         }
+        enforce_readonly_directives(&mut model, &prior);
+        scryer_core::rewrite_renamed_wikilinks(&mut model, &prior);
 
-        // Collect all existing descendant IDs of node_id
-        let mut old_descendants = HashSet::new();
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for n in &model.nodes {
-                if let Some(pid) = &n.parent_id {
-                    let is_child = *pid == req.node_id || old_descendants.contains(pid);
-                    if is_child && !old_descendants.contains(&n.id) {
-                        old_descendants.insert(n.id.clone());
-                        changed = true;
-                    }
-                }
-            }
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
 
-        // Remove old descendants and edges referencing them
-        model.nodes.retain(|n| !old_descendants.contains(&n.id));
-        model.edges.retain(|e| {
-            !old_descendants.contains(&e.source) && !old_descendants.contains(&e.target)
-        });
-
-        // Validate all incoming nodes have parent chains leading to node_id
-        let incoming_ids: HashSet<_> = subtree.nodes.iter().map(|n| n.id.clone()).collect();
-        for node in &subtree.nodes {
-            match &node.parent_id {
-                Some(pid) if *pid == req.node_id || incoming_ids.contains(pid) => {}
-                Some(pid) => {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Node '{}' has parentId '{}' which is not in the subtree or the target node",
-                        node.id, pid
-                    ))]));
-                }
-                None => {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Node '{}' has no parentId — all nodes must be descendants of '{}'",
-                        node.id, req.node_id
-                    ))]));
-                }
+        let warnings = validate::validate(&model);
+        let mut msg = format!("Replaced subtree under {}", req.node_id);
+        if !warnings.is_empty() {
+            msg.push_str(&format!("\n\n{} warning(s):", warnings.len()));
+            for w in warnings {
+                msg.push_str(&format!("\n- {}", w));
             }
         }
-
-        // Check for ID collisions with remaining model nodes
-        let existing_ids: HashSet<_> = model.nodes.iter().map(|n| n.id.clone()).collect();
-        for node in &subtree.nodes {
-            if existing_ids.contains(&node.id) {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Node ID '{}' already exists in the model",
-                    node.id
-                ))]));
-            }
-        }
-
-        // Validate parent hierarchy (kind rules)
-        for node in &subtree.nodes {
-            let pid = node.parent_id.as_deref().unwrap(); // validated above
-            let parent_kind = if pid == req.node_id {
-                model
-                    .nodes
-                    .iter()
-                    .find(|n| n.id == req.node_id)
-                    .map(|n| &n.data.kind)
-            } else {
-                subtree
-                    .nodes
-                    .iter()
-                    .find(|n| n.id == pid)
-                    .map(|n| &n.data.kind)
-            };
-            if let Some(pk) = parent_kind {
-                match (&node.data.kind, pk) {
-                    (C4Kind::Container, C4Kind::System) => {}
-                    (C4Kind::Component, C4Kind::Container) => {}
-                    (C4Kind::Operation, C4Kind::Component) => {}
-                    (C4Kind::Process, C4Kind::Component) => {}
-                    (C4Kind::Model, C4Kind::Component) => {}
-                    (kind, pk) => {
-                        return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "Node '{}' (kind {:?}) cannot be a child of '{}' (kind {:?})",
-                            node.id, kind, pid, pk
-                        ))]));
-                    }
-                }
-            }
-        }
-
-        // Strip all positions — layout is a UI concern
-        let node_count = subtree.nodes.len();
-        let edge_count = subtree.edges.len();
-        let mut new_nodes = subtree.nodes;
-        for node in &mut new_nodes {
-            node.position = None;
-        }
-        model.nodes.extend(new_nodes);
-
-        // Validate edges reference existing nodes
-        let all_ids: HashSet<_> = model.nodes.iter().map(|n| n.id.as_str()).collect();
-        for edge in &subtree.edges {
-            if !all_ids.contains(edge.source.as_str()) {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Edge source '{}' not found",
-                    edge.source
-                ))]));
-            }
-            if !all_ids.contains(edge.target.as_str()) {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Edge target '{}' not found",
-                    edge.target
-                ))]));
-            }
-        }
-        // Skip subtree edges whose ID already exists in the model (warn the agent)
-        let existing_edge_ids: HashSet<_> = model.edges.iter().map(|e| e.id.clone()).collect();
-        let mut skipped_edges = Vec::new();
-        for edge in subtree.edges {
-            if existing_edge_ids.contains(&edge.id) {
-                skipped_edges.push(edge.id);
-            } else {
-                model.edges.push(edge);
-            }
-        }
-
-        // Check for missing edges when detailing a system or container (not components —
-        // operation/process/model nodes are code-level and don't need architectural edges).
-        let parent_kind = model.nodes.iter().find(|n| n.id == req.node_id).map(|n| &n.data.kind);
-        let check_edges = matches!(parent_kind, Some(C4Kind::System) | Some(C4Kind::Container));
-        let new_subtree_ids: HashSet<&str> = incoming_ids.iter().map(|s| s.as_str()).collect();
-        let mut missing_externals: Vec<String> = Vec::new();
-        if check_edges {
-            for edge in &model.edges {
-                // Find edges where the parent node itself is source or target
-                let external_id = if edge.source == req.node_id && !new_subtree_ids.contains(edge.target.as_str()) && edge.target != req.node_id {
-                    Some(&edge.target)
-                } else if edge.target == req.node_id && !new_subtree_ids.contains(edge.source.as_str()) && edge.source != req.node_id {
-                    Some(&edge.source)
-                } else {
-                    None
-                };
-                if let Some(ext_id) = external_id {
-                    let has_subtree_edge = model.edges.iter().any(|e| {
-                        let src_in = new_subtree_ids.contains(e.source.as_str());
-                        let tgt_in = new_subtree_ids.contains(e.target.as_str());
-                        (src_in && e.target == *ext_id) || (tgt_in && e.source == *ext_id)
-                    });
-                    if !has_subtree_edge {
-                        if let Some(ext_node) = model.nodes.iter().find(|n| n.id == *ext_id) {
-                            let name = format!("{} ({})", ext_node.data.name, kind_str(&ext_node.data.kind));
-                            if !missing_externals.contains(&name) {
-                                missing_externals.push(name);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        match scryer_core::write_model_at(&model_ref, &model) {
-            Ok(()) => {
-                let _ = scryer_core::save_baseline_at(&model_ref, &model);
-                let mut msg = format!(
-                    "Set {} descendant node(s) and {} edge(s) under '{}'",
-                    node_count, edge_count, req.node_id
-                );
-                if !skipped_edges.is_empty() {
-                    msg.push_str(&format!(
-                        "\n\n⚠️ SKIPPED {} DUPLICATE EDGE(S): {} — these edge IDs already exist in the model.",
-                        skipped_edges.len(),
-                        skipped_edges.join(", ")
-                    ));
-                }
-                if !missing_externals.is_empty() {
-                    msg.push_str(&format!(
-                        "\n\n⚠️ MISSING EDGES: The parent node '{}' has edges to external nodes, \
-                        but none of the new children have edges connecting to: {}. \
-                        C4 requires edges at every abstraction level — use add_edges to connect \
-                        the appropriate children to these nodes.",
-                        req.node_id,
-                        missing_externals.join(", ")
-                    ));
-                }
-                let mention_warnings = check_mention_edges(&model);
-        let cross_container_warnings = check_cross_container_edges(&model);
-                if !mention_warnings.is_empty() {
-                    msg.push_str(&format!(
-                        "\n\n⚠️ MENTIONS WITHOUT EDGES: Descriptions reference nodes with @[Name] \
-                        but no edge exists between them. Add the missing edges:\n- {}",
-                        mention_warnings.join("\n- ")
-                    ));
-                }
-                if !cross_container_warnings.is_empty() {
-                    msg.push_str(&format!(
-                        "\n\n⚠️ CROSS-CONTAINER COMPONENT EDGES: Components are internal to their container. \
-                        These edges reach inside another container's boundary. \
-                        Re-target them to the container node instead:\n- {}",
-                        cross_container_warnings.join("\n- ")
-                    ));
-                }
-                Ok(CallToolResult::success(vec![Content::text(msg)]))
-            }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
-        }
-    }
-
-    #[tool(description = "Patch one or more existing nodes. This is a partial update — only include fields you want to change. Omitted fields are left unchanged. Do NOT use set_node or set_model just to change a few properties.\n\nCommon uses:\n- Change status: {\"node_id\": \"node-5\", \"status\": \"implemented\", \"reason\": \"Built handler and tests\"}\n- Update description: {\"node_id\": \"node-3\", \"description\": \"New description\"}\n- Set source map: {\"node_id\": \"node-5\", \"source\": [{\"pattern\": \"src/handler.ts\", \"line\": 10, \"endLine\": 30}]}\n- Multiple nodes at once: pass an array of patches to the nodes parameter")]
-    fn update_nodes(
-        &self,
-        Parameters(req): Parameters<UpdateNodeRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        let model_ref = match self.resolve_model(req.model) {
-            Ok(r) => r,
-            Err(e) => return Ok(e),
-        };
-        let mut model = match scryer_core::read_model_at(&model_ref) {
-            Ok(m) => m,
-            Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model '{}': {}",
-                    model_ref, e
-                ))]));
-            }
-        };
-
-        let mut updated = Vec::new();
-        for item in req.nodes {
-            let node_idx = match model.nodes.iter().position(|n| n.id == item.node_id) {
-                Some(i) => i,
-                None => {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Node '{}' not found",
-                        item.node_id
-                    ))]));
-                }
-            };
-
-            // Pre-validate verified gate before taking mutable borrow
-            if let Some(ref s) = item.status {
-                let new_status = parse_status(s);
-                if new_status == Some(Status::Verified) && model.nodes[node_idx].data.kind != C4Kind::Person {
-                    let parent_id = model.nodes[node_idx].parent_id.clone();
-                    let own_contract = item.contract.as_ref().unwrap_or(&model.nodes[node_idx].data.contract).clone();
-                    let unmet = check_verified_gate(&model.nodes, &model.groups, &item.node_id, &parent_id, &own_contract);
-                    if !unmet.is_empty() {
-                        return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "Cannot set '{}' to verified. These expect contract items are not yet passed:\n{}\n\nMark each as passed (passed: true) or set status to 'implemented' instead.",
-                            item.node_id, unmet.join("\n")
-                        ))]));
-                    }
-                }
-            }
-
-            let node = &mut model.nodes[node_idx];
-
-            if let Some(name) = item.name {
-                if node.data.kind == C4Kind::Operation {
-                    if let Err(e) = validate_identifier(
-                        &name,
-                        &format!("{:?} '{}'", node.data.kind, item.node_id),
-                    ) {
-                        return Ok(CallToolResult::error(vec![Content::text(e)]));
-                    }
-                }
-                if node.data.kind == C4Kind::Model {
-                    if let Err(e) = validate_type_name(
-                        &name,
-                        &format!("{:?} '{}'", node.data.kind, item.node_id),
-                    ) {
-                        return Ok(CallToolResult::error(vec![Content::text(e)]));
-                    }
-                }
-                node.data.name = name;
-            }
-            if let Some(desc) = item.description {
-                if desc.len() > 200
-                    && !matches!(
-                        node.data.kind,
-                        C4Kind::Operation | C4Kind::Process | C4Kind::Model
-                    )
-                {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Description for '{}' must be 200 characters or less",
-                        item.node_id
-                    ))]));
-                }
-                node.data.description = desc;
-            }
-            if let Some(tech) = item.technology {
-                if tech.len() > 28 {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Technology '{}' on '{}' exceeds 28 character limit",
-                        tech, item.node_id
-                    ))]));
-                }
-                node.data.technology = Some(tech);
-            }
-            if let Some(ext) = item.external {
-                node.data.external = Some(ext);
-            }
-            if let Some(s) = item.shape {
-                node.data.shape = parse_shape(&s);
-            }
-            if let Some(sources) = item.sources {
-                node.data.sources = sources;
-            }
-            if let Some(ref s) = item.status {
-                if node.data.kind != C4Kind::Person {
-                    let new_status = parse_status(s);
-                    // Require reason when changing status
-                    let reason = item.reason.as_deref().unwrap_or("").trim();
-                    if reason.is_empty() {
-                        return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "Node '{}': `reason` is required when changing status. Explain why you're setting status to '{}'.",
-                            item.node_id, s
-                        ))]));
-                    }
-                    // Verified gate already validated above (before mutable borrow)
-                    node.data.status = new_status;
-                    node.data.status_reason = Some(reason.to_string());
-                }
-            }
-            if let Some(g) = item.contract {
-                node.data.contract = g;
-            }
-            if let Some(d) = item.notes {
-                node.data.notes = d;
-            }
-            if let Some(p) = item.properties {
-                if let Err(e) = validate_property_labels(&p, &format!("node '{}'", item.node_id)) {
-                    return Ok(CallToolResult::error(vec![Content::text(e)]));
-                }
-                node.data.properties = p;
-            }
-            if let Some(locations) = item.source {
-                if locations.is_empty() {
-                    model.source_map.remove(&item.node_id);
-                } else {
-                    model.source_map.insert(item.node_id.clone(), locations);
-                }
-            }
-            updated.push(item.node_id);
-        }
-
-        match scryer_core::write_model_at(&model_ref, &model) {
-            Ok(()) => {
-                let _ = scryer_core::save_baseline_at(&model_ref, &model);
-                Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Updated {} node(s)",
-                    updated.len()
-                ))]))
-            }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
-        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     #[tool(
-        description = "Delete one or more nodes and all their descendants. Connected edges are also removed."
+        description = "Delete one or more nodes because the CODE they model should go away — a forward modeling intent. Each node's descendants, connected links, and source-map entries are also removed. This stages real removal work in the plan: it shows up as pending until you delete the code and call `mark_implemented`. If instead the code is fine and you just shouldn't be MODELING it (an entry-point `main`, boilerplate), use `descope` — that's a code-untouched, model-only correction."
     )]
     fn delete_nodes(
         &self,
         Parameters(req): Parameters<DeleteNodeRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let model_ref = match self.resolve_model(req.model) {
-            Ok(r) => r,
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_model_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model '{}': {}",
+                    "Failed to read model at {}: {}",
                     model_ref, e
                 ))]));
             }
         };
 
-        let mut to_delete = HashSet::new();
-        for nid in &req.node_ids {
-            to_delete.insert(nid.clone());
-        }
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for n in &model.nodes {
-                if let Some(pid) = &n.parent_id {
-                    if to_delete.contains(pid) && !to_delete.contains(&n.id) {
-                        to_delete.insert(n.id.clone());
-                        changed = true;
-                    }
+        // Expand to include all descendants
+        let mut to_remove: HashSet<String> = req.node_ids.iter().cloned().collect();
+        let mut frontier: Vec<String> = req.node_ids.clone();
+        while let Some(id) = frontier.pop() {
+            for child in model.nodes.iter().filter(|n| n.parent_id.as_deref() == Some(&id)) {
+                if to_remove.insert(child.id.clone()) {
+                    frontier.push(child.id.clone());
                 }
             }
         }
 
         let before = model.nodes.len();
-        model.nodes.retain(|n| !to_delete.contains(&n.id));
+        prune_code_map(&mut model, &to_remove);
+        model.nodes.retain(|n| !to_remove.contains(&n.id));
         model
-            .edges
-            .retain(|e| !to_delete.contains(&e.source) && !to_delete.contains(&e.target));
-        let removed = before - model.nodes.len();
+            .links
+            .retain(|l| !to_remove.contains(&l.src) && !to_remove.contains(&l.dst));
+        // Prune dead group memberships
+        for g in model.groups.iter_mut() {
+            g.member_ids.retain(|m| !to_remove.contains(m));
+        }
 
-        match scryer_core::write_model_at(&model_ref, &model) {
-            Ok(()) => {
-                let _ = scryer_core::save_baseline_at(&model_ref, &model);
-                Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Deleted {} node(s)",
-                    removed
-                ))]))
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Deleted {} node(s) (including descendants)",
+            before - model.nodes.len()
+        ))]))
+    }
+
+    #[tool(
+        description = "Descope nodes: remove them from the MODEL because they shouldn't be modeled — the CODE is fine and stays untouched (e.g. an entry-point `main`, a trivial wrapper, generated boilerplate). Each target's own responsibilities relocate up to its parent component, keeping their source anchors, so the parent still covers that code and no darkness appears; the node and its descendants are then removed. This is a model-only correction — it writes BOTH the plan and the committed model at once, so there is NO code work to do and it never shows up in the pending work queue. Reach for this when the model over-claims relative to code reality. To instead remove the CODE itself, use `delete_nodes`, which stages real removal work."
+    )]
+    fn descope(
+        &self,
+        Parameters(req): Parameters<DescopeRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
+
+        let mut planned = match scryer_core::read_planned_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read plan at {}: {}",
+                    model_ref, e
+                ))]));
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
+        };
+        let mut committed = match scryer_core::read_model_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read model at {}: {}",
+                    model_ref, e
+                ))]));
+            }
+        };
+
+        // Every target must exist in at least one layer.
+        for id in &req.node_ids {
+            let present = planned.nodes.iter().any(|n| &n.id == id)
+                || committed.nodes.iter().any(|n| &n.id == id);
+            if !present {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Node '{}' not found",
+                    id
+                ))]));
+            }
+        }
+
+        // Fold the targets out of both layers identically — descope is true in both.
+        // Report whichever layer actually changed: when the plan was already folded
+        // (e.g. the canvas removed them first), committed is where the work lands, so
+        // take the max rather than letting a clean plan report a misleading 0.
+        let (rp, remp, dp) = fold_out_layer(&mut planned, &req.node_ids);
+        let (rc, remc, dc) = fold_out_layer(&mut committed, &req.node_ids);
+        let (relocated, removed, dropped) = (rp.max(rc), remp.max(remc), dp.max(dc));
+
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &planned) {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
+        }
+        if let Err(e) = scryer_core::write_model_at(&model_ref, &committed) {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
+        }
+        let _ = scryer_core::save_baseline_at(&model_ref, &committed);
+
+        let mut msg = format!(
+            "Descoped {} node(s) from the model — code untouched. Relocated {} responsibilit{} to parent component(s).",
+            removed,
+            relocated,
+            if relocated == 1 { "y" } else { "ies" }
+        );
+        if dropped > 0 {
+            msg.push_str(&format!(
+                " Note: {} responsibilit{} on removed descendants were dropped.",
+                dropped,
+                if dropped == 1 { "y" } else { "ies" }
+            ));
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
+    }
+
+    #[tool(
+        description = "Move responsibilities between nodes. A responsibility keeps its id and is reparented onto the destination node; the plan diff records the move (shown as `moved`). Vagrant responsibilities cannot be moved."
+    )]
+    fn move_responsibilities(
+        &self,
+        Parameters(req): Parameters<MoveResponsibilitiesRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_planned_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read model at {}: {}",
+                    model_ref, e
+                ))]));
+            }
+        };
+
+        let mut moved = 0usize;
+        // (destination node id, row text) for the timeline `move` events below.
+        let mut reloc_rows: Vec<(String, String)> = Vec::new();
+        for mv in &req.moves {
+            let resp = {
+                let from_node = model.nodes.iter().find(|n| n.id == mv.from_node_id);
+                let Some(from_node) = from_node else {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Source node '{}' not found", mv.from_node_id
+                    ))]));
+                };
+                let Some(r) = from_node.responsibilities.iter().find(|r| r.id == mv.responsibility_id) else {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Responsibility '{}' not found on node '{}'", mv.responsibility_id, mv.from_node_id
+                    ))]));
+                };
+                if r.vagrant == Some(true) {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Vagrant responsibility '{}' cannot be moved", mv.responsibility_id
+                    ))]));
+                }
+                r.clone()
+            };
+
+            if !model.nodes.iter().any(|n| n.id == mv.to_node_id) {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Destination node '{}' not found", mv.to_node_id
+                ))]));
+            }
+
+            // Plain reparent: keep the same id so the plan diff matches the
+            // claim by id and renders the move as `moved` (R). No ghost/locked
+            // copy at the source — the diff is the record of the relocation.
+            let statement = resp.statement.clone();
+            let from_name = model
+                .nodes
+                .iter()
+                .find(|n| n.id == mv.from_node_id)
+                .map(|n| n.name.clone())
+                .unwrap_or_else(|| mv.from_node_id.clone());
+            let from = model.nodes.iter_mut().find(|n| n.id == mv.from_node_id).unwrap();
+            from.responsibilities.retain(|r| r.id != mv.responsibility_id);
+            let to = model.nodes.iter_mut().find(|n| n.id == mv.to_node_id).unwrap();
+            to.responsibilities.push(resp);
+            reloc_rows.push((
+                mv.to_node_id.clone(),
+                format!("relocated “{}” from {}", statement, from_name),
+            ));
+            moved += 1;
+        }
+
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
+        }
+
+        // Timeline: a `move` event on each destination node.
+        let now = scryer_core::drift::now_secs();
+        for (to_node_id, text) in reloc_rows {
+            record_event(
+                &model_ref,
+                HistoryEvent::new(now, EventKind::Move, &to_node_id, "reorganize")
+                    .with_rows(vec![EventRow::new("→", text)]),
+            );
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Moved {} responsibility(ies)", moved
+        ))]))
+    }
+}
+
+// Helper kept here because `Kind` is used in subtree handling below.
+#[allow(dead_code)]
+fn _kind_check(_k: Kind) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use scryer_core::{Appearance, ModelRef, RenderState, Responsibility};
+
+    fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
+        Node {
+            id: id.into(),
+            kind,
+            name: name.into(),
+            vagrant: None,
+            stale: None,
+            parent_id: parent.map(|p| p.into()),
+            external: None,
+            technology: None,
+            description: None,
+            responsibilities: Vec::new(),
+            properties: Vec::new(),
+            icon: None,
+            visual: None,
+            appearance: None,
+            notes: None,
         }
     }
 
+    fn resp(id: &str) -> Responsibility {
+        Responsibility {
+            id: id.into(),
+            statement: format!("does {id}"),
+            vagrant: None,
+            stale: None,
+            directives: Vec::new(),
+            last_touched_at: None,
+        }
+    }
+
+    /// Descope: a symbol that shouldn't be modeled is removed from BOTH layers, its
+    /// responsibility relocates to the parent with its source anchor intact (so the
+    /// file stays lit and no darkness appears), and the code is never consulted.
+    #[test]
+    fn descope_relocates_responsibility_and_writes_both_layers() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::Component, "Harness", None));
+        let mut main = node("node-2", Kind::Symbol, "main", Some("node-1"));
+        main.responsibilities = vec![resp("r-main")];
+        m.nodes.push(main);
+        m.source_map.insert(
+            "r-main".into(),
+            vec![scryer_core::SourceLocation {
+                pattern: "examples/bench.rs".into(),
+                symbol: Some("main".into()),
+                line: None,
+                end_line: None,
+                command: None,
+            }],
+        );
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        scryer_core::write_planned_at(&model_ref, &m).unwrap(); // plan mirrors committed
+
+        let server = ScryerServer::new();
+        server
+            .descope(Parameters(DescopeRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                node_ids: vec!["node-2".into()],
+            }))
+            .unwrap();
+
+        // Both layers must show the same model-only correction.
+        for layer in [
+            scryer_core::read_model_at(&model_ref).unwrap(),
+            scryer_core::read_planned_at(&model_ref).unwrap(),
+        ] {
+            assert!(layer.nodes.iter().all(|n| n.id != "node-2"), "main removed");
+            let parent = layer.nodes.iter().find(|n| n.id == "node-1").unwrap();
+            assert!(
+                parent.responsibilities.iter().any(|r| r.id == "r-main"),
+                "responsibility relocated to parent"
+            );
+            assert_eq!(
+                layer.source_map.get("r-main").unwrap()[0].pattern,
+                "examples/bench.rs",
+                "source anchor preserved — file stays lit"
+            );
+        }
+    }
+
+    /// mark_implemented folds a planned DELETION: a node removed from the plan (its
+    /// code now gone) is dropped from the committed model.
+    #[test]
+    fn mark_implemented_folds_a_planned_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::Component, "Root", None));
+        m.nodes.push(node("node-2", Kind::Symbol, "gone", Some("node-1")));
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        // Plan no longer has node-2 (the agent deleted it, then removed the code).
+        let mut planned = m.clone();
+        planned.nodes.retain(|n| n.id != "node-2");
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        let r = server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                node_id: "node-2".into(),
+                responsibility_ids: None,
+            }))
+            .unwrap();
+        assert!(serde_json::to_string(&r.content).unwrap().contains("removal"));
+
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        assert!(
+            committed.nodes.iter().all(|n| n.id != "node-2"),
+            "deletion folded into the committed model"
+        );
+    }
+
+    /// Whole-node: marking implemented folds the node's entire planned state
+    /// (responsibilities + appearance) into the committed model, and the plan
+    /// for that node clears.
+    #[test]
+    fn mark_implemented_commits_whole_node_from_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        // Committed model: the node exists but is empty.
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::Component, "ModelTree", None));
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+
+        // Plan (draft): the node gains responsibilities and an appearance.
+        let mut planned = m.clone();
+        planned.nodes[0].responsibilities =
+            vec![resp("r-a"), resp("r-b")];
+        planned.nodes[0].appearance = Some(Appearance {
+            status: Some(RenderState::Proposed),
+            dist_path: None,
+            built_at: None,
+            source_hash: None,
+        });
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                node_id: "node-1".into(),
+                responsibility_ids: None,
+            }))
+            .unwrap();
+
+        let m = scryer_core::read_model_at(&model_ref).unwrap();
+        let n = &m.nodes[0];
+        assert_eq!(n.responsibilities.len(), 2, "responsibilities committed");
+        assert!(n.appearance.is_some(), "appearance committed");
+        assert!(
+            scryer_core::plan_diff_at(&model_ref).unwrap().is_empty(),
+            "plan clears after commit"
+        );
+
+        // The fold is recorded as an `impl` event listing both folded claims.
+        let log = scryer_core::history::read_history(&model_ref);
+        assert_eq!(log.len(), 1, "one impl event");
+        assert_eq!(log[0].kind, scryer_core::history::EventKind::Impl);
+        assert_eq!(log[0].node_id, "node-1");
+        assert_eq!(log[0].rows.len(), 2, "both newly-folded claims listed");
+    }
+
+    /// Scoped: marking a single newly-planned responsibility folds just it onto
+    /// its (already-committed) host node, leaving the rest of the plan untouched.
+    #[test]
+    fn mark_implemented_commits_named_responsibility_from_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        // Committed model: node-1 already owns r-a.
+        let mut m = ScryModel::new();
+        let mut c = node("node-1", Kind::Component, "Billing", None);
+        c.responsibilities = vec![resp("r-a")];
+        m.nodes.push(c);
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+
+        // Plan: a new r-b is proposed on the same node; r-c is proposed too but
+        // not named in the call, so it must stay in the plan.
+        let mut planned = m.clone();
+        planned.nodes[0]
+            .responsibilities
+            .push(resp("r-b"));
+        planned.nodes[0]
+            .responsibilities
+            .push(resp("r-c"));
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                node_id: "node-1".into(),
+                responsibility_ids: Some(vec!["r-b".into()]),
+            }))
+            .unwrap();
+
+        let m = scryer_core::read_model_at(&model_ref).unwrap();
+        let n = &m.nodes[0];
+        assert!(n.responsibilities.iter().any(|r| r.id == "r-b"), "r-b committed");
+        assert!(!n.responsibilities.iter().any(|r| r.id == "r-c"), "r-c left uncommitted");
+
+        // Only r-c remains as a pending plan entry (Added).
+        let plan = scryer_core::plan_diff_at(&model_ref).unwrap();
+        assert_eq!(plan.changes.len(), 1);
+        assert_eq!(plan.changes[0].id, "r-c");
+    }
+
+    /// move_nodes re-parents with kind/cycle validation and pulls the node out
+    /// of its old-level group.
+    #[test]
+    fn move_nodes_validates_and_leaves_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, "Sys", None));
+        m.nodes.push(node("ca", Kind::Container, "A", Some("sys")));
+        m.nodes.push(node("cb", Kind::Container, "B", Some("sys")));
+        m.nodes.push(node("comp", Kind::Component, "Comp", Some("ca")));
+        m.nodes.push(node("sym", Kind::Symbol, "sym", Some("comp")));
+        m.groups.push(scryer_core::Group {
+            id: "g1".into(),
+            name: "Edge".into(),
+            description: None,
+            member_ids: vec!["comp".into()],
+            parent_group_id: None,
+            parent_node_id: Some("ca".into()),
+            responsibilities: Vec::new(),
+            icon: None,
+        });
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        let server = ScryerServer::new();
+        let project = dir.path().to_string_lossy().to_string();
+
+        // Valid: component A→B. The subtree (sym) follows; the group lets go.
+        let r = server
+            .move_nodes(Parameters(MoveNodesRequest {
+                project: Some(project.clone()),
+                moves: vec![NodeMove { node_id: "comp".into(), new_parent_id: Some("cb".into()) }],
+            }))
+            .unwrap();
+        assert!(!r.is_error.unwrap_or(false), "{r:?}");
+        // move_nodes authors into the plan; assert on the planned (draft) model.
+        let m = scryer_core::read_planned_at(&model_ref).unwrap();
+        let comp = m.nodes.iter().find(|n| n.id == "comp").unwrap();
+        assert_eq!(comp.parent_id.as_deref(), Some("cb"));
+        let sym = m.nodes.iter().find(|n| n.id == "sym").unwrap();
+        assert_eq!(sym.parent_id.as_deref(), Some("comp"), "subtree intact");
+        assert!(m.groups[0].member_ids.is_empty(), "left the old-level group");
+
+        // Invalid kind pair: component under system.
+        let r = server
+            .move_nodes(Parameters(MoveNodesRequest {
+                project: Some(project.clone()),
+                moves: vec![NodeMove { node_id: "comp".into(), new_parent_id: Some("sys".into()) }],
+            }))
+            .unwrap();
+        assert!(r.is_error.unwrap_or(false), "kind pair rejected");
+
+        // Cycle: container under a symbol inside its own subtree.
+        let r = server
+            .move_nodes(Parameters(MoveNodesRequest {
+                project: Some(project),
+                moves: vec![NodeMove { node_id: "cb".into(), new_parent_id: Some("sym".into()) }],
+            }))
+            .unwrap();
+        assert!(r.is_error.unwrap_or(false), "cycle rejected");
+    }
 }

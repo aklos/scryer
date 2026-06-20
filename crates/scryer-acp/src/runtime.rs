@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::client::ScryerClient;
-use crate::events::AgentEvent;
+use crate::events::{AgentEvent, Usage};
 use crate::AgentKind;
 
 /// How the agent should be launched.
@@ -28,16 +28,18 @@ enum RuntimeCommand {
         mode: LaunchMode,
         cwd: String,
         model_name: String,
+        effort: String,
         mcp_binary: String,
         prompt: String,
+        allowed_tools: Vec<String>,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
         result_tx: oneshot::Sender<Result<String, String>>,
     },
     Cancel {
         result_tx: oneshot::Sender<Result<(), String>>,
     },
-    /// Internal: session finished naturally.
-    Done,
+    /// Internal: the session with this id finished naturally.
+    Done { id: u64 },
 }
 
 /// Manages agent sync sessions.
@@ -70,8 +72,10 @@ impl AcpRuntime {
         mode: LaunchMode,
         cwd: String,
         model_name: String,
+        effort: String,
         mcp_binary: String,
         prompt: String,
+        allowed_tools: Vec<String>,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
     ) -> Result<String, String> {
         let (result_tx, result_rx) = oneshot::channel();
@@ -81,8 +85,10 @@ impl AcpRuntime {
                 mode,
                 cwd,
                 model_name,
+                effort,
                 mcp_binary,
                 prompt,
+                allowed_tools,
                 event_tx,
                 result_tx,
             })
@@ -90,7 +96,8 @@ impl AcpRuntime {
         result_rx.await.map_err(|_| "Runtime dropped".to_string())?
     }
 
-    /// Cancel the active session.
+    /// Cancel every active session (used for the user's single "stop" / a build
+    /// of many parallel container sessions / orphan cleanup on dev refresh).
     pub async fn cancel(&self) -> Result<(), String> {
         let (result_tx, result_rx) = oneshot::channel();
         self.cmd_tx
@@ -112,8 +119,13 @@ fn runtime_thread(
     let local = tokio::task::LocalSet::new();
 
     local.block_on(&rt, async move {
-        // Cancel sender for the active session (works for both modes)
-        let mut cancel_tx: Option<oneshot::Sender<()>> = None;
+        // Cancel sender per in-flight session, keyed by a monotonic id. Many
+        // sessions can run at once — they multiplex on this one LocalSet (each
+        // is mostly waiting on its agent subprocess), so a parallel Wave 2 just
+        // means several entries here. The orchestrator bounds how many start.
+        let mut sessions: std::collections::HashMap<u64, oneshot::Sender<()>> =
+            std::collections::HashMap::new();
+        let mut next_id: u64 = 0;
 
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
@@ -122,18 +134,17 @@ fn runtime_thread(
                     mode,
                     cwd,
                     model_name,
+                    effort,
                     mcp_binary,
                     prompt,
+                    allowed_tools,
                     event_tx,
                     result_tx,
                 } => {
-                    if cancel_tx.is_some() {
-                        let _ = result_tx.send(Err(
-                            "A sync session is already running.".into(),
-                        ));
-                        continue;
-                    }
-
+                    let id = next_id;
+                    next_id += 1;
+                    // External session id stays timestamp-based (unchanged for
+                    // callers); the numeric `id` only routes Done/Cancel here.
                     let session_id = format!(
                         "sync-{}",
                         std::time::SystemTime::now()
@@ -142,20 +153,21 @@ fn runtime_thread(
                             .as_millis()
                     );
 
+                    let tool_refs: Vec<&str> = allowed_tools.iter().map(|s| s.as_str()).collect();
                     let result = match mode {
                         LaunchMode::Cli { kind } => start_cli_session(
-                            &agent_binary, &kind, &cwd, &model_name, &mcp_binary,
-                            &prompt, event_tx, done_tx.clone(),
+                            &agent_binary, &kind, &cwd, &model_name, &effort, &mcp_binary,
+                            &prompt, &tool_refs, id, event_tx, done_tx.clone(),
                         ),
                         LaunchMode::Acp => start_acp_session(
                             &agent_binary, &cwd, &model_name, &mcp_binary,
-                            &prompt, event_tx, done_tx.clone(),
+                            &prompt, id, event_tx, done_tx.clone(),
                         ).await,
                     };
 
                     match result {
                         Ok(tx) => {
-                            cancel_tx = Some(tx);
+                            sessions.insert(id, tx);
                             let _ = result_tx.send(Ok(session_id));
                         }
                         Err(e) => {
@@ -164,15 +176,19 @@ fn runtime_thread(
                     }
                 }
                 RuntimeCommand::Cancel { result_tx } => {
-                    if let Some(tx) = cancel_tx.take() {
-                        let _ = tx.send(());
-                        let _ = result_tx.send(Ok(()));
-                    } else {
+                    if sessions.is_empty() {
                         let _ = result_tx.send(Err("No active session".into()));
+                    } else {
+                        // Cancel every in-flight session — a build is many
+                        // sessions and the user's "stop" means stop all of them.
+                        for (_, tx) in sessions.drain() {
+                            let _ = tx.send(());
+                        }
+                        let _ = result_tx.send(Ok(()));
                     }
                 }
-                RuntimeCommand::Done => {
-                    cancel_tx = None;
+                RuntimeCommand::Done { id } => {
+                    sessions.remove(&id);
                 }
             }
         }
@@ -187,14 +203,21 @@ fn start_cli_session(
     agent_binary: &str,
     kind: &AgentKind,
     cwd: &str,
-    _model_name: &str,
+    model_name: &str,
+    effort: &str,
     mcp_binary: &str,
     prompt: &str,
+    allowed_tools: &[&str],
+    id: u64,
     event_tx: mpsc::UnboundedSender<AgentEvent>,
     done_tx: mpsc::UnboundedSender<RuntimeCommand>,
 ) -> Result<oneshot::Sender<()>, String> {
     let mut cmd = tokio::process::Command::new(agent_binary);
 
+    // The prompt goes over STDIN for the known CLIs, never argv: an
+    // evidence-embedded build prompt easily exceeds Linux's ~128 KB per-argument
+    // cap (E2BIG), and both `claude -p` and `codex exec -` read stdin.
+    let mut prompt_via_stdin = true;
     match kind {
         AgentKind::ClaudeCode => {
             let mcp_config = serde_json::json!({
@@ -209,11 +232,15 @@ fn start_cli_session(
             cmd.arg("-p")
                 .arg("--output-format").arg("stream-json")
                 .arg("--verbose")
-                .arg("--effort").arg("medium")
-                .arg("--mcp-config").arg(mcp_config.to_string())
-                .arg("--allowed-tools").arg("mcp__scryer__*")
-                .arg("--no-session-persistence")
-                .arg(&prompt);
+                .arg("--effort").arg(effort);
+            if !model_name.is_empty() {
+                cmd.arg("--model").arg(model_name);
+            }
+            cmd.arg("--mcp-config").arg(mcp_config.to_string());
+            for pat in allowed_tools {
+                cmd.arg("--allowed-tools").arg(pat);
+            }
+            cmd.arg("--no-session-persistence");
         }
         AgentKind::Codex => {
             // Codex uses `codex exec` with MCP pre-configured via .codex/config.toml
@@ -221,17 +248,27 @@ fn start_cli_session(
                 .arg("--full-auto")
                 .arg("--json")
                 .arg("--ephemeral")
-                .arg("-c").arg("model_reasoning_effort=\"medium\"")
-                .arg(&prompt);
+                .arg("-c").arg(format!("model_reasoning_effort=\"{}\"", effort));
+            if !model_name.is_empty() {
+                cmd.arg("-c").arg(format!("model=\"{}\"", model_name));
+            }
+            // `-` = read the prompt from stdin.
+            cmd.arg("-");
         }
         AgentKind::Other => {
-            // Best-effort: pass prompt as last arg
+            // Best-effort: pass prompt as last arg (unknown CLIs may not read
+            // stdin — large prompts are unsupported here).
             cmd.arg(&prompt);
+            prompt_via_stdin = false;
         }
     }
 
     cmd.current_dir(cwd)
-        .stdin(std::process::Stdio::null())
+        .stdin(if prompt_via_stdin {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        })
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
@@ -253,14 +290,37 @@ fn start_cli_session(
     let mut child = cmd.spawn()
         .map_err(|e| format!("Failed to spawn {agent_binary}: {e}"))?;
 
+    if prompt_via_stdin {
+        if let Some(mut stdin) = child.stdin.take() {
+            let prompt_bytes = prompt.as_bytes().to_vec();
+            tokio::task::spawn_local(async move {
+                use tokio::io::AsyncWriteExt;
+                let _ = stdin.write_all(&prompt_bytes).await;
+                let _ = stdin.shutdown().await;
+                // Dropping stdin closes the pipe — the CLI sees EOF and starts.
+            });
+        }
+    }
+
     let child_pid = child.id();
     let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+
+    // Tee the raw agent stream to disk. Sessions run with
+    // `--no-session-persistence`, so without this nothing records what the agent
+    // actually did — every tool call, every fill_container argument, and
+    // every validator rejection is in this stdout stream. One file per session.
+    let log_dir = std::path::Path::new(cwd).join(".scryer").join("build-logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let stdout_log_path = log_dir.join(format!("session-{id}.jsonl"));
+    let stderr_log_path = log_dir.join(format!("session-{id}.err.log"));
 
     tokio::task::spawn_local(async move {
         // Stream stdout and stderr to detect activity and tool call events.
         // Claude Code writes JSON events to stdout; some agents use stderr.
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
+        let mut stdout_log = std::fs::File::create(&stdout_log_path).ok();
+        let mut stderr_log = std::fs::File::create(&stderr_log_path).ok();
 
         let event_tx_stdout = event_tx.clone();
         let event_tx_stderr = event_tx.clone();
@@ -268,10 +328,17 @@ fn start_cli_session(
         let monitor = async {
             let stdout_task = async {
                 if let Some(stdout) = stdout {
+                    use std::io::Write as _;
                     use tokio::io::{AsyncBufReadExt, BufReader};
                     let reader = BufReader::new(stdout);
                     let mut lines = reader.lines();
                     while let Ok(Some(line)) = lines.next_line().await {
+                        if let Some(f) = stdout_log.as_mut() {
+                            let _ = writeln!(f, "{line}");
+                        }
+                        if let Some(usage) = extract_usage(&line) {
+                            let _ = event_tx_stdout.send(AgentEvent::Usage { usage });
+                        }
                         if let Some(msg) = summarize_event(&line) {
                             let _ = event_tx_stdout.send(AgentEvent::Message { text: msg });
                         }
@@ -283,19 +350,33 @@ fn start_cli_session(
             let last_stderr2 = last_stderr.clone();
             let stderr_task = async move {
                 if let Some(stderr) = stderr {
+                    use std::io::Write as _;
                     use tokio::io::{AsyncBufReadExt, BufReader};
                     let reader = BufReader::new(stderr);
                     let mut lines = reader.lines();
                     while let Ok(Some(line)) = lines.next_line().await {
+                        if let Some(f) = stderr_log.as_mut() {
+                            let _ = writeln!(f, "{line}");
+                        }
                         *last_stderr2.lock().unwrap() = line.clone();
                         let _ = event_tx_stderr.send(AgentEvent::Message { text: line });
                     }
                 }
             };
 
-            tokio::join!(stdout_task, stderr_task);
-            // streams closed — process has exited or is about to
-            let status = child.wait().await;
+            // Drive completion off the process exit, not stream EOF. A
+            // grandchild (notably the MCP server the agent spawns) can inherit
+            // our stdout/stderr pipe and keep it open after the agent itself
+            // exits — so waiting for the streams to close can hang forever.
+            // Read the streams concurrently, but stop as soon as the child exits.
+            let streams = async { tokio::join!(stdout_task, stderr_task); };
+            tokio::pin!(streams);
+            let waiter = child.wait();
+            tokio::pin!(waiter);
+            let status = tokio::select! {
+                s = &mut waiter => s,
+                _ = &mut streams => (&mut waiter).await,
+            };
             (status, last_stderr)
         };
 
@@ -333,10 +414,82 @@ fn start_cli_session(
                 let _ = event_tx.send(AgentEvent::Cancelled);
             }
         }
-        let _ = done_tx.send(RuntimeCommand::Done);
+        let _ = done_tx.send(RuntimeCommand::Done { id });
     });
 
     Ok(cancel_tx)
+}
+
+/// Drop the `mcp__<server>__` prefix from MCP tool names for display.
+fn short_tool(name: &str) -> &str {
+    name.rsplit("__").next().unwrap_or(name)
+}
+
+/// Last two path segments, e.g. "/home/alex/p/src/App.tsx" -> "src/App.tsx".
+fn short_path(p: &str) -> String {
+    let parts: Vec<&str> = p.trim_end_matches('/').split('/').filter(|s| !s.is_empty()).collect();
+    match parts.as_slice() {
+        [.., a, b] => format!("{}/{}", a, b),
+        _ => p.to_string(),
+    }
+}
+
+/// Pull a short, human-meaningful argument out of a tool_use input so the
+/// activity readout shows *what* the tool is acting on (which file, which node).
+fn tool_detail(input: &serde_json::Value) -> Option<String> {
+    let obj = input.as_object()?;
+    if let Some(p) = obj.get("file_path").or_else(|| obj.get("path")).and_then(|v| v.as_str()) {
+        if !p.is_empty() {
+            return Some(short_path(p));
+        }
+    }
+    for key in ["pattern", "node_id", "nodeId", "query", "command", "url"] {
+        if let Some(v) = obj.get(key).and_then(|v| v.as_str()) {
+            if !v.is_empty() {
+                let v = if v.chars().count() > 60 {
+                    format!("{}…", v.chars().take(60).collect::<String>())
+                } else {
+                    v.to_string()
+                };
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+/// Pull end-of-turn token usage out of one agent stream-json line. Returns
+/// `Some` only for a line that actually reports a turn total — Claude Code's
+/// `result` event (top-level `usage` + `total_cost_usd`) or Codex's token-count
+/// event (nested under `info.total_token_usage`). Per-chunk `assistant` events
+/// carry their partial usage under `message.usage`, which this deliberately does
+/// NOT match, so we report the final total once, not every streamed delta.
+fn extract_usage(line: &str) -> Option<Usage> {
+    let val: serde_json::Value = serde_json::from_str(line).ok()?;
+    let usage_obj = val
+        .pointer("/usage")
+        .or_else(|| val.pointer("/token_usage"))
+        .or_else(|| val.pointer("/info/total_token_usage"))
+        .or_else(|| val.pointer("/msg/info/total_token_usage"))?;
+
+    let n = |key: &str| usage_obj.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+    Some(Usage {
+        input_tokens: n("input_tokens"),
+        output_tokens: n("output_tokens"),
+        cache_creation_input_tokens: n("cache_creation_input_tokens"),
+        // Claude calls the cache-hit bucket `cache_read_input_tokens`; Codex
+        // calls it `cached_input_tokens`. Accept whichever is present.
+        cache_read_input_tokens: if usage_obj.get("cache_read_input_tokens").is_some() {
+            n("cache_read_input_tokens")
+        } else {
+            n("cached_input_tokens")
+        },
+        // Cost is Claude-only; Codex omits it (left at 0.0).
+        cost_usd: val
+            .pointer("/total_cost_usd")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0),
+    })
 }
 
 /// Extract a readable one-liner from a Claude Code stream-json event.
@@ -349,8 +502,11 @@ fn summarize_event(line: &str) -> Option<String> {
             let content = val.pointer("/message/content")?.as_array()?;
             for block in content {
                 if block.get("type")?.as_str()? == "tool_use" {
-                    let name = block.get("name")?.as_str()?;
-                    return Some(format!("-> {}", name));
+                    let name = short_tool(block.get("name")?.as_str()?);
+                    return Some(match block.get("input").and_then(tool_detail) {
+                        Some(d) => format!("-> {} {}", name, d),
+                        None => format!("-> {}", name),
+                    });
                 }
                 if block.get("type")?.as_str()? == "text" {
                     let text = block.get("text")?.as_str()?;
@@ -364,8 +520,11 @@ fn summarize_event(line: &str) -> Option<String> {
             None
         }
         "tool_result" | "tool_use" => {
-            let name = val.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
-            Some(format!("-> {}", name))
+            let name = short_tool(val.get("name").and_then(|v| v.as_str()).unwrap_or("tool"));
+            Some(match val.get("input").and_then(tool_detail) {
+                Some(d) => format!("-> {} {}", name, d),
+                None => format!("-> {}", name),
+            })
         }
         "result" => {
             let subtype = val.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
@@ -385,6 +544,7 @@ async fn start_acp_session(
     _model_name: &str,
     mcp_binary: &str,
     prompt: &str,
+    id: u64,
     event_tx: mpsc::UnboundedSender<AgentEvent>,
     done_tx: mpsc::UnboundedSender<RuntimeCommand>,
 ) -> Result<oneshot::Sender<()>, String> {
@@ -465,7 +625,7 @@ async fn start_acp_session(
                 let _ = event_tx.send(AgentEvent::Cancelled);
             }
         }
-        let _ = done_tx.send(RuntimeCommand::Done);
+        let _ = done_tx.send(RuntimeCommand::Done { id });
     });
 
     Ok(cancel_tx)

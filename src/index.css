@@ -1,13 +1,52 @@
 @import "tailwindcss";
-@import "@xyflow/react/dist/style.css";
 @import "@fontsource-variable/space-grotesk";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Tailwind v4's Preflight defers to the browser default cursor for buttons
+   (the arrow), unlike v3 which set `cursor: pointer`. Restore the pointer for
+   every enabled button/role=button so individual components don't each have to
+   opt back in; disabled controls keep the default cursor. */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+/* — Type scale —
+   The UI uses exactly five sizes; everything maps onto this scale.
+     text-2xs  11px  micro labels, eyebrows, status tags, anchors
+     text-xs   12px  secondary/meta content, buttons, infobox rows
+     text-sm   13px  primary content: tree rows, statements, descriptions
+     text-base 15px  section titles
+     text-xl   22px  page title */
+@theme {
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1.4;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.45;
+  --text-base: 0.9375rem;
+  --text-base--line-height: 1.4;
+  --text-xl: 1.375rem;
+  --text-xl--line-height: 1.2;
+}
+
+/* — Color contract —
+   Chromatic hues are reserved for semantics; interaction chrome (buttons,
+   selection, focus, links, [edit]) is neutral. One hue, one meaning:
+
+     blue     proposed        (planned, no code yet)
+     amber    implemented     (built, awaiting human verification)
+     emerald  verified        (checked against code)
+     orange   changed / drift (model and code disagree; empty symbols)
+     red      vagrant + destructive actions
+     violet   relocated
+     indigo   the agent       (activity, new arrivals, accept-agent-work)
+
+   Neutral surface/text/border tokens below are fallbacks — applyTheme()
+   regenerates them from the configured palette at startup (see theme.ts). */
 :root {
-  --grid-color: #d4d4d8;
-  --xy-background-color: #f8f8fa;
-  --selection-color: #18181b;
   --surface-canvas: #f4f4f5;
   --surface: #fafafa;
   --surface-raised: #ffffff;
@@ -25,12 +64,17 @@
   --border-subtle: #e4e4e799;
   --border-strong: #d4d4d8;
   --border-overlay: #e4e4e7cc;
+  --selection-color: #18181b;
+  /* Diagram (C4 card) chrome — aliased to surface tokens so the ported card
+     styling stays theme-adaptive without main's applyTheme injection. */
+  --scryer-node-bg: var(--surface-raised);
+  --scryer-ext-bg: var(--surface-inset);
+  --scryer-person-fill: var(--surface-active);
+  --scryer-select-stroke: var(--text);
+  --scryer-outline-stroke: var(--border-strong);
 }
 
 .dark {
-  --xy-background-color: #18181b;
-  --selection-color: #d4d4d8;
-  --grid-color: #2a2a2e;
   --surface-canvas: #18181b;
   --surface: #18181b;
   --surface-raised: #27272a;
@@ -48,22 +92,7 @@
   --border-subtle: #3f3f4699;
   --border-strong: #52525b;
   --border-overlay: #3f3f46cc;
-}
-
-@keyframes dash-flow {
-  to {
-    stroke-dashoffset: -9;
-  }
-}
-
-@keyframes pulse-glow {
-  0% { opacity: 0; }
-  15% { opacity: 0.7; }
-  100% { opacity: 0; }
-}
-
-.scryer-changed-glow {
-  animation: pulse-glow 3s ease-in-out;
+  --selection-color: #d4d4d8;
 }
 
 @keyframes shimmer {
@@ -71,81 +100,234 @@
   100% { transform: translateX(400%); }
 }
 
-/* Edges render above nodes so shape decorations don't overlap arrows */
+/* --- Diagram view: ported edge + card animations from main --- */
+@keyframes dash-flow {
+  to { stroke-dashoffset: -9; }
+}
+@keyframes pulse-glow {
+  0% { opacity: 0; }
+  15% { opacity: 0.7; }
+  100% { opacity: 0; }
+}
+.scryer-changed-glow {
+  animation: pulse-glow 3s ease-in-out;
+}
+/* Edges render above nodes so shape decorations don't overlap arrows. */
 .react-flow__edges {
   z-index: 1 !important;
 }
-
-.react-flow__handle {
-  width: 8px;
-  height: 8px;
-  opacity: 0;
-}
-
-/* Larger invisible hit area for easier targeting */
-.react-flow__handle::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-}
-
-/* Show handles when hovering over any node */
-.react-flow__node:hover .react-flow__handle {
-  opacity: 1;
-}
-
-/* Show handles on nodes near the cursor during connection drag */
-.react-flow__node.connection-nearby .react-flow__handle {
-  opacity: 1;
-}
-
-
-/* edge midpoint dot: hidden by default, shown when hovering the edge */
+/* Edge midpoint dot: hidden until the edge is hovered. */
 .edge-handle-dot {
   opacity: 0;
 }
-
 .react-flow__edge:hover .edge-handle-dot {
   opacity: 0.7;
 }
-
-/* Hide the bounding box around selected nodes (selection logic still works) */
+/* Hide the default selection bounding box (our nodes show their own ring). */
 .react-flow__nodesselection {
   display: none !important;
 }
 
-/* Normalize ReactFlow controls to match other canvas panels */
+/* Zoom/fit controls (bottom-left): follow the theme instead of the library's
+   white-on-grey default. */
 .react-flow__controls {
-  border-radius: 0.5rem;
-  border: 1px solid var(--border-overlay);
-  background: var(--surface-overlay);
-  backdrop-filter: blur(4px);
-  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  box-shadow: none !important;
+  border: 1px solid var(--border);
+  border-radius: 6px;
   overflow: hidden;
-  margin: 0.75rem !important;
+  background: var(--surface);
 }
-
 .react-flow__controls-button {
-  border: none !important;
-  background: transparent !important;
-  color: var(--text-muted) !important;
-  fill: var(--text-muted) !important;
-  transition: background 0.15s, color 0.15s;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  width: 26px;
+  height: 26px;
 }
-
+.react-flow__controls-button:last-child {
+  border-bottom: none;
+}
 .react-flow__controls-button:hover {
-  background: var(--surface-hover) !important;
-  color: var(--text-secondary) !important;
-  fill: var(--text-secondary) !important;
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.react-flow__controls-button svg {
+  fill: currentColor;
+  max-width: 13px;
+  max-height: 13px;
 }
 
-.react-flow__controls-button svg {
-  fill: currentColor !important;
+/* Citation-jump flash: briefly highlight the hunk/claim that was jumped to
+   (see pagekit.jumpTo). Amber — the "highlighted passage" convention. */
+@keyframes flash-fade {
+  0%, 35% { background-color: color-mix(in srgb, var(--color-amber-400) 22%, transparent); }
+  100% { background-color: transparent; }
+}
+.flash-target {
+  animation: flash-fade 1.4s ease-out;
+}
+
+/* --- Powerline status bar (ported from the mockup `.pl`) ---
+   Chevron-tiled segments whose triangle separators borrow each segment's own
+   background via the inline `--sb` var, so the shape stays seamless in either
+   theme. The `working` modifier adds the violet activity sliver along the top. */
+.pl {
+  display: flex;
+  align-items: stretch;
+  height: 26px;
+  flex-shrink: 0;
+  position: relative;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  background: var(--surface-canvas);
+  user-select: none;
+}
+.pl .seg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* Left pad clears the previous segment's chevron, which bleeds 10px past its
+     own edge into this one (see ::after); +14px keeps real clearance from the tip. */
+  padding: 0 15px 0 24px;
+  position: relative;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  background: var(--sb);
+}
+/* First segment has no chevron before it — drop the bleed allowance. */
+.pl .seg:first-child {
+  padding-left: 13px;
+}
+.pl .seg::after {
+  content: "";
+  position: absolute;
+  right: -10px;
+  top: 0;
+  z-index: 2;
+  border-style: solid;
+  border-width: 13px 0 13px 10px;
+  border-color: transparent transparent transparent var(--sb);
+}
+.pl .grow {
+  flex: 1;
+}
+/* Center stream — the agent's live transient line, plainly styled (no chevron,
+   no barber-pole) and centered in the gap. Also acts as the flex spacer. */
+.pl .pl-msg {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 16px;
+}
+.pl .rseg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* The NEXT rseg's chevron (::before) bleeds 10px back into this one's right
+     edge; +14px keeps clearance from its tip. Mirrors .seg's left allowance. */
+  padding: 0 24px 0 13px;
+  position: relative;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  background: var(--sb);
+}
+/* Last rseg has no chevron after it (window edge) — drop the bleed allowance. */
+.pl .rseg:last-child {
+  padding-right: 13px;
+}
+/* Interactive segments are <button>s (drift jump, to-review, changes, cancel);
+   static readouts are <div>s. Brightening via filter lifts the fill AND its
+   chevron pseudo-element together — a background change can't reach the chevron,
+   which borrows the inline --sb. Works in both themes (always toward lighter). */
+.pl button.seg,
+.pl button.rseg {
+  transition: filter 0.12s ease;
+}
+.pl button.seg:hover,
+.pl button.rseg:hover {
+  filter: brightness(1.4);
+}
+/* The hover filter turns the segment into a stacking context, which would trap
+   its chevron (.seg::after, normally z-index:2 above the next segment) inside
+   that context — the next segment then paints over it and the > edge vanishes.
+   Lift the segment into the positive layer *permanently* (not just on :hover):
+   the filter lingers through the 0.12s fade-out on unhover, so a hover-only
+   z-index would snap away first and the chevron would drop during the
+   transition. A constant z-index keeps it on top in every state. */
+.pl button.seg {
+  z-index: 1;
+}
+.pl .rseg::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 0;
+  border-style: solid;
+  border-width: 13px 10px 13px 0;
+  border-color: transparent var(--sb) transparent transparent;
+}
+.pl .pl-strong {
+  color: var(--text);
+}
+.pl.working::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  z-index: 5;
+  background: linear-gradient(90deg, transparent 0, var(--color-violet-400) 50%, transparent 100%);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: plslide 1.5s ease-in-out infinite;
+}
+@keyframes plslide {
+  0% { background-position: -45% 0; }
+  100% { background-position: 145% 0; }
+}
+.pl .r-agent {
+  /* Shared so the left chevron (::before) can reuse the exact same fill — both
+     resolve `--sb` to this segment's inherited value, keeping the stripes
+     identical across the seam. */
+  --barber: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--color-violet-500) 16%, var(--sb)) 0,
+    color-mix(in srgb, var(--color-violet-500) 16%, var(--sb)) 9px,
+    color-mix(in srgb, var(--color-violet-500) 30%, var(--sb)) 9px,
+    color-mix(in srgb, var(--color-violet-500) 30%, var(--sb)) 18px
+  );
+  color: var(--color-violet-400);
+  background-image: var(--barber);
+  background-size: 25.5px 100%;
+  animation: barber 0.7s linear infinite;
+}
+/* The other segments' chevrons are flat border-triangles (solid --sb), but the
+   agent segment's left chevron must continue the barber-pole rather than read as
+   a flat wedge. Rebuild it as a clip-path triangle carrying the same striped
+   fill; the +10px background offset (its right edge sits 10px right of its own
+   origin, flush with the body's left edge) keeps the stripes continuous across
+   the seam, and its keyframe travels the same 25.5px so it stays phase-locked to
+   the body. */
+.pl .r-agent::before {
+  border: none;
+  width: 10px;
+  height: 100%;
+  background-color: var(--sb);
+  background-image: var(--barber);
+  background-size: 25.5px 100%;
+  clip-path: polygon(100% 0, 100% 100%, 0 50%);
+  animation: barber-chevron 0.7s linear infinite;
+}
+@keyframes barber {
+  to { background-position: 25.5px 0; }
+}
+@keyframes barber-chevron {
+  from { background-position: 10px 0; }
+  to { background-position: 35.5px 0; }
 }
 
 /* Thin scrollbars */
