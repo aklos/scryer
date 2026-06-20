@@ -7,7 +7,7 @@ type ButtonVariant = "primary" | "secondary" | "ghost" | "link";
 type ButtonColor = "default" | "accent" | "danger";
 type ButtonSize = "sm" | "md";
 
-const base = "inline-flex items-center justify-center gap-1 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-default";
+const base = "inline-flex items-center justify-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-default";
 
 const variantClasses: Record<ButtonVariant, Record<ButtonColor, string>> = {
   primary: {

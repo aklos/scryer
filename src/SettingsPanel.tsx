@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, X } from "lucide-react";
 import { Input, Select } from "./ui";
-import { BTN, BTN_GO } from "./pagekit";
+import { BTN, BTN_GO, SegField } from "./pagekit";
 
 type AgentPref = "auto" | "claudeCode" | "codex";
 
@@ -16,6 +16,8 @@ export interface SubagentSettings {
   agent: AgentPref;
   claude: AgentSettings;
   codex: AgentSettings;
+  /** Confirm before a UI action launches an agent. "Don't ask again" clears it. */
+  confirmLaunch: boolean;
 }
 
 export interface Detected {
@@ -28,6 +30,7 @@ export const SUBAGENT_DEFAULTS: SubagentSettings = {
   agent: "auto",
   claude: { ...DEFAULT_AGENT },
   codex: { ...DEFAULT_AGENT },
+  confirmLaunch: true,
 };
 
 /** Which agent a fill will actually use given the preference + what's installed,
@@ -132,7 +135,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           <button
             type="button"
             onClick={onClose}
-            className="rounded p-0.5 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] cursor-pointer"
+            className="rounded p-0.5 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
             aria-label="Close"
           >
             <X className="h-4 w-4" />
@@ -202,45 +205,6 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       </div>
     </div>,
     document.body,
-  );
-}
-
-/** A neutral segmented toggle in the wiki design's chrome — a bordered track
- *  whose active segment fills with the selection surface, like the [edit]
- *  buttons and selected rows on the node pages. The shared ui SegmentedControl
- *  still carries a solid-zinc active fill (off the neutral interaction
- *  contract), so the settings panel uses its own. */
-function SegField<T extends string | undefined>({
-  options,
-  value,
-  onChange,
-}: {
-  options: { value: T; label: string }[];
-  value: T;
-  onChange: (value: T) => void;
-}) {
-  return (
-    <div className="flex overflow-hidden rounded-[5px] border border-[var(--border-strong)]">
-      {options.map((opt, i) => {
-        const active = value === opt.value;
-        return (
-          <button
-            key={String(opt.value ?? "__none__")}
-            type="button"
-            onClick={() => onChange(opt.value)}
-            className={`flex-1 cursor-pointer px-2 py-1 text-[11px] transition-colors ${
-              i > 0 ? "border-l border-[var(--border)]" : ""
-            } ${
-              active
-                ? "bg-[var(--surface-active)] font-medium text-[var(--text)]"
-                : "bg-[var(--surface-raised)] text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
-            }`}
-          >
-            {opt.label}
-          </button>
-        );
-      })}
-    </div>
   );
 }
 

@@ -9,7 +9,7 @@ export function Toggle({ value, onChange }: {
       role="switch"
       aria-checked={value}
       onClick={() => onChange(!value)}
-      className={`h-4 w-7 rounded-full transition-colors cursor-pointer flex items-center ${
+      className={`h-4 w-7 rounded-full transition-colors flex items-center ${
         value
           ? "bg-zinc-800 dark:bg-zinc-300 justify-end"
           : "bg-[var(--border-strong)] justify-start"

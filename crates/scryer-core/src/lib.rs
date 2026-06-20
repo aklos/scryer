@@ -1167,6 +1167,11 @@ pub struct SubagentSettings {
     pub claude: AgentSettings,
     #[serde(default)]
     pub codex: AgentSettings,
+    /// Confirm before any UI action launches an agent (a billable run). Lets the
+    /// user see which agent + model + effort will run; "don't ask again" clears
+    /// it. Defaults to true so the gate is opt-out, not opt-in.
+    #[serde(default = "default_confirm_launch")]
+    pub confirm_launch: bool,
 }
 
 impl Default for SubagentSettings {
@@ -1175,12 +1180,17 @@ impl Default for SubagentSettings {
             agent: default_agent(),
             claude: AgentSettings::default(),
             codex: AgentSettings::default(),
+            confirm_launch: default_confirm_launch(),
         }
     }
 }
 
 fn default_agent() -> String {
     "auto".to_string()
+}
+
+fn default_confirm_launch() -> bool {
+    true
 }
 
 fn default_effort() -> String {

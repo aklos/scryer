@@ -312,7 +312,7 @@ function DiagramInner({
             type="button"
             title="Up a level"
             onClick={() => onFocus(crumbs.length >= 2 ? crumbs[crumbs.length - 2].id : null)}
-            className="mr-1 flex items-center rounded p-1 text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] cursor-pointer"
+            className="mr-1 flex items-center rounded p-1 text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
           >
             <CornerLeftUp className="h-3.5 w-3.5" />
           </button>
@@ -320,7 +320,7 @@ function DiagramInner({
         <button
           type="button"
           onClick={() => onFocus(null)}
-          className={`rounded px-1.5 py-0.5 cursor-pointer hover:bg-[var(--surface-hover)] ${
+          className={`rounded px-1.5 py-0.5 hover:bg-[var(--surface-hover)] ${
             focusId === null ? "font-medium text-[var(--text)]" : "text-[var(--text-muted)]"
           }`}
         >
@@ -332,7 +332,7 @@ function DiagramInner({
             <button
               type="button"
               onClick={() => onFocus(c.id)}
-              className={`max-w-[180px] truncate rounded px-1.5 py-0.5 cursor-pointer hover:bg-[var(--surface-hover)] ${
+              className={`max-w-[180px] truncate rounded px-1.5 py-0.5 hover:bg-[var(--surface-hover)] ${
                 i === crumbs.length - 1
                   ? "font-medium text-[var(--text)]"
                   : "text-[var(--text-muted)]"

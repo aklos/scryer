@@ -75,7 +75,7 @@ export function Powerline({
       <button
         type="button"
         onClick={onOpenSettings}
-        className="seg cursor-pointer"
+        className="seg"
         style={sb("color-mix(in srgb, var(--text) 9%, var(--surface-canvas))")}
         title="Subagent launch setup — which agent fills the model, and its model + reasoning effort. Click to change."
       >
@@ -100,7 +100,7 @@ export function Powerline({
       <button
         type="button"
         onClick={() => onOpenSpecial("unmapped")}
-        className="seg cursor-pointer"
+        className="seg"
         style={sb("color-mix(in srgb, var(--text) 4%, var(--surface-canvas))")}
         title="Claims mapped — committed claims that read through to code. Click to list the ones that map to nothing."
       >
@@ -119,7 +119,7 @@ export function Powerline({
       <button
         type="button"
         onClick={() => onOpenSpecial("dark")}
-        className="seg cursor-pointer"
+        className="seg"
         style={sb("color-mix(in srgb, var(--text) 4%, var(--surface-canvas))")}
         title="Dark code — files under a node's boundary that no claim reads into. Click to list them."
       >
@@ -167,7 +167,7 @@ export function Powerline({
           <button
             type="button"
             onClick={build.active ? build.cancel : agent.cancel}
-            className="rseg cursor-pointer"
+            className="rseg"
             style={sb("color-mix(in srgb, var(--text) 9%, var(--surface-canvas))")}
           >
             <X className="h-3 w-3" />
@@ -180,7 +180,7 @@ export function Powerline({
             <button
               type="button"
               onClick={() => onOpenSpecial("review")}
-              className="rseg cursor-pointer"
+              className="rseg"
               style={sb("color-mix(in srgb, var(--color-orange-500) 18%, var(--surface-canvas))")}
               title="Open Needs review — flags awaiting a human verdict (drift, stale claims, agent edits, empty symbols …)"
             >
@@ -193,7 +193,7 @@ export function Powerline({
           <button
             type="button"
             onClick={() => onOpenSpecial("changes")}
-            className="rseg cursor-pointer"
+            className="rseg"
             style={sb("color-mix(in srgb, var(--text) 6.5%, var(--surface-canvas))")}
             title="Recent changes — the agent's edits this session"
           >

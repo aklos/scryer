@@ -102,10 +102,15 @@ export function fieldKeys(
 /** One button system for the page (the mockup's `.btn`): bordered, sentence
  *  case, color = role. Set off the mono content in its own lane. */
 const BTN_BASE =
-  "pointer-events-auto inline-flex items-center gap-1 rounded-[5px] border px-2.5 py-0.5 text-[11px] transition-colors cursor-pointer whitespace-nowrap";
+  "pointer-events-auto inline-flex items-center gap-1 rounded-[5px] border px-2.5 py-0.5 text-[11px] transition-colors whitespace-nowrap";
 export const BTN = `${BTN_BASE} border-[var(--border-strong)] bg-[var(--surface-hover)] text-[var(--text-secondary)] hover:bg-[var(--surface-active)] hover:text-[var(--text)]`;
 export const BTN_GO = `${BTN_BASE} border-emerald-500/45 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400`;
 export const BTN_DANGER = `${BTN_BASE} border-red-500/45 bg-red-500/10 text-red-600 hover:bg-red-500/20 dark:text-red-400`;
+/** Spawns an AI agent (a billable, possibly long-running fill). Violet is the
+ *  agent signal throughout — the powerline's launch readout and activity pole —
+ *  so every button that launches one carries it, warning the user before the
+ *  click what kind of action this is. */
+export const BTN_AGENT = `${BTN_BASE} border-violet-500/45 bg-violet-500/10 text-violet-600 hover:bg-violet-500/20 dark:text-violet-400`;
 
 /** Per-row edit controls (the mockup's `.ctl`): floated over the row's right
  *  edge, top-aligned to the first line, with a gradient fade so they read over
@@ -304,6 +309,48 @@ export function Empty({ children }: { children: ReactNode }) {
   );
 }
 
+/** A neutral segmented toggle in the wiki design's chrome — a bordered track
+ *  whose active segment fills with the selection surface, like the [edit]
+ *  buttons and selected rows on the node pages. The shared ui SegmentedControl
+ *  still carries a solid-zinc active fill (off the neutral interaction
+ *  contract), so the wiki pages use this instead. */
+export function SegField<T extends string | number | undefined>({
+  options,
+  value,
+  disabled,
+  onChange,
+}: {
+  options: { value: T; label: ReactNode }[];
+  value: T;
+  disabled?: boolean;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="flex overflow-hidden rounded-[5px] border border-[var(--border-strong)]">
+      {options.map((opt, i) => {
+        const active = value === opt.value;
+        return (
+          <button
+            key={String(opt.value ?? "__none__")}
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(opt.value)}
+            className={`flex-1 px-2 py-1 text-[11px] transition-colors disabled:opacity-50 ${
+              i > 0 ? "border-l border-[var(--border)]" : ""
+            } ${
+              active
+                ? "bg-[var(--surface-active)] font-medium text-[var(--text)]"
+                : "bg-[var(--surface-raised)] text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+            }`}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // --- transactional section editor ---------------------------------------------
 
 /**
@@ -440,7 +487,7 @@ export function WikiLink({
     <button
       type="button"
       onClick={onClick}
-      className={`group/wl inline-flex max-w-full items-center gap-1.5 rounded px-1 py-0.5 text-left transition-colors hover:bg-[var(--surface-hover)] cursor-pointer ${color}`}
+      className={`group/wl inline-flex max-w-full items-center gap-1.5 rounded px-1 py-0.5 text-left transition-colors hover:bg-[var(--surface-hover)] ${color}`}
     >
       {Arrow && <Arrow className="h-3.5 w-3.5 shrink-0 text-[var(--text-ghost)]" />}
       {Icon && <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--text-ghost)]" />}
@@ -490,7 +537,7 @@ export function WikiText({
           type="button"
           onClick={() => onSelectNode(target.id)}
           title={target.name}
-          className="inline cursor-pointer rounded-sm text-left text-blue-700 hover:underline dark:text-blue-400"
+          className="inline rounded-sm text-left text-blue-700 hover:underline dark:text-blue-400"
         >
           {shown}
         </button>,

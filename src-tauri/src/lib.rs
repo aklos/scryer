@@ -2757,7 +2757,22 @@ async fn start_drift_check(
                     let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Cancelled);
                     return;
                 }
-                Err(e) => emit_msg(format!("Drift check for '{}' failed: {e}", scope.node_name)),
+                // A failed agent run means this scope's drift was never examined.
+                // Surface it as a failure and bail WITHOUT advancing the anchor, so
+                // the model's drift state is left untouched and a re-run re-checks
+                // every changed scope. Bailing on the first failure (rather than
+                // per-scope logging) avoids spamming an identical error when the
+                // cause is a global one like an auth (401) or network failure.
+                Err(e) => {
+                    let _ = app.emit("build-active-node", Vec::<String>::new());
+                    let _ = app.emit(
+                        "agent-event",
+                        &scryer_acp::AgentEvent::Failed {
+                            error: format!("Drift check for '{}' failed: {e}", scope.node_name),
+                        },
+                    );
+                    return;
+                }
             }
         }
 

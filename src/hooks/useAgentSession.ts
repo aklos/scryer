@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useToast } from "../Toast";
+import { useAgentFailure } from "../AgentFailure";
 
 type AgentEvent =
   | { kind: "message"; text: string }
@@ -34,7 +34,7 @@ export interface AgentSession {
 }
 
 export function useAgentSession(): AgentSession {
-  const { toast } = useToast();
+  const { report } = useAgentFailure();
   const [running, setRunning] = useState(false);
   const [label, setLabel] = useState("");
   const [lastTool, setLastTool] = useState<string | null>(null);
@@ -74,7 +74,11 @@ export function useAgentSession(): AgentSession {
               setActivity((a) => a ?? "working…");
               break;
             case "failed":
-              toast(`${taskLabel} failed: ${p.error}`, "error");
+              report({
+                title: `${taskLabel} failed`,
+                error: p.error,
+                consequence: "No changes were made to your model — this run is ephemeral.",
+              });
               unlisten.current?.();
               unlisten.current = null;
               setRunning(false);
@@ -94,7 +98,11 @@ export function useAgentSession(): AgentSession {
         try {
           await invoke<string>(command, args);
         } catch (e) {
-          toast(`${taskLabel} failed to start: ${String(e)}`, "error");
+          report({
+            title: `${taskLabel} failed to start`,
+            error: String(e),
+            consequence: "Nothing was changed — the run never started.",
+          });
           unlisten.current?.();
           unlisten.current = null;
           setRunning(false);
@@ -102,7 +110,7 @@ export function useAgentSession(): AgentSession {
         }
       })();
     },
-    [running, toast],
+    [running, report],
   );
 
   const startFixture = useCallback(

@@ -694,7 +694,7 @@ export function ModelTree({
               e.stopPropagation();
               addChild(node);
             }}
-            className="shrink-0 rounded p-0.5 text-[var(--text-ghost)] opacity-0 transition-opacity group-hover/row:opacity-100 hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] cursor-pointer"
+            className="shrink-0 rounded p-0.5 text-[var(--text-ghost)] opacity-0 transition-opacity group-hover/row:opacity-100 hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
           >
             <Plus className="h-3 w-3" />
           </button>
@@ -822,7 +822,7 @@ export function ModelTree({
                 : "Show symbols in the tree"
             }
             onClick={toggleSymbols}
-            className={`rounded p-0.5 cursor-pointer ${
+            className={`rounded p-0.5 ${
               showSymbols
                 ? "bg-[var(--surface-active)] text-[var(--text-secondary)]"
                 : "text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
@@ -867,7 +867,7 @@ export function ModelTree({
                     : "Show the whole model"
               }
               onClick={() => setLens(opt.id)}
-              className={`flex flex-1 items-center justify-center gap-1.5 border border-[var(--border)] py-1 text-xs cursor-pointer ${
+              className={`flex flex-1 items-center justify-center gap-1.5 border border-[var(--border)] py-1 text-xs ${
                 i > 0 ? "border-l-0" : ""
               } ${i === 0 ? "rounded-l-md" : ""} ${i === 2 ? "rounded-r-md" : ""} ${
                 lens === opt.id
@@ -896,14 +896,14 @@ export function ModelTree({
                 <button
                   type="button"
                   onClick={() => addRoot("system", false)}
-                  className="inline-flex items-center gap-1 rounded border border-[var(--border)] px-2 py-1 text-2xs font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] cursor-pointer"
+                  className="inline-flex items-center gap-1 rounded border border-[var(--border)] px-2 py-1 text-2xs font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
                 >
                   <Plus className="h-3 w-3" /> System
                 </button>
                 <button
                   type="button"
                   onClick={() => addRoot("person", false)}
-                  className="inline-flex items-center gap-1 rounded border border-[var(--border)] px-2 py-1 text-2xs font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] cursor-pointer"
+                  className="inline-flex items-center gap-1 rounded border border-[var(--border)] px-2 py-1 text-2xs font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
                 >
                   <Plus className="h-3 w-3" /> Person
                 </button>
@@ -982,7 +982,7 @@ function Chevron({
       }}
       onMouseEnter={() => onHover?.(true)}
       onMouseLeave={() => onHover?.(false)}
-      className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center cursor-pointer transition-colors ${
+      className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center transition-colors ${
         hot || sel ? "text-[var(--text-secondary)]" : "text-[var(--text-ghost)] hover:text-[var(--text-secondary)]"
       }`}
     >

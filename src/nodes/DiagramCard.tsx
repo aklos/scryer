@@ -141,7 +141,7 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
         {expandable && selected && (
           <div className="absolute right-1.5 top-1.5 z-10 flex items-center">
             <button
-              className="nodrag nopan flex h-5 w-5 cursor-pointer items-center justify-center rounded bg-[var(--surface-tint)] text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-active)]"
+              className="nodrag nopan flex h-5 w-5 items-center justify-center rounded bg-[var(--surface-tint)] text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-active)]"
               title="Drill into this node"
               onClick={(e) => {
                 // Stop the click from bubbling to React Flow's onNodeClick,

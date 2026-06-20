@@ -293,7 +293,7 @@ export function SearchPalette({
                 type="button"
                 onPointerEnter={() => setActive(i)}
                 onClick={() => pick(hit)}
-                className={`flex w-full flex-col gap-0.5 px-3 py-1.5 text-left cursor-pointer ${
+                className={`flex w-full flex-col gap-0.5 px-3 py-1.5 text-left ${
                   i === active ? "bg-[var(--surface-hover)]" : ""
                 }`}
               >

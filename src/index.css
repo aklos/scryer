@@ -3,6 +3,17 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Tailwind v4's Preflight defers to the browser default cursor for buttons
+   (the arrow), unlike v3 which set `cursor: pointer`. Restore the pointer for
+   every enabled button/role=button so individual components don't each have to
+   opt back in; disabled controls keep the default cursor. */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
 /* — Type scale —
    The UI uses exactly five sizes; everything maps onto this scale.
      text-2xs  11px  micro labels, eyebrows, status tags, anchors

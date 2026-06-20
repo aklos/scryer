@@ -16,6 +16,7 @@
  */
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Check,
@@ -64,8 +65,10 @@ import { matchPreviewComponent, usePreviewServer } from "./hooks/usePreviewServe
 import { useDarkMode } from "./hooks/useDarkMode";
 import { ClaimSource, respElementId } from "./SourceSection";
 import { PageMenuProvider, usePageMenu, useCopyId, copyIdItem } from "./pageMenu";
+import { Input } from "./ui";
 import {
   BTN,
+  BTN_AGENT,
   BTN_DANGER,
   BTN_GO,
   CTL,
@@ -79,6 +82,7 @@ import {
   PageSection,
   sanitizeIdentifier,
   SectionEditor,
+  SegField,
   WikiText,
 } from "./pagekit";
 
@@ -232,7 +236,7 @@ function Crumbs({
           <button
             type="button"
             onClick={() => onSelectNode(n.id)}
-            className="max-w-[200px] truncate hover:text-[var(--text-secondary)] hover:underline cursor-pointer"
+            className="max-w-[200px] truncate hover:text-[var(--text-secondary)] hover:underline"
           >
             {n.name || "Untitled"}
           </button>
@@ -361,7 +365,7 @@ function Ambox({
 
 /** Inline text action for an {@link Ambox} — terse, underlined, no chrome. */
 const NOTICE_ACTION =
-  "shrink-0 font-medium underline-offset-2 hover:underline cursor-pointer";
+  "shrink-0 font-medium underline-offset-2 hover:underline";
 
 // --- tabs -------------------------------------------------------------------
 
@@ -377,7 +381,7 @@ function PageTabs({
   historyCount: number;
 }) {
   const tabClass = (active: boolean) =>
-    `-mb-px mr-[18px] border-b-2 py-1.5 text-xs cursor-pointer transition-colors ${
+    `-mb-px mr-[18px] border-b-2 py-1.5 text-xs transition-colors ${
       active
         ? "border-[var(--text)] text-[var(--text)]"
         : "border-transparent text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
@@ -692,7 +696,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   type="button"
                   onClick={() => void invoke("open_in_editor", { file: defFile, line: definition[0]?.line ?? null, projectPath })}
                   title="Open in editor"
-                  className="font-mono text-[var(--text-tertiary)] hover:text-blue-600 hover:underline dark:hover:text-blue-400 cursor-pointer"
+                  className="font-mono text-[var(--text-tertiary)] hover:text-blue-600 hover:underline dark:hover:text-blue-400"
                 >
                   {defFile}
                 </button>
@@ -975,7 +979,7 @@ function MemberRow({
           type="button"
           onClick={() => onSelectNode(member.id)}
           title={member.name}
-          className="shrink truncate text-left text-blue-700 hover:underline dark:text-blue-400 cursor-pointer"
+          className="shrink truncate text-left text-blue-700 hover:underline dark:text-blue-400"
         >
           {member.name || "Untitled"}
         </button>
@@ -984,7 +988,7 @@ function MemberRow({
             type="button"
             title="Remove from group"
             onClick={onRemove}
-            className="invisible ml-2 shrink-0 rounded p-0.5 text-[var(--text-ghost)] hover:text-red-400 group-hover/conn:visible cursor-pointer"
+            className="invisible ml-2 shrink-0 rounded p-0.5 text-[var(--text-ghost)] hover:text-red-400 group-hover/conn:visible"
           >
             <X className="h-3 w-3" />
           </button>
@@ -2205,7 +2209,7 @@ function PreviewSection({
             type="button"
             onClick={() => setComponentDark((d) => !d)}
             title={`Preview the component in ${componentDark ? "light" : "dark"} mode`}
-            className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] cursor-pointer"
+            className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)]"
           >
             {componentDark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
           </button>
@@ -2243,7 +2247,7 @@ function PreviewSection({
               <button
                 type="button"
                 onClick={() => onFixture(node.id, report!.status, report!.error)}
-                className={BTN}
+                className={BTN_AGENT}
               >
                 <Sparkles className="h-3 w-3" /> Generate preview data
               </button>
@@ -2297,14 +2301,22 @@ function VariationModal({
   onSelectVariation?: (idx: number | null) => void;
   onClose: () => void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [prompt, setPrompt] = useState("");
   const [count, setCount] = useState<1 | 3>(3);
   const generating = variationState?.status === "generating";
   const ready = variationState?.status === "ready";
   const selectedIdx = variationState?.selectedIdx ?? null;
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const handleSubmit = () => {
-    const value = inputRef.current?.value.trim();
+    const value = prompt.trim();
     if (!value || generating) return;
     onStartVariation(
       node.id,
@@ -2312,7 +2324,7 @@ function VariationModal({
       count,
       ready && selectedIdx != null ? selectedIdx : undefined,
     );
-    if (inputRef.current) inputRef.current.value = "";
+    setPrompt("");
   };
 
   const handleAccept = () => {
@@ -2327,18 +2339,20 @@ function VariationModal({
 
   const varCount = variationState?.count ?? 0;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="flex max-h-[90vh] w-[90vw] max-w-[1200px] flex-col overflow-hidden rounded-xl border border-[var(--border-strong)] bg-[var(--surface-canvas)] shadow-2xl">
+  return createPortal(
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/55 backdrop-blur-[3px]" onClick={onClose} />
+      <div className="relative flex max-h-[90vh] w-[90vw] max-w-[1200px] flex-col overflow-hidden rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] shadow-2xl">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-5 py-3">
-          <h3 className="text-sm font-semibold text-[var(--text)]">
+        <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+          <span className="text-sm font-medium text-[var(--text)]">
             Plan visual changes — {node.name}
-          </h3>
+          </span>
           <button
             type="button"
             onClick={onClose}
-            className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] cursor-pointer"
+            className="rounded p-0.5 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+            aria-label="Close"
           >
             <X className="h-4 w-4" />
           </button>
@@ -2348,7 +2362,7 @@ function VariationModal({
         <div className="flex-1 overflow-y-auto">
           {/* Original preview — always visible */}
           <div className="border-b border-[var(--border-subtle)] px-5 py-4">
-            <p className="mb-2 text-2xs font-medium text-[var(--text-tertiary)]">Current</p>
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-[var(--text-tertiary)]">Current</p>
             <div className="overflow-hidden rounded-md border border-[var(--border-subtle)]">
               <iframe
                 src={currentSrc}
@@ -2361,36 +2375,30 @@ function VariationModal({
 
           {/* Prompt bar */}
           <div className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-5 py-3">
-            <input
-              ref={inputRef}
+            <Input
+              variant="bordered"
+              className="min-w-0 flex-1 disabled:opacity-50"
               type="text"
               placeholder={ready && selectedIdx != null ? "Refine the selected variation…" : "Describe visual changes…"}
+              value={prompt}
               disabled={generating}
+              onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") handleSubmit(); }}
-              className="min-w-0 flex-1 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] px-3 py-1.5 text-sm text-[var(--text)] placeholder:text-[var(--text-ghost)] focus:border-[var(--border-strong)] focus:outline-none disabled:opacity-50"
             />
-            <div className="flex items-center rounded-md border border-[var(--border)]">
-              {([1, 3] as const).map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  disabled={generating}
-                  onClick={() => setCount(n)}
-                  className={`px-2 py-1 text-2xs font-medium transition-colors cursor-pointer disabled:opacity-50 ${
-                    count === n
-                      ? "bg-[var(--surface-hover)] text-[var(--text)]"
-                      : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
-                  } ${n === 1 ? "rounded-l-md" : "rounded-r-md border-l border-[var(--border-subtle)]"}`}
-                >
-                  {n}
-                </button>
-              ))}
-            </div>
+            <SegField<1 | 3>
+              options={[
+                { value: 1, label: "1" },
+                { value: 3, label: "3" },
+              ]}
+              value={count}
+              disabled={generating}
+              onChange={setCount}
+            />
             <button
               type="button"
               disabled={generating}
               onClick={handleSubmit}
-              className={`${BTN_GO} disabled:opacity-50`}
+              className={`${BTN_AGENT} disabled:opacity-50`}
             >
               <Send className="h-3.5 w-3.5" />
               {ready ? "Iterate" : "Generate"}
@@ -2433,7 +2441,7 @@ function VariationModal({
                     key={i}
                     type="button"
                     onClick={() => onSelectVariation?.(selectedIdx === i ? null : i)}
-                    className={`flex flex-col gap-1.5 rounded-lg border-2 p-1 transition-colors cursor-pointer ${
+                    className={`flex flex-col gap-1.5 rounded-lg border-2 p-1 transition-colors ${
                       selectedIdx === i
                         ? "border-violet-500 bg-violet-500/5"
                         : "border-[var(--border-subtle)] hover:border-[var(--border-strong)]"
@@ -2459,6 +2467,7 @@ function VariationModal({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

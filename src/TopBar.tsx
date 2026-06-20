@@ -56,7 +56,7 @@ export function TopBar({
           setMenu({ x: r.left, y: r.bottom + 2 });
         }}
         title={projectPath ?? undefined}
-        className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface-hover)] cursor-pointer"
+        className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface-hover)]"
       >
         <img src="/logo.png" alt="scryer" className="h-3.5 w-3.5 shrink-0 rounded" />
         <span className="truncate">{projectName}</span>
@@ -100,7 +100,7 @@ export function TopBar({
             title={`${label} view (Ctrl+Space to switch)`}
             aria-pressed={view === id}
             onClick={() => onSetView(id)}
-            className={`flex items-center gap-1.5 rounded px-3 py-1 text-xs font-medium transition-colors cursor-pointer ${
+            className={`flex items-center gap-1.5 rounded px-3 py-1 text-xs font-medium transition-colors ${
               view === id
                 ? "bg-[var(--surface-raised)] text-[var(--text)] shadow-sm"
                 : "text-[var(--text-tertiary)] hover:text-[var(--text)]"
@@ -158,7 +158,7 @@ function ThemeToggle() {
       onClick={toggle}
       title={isDark ? "Switch to light mode" : "Switch to dark mode"}
       aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-      className="ml-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] cursor-pointer"
+      className="ml-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
     >
       {isDark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
     </button>

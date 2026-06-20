@@ -31,7 +31,7 @@ import { ANCHOR_STATE_LABEL, collapseAnchors, darkBoundaries } from "./health";
 import { kindIcon } from "./kindIcon";
 import { isNodeEmpty } from "./rollup";
 import { respElementId } from "./SourceSection";
-import { BTN, jumpTo, PageSection, WikiLink } from "./pagekit";
+import { BTN, BTN_AGENT, jumpTo, PageSection, WikiLink } from "./pagekit";
 
 // --- shared shell -------------------------------------------------------------
 
@@ -100,7 +100,7 @@ function RevisionItems({
                 <button
                   type="button"
                   onClick={() => onSelectNode(it.nodeId!)}
-                  className="min-w-0 truncate text-left text-blue-700 hover:underline dark:text-blue-400 cursor-pointer"
+                  className="min-w-0 truncate text-left text-blue-700 hover:underline dark:text-blue-400"
                 >
                   {it.label}
                 </button>
@@ -246,7 +246,7 @@ function ClaimRow({
         <button
           type="button"
           onClick={goToClaim}
-          className="block w-full truncate text-left text-sm text-[var(--text-secondary)] hover:text-[var(--text)] hover:underline cursor-pointer"
+          className="block w-full truncate text-left text-sm text-[var(--text-secondary)] hover:text-[var(--text)] hover:underline"
           title="Open on its page"
         >
           {claim.resp.statement || "Untitled responsibility"}
@@ -256,7 +256,7 @@ function ClaimRow({
           <button
             type="button"
             onClick={() => onSelectNode(claim.node.id)}
-            className="text-blue-700 hover:underline dark:text-blue-400 cursor-pointer"
+            className="text-blue-700 hover:underline dark:text-blue-400"
           >
             {claim.node.name || "Untitled"}
           </button>
@@ -422,14 +422,14 @@ export function NeedsReviewPage({
                             <button
                               type="button"
                               onClick={() => editor.adoptResponsibility(ref.resp.id)}
-                              className="font-medium text-indigo-600 hover:underline dark:text-indigo-400 cursor-pointer"
+                              className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                             >
                               Adopt
                             </button>
                             <button
                               type="button"
                               onClick={() => editor.rejectResponsibility(ref.resp.id)}
-                              className="font-medium text-[var(--text-tertiary)] hover:text-red-500 hover:underline dark:hover:text-red-400 cursor-pointer"
+                              className="font-medium text-[var(--text-tertiary)] hover:text-red-500 hover:underline dark:hover:text-red-400"
                             >
                               Reject
                             </button>
@@ -460,7 +460,7 @@ export function NeedsReviewPage({
                             <button
                               type="button"
                               onClick={() => editor.reimplementResponsibility(ref.resp.id)}
-                              className="font-medium text-indigo-600 hover:underline dark:text-indigo-400 cursor-pointer"
+                              className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                             >
                               Re-implement
                             </button>
@@ -473,7 +473,7 @@ export function NeedsReviewPage({
                                   run: () => editor.dropResponsibility(ref.resp.id),
                                 })
                               }
-                              className="font-medium text-[var(--text-tertiary)] hover:text-red-500 hover:underline dark:hover:text-red-400 cursor-pointer"
+                              className="font-medium text-[var(--text-tertiary)] hover:text-red-500 hover:underline dark:hover:text-red-400"
                             >
                               Drop
                             </button>
@@ -506,7 +506,7 @@ export function NeedsReviewPage({
                           <button
                             type="button"
                             onClick={() => editor.reimplementNode(n.id)}
-                            className="font-medium text-indigo-600 hover:underline dark:text-indigo-400 cursor-pointer"
+                            className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                           >
                             Re-implement
                           </button>
@@ -519,7 +519,7 @@ export function NeedsReviewPage({
                                 run: () => editor.dropNode(n.id),
                               })
                             }
-                            className="font-medium text-[var(--text-tertiary)] hover:text-red-500 hover:underline dark:hover:text-red-400 cursor-pointer"
+                            className="font-medium text-[var(--text-tertiary)] hover:text-red-500 hover:underline dark:hover:text-red-400"
                           >
                             Drop
                           </button>
@@ -541,7 +541,7 @@ export function NeedsReviewPage({
                       <button
                         type="button"
                         onClick={onCheckDrift}
-                        className={BTN}
+                        className={BTN_AGENT}
                       >
                         <GitCompare className="h-3 w-3" /> Run drift check
                       </button>
@@ -572,7 +572,7 @@ export function NeedsReviewPage({
                       <button
                         type="button"
                         onClick={() => onSelectNode(s.nodeId)}
-                        className="text-sm text-blue-700 hover:underline dark:text-blue-400 cursor-pointer"
+                        className="text-sm text-blue-700 hover:underline dark:text-blue-400"
                       >
                         {s.nodeName}
                       </button>
@@ -604,7 +604,7 @@ export function NeedsReviewPage({
                       <button
                         type="button"
                         onClick={() => onSelectNode(a.hostId)}
-                        className="shrink-0 text-sm text-blue-700 hover:underline dark:text-blue-400 cursor-pointer"
+                        className="shrink-0 text-sm text-blue-700 hover:underline dark:text-blue-400"
                       >
                         {a.hostName}
                       </button>

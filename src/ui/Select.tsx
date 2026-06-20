@@ -10,7 +10,7 @@ type SelectVariant = "inline" | "bordered";
 
 // Both variants share Input's field treatment; inline is the compact row form.
 const triggerBase =
-  "w-full flex items-center justify-between gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] text-left text-[var(--text-secondary)] outline-none transition-colors hover:border-[var(--border-strong)] cursor-pointer";
+  "w-full flex items-center justify-between gap-1 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] text-left text-[var(--text-secondary)] outline-none transition-colors hover:border-[var(--border-strong)]";
 
 const triggerClasses: Record<SelectVariant, string> = {
   inline: `${triggerBase} px-2 py-1 text-xs`,
@@ -115,7 +115,7 @@ export function Select({
                 <button
                   key={o.value}
                   type="button"
-                  className={`w-full px-2.5 py-1 text-xs text-left cursor-pointer transition-colors ${
+                  className={`w-full px-2.5 py-1 text-xs text-left transition-colors ${
                     o.value === value
                       ? "bg-[var(--surface-active)] text-[var(--text)]"
                       : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"

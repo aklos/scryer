@@ -10,7 +10,7 @@ export function SegmentedControl<T extends string | undefined>({ options, value,
         <button
           key={String(opt.value ?? "__none__")}
           type="button"
-          className={`flex-1 px-2 py-1 text-xs cursor-pointer transition-colors ${
+          className={`flex-1 px-2 py-1 text-xs transition-colors ${
             value === opt.value
               ? "bg-zinc-700 text-white dark:bg-zinc-200 dark:text-zinc-900"
               : "bg-[var(--surface-raised)] text-[var(--text-secondary)] hover:bg-[var(--surface)]"

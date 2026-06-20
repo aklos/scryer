@@ -99,7 +99,7 @@ function SourceLine({
         disabled={!anchored}
         onClick={() => anchored && setOpen((o) => !o)}
         className={`group/src inline-flex items-baseline gap-1 text-left ${
-          anchored ? "cursor-pointer" : "cursor-default"
+          anchored ? "" : "cursor-default"
         }`}
         title={anchored ? "Peek at the source" : "Whole-file mapping — no line anchor"}
       >
@@ -172,7 +172,7 @@ function InlinePeek({ loc, projectPath }: { loc: SourceLocation; projectPath: st
         <button
           type="button"
           onClick={() => void invoke("open_in_editor", { file: loc.pattern, line: loc.line ?? null, projectPath })}
-          className="ml-auto inline-flex shrink-0 items-center gap-1 text-blue-600 hover:underline dark:text-blue-400 cursor-pointer"
+          className="ml-auto inline-flex shrink-0 items-center gap-1 text-blue-600 hover:underline dark:text-blue-400"
         >
           open <ExternalLink className="h-3 w-3" />
         </button>

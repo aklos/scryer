@@ -12,6 +12,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { VariationState } from "./NodePage";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ToastProvider } from "./Toast";
+import { AgentFailureProvider } from "./AgentFailure";
 import { ModelTree } from "./ModelTree";
 import { TopBar, type WorkspaceView } from "./TopBar";
 import { DiagramView } from "./DiagramView";
@@ -26,14 +27,9 @@ import {
 import { ProjectPicker } from "./ProjectPicker";
 import { SearchPalette } from "./SearchPalette";
 import { Powerline } from "./Powerline";
-import {
-  SettingsPanel,
-  SUBAGENT_DEFAULTS,
-  resolveLaunch,
-  type Detected,
-  type ResolvedLaunch,
-  type SubagentSettings,
-} from "./SettingsPanel";
+import { SettingsPanel } from "./SettingsPanel";
+import { useLaunchSettings } from "./hooks/useLaunchSettings";
+import { useAgentLaunchGate } from "./AgentLaunchConfirm";
 import { useModelStorage } from "./hooks/useModelStorage";
 import { useModelBuild, type ModelBuild } from "./hooks/useModelBuild";
 import { useAgentSession } from "./hooks/useAgentSession";
@@ -82,7 +78,9 @@ export default function App() {
   return (
     <ErrorBoundary>
       <ToastProvider>
-        <AppBody />
+        <AgentFailureProvider>
+          <AppBody />
+        </AgentFailureProvider>
       </ToastProvider>
     </ErrorBoundary>
   );
@@ -208,23 +206,15 @@ function Workspace({
   const [searchOpen, setSearchOpen] = useState(false);
 
   // The subagent launch setup (which agent + model + effort a fill will run
-  // with), surfaced read-only in the powerline. Reloaded whenever the settings
-  // panel closes so an edit there reflects immediately.
-  const [subagent, setSubagent] = useState<SubagentSettings>(SUBAGENT_DEFAULTS);
-  const [detectedTools, setDetectedTools] = useState<Detected>({ claude: false, codex: false });
-  const loadLaunch = useCallback(() => {
-    invoke<SubagentSettings>("get_subagent_settings")
-      .then((s) => setSubagent({ ...SUBAGENT_DEFAULTS, ...s }))
-      .catch(() => {});
-    invoke<Detected>("detect_ai_tools", { projectPath: null })
-      .then((d) => setDetectedTools({ claude: !!d.claude, codex: !!d.codex }))
-      .catch(() => {});
-  }, []);
-  useEffect(loadLaunch, [loadLaunch]);
-  const launch: ResolvedLaunch = useMemo(
-    () => resolveLaunch(subagent, detectedTools),
-    [subagent, detectedTools],
-  );
+  // with), surfaced read-only in the powerline and named in the pre-launch
+  // confirm gate. Reloaded whenever the settings panel closes so an edit there
+  // reflects immediately.
+  const launchSettings = useLaunchSettings();
+  const { launch } = launchSettings;
+  // Confirm gate for every agent-spawning action — names what will run before
+  // the (billable) launch; "don't ask again" clears it (the violet buttons stay
+  // as the standing cue).
+  const launchGate = useAgentLaunchGate(launchSettings);
 
   // The Wiki/Diagram toggle. The diagram is a secondary nav surface onto the
   // same model and selection; `diagramFocus` is the level it currently shows
@@ -372,9 +362,13 @@ function Workspace({
     (nodeId: string, renderStatus: string, renderError: string | null) => {
       if (!projectPath || !modelRefStr || writing) return;
       const node = modelRef.current.nodes.find((n) => n.id === nodeId);
-      agent.startFixture(projectPath, modelRefStr, nodeId, node?.name ?? "component", renderStatus, renderError);
+      const name = node?.name ?? "component";
+      launchGate.request(
+        { action: `Generate placeholder preview data for “${name}”.` },
+        () => agent.startFixture(projectPath, modelRefStr, nodeId, name, renderStatus, renderError),
+      );
     },
-    [agent, projectPath, modelRefStr, writing],
+    [agent, projectPath, modelRefStr, writing, launchGate],
   );
 
   // --- visual variation planning ---
@@ -394,10 +388,18 @@ function Workspace({
       if (!projectPath || !modelRefStr || agent.running) return;
       const n = count ?? 3;
       const node = modelRef.current.nodes.find((nd) => nd.id === nodeId);
-      setVariationState({ nodeId, prompt, status: "generating", count: n, selectedIdx: null });
-      agent.startVariation(projectPath, modelRefStr, nodeId, node?.name ?? "component", prompt, n, baseVariationIdx);
+      const name = node?.name ?? "component";
+      launchGate.request(
+        { action: `Generate ${n} visual variation${n === 1 ? "" : "s"} of “${name}”.` },
+        () => {
+          // Flip to "generating" only on confirm — cancelling the gate must not
+          // leave the modal stuck in a loading state.
+          setVariationState({ nodeId, prompt, status: "generating", count: n, selectedIdx: null });
+          agent.startVariation(projectPath, modelRefStr, nodeId, name, prompt, n, baseVariationIdx);
+        },
+      );
     },
-    [agent, projectPath, modelRefStr],
+    [agent, projectPath, modelRefStr, launchGate],
   );
 
   const [previewKey, setPreviewKey] = useState(0);
@@ -590,8 +592,14 @@ function Workspace({
 
   const onCheckDrift = useCallback(() => {
     if (!projectPath) return;
-    build.checkDrift(projectPath);
-  }, [projectPath, build]);
+    launchGate.request(
+      {
+        action: "Re-check the model against your code for drift.",
+        detail: "Reads the changed code under the flagged nodes.",
+      },
+      () => build.checkDrift(projectPath),
+    );
+  }, [projectPath, build, launchGate]);
 
   const openSpecial = useCallback(
     (page: SpecialPage) => {
@@ -707,10 +715,11 @@ function Workspace({
         <SettingsPanel
           onClose={() => {
             setSettingsOpen(false);
-            loadLaunch();
+            launchSettings.reload();
           }}
         />
       )}
+      {launchGate.modal}
       {searchOpen && (
         <SearchPalette
           model={model}

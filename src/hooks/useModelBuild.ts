@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useToast } from "../Toast";
+import { useAgentFailure } from "../AgentFailure";
 import type { ModelStorage } from "./useModelStorage";
 
 type AgentEvent =
@@ -43,7 +43,7 @@ export interface ModelBuild {
 /// positions once it finishes. Lives above the picker↔canvas split so its state
 /// survives that transition.
 export function useModelBuild(storage: ModelStorage): ModelBuild {
-  const { toast } = useToast();
+  const { report } = useAgentFailure();
   const [building, setBuilding] = useState(false);
   const [checking, setChecking] = useState(false);
   const [phase, setPhase] = useState<string | null>(null);
@@ -148,7 +148,14 @@ export function useModelBuild(storage: ModelStorage): ModelBuild {
             setActivity((a) => a ?? "working…");
             break;
           case "failed":
-            toast(`${label} failed: ${p.error}`, "error");
+            report({
+              title: `${label} failed`,
+              error: p.error,
+              consequence:
+                kind === "drift"
+                  ? "Your model's drift state was left unchanged — no flags were cleared and nothing was reconciled. Re-run the drift check once the error is resolved."
+                  : "The build did not finish, so your model was not updated. Re-run it once the error is resolved.",
+            });
             finish(false);
             break;
           case "completed":
@@ -180,11 +187,15 @@ export function useModelBuild(storage: ModelStorage): ModelBuild {
           await invoke("start_drift_check", { cwd });
         }
       } catch (e) {
-        toast(`${label} failed to start: ${String(e)}`, "error");
+        report({
+          title: `${label} failed to start`,
+          error: String(e),
+          consequence: "Nothing was changed — the run never started.",
+        });
         finish(false);
       }
     },
-    [storage, toast, finish],
+    [storage, report, finish],
   );
 
   const start = useCallback((cwd: string) => run("build", cwd), [run]);

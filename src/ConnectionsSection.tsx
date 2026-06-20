@@ -164,7 +164,7 @@ function ConnRow({
           type="button"
           onClick={expand.onToggle}
           title={expand.open ? "Hide code paths" : "Show the code paths behind this link"}
-          className="flex select-none items-center justify-center text-[var(--text-ghost)] hover:text-[var(--text-secondary)] cursor-pointer"
+          className="flex select-none items-center justify-center text-[var(--text-ghost)] hover:text-[var(--text-secondary)]"
         >
           {expand.open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         </button>
@@ -176,7 +176,7 @@ function ConnRow({
           type="button"
           onClick={() => onSelectNode(peer.id)}
           title={struck ? `${peer.name || "Untitled"} — slated for deletion in the plan` : peer.name}
-          className={`shrink truncate text-left hover:underline cursor-pointer ${peerColor}`}
+          className={`shrink truncate text-left hover:underline ${peerColor}`}
         >
           {peer.name || "Untitled"}
         </button>
@@ -254,7 +254,7 @@ function NodeRef({
           type="button"
           onClick={() => onSelectNode(node.id)}
           title={node.name}
-          className={`truncate text-left hover:underline cursor-pointer ${
+          className={`truncate text-left hover:underline ${
             muted
               ? "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
               : "text-blue-700 dark:text-blue-400"
@@ -578,7 +578,7 @@ function SuggestedRow({
         <button
           type="button"
           onClick={() => onSelectNode(peer.id)}
-          className={`shrink truncate text-left hover:underline cursor-pointer ${declared ? "text-emerald-700 dark:text-emerald-400" : "text-[var(--text-muted)]"}`}
+          className={`shrink truncate text-left hover:underline ${declared ? "text-emerald-700 dark:text-emerald-400" : "text-[var(--text-muted)]"}`}
         >
           {peer.name || "Untitled"}
         </button>
@@ -640,7 +640,7 @@ function ImpliedRow({
             type="button"
             onClick={() => setOpen((o) => !o)}
             title={open ? "Hide code paths" : "Show the code paths behind this connection"}
-            className="flex select-none items-center justify-center text-[var(--text-ghost)] hover:text-[var(--text-secondary)] cursor-pointer"
+            className="flex select-none items-center justify-center text-[var(--text-ghost)] hover:text-[var(--text-secondary)]"
           >
             {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
           </button>
