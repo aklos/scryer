@@ -31,18 +31,11 @@ impl ScryerServer {
 #[tool_handler]
 impl ServerHandler for ScryerServer {
     fn get_info(&self) -> ServerInfo {
-        let instructions = format!(
-            "{}\n\n## Modeling Rules (authoritative & binding)\n\
-             These rules decide every modeling judgment. They are BINDING — follow them, and never \
-             infer the conventions from existing nodes. Below is the index only; before you make a \
-             modeling decision (what earns a symbol, how to pitch a responsibility, when a group is \
-             right, how links propagate), call `get_rules{{topic}}` to read the relevant rule in \
-             full. Do not skip this.\n\n{}",
-            INSTRUCTIONS,
-            scryer_core::rules::rules_index()
-        );
+        // The connect-time block is kept tight and imperative on purpose: it is
+        // always-loaded context, so it leads with the working loop and points at
+        // `get_rules` for the rule text rather than inlining the rules index.
         ServerInfo {
-            instructions: Some(instructions.into()),
+            instructions: Some(INSTRUCTIONS.into()),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
