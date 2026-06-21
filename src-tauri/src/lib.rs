@@ -2033,14 +2033,16 @@ async fn start_model_build(
     Ok("started".to_string())
 }
 
-/// Cheap, agent-free drift status: which boundary-owning nodes have code changes
-/// since the last reconcile. Used to nudge the user to run a semantic check on
-/// open — it never decides the model drifted, only where to look.
+/// Cheap, agent-free drift status: nodes with OUT-OF-PLAN regressions to mapped
+/// code — a committed anchor that broke or changed since the last reconcile with
+/// no pending plan item to explain it (see `anchors::out_of_plan_scopes`). Stays
+/// quiet while the plan is being implemented (that churn is expected) and ticks
+/// when code diverges from the model outside the plan. Used to nudge the user to
+/// run a semantic check — it never decides the model drifted, only where to look.
 #[tauri::command]
 fn get_drift_status(cwd: String) -> Result<Vec<scryer_core::drift::DriftScope>, String> {
     let project = std::path::Path::new(&cwd);
     let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
-    let model = scryer_core::read_model_at(&model_ref).map_err(|e| e.to_string())?;
 
     // A model that has never been reconciled has no `.sync` anchor, so the
     // baseline defaults to epoch 0 and *every* file reads as "changed since
@@ -2061,8 +2063,7 @@ fn get_drift_status(cwd: String) -> Result<Vec<scryer_core::drift::DriftScope>, 
         return Ok(Vec::new());
     }
 
-    let sync = scryer_core::read_sync_state(&model_ref);
-    Ok(scryer_core::drift::drifted_scopes(&model, project, &sync))
+    scryer_extract::anchors::out_of_plan_scopes(&model_ref)
 }
 
 /// Everything the observability surfaces read, in one deterministic pass — no
@@ -2343,6 +2344,106 @@ fn reject_responsibility(cwd: String, resp_id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Clear the vagrant flag on a code-discovered PROPERTY (addressed by its owning
+/// node + label, since properties carry no id) and its minted host chain, then
+/// FOLD the chain (root→leaf) and the property into the committed model. The
+/// property-level twin of [`fold_vagrant`]; shared by adopt and reject. A property
+/// has no source anchor of its own (the data node bears it), so `source` is None.
+fn fold_vagrant_property(
+    model_ref: &scryer_core::ModelRef,
+    node_id: &str,
+    label: &str,
+) -> Result<FoldedVagrant, String> {
+    use scryer_core::diff::ElementKind;
+
+    let mut planned = scryer_core::read_planned_at(model_ref)?;
+    let cleared = planned
+        .nodes
+        .iter_mut()
+        .find(|n| n.id == node_id)
+        .and_then(|n| n.properties.iter_mut().find(|p| p.label == label))
+        .map(|p| p.vagrant = None)
+        .is_some();
+    if !cleared {
+        return Err(format!("Property '{label}' on node '{node_id}' not found in the plan"));
+    }
+    // The property may have landed on a freshly minted data symbol; fold that
+    // chain first so the host exists in committed before the property folds onto it.
+    let chain = vagrant_chain(&planned, node_id);
+    for id in &chain {
+        if let Some(n) = planned.nodes.iter_mut().find(|n| &n.id == id) {
+            n.vagrant = None;
+        }
+    }
+    scryer_core::write_planned_at(model_ref, &planned)?;
+
+    for id in &chain {
+        scryer_core::commit_element(model_ref, ElementKind::Node, None, id)?;
+    }
+    scryer_core::commit_element(model_ref, ElementKind::Property, Some(node_id), label)?;
+
+    Ok(FoldedVagrant { host_id: node_id.to_string(), statement: label.to_string(), source: None, chain })
+}
+
+/// Adopt a code-discovered (vagrant) property — the property-level twin of
+/// [`adopt_responsibility`]. The field already exists in code, so adopting it IS
+/// the commit: fold it (and any minted host chain) into the committed model.
+#[tauri::command]
+fn adopt_property(cwd: String, node_id: String, label: String) -> Result<(), String> {
+    let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    let folded = fold_vagrant_property(&model_ref, &node_id, &label)?;
+
+    if let Ok(after) = scryer_core::read_model_at(&model_ref) {
+        let _ = scryer_core::save_baseline_at(&model_ref, &after);
+    }
+    let _ = scryer_core::history::append_event(
+        &model_ref,
+        &scryer_core::history::HistoryEvent::new(
+            scryer_core::drift::now_secs(),
+            scryer_core::history::EventKind::Impl,
+            &folded.host_id,
+            "took code",
+        )
+        .with_rows(vec![scryer_core::history::EventRow::new("+", folded.statement)]),
+    );
+    Ok(())
+}
+
+/// Reject a code-discovered (vagrant) property — the property-level twin of
+/// [`reject_responsibility`]. Fold it (and any minted host chain) into committed,
+/// then drop it from the plan so the diff reads as a deletion work item anchored
+/// to the field the agent should remove; folding also stops drift re-proposing it.
+#[tauri::command]
+fn reject_property(cwd: String, node_id: String, label: String) -> Result<(), String> {
+    let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    let folded = fold_vagrant_property(&model_ref, &node_id, &label)?;
+
+    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+    if let Some(n) = planned.nodes.iter_mut().find(|n| n.id == node_id) {
+        n.properties.retain(|p| p.label != label);
+    }
+    for id in &folded.chain {
+        planned.nodes.retain(|n| &n.id != id);
+        planned.source_map.remove(id);
+    }
+    scryer_core::write_planned_at(&model_ref, &planned)?;
+
+    if let Ok(after) = scryer_core::read_model_at(&model_ref) {
+        let _ = scryer_core::save_baseline_at(&model_ref, &after);
+    }
+    let _ = scryer_core::history::append_event(
+        &model_ref,
+        &scryer_core::history::HistoryEvent::new(
+            scryer_core::drift::now_secs(),
+            scryer_core::history::EventKind::Impl,
+            &folded.host_id,
+            "rejected — marked for deletion",
+        )
+        .with_rows(vec![scryer_core::history::EventRow::new("−", folded.statement)]),
+    );
+    Ok(())
+}
+
 // ---- Stale (take-model) verdicts: the mirror of adopt/reject. ----
 //
 // A stale claim/node means the model still asserts something the code stopped
@@ -2491,6 +2592,7 @@ fn reimplement_responsibility(cwd: String, resp_id: String) -> Result<(), String
         .find(|(_, r)| r.id == resp_id);
     if let Some((hid, r)) = in_plan {
         r.stale = None;
+        r.stale_proposal = None;
         host_id = Some(hid);
         statement = Some(r.statement.clone());
     } else if let Some((chost, cstmt)) = &removed {
@@ -2501,6 +2603,7 @@ fn reimplement_responsibility(cwd: String, resp_id: String) -> Result<(), String
                 statement: cstmt.clone(),
                 vagrant: None,
                 stale: None,
+                stale_proposal: None,
                 directives: Vec::new(),
                 last_touched_at: None,
             });
@@ -2520,6 +2623,141 @@ fn reimplement_responsibility(cwd: String, resp_id: String) -> Result<(), String
     scryer_core::write_planned_at(&model_ref, &planned)?;
     let _ = scryer_core::save_baseline_at(&model_ref, &committed);
     log_take_model(&model_ref, &host_id, "re-implement — code regressed", "+", statement, source);
+    Ok(())
+}
+
+/// Remove a property by (node, label), returning it. None if absent. Properties
+/// have no source anchor of their own, so nothing else to GC. Mirror of
+/// [`take_responsibility`] for the data-shape layer.
+fn take_property(
+    model: &mut scryer_core::ScryModel,
+    node_id: &str,
+    label: &str,
+) -> Option<scryer_core::SchemaProperty> {
+    let n = model.nodes.iter_mut().find(|n| n.id == node_id)?;
+    let pos = n.properties.iter().position(|p| p.label == label)?;
+    Some(n.properties.remove(pos))
+}
+
+/// DROP a stale property: the code legitimately removed this field, so the property
+/// leaves the model entirely (both layers). Property-level twin of
+/// [`drop_responsibility`].
+#[tauri::command]
+fn drop_property(cwd: String, node_id: String, label: String) -> Result<(), String> {
+    let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    let mut committed = scryer_core::read_model_at(&model_ref)?;
+    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+
+    let removed = take_property(&mut committed, &node_id, &label)
+        .or_else(|| take_property(&mut planned, &node_id, &label))
+        .ok_or_else(|| format!("Property '{label}' on node '{node_id}' not found"))?;
+    // Make sure it's gone from BOTH layers regardless of which one matched first.
+    take_property(&mut committed, &node_id, &label);
+    take_property(&mut planned, &node_id, &label);
+
+    scryer_core::write_model_at(&model_ref, &committed)?;
+    scryer_core::write_planned_at(&model_ref, &planned)?;
+    let _ = scryer_core::save_baseline_at(&model_ref, &committed);
+    log_take_model(&model_ref, &node_id, "dropped — removed from code", "−", removed.label, None);
+    Ok(())
+}
+
+/// RE-IMPLEMENT a stale property: the model is right and the field must be rebuilt.
+/// Remove it from committed while the plan keeps a clean copy (stale cleared), so
+/// the diff reads it as an `Added` to-do. Property-level twin of
+/// [`reimplement_responsibility`].
+#[tauri::command]
+fn reimplement_property(cwd: String, node_id: String, label: String) -> Result<(), String> {
+    let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    let mut committed = scryer_core::read_model_at(&model_ref)?;
+    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+
+    let removed = take_property(&mut committed, &node_id, &label);
+
+    // Keep a clean to-do in the plan: clear stale, or reconstruct from committed.
+    let in_plan = planned
+        .nodes
+        .iter_mut()
+        .find(|n| n.id == node_id)
+        .and_then(|n| n.properties.iter_mut().find(|p| p.label == label));
+    if let Some(p) = in_plan {
+        p.stale = None;
+    } else if let Some(prop) = &removed {
+        if let Some(n) = planned.nodes.iter_mut().find(|n| n.id == node_id) {
+            n.properties.push(scryer_core::SchemaProperty {
+                label: prop.label.clone(),
+                description: prop.description.clone(),
+                vagrant: None,
+                stale: None,
+                last_touched_at: None,
+            });
+        }
+    } else {
+        return Err(format!("Property '{label}' on node '{node_id}' not found"));
+    }
+
+    scryer_core::write_model_at(&model_ref, &committed)?;
+    scryer_core::write_planned_at(&model_ref, &planned)?;
+    let _ = scryer_core::save_baseline_at(&model_ref, &committed);
+    log_take_model(&model_ref, &node_id, "re-implement — code regressed", "+", label, None);
+    Ok(())
+}
+
+/// Set a responsibility's statement wherever it lives (nodes or groups), clearing
+/// the drift flags and stamping the edit. Returns the host node/group id.
+fn reword_in_model(
+    model: &mut scryer_core::ScryModel,
+    resp_id: &str,
+    statement: &str,
+    now: u64,
+) -> Option<String> {
+    let host = model
+        .nodes
+        .iter_mut()
+        .map(|n| (n.id.clone(), &mut n.responsibilities))
+        .chain(model.groups.iter_mut().map(|g| (g.id.clone(), &mut g.responsibilities)))
+        .find_map(|(hid, resps)| resps.iter_mut().find(|r| r.id == resp_id).map(|r| (hid, r)));
+    let (host_id, r) = host?;
+    r.statement = statement.to_string();
+    r.stale = None;
+    r.stale_proposal = None;
+    r.last_touched_at = Some(now);
+    Some(host_id)
+}
+
+/// REWORD a stale responsibility: the code didn't lose the behaviour, it DIVERGED,
+/// and drift proposed a corrected statement. Accepting it brings the model in line
+/// with code that already exists — so the new wording lands in BOTH layers and the
+/// stale/proposal flags clear, leaving the layers identical and thus no plan work
+/// item. The reconcile mirror of `drop`/`adopt`: a model edit catching up to
+/// reality, not a build to-do. `statement` is the accepted text (drift's proposal,
+/// possibly edited by the user).
+#[tauri::command]
+fn reword_responsibility(cwd: String, resp_id: String, statement: String) -> Result<(), String> {
+    let statement = statement.trim().to_string();
+    if statement.is_empty() {
+        return Err("Reworded statement is empty".into());
+    }
+    let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    let mut committed = scryer_core::read_model_at(&model_ref)?;
+    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+
+    let source = committed
+        .source_map
+        .get(&resp_id)
+        .or_else(|| planned.source_map.get(&resp_id))
+        .and_then(|l| l.first())
+        .cloned();
+
+    let now = scryer_core::drift::now_secs();
+    let in_c = reword_in_model(&mut committed, &resp_id, &statement, now);
+    let in_p = reword_in_model(&mut planned, &resp_id, &statement, now);
+    let host_id = in_c.or(in_p).ok_or_else(|| format!("Responsibility '{resp_id}' not found"))?;
+
+    scryer_core::write_model_at(&model_ref, &committed)?;
+    scryer_core::write_planned_at(&model_ref, &planned)?;
+    let _ = scryer_core::save_baseline_at(&model_ref, &committed);
+    log_take_model(&model_ref, &host_id, "reworded — code diverged", "~", statement, source);
     Ok(())
 }
 
@@ -2845,6 +3083,11 @@ pub fn run() {
             reject_responsibility,
             drop_responsibility,
             reimplement_responsibility,
+            adopt_property,
+            reject_property,
+            drop_property,
+            reimplement_property,
+            reword_responsibility,
             drop_node,
             reimplement_node,
             cancel_agent_session,

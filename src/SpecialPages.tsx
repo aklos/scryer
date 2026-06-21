@@ -21,17 +21,17 @@
  */
 
 import { useState } from "react";
-import { Check, FileClock, GitCompare, Sparkles } from "lucide-react";
+import { Check, FileClock, GitCompare } from "lucide-react";
 import { ConfirmPopover } from "./ConfirmPopover";
 import type { ChangeItem, ChangeRevision } from "./hooks/useModelStorage";
-import type { ScryModel, Node, Responsibility, DriftScope } from "./viewmodel";
+import type { ScryModel, Node, Responsibility, SchemaProperty, DriftScope } from "./viewmodel";
 import type { Editor } from "./editor";
 import type { ModelHealthReport } from "./health";
 import { ANCHOR_STATE_LABEL, collapseAnchors, darkBoundaries } from "./health";
 import { kindIcon } from "./kindIcon";
 import { isNodeEmpty } from "./rollup";
-import { respElementId } from "./SourceSection";
-import { BTN, BTN_AGENT, jumpTo, PageSection, WikiLink } from "./pagekit";
+import { respElementId, propElementId } from "./SourceSection";
+import { BTN, BTN_AGENT, BTN_DANGER, BTN_GO, jumpTo, PageSection, WikiLink, WordDiffText } from "./pagekit";
 
 // --- shared shell -------------------------------------------------------------
 
@@ -261,6 +261,65 @@ function ClaimRow({
             {claim.node.name || "Untitled"}
           </button>
         </span>
+        {claim.resp.staleProposal && (
+          <div className="mt-0.5 text-2xs text-[var(--text-muted)]">
+            drift proposes:{" "}
+            <span className="text-[var(--text-secondary)]">
+              <WordDiffText from={claim.resp.statement} to={claim.resp.staleProposal} />
+            </span>
+          </div>
+        )}
+      </div>
+      {actions}
+    </li>
+  );
+}
+
+interface PropRef {
+  node: Node;
+  prop: SchemaProperty;
+}
+
+/** One data-field row — the property-level mirror of {@link ClaimRow}. Opens the
+ *  owning node and flashes the field; properties have no id, so it's addressed by
+ *  (node, label). */
+function PropRow({
+  pref,
+  onSelectNode,
+  actions,
+}: {
+  pref: PropRef;
+  onSelectNode: (id: string) => void;
+  actions?: React.ReactNode;
+}) {
+  const goToProp = () => {
+    onSelectNode(pref.node.id);
+    window.setTimeout(() => jumpTo(propElementId(pref.node.id, pref.prop.label)), 250);
+  };
+  return (
+    <li className="flex items-start gap-2 border-b border-[var(--border-subtle)] py-2 last:border-b-0">
+      <div className="min-w-0 flex-1">
+        <button
+          type="button"
+          onClick={goToProp}
+          className="block w-full truncate text-left text-sm text-[var(--text-secondary)] hover:text-[var(--text)] hover:underline"
+          title="Open on its page"
+        >
+          <span className="font-mono">{pref.prop.label || "field"}</span>
+          {pref.prop.description && (
+            <span className="text-[var(--text-muted)]"> — {pref.prop.description}</span>
+          )}
+        </button>
+        <span className="text-2xs text-[var(--text-muted)]">
+          on{" "}
+          <button
+            type="button"
+            onClick={() => onSelectNode(pref.node.id)}
+            className="text-blue-700 hover:underline dark:text-blue-400"
+          >
+            {pref.node.name || "Untitled"}
+          </button>
+        </span>
       </div>
       {actions}
     </li>
@@ -269,7 +328,9 @@ function ClaimRow({
 
 export interface ReviewIndex {
   vagrant: ClaimRef[];
+  vagrantProps: PropRef[];
   stale: ClaimRef[];
+  staleProps: PropRef[];
   staleNodes: Node[];
   emptySymbols: Node[];
   unseenNodes: Node[];
@@ -287,7 +348,9 @@ export function buildReviewIndex(
   newRespIds: ReadonlySet<string>,
 ): ReviewIndex {
   const vagrant: ClaimRef[] = [];
+  const vagrantProps: PropRef[] = [];
   const stale: ClaimRef[] = [];
+  const staleProps: PropRef[] = [];
   const unseenClaims: ClaimRef[] = [];
   // Whole nodes whose backing code is gone — verdicted as a subtree, so their
   // own stale claims are subsumed (don't also list them as individual claims).
@@ -299,19 +362,27 @@ export function buildReviewIndex(
       if (resp.stale && !staleNodeIds.has(node.id)) stale.push({ node, resp });
       if (newRespIds.has(resp.id)) unseenClaims.push({ node, resp });
     }
+    // Data fields drift the same way — a vagrant/stale property awaits the same
+    // adopt/reject and re-implement/drop verdicts as a claim.
+    for (const prop of node.properties ?? []) {
+      if (prop.vagrant) vagrantProps.push({ node, prop });
+      if (prop.stale && !staleNodeIds.has(node.id)) staleProps.push({ node, prop });
+    }
   }
   const emptySymbols = model.nodes.filter(isNodeEmpty);
   const unseenNodes = model.nodes.filter((n) => newNodeIds.has(n.id));
   const total =
     vagrant.length +
+    vagrantProps.length +
     stale.length +
+    staleProps.length +
     staleNodes.length +
     emptySymbols.length +
     unseenNodes.length +
     unseenClaims.length +
     driftScopes.length +
     collapseAnchors(report?.anchors ?? []).length;
-  return { vagrant, stale, staleNodes, emptySymbols, unseenNodes, unseenClaims, total };
+  return { vagrant, vagrantProps, stale, staleProps, staleNodes, emptySymbols, unseenNodes, unseenClaims, total };
 }
 
 export function NeedsReviewPage({
@@ -383,7 +454,6 @@ export function NeedsReviewPage({
                 }
               >
                 <p className="mb-2 text-2xs text-[var(--text-muted)]">
-                  <Sparkles className="mr-1 inline h-3 w-3 text-indigo-500 dark:text-indigo-400" />
                   Landed from the agent and not yet looked at. Opening an item clears it; see
                   Recent changes for the field-level diffs.
                 </p>
@@ -404,11 +474,14 @@ export function NeedsReviewPage({
               </PageSection>
             )}
 
-            {idx.vagrant.length > 0 && (
-              <PageSection title="Undescribed behaviour" count={idx.vagrant.length}>
+            {idx.vagrant.length + idx.vagrantProps.length > 0 && (
+              <PageSection
+                title="Undescribed in code"
+                count={idx.vagrant.length + idx.vagrantProps.length}
+              >
                 <p className="mb-2 text-2xs text-[var(--text-muted)]">
-                  Found in the code with no claim describing it. Adopt into the contract, or
-                  reject to mark the code for deletion.
+                  Found in the code with no claim or field describing it. Adopt into the contract,
+                  or reject to mark the code for deletion.
                 </p>
                 <ul className="flex flex-col">
                   {idx.vagrant.map((ref) => (
@@ -422,14 +495,41 @@ export function NeedsReviewPage({
                             <button
                               type="button"
                               onClick={() => editor.adoptResponsibility(ref.resp.id)}
-                              className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                              className={BTN_GO}
                             >
                               Adopt
                             </button>
                             <button
                               type="button"
                               onClick={() => editor.rejectResponsibility(ref.resp.id)}
-                              className="font-medium text-[var(--text-tertiary)] hover:text-red-500 hover:underline dark:hover:text-red-400"
+                              className={BTN_DANGER}
+                            >
+                              Reject
+                            </button>
+                          </span>
+                        )
+                      }
+                    />
+                  ))}
+                  {idx.vagrantProps.map((ref) => (
+                    <PropRow
+                      key={`${ref.node.id}.${ref.prop.label}`}
+                      pref={ref}
+                      onSelectNode={onSelectNode}
+                      actions={
+                        editor && (
+                          <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
+                            <button
+                              type="button"
+                              onClick={() => editor.adoptProperty(ref.node.id, ref.prop.label)}
+                              className={BTN_GO}
+                            >
+                              Adopt
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => editor.rejectProperty(ref.node.id, ref.prop.label)}
+                              className={BTN_DANGER}
                             >
                               Reject
                             </button>
@@ -442,11 +542,15 @@ export function NeedsReviewPage({
               </PageSection>
             )}
 
-            {idx.stale.length > 0 && (
-              <PageSection title="Stale claims" count={idx.stale.length}>
+            {idx.stale.length + idx.staleProps.length > 0 && (
+              <PageSection
+                title="Stale claims"
+                count={idx.stale.length + idx.staleProps.length}
+              >
                 <p className="mb-2 text-2xs text-[var(--text-muted)]">
-                  The model asserts these but the code stopped doing them. Re-implement to
-                  rebuild the code, or drop the claim if the behaviour was removed on purpose.
+                  The model asserts these but the code no longer matches. Where drift proposes a
+                  reword, accept it to bring the claim in line with the code (no rebuild). Otherwise
+                  re-implement to rebuild the code, or drop the claim if the behaviour was removed.
                 </p>
                 <ul className="flex flex-col">
                   {idx.stale.map((ref) => (
@@ -457,10 +561,22 @@ export function NeedsReviewPage({
                       actions={
                         editor && (
                           <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
+                            {ref.resp.staleProposal && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  editor.rewordResponsibility(ref.resp.id, ref.resp.staleProposal!)
+                                }
+                                className={BTN_GO}
+                                title="The code changed what it does — accept drift's wording into the model. No rebuild: the code already does this."
+                              >
+                                Accept reword
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => editor.reimplementResponsibility(ref.resp.id)}
-                              className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                              className={ref.resp.staleProposal ? BTN : BTN_GO}
                             >
                               Re-implement
                             </button>
@@ -473,7 +589,40 @@ export function NeedsReviewPage({
                                   run: () => editor.dropResponsibility(ref.resp.id),
                                 })
                               }
-                              className="font-medium text-[var(--text-tertiary)] hover:text-red-500 hover:underline dark:hover:text-red-400"
+                              className={BTN_DANGER}
+                            >
+                              Drop
+                            </button>
+                          </span>
+                        )
+                      }
+                    />
+                  ))}
+                  {idx.staleProps.map((ref) => (
+                    <PropRow
+                      key={`${ref.node.id}.${ref.prop.label}`}
+                      pref={ref}
+                      onSelectNode={onSelectNode}
+                      actions={
+                        editor && (
+                          <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
+                            <button
+                              type="button"
+                              onClick={() => editor.reimplementProperty(ref.node.id, ref.prop.label)}
+                              className={BTN_GO}
+                            >
+                              Re-implement
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) =>
+                                setConfirmDrop({
+                                  rect: e.currentTarget.getBoundingClientRect(),
+                                  label: "Drop this field?",
+                                  run: () => editor.dropProperty(ref.node.id, ref.prop.label),
+                                })
+                              }
+                              className={BTN_DANGER}
                             >
                               Drop
                             </button>
@@ -506,7 +655,7 @@ export function NeedsReviewPage({
                           <button
                             type="button"
                             onClick={() => editor.reimplementNode(n.id)}
-                            className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                            className={BTN_GO}
                           >
                             Re-implement
                           </button>
@@ -519,7 +668,7 @@ export function NeedsReviewPage({
                                 run: () => editor.dropNode(n.id),
                               })
                             }
-                            className="font-medium text-[var(--text-tertiary)] hover:text-red-500 hover:underline dark:hover:text-red-400"
+                            className={BTN_DANGER}
                           >
                             Drop
                           </button>

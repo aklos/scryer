@@ -41,6 +41,11 @@ export interface Responsibility {
    *  discharges this claim. A flag awaiting a verdict (re-implement, reword,
    *  or drop) — the status is the prescription and stays untouched. */
   stale?: boolean;
+  /** Drift's proposed correction for a stale claim: the statement that would
+   *  match what the code now does, set when the behaviour diverged rather than
+   *  vanished. Surfaced as an accept-or-edit reword next to re-implement/drop;
+   *  a localized hint that never enters the plan diff. Cleared with `stale`. */
+  staleProposal?: string;
   /** Optional prescriptive HOW-constraints ("must"/"never" rules) — not part of conformance. */
   directives?: string[];
   /** Unix seconds of the last truth-bearing edit. Drives the canvas
@@ -53,6 +58,13 @@ export interface Responsibility {
 export interface SchemaProperty {
   label: string;
   description?: string;
+  /** Drift adoption marker, the property-level twin of {@link Responsibility.vagrant}:
+   *  `flag_drift` found a declared field no property described. Renders as a drift
+   *  mark (Q), not a plan add (A); awaits adopt/reject. Mirrors Rust `SchemaProperty.vagrant`. */
+  vagrant?: boolean;
+  /** Drift regression marker, the twin of {@link Responsibility.stale}: the field
+   *  backing this property is gone or changed. Awaits drop/reimplement. */
+  stale?: boolean;
   /** Unix seconds of the last truth-bearing edit — see {@link Responsibility.lastTouchedAt}. */
   lastTouchedAt?: number;
 }

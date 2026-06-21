@@ -55,6 +55,15 @@ pub struct Responsibility {
     /// `mark_implemented` or by editing the claim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stale: Option<bool>,
+    /// Drift's proposed correction for a `stale` claim: the statement that would
+    /// match what the code now does. Set by `flag_drift` alongside `stale` when
+    /// the behaviour didn't vanish but diverged — the user accepts it (folding
+    /// the new wording into the model), edits it, or ignores it for the
+    /// re-implement/drop verdicts. A localized hint, not a plan work item:
+    /// `diff` ignores it, so a reword awaiting a verdict never enters the queue.
+    /// Cleared with `stale` on any verdict or edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_proposal: Option<String>,
     /// Optional prescriptive HOW-constraints — verb-led "must"/"never" rules
     /// the implementation has to satisfy. User-authored: read-only to the agent,
     /// so hidden from write-tool input schemas (`schemars(skip)`) while still
@@ -81,6 +90,22 @@ pub struct SchemaProperty {
     pub label: String,
     #[serde(default)]
     pub description: String,
+    /// Drift adoption marker, the property-level twin of [`Responsibility::vagrant`]:
+    /// `flag_drift` discovered a declared data field that no property described and
+    /// proposed it into the PLAN. Awaits a human verdict — adopt (the field exists,
+    /// fold it in) or reject (mark the field for deletion). Hidden from the agent's
+    /// write-tool schemas — vagrancy is set only by `flag_drift`, never authored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub vagrant: Option<bool>,
+    /// Drift regression marker, the property-level twin of [`Responsibility::stale`]:
+    /// the semantic check judged the field backing this property gone or materially
+    /// changed. A flag awaiting a verdict (re-implement or drop); the property itself
+    /// stays untouched until then. Cleared by adoption/commit or by editing the
+    /// property. Hidden from the agent's write-tool schemas — set only by `flag_drift`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub stale: Option<bool>,
     /// Unix seconds of the last truth-bearing edit (label / description).
     /// Drives the fossilization patina, exactly like
     /// [`Responsibility::last_touched_at`]; stamped automatically, never authored.
@@ -364,12 +389,6 @@ impl ModelRef {
         }
     }
 
-    pub fn implementing_path(&self) -> PathBuf {
-        match self {
-            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".implementing"),
-        }
-    }
-
     pub fn lock_path(&self) -> PathBuf {
         match self {
             ModelRef::ProjectLocal(path) => path.join(".scryer").join(".lock"),
@@ -438,7 +457,7 @@ fn ensure_project_gitignore(scryer_dir: &Path) -> Result<(), String> {
     if !gitignore.exists() {
         fs::write(
             &gitignore,
-            "*.baseline.scry\n.implementing\n.sync\n.tmp.*\n.lock\n.anchors.json\n.build_edges.json\npreview/\n",
+            "*.baseline.scry\n.sync\n.tmp.*\n.lock\n.anchors.json\n.build_edges.json\npreview/\n",
         )
         .map_err(|e| format!("Failed to create .gitignore: {}", e))?;
     }
@@ -538,7 +557,10 @@ fn resp_truth_changed(a: &Responsibility, b: &Responsibility) -> bool {
 /// Whether two properties differ in any truth-bearing field (label /
 /// description). Excludes `last_touched_at`.
 fn prop_truth_changed(a: &SchemaProperty, b: &SchemaProperty) -> bool {
-    a.label != b.label || a.description != b.description
+    a.label != b.label
+        || a.description != b.description
+        || a.vagrant != b.vagrant
+        || a.stale != b.stale
 }
 
 /// Stamp `last_touched_at = now` on every responsibility/property whose
@@ -929,25 +951,6 @@ pub fn commit_element(
     Ok(())
 }
 
-// --- Implementing flag ---
-
-pub fn is_implementing_at(r: &ModelRef) -> bool {
-    r.implementing_path().exists()
-}
-
-pub fn set_implementing_at(r: &ModelRef, active: bool) -> Result<(), String> {
-    let path = r.implementing_path();
-    if active {
-        let dir = r.dir();
-        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        fs::write(&path, "").map_err(|e| format!("Failed to set implementing flag: {}", e))
-    } else if path.exists() {
-        fs::remove_file(&path).map_err(|e| format!("Failed to clear implementing flag: {}", e))
-    } else {
-        Ok(())
-    }
-}
-
 pub fn delete_model_at(r: &ModelRef) -> Result<(), String> {
     let model_path = r.model_path();
     if model_path.exists() {
@@ -956,10 +959,6 @@ pub fn delete_model_at(r: &ModelRef) -> Result<(), String> {
     let baseline = r.baseline_path();
     if baseline.exists() {
         let _ = fs::remove_file(&baseline);
-    }
-    let imp = r.implementing_path();
-    if imp.exists() {
-        let _ = fs::remove_file(&imp);
     }
     let sync = r.sync_path();
     if sync.exists() {
@@ -1289,6 +1288,7 @@ mod tests {
                 statement: statement.into(),
                 vagrant: None,
                 stale: None,
+                stale_proposal: None,
                 directives: Vec::new(),
                 last_touched_at: None,
             }],
@@ -1497,6 +1497,7 @@ mod lock_tests {
             statement: statement.into(),
             vagrant: None,
             stale: None,
+            stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
         }
@@ -1587,6 +1588,8 @@ mod lock_tests {
         a.properties.push(SchemaProperty {
             label: "email".into(),
             description: "old".into(),
+            vagrant: None,
+            stale: None,
             last_touched_at: None,
         });
         m.nodes.push(a);

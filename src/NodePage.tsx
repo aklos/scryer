@@ -16,7 +16,7 @@
  * New items land as `proposed`. Mutations flow through the Editor intents.
  */
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -47,7 +47,6 @@ import type {
   DriftScope,
 } from "./viewmodel";
 import { effectiveSourceMap, isDataShape, nextResponsibilityId } from "./viewmodel";
-import { wordDiff } from "./wordDiff";
 import type { Editor } from "./editor";
 import type { ModelHealthReport } from "./health";
 import { FLAG_COLORS } from "./statusColors";
@@ -64,7 +63,7 @@ import {
 } from "./history";
 import { matchPreviewComponent, usePreviewServer } from "./hooks/usePreviewServer";
 import { useDarkMode } from "./hooks/useDarkMode";
-import { ClaimSource, respElementId } from "./SourceSection";
+import { ClaimSource, respElementId, propElementId } from "./SourceSection";
 import { PageMenuProvider, usePageMenu, useCopyId, copyIdItem } from "./pageMenu";
 import { Input } from "./ui";
 import {
@@ -85,6 +84,7 @@ import {
   SectionEditor,
   SegField,
   WikiText,
+  WordDiffText,
 } from "./pagekit";
 
 // Row grid for the mono lanes: marker | index | content. The edit controls
@@ -543,8 +543,13 @@ function NodePageBody(props: PageProps & { node: Node }) {
   // The node's own definition anchor — its file, surfaced in the type line.
   const defFile = definition[0]?.pattern;
 
-  const staleCount = resps.filter((r) => r.stale).length;
-  const vagrantCount = resps.filter((r) => r.vagrant).length;
+  // Drift counts span both claims and data fields — a vagrant/stale property
+  // feeds the same review notices as a responsibility.
+  const driftProps = node.properties ?? [];
+  const staleCount =
+    resps.filter((r) => r.stale).length + driftProps.filter((p) => p.stale).length;
+  const vagrantCount =
+    resps.filter((r) => r.vagrant).length + driftProps.filter((p) => p.vagrant).length;
   const drift = driftScopes.find((s) => s.nodeId === node.id);
 
   // Maintenance notices — full-width amboxes stacked at the top of the article
@@ -623,6 +628,10 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 onClick={() => {
                   const first = resps.find((r) => r.stale);
                   if (first) jumpTo(respElementId(first.id));
+                  else {
+                    const fp = driftProps.find((p) => p.stale);
+                    if (fp) jumpTo(propElementId(node.id, fp.label));
+                  }
                 }}
                 className={NOTICE_ACTION}
               >
@@ -643,6 +652,10 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 onClick={() => {
                   const first = resps.find((r) => r.vagrant);
                   if (first) jumpTo(respElementId(first.id));
+                  else {
+                    const fp = driftProps.find((p) => p.vagrant);
+                    if (fp) jumpTo(propElementId(node.id, fp.label));
+                  }
                 }}
                 className={NOTICE_ACTION}
               >
@@ -650,7 +663,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
               </button>
             }
           >
-            {vagrantCount} undescribed behaviour{vagrantCount === 1 ? "" : "s"} in code
+            {vagrantCount} undescribed in code
           </Ambox>
         )}
         {isNodeEmpty(node) && (
@@ -1361,37 +1374,6 @@ function buildRespDiff(planned: Responsibility[], committed: Responsibility[]): 
 
 /** Render text with word-level add/remove highlighting (a reworded claim). When
  *  `from`/`to` are equal it's just the plain text. */
-function WordDiffText({ from, to }: { from: string; to: string }) {
-  const segs = wordDiff(from, to);
-  return (
-    <>
-      {segs.map((s, i) => {
-        // A substitution (removed word immediately followed by its replacement)
-        // glues the two together — "forin" — because the tokenizer keeps the
-        // surrounding spaces in the unchanged runs, leaving none between the
-        // changed words. Reinsert that gap so the strike and the pill read apart.
-        const sep = i > 0 && segs[i - 1].kind !== "equal" && s.kind !== "equal";
-        return (
-          <Fragment key={i}>
-            {sep && " "}
-            {s.kind === "equal" ? (
-              <span>{s.text}</span>
-            ) : s.kind === "added" ? (
-              <span className="rounded-[2px] bg-emerald-500/15 px-px text-emerald-700 dark:text-emerald-300">
-                {s.text}
-              </span>
-            ) : (
-              <del className="text-red-600/90 decoration-red-400/60 dark:text-red-400/90">
-                {s.text}
-              </del>
-            )}
-          </Fragment>
-        );
-      })}
-    </>
-  );
-}
-
 function ResponsibilitiesSection({
   model,
   host,
@@ -1619,6 +1601,9 @@ function RespDiffRow({
   // or code-first, so they're never "unmapped".
   const unmapped = leafHost && locations.length === 0 && (kind === "unchanged" || kind === "reworded");
   const hasMeta = resp.stale === true || unmapped;
+  // Drift's reword proposal: `null` = showing the accept/edit affordance, a
+  // string = editing the wording before accepting.
+  const [rewordDraft, setRewordDraft] = useState<string | null>(null);
 
   const contentColor = deleted
     ? "text-[var(--text-muted)]"
@@ -1680,24 +1665,80 @@ function RespDiffRow({
         {/* Verdict actions, inline where the row needs one — controls in their
             own lane, off the mono content. */}
         {resp.stale && editor && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
-            <span className="text-[var(--text-tertiary)]">Drift says the code no longer does this —</span>
-            <button
-              type="button"
-              onClick={() => editor.reimplementResponsibility(resp.id)}
-              className={BTN_GO}
-              title="The model is right — rebuild the code. Becomes a to-do the agent implements (folds back when done)."
-            >
-              Re-implement
-            </button>
-            <button
-              type="button"
-              onClick={() => editor.dropResponsibility(resp.id)}
-              className={BTN_DANGER}
-              title="The behaviour was removed on purpose — drop the claim from the model."
-            >
-              Drop
-            </button>
+          <div className="mt-1.5 flex flex-col gap-1.5 text-[11px]">
+            {/* Reword: drift judged the behaviour DIVERGED, not vanished, and
+                proposed wording that matches the code now. The recommended path —
+                accept it (or edit first) to fold the new wording in with no
+                rebuild, since the code already does it. */}
+            {resp.staleProposal &&
+              (rewordDraft === null ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[var(--text-tertiary)]">Drift proposes:</span>
+                  <span className="min-w-0 font-mono text-[12.5px]">
+                    <WordDiffText from={resp.statement} to={resp.staleProposal} />
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => editor.rewordResponsibility(resp.id, resp.staleProposal!)}
+                    className={BTN_GO}
+                    title="The code changed what it does — accept this wording into the model. No rebuild: the code already does this."
+                  >
+                    Accept reword
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRewordDraft(resp.staleProposal ?? "")}
+                    className={BTN}
+                    title="Adjust the wording before accepting"
+                  >
+                    Edit
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Editable
+                    initial={rewordDraft}
+                    autoFocus
+                    placeholder="Verb-led statement of accountability"
+                    onInput={setRewordDraft}
+                    className={`min-w-[12rem] flex-1 ${STMT_HL}`}
+                  />
+                  <button
+                    type="button"
+                    disabled={!rewordDraft.trim()}
+                    onClick={() => editor.rewordResponsibility(resp.id, rewordDraft)}
+                    className={`${BTN_GO} disabled:opacity-40`}
+                  >
+                    Save
+                  </button>
+                  <button type="button" onClick={() => setRewordDraft(null)} className={BTN}>
+                    Cancel
+                  </button>
+                </div>
+              ))}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[var(--text-tertiary)]">
+                {resp.staleProposal
+                  ? "Or —"
+                  : "Drift says the code no longer does this —"}
+              </span>
+              <button
+                type="button"
+                onClick={() => editor.reimplementResponsibility(resp.id)}
+                className={BTN_GO}
+                title="The model is right — rebuild the code. Becomes a to-do the agent implements (folds back when done)."
+              >
+                Re-implement
+              </button>
+              <button
+                type="button"
+                onClick={() => editor.dropResponsibility(resp.id)}
+                className={BTN_DANGER}
+                title="The behaviour was removed on purpose — drop the claim from the model."
+              >
+                Drop
+              </button>
+            </div>
           </div>
         )}
         {reviewable && (
@@ -1881,7 +1922,7 @@ function ResponsibilityEditRow({
 /** A property's divergence from the committed model, matched by label (props
  *  carry no stable id): `added`, `reworded` (description changed), `deleted`
  *  (committed but dropped), or `unchanged`. */
-type PropDiffKind = "added" | "reworded" | "deleted" | "unchanged";
+type PropDiffKind = "added" | "reworded" | "deleted" | "vagrant" | "unchanged";
 
 interface PropDiffRow {
   prop: SchemaProperty;
@@ -1900,10 +1941,13 @@ function buildPropDiff(planned: SchemaProperty[], committed: SchemaProperty[]): 
   for (const p of planned) {
     const prev = prevByKey.get(propKey(p.label));
     let kind: PropDiffKind;
-    if (!prev) kind = "added";
+    // A vagrant field is code-discovered (the "?" drift kind), never numbered —
+    // mirrors how a vagrant responsibility classifies.
+    if (p.vagrant) kind = "vagrant";
+    else if (!prev) kind = "added";
     else if (prev.description !== p.description) kind = "reworded";
     else kind = "unchanged";
-    rows.push({ prop: p, kind, prev, index: ++n });
+    rows.push({ prop: p, kind, prev, index: kind === "vagrant" ? null : ++n });
   }
   for (const p of committed)
     if (!liveKeys.has(propKey(p.label))) rows.push({ prop: p, kind: "deleted", index: null });
@@ -1915,24 +1959,31 @@ function buildPropDiff(planned: SchemaProperty[], committed: SchemaProperty[]): 
  *  grid so it reads as part of the same diff sheet as the responsibilities. */
 function PropDiffRow({
   row,
+  nodeId,
   model,
   onSelectNode,
+  editor,
 }: {
   row: PropDiffRow;
+  nodeId: string;
   model: ScryModel;
   onSelectNode: (id: string) => void;
+  editor?: Editor;
 }) {
   const { prop, kind, prev, index } = row;
   const mark = kind === "unchanged" ? null : RESP_MARK[kind];
   const deleted = kind === "deleted";
   const desc = prop.description ?? "";
+  // A vagrant field is code-first ("adopt?"); a stale one is a regressed field
+  // ("re-implement / drop") — the property-level mirror of the claim verdicts.
+  const reviewable = kind === "vagrant" && !!editor;
   const contentColor = deleted
     ? "text-[var(--text-muted)]"
     : kind === "unchanged"
       ? "text-[var(--text-secondary)]"
       : "text-[var(--text)]";
   return (
-    <li className={`${PROP_ROW} rounded-sm py-[1.5px]`}>
+    <li id={propElementId(nodeId, prop.label)} className={`${PROP_ROW} rounded-sm py-[1.5px]`}>
       <span
         className={`select-none text-center font-mono text-xs font-bold ${mark?.color ?? "text-[var(--text-ghost)]"}`}
       >
@@ -1952,6 +2003,58 @@ function PropDiffRow({
               <WikiText text={desc} nodes={model.nodes} onSelectNode={onSelectNode}/>
             )}
           </span>
+        )}
+        {prop.stale && (
+          <span className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-2xs">
+            <span
+              className={FLAG_COLORS.stale.pill}
+              title="Drift check: the field backing this property is gone or changed. Re-implement or drop it."
+            >
+              stale
+            </span>
+          </span>
+        )}
+        {prop.stale && editor && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+            <span className="text-[var(--text-tertiary)]">Drift says this field is gone —</span>
+            <button
+              type="button"
+              onClick={() => editor.reimplementProperty(nodeId, prop.label)}
+              className={BTN_GO}
+              title="The model is right — rebuild the field. Becomes a to-do the agent implements (folds back when done)."
+            >
+              Re-implement
+            </button>
+            <button
+              type="button"
+              onClick={() => editor.dropProperty(nodeId, prop.label)}
+              className={BTN_DANGER}
+              title="The field was removed on purpose — drop the property from the model."
+            >
+              Drop
+            </button>
+          </div>
+        )}
+        {reviewable && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+            <span className="text-[var(--text-tertiary)]">In the code, not in the model —</span>
+            <button
+              type="button"
+              onClick={() => editor!.adoptProperty(nodeId, prop.label)}
+              className={BTN_GO}
+              title="Accept this discovered field into the contract — commits it to the model now (the code already exists)"
+            >
+              Adopt
+            </button>
+            <button
+              type="button"
+              onClick={() => editor!.rejectProperty(nodeId, prop.label)}
+              className={BTN_DANGER}
+              title="Mark the field for deletion — this data is not wanted (folds it in, then schedules its removal)"
+            >
+              Reject
+            </button>
+          </div>
         )}
       </div>
     </li>
@@ -2088,7 +2191,14 @@ function PropertiesSection({
       ) : (
         <ol className="-mx-2 flex flex-col">
           {diffRows.map((row, i) => (
-            <PropDiffRow key={i} row={row} model={model} onSelectNode={onSelectNode} />
+            <PropDiffRow
+              key={i}
+              row={row}
+              nodeId={node.id}
+              model={model}
+              onSelectNode={onSelectNode}
+              editor={editor}
+            />
           ))}
         </ol>
       )}

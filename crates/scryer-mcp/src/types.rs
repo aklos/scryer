@@ -360,13 +360,6 @@ pub(crate) struct DeleteGroupRequest {
     pub group_id: String,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct SetDriftWatchRequest {
-    pub project: Option<String>,
-    /// true to suppress drift detection while implementing, false to resume.
-    pub active: bool,
-}
-
 // --- Intent write tools ---
 //
 // These build nodes from INTENT: the agent supplies meaning (name, plain
@@ -675,6 +668,47 @@ pub(crate) struct UndescribedItem {
     pub node_key: Option<String>,
 }
 
+/// A declared data field the code has that no property describes — the
+/// property-level twin of [`UndescribedItem`]. Recorded as a vagrant property
+/// on the data-shape node for the user to adopt (the field exists) or reject
+/// (mark the field for deletion).
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct UndescribedProperty {
+    /// The field's name — the property label, the EXACT identifier in code.
+    pub label: String,
+    /// Terse description of what the field holds. Omit if self-evident.
+    #[serde(default)]
+    pub description: String,
+    /// File the field is declared in (project-relative).
+    pub source_file: String,
+    /// Enclosing data-type definition name — the durable anchor that routes the
+    /// field to the node already modeling that type.
+    pub symbol: Option<String>,
+    /// Attach to an EXISTING node by id — when the data type is already modeled.
+    /// Leave node_id AND node_key unset to route automatically to the finest node
+    /// the source map ties `symbol`/`source_file` to.
+    #[serde(default, alias = "nodeId")]
+    pub node_id: Option<String>,
+    /// Attach to a node MINTED in this call — the `key` of a `newNodes` entry.
+    /// Use when the field belongs to a brand-new type the model has no node for.
+    /// Takes precedence over node_id.
+    #[serde(default, alias = "nodeKey")]
+    pub node_key: Option<String>,
+}
+
+/// An existing property whose backing field is gone or materially changed — the
+/// property-level twin of [`StaleResponsibility`]. Properties have no id, so it
+/// is addressed by its owning node plus its `label`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct StaleProperty {
+    /// ID of the node that carries the property.
+    pub node_id: String,
+    /// Label of the property whose field no longer matches the code.
+    pub label: String,
+    /// Short factual note on how the field diverged (for the review queue).
+    pub reason: String,
+}
+
 /// A node the drift check MINTS to home code the model has no node for — a
 /// missing rung in the tree (a component, or a symbol for a brand-new
 /// definition). Minted vagrant in the PLAN: it folds into the committed model
@@ -710,6 +744,13 @@ pub(crate) struct StaleResponsibility {
     pub responsibility_id: String,
     /// Short factual note on how the code diverged (for the review queue).
     pub reason: String,
+    /// Optional corrected statement: when the behaviour didn't vanish but
+    /// DIVERGED, the responsibility wording that matches what the code now does.
+    /// Surfaced to the user as a proposed reword they can accept (folding it into
+    /// the model — no code work, the code already does this), edit, or ignore in
+    /// favour of re-implement/drop. Omit when the behaviour is truly gone.
+    #[serde(default, alias = "proposedStatement")]
+    pub proposed_statement: Option<String>,
 }
 
 /// An existing NODE whose backing code is GONE — a symbol, a component, or a
@@ -742,10 +783,20 @@ pub(crate) struct FlagDriftRequest {
     /// first). Omit when every finding already has a home node.
     #[serde(default, alias = "newNodes")]
     pub new_nodes: Vec<NewNode>,
+    /// Declared data fields present in the code that NO property describes — each
+    /// is recorded as a vagrant property on the data-shape node for the user to
+    /// adopt or reject. Use this (not `undescribed`) for a new struct field /
+    /// interface member: it is data the type carries, never a behaviour.
+    #[serde(default, alias = "undescribedProperties")]
+    pub undescribed_properties: Vec<UndescribedProperty>,
     /// Existing responsibilities whose code no longer discharges them — marked
     /// `changed` for review.
     #[serde(default)]
     pub stale: Vec<StaleResponsibility>,
+    /// Existing properties whose backing field is gone or materially changed —
+    /// marked stale for review. The property-level mirror of `stale`.
+    #[serde(default, alias = "staleProperties")]
+    pub stale_properties: Vec<StaleProperty>,
     /// Existing NODES whose backing code is entirely GONE (a deleted file/folder
     /// wiped out a symbol, component, or container subtree). Each is flagged
     /// stale as a unit — the whole subtree — for the user to re-implement or

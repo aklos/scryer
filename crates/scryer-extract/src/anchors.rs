@@ -20,7 +20,7 @@
 use crate::lang;
 use scryer_core::{drift, lock_model, read_model_at, write_model_at, ModelRef, ScryModel};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 /// One fingerprinted anchor: a sourceMap location resolved to a concrete span
@@ -436,6 +436,57 @@ pub fn check_anchors(r: &ModelRef) -> Result<AnchorCheck, String> {
     })
 }
 
+/// Out-of-plan regressions to already-mapped code — the live drift nudge.
+///
+/// Drift, mid-implementation, is a change the plan does NOT account for. The
+/// plan is a positive description of the change we expect, so its footprint (the
+/// elements `plan_diff_at` reports as added/reworded/moved/…) is the suppression
+/// set: a committed anchor that breaks or changes BECAUSE the agent is
+/// re-implementing the responsibility it backs is expected churn, not drift.
+/// What survives is the dangerous case — a committed anchor that regressed with
+/// no pending plan item to explain it (e.g. a method deleted that the plan never
+/// touched). Rolled up per host node as [`drift::DriftScope`] so it feeds the
+/// existing nudge unchanged.
+///
+/// Anchor-level by design: it only sees changes to code the model already maps,
+/// which is exactly what keeps it cheap and quiet during planned work. Brand-new
+/// undescribed behaviour has no committed anchor to trip and is the on-demand
+/// semantic drift check's job, not this tripwire's.
+pub fn out_of_plan_scopes(r: &ModelRef) -> Result<Vec<drift::DriftScope>, String> {
+    // The plan's footprint, keyed by element. `obs.key` IS the element a broken
+    // anchor backs — a responsibility id, or a node id for a schema declaration
+    // — and `plan_diff_at` reports changes against those same ids, so a direct
+    // key match is the precise test. Deliberately NOT by owning node: reworking
+    // ONE responsibility must not silence a sibling regression on the same node
+    // (the deleted-method case). Link/group/property ids simply never match an
+    // anchor key, so collecting them all is harmless.
+    let plan = scryer_core::plan_diff_at(r)?;
+    let planned: HashSet<&str> = plan.changes.iter().map(|c| c.id.as_str()).collect();
+
+    let check = check_anchors(r)?;
+    // host_id → (host_name, changed files), so each node surfaces once.
+    let mut by_host: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
+    for obs in check.observations {
+        if planned.contains(obs.key.as_str()) {
+            continue;
+        }
+        by_host
+            .entry(obs.host_id)
+            .or_insert_with(|| (obs.host_name, BTreeSet::new()))
+            .1
+            .insert(obs.file);
+    }
+
+    Ok(by_host
+        .into_iter()
+        .map(|(node_id, (node_name, files))| drift::DriftScope {
+            node_id,
+            node_name,
+            changed_files: files.into_iter().collect(),
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -489,6 +540,7 @@ mod tests {
                 statement: "does the thing".into(),
                 vagrant: None,
                 stale: None,
+                stale_proposal: None,
                 directives: Vec::new(),
                 last_touched_at: None,
             }],
@@ -626,5 +678,75 @@ mod tests {
         let check = check_anchors(&r).unwrap();
         assert_eq!(check.observations.len(), 1);
         assert_eq!(check.observations[0].state, AnchorState::FileMissing);
+    }
+
+    /// Two responsibilities on one node, anchored to `alpha` and `beta`. The
+    /// plan reworks r1 (alpha) only. A change to alpha is expected churn —
+    /// suppressed; a change to beta has no pending plan item — it surfaces. This
+    /// is the deleted-method case: out-of-plan regressions tick even while the
+    /// node has other planned work in flight.
+    fn two_resp_model() -> ScryModel {
+        let mut m = leaf_model("alpha", "src/m.ts", 1, 3);
+        // leaf_model gives node "sym" + r1→alpha; add r2→beta on the same node.
+        m.nodes[0].responsibilities.push(Responsibility {
+            id: "r2".into(),
+            statement: "does beta".into(),
+            vagrant: None,
+            stale: None,
+            stale_proposal: None,
+            directives: Vec::new(),
+            last_touched_at: None,
+        });
+        m.source_map.insert(
+            "r2".into(),
+            vec![SourceLocation {
+                pattern: "src/m.ts".into(),
+                symbol: Some("beta".into()),
+                line: Some(5),
+                end_line: Some(7),
+                command: None,
+            }],
+        );
+        m
+    }
+
+    #[test]
+    fn out_of_plan_scopes_suppresses_planned_surfaces_unplanned() {
+        let (_dir, r) = project_with("src/m.ts", TS);
+        let committed = two_resp_model();
+        scryer_core::write_model_at(&r, &committed).unwrap();
+
+        // Plan reworks r1's statement; r2 is untouched by the plan.
+        let mut planned = committed.clone();
+        planned.nodes[0].responsibilities[0].statement = "does alpha, revised".into();
+        scryer_core::write_planned_at(&r, &planned).unwrap();
+        reconcile(&r);
+
+        // Edit alpha (the planned responsibility's code) → expected, suppressed.
+        touch_gate();
+        std::fs::write(
+            r.project_path().join("src/m.ts"),
+            TS.replace(
+                "function alpha() {\n    return 1;",
+                "function alpha() {\n    return 42;",
+            ),
+        )
+        .unwrap();
+        assert!(
+            out_of_plan_scopes(&r).unwrap().is_empty(),
+            "a change the plan accounts for is not drift"
+        );
+
+        // Now delete beta — a regression no pending plan item explains.
+        touch_gate();
+        std::fs::write(
+            r.project_path().join("src/m.ts"),
+            "export function alpha() {\n    return 42;\n}\n",
+        )
+        .unwrap();
+        let scopes = out_of_plan_scopes(&r).unwrap();
+        assert_eq!(scopes.len(), 1, "the out-of-plan deletion surfaces");
+        assert_eq!(scopes[0].node_id, "sym");
+        assert!(scopes[0].changed_files.iter().any(|f| f == "src/m.ts"));
     }
 }

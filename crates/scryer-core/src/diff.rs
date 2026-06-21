@@ -490,6 +490,7 @@ mod tests {
             statement: statement.to_string(),
             vagrant: None,
             stale: None,
+            stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
         }
@@ -641,6 +642,8 @@ mod tests {
         crate::SchemaProperty {
             label: label.to_string(),
             description: description.to_string(),
+            vagrant: None,
+            stale: None,
             last_touched_at: None,
         }
     }

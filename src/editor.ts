@@ -93,6 +93,11 @@ export interface Editor {
    *  `Added` to-do the agent rebuilds. Backend-driven; the watcher refreshes. */
   dropResponsibility: (respId: string) => void;
   reimplementResponsibility: (respId: string) => void;
+  /** Accept (or edit) drift's proposed reword for a STALE responsibility: the
+   *  code diverged rather than vanished, so the new wording — already true of the
+   *  code — lands in both layers and the stale flag clears, with no work item.
+   *  Backend-driven; the watcher refreshes. */
+  rewordResponsibility: (respId: string, statement: string) => void;
   /** Verdict on a STALE node — the whole subtree's backing code is gone. The
    *  node-level mirror of drop/reimplement: `dropNode` removes the node and every
    *  descendant from both layers; `reimplementNode` keeps the subtree in the plan
@@ -114,4 +119,17 @@ export interface Editor {
     patch: Partial<SchemaProperty>,
   ) => void;
   removeProperty: (nodeId: string, index: number) => void;
+  /** Verdict on a code-discovered (vagrant) PROPERTY — the property-level twin of
+   *  {@link adoptResponsibility}/{@link rejectResponsibility}. `adopt`: the field
+   *  already exists, so fold it into the committed model. `reject`: fold then drop
+   *  from the plan as a deletion work item. Addressed by (node, label) since
+   *  properties have no id. Backend-driven; the watcher refreshes both layers. */
+  adoptProperty: (nodeId: string, label: string) => void;
+  rejectProperty: (nodeId: string, label: string) => void;
+  /** Verdict on a STALE property (its backing field is gone or changed) — the
+   *  take-model mirror. `drop`: the code is right → remove from both layers.
+   *  `reimplement`: the model is right → remove from committed so it reads as an
+   *  `Added` to-do. Backend-driven; the watcher refreshes. */
+  dropProperty: (nodeId: string, label: string) => void;
+  reimplementProperty: (nodeId: string, label: string) => void;
 }

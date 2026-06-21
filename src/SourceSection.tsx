@@ -16,6 +16,11 @@ import type { SourceLocation } from "./viewmodel";
  *  Needs-review page. */
 export const respElementId = (respId: string) => `resp-${respId}`;
 
+/** Element id for a property row — a jump target for banners and the Needs-review
+ *  page. Properties have no id, so keyed by owning node + label. */
+export const propElementId = (nodeId: string, label: string) =>
+  `prop-${nodeId}-${label.trim().toLowerCase()}`;
+
 // --- code span (from the backend) --------------------------------------------
 
 interface Segment {

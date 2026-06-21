@@ -11,6 +11,7 @@
 
 import {
   createContext,
+  Fragment,
   useContext,
   useEffect,
   useRef,
@@ -24,6 +25,7 @@ import { createPortal } from "react-dom";
 import type { LucideProps } from "lucide-react";
 import { ArrowDownLeft, ArrowUpRight } from "lucide-react";
 import type { Node } from "./viewmodel";
+import { wordDiff } from "./wordDiff";
 
 /** A section's edit controls (Cancel/Done) render into the section header's
  *  action lane via this slot — the mockup puts them in the `.h2row`, not the
@@ -41,6 +43,39 @@ const EMPTY_HINT =
 // real code identifiers).
 export const DESCRIPTION_MAX = 200;
 export const NAME_MAX = 40;
+
+/** Inline word-level diff: unchanged text plain, added words highlighted, removed
+ *  words struck through. Used for reworded claims, descriptions, and link labels. */
+export function WordDiffText({ from, to }: { from: string; to: string }) {
+  const segs = wordDiff(from, to);
+  return (
+    <>
+      {segs.map((s, i) => {
+        // A substitution (removed word immediately followed by its replacement)
+        // glues the two together — "forin" — because the tokenizer keeps the
+        // surrounding spaces in the unchanged runs, leaving none between the
+        // changed words. Reinsert that gap so the strike and the pill read apart.
+        const sep = i > 0 && segs[i - 1].kind !== "equal" && s.kind !== "equal";
+        return (
+          <Fragment key={i}>
+            {sep && " "}
+            {s.kind === "equal" ? (
+              <span>{s.text}</span>
+            ) : s.kind === "added" ? (
+              <span className="rounded-[2px] bg-emerald-500/15 px-px text-emerald-700 dark:text-emerald-300">
+                {s.text}
+              </span>
+            ) : (
+              <del className="text-red-600/90 decoration-red-400/60 dark:text-red-400/90">
+                {s.text}
+              </del>
+            )}
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
 
 /** Coerce text to a valid source identifier: drop anything that isn't
  *  `[A-Za-z0-9_]`, and a leading character that can't start one. Mirrors the

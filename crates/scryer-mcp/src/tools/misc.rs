@@ -435,22 +435,6 @@ impl ScryerServer {
         ))]))
     }
 
-    #[tool(
-        description = "Pause or resume drift detection for this project's model. Call with active=true before implementing code; active=false after."
-    )]
-    fn set_drift_watch(
-        &self,
-        Parameters(req): Parameters<SetDriftWatchRequest>,
-    ) -> Result<CallToolResult, McpError> {
-        let model_ref = resolve_model_ref(req.project.as_deref())?;
-        if let Err(e) = scryer_core::set_implementing_at(&model_ref, req.active) {
-            return Ok(CallToolResult::error(vec![Content::text(e)]));
-        }
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Implementing flag = {}",
-            req.active
-        ))]))
-    }
 }
 
 #[cfg(test)]

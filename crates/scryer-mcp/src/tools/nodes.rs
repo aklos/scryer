@@ -872,6 +872,7 @@ mod tests {
             statement: format!("does {id}"),
             vagrant: None,
             stale: None,
+            stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
         }

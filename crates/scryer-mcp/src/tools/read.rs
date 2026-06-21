@@ -753,6 +753,19 @@ impl ScryerServer {
                 .chain(planned.groups.iter().flat_map(|g| g.responsibilities.iter()))
                 .any(|r| r.id == id && r.vagrant == Some(true))
         };
+        // A property's identity is (owner node, label); a vagrant one is a
+        // code-discovered field awaiting adopt/reject, so it too is kept out of the
+        // implement queue.
+        let is_vagrant_prop = |owner: Option<&str>, label: &str| {
+            owner.is_some_and(|oid| {
+                planned.nodes.iter().any(|n| {
+                    n.id == oid
+                        && n.properties
+                            .iter()
+                            .any(|p| p.label == label && p.vagrant == Some(true))
+                })
+            })
+        };
 
         // Resolve a node's breadcrumb against whichever side actually holds it:
         // the draft for added/existing nodes, the committed model for a deletion.
@@ -772,6 +785,7 @@ impl ScryerServer {
             let vagrant = match ch.kind {
                 ElementKind::Node => is_vagrant_node(&ch.id),
                 ElementKind::Responsibility => is_vagrant_resp(&ch.id),
+                ElementKind::Property => is_vagrant_prop(ch.owner_id.as_deref(), &ch.id),
                 _ => false,
             };
             if vagrant {
@@ -1122,6 +1136,7 @@ mod tests {
             statement: statement.into(),
             vagrant: None,
             stale: None,
+            stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
         }
@@ -1529,6 +1544,7 @@ mod tests {
             statement: "orchestrates everything".into(),
             vagrant: None,
             stale: None,
+            stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
         });
@@ -1539,6 +1555,7 @@ mod tests {
             statement: "does the thing".into(),
             vagrant: None,
             stale: None,
+            stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
         });

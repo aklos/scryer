@@ -87,6 +87,7 @@ export function nodeMarks(node: Node, idx: DiffIndex): { plan: Mark | null; drif
   // The node ITSELF can be vagrant — a rung the drift check minted to home
   // code-discovered behaviour — on top of any vagrant responsibilities it holds.
   const vagrantIds = new Set<string>();
+  const vagrantPropLabels = new Set<string>();
   let vagrant = !!node.vagrant;
   // The node ITSELF can be stale — its whole backing code is gone (mirror of a
   // vagrant node) — on top of any stale responsibilities it holds.
@@ -98,9 +99,19 @@ export function nodeMarks(node: Node, idx: DiffIndex): { plan: Mark | null; drif
     }
     if (r.stale) stale = true;
   }
+  // Data fields drift the same way: a vagrant property is undescribed data (Q),
+  // a stale one is a regressed field (X).
+  for (const p of node.properties ?? []) {
+    if (p.vagrant) {
+      vagrant = true;
+      vagrantPropLabels.add(p.label);
+    }
+    if (p.stale) stale = true;
+  }
   const childChanges: Change[] = [];
   for (const ec of idx.byOwner.get(node.id) ?? []) {
     if (ec.kind === "responsibility" && vagrantIds.has(ec.id)) continue; // drift, not plan
+    if (ec.kind === "property" && vagrantPropLabels.has(ec.id)) continue; // drift, not plan
     childChanges.push(...ec.changes);
   }
   // A vagrant node is code-first ("adopt?"), not a planned edit — its own

@@ -49,7 +49,13 @@ things: `search_model` by text, `query_model` by structure, `get_pending` for th
 model→code work), `mark_implemented` to commit it after you write code.\n\
 \n\
 ## Keeping the model in sync with the code (drift)\n\
-Two directions. Model→code: `get_pending` lists spec not yet built; `mark_implemented` closes it. \
+Drift is a code change the PLAN does not account for. So plan first: before you touch code, capture the intended \
+change in the plan (the authoring tools write it), THEN implement to that plan. Code you change in service of a \
+pending plan item is expected churn and stays silent; but any change to already-mapped code that no plan item \
+explains — editing or deleting a method that backs a responsibility you did not touch in the plan — is flagged as \
+drift the moment you make it. Treat that as the signal it is: either the change was a mistake, or it belongs in the \
+plan and you skipped a step. Don't work around it by editing outside the plan.\n\
+Two directions to reconcile. Model→code: `get_pending` lists spec not yet built; `mark_implemented` closes it. \
 Code→model: `get_drift` reports the boundary-owning nodes whose code CHANGED since the last reconcile (cheap, \
 deterministic — mtimes + git, no verdict). For each scope it returns, `read_model {node}` to load the claims, \
 compare them against what the changed code now does, and `flag_drift` to record undescribed behaviour and stale \

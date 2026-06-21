@@ -111,6 +111,7 @@ impl IdMinter {
             statement: statement.trim().to_string(),
             vagrant: None,
             stale: None,
+            stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
         }
@@ -358,6 +359,8 @@ impl ScryerServer {
                     .map(|property| SchemaProperty {
                         label: property.label.clone(),
                         description: property.description.clone(),
+                        vagrant: None,
+                        stale: None,
                         last_touched_at: None,
                     })
                     .collect();

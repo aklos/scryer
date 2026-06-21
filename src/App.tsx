@@ -530,6 +530,14 @@ function Workspace({
           .then(() => refreshHealth())
           .catch((e) => console.error("reimplement_responsibility failed", e));
       },
+      rewordResponsibility: (respId, statement) => {
+        if (!projectPath) return;
+        // Code diverged: the new wording already matches it, so write it to both
+        // layers and clear the flag — no to-do, the model just catches up.
+        invoke("reword_responsibility", { cwd: projectPath, respId, statement })
+          .then(() => refreshHealth())
+          .catch((e) => console.error("reword_responsibility failed", e));
+      },
       dropNode: (nodeId) => {
         if (!projectPath) return;
         // Code is right: delete the stale node + subtree from both layers.
@@ -550,6 +558,36 @@ function Workspace({
       updateProperty: (nodeId, index, patch) =>
         updateModel((m) => updateProperty(m, nodeId, index, patch)),
       removeProperty: (nodeId, index) => updateModel((m) => removeProperty(m, nodeId, index)),
+      adoptProperty: (nodeId, label) => {
+        if (!projectPath) return;
+        // Backend folds the field into the committed model (the code already
+        // exists); the file watcher then re-reads both layers into the UI.
+        invoke("adopt_property", { cwd: projectPath, nodeId, label })
+          .then(() => refreshHealth())
+          .catch((e) => console.error("adopt_property failed", e));
+      },
+      rejectProperty: (nodeId, label) => {
+        if (!projectPath) return;
+        // Backend folds the field into committed then drops it from the plan,
+        // leaving a deletion work item; the watcher re-reads both layers.
+        invoke("reject_property", { cwd: projectPath, nodeId, label })
+          .then(() => refreshHealth())
+          .catch((e) => console.error("reject_property failed", e));
+      },
+      dropProperty: (nodeId, label) => {
+        if (!projectPath) return;
+        // Code is right: delete the stale field from both layers; watcher refreshes.
+        invoke("drop_property", { cwd: projectPath, nodeId, label })
+          .then(() => refreshHealth())
+          .catch((e) => console.error("drop_property failed", e));
+      },
+      reimplementProperty: (nodeId, label) => {
+        if (!projectPath) return;
+        // Model is right: remove from committed so it reads as an Added to-do.
+        invoke("reimplement_property", { cwd: projectPath, nodeId, label })
+          .then(() => refreshHealth())
+          .catch((e) => console.error("reimplement_property failed", e));
+      },
     }),
     [updateModel, projectPath, refreshHealth],
   );

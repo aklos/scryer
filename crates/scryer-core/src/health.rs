@@ -33,11 +33,11 @@ pub struct HealthCounts {
     pub responsibilities: u32,
     /// Data-shape properties in scope.
     pub properties: u32,
-    /// Responsibilities carrying the vagrant flag (undescribed behaviour
+    /// Responsibilities or properties carrying the vagrant flag (undescribed behaviour
     /// awaiting adopt/reject).
     pub vagrant: u32,
-    /// Responsibilities carrying the stale flag (the drift check judged the
-    /// code no longer discharges them; awaiting a verdict).
+    /// Responsibilities or properties carrying the stale flag (the drift check
+    /// judged the code no longer discharges them; awaiting a verdict).
     pub stale: u32,
     /// Claims that are EXPECTED to read through to code: any committed content
     /// hosted on a leaf (childless, non-external) node. A claim on a structural
@@ -153,6 +153,12 @@ pub fn compute_health(model: &ScryModel, files: Option<&BTreeSet<String>>) -> Mo
         // the shape's definition must anchor — one claim for the whole node.
         for prop in &node.properties {
             h.properties += 1;
+            if prop.vagrant == Some(true) {
+                h.vagrant += 1;
+            }
+            if prop.stale == Some(true) {
+                h.stale += 1;
+            }
             h.touch(prop.last_touched_at);
         }
         if anchorable_node && !node.properties.is_empty() {
@@ -440,6 +446,7 @@ mod tests {
             statement: format!("does {id}"),
             vagrant: None,
             stale: None,
+            stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: Some(100),
         }
@@ -524,6 +531,8 @@ mod tests {
         shape.properties.push(crate::SchemaProperty {
             label: "field".into(),
             description: String::new(),
+            vagrant: None,
+            stale: None,
             last_touched_at: Some(50),
         });
         m.nodes.push(shape);

@@ -307,10 +307,13 @@ pub fn drift_check_prompt(
   - **The model has NO node for this code** (a new function, a new file, a whole new area) → MINT the missing rungs in `newNodes` and point the finding at the leaf with `nodeKey`. Give each new node a `key`, `kind` ("component"/"symbol"), and `name` (a symbol's name is the exact identifier); hang the shallowest new rung off an existing node with `parentId`, and chain deeper rungs with `parentKey` (list ancestors before descendants). You know how this code is organised — define the structure it belongs in. NEVER let a symbol-level finding bubble up to this container because no finer node exists: mint the node instead.
 - **Stale claims:** an existing responsibility whose code no longer discharges it — the implementation was removed, or now does something materially different. Report its `responsibilityId` under `stale` with a short factual `reason`.
 - **Stale nodes (code gone entirely):** when a deleted file or folder wipes out a whole modeled node — a symbol whose definition is gone, a component or container subtree whose directory no longer exists — flag the NODE itself under `staleNodes` (its `nodeId` + a short `reason`) instead of listing each of its claims. The verdict then applies to the whole subtree. This is the mirror of minting a `newNodes` chain for code the model has no node for: here the model has a node for code that's gone.
+- **Undescribed data fields:** a newly declared field on a data type — a struct field, an interface/record member, an enum case — that NO `property` on the owning data node describes. This is DATA, not behaviour: report it under `undescribedProperties` (its `label`, an optional one-line `description`, the `sourceFile`, and the enclosing type's `symbol`), homed exactly like an undescribed behaviour — cite the `symbol` to auto-route, or set `nodeId`/`nodeKey`. Each becomes a vagrant property the user adopts or rejects. Describe what the field HOLDS, never the behaviour it enables — a `confirm_launch: bool` field is "whether to confirm before launching", NOT "gates launches behind confirmation" (that behaviour, if real, lives on the code that enforces it).
+- **Stale properties:** an existing property whose backing field was removed or materially changed (renamed, retyped, repurposed). Report it under `staleProperties` (`nodeId` + the property `label` + a short `reason`) — the data-shape mirror of a stale claim.
 
 ## What is NOT drift (do not flag)
 - Code that changed but still satisfies an existing responsibility. A refactor that preserves behaviour is not drift. The user does not care that lines moved or bytes changed — only that the model's description still matches reality.
 - **Mechanism beneath an existing responsibility.** A responsibility is described at its own altitude and SUBSUMES its implementation detail. If a node already claims "Validate structural correctness", then each individual check it performs (a length cap, an id-uniqueness rule, a kind constraint) is HOW that claim is discharged — already described, do NOT flag it. Likewise a new branch inside a handler, a new field on a validator, a new helper call. Only flag a behaviour that is a genuinely NEW capability the model names nowhere — never decompose one responsibility into a list of its mechanics.
+- **A data field is not a behaviour.** When the only change to a type is its SHAPE — a field added, removed, or retyped — that is a `property` finding (`undescribedProperties` / `staleProperties`), NEVER a responsibility. Do not invent a verb-led "behaviour" to describe a plain field; if a struct gains `confirm_launch: bool`, the finding is a property named `confirm_launch`, not a responsibility about gating. A field already covered by one of the node's properties is not drift at all.
 
 ## Focus — these files changed
 ```json
@@ -508,6 +511,7 @@ mod tests {
                         statement: "does a thing".into(),
                         vagrant: None,
                         stale: None,
+                        stale_proposal: None,
                         directives: Vec::new(),
                         last_touched_at: None,
                     }]

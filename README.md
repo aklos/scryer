@@ -171,7 +171,6 @@ For Claude Code, you can also auto-approve Scryer's read tools so the agent does
 - `flag_drift` / `reconcile_drift` — record undescribed behavior or stale claims, then advance the drift anchor.
 - `update_nodes` / `delete_nodes` / `descope` / `move_nodes` / `move_responsibilities` — interactive edits and refinement (`descope` drops a node from the model while leaving its code in place).
 - `set_model` / `set_node` / `set_groups` — generation-pipeline primitives for whole-model / whole-subtree / bulk-group writes.
-- `set_drift_watch` — pause drift detection while implementing.
 
 ## Drift detection & sync
 
