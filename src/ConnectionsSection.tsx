@@ -5,9 +5,8 @@
  * and the import-evidence verdict; beneath it, the peer node's own
  * description (the "annotation" Wikipedia puts after a See-also entry).
  * Grouped by direction — Uses (outgoing) / Used by (incoming) — plus the
- * code-suggested candidates with a one-click declare. The infobox keeps only
- * the compact name list; this section is where connections are understood
- * and edited.
+ * code-suggested candidates with a one-click declare. This is where
+ * connections are read and edited.
  */
 
 import { useMemo, useState } from "react";

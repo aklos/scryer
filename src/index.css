@@ -17,7 +17,7 @@
 /* — Type scale —
    The UI uses exactly five sizes; everything maps onto this scale.
      text-2xs  11px  micro labels, eyebrows, status tags, anchors
-     text-xs   12px  secondary/meta content, buttons, infobox rows
+     text-xs   12px  secondary/meta content, buttons, meta rows
      text-sm   13px  primary content: tree rows, statements, descriptions
      text-base 15px  section titles
      text-xl   22px  page title */

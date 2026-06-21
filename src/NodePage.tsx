@@ -6,7 +6,8 @@
  *  - maintenance banners (ambox): drift, stale claims, undescribed behaviour,
  *    empty symbols — each stating the problem with its verdict actions inline
  *  - lede: the description paragraph, no heading
- *  - infobox: structured summary, right-hand column
+ *  - type line under the title: kind, technology, status — structured metadata
+ *    surfaced inline rather than in a separate column
  *  - sections with per-section [edit] links, swapped to edit mode in place
  *  - Source: the read-through-to-code section. Claims cite source hunks like
  *    footnotes ([n] jumps down); hunks stack the claims they discharge and

@@ -10,7 +10,7 @@ const base =
 const variants: Record<InputVariant, string> = {
   /** Page-title rename field — matches the h1 metrics so nothing jumps. */
   title: `${base} px-2 py-1 text-xl font-semibold leading-tight`,
-  /** Compact field for tight rows (infobox, meta lines). */
+  /** Compact field for tight rows (meta lines). */
   inline: `${base} px-2 py-1 text-xs`,
   /** The default form field. */
   bordered: `${base} px-2.5 py-1.5 text-sm`,
