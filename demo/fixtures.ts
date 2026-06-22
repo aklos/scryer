@@ -117,8 +117,6 @@ const links: Link[] = [
   { id: "l-6", src: "ledger", dst: "event-bus", label: "Publishes events" },
   { id: "l-7", src: "event-bus", dst: "webhooks", label: "Delivers" },
   { id: "l-8", src: "event-bus", dst: "notifications", label: "Delivers" },
-  { id: "l-9", src: "fraud", dst: "payments-db", label: "Reads history", method: "SQL" },
-  { id: "l-10", src: "auth", dst: "payments-db", label: "Reads accounts", method: "SQL" },
 ];
 
 /** The fictional payments platform, shaped to the real on-disk model. */
@@ -192,6 +190,44 @@ export const driftScopes: DriftScope[] = [
 
 /** Claims the agent authored this session, awaiting a human's eyes. */
 export const newRespIds: ReadonlySet<string> = new Set(["r-wh-2"]);
+
+// --- Inline source spans -----------------------------------------------------
+// What the `read_source_span` Tauri command would return for a claim's code
+// peek. The demo Tauri stub serves these by file so the claim→code reveal shows
+// real, syntax-coloured code with no backend. Shape mirrors `SourceSection`'s
+// private `SourceSpan` (segments coloured by coarse token `kind`).
+
+interface Seg { text: string; kind: string }
+interface Span { file: string; startLine: number; focusStart: number; focusEnd: number; lines: Seg[][] }
+
+const k = (text: string): Seg => ({ text, kind: "keyword" });
+const ty = (text: string): Seg => ({ text, kind: "type" });
+const fn = (text: string): Seg => ({ text, kind: "function" });
+const cn = (text: string): Seg => ({ text, kind: "constant" });
+const cm = (text: string): Seg => ({ text, kind: "comment" });
+const p = (text: string): Seg => ({ text, kind: "" });
+
+/** Keyed by the location `pattern` the peek requests. */
+export const SOURCE_SPANS: Record<string, Span> = {
+  "ledger/src/escrow.rs": {
+    file: "ledger/src/escrow.rs",
+    startLine: 18,
+    focusStart: 21,
+    focusEnd: 27,
+    lines: [
+      [k("use "), p("crate::ledger::{"), ty("Ledger"), p(", "), ty("Money"), p("};")],
+      [],
+      [cm("/// Hold authorized funds until the acquiring bank settles.")],
+      [k("pub fn "), fn("hold_in_escrow"), p("(tx: &"), ty("Tx"), p(", amount: "), ty("Money"), p(") -> "), ty("Result"), p("<"), ty("EscrowId"), p("> {")],
+      [p("    "), k("let "), p("id = "), ty("EscrowId"), p("::new();")],
+      [p("    ledger."), fn("debit"), p("(tx.account, amount)?;")],
+      [p("    ledger."), fn("credit"), p("("), cn("ESCROW"), p(", amount)?;")],
+      [p("    audit::"), fn("record"), p("(tx.id, amount);")],
+      [p("    "), ty("Ok"), p("(id)")],
+      [p("}")],
+    ],
+  },
+};
 
 // --- Health / observability report ------------------------------------------
 

@@ -16,26 +16,6 @@ export function rectanglePath(w: number, h: number): string {
   return baseRectPath(w, h);
 }
 
-/** Person: single unified path — rect body + shoulders + head arc, all one outline. */
-export function personPath(w: number, h: number): string {
-  const cx = w / 2;
-  const neckHalf = 12;
-  const neckY = -10;
-  const headR = 16;
-  const neckRight = cx + neckHalf;
-  const neckLeft = cx - neckHalf;
-
-  return (
-    `M0,${h}` +
-    ` H${w}` +
-    ` V0` +
-    ` C${w},${neckY * 0.5} ${neckRight + 8},${neckY} ${neckRight},${neckY}` +
-    ` A${headR},${headR} 0 1,0 ${neckLeft},${neckY}` +
-    ` C${neckLeft - 8},${neckY} 0,${neckY * 0.5} 0,0` +
-    ` Z`
-  );
-}
-
 export interface CylinderParts {
   bodyPath: string;
   topCapPath: string;

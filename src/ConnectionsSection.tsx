@@ -142,9 +142,13 @@ function ConnRow({
   // encodes. Everything else is a plain blue wikilink to a real page.
   const struck = kind === "deleted" || removed;
   const mark = removed ? LINK_MARK.deleted : kind === "unchanged" ? null : LINK_MARK[kind];
+  // A brand-new link reads green (the connection itself is new), a dropped one
+  // red + struck — the same git-style added/removed signal the claim rows carry.
   const peerColor = struck
     ? "text-red-700 line-through decoration-red-500/60 dark:text-red-400"
-    : "text-blue-700 dark:text-blue-400";
+    : kind === "added" && !removed
+      ? "text-emerald-700 hover:text-emerald-800 dark:text-emerald-300 dark:hover:text-emerald-200"
+      : "text-blue-700 dark:text-blue-400";
   // Inline editing only on live rows; a row staged for deletion keeps its
   // struck, read-only rendering so the removal still reads at a glance.
   const editable = edit && !struck;

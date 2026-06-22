@@ -101,6 +101,7 @@ function SourceLine({
     <div className="font-mono text-2xs leading-relaxed text-[var(--text-tertiary)]">
       <button
         type="button"
+        data-cam="resp-source"
         disabled={!anchored}
         onClick={() => anchored && setOpen((o) => !o)}
         className={`group/src inline-flex items-baseline gap-1 text-left ${
@@ -170,7 +171,10 @@ function InlinePeek({ loc, projectPath }: { loc: SourceLocation; projectPath: st
 
   const range = locRangeLabel(loc);
   return (
-    <div className="mb-1.5 ml-1 mt-1 overflow-hidden rounded-md border border-[var(--border-subtle)]">
+    <div
+      data-cam="source-peek"
+      className="mb-1.5 ml-1 mt-1 overflow-hidden rounded-md border border-[var(--border-subtle)]"
+    >
       <div className="flex items-center gap-2 border-b border-[var(--border-subtle)] bg-[var(--surface)] px-2.5 py-1 font-mono text-2xs text-[var(--text-muted)]">
         <span className="min-w-0 truncate text-[var(--text-secondary)]">{loc.pattern}</span>
         {range && <span className="shrink-0">{range}</span>}

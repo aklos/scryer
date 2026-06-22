@@ -10,7 +10,6 @@ import type { C4Shape } from "./index";
 import {
   baseRectPath,
   rectanglePath,
-  personPath,
   cylinderParts,
   pipeParts,
   trapezoidPath,
@@ -126,8 +125,6 @@ function GlowOverlay({ shape, kind }: { shape: C4Shape; kind?: Kind }) {
     switch (shape) {
       case "rectangle":
         return <path d={rectanglePath(W, H)} {...glowProps} />;
-      case "person":
-        return <path d={personPath(W, H)} {...glowProps} />;
       case "cylinder": {
         const c = cylinderParts(W, H);
         return (
@@ -209,9 +206,6 @@ function ShapePaths({
   switch (shape) {
     case "rectangle":
       return <path d={rectanglePath(W, H)} {...outline} />;
-
-    case "person":
-      return <path d={personPath(W, H)} {...outline} />;
 
     case "cylinder": {
       const c = cylinderParts(W, H);

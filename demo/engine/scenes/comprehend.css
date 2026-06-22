@@ -1,0 +1,62 @@
+/* Minimal workspace chrome for the comprehend beat — a top bar with a Wiki/Map
+   toggle, wrapping the real lifted panes. Demo-owned (the panes are real). */
+
+.cz-workspace {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-canvas, #0b0d10);
+  color: var(--text, #e6e9ee);
+}
+
+.cz-topbar {
+  flex: none;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 1.25rem;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.07));
+  background: var(--surface, rgba(255, 255, 255, 0.015));
+}
+
+.cz-crumb {
+  font-family: "Space Grotesk Variable", system-ui, sans-serif;
+  font-size: 0.95rem;
+  color: var(--text-secondary, #b6bdc8);
+}
+.cz-sep {
+  color: var(--text-ghost, #5a626e);
+  margin: 0 0.4rem;
+}
+
+.cz-toggle {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--surface-inset, rgba(0, 0, 0, 0.25));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.07));
+}
+.cz-seg {
+  font-family: system-ui, sans-serif;
+  font-size: 0.82rem;
+  font-weight: 500;
+  padding: 0.3rem 0.85rem;
+  border-radius: 6px;
+  color: var(--text-muted, #8a93a2);
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.cz-seg.is-active {
+  color: var(--text, #e6e9ee);
+  background: var(--surface-raised, rgba(255, 255, 255, 0.08));
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.cz-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}

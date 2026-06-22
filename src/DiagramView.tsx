@@ -23,6 +23,7 @@ import {
   ConnectionMode,
   Controls,
   useReactFlow,
+  useUpdateNodeInternals,
   type Node as RFNode,
   type Edge as RFEdge,
   type NodeProps,
@@ -109,6 +110,9 @@ const edgeTypes = { rel: RelationshipEdge };
 const CARD_W = 180;
 const CARD_H = 160;
 
+// Stable empty edge set, shown until a fresh level's cards are measured.
+const NO_EDGES: RFEdge<EdgeData>[] = [];
+
 export function DiagramView({
   model,
   planDiff,
@@ -117,6 +121,7 @@ export function DiagramView({
   selectedId,
   onFocus,
   onSelectNode,
+  pendingIds,
 }: {
   model: ScryModel;
   /** Live plan diff — colors each node/dot by its change mark. */
@@ -129,6 +134,9 @@ export function DiagramView({
   selectedId: string | null;
   onFocus: (id: string | null) => void;
   onSelectNode: (id: string | null) => void;
+  /** Nodes whose semantics aren't generated yet — drawn as pulsing placeholders.
+   *  Used by the trailer's build sequence; unset (empty) in the product. */
+  pendingIds?: ReadonlySet<string>;
 }) {
   return (
     <ReactFlowProvider>
@@ -140,6 +148,7 @@ export function DiagramView({
         selectedId={selectedId}
         onFocus={onFocus}
         onSelectNode={onSelectNode}
+        pendingIds={pendingIds}
       />
     </ReactFlowProvider>
   );
@@ -153,6 +162,7 @@ function DiagramInner({
   selectedId,
   onFocus,
   onSelectNode,
+  pendingIds,
 }: {
   model: ScryModel;
   planDiff: ModelDiff;
@@ -161,9 +171,11 @@ function DiagramInner({
   selectedId: string | null;
   onFocus: (id: string | null) => void;
   onSelectNode: (id: string | null) => void;
+  pendingIds?: ReadonlySet<string>;
 }) {
   const [scene, setScene] = useState<DiagramScene | null>(null);
   const { fitView } = useReactFlow();
+  const updateNodeInternals = useUpdateNodeInternals();
 
   // Build the scene whenever the level or the model changes. The planar layout
   // is async; guard against a stale build landing after a newer one.
@@ -225,9 +237,10 @@ function DiagramInner({
         selected: n.id === selectedId,
         mark: markFor(n.id),
         dimmed: highlight.active && !highlight.neighbors.has(n.id),
+        pending: pendingIds?.has(n.id),
       },
     })) as Array<RFCard | RFDot>;
-  }, [scene, selectedId, markFor, highlight]);
+  }, [scene, selectedId, markFor, highlight, pendingIds]);
 
   const rfEdges = useMemo<RFEdge<EdgeData>[]>(() => {
     if (!scene) return [];
@@ -301,6 +314,26 @@ function DiagramInner({
     return () => clearTimeout(t);
   }, [fitKey, rfNodes.length, fitView]);
 
+  // Edges route off the card handles, but React Flow doesn't know a handle's
+  // real position until it has MEASURED the card — so an edge that mounts before
+  // its cards anchors to a guessed box and only snaps right on the first
+  // interaction. So for a fresh level we withhold the edges for a beat (by which
+  // point the cards have laid out and measured), recompute the handle positions,
+  // then mount them — they route correctly on first paint. As a bonus the cards
+  // land first and the connections follow, which reads well during the build.
+  const [edgesReady, setEdgesReady] = useState(false);
+  const updateInternalsRef = useRef(updateNodeInternals);
+  updateInternalsRef.current = updateNodeInternals;
+  useEffect(() => {
+    setEdgesReady(false);
+    if (!scene || scene.nodes.length === 0) return;
+    const t = setTimeout(() => {
+      scene.nodes.forEach((n) => updateInternalsRef.current(n.id));
+      setEdgesReady(true);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [scene]);
+
   const crumbs = useMemo(() => breadcrumb(model, focusId), [model, focusId]);
 
   return (
@@ -352,7 +385,7 @@ function DiagramInner({
         ) : (
           <ReactFlow
             nodes={rfNodes}
-            edges={rfEdges}
+            edges={edgesReady ? rfEdges : NO_EDGES}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             connectionMode={ConnectionMode.Loose}

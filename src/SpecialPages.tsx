@@ -208,7 +208,7 @@ export function RecentChangesPage({
             </p>
           </div>
         ) : (
-          <div className="pt-5">
+          <div className="pt-5" data-changes-list>
             <RevisionList revisions={changeLog} onSelectNode={onSelectNode} />
           </div>
         )}

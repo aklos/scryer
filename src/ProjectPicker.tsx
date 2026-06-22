@@ -104,6 +104,7 @@ export function ProjectPicker({
             <div className="flex flex-col gap-2">
               <button
                 type="button"
+                data-cam="generate"
                 className="flex items-center justify-center gap-2 rounded-lg border border-violet-400/50 bg-violet-500/5 px-4 py-2.5 text-sm font-medium text-[var(--text)] hover:bg-violet-500/10 transition-colors"
                 onClick={onGenerate}
               >

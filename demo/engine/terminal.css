@@ -1,0 +1,303 @@
+/*
+ * The agent-CLI terminal — a demo-only prop (the product has no terminal). A
+ * generic coding-agent shell: the user types a request, the agent streams a
+ * line of intent and a run of tool calls that mirror the scryer MCP tools. The
+ * scene drives the content over time; this file is just the static look. Kept
+ * as hand CSS (not Tailwind) so the whole terminal aesthetic lives in one place.
+ *
+ * Aesthetic: near-monochrome, like a real coding-agent CLI. Two tiers only —
+ * foreground (white-ish) and dim (gray) — plus ONE accent, the violet ● marker
+ * and matching spinner (the same agent-activity violet scryer uses elsewhere,
+ * tying the two windows into one session) and a quiet green ✓ for "done".
+ */
+
+.term {
+  --term-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  --term-bg: #0a0c11;
+  --term-panel: #0e1117;
+  --term-line: rgba(255, 255, 255, 0.07);
+  --term-fg: #dfe3ea; /* primary foreground */
+  --term-bright: #f4f5f7; /* user input + tool name (the one emphasis) */
+  --term-dim: #697083; /* everything secondary: ❯, ▸, targets, args */
+  --term-agent: var(--color-violet-400, #a78bfa); /* the single accent */
+  --term-ok: #57a98a; /* quiet, desaturated "done" check */
+
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: var(--term-bg);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+  font-family: var(--term-mono);
+  font-size: 15px;
+  line-height: 1.72;
+  color: var(--term-fg);
+}
+
+/* --- Window chrome -------------------------------------------------------- */
+
+.term-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex: none;
+  padding: 0.7rem 0.95rem;
+  background: var(--term-panel);
+  border-bottom: 1px solid var(--term-line);
+}
+.term-dots {
+  display: flex;
+  gap: 0.45rem;
+}
+.term-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 9999px;
+  background: #3a3f4b;
+}
+.term-dot--r { background: #ff5f57; }
+.term-dot--y { background: #febc2e; }
+.term-dot--g { background: #28c840; }
+.term-title {
+  flex: 1;
+  text-align: center;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+  color: var(--term-dim);
+}
+
+/* --- Body ----------------------------------------------------------------- */
+
+.term-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 1.1rem 1.3rem 0.7rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* The agent-CLI start banner — pinned at the top of the scrollback so the
+   window reads as an agent CLI, not a generic terminal. */
+.term-banner {
+  margin-bottom: 1.2rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--term-line);
+}
+.term-banner-id {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.term-logo {
+  margin: 0;
+  font-family: var(--term-mono);
+  font-size: 13px;
+  line-height: 1.05;
+  color: var(--term-agent);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--term-agent) 45%, transparent);
+}
+.term-banner-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+.term-banner-kicker {
+  font-size: 0.78em;
+  letter-spacing: 0.22em;
+  color: var(--term-dim);
+}
+.term-banner-name {
+  font-size: 1.5em;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--term-bright);
+}
+.term-banner-meta {
+  margin-top: 0.1rem;
+  color: var(--term-dim);
+  font-size: 0.9em;
+}
+.term-banner-hint {
+  margin-top: 0.9rem;
+  max-width: 46ch;
+  color: var(--term-dim);
+}
+
+/* The prompt line: ❯ then the user's request. */
+.term-prompt {
+  display: flex;
+  gap: 0.6rem;
+}
+.term-caret-prompt {
+  color: var(--term-dim);
+  flex: none;
+}
+.term-input {
+  color: var(--term-bright);
+}
+
+/* A committed user prompt in the scrollback — a subtle full-bleed bar (the
+   horizontal margin cancels the body padding, the padding restores it) so the
+   ❯ stays aligned with the agent's ● lines while the human's turn reads apart. */
+.term-sent {
+  margin: 0 -1.3rem 1rem;
+  padding: 0.6rem 1.3rem;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* Agent prose, prefixed with the violet ● marker — the single accent. */
+.term-say {
+  display: flex;
+  gap: 0.65rem;
+  margin-top: 1rem;
+  color: var(--term-fg);
+}
+.term-say-mark {
+  color: var(--term-agent);
+  flex: none;
+}
+
+/* Tool-call row — indented under the agent's prose. Status leads on the left;
+   the head (tool + target) sits beside it; a long argument drops to its own
+   indented line beneath. Near-monochrome: only the tool name lifts to
+   foreground, everything else stays dim. */
+.term-tool {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  margin-left: 1.35rem;
+  margin-top: 0.4rem;
+}
+.term-tool:first-of-type { margin-top: 0.65rem; }
+.term-tool-status { flex: none; width: 1.1em; text-align: center; }
+.term-tool-ok { color: var(--term-ok); }
+.term-tool-call { min-width: 0; }
+.term-tool-head { display: flex; gap: 0.6rem; }
+.term-tool-name { color: var(--term-bright); }
+.term-tool-target { color: var(--term-dim); }
+.term-tool-arg { color: var(--term-dim); }
+
+/* A dim system note. */
+.term-note { margin-top: 0.45rem; color: var(--term-dim); }
+
+/* --- Streamed code edit (diff block) -------------------------------------- */
+/* The agent's implementation work: a file header over a compact +/- diff,
+   indented under its tool call like the rest of the agent's output. */
+.term-diff {
+  margin: 0.5rem 0 0.3rem 1.35rem;
+  border: 1px solid var(--term-line);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 0.92em;
+}
+.term-diff-file {
+  padding: 0.32rem 0.75rem;
+  background: var(--term-panel);
+  border-bottom: 1px solid var(--term-line);
+  color: var(--term-dim);
+  font-size: 0.92em;
+}
+.term-diff-body {
+  padding: 0.3rem 0;
+  line-height: 1.5;
+}
+.term-diff-row {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0 0.75rem;
+  white-space: pre;
+}
+.term-diff-sign {
+  flex: none;
+  width: 0.8em;
+  text-align: center;
+  opacity: 0.85;
+}
+.term-diff-text { min-width: 0; }
+.term-diff-add {
+  background: color-mix(in srgb, var(--term-ok) 13%, transparent);
+  color: #a8dcc6;
+}
+.term-diff-add .term-diff-sign { color: var(--term-ok); }
+.term-diff-del {
+  background: color-mix(in srgb, #ff5f57 10%, transparent);
+  color: #e6a9a4;
+}
+.term-diff-del .term-diff-sign { color: #ff7b73; }
+.term-diff-ctx { color: var(--term-dim); }
+
+/* --- The pinned input box ------------------------------------------------- */
+/* Bordered + inset so it reads as a distinct, always-present input — separated
+   from the scrollback above by its own frame and the margin around it. */
+.term-inputbox {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0.3rem 1.1rem 1.1rem;
+  padding: 0.72rem 0.95rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+}
+/* The input text wraps and the box grows downward to fit a long prompt — the
+   window is fixed-width now, so there's no horizontal drift to worry about. */
+.term-inputbox .term-input {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.term-box-prompt {
+  color: var(--term-dim);
+  flex: none;
+}
+
+/* Invisible camera anchor over the lower "active" zone (prompt box + freshest
+   output). Pinned to the bottom of the window; the implement beat frames it. */
+.term-active {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 56%;
+  pointer-events: none;
+}
+
+/* --- Blinking caret + ring spinner ---------------------------------------- */
+
+.term-caret {
+  display: inline-block;
+  width: 0.55em;
+  height: 1.05em;
+  margin-left: 1px;
+  transform: translateY(0.18em);
+  background: var(--term-bright);
+  animation: term-blink 1.05s steps(1) infinite;
+}
+@keyframes term-blink {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+
+/* In-flight tool call — a small violet ring (robust where braille glyphs aren't
+   in the mono font). */
+.term-spin {
+  display: inline-block;
+  width: 0.82em;
+  height: 0.82em;
+  border: 1.5px solid color-mix(in srgb, var(--term-agent) 30%, transparent);
+  border-top-color: var(--term-agent);
+  border-radius: 9999px;
+  vertical-align: -0.12em;
+  animation: term-spin 0.7s linear infinite;
+}
+@keyframes term-spin {
+  to { transform: rotate(360deg); }
+}

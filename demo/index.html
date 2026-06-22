@@ -6,7 +6,9 @@
     <title>scryer — demo</title>
     <style>
       html, body, #root { margin: 0; height: 100%; }
-      body { overflow: hidden; }
+      /* Match the trailer canvas so there's no white flash before React paints
+         (the first frame is the video's GitHub thumbnail). */
+      html, body { background: #06070b; overflow: hidden; }
     </style>
   </head>
   <body>

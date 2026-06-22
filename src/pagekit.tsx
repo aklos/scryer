@@ -295,6 +295,7 @@ export function PageSection({
   return (
     <SectionActionsContext.Provider value={actionsSlot}>
       <section
+        data-section={title}
         // `py-2` + compensating margins (mt 26→18, -mb-2) bleed the edit-mode
         // bg 8px above/below the content — the vertical analog of `-mx-3 px-3` —
         // without moving content or changing inter-section spacing.
@@ -413,11 +414,12 @@ export function SectionEditor<T>({
   const slot = useContext(SectionActionsContext);
   const buttons = (
     <>
-      <button type="button" onClick={onClose} className={BTN}>
+      <button type="button" data-act="cancel" onClick={onClose} className={BTN}>
         Cancel
       </button>
       <button
         type="button"
+        data-act="commit"
         onClick={() => {
           onCommit(draft);
           onClose();

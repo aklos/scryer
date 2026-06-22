@@ -586,6 +586,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
           </Ambox>
         )}
         {drift && (
+          <div data-drift-banner>
           <Ambox
             tone="warning"
             icon={<GitCompare className="h-3 w-3" />}
@@ -617,6 +618,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
             Code changed ({drift.changedFiles.length} file
             {drift.changedFiles.length === 1 ? "" : "s"}) — claims may not hold
           </Ambox>
+          </div>
         )}
         {staleCount > 0 && (
           <Ambox
@@ -1344,6 +1346,15 @@ const RESP_MARK: Record<Exclude<RespDiffKind, "unchanged">, { glyph: string; col
   vagrant: { glyph: "?", color: "text-violet-600 dark:text-violet-400" },
 };
 
+// Whole-claim diff highlight — a brand-new claim reads entirely added (green),
+// a dropped one entirely removed (struck red), the same palette `WordDiffText`
+// paints individual added/removed words in. A reworded claim keeps the
+// word-level diff; only added/deleted tint the whole statement.
+const STMT_ADDED =
+  "rounded-[2px] bg-emerald-500/15 px-0.5 text-emerald-700 dark:text-emerald-300 decoration-clone";
+const STMT_DELETED =
+  "rounded-[2px] bg-red-500/10 px-0.5 text-red-700/90 line-through decoration-red-400/60 decoration-clone dark:text-red-300/90";
+
 /** Build the diff rows for a host's claims: planned claims in order (each tagged
  *  added / reworded / vagrant / unchanged against the committed copy), then any
  *  committed claims the plan dropped, as restorable `deleted` rows. */
@@ -1631,6 +1642,14 @@ function RespDiffRow({
           {resp.statement ? (
             kind === "reworded" && prev ? (
               <WordDiffText from={prev.statement} to={resp.statement} />
+            ) : kind === "added" ? (
+              <span className={STMT_ADDED}>
+                <WikiText text={resp.statement} nodes={model.nodes} onSelectNode={onSelectNode} />
+              </span>
+            ) : deleted ? (
+              <span className={STMT_DELETED}>
+                <WikiText text={resp.statement} nodes={model.nodes} onSelectNode={onSelectNode} />
+              </span>
             ) : (
               <WikiText text={resp.statement} nodes={model.nodes} onSelectNode={onSelectNode}/>
             )
@@ -1742,7 +1761,7 @@ function RespDiffRow({
           </div>
         )}
         {reviewable && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+          <div className="mt-1.5 -mr-[180px] flex flex-wrap items-center gap-2 text-[11px]">
             <span className="text-[var(--text-tertiary)]">In the code, not in the model —</span>
             <button
               type="button"
@@ -1754,6 +1773,7 @@ function RespDiffRow({
             </button>
             <button
               type="button"
+              data-act="reject"
               onClick={() => editor!.rejectResponsibility(resp.id)}
               className={BTN_DANGER}
               title="Mark the code for deletion — this behaviour is not wanted (folds it in, then schedules its removal)"
@@ -1793,7 +1813,7 @@ function RespDiffRow({
               }`}
             >
               <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px not-italic text-[var(--text-ghost)]" />
-              <span className="min-w-0">
+              <span className={`min-w-0 ${added ? STMT_ADDED : ""}`}>
                 <WikiText text={d} nodes={model.nodes} onSelectNode={onSelectNode}/>
               </span>
             </div>
@@ -1808,9 +1828,9 @@ function RespDiffRow({
           <span className="select-none" />
           <div className="flex min-w-0 items-baseline gap-1.5 pr-[180px] font-mono text-[12.5px] leading-[1.65] text-[var(--text-tertiary)]">
             <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px not-italic text-[var(--text-ghost)]" />
-            <del className="min-w-0 decoration-red-400/50">
+            <span className={`min-w-0 ${STMT_DELETED}`}>
               <WikiText text={d} nodes={model.nodes} onSelectNode={onSelectNode}/>
-            </del>
+            </span>
           </div>
         </li>
       ))}
@@ -1842,7 +1862,7 @@ function ResponsibilityEditRow({
   // own hover-scoped line (`/srow`, `/drow`): the full cell highlights on hover
   // and its controls (CTL) float over the right edge with a gradient fade.
   return (
-    <li className={`group/erow ${RESP_ROW} py-[1.5px] [&:not(:first-child)]:mt-2.5`}>
+    <li data-erow={resp.id} className={`group/erow ${RESP_ROW} py-[1.5px] [&:not(:first-child)]:mt-2.5`}>
       <span className="select-none text-center font-mono text-xs" />
       <span className="select-none pr-2.5 text-right font-mono text-[11px] tabular-nums text-[var(--text-ghost)]">
         {index}
@@ -1859,6 +1879,7 @@ function ResponsibilityEditRow({
           <span className={CTL_SROW}>
             <button
               type="button"
+              data-act="add-directive"
               onClick={() => setDirectives([...directives, ""])}
               className={BTN}
             >
@@ -1880,6 +1901,7 @@ function ResponsibilityEditRow({
             {directives.map((d, i) => (
               <div
                 key={i}
+                data-drow={resp.id}
                 className="group/drow relative flex items-baseline gap-1.5 text-[var(--text-tertiary)]"
               >
                 <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px not-italic text-[var(--text-ghost)]" />
@@ -2036,7 +2058,7 @@ function PropDiffRow({
           </div>
         )}
         {reviewable && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+          <div className="mt-1.5 -mr-[180px] flex flex-wrap items-center gap-2 text-[11px]">
             <span className="text-[var(--text-tertiary)]">In the code, not in the model —</span>
             <button
               type="button"

@@ -1,0 +1,93 @@
+/*
+ * Act 1 layout — the two-window "desktop": the agent terminal floating beside
+ * the real scryer shell on a dark, textured canvas.
+ *
+ * The canvas is deliberately LARGER than the record frame (1600×1000), with the
+ * windows centered and a wide margin of patterned background around them — room
+ * for the camera to establish, push in, and pan while the dot-grid + glow bleed
+ * at the edges. The two windows live in a `.rf-pair` sized to their content, so
+ * the camera can frame the PAIR (both whole) for the establishing shot. Sizes
+ * are fixed px so the framing — and the `.rf-work` anchor — are deterministic.
+ */
+
+.rf-desktop {
+  position: relative;
+  /* Larger than the record frame so the camera stays well inside the canvas. */
+  width: 3000px;
+  height: 1700px;
+  background-color: #06070b;
+  background-image:
+    radial-gradient(110% 85% at 50% -5%, rgba(112, 112, 182, 0.16), transparent 55%),
+    radial-gradient(rgba(255, 255, 255, 0.09) 1.5px, transparent 1.6px);
+  background-size: 100% 100%, 30px 30px;
+  background-position: center, center;
+}
+
+/*
+ * The two windows are pinned at ABSOLUTE pixel coordinates — never flowed or
+ * flex-centered. This is load-bearing: with flex centering, any size change in
+ * a child (the input box as text is typed, the tree as the plan lands) re-runs
+ * layout and slides the whole pair under the fixed camera — which reads exactly
+ * like the camera drifting/snapping. Absolute coords make every window box a
+ * constant, so nothing the agent does can move it. Geometry (centered in the
+ * 3000×1700 canvas): pair = 620 + 90 gap + 1140 = 1850 wide, 940 tall, so
+ * pair-left = (3000-1850)/2 = 575, pair-top = (1700-940)/2 = 380.
+ */
+.rf-pair {
+  position: absolute;
+  left: 575px;
+  top: 380px;
+  width: 1850px;
+  height: 940px;
+}
+
+/* The terminal — carries its own window chrome, so this is just the sizing box.
+   Pinned + clipped so typed input can never grow it. */
+.rf-term {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 620px;
+  height: 940px;
+  overflow: hidden;
+}
+
+/* The shell's edit affordances reveal on :hover (section [edit], the per-row
+   [Directive]/[Delete] controls). The film's synthetic cursor can't trigger a
+   real CSS :hover, so force those controls visible inside the shell — otherwise
+   the cursor would click a button the viewer can't see. Scoped to this scene. */
+.rf-shell [class~="group-hover/sec:visible"],
+.rf-shell [class~="group-hover/srow:visible"],
+.rf-shell [class~="group-hover/drow:visible"] {
+  visibility: visible !important;
+}
+
+/* The scryer column — pinned beside the terminal (620 + 90 gap = 710). Wrapped
+   + clipped so the full-bleed app reads as a fixed, framed window. */
+.rf-shell {
+  position: absolute;
+  left: 710px;
+  top: 0;
+  width: 1140px;
+  height: 940px;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+}
+
+/* An invisible camera anchor spanning the terminal's scrollback AND scryer's
+   tree — the balanced "watch the agent work" shot, framed so the streaming tool
+   calls and the blooming tree marks are both prominent and in the vertical safe
+   band. Its px box tracks the centered layout: pair = 620+90+1140 = 1850 wide,
+   so pair-left = (3000-1850)/2 = 575; the box runs from the terminal's left to
+   ~340px into scryer (its tree), and stops short of the windows' bottom so the
+   action sits centred. Update if the window sizes change. */
+.rf-work {
+  position: absolute;
+  left: 575px;
+  top: 392px;
+  width: 1055px;
+  height: 740px;
+  pointer-events: none;
+}

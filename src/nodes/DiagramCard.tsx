@@ -21,8 +21,46 @@ export interface CardData extends Record<string, unknown> {
   mark?: Mark | null;
   /** A selection exists elsewhere and this node isn't a neighbour — fade it. */
   dimmed?: boolean;
+  /** Structure is laid out but the agent hasn't generated the semantics yet —
+   *  render the card with the indigo "working on this" treatment (matching the
+   *  tree's active-node spinner) and cross-fade the content in once it lands. */
+  pending?: boolean;
 }
 export type RFCard = RFNode<CardData, "card">;
+
+/** The one "generating" effect: the same animated barber-pole the powerline uses
+ *  for agent activity, filling the card UNTIL its content lands, then cross-fading
+ *  out. Conforms to the card exactly because it's a second `ShapeBackground` whose
+ *  fill is the barber pattern (`url(#barber-gen)`, defined by the demo) — so it
+ *  follows the silhouette, the container tab, the component side-tabs, etc.
+ *  Rendered only for cards the demo marks pending; `undefined` (the product
+ *  default) skips it entirely. */
+function GeneratingFill({
+  shape,
+  kind,
+  external,
+  pending,
+}: {
+  shape: Parameters<typeof ShapeBackground>[0]["shape"];
+  kind: DiagramNode["kind"];
+  external: boolean;
+  pending?: boolean;
+}) {
+  if (pending === undefined) return null;
+  return (
+    <div
+      className="pointer-events-none absolute inset-0 transition-opacity duration-300"
+      style={{ opacity: pending ? 1 : 0 }}
+    >
+      <ShapeBackground
+        shape={shape}
+        kind={kind}
+        external={external}
+        fillClass="fill-barber-gen"
+      />
+    </div>
+  );
+}
 
 /** Card outline stroke per change mark — same palette as the tree gutter and
  *  the dots: A green, M amber, D red, R blue, Q violet, X orange. */
@@ -58,6 +96,9 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
   // Person nodes: silhouette above, no background rect, normal text layout.
   if (node.kind === "person") {
     const longDesc = (node.description?.length ?? 0) > 80;
+    // The silhouette outline — shared by the fade fill, the generating barber,
+    // and the stroke so all three are always the exact same shape.
+    const silhouette = "M 33,72 C 33,42 48,28 76,24 A 22,26 0 1,1 104,24 C 132,28 147,42 147,72";
     return (
       <div className={`relative h-[160px] w-[180px] transition-opacity ${data.dimmed ? "opacity-30" : ""}`}>
         <NodeHandles />
@@ -83,25 +124,34 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
                 <stop offset="100%" stopColor={selected ? "var(--scryer-select-stroke)" : "var(--scryer-outline-stroke)"} stopOpacity="0" />
               </linearGradient>
             </defs>
+            <path d={`${silhouette} Z`} fill={`url(#person-fade-${id})`} />
+            {data.pending !== undefined && (
+              <path
+                d={`${silhouette} Z`}
+                fill="url(#barber-gen)"
+                style={{ opacity: data.pending ? 1 : 0, transition: "opacity 0.3s" }}
+              />
+            )}
             <path
-              d={["M 33,72 C 33,42 48,28 76,24", "A 22,26 0 1,1 104,24", "C 132,28 147,42 147,72", "Z"].join(" ")}
-              fill={`url(#person-fade-${id})`}
-            />
-            <path
-              d={["M 33,72 C 33,42 48,28 76,24", "A 22,26 0 1,1 104,24", "C 132,28 147,42 147,72"].join(" ")}
+              d={silhouette}
               fill="none"
               stroke={`url(#person-stroke-${id})`}
               strokeWidth={selected ? 2.5 : 1}
             />
           </svg>
-          <div className="w-full break-words text-center text-sm font-semibold leading-tight">
-            {node.name || "Untitled"}
-          </div>
-          {node.description && (
-            <div className="mt-2 w-full overflow-hidden break-words text-center text-[10px] leading-snug text-[var(--text-muted)]">
-              {node.description}
+          <div
+            className="flex w-full flex-col items-center transition-opacity duration-500"
+            style={{ opacity: data.pending ? 0 : 1 }}
+          >
+            <div className="w-full break-words text-center text-sm font-semibold leading-tight">
+              {node.name || "Untitled"}
             </div>
-          )}
+            {node.description && (
+              <div className="mt-2 w-full overflow-hidden break-words text-center text-[10px] leading-snug text-[var(--text-muted)]">
+                {node.description}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -136,6 +186,7 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
           external={!!isExternal}
         />
         <NodeHandles />
+        <GeneratingFill shape={shape} kind={node.kind} external={!!isExternal} pending={data.pending} />
 
         {/* Drill-in — shown on select. */}
         {expandable && selected && (
@@ -163,24 +214,29 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
           </div>
         )}
 
-        {/* Content area. */}
+        {/* Content area — cross-fades in as the card finishes generating. */}
         <div
           className="absolute flex flex-col items-center justify-center overflow-hidden text-[var(--text)]"
           style={{ top: insets.top, bottom: insets.bottom, left: insets.left, right: insets.right }}
         >
-          <div className="w-full break-words text-center text-sm font-semibold leading-tight">
-            {node.name || "Untitled"}
+          <div
+            className="flex w-full flex-col items-center transition-opacity duration-500"
+            style={{ opacity: data.pending ? 0 : 1 }}
+          >
+            <div className="w-full break-words text-center text-sm font-semibold leading-tight">
+              {node.name || "Untitled"}
+            </div>
+            {node.technology && (
+              <div className="mt-0.5 text-center text-[10px] tracking-wider text-[var(--text-tertiary)]">
+                {node.technology}
+              </div>
+            )}
+            {node.description && (
+              <div className="mt-2 w-full overflow-hidden break-words text-center text-[10px] leading-snug text-[var(--text-muted)]">
+                {node.description}
+              </div>
+            )}
           </div>
-          {node.technology && (
-            <div className="mt-0.5 text-center text-[10px] tracking-wider text-[var(--text-tertiary)]">
-              {node.technology}
-            </div>
-          )}
-          {node.description && (
-            <div className="mt-2 w-full overflow-hidden break-words text-center text-[10px] leading-snug text-[var(--text-muted)]">
-              {node.description}
-            </div>
-          )}
         </div>
       </div>
     </div>

@@ -1,0 +1,209 @@
+/*
+ * Film engine chrome — the frame, the camera layer, the synthetic cursor, and
+ * the caption. The motion itself lives in JS (the director drives `transform`
+ * straight on `.film-content` and `.film-cursor`); this file is just the
+ * static look + the click ripple.
+ */
+
+.film-frame {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: var(--surface-canvas, #0b0d10);
+}
+
+/* The camera layer. transform-origin 0 0 keeps the director's geometry honest
+   (scale about the top-left, then translate). */
+.film-content {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+/* Synthetic cursor. The arrow's tip sits at the wrapper origin, so the
+   director can translate the wrapper straight to a target's centre. */
+.film-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 60;
+  pointer-events: none;
+  will-change: transform;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.45));
+}
+.film-cursor svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+}
+
+/* Click ripple — centred on the cursor tip (the wrapper origin). */
+.film-cursor-ring {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  border-radius: 9999px;
+  border: 2px solid var(--color-blue-400, #60a5fa);
+  opacity: 0;
+  transform: scale(0.2);
+  pointer-events: none;
+}
+
+/* --- Anchored annotation (coachmark): focal pin + marker-tag label --------- */
+/* A director's overlay, deliberately UNLIKE the product UI. The app reserves
+   every chromatic hue for meaning on neutral surfaces; this is a single warm
+   "marker" accent used nowhere in the app, rendered as a SOLID fill with dark
+   ink — the inverse of the app's dark-surface/light-text chrome — so it reads
+   as drawn on top, never as another panel. */
+.film-annot {
+  --film-annot: #ffc845; /* warm marker amber — the annotation accent */
+  position: absolute;
+  inset: 0;
+  z-index: 55;
+  pointer-events: none;
+  /* Dismissal fades the whole mark out (the director sets data-exiting, holds,
+     then unmounts) rather than letting it pop out of existence. */
+  transition: opacity 0.32s ease;
+}
+.film-annot[data-exiting="true"] {
+  opacity: 0;
+}
+
+/* The leader — a short line from the pin out to the label. The SVG spans the
+   whole frame in raw px (no viewBox), so it lands exactly where measured. */
+.film-mark-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.film-mark-leader {
+  fill: none;
+  stroke: var(--film-annot);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  filter: drop-shadow(0 1px 4px rgba(255, 200, 69, 0.45));
+  animation: film-mark-draw 0.28s cubic-bezier(0.65, 0, 0.35, 1) 0.16s forwards;
+}
+@keyframes film-mark-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+/* The focal pin — a solid dot on the target corner. */
+.film-mark-pin {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, -50%);
+}
+.film-mark-pin-dot {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: var(--film-annot);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.55);
+}
+
+/* The label — plain marker-amber text, a shadow to lift it off the background. */
+.film-mark-bubble {
+  position: absolute;
+  transform: translateY(-100%);
+  /* Wraps within the director-computed max-width so it never leaves frame. */
+  text-wrap: balance;
+  line-height: 1.25;
+  font-family: "Space Grotesk Variable", system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 1.9rem;
+  letter-spacing: -0.01em;
+  color: var(--film-annot);
+  /* A solid dark halo so the type reads cleanly over the app text behind it. */
+  text-shadow:
+    0 0 4px rgba(0, 0, 0, 1),
+    0 0 10px rgba(0, 0, 0, 1),
+    0 0 20px rgba(0, 0, 0, 0.95),
+    0 3px 26px rgba(0, 0, 0, 0.9);
+  opacity: 0;
+  animation: film-bubble-in 0.32s ease 0.46s forwards;
+}
+.film-mark-bubble--bottom { transform: none; }
+.film-mark-bubble--right { transform: translateY(-50%); }
+/* Centred over the target's top edge — the leader runs straight up to it. */
+.film-mark-bubble--above {
+  transform: translate(-50%, -100%);
+  text-align: center;
+}
+@keyframes film-bubble-in {
+  to { opacity: 1; }
+}
+
+/* --- Caption: centered lower-third for the rare conceptual beat ------------ */
+/* A full-width band rising from the bottom on a soft scrim, with a short accent
+   bar over a single line of headline type. Reads as an intentional marketing
+   caption (not a label pinned to a control), and the scrim gives it legibility
+   over either window. */
+
+.film-title {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  height: 42%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1rem;
+  padding-bottom: 3.4rem;
+  background: linear-gradient(
+    to top,
+    rgba(6, 7, 11, 0.94) 0%,
+    rgba(6, 7, 11, 0.6) 42%,
+    transparent 100%
+  );
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 0.55s ease, transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: none;
+}
+.film-title[data-show="true"] {
+  opacity: 1;
+  transform: none;
+}
+.film-title-bar {
+  width: 38px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--color-blue-400, #60a5fa);
+  box-shadow: 0 0 18px var(--color-blue-500, #3b82f6);
+}
+.film-title-text {
+  max-width: 60%;
+  text-align: center;
+  font-family: "Space Grotesk Variable", system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 2.05rem;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: #fff;
+  text-shadow: 0 2px 34px rgba(0, 0, 0, 0.7);
+}
+
+/* --- Diagram "populate" -----------------------------------------------------
+ * The build lands a level's whole structure at once as "generating" placeholders,
+ * then the scene fills the cards in one by one. The single "generating" effect for
+ * a card (DiagramCard `pending`) is a second ShapeBackground whose fill is the
+ * animated barber `<pattern id="barber-gen">` the demo renders (see Workspace) —
+ * so the stripes conform to the card's exact shape (silhouette, container tab,
+ * component tabs). The pattern animates itself; this just points the fill at it. */
+.fill-barber-gen {
+  fill: url(#barber-gen);
+}

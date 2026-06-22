@@ -97,6 +97,7 @@ export function TopBar({
           <button
             key={id}
             type="button"
+            data-cam={`view-${id}`}
             title={`${label} view (Ctrl+Space to switch)`}
             aria-pressed={view === id}
             onClick={() => onSetView(id)}

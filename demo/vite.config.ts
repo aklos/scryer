@@ -17,6 +17,8 @@ export default defineConfig({
     alias: [
       { find: /^@tauri-apps\/api\/core$/, replacement: path.resolve(import.meta.dirname, "tauri-stub.ts") },
       { find: /^@tauri-apps\/api\/window$/, replacement: path.resolve(import.meta.dirname, "tauri-stub.ts") },
+      { find: /^@tauri-apps\/api\/event$/, replacement: path.resolve(import.meta.dirname, "tauri-stub.ts") },
+      { find: /^@tauri-apps\/plugin-dialog$/, replacement: path.resolve(import.meta.dirname, "tauri-stub.ts") },
     ],
   },
   server: {
