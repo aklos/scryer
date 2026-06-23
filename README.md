@@ -29,7 +29,7 @@
 <br/>
 
 <p align="center">
-<video src="https://github.com/user-attachments/assets/df5d43b8-1bde-454c-b83f-8501b9c652ca" width="100%" autoplay loop muted></video>
+<video src="https://github.com/user-attachments/assets/094f2e6f-15c7-415c-9edd-3cb4284da0ed" width="100%" autoplay loop muted></video>
 </p>
 
 Coding agents write faster than you can review. You end up shipping code you don't fully understand, and what you meant drifts from what got built. Scryer keeps a model next to your code: a graph of what each part of the system is responsible for, mapped to the source lines that implement it. Use it to see how the code matches your intent, and to plan changes against that intent before the agent writes them.
