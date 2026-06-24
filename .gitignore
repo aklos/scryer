@@ -41,3 +41,6 @@ docs/.astro
 # Saved models
 .scryer
 target
+
+# Video artifacts (hosted on GitHub via README embed)
+*.mp4

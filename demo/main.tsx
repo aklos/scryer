@@ -18,6 +18,7 @@ import { Stage } from "./engine/Stage";
 import { comprehendScene } from "./engine/scenes/comprehend";
 import { prologueScene } from "./engine/scenes/prologue";
 import { refundScene } from "./engine/scenes/refund";
+import { filmScene } from "./engine/scenes/film";
 import { ShellDemo } from "./engine/ShellDemo";
 import { Terminal, type TerminalState } from "./engine/Terminal";
 
@@ -76,6 +77,7 @@ function DemoStage() {
   if (h === "comprehend") return <Stage scene={comprehendScene} />;
   if (h === "prologue") return <Stage scene={prologueScene} />;
   if (h === "refund") return <Stage scene={refundScene} />;
+  if (h === "film") return <Stage scene={filmScene} />;
   if (h === "shell") return <ShellDemo />;
   if (h === "terminal") return <TerminalPreview />;
   return <>{sceneById(h).render()}</>;

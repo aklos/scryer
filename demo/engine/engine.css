@@ -12,6 +12,31 @@
   background: var(--surface-canvas, #0b0d10);
 }
 
+/* React Flow's base stylesheet (`@xyflow/react/dist/style.css`, pulled in by
+   DiagramView) loads *after* the app's index.css in the demo's module graph, so
+   its white-on-grey control defaults win the cascade — the zoom controls render
+   light even in dark mode, unlike the real app. Re-assert the themed look with
+   priority. (Mirrors `.react-flow__controls` in src/index.css.) */
+.react-flow__controls {
+  box-shadow: none !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface) !important;
+}
+.react-flow__controls-button {
+  background: var(--surface) !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
+  color: var(--text-secondary) !important;
+}
+.react-flow__controls-button:hover {
+  background: var(--surface-hover) !important;
+  color: var(--text) !important;
+}
+.react-flow__controls-button svg {
+  fill: currentColor !important;
+}
+
 /* The camera layer. transform-origin 0 0 keeps the director's geometry honest
    (scale about the top-left, then translate). */
 .film-content {

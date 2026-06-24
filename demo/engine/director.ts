@@ -125,9 +125,13 @@ export class Director<S = unknown> {
       ],
       { duration: 520, easing: "cubic-bezier(0.22,1,0.36,1)" },
     );
+    // composite:"add" so the press dip COMPOSES with the cursor's base
+    // translate3d (its live position) instead of replacing it — otherwise the
+    // keyframes' bare scale() drops the translate and the cursor snaps to (0,0)
+    // for the length of the tap.
     this.dom.cursor.animate(
       [{ transform: "scale(1)" }, { transform: "scale(0.86)" }, { transform: "scale(1)" }],
-      { duration: 220, easing: "ease-out" },
+      { duration: 220, easing: "ease-out", composite: "add" },
     );
     if (target) {
       const el = this.resolve(target);

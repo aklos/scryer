@@ -105,19 +105,19 @@ export function Terminal({ state }: { state: TerminalState }) {
   }, [lines]);
   return (
     <div className="term" data-cam="terminal">
+      {/* A terminal tab-bar, not a centred window title — so it reads as its own
+          app (a modern terminal), not a stripped copy of scryer's toolbar. */}
       <div className="term-bar">
         <div className="term-dots">
           <span className="term-dot term-dot--r" />
           <span className="term-dot term-dot--y" />
           <span className="term-dot term-dot--g" />
         </div>
-        <div className="term-title">agent · {cwd}</div>
-        {/* spacer to balance the dots so the title stays centred */}
-        <div className="term-dots" style={{ visibility: "hidden" }}>
-          <span className="term-dot" />
-          <span className="term-dot" />
-          <span className="term-dot" />
+        <div className="term-tab">
+          <span className="term-tab-glyph">❯_</span>
+          <span className="term-tab-label">{cwd}</span>
         </div>
+        <span className="term-shell-badge">zsh</span>
       </div>
 
       {/* Scrollback: the agent-CLI banner, the committed request, then output. */}

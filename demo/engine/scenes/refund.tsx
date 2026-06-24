@@ -25,6 +25,7 @@ import type { ModelBuild } from "../../../src/hooks/useModelBuild";
 import type { Editor } from "../../../src/editor";
 import type { ChangeRevision } from "../../../src/hooks/useModelStorage";
 import type { Scene } from "../types";
+import type { Director } from "../director";
 import "../scenes/refund.css";
 
 const EMPTY: ReadonlySet<string> = new Set();
@@ -128,9 +129,10 @@ interface Edit {
 }
 
 /** The code edits the agent streams while implementing the plan. The first four
- *  realise the planned refund claims across the services; the LAST touches
- *  escrow.rs — a file no plan item called for, which scryer's drift watch then
- *  catches (the "oopsie"). */
+ *  realise the planned refund claims across the services. The next two are
+ *  genuine refund plumbing (index captures as refundable, add the migration).
+ *  The LAST — fees.rs — silently waives the processing fee on refunds, a policy
+ *  no claim ever asked for, which scryer's drift watch then catches. */
 const EDITS: Edit[] = [
   {
     file: "ledger/src/refund.rs",
@@ -174,8 +176,8 @@ const EDITS: Edit[] = [
       { op: "+", text: "}" },
     ],
   },
-  // --- and then the agent keeps going, "tidying up" the whole ledger service —
-  //     eight files no plan item ever called for (the joke / drift bait). -------
+  // --- genuine refund plumbing the claims imply (not separate claims): index
+  //     existing captures as refundable, and add the column to store the link. --
   {
     file: "ledger/src/escrow.rs",
     rows: [
@@ -185,53 +187,21 @@ const EDITS: Edit[] = [
     ],
   },
   {
-    file: "ledger/src/reconcile.rs",
-    rows: [
-      { op: "-", text: "fn reconcile(day: Date) -> Report {" },
-      { op: "+", text: "fn reconcile(day: Date, include_refunds: bool) -> Report {" },
-      { op: "+", text: "    tracing::info!(?day, \"reconcile (now refund-aware)\");" },
-    ],
-  },
-  {
-    file: "ledger/src/settle.rs",
-    rows: [
-      { op: " ", text: "pub fn settle(batch: &Batch) -> Result<()> {" },
-      { op: "+", text: "    metrics::incr(\"settle.batch\"); // figured I'd add metrics" },
-      { op: " ", text: "    bank.submit(batch)" },
-    ],
-  },
-  {
-    file: "ledger/src/audit.rs",
-    rows: [
-      { op: "-", text: "pub fn record(id: TxId, amount: Money) {" },
-      { op: "+", text: "pub fn record(id: TxId, amount: Money, kind: Kind) {" },
-    ],
-  },
-  {
-    file: "ledger/src/balance.rs",
-    rows: [
-      { op: " ", text: "pub fn balance(account: AccountId) -> Money {" },
-      { op: "+", text: "    cache.get_or_compute(account, compute_balance) // cached it, why not" },
-    ],
-  },
-  {
-    file: "ledger/src/fees.rs",
-    rows: [
-      { op: "-", text: "const FEE_BPS: u32 = 290;" },
-      { op: "+", text: "const FEE_BPS: u32 = 290; // refunds waive this — TODO confirm with finance" },
-    ],
-  },
-  {
     file: "ledger/migrations/0008_refund.sql",
     rows: [
       { op: "+", text: "ALTER TABLE entries ADD COLUMN refund_of UUID NULL;" },
       { op: "+", text: "CREATE INDEX idx_entries_refund_of ON entries(refund_of);" },
     ],
   },
+  // --- the overreach: the agent quietly waives the processing fee on every
+  //     refund — a real behaviour change no claim asked for (the drift bait). ----
   {
-    file: "ledger/src/config.rs",
+    file: "ledger/src/fees.rs",
     rows: [
-      { op: "+", text: "pub const REFUND_WINDOW_DAYS: u32 = 120; // seemed like a sensible default" },
+      { op: " ", text: "pub fn fee(entry: &Entry) -> Money {" },
+      { op: "+", text: "    if entry.kind == Kind::Refund { return Money::ZERO; } // waive fees on refunds" },
+      { op: " ", text: "    entry.amount * FEE_BPS / 10_000" },
+      { op: " ", text: "}" },
     ],
   },
 ];
@@ -255,30 +225,30 @@ const VAGRANT: Responsibility = {
 };
 
 /** The agent's reconcile edit — reverting the fee waiver it never should have
- *  written (the code behind the rejected claim). */
+ *  written (the code behind the rejected claim): drop the refund guard so
+ *  refunds pay the fee again, same as every other entry. */
 const RECONCILE_EDIT: Edit = {
   file: "ledger/src/fees.rs",
   rows: [
-    { op: "-", text: "const FEE_BPS: u32 = 290; // refunds waive this — TODO confirm with finance" },
-    { op: "+", text: "const FEE_BPS: u32 = 290;" },
+    { op: " ", text: "pub fn fee(entry: &Entry) -> Money {" },
+    { op: "-", text: "    if entry.kind == Kind::Refund { return Money::ZERO; } // waive fees on refunds" },
+    { op: " ", text: "    entry.amount * FEE_BPS / 10_000" },
+    { op: " ", text: "}" },
   ],
 };
 
-/** The eight files scryer's plan-aware drift watch flags — the agent's unplanned
- *  "tidying", caught (the changedFiles match the unplanned EDITS above). */
+/** The ledger files scryer's plan-aware drift watch flags — code the agent
+ *  changed beyond the three mapped claims (the changedFiles match the plumbing +
+ *  overreach EDITS above). The semantic Check then triages them: the plumbing
+ *  backs the refund claims and reconciles; the fee waiver is left as a vagrant. */
 const DRIFT_SCOPES: DriftScope[] = [
   {
     nodeId: "ledger",
     nodeName: "Ledger Service",
     changedFiles: [
       "ledger/src/escrow.rs",
-      "ledger/src/reconcile.rs",
-      "ledger/src/settle.rs",
-      "ledger/src/audit.rs",
-      "ledger/src/balance.rs",
-      "ledger/src/fees.rs",
       "ledger/migrations/0008_refund.sql",
-      "ledger/src/config.rs",
+      "ledger/src/fees.rs",
     ],
   },
 ];
@@ -303,7 +273,7 @@ function withResp(model: ScryModel, nodeId: string, resp: { id: string; statemen
 // real work (node/group patches on Done); the rest are inert.
 let applyEdit: (fn: (s: RefundState) => RefundState) => void = () => {};
 
-const demoEditor: Editor = {
+export const demoEditor: Editor = {
   updateNode: (nodeId, patch) =>
     applyEdit((s) => ({
       ...s,
@@ -421,7 +391,7 @@ function flashOn(nodeId: string): ModelBuild {
   };
 }
 
-interface RefundState {
+export interface RefundState {
   term: TerminalState;
   shell: WorkspaceState;
 }
@@ -467,7 +437,18 @@ export const refundScene: Scene<RefundState> = {
       <div className="rf-work" data-cam="work" />
     </div>
   ),
-  run: async (d) => {
+  run: (d) => runRefund(d),
+};
+
+/**
+ * The refund choreography, extracted so the combined `film` scene can run it
+ * verbatim after the prologue + terminal launch. `skipEstablish` drops the wide
+ * desktop establishing shot (the film already framed the pair at the seam).
+ */
+export async function runRefund(
+  d: Director<RefundState>,
+  opts: { skipEstablish?: boolean } = {},
+): Promise<void> {
     // Route the demo editor's commits (Done in the node page) through the
     // director, so a real edit mutates the scene model and repaints.
     applyEdit = (fn) => void d.set(fn);
@@ -494,8 +475,10 @@ export const refundScene: Scene<RefundState> = {
     // 0. Establish the scene: open wide on the patterned canvas, then ease in to
     //    frame BOTH windows balanced — the AI agent CLI on the left, the scryer
     //    model on the right. (The engine can zoom out below 1:1 now.)
-    await d.camera("desktop", { minZoom: 0.3, duration: 0 });
-    await d.camera("pair", { minZoom: 0.5, duration: 1200, hold: 600 });
+    if (!opts.skipEstablish) {
+      await d.camera("desktop", { minZoom: 0.3, duration: 0 });
+      await d.camera("pair", { minZoom: 0.5, duration: 1200, hold: 600 });
+    }
 
     // THE ENTIRE AGENT TURN PLAYS IN THIS ONE STATIC SHOT. No camera moves while
     // typing or while the edits land — so there is physically nothing to shift or
@@ -506,7 +489,7 @@ export const refundScene: Scene<RefundState> = {
     // 0b. Frame the relationship first: the agent CLI talks to scryer through its
     //     MCP server. The leader runs off the terminal toward scryer — the link.
     await d.annotate("terminal", "Connect your agent to Scryer through MCP", { place: "right" });
-    await d.wait(2600);
+    await d.wait(2200);
     await d.clear();
     await d.wait(300);
 
@@ -525,7 +508,7 @@ export const refundScene: Scene<RefundState> = {
     await d.set((s) => ({ ...s, term: { ...s.term, lines: resolveLastTool(s.term.lines) } }));
     await d.wait(440);
     await pushLine({ kind: "say", text: SAY });
-    await d.wait(1300);
+    await d.wait(1100);
 
     // 4. Each write streams in the terminal (left) and lands in the tree (right):
     //    the target service flashes indigo as the tool runs, then settles with
@@ -552,7 +535,7 @@ export const refundScene: Scene<RefundState> = {
     //     it (the joke). The terminal auto-scrolls as the wall of text streams.
     await d.wait(300);
     await pushLine({ kind: "say", text: ESSAY });
-    await d.wait(3200);
+    await d.wait(2500);
 
     // 5. The agent's turn ends; the user takes over. The cursor crosses into
     //    scryer and points at the new Ledger claim, and the camera follows the
@@ -574,7 +557,7 @@ export const refundScene: Scene<RefundState> = {
       "Planned changes are diffed in the model — before code",
       { place: "right" },
     );
-    await d.wait(2400);
+    await d.wait(2100);
     await d.clear();
 
     // 6. The human takes over and refines the plan BY HAND in scryer — driving
@@ -614,7 +597,7 @@ export const refundScene: Scene<RefundState> = {
       "Edit by hand — it lands in the plan, same as the agent",
       { place: "right" },
     );
-    await d.wait(3000);
+    await d.wait(2400);
 
     // ========================================================================
     // ACT 2 — the blast radius. Scryer takes the full frame; the human opens
@@ -647,7 +630,7 @@ export const refundScene: Scene<RefundState> = {
       "The whole plan in one place — every change, across the services",
       { place: "bottom" },
     );
-    await d.wait(3400);
+    await d.wait(2700);
     await d.clear();
 
     // Only now move to the terminal — close on the prompt box + live output (the
@@ -655,9 +638,9 @@ export const refundScene: Scene<RefundState> = {
     await d.camera("term-active", { pad: 28, duration: 1200, hold: 500 });
 
     // ========================================================================
-    // ACT 3 — implement the plan. The user prompts; the agent spams the
-    // terminal with the code edits across the services (no build viz — just the
-    // diffs streaming by). One of them — escrow.rs — wasn't in the plan.
+    // ACT 3 — implement the plan. The user prompts; the agent streams the code
+    // edits across the services (no build viz — just the diffs going by). The
+    // last one — waiving the refund fee — was never in the plan.
     // ========================================================================
     await d.cursorTo("term-input");
     await d.wait(350);
@@ -673,17 +656,16 @@ export const refundScene: Scene<RefundState> = {
     });
     await d.wait(750);
 
-    // The edits spam by, one after another — fast, so the volume reads as a joke.
-    for (const [i, e] of EDITS.entries()) {
+    // The edits stream by one after another — every one readable; the last (the
+    // fee waiver) is the one that shouldn't be here.
+    for (const e of EDITS) {
       await pushLine({ kind: "diff", file: e.file, rows: e.rows });
-      // The four planned edits land at a readable pace; the eight "extras" the
-      // agent keeps tacking on rattle off quicker, piling up.
-      await d.wait(i < 4 ? 620 : 430);
+      await d.wait(560);
     }
 
     await pushLine({
       kind: "say",
-      text: "Done — refund's in. I also took the liberty of tidying up the rest of the ledger service while I was in there.",
+      text: "Done — refund's in across all three services. I also waived the processing fee on refunds while I was in there — figured it'd be a nice touch.",
     });
     await d.wait(900);
 
@@ -701,8 +683,8 @@ export const refundScene: Scene<RefundState> = {
     // ========================================================================
     // ACT 3 (cont) — commit + the drift catch (the payoff). Pull to scryer with
     // the plan still showing, fold it into committed (the plan DISAPPEARS — the
-    // "Added" marks clear), then the plan-aware drift watch flags the eight files
-    // the agent touched that no plan item ever called for.
+    // "Added" marks clear), then the plan-aware drift watch flags the ledger files
+    // the agent touched beyond the three claims it was asked to implement.
     // ========================================================================
     await d.set((s) => ({
       ...s,
@@ -722,17 +704,17 @@ export const refundScene: Scene<RefundState> = {
     });
     await d.wait(1500); // the plan disappears
 
-    // Then drift surfaces — eight files the plan never asked for.
+    // Then drift surfaces — the ledger files the agent changed beyond the plan.
     await d.set((s) => ({ ...s, shell: { ...s.shell, driftScopes: DRIFT_SCOPES } }));
     await d.wait(900);
     await d.camera("[data-drift-banner]", { minZoom: 0.5, pad: 120, duration: 1000, hold: 300 });
     await d.cursorTo("[data-drift-banner]");
     await d.annotate(
       "[data-drift-banner]",
-      "Scryer caught 8 files the plan never asked for",
+      "The agent changed code beyond the plan — Scryer flags it",
       { place: "above" },
     );
-    await d.wait(4200);
+    await d.wait(3000);
 
     // ========================================================================
     // ACT 4 — reconcile (the resolution). The human runs scryer's drift check;
@@ -760,7 +742,7 @@ export const refundScene: Scene<RefundState> = {
       },
     }));
     await d.camera(".rf-shell", { minZoom: 0.7, pad: 90, duration: 1000, hold: 200 });
-    await d.wait(2400);
+    await d.wait(1900);
 
     // The scan resolves: the genuine cleanup reconciles (the drift clears), but
     // one change does something no claim describes — a vagrant claim surfaces.
@@ -787,10 +769,10 @@ export const refundScene: Scene<RefundState> = {
     await d.cursorTo("#resp-r-ledger-vagrant > div > span");
     await d.annotate(
       "#resp-r-ledger-vagrant > div > span",
-      "Code the agent wrote that no claim asked for",
+      "A fee policy the agent set — that no one approved",
       { place: "right" },
     );
-    await d.wait(3400);
+    await d.wait(2700);
     await d.clear();
 
     // The human drops the vagrancy — Reject. It becomes a deletion to-do.
@@ -803,7 +785,7 @@ export const refundScene: Scene<RefundState> = {
       "Dropped — now a deletion for the agent to reconcile",
       { place: "right" },
     );
-    await d.wait(3200);
+    await d.wait(2500);
     await d.clear();
 
     // Cut to the terminal — the human tells the agent to fix its mistake.
@@ -870,6 +852,5 @@ export const refundScene: Scene<RefundState> = {
     await d.camera(".rf-shell", { minZoom: 0.7, pad: 90, duration: 1300, hold: 400 });
     await d.wait(1000);
     await d.annotate(".rf-shell h1", "Model and code, back in agreement", { place: "right" });
-    await d.wait(4200);
-  },
-};
+    await d.wait(3200);
+}

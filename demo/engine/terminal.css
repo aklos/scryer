@@ -14,12 +14,15 @@
 .term {
   --term-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
-  --term-bg: #0a0c11;
-  --term-panel: #0e1117;
-  --term-line: rgba(255, 255, 255, 0.07);
-  --term-fg: #dfe3ea; /* primary foreground */
-  --term-bright: #f4f5f7; /* user input + tool name (the one emphasis) */
-  --term-dim: #697083; /* everything secondary: ❯, ▸, targets, args */
+  /* A deep COOL slate-blue — deliberately a different temperature from scryer's
+     neutral zinc canvas (#18181b), so the two windows read as separate surfaces
+     (different by hue, not just darkness) rather than one template twice. */
+  --term-bg: #0a0d14;
+  --term-panel: #10141d;
+  --term-line: rgba(200, 215, 255, 0.07);
+  --term-fg: #dde3ee; /* primary foreground — cool off-white */
+  --term-bright: #f3f5fa; /* user input + tool name (the one emphasis) */
+  --term-dim: #69728a; /* everything secondary: ❯, ▸, targets, args */
   --term-agent: var(--color-violet-400, #a78bfa); /* the single accent */
   --term-ok: #57a98a; /* quiet, desaturated "done" check */
 
@@ -44,15 +47,18 @@
 .term-bar {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.7rem;
   flex: none;
-  padding: 0.7rem 0.95rem;
-  background: var(--term-panel);
+  padding: 0.55rem 0.85rem 0;
+  /* A hair lighter than the body, with a seam below the active tab — the look
+     of a real terminal's tab strip rather than a flat window title. */
+  background: linear-gradient(180deg, #1a2030, var(--term-panel));
   border-bottom: 1px solid var(--term-line);
 }
 .term-dots {
   display: flex;
   gap: 0.45rem;
+  padding-bottom: 0.55rem;
 }
 .term-dot {
   width: 11px;
@@ -63,11 +69,41 @@
 .term-dot--r { background: #ff5f57; }
 .term-dot--y { background: #febc2e; }
 .term-dot--g { background: #28c840; }
-.term-title {
-  flex: 1;
-  text-align: center;
-  font-size: 13px;
+
+/* The active terminal tab — a rounded chip that sits on the body, seam-matched
+   so it reads as "the open shell", the way Warp / iTerm / Ghostty draw a tab. */
+.term-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.42rem 0.8rem;
+  border: 1px solid var(--term-line);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: var(--term-bg);
+  font-size: 12.5px;
+  color: var(--term-fg);
+  /* nudge the tab down so its open bottom meets the bar's border seam */
+  margin-bottom: -1px;
+}
+.term-tab-glyph {
+  color: var(--term-agent);
+  font-weight: 600;
+  letter-spacing: -0.04em;
+}
+.term-tab-label {
+  color: var(--term-dim);
   letter-spacing: 0.01em;
+}
+.term-shell-badge {
+  margin-left: auto;
+  margin-bottom: 0.55rem;
+  padding: 0.12rem 0.5rem;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--term-dim);
 }
 

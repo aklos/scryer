@@ -15,12 +15,23 @@
   /* Larger than the record frame so the camera stays well inside the canvas. */
   width: 3000px;
   height: 1700px;
-  background-color: #06070b;
+  /* A dark "stage": mostly deep near-black with a single CONTAINED glow up the
+     centre. Two constraints shape it:
+       1. The trailer encodes as low-bitrate H.264 — fine texture (grain) is
+          incompressible and smears into blocky "blobs", so this is SMOOTH, large,
+          low-frequency gradients only.
+       2. The camera often frames ONE window, leaving side margins. A wide glow
+          shows in those margins as a stray violet band ("bleed"); a contained
+          glow + a vignette that resolves to flat near-black keeps every margin
+          clean black, reading as intentional framing.
+     The windows are the subject; this is just a hint of light behind them. */
+  background-color: #08080c;
   background-image:
-    radial-gradient(110% 85% at 50% -5%, rgba(112, 112, 182, 0.16), transparent 55%),
-    radial-gradient(rgba(255, 255, 255, 0.09) 1.5px, transparent 1.6px);
-  background-size: 100% 100%, 30px 30px;
-  background-position: center, center;
+    radial-gradient(115% 100% at 50% 38%, transparent 30%, #050506 80%),
+    radial-gradient(42% 38% at 50% 32%, rgba(98, 104, 140, 0.10), transparent 72%),
+    linear-gradient(180deg, #0a0a11 0%, #08080d 55%, #060608 100%);
+  background-size: 100% 100%;
+  background-position: center;
 }
 
 /*
