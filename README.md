@@ -1,4 +1,4 @@
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/bc489933-ea18-4eba-a819-98b402e92c92" /><div align="center">
+<div align="center">
 
   <h1>
     <img width="50" src="public/logo.png" alt="Scryer logo" align="absmiddle" />
