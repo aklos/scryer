@@ -11,6 +11,8 @@ import { FolderOpen, Sparkles, X, AlertTriangle } from "lucide-react";
 import type { ModelStorage } from "./hooks/useModelStorage";
 import type { ModelBuild } from "./hooks/useModelBuild";
 import { useLaunchSettings } from "./hooks/useLaunchSettings";
+import { useMcpSetup } from "./hooks/useMcpSetup";
+import { McpSetupPrompt } from "./McpSetupPrompt";
 import { useAgentLaunchGate } from "./AgentLaunchConfirm";
 
 type Phase = "picker" | "needs-model";
@@ -23,7 +25,13 @@ export function ProjectPicker({
   build: ModelBuild;
 }) {
   const [phase, setPhase] = useState<Phase>("picker");
-  const launchGate = useAgentLaunchGate(useLaunchSettings());
+  const launchSettings = useLaunchSettings();
+  const launchGate = useAgentLaunchGate(launchSettings);
+  // Offer MCP wiring on the same screen where the model store is created, so a
+  // fresh project gets set up in one sitting. The `.mcp.json` etc. are written
+  // independently of `.scryer/`, so this works whether they enable before or
+  // after creating the model.
+  const mcpSetup = useMcpSetup(storage.projectPath);
 
   useEffect(() => {
     if (storage.status === "needs-model") {
@@ -125,6 +133,15 @@ export function ProjectPicker({
             >
               Start blank
             </button>
+            <p className="px-1 text-2xs leading-relaxed text-[var(--text-muted)]">
+              Either option creates a <code className="font-mono">.scryer/</code> folder &mdash; your
+              model store &mdash; in this project.
+            </p>
+            {mcpSetup.needsSetup && !mcpSetup.dismissed && (
+              <div className="mt-1 text-left">
+                <McpSetupPrompt setup={mcpSetup} onDone={launchSettings.reload} />
+              </div>
+            )}
             <button
               type="button"
               className="text-xs text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] mt-1"
