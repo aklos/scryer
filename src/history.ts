@@ -57,23 +57,6 @@ export const EVENT_META: Record<EventKind, { label: string; dot: string; badge: 
   },
 };
 
-/** Colour for a diff-row marker glyph, matching the change-mark palette. */
-export function markerColor(marker: string): string {
-  switch (marker) {
-    case "+":
-      return "text-emerald-600 dark:text-emerald-400";
-    case "−":
-    case "!":
-      return "text-red-500 dark:text-red-400";
-    case "~":
-      return "text-amber-600 dark:text-amber-400";
-    case "→":
-      return "text-blue-600 dark:text-blue-400";
-    default:
-      return "text-[var(--text-muted)]";
-  }
-}
-
 /** A coarse "2 days ago" label from a unix-seconds timestamp. The durable log
  *  spans days/weeks, so relative phrasing reads better than a clock time. */
 export function relativeTime(atSecs: number, nowSecs = Date.now() / 1000): string {

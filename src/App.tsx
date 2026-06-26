@@ -19,9 +19,9 @@ import { DiagramView } from "./DiagramView";
 import { NodePage, type Selected, type SpecialPage } from "./NodePage";
 import {
   buildReviewIndex,
+  ChangesPage,
   DarkCodePage,
   NeedsReviewPage,
-  RecentChangesPage,
   UnmappedClaimsPage,
 } from "./SpecialPages";
 import { ProjectPicker } from "./ProjectPicker";
@@ -710,7 +710,13 @@ function Workspace({
           />
         ) : selected?.kind === "special" ? (
           selected.id === "changes" ? (
-            <RecentChangesPage changeLog={changeLog} onSelectNode={selectNode} />
+            <ChangesPage
+              planDiff={planDiff}
+              model={model}
+              committed={committed}
+              changeLog={changeLog}
+              onSelectNode={selectNode}
+            />
           ) : selected.id === "dark" ? (
             <DarkCodePage model={model} report={healthReport} onSelectNode={selectNode} />
           ) : selected.id === "unmapped" ? (

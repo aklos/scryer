@@ -21,15 +21,43 @@ import type { Group, Node } from "./viewmodel";
 
 export type Mark = "A" | "M" | "D" | "R" | "Q" | "X";
 
-/** Per-mark hue + label. Hues follow the mockup palette: A green, M amber,
- *  D red, R blue, Q violet, X orange. */
+/** The change categories the whole UI colours by. Both axes of marking draw
+ *  from this: the element marks (A/M/D/R/Q/X, the glanceable tree/map badge) and
+ *  the per-change diff glyphs (+ ~ − → ? !, the rendered diff on the node and
+ *  changes pages). One hue per category so a letter and its glyph never
+ *  disagree. Hues follow the mockup palette: add green, reword amber, delete
+ *  red, relocate blue, vagrant violet, stale orange. */
+export type ChangeKind = "add" | "reword" | "delete" | "relocate" | "vagrant" | "stale";
+
+export const CHANGE_COLOR: Record<ChangeKind, string> = {
+  add: "text-emerald-600 dark:text-emerald-400",
+  reword: "text-amber-600 dark:text-amber-400",
+  delete: "text-red-600 dark:text-red-400",
+  relocate: "text-blue-600 dark:text-blue-400",
+  vagrant: "text-violet-600 dark:text-violet-400",
+  stale: "text-orange-600 dark:text-orange-400",
+};
+
+/** Which category each element mark belongs to — the bridge between the
+ *  one-letter badge and the shared palette. */
+export const MARK_KIND: Record<Mark, ChangeKind> = {
+  A: "add",
+  M: "reword",
+  D: "delete",
+  R: "relocate",
+  Q: "vagrant",
+  X: "stale",
+};
+
+/** Per-mark hue + label. The hue is the category colour, kept in lockstep with
+ *  the diff glyphs via {@link CHANGE_COLOR}. */
 export const MARK_META: Record<Mark, { color: string; label: string }> = {
-  A: { color: "text-emerald-600 dark:text-emerald-400", label: "Added" },
-  M: { color: "text-amber-600 dark:text-amber-400", label: "Modified" },
-  D: { color: "text-red-600 dark:text-red-400", label: "Deleted" },
-  R: { color: "text-blue-600 dark:text-blue-400", label: "Relocated" },
-  Q: { color: "text-violet-600 dark:text-violet-400", label: "Undescribed in the model (drift)" },
-  X: { color: "text-orange-600 dark:text-orange-400", label: "Stale — code regressed (drift)" },
+  A: { color: CHANGE_COLOR.add, label: "Added" },
+  M: { color: CHANGE_COLOR.reword, label: "Modified" },
+  D: { color: CHANGE_COLOR.delete, label: "Deleted" },
+  R: { color: CHANGE_COLOR.relocate, label: "Relocated" },
+  Q: { color: CHANGE_COLOR.vagrant, label: "Undescribed in the model (drift)" },
+  X: { color: CHANGE_COLOR.stale, label: "Stale — code regressed (drift)" },
 };
 
 /** The plan diff, indexed for per-element lookup: each node/group's own changes,
@@ -59,7 +87,7 @@ export function indexDiff(diff: ModelDiff): DiffIndex {
 /** Classify a single PLAN mark from an element's own changes plus the changes
  *  to the content it owns. A brand-new or dropped element wins outright; then a
  *  relocation; then any reword/add/remove reads as "modified". */
-function classifyPlan(own: Change[] | undefined, childChanges: Change[]): Mark | null {
+export function classifyPlan(own: Change[] | undefined, childChanges: Change[]): Mark | null {
   if (own?.some((c) => c.type === "added")) return "A";
   if (own?.some((c) => c.type === "deleted")) return "D";
   const all = own ? [...own, ...childChanges] : childChanges;

@@ -195,7 +195,7 @@ export function Powerline({
             onClick={() => onOpenSpecial("changes")}
             className="rseg"
             style={sb("color-mix(in srgb, var(--text) 6.5%, var(--surface-canvas))")}
-            title="Recent changes — the agent's edits this session"
+            title="Changes — the whole plan diff against the committed model"
           >
             <History className="h-3.5 w-3.5" />
             <span>changes</span>

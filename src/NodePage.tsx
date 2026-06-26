@@ -54,13 +54,10 @@ import { isNodeEmpty } from "./rollup";
 import { kindIcon, typeTag } from "./kindIcon";
 import { lookupIcon } from "./IconPicker";
 import { ConnectionsSection, ImpliedConnectionsSection } from "./ConnectionsSection";
+import { ChangeGlyph, DIFF_TINT, glyphColor } from "./diffkit";
+import type { ChangeKind } from "./changeMarks";
 import type { ChangeRevision } from "./hooks/useModelStorage";
-import {
-  EVENT_META,
-  type HistoryEvent,
-  markerColor,
-  relativeTime,
-} from "./history";
+import { EVENT_META, type HistoryEvent, relativeTime } from "./history";
 import { matchPreviewComponent, usePreviewServer } from "./hooks/usePreviewServer";
 import { useDarkMode } from "./hooks/useDarkMode";
 import { ClaimSource, respElementId, propElementId } from "./SourceSection";
@@ -459,7 +456,7 @@ function NodeHistory({
               {ev.rows.map((row, j) => (
                 <div key={j} className="grid grid-cols-[16px_1fr] items-baseline gap-1">
                   <span
-                    className={`text-center font-mono text-xs font-bold ${markerColor(row.marker)}`}
+                    className={`text-center font-mono text-xs font-bold ${glyphColor(row.marker)}`}
                   >
                     {row.marker}
                   </span>
@@ -1339,21 +1336,14 @@ interface RespDiffRow {
   index: number | null;
 }
 
-const RESP_MARK: Record<Exclude<RespDiffKind, "unchanged">, { glyph: string; color: string }> = {
-  added: { glyph: "+", color: "text-emerald-600 dark:text-emerald-400" },
-  reworded: { glyph: "~", color: "text-amber-600 dark:text-amber-400" },
-  deleted: { glyph: "−", color: "text-red-600 dark:text-red-400" },
-  vagrant: { glyph: "?", color: "text-violet-600 dark:text-violet-400" },
+// Claim/property diff kinds map onto the shared change categories so the marker
+// glyph, its hue, and the whole-element tint all come from the one diff kit.
+const CHANGE_OF: Record<Exclude<RespDiffKind, "unchanged">, ChangeKind> = {
+  added: "add",
+  reworded: "reword",
+  deleted: "delete",
+  vagrant: "vagrant",
 };
-
-// Whole-claim diff highlight — a brand-new claim reads entirely added (green),
-// a dropped one entirely removed (struck red), the same palette `WordDiffText`
-// paints individual added/removed words in. A reworded claim keeps the
-// word-level diff; only added/deleted tint the whole statement.
-const STMT_ADDED =
-  "rounded-[2px] bg-emerald-500/15 px-0.5 text-emerald-700 dark:text-emerald-300 decoration-clone";
-const STMT_DELETED =
-  "rounded-[2px] bg-red-500/10 px-0.5 text-red-700/90 line-through decoration-red-400/60 decoration-clone dark:text-red-300/90";
 
 /** Build the diff rows for a host's claims: planned claims in order (each tagged
  *  added / reworded / vagrant / unchanged against the committed copy), then any
@@ -1598,7 +1588,6 @@ function RespDiffRow({
   const { resp, kind, prev, index } = row;
   const openMenu = usePageMenu();
   const copyId = useCopyId();
-  const mark = kind === "unchanged" ? null : RESP_MARK[kind];
   const deleted = kind === "deleted";
   const directives = resp.directives ?? [];
   const prevDirs = prev?.directives ?? [];
@@ -1629,11 +1618,7 @@ function RespDiffRow({
       onContextMenu={(e) => openMenu(e, [copyIdItem(resp.id, copyId)])}
       className={`${RESP_ROW} rounded-sm py-[1.5px] [&:not(:first-child)]:mt-2.5`}
     >
-      <span
-        className={`select-none text-center font-mono text-xs font-bold ${mark?.color ?? "text-[var(--text-ghost)]"}`}
-      >
-        {mark?.glyph}
-      </span>
+      {kind === "unchanged" ? <span /> : <ChangeGlyph kind={CHANGE_OF[kind]} />}
       <span className="select-none pr-2.5 text-right font-mono text-[11px] tabular-nums text-[var(--text-ghost)]">
         {index}
       </span>
@@ -1643,11 +1628,11 @@ function RespDiffRow({
             kind === "reworded" && prev ? (
               <WordDiffText from={prev.statement} to={resp.statement} />
             ) : kind === "added" ? (
-              <span className={STMT_ADDED}>
+              <span className={DIFF_TINT.add}>
                 <WikiText text={resp.statement} nodes={model.nodes} onSelectNode={onSelectNode} />
               </span>
             ) : deleted ? (
-              <span className={STMT_DELETED}>
+              <span className={DIFF_TINT.delete}>
                 <WikiText text={resp.statement} nodes={model.nodes} onSelectNode={onSelectNode} />
               </span>
             ) : (
@@ -1799,13 +1784,7 @@ function RespDiffRow({
         const added = !!prev && !prevDirs.includes(d) && !deleted;
         return (
           <li key={`d${i}`} className={`${RESP_ROW} py-[0.5px]`}>
-            <span
-              className={`select-none text-center font-mono text-xs font-bold ${
-                added ? "text-emerald-600 dark:text-emerald-400" : "text-[var(--text-ghost)]"
-              }`}
-            >
-              {added ? "+" : ""}
-            </span>
+            {added ? <ChangeGlyph kind="add" /> : <span className="select-none" />}
             <span className="select-none" />
             <div
               className={`flex min-w-0 items-baseline gap-1.5 pr-[180px] font-mono text-[12.5px] leading-[1.65] ${
@@ -1813,7 +1792,7 @@ function RespDiffRow({
               }`}
             >
               <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px not-italic text-[var(--text-ghost)]" />
-              <span className={`min-w-0 ${added ? STMT_ADDED : ""}`}>
+              <span className={`min-w-0 ${added ? DIFF_TINT.add : ""}`}>
                 <WikiText text={d} nodes={model.nodes} onSelectNode={onSelectNode}/>
               </span>
             </div>
@@ -1822,13 +1801,11 @@ function RespDiffRow({
       })}
       {removedDirs.map((d, i) => (
         <li key={`rd${i}`} className={`${RESP_ROW} py-[0.5px]`}>
-          <span className="select-none text-center font-mono text-xs font-bold text-red-600 dark:text-red-400">
-            −
-          </span>
+          <ChangeGlyph kind="delete" />
           <span className="select-none" />
           <div className="flex min-w-0 items-baseline gap-1.5 pr-[180px] font-mono text-[12.5px] leading-[1.65] text-[var(--text-tertiary)]">
             <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px not-italic text-[var(--text-ghost)]" />
-            <span className={`min-w-0 ${STMT_DELETED}`}>
+            <span className={`min-w-0 ${DIFF_TINT.delete}`}>
               <WikiText text={d} nodes={model.nodes} onSelectNode={onSelectNode}/>
             </span>
           </div>
@@ -1993,7 +1970,6 @@ function PropDiffRow({
   editor?: Editor;
 }) {
   const { prop, kind, prev, index } = row;
-  const mark = kind === "unchanged" ? null : RESP_MARK[kind];
   const deleted = kind === "deleted";
   const desc = prop.description ?? "";
   // A vagrant field is code-first ("adopt?"); a stale one is a regressed field
@@ -2006,11 +1982,7 @@ function PropDiffRow({
       : "text-[var(--text)]";
   return (
     <li id={propElementId(nodeId, prop.label)} className={`${PROP_ROW} rounded-sm py-[1.5px]`}>
-      <span
-        className={`select-none text-center font-mono text-xs font-bold ${mark?.color ?? "text-[var(--text-ghost)]"}`}
-      >
-        {mark?.glyph}
-      </span>
+      {kind === "unchanged" ? <span /> : <ChangeGlyph kind={CHANGE_OF[kind]} />}
       <span className="select-none pr-2.5 text-right font-mono text-[11px] tabular-nums text-[var(--text-ghost)]">
         {index}
       </span>
