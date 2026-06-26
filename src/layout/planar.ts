@@ -1,19 +1,18 @@
 /**
- * Planar graph layout: FPP shift method → Kamada-Kawai stress minimization.
+ * Planar graph layout: Tutte's barycentric embedding → Kamada-Kawai.
  *
  * Pipeline:
- *   1. DFS → tree edges + back edges
- *   2. Greedy planarity: build embedding incrementally, classify edges
- *   3. Augment to biconnected + triangulate
- *   4. Canonical ordering (de Fraysseix-Pach-Pollack)
- *   5. FPP shift method: crossing-free integer grid placement
- *   6. Kamada-Kawai: stress-minimize all edges (planar + non-planar)
- *
- * FPP works on any triangulated planar graph (no 3-connectivity needed).
- * Kamada-Kawai adjusts spacing proportionally to graph-theoretic distance.
+ *   1. Classify edges: Left-Right planarity test (true test). If planar, every
+ *      edge is planar and we get a combinatorial embedding directly; only a
+ *      genuinely non-planar graph falls back to greedy partition + KK.
+ *   2. Augment to biconnected + triangulate
+ *   3. Tutte barycentric embedding (hubs pulled to neighbour centroids)
+ *   4. Kamada-Kawai: stress-minimize (used for the non-planar fallback)
  *
  * All algorithms are O(n²) or better, which is instant for n ≤ 50.
  */
+
+import { lrPlanarity } from "./lrPlanarity";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -293,6 +292,19 @@ export function classifyEdges(
     };
   }
 
+  // Authoritative planarity verdict first: the Left-Right test is a true
+  // planarity test (unlike the greedy fallback below, which is order-dependent
+  // and false-positives on planar graphs). When the graph IS planar, LR yields
+  // a valid combinatorial embedding directly, so every edge is planar and the
+  // graph flows through the real Tutte pipeline instead of the KK fallback.
+  const lr = lrPlanarity(nodeIds, edges);
+  if (lr.isPlanar && lr.embedding) {
+    return { planarEdges: edges, nonPlanarEdges: [], embedding: lr.embedding };
+  }
+
+  // Genuinely non-planar: fall back to the greedy incremental embedding to
+  // extract a maximal planar subgraph plus the edges that don't fit. (Any such
+  // partition is heuristic — for a non-planar graph there is no clean one.)
   const { treeEdges, backEdges, depth } = dfs(nodeIds, edges);
   const embedding = treeEmbedding(nodeIds, treeEdges);
   const planarEdges: EdgePair[] = [...treeEdges];
@@ -1675,9 +1687,29 @@ export async function planarLayout(
   // Step 5: Tutte's embedding on the triangulated (3-connected) core graph.
   // Use the pre-triangulation outer face (actual graph boundary) — after
   // triangulation all faces are triangles so "largest face" is meaningless.
+  //
+  // Pick the largest face (most boundary room); among equally-large faces,
+  // prefer the one whose busiest vertex is least busy. Tutte places outer-face
+  // vertices on the boundary circle and pulls everything else to its neighbour
+  // centroid, so keeping high-degree hubs OFF the boundary lets them settle in
+  // the centre — which reads far clearer than a hub stranded on the rim.
+  // Degree is measured on the FULL graph (realAdj, leaves included) so a hub's
+  // pendant spokes count toward keeping it interior.
+  const boundaryMaxDeg = (f: string[]): number => {
+    let m = 0;
+    for (const v of f) m = Math.max(m, realAdj.get(v)?.size ?? 0);
+    return m;
+  };
   const preTrOuter = preTrFaces.reduce(
-    (a, b) => (a.length >= b.length ? a : b),
-    [],
+    (best, f) =>
+      f.length !== best.length
+        ? f.length > best.length
+          ? f
+          : best
+        : boundaryMaxDeg(f) < boundaryMaxDeg(best)
+          ? f
+          : best,
+    preTrFaces[0] ?? [],
   );
   const { positions, outerContour } = tuttePlace(
     coreClassification.embedding,
