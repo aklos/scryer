@@ -358,12 +358,19 @@ function Workspace({
     });
   }, []);
 
-  // Open the first top-level node once a model loads with nothing selected.
+  // Open the first top-level node ONCE when a project first loads, so the right
+  // pane lands on a real page instead of the empty state. One-shot per project —
+  // not an invariant: a deliberate deselect (clicking the empty diagram pane)
+  // must stick, so we never re-fill a selection the user cleared.
+  const autoSelectedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (selected) return;
+    const key = projectPath ?? "";
+    if (autoSelectedFor.current === key) return;
     const top = model.nodes.find((n) => !n.parentId);
-    if (top) selectNode(top.id);
-  }, [model, selected, selectNode]);
+    if (!top) return; // model not loaded yet; try again when it is
+    autoSelectedFor.current = key;
+    if (!selected) selectNode(top.id);
+  }, [model, projectPath, selected, selectNode]);
 
   const onFixture = useCallback(
     (nodeId: string, renderStatus: string, renderError: string | null) => {
@@ -686,6 +693,10 @@ function Workspace({
           onToggle={toggle}
           editor={pageEditor}
           activeNodeIds={build.active ? build.activeNodeIds : EMPTY_IDS}
+          // The map's current level (children of the focused node) — tinted in
+          // the tree so it mirrors what the diagram is showing. Only while in
+          // map view; undefined elsewhere disables the tint.
+          activeLevel={view === "diagram" ? diagramFocus : undefined}
         />
         {view === "diagram" ? (
           <DiagramView

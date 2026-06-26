@@ -110,6 +110,7 @@ export function ModelTree({
   onToggle,
   editor,
   activeNodeIds,
+  activeLevel,
 }: {
   model: ScryModel;
   /** Live `diff(committed, planned)` — drives the change-letter gutter. */
@@ -121,6 +122,10 @@ export function ModelTree({
   onToggle: (id: string, expand?: boolean) => void;
   editor: Editor | undefined;
   activeNodeIds: ReadonlySet<string>;
+  /** The map's current level — the parent whose children the diagram is showing
+   *  (null = top level). Rows at this level get a faint band so the tree mirrors
+   *  the map. `undefined` (i.e. not in map view) disables the tint. */
+  activeLevel: string | null | undefined;
 }) {
   const [width, setWidth] = useState(() => {
     const saved = Number(localStorage.getItem("scryer:treeWidth"));
@@ -614,6 +619,16 @@ export function ModelTree({
     }
   };
 
+  // --- active-level tint ----------------------------------------------------
+  // `activeLevel` (a prop) is the map's current level — the parent whose
+  // children the diagram is showing. Every row at that level gets a faint band
+  // so the tree mirrors the map. It tracks the level you're VIEWING, not what
+  // you've selected within it, and is undefined outside map view (no tint).
+  // The band is suppressed on the selected row (it owns the stronger
+  // --surface-active band) and yields to hover.
+  const levelTint = (atLevel: boolean, isSel: boolean) =>
+    atLevel && activeLevel !== undefined && !isSel ? "bg-[var(--surface-tint)]" : "";
+
   // --- rendering ------------------------------------------------------------
 
   const renderNode = (row: TreeRow): React.ReactNode => {
@@ -649,7 +664,10 @@ export function ModelTree({
         className={`${ROW} ${
           isSel
             ? "bg-[var(--surface-active)] text-[var(--text)]"
-            : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+            : `text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] ${levelTint(
+                (node.parentId ?? null) === activeLevel,
+                isSel,
+              )}`
         } ${isDrop ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""}`}
       >
         <ChangeGutter mark={ownMark} />
@@ -735,6 +753,10 @@ export function ModelTree({
     const rollupCount = row.isOpen ? 0 : changeRollup;
     // Declared member count, shown (quietly) only when collapsed.
     const memberCount = row.isOpen ? 0 : group.memberIds.length;
+    const groupLevel =
+      group.parentNodeId ??
+      model.nodes.find((n) => n.id === group.memberIds[0])?.parentId ??
+      null;
 
     return (
       <div
@@ -748,7 +770,10 @@ export function ModelTree({
         className={`${ROW} ${
           isSel
             ? "bg-[var(--surface-active)] text-[var(--text)]"
-            : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+            : `text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] ${levelTint(
+                groupLevel === activeLevel,
+                isSel,
+              )}`
         } ${dropKey === `group:${group.id}` ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""}`}
       >
         <ChangeGutter mark={gMark} />
