@@ -485,6 +485,81 @@ fn read_source_span(
     })
 }
 
+/// Whether a single source-map anchor currently lands in real code. The model's
+/// source map records intent (a file plus an optional symbol/line); this reports
+/// whether that intent resolves right now, so the inspector can distinguish an
+/// anchor backed by code from one pointing at a symbol or file that isn't there
+/// (yet) — e.g. a spec authored before the code exists.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+enum AnchorStatus {
+    /// The symbol resolves (or the line is in range) in an existing file.
+    Resolved,
+    /// The file doesn't exist on disk.
+    FileMissing,
+    /// The file exists but the named symbol isn't found in it.
+    SymbolMissing,
+    /// A line-only anchor points past the end of the file.
+    LineOutOfRange,
+}
+
+/// Verify whether one source anchor resolves to real code. Mirrors how
+/// `read_source_span` locates a symbol (tree-sitter, then a text-search
+/// fallback) but renders nothing — it's the cheap pre-flight the inspector uses
+/// to pick the anchor icon. Only anchored locations (a symbol or a line) are
+/// meaningful; a whole-file mapping shouldn't call this. A missing or escaping
+/// file reads as `FileMissing` rather than erroring, since "not there yet" is a
+/// normal state for an authored-ahead spec.
+#[tauri::command]
+fn verify_anchor(
+    project_path: String,
+    file: String,
+    symbol: Option<String>,
+    line: Option<u32>,
+) -> AnchorStatus {
+    let base = PathBuf::from(&project_path);
+    let path = base.join(&file);
+
+    let Ok(canon_base) = base.canonicalize() else {
+        return AnchorStatus::FileMissing;
+    };
+    let Ok(canon) = path.canonicalize() else {
+        return AnchorStatus::FileMissing;
+    };
+    if !canon.starts_with(&canon_base) {
+        return AnchorStatus::FileMissing;
+    }
+    let Ok(contents) = std::fs::read_to_string(&canon) else {
+        return AnchorStatus::FileMissing;
+    };
+
+    // A named symbol is the durable anchor: resolve it the same way the peek
+    // does (tree-sitter, then text search). Otherwise fall back to the line.
+    if let Some(sym) = symbol.as_deref().filter(|s| !s.is_empty()) {
+        let lines: Vec<&str> = contents.lines().collect();
+        let found = symbols::resolve(&canon, &contents, sym, line).is_some()
+            || text_search_symbol(&lines, sym).is_some();
+        return if found {
+            AnchorStatus::Resolved
+        } else {
+            AnchorStatus::SymbolMissing
+        };
+    }
+
+    match line {
+        Some(l) => {
+            let total = contents.lines().count() as u32;
+            if (1..=total).contains(&l) {
+                AnchorStatus::Resolved
+            } else {
+                AnchorStatus::LineOutOfRange
+            }
+        }
+        // No symbol and no line isn't an anchor; the file exists, so it's fine.
+        None => AnchorStatus::Resolved,
+    }
+}
+
 #[tauri::command]
 /// Check if a project has .mcp.json with a scryer entry.
 fn check_mcp_json(project_path: &str) -> bool {
@@ -3059,6 +3134,7 @@ pub fn run() {
             load_template,
             open_in_editor,
             read_source_span,
+            verify_anchor,
             detect_ai_tools,
             setup_mcp_integration,
             get_active_agent,

@@ -9,8 +9,19 @@
 
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Check, ChevronRight, ExternalLink } from "lucide-react";
+import { Anchor, ChevronRight, ExternalLink, Slash } from "lucide-react";
 import type { SourceLocation } from "./viewmodel";
+
+/** Whether a source anchor currently lands in real code — mirrors the backend
+ *  `verify_anchor` command. Anything but `resolved` reads as a broken anchor. */
+type AnchorStatus = "resolved" | "fileMissing" | "symbolMissing" | "lineOutOfRange";
+
+const ANCHOR_TITLE: Record<AnchorStatus, string> = {
+  resolved: "Anchored to source",
+  fileMissing: "File not found in the codebase",
+  symbolMissing: "Symbol not found in the file",
+  lineOutOfRange: "Line is past the end of the file",
+};
 
 /** Element id for a responsibility row — a jump target for banners and the
  *  Needs-review page. */
@@ -96,7 +107,35 @@ function SourceLine({
 }) {
   const anchored = Boolean(loc.symbol) || loc.line != null;
   const [open, setOpen] = useState(false);
+  const [status, setStatus] = useState<AnchorStatus | null>(null);
   const range = locRangeLabel(loc);
+  // Once verified, a non-resolving anchor reads as broken: the link drops its
+  // live-target styling to match the struck-through anchor. (null = still
+  // checking, so keep the optimistic link look until we know.)
+  const broken = status != null && status !== "resolved";
+
+  // Verify the anchor against real code so the icon reflects whether it lands.
+  // Deleted claims show no anchor; without a project path (e.g. demo fixtures)
+  // there's nothing to check against, so we optimistically treat it as resolved.
+  useEffect(() => {
+    if (!anchored || deleted) return;
+    if (!projectPath) {
+      setStatus("resolved");
+      return;
+    }
+    let cancelled = false;
+    invoke<AnchorStatus>("verify_anchor", {
+      projectPath,
+      file: loc.pattern,
+      symbol: loc.symbol ?? null,
+      line: loc.line ?? null,
+    })
+      .then((s) => !cancelled && setStatus(s))
+      .catch(() => !cancelled && setStatus(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [anchored, deleted, projectPath, loc.pattern, loc.symbol, loc.line]);
   return (
     <div className="font-mono text-2xs leading-relaxed text-[var(--text-tertiary)]">
       <button
@@ -120,16 +159,34 @@ function SourceLine({
           className={
             deleted
               ? "text-[var(--text-muted)] line-through decoration-red-400/50"
-              : "text-blue-600 group-hover/src:underline dark:text-blue-400"
+              : broken
+                ? "text-[var(--text-muted)] decoration-[var(--text-ghost)] decoration-dotted underline"
+                : "text-blue-600 group-hover/src:underline dark:text-blue-400"
           }
         >
           ↳ {loc.pattern}
           {range ? `:${range}` : ""}
         </span>
-        {anchored && !deleted && <Check className="relative top-px h-3 w-3 shrink-0 text-emerald-500" />}
+        {anchored && !deleted && status && <AnchorMark status={status} />}
       </button>
       {open && anchored && <InlinePeek loc={loc} projectPath={projectPath} />}
     </div>
+  );
+}
+
+/** The anchor indicator beside a source ref. A plain anchor means the ref lands
+ *  in real code; a struck-through anchor means the symbol or file it points at
+ *  isn't there. The slash carries the meaning — both states stay monochrome. */
+function AnchorMark({ status }: { status: AnchorStatus }) {
+  const broken = status !== "resolved";
+  return (
+    <span
+      className="relative top-px inline-block h-3 w-3 shrink-0 text-[var(--text-muted)]"
+      title={ANCHOR_TITLE[status]}
+    >
+      <Anchor className="h-3 w-3" />
+      {broken && <Slash className="absolute inset-0 h-3 w-3" />}
+    </span>
   );
 }
 
