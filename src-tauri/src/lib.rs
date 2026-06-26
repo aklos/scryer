@@ -1,7 +1,6 @@
 mod highlight;
 mod symbols;
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -572,25 +571,22 @@ fn check_mcp_json(project_path: &str) -> bool {
     false
 }
 
-const SCRYER_READ_TOOLS: &[&str] = &[
-    "mcp__scryer__read_model",
-    "mcp__scryer__search_model",
-    "mcp__scryer__get_pending",
-    "mcp__scryer__get_rules",
-    "mcp__scryer__read_codebase",
-    "mcp__scryer__validate_model",
-];
+/// Server-wide allow entry. Claude Code treats a bare `mcp__<server>` as
+/// "auto-approve every tool from that server", so this one string covers all
+/// scryer tools — reads and model writes alike, plus any added later. Safe
+/// because scryer tools only ever mutate the git-tracked model under `.scryer/`
+/// (reviewable in scryer's own diff), never source, the shell, or the network.
+const SCRYER_MCP_ALLOW: &str = "mcp__scryer";
 
-/// Check if Claude Code has auto-approved scryer read tools in project settings.
-fn check_claude_read_approved(project_path: &str) -> bool {
+/// Check if Claude Code has auto-approved scryer tools in project settings.
+fn check_claude_approved(project_path: &str) -> bool {
     // Check both settings.local.json and settings.json
     for filename in &["settings.local.json", "settings.json"] {
         let path = PathBuf::from(project_path).join(".claude").join(filename);
         if let Ok(contents) = std::fs::read_to_string(&path) {
             if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
                 if let Some(allow) = root.pointer("/permissions/allow").and_then(|v| v.as_array()) {
-                    let allowed: HashSet<&str> = allow.iter().filter_map(|v| v.as_str()).collect();
-                    if SCRYER_READ_TOOLS.iter().all(|t| allowed.contains(t)) {
+                    if allow.iter().any(|v| v.as_str() == Some(SCRYER_MCP_ALLOW)) {
                         return true;
                     }
                 }
@@ -621,14 +617,14 @@ fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value {
 
     let claude_mcp = project_path.as_deref().map(check_mcp_json).unwrap_or(false);
     let codex_mcp = project_path.as_deref().map(check_codex_toml).unwrap_or(false);
-    let claude_read_approved = project_path.as_deref().map(check_claude_read_approved).unwrap_or(false);
+    let claude_approved = project_path.as_deref().map(check_claude_approved).unwrap_or(false);
 
     serde_json::json!({
         "claude": has_claude,
         "codex": has_codex,
         "claudeMcpEnabled": claude_mcp,
         "codexMcpEnabled": codex_mcp,
-        "claudeReadApproved": claude_read_approved,
+        "claudeApproved": claude_approved,
     })
 }
 
@@ -710,7 +706,7 @@ fn setup_mcp_integration(
 
             return Ok(config_path.to_string_lossy().to_string());
         }
-        "claude_read_approve" => {
+        "claude_approve" => {
             let claude_dir = PathBuf::from(&project_path).join(".claude");
             let settings_path = claude_dir.join("settings.local.json");
 
@@ -726,11 +722,8 @@ fn setup_mcp_integration(
             }
 
             let allow = root.pointer_mut("/permissions/allow").unwrap().as_array_mut().unwrap();
-            let existing: HashSet<String> = allow.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-            for tool in SCRYER_READ_TOOLS {
-                if !existing.contains(*tool) {
-                    allow.push(serde_json::json!(tool));
-                }
+            if !allow.iter().any(|v| v.as_str() == Some(SCRYER_MCP_ALLOW)) {
+                allow.push(serde_json::json!(SCRYER_MCP_ALLOW));
             }
 
             std::fs::create_dir_all(&claude_dir).map_err(|e| e.to_string())?;

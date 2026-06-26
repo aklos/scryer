@@ -10,7 +10,7 @@ export interface AiToolsState {
   codex: boolean;
   claudeMcpEnabled: boolean;
   codexMcpEnabled: boolean;
-  claudeReadApproved: boolean;
+  claudeApproved: boolean;
 }
 
 const EMPTY: AiToolsState = {
@@ -18,13 +18,13 @@ const EMPTY: AiToolsState = {
   codex: false,
   claudeMcpEnabled: false,
   codexMcpEnabled: false,
-  claudeReadApproved: false,
+  claudeApproved: false,
 };
 
 export interface McpSetup {
   tools: AiToolsState;
   /** A detected agent exists whose scryer MCP config this project is missing —
-   *  the signal to offer setup. Read auto-approve alone never nags (it rides
+   *  the signal to offer setup. Tool auto-approve alone never nags (it rides
    *  along in `enable`, but its absence isn't worth a prompt). */
   needsSetup: boolean;
   /** The user clicked "Not now" for this project this session. */
@@ -32,7 +32,7 @@ export interface McpSetup {
   /** An enable write is in flight. */
   busy: boolean;
   /** Write every applicable config — `.mcp.json`, `.codex/config.toml`, and
-   *  read auto-approve in `.claude/settings.local.json` — then re-detect. */
+   *  tool auto-approve in `.claude/settings.local.json` — then re-detect. */
   enable: () => Promise<void>;
   dismiss: () => void;
   /** Re-read detection from disk (e.g. after a config is written externally). */
@@ -69,7 +69,7 @@ export function useMcpSetup(projectPath: string | null): McpSetup {
       const actions: string[] = [];
       if (tools.claude && !tools.claudeMcpEnabled) actions.push("mcp");
       if (tools.codex && !tools.codexMcpEnabled) actions.push("mcp_codex");
-      if (tools.claude && !tools.claudeReadApproved) actions.push("claude_read_approve");
+      if (tools.claude && !tools.claudeApproved) actions.push("claude_approve");
       for (const action of actions) {
         await invoke("setup_mcp_integration", { action, projectPath });
       }

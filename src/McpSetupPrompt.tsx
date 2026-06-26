@@ -16,8 +16,8 @@ function plannedWrites(tools: McpSetup["tools"]): string[] {
   const out: string[] = [];
   if (tools.claude && !tools.claudeMcpEnabled) out.push(".mcp.json");
   if (tools.codex && !tools.codexMcpEnabled) out.push(".codex/config.toml");
-  if (tools.claude && !tools.claudeReadApproved)
-    out.push(".claude/settings.local.json — auto-approve scryer's read tools");
+  if (tools.claude && !tools.claudeApproved)
+    out.push(".claude/settings.local.json — auto-approve all scryer tools");
   return out;
 }
 

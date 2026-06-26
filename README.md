@@ -101,7 +101,7 @@ The MCP server lets AI agents read and modify your architecture models. It ships
 
 Link a project directory in the app and click "Enable" on the prompt, or run `scryer-mcp init` from the command line. Both detect installed AI tools and write config:
 
-- **Claude Code** — `.mcp.json` + read tool auto-approve in `.claude/settings.local.json`
+- **Claude Code** — `.mcp.json` + tool auto-approve in `.claude/settings.local.json`
 - **Codex** — `.codex/config.toml`
 
 Existing config files are preserved — only the `scryer` entry is added or updated.
@@ -130,18 +130,13 @@ If you prefer to configure MCP manually, add Scryer to your project config:
 command = "/path/to/scryer-mcp"
 ```
 
-For Claude Code, you can also auto-approve Scryer's read tools so the agent doesn't prompt for every read. The app can set this up for you, or add them manually to `.claude/settings.local.json`:
+For Claude Code, you can also auto-approve Scryer's tools so the agent doesn't prompt for every call. This is safe: Scryer's tools only ever read or mutate the model under `.scryer/` — which is git-tracked and shown in Scryer's own diff — never your source, shell, or network. The app can set this up for you, or add the server-wide entry manually to `.claude/settings.local.json`:
 
 ```json
 {
   "permissions": {
     "allow": [
-      "mcp__scryer__read_model",
-      "mcp__scryer__search_model",
-      "mcp__scryer__get_pending",
-      "mcp__scryer__get_rules",
-      "mcp__scryer__read_codebase",
-      "mcp__scryer__validate_model"
+      "mcp__scryer"
     ]
   }
 }
