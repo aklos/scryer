@@ -268,14 +268,14 @@ function DiagramInner({
     const ghostIds = new Set(
       scene.nodes.filter((n) => n.reference).map((n) => n.id),
     );
-    // Count edges per unordered node pair on the (straight) code tier, so a
-    // reverse edge between the same two dots can be split into parallel lanes.
+    // Count edges per unordered node pair, so a reverse edge between the same
+    // two nodes can be split into parallel lanes. Needed on both tiers: code
+    // edges share a center handle and arch reverse pairs are routed onto the
+    // same swapped handles, so either way the two chords land exactly collinear.
     const pairCount = new Map<string, number>();
-    if (scene.mode === "code") {
-      for (const e of scene.edges) {
-        const k = e.source < e.target ? `${e.source}\0${e.target}` : `${e.target}\0${e.source}`;
-        pairCount.set(k, (pairCount.get(k) ?? 0) + 1);
-      }
+    for (const e of scene.edges) {
+      const k = e.source < e.target ? `${e.source}\0${e.target}` : `${e.target}\0${e.source}`;
+      pairCount.set(k, (pairCount.get(k) ?? 0) + 1);
     }
     return scene.edges.map((e) => {
       const h = handles?.get(e.id);

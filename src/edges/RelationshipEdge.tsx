@@ -40,6 +40,9 @@ const DOT_GAP = 3;
 /** Sideways shift (px) for an edge that shares a node pair with its reverse, so
  *  the two land as separate parallel lanes instead of on top of each other. */
 const PARALLEL_GAP = 5;
+/** Perpendicular nudge (px) for a parallel edge's label, pushing the pill to its
+ *  lane's outer side so it hugs its own line instead of straddling both lanes. */
+const PARALLEL_LABEL_GAP = 12;
 export type RFRelEdge = RFEdge<EdgeData, "rel">;
 
 export function RelationshipEdge({
@@ -80,8 +83,21 @@ export function RelationshipEdge({
   // Straight chord rim-to-rim — same edge as before (arrowhead, label, and the
   // arch tier's animated dash all kept below), just no longer bowed.
   const edgePath = `M ${sx} ${sy} L ${tx} ${ty}`;
+  // Hover handle sits at the lane midpoint.
   const labelX = (sx + tx) / 2;
   const labelY = (sy + ty) / 2;
+  // Parallel (reverse-pair) edges share one chord, so a midpoint pill can't be
+  // told apart from its twin. Place each label by (a) sliding it along the chord
+  // toward its own source — the pair lands at ~35%/65% and clears ALONG the line
+  // at any angle — and (b) nudging it to its lane's OUTER side so the pill hugs
+  // its own line. Both flip with direction, so the pair reads as opposite lanes.
+  let labelDivX = labelX, labelDivY = labelY;
+  if (data?.parallel) {
+    const t = 0.35;
+    const px = sx + (tx - sx) * t, py = sy + (ty - sy) * t;
+    labelDivX = px + -uy * PARALLEL_LABEL_GAP;
+    labelDivY = py + ux * PARALLEL_LABEL_GAP;
+  }
   const arrowAngle = Math.atan2(ty - sy, tx - sx);
 
   // Arrowhead polygon from explicit geometry.
@@ -138,7 +154,7 @@ export function RelationshipEdge({
           <div
             style={{
               position: "absolute",
-              transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+              transform: `translate(-50%, -50%) translate(${labelDivX}px,${labelDivY}px)`,
               zIndex: 1,
               pointerEvents: "all",
               ...(data?.dimmed ? { opacity: 0.18 } : {}),
