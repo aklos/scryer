@@ -123,7 +123,13 @@ execFileSync(
   [
     "-y", "-f", "concat", "-safe", "0", "-i", listFile,
     "-fps_mode", "cfr", "-r", `${FPS}`,
+    // Chrome's screencast JPEGs are BT.601, FULL-range. Browsers (the GitHub embed
+    // target) ignore the full-range flag and assume limited BT.709, so a full-range
+    // file washes out there. Convert ONCE to the web standard — BT.601→709 matrix +
+    // full→limited range — so it decodes correctly in browsers AND local players.
+    "-vf", "colorspace=ispace=smpte170m:iprimaries=bt709:itrc=bt709:irange=pc:space=bt709:primaries=bt709:trc=bt709:range=tv:format=yuv420p",
     "-c:v", "libx264", "-crf", "12", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+    "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv",
     webm,
   ],
   { stdio: "inherit" },
@@ -215,6 +221,8 @@ const enc = (pass, extra) =>
       "-y", "-i", webm,
       "-filter_complex", splice, "-map", "[v]",
       "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "slow",
+      // Intermediate is already BT.709/limited; just preserve and tag it.
+      "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv",
       "-b:v", `${bitrate}`, "-maxrate", `${Math.floor(bitrate * 1.4)}`,
       "-bufsize", `${Math.floor(bitrate * 2)}`,
       "-an", "-pass", `${pass}`, ...extra,

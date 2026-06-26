@@ -171,8 +171,8 @@ export const filmScene: Scene<FilmState> = {
     await fill(SYSTEMS, 380);
     // Label the beat once the map is in. annotate → hold → clear with no state
     // change in between, so the marker fades out cleanly (same shape as Act 2).
-    await d.annotate(card("aperture"), "From your codebase to a living model", { place: "right" });
-    await d.wait(1300);
+    await d.annotate(card("aperture"), "Scryer reads your code and maps the architecture", { place: "right" });
+    await d.wait(2400);
     await d.clear();
 
     // 3. Drill into the platform — its services scaffold, then fill in beneath it.

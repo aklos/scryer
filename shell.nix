@@ -15,7 +15,8 @@ pkgs.mkShell {
     # Image tools
     imagemagick
 
-    # Demo / trailer capture (Playwright drives this chromium; ffmpeg encodes)
+    # Demo / trailer capture (Playwright drives this chromium, CDP screencast
+    # captures the frames, ffmpeg encodes)
     chromium
     ffmpeg
 
