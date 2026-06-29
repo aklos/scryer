@@ -46,7 +46,13 @@ import type {
   SourceLocation,
   DriftScope,
 } from "./viewmodel";
-import { effectiveSourceMap, isDataShape, nextResponsibilityId } from "./viewmodel";
+import type { InheritedDirectives } from "./viewmodel";
+import {
+  effectiveSourceMap,
+  inheritedDirectives,
+  isDataShape,
+  nextResponsibilityId,
+} from "./viewmodel";
 import type { Editor } from "./editor";
 import type { ModelHealthReport } from "./health";
 import { FLAG_COLORS } from "./statusColors";
@@ -80,7 +86,6 @@ import {
   sanitizeIdentifier,
   SectionEditor,
   SegField,
-  WikiText,
   WordDiffText,
 } from "./pagekit";
 
@@ -747,8 +752,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
               <DescriptionSection
                 value={node.description}
                 prevValue={committed?.nodes.find((n) => n.id === node.id)?.description}
-                model={model}
-                onSelectNode={onSelectNode}
                 editor={editor}
                 editing={ed.isEditing("description")}
                 onToggle={() => ed.toggle("description")}
@@ -778,7 +781,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
 
               {!dataShape && (
                 <ResponsibilitiesSection
-                  model={model}
                   host="node"
                   hostId={node.id}
                   resps={resps}
@@ -789,7 +791,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   editor={editor}
                   editing={ed.isEditing("responsibilities")}
                   onToggle={() => ed.toggle("responsibilities")}
-                  onSelectNode={onSelectNode}
                 />
               )}
 
@@ -797,8 +798,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 <PropertiesSection
                   node={node}
                   prevProps={committed?.nodes.find((n) => n.id === node.id)?.properties ?? []}
-                  model={model}
-                  onSelectNode={onSelectNode}
                   editor={editor}
                   editing={ed.isEditing("properties")}
                   onToggle={() => ed.toggle("properties")}
@@ -823,12 +822,15 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 onSelectNode={onSelectNode}
               />
             </article>
-            <NotesGutter
+            <DetailRail
               node={node}
               model={model}
+              committed={committed}
               editor={editor}
-              editing={ed.isEditing("notes")}
-              onToggle={() => ed.toggle("notes")}
+              notesEditing={ed.isEditing("notes")}
+              onToggleNotes={() => ed.toggle("notes")}
+              dirEditing={ed.isEditing("directives")}
+              onToggleDir={() => ed.toggle("directives")}
               onSelectNode={onSelectNode}
             />
           </div>
@@ -914,8 +916,6 @@ function GroupPageBody(props: PageProps & { group: Group }) {
             <DescriptionSection
               value={group.description}
               prevValue={committed?.groups.find((g) => g.id === group.id)?.description}
-              model={model}
-              onSelectNode={onSelectNode}
               editor={editor}
               editing={ed.isEditing("description")}
               onToggle={() => ed.toggle("description")}
@@ -923,7 +923,6 @@ function GroupPageBody(props: PageProps & { group: Group }) {
             />
 
             <ResponsibilitiesSection
-              model={model}
               host="group"
               hostId={group.id}
               resps={resps}
@@ -934,7 +933,6 @@ function GroupPageBody(props: PageProps & { group: Group }) {
               editor={editor}
               editing={ed.isEditing("responsibilities")}
               onToggle={() => ed.toggle("responsibilities")}
-              onSelectNode={onSelectNode}
             />
 
             <PageSection
@@ -1088,8 +1086,6 @@ function MembersEditor({
 function DescriptionSection({
   value,
   prevValue,
-  model,
-  onSelectNode,
   editor,
   editing,
   onToggle,
@@ -1099,8 +1095,6 @@ function DescriptionSection({
   /** The committed description — when it differs from `value`, the lede shows
    *  the reword inline (word-diff), like a claim. */
   prevValue?: string;
-  model: ScryModel;
-  onSelectNode: (id: string) => void;
   editor: Editor | undefined;
   editing: boolean;
   onToggle: () => void;
@@ -1116,7 +1110,7 @@ function DescriptionSection({
             initial={value ?? ""}
             autoFocus
             maxLength={DESCRIPTION_MAX}
-            placeholder="Describe what this is. Link other nodes with [[Name]]."
+            placeholder="Describe what this is."
             onInput={setDraft}
             className="block text-[13.5px] leading-[1.6] text-[var(--text-secondary)]"
           />
@@ -1139,7 +1133,7 @@ function DescriptionSection({
           reworded ? (
             <WordDiffText from={prevValue!} to={value} />
           ) : (
-            <WikiText text={value} nodes={model.nodes} onSelectNode={onSelectNode}/>
+            value
           )
         ) : (
           "No description."
@@ -1159,17 +1153,8 @@ function DescriptionSection({
 // --- notes gutter ------------------------------------------------------------
 
 /** Render notes read-only: lines starting with `- ` (or `• `) group into a
- *  bullet list; everything else is a paragraph. Each line's prose runs through
- *  WikiText so `[[Name]]` links resolve. */
-function NotesRead({
-  text,
-  nodes,
-  onSelectNode,
-}: {
-  text: string;
-  nodes: readonly Node[];
-  onSelectNode: (id: string) => void;
-}) {
+ *  bullet list; everything else is a paragraph. */
+function NotesRead({ text }: { text: string }) {
   const blocks: React.ReactNode[] = [];
   let bullets: string[] = [];
   const flush = () => {
@@ -1178,9 +1163,7 @@ function NotesRead({
     blocks.push(
       <ul key={blocks.length} className="list-disc space-y-0.5 pl-4">
         {items.map((b, i) => (
-          <li key={i}>
-            <WikiText text={b} nodes={nodes} onSelectNode={onSelectNode} />
-          </li>
+          <li key={i}>{b}</li>
         ))}
       </ul>,
     );
@@ -1195,7 +1178,7 @@ function NotesRead({
       if (line.trim())
         blocks.push(
           <p key={blocks.length}>
-            <WikiText text={line} nodes={nodes} onSelectNode={onSelectNode} />
+            {line}
           </p>,
         );
     }
@@ -1232,7 +1215,7 @@ function NotesEditable({
       ref={ref}
       defaultValue={initial}
       rows={2}
-      placeholder="Notes to self. Start a line with “- ” for a bullet. Link nodes with [[Name]]."
+      placeholder="Notes to self. Start a line with “- ” for a bullet."
       onInput={(e) => {
         grow(e.currentTarget);
         onInput(e.currentTarget.value);
@@ -1255,16 +1238,86 @@ function NotesEditable({
   );
 }
 
-/**
- * The right-margin gutter: the user's own freeform notes about this node —
- * self-context and traversal aids, NOT part of the spec (distinct from the
- * description and from a responsibility's directives). Supports `[[Name]]`
- * wikilinks like every prose field. User-only; the agent never authors it.
- * Node-only (groups carry no `notes`).
- */
-function NotesGutter({
+/** A rail section header: the uppercase eyebrow on a rule, with a hover-revealed
+ *  [Edit] toggle. `revealClass` must be a LITERAL Tailwind string (e.g.
+ *  `"invisible group-hover/dir:visible"`) — Tailwind's JIT can't see classes
+ *  built from template parts, so callers pass the whole class. */
+function RailHeader({
+  title,
+  revealClass,
+  editable,
+  editing,
+  onToggle,
+}: {
+  title: string;
+  revealClass: string;
+  editable: boolean;
+  editing: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="mb-2 flex items-end justify-between gap-2 border-b border-[var(--border)] pb-[5px]">
+      <h2 className="text-[11px] font-semibold uppercase tracking-[0.07em] text-[var(--text-tertiary)]">
+        {title}
+      </h2>
+      {editable && !editing && (
+        <EditLink editing={false} onClick={onToggle} className={revealClass} />
+      )}
+    </div>
+  );
+}
+
+/** Read-only directive bullets, rendered as plain text. */
+function DirectiveList({
+  directives,
+  muted = false,
+}: {
+  directives: readonly string[];
+  muted?: boolean;
+}) {
+  return (
+    <ul
+      className={`list-disc space-y-1.5 pl-4 text-[12.5px] leading-[1.6] ${
+        muted ? "text-[var(--text-tertiary)]" : "text-[var(--text-secondary)]"
+      }`}
+    >
+      {directives.map((d, i) => (
+        <li key={i}>{d}</li>
+      ))}
+    </ul>
+  );
+}
+
+/** Own directives as a plan diff, one bullet per entry — additions tinted green,
+ *  removals struck red, unchanged plain. Keeps the bulleted list and its spacing
+ *  (an edit reads as the old line struck + the new line added). */
+function DirectiveDiffList({ prev, next }: { prev: readonly string[]; next: readonly string[] }) {
+  const prevSet = new Set(prev);
+  const nextSet = new Set(next);
+  const removed = prev.filter((d) => !nextSet.has(d));
+  return (
+    <ul className="list-disc space-y-1.5 pl-4 text-[12.5px] leading-[1.6] text-[var(--text-secondary)]">
+      {next.map((d, i) => (
+        <li key={`n${i}`}>{prevSet.has(d) ? d : <span className={DIFF_TINT.add}>{d}</span>}</li>
+      ))}
+      {removed.map((d, i) => (
+        <li key={`r${i}`} className="marker:text-red-400/60">
+          <span className={DIFF_TINT.delete}>{d}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Top of the detail rail: the node's OWN node-level directives (user-authored
+ *  HOW-constraints), editable here, followed by the directives INHERITED from
+ *  ancestors — shown read-only, grouped under the ancestor that authored them
+ *  (click to jump). Mirrors the Notes section's chrome. User-only; the agent
+ *  reads directives but never authors them. */
+function DirectivesSection({
   node,
   model,
+  committed,
   editor,
   editing,
   onToggle,
@@ -1272,46 +1325,190 @@ function NotesGutter({
 }: {
   node: Node;
   model: ScryModel;
+  committed: ScryModel | null;
   editor: Editor | undefined;
   editing: boolean;
   onToggle: () => void;
   onSelectNode: (id: string) => void;
 }) {
-  const notes = node.notes;
+  const own = node.directives ?? [];
+  const inherited: InheritedDirectives[] = useMemo(
+    () => inheritedDirectives(model, node.id),
+    [model, node.id],
+  );
+  // The own list shows its plan divergence inline, on the same joined string the
+  // plan diff tracks: additions paint green, removals strike through, edits
+  // word-diff — every case, not just edit-in-place. Only an unchanged list (or
+  // one with no committed base yet) reads plain. Inherited directives are an
+  // ancestor's edit, so they always read plain.
+  const prevOwn = committed?.nodes.find((n) => n.id === node.id)?.directives ?? [];
+  const ownJoined = own.join("\n");
+  const prevJoined = prevOwn.join("\n");
+  const changed = !!committed && prevJoined !== ownJoined;
+  const nothing = !changed && own.length === 0 && inherited.length === 0;
   return (
-    <aside className="ml-auto hidden w-[240px] shrink-0 lg:block">
-      <div className="group/gutter sticky top-0">
-        <div className="mb-2 flex items-end justify-between gap-2 border-b border-[var(--border)] pb-[5px]">
-          <h2 className="text-[11px] font-semibold uppercase tracking-[0.07em] text-[var(--text-tertiary)]">
-            Notes
-          </h2>
-          {editor && !editing && (
-            <EditLink
-              editing={false}
-              onClick={onToggle}
-              className="invisible group-hover/gutter:visible"
-            />
+    <div className="group/dir">
+      <RailHeader
+        title="Node directives"
+        revealClass="invisible group-hover/dir:visible"
+        editable={!!editor}
+        editing={editing}
+        onToggle={onToggle}
+      />
+      {editing && editor ? (
+        <SectionEditor<string[]>
+          initial={own}
+          onCommit={(draft) => {
+            const next = draft.map((s) => s.trim()).filter(Boolean);
+            editor.updateNode(node.id, { directives: next.length ? next : undefined });
+          }}
+          onClose={onToggle}
+          footerExtra={(setDraft) => (
+            <button type="button" onClick={() => setDraft((d) => [...d, ""])} className={BTN}>
+              Add directive
+            </button>
+          )}
+        >
+          {(draft, setDraft) =>
+            draft.length === 0 ? (
+              <Empty>No directives — add one.</Empty>
+            ) : (
+              <div className="flex flex-col gap-0.5">
+                {draft.map((d, i) => (
+                  <div
+                    key={i}
+                    className="group/drow relative flex items-baseline gap-1.5 text-[12.5px] leading-[1.6] text-[var(--text-secondary)]"
+                  >
+                    <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px text-[var(--text-ghost)]" />
+                    <Editable
+                      initial={d}
+                      autoFocus={d === ""}
+                      placeholder={'must … / never …'}
+                      onInput={(t) =>
+                        setDraft((arr) => {
+                          const n = arr.slice();
+                          n[i] = t;
+                          return n;
+                        })
+                      }
+                      className={`block min-w-0 flex-1 rounded-sm !pr-16 ${DIR_HL}`}
+                    />
+                    <span className={CTL_DROW}>
+                      <button
+                        type="button"
+                        title="Remove directive"
+                        onClick={() => setDraft((arr) => arr.filter((_, j) => j !== i))}
+                        className={BTN_DANGER}
+                      >
+                        Delete
+                      </button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )
+          }
+        </SectionEditor>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {changed ? (
+            <DirectiveDiffList prev={prevOwn} next={own} />
+          ) : own.length > 0 ? (
+            <DirectiveList directives={own} />
+          ) : null}
+          {inherited.map((g) => (
+            <div key={g.nodeId}>
+              <button
+                type="button"
+                onClick={() => onSelectNode(g.nodeId)}
+                title={`Inherited from ${g.name}`}
+                className="mb-0.5 text-[10.5px] font-medium uppercase tracking-[0.06em] text-[var(--text-muted)] hover:text-blue-700 dark:hover:text-blue-400"
+              >
+                ↑ {g.name}
+              </button>
+              <DirectiveList directives={g.directives} muted />
+            </div>
+          ))}
+          {nothing && (
+            <p className="text-[12.5px] italic leading-[1.6] text-[var(--text-muted)]">
+              No directives.
+            </p>
           )}
         </div>
-        {editing && editor ? (
-          <SectionEditor<string>
-            initial={notes ?? ""}
-            onCommit={(v) => editor.updateNode(node.id, { notes: v.trim() || undefined })}
-            onClose={onToggle}
-          >
-            {(_draft, setDraft) => (
-              <NotesEditable initial={notes ?? ""} onInput={setDraft} />
-            )}
-          </SectionEditor>
-        ) : notes ? (
-          <div className="text-[12.5px] leading-[1.6] text-[var(--text-secondary)]">
-            <NotesRead text={notes} nodes={model.nodes} onSelectNode={onSelectNode} />
-          </div>
-        ) : (
-          <p className="text-[12.5px] italic leading-[1.6] text-[var(--text-muted)]">
-            No notes.
-          </p>
-        )}
+      )}
+    </div>
+  );
+}
+
+/**
+ * The right-margin detail rail. Top: this node's directives — its own
+ * (editable) plus those inherited from ancestors (read-only). Below: the user's
+ * own freeform notes — self-context and traversal aids, NOT part of the spec.
+ * User-only; the agent authors neither. Node-only (groups carry no `notes` or
+ * node-level `directives`).
+ */
+function DetailRail({
+  node,
+  model,
+  committed,
+  editor,
+  notesEditing,
+  onToggleNotes,
+  dirEditing,
+  onToggleDir,
+  onSelectNode,
+}: {
+  node: Node;
+  model: ScryModel;
+  committed: ScryModel | null;
+  editor: Editor | undefined;
+  notesEditing: boolean;
+  onToggleNotes: () => void;
+  dirEditing: boolean;
+  onToggleDir: () => void;
+  onSelectNode: (id: string) => void;
+}) {
+  const notes = node.notes;
+  return (
+    <aside className="ml-auto hidden w-[300px] shrink-0 lg:block">
+      <div className="sticky top-0 flex flex-col gap-8">
+        <DirectivesSection
+          node={node}
+          model={model}
+          committed={committed}
+          editor={editor}
+          editing={dirEditing}
+          onToggle={onToggleDir}
+          onSelectNode={onSelectNode}
+        />
+        <div className="group/notes">
+          <RailHeader
+            title="Notes"
+            revealClass="invisible group-hover/notes:visible"
+            editable={!!editor}
+            editing={notesEditing}
+            onToggle={onToggleNotes}
+          />
+          {notesEditing && editor ? (
+            <SectionEditor<string>
+              initial={notes ?? ""}
+              onCommit={(v) => editor.updateNode(node.id, { notes: v.trim() || undefined })}
+              onClose={onToggleNotes}
+            >
+              {(_draft, setDraft) => (
+                <NotesEditable initial={notes ?? ""} onInput={setDraft} />
+              )}
+            </SectionEditor>
+          ) : notes ? (
+            <div className="text-[12.5px] leading-[1.6] text-[var(--text-secondary)]">
+              <NotesRead text={notes} />
+            </div>
+          ) : (
+            <p className="text-[12.5px] italic leading-[1.6] text-[var(--text-muted)]">
+              No notes.
+            </p>
+          )}
+        </div>
       </div>
     </aside>
   );
@@ -1376,7 +1573,6 @@ function buildRespDiff(planned: Responsibility[], committed: Responsibility[]): 
 /** Render text with word-level add/remove highlighting (a reworded claim). When
  *  `from`/`to` are equal it's just the plain text. */
 function ResponsibilitiesSection({
-  model,
   host,
   hostId,
   resps,
@@ -1387,9 +1583,7 @@ function ResponsibilitiesSection({
   editor,
   editing,
   onToggle,
-  onSelectNode,
 }: {
-  model: ScryModel;
   host: "node" | "group";
   hostId: string;
   resps: Responsibility[];
@@ -1404,7 +1598,6 @@ function ResponsibilitiesSection({
   editor: Editor | undefined;
   editing: boolean;
   onToggle: () => void;
-  onSelectNode: (id: string) => void;
 }) {
   const diffRows = buildRespDiff(resps, prevResps);
   /** Restore a dropped claim by putting the committed copy back into the plan. */
@@ -1448,13 +1641,11 @@ function ResponsibilitiesSection({
           {diffRows.map((row) => (
             <RespDiffRow
               key={row.resp.id}
-              model={model}
               row={row}
               host={host}
               locations={sourceMap[row.resp.id] ?? []}
               projectPath={projectPath}
               leafHost={leafHost}
-              onSelectNode={onSelectNode}
               onRestore={() => restore(row.resp)}
               editor={editor}
             />
@@ -1564,24 +1755,20 @@ function ResponsibilitiesEditor({
  * stale flag). No status pill — the marker carries the lifecycle now.
  */
 function RespDiffRow({
-  model,
   row,
   host,
   locations,
   projectPath,
   leafHost,
-  onSelectNode,
   onRestore,
   editor,
 }: {
-  model: ScryModel;
   row: RespDiffRow;
   host: "node" | "group";
   /** This claim's source locations — rendered inline with expandable peeks. */
   locations: SourceLocation[];
   projectPath: string | null;
   leafHost: boolean;
-  onSelectNode: (id: string) => void;
   onRestore: () => void;
   editor: Editor | undefined;
 }) {
@@ -1629,14 +1816,14 @@ function RespDiffRow({
               <WordDiffText from={prev.statement} to={resp.statement} />
             ) : kind === "added" ? (
               <span className={DIFF_TINT.add}>
-                <WikiText text={resp.statement} nodes={model.nodes} onSelectNode={onSelectNode} />
+                {resp.statement}
               </span>
             ) : deleted ? (
               <span className={DIFF_TINT.delete}>
-                <WikiText text={resp.statement} nodes={model.nodes} onSelectNode={onSelectNode} />
+                {resp.statement}
               </span>
             ) : (
-              <WikiText text={resp.statement} nodes={model.nodes} onSelectNode={onSelectNode}/>
+              resp.statement
             )
           ) : (
             <span className="italic text-[var(--text-ghost)]">Untitled responsibility</span>
@@ -1792,9 +1979,7 @@ function RespDiffRow({
               }`}
             >
               <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px not-italic text-[var(--text-ghost)]" />
-              <span className={`min-w-0 ${added ? DIFF_TINT.add : ""}`}>
-                <WikiText text={d} nodes={model.nodes} onSelectNode={onSelectNode}/>
-              </span>
+              <span className={`min-w-0 ${added ? DIFF_TINT.add : ""}`}>{d}</span>
             </div>
           </li>
         );
@@ -1805,9 +1990,7 @@ function RespDiffRow({
           <span className="select-none" />
           <div className="flex min-w-0 items-baseline gap-1.5 pr-[180px] font-mono text-[12.5px] leading-[1.65] text-[var(--text-tertiary)]">
             <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px not-italic text-[var(--text-ghost)]" />
-            <span className={`min-w-0 ${DIFF_TINT.delete}`}>
-              <WikiText text={d} nodes={model.nodes} onSelectNode={onSelectNode}/>
-            </span>
+            <span className={`min-w-0 ${DIFF_TINT.delete}`}>{d}</span>
           </div>
         </li>
       ))}
@@ -1959,14 +2142,10 @@ function buildPropDiff(planned: SchemaProperty[], committed: SchemaProperty[]): 
 function PropDiffRow({
   row,
   nodeId,
-  model,
-  onSelectNode,
   editor,
 }: {
   row: PropDiffRow;
   nodeId: string;
-  model: ScryModel;
-  onSelectNode: (id: string) => void;
   editor?: Editor;
 }) {
   const { prop, kind, prev, index } = row;
@@ -1994,7 +2173,7 @@ function PropDiffRow({
             {kind === "reworded" && prev ? (
               <WordDiffText from={prev.description ?? ""} to={desc} />
             ) : (
-              <WikiText text={desc} nodes={model.nodes} onSelectNode={onSelectNode}/>
+              desc
             )}
           </span>
         )}
@@ -2111,8 +2290,6 @@ function PropertyEditRow({
 function PropertiesSection({
   node,
   prevProps,
-  model,
-  onSelectNode,
   editor,
   editing,
   onToggle,
@@ -2120,8 +2297,6 @@ function PropertiesSection({
   node: Node;
   /** The committed copy of this symbol's properties — the diff base. */
   prevProps: SchemaProperty[];
-  model: ScryModel;
-  onSelectNode: (id: string) => void;
   editor: Editor | undefined;
   editing: boolean;
   onToggle: () => void;
@@ -2185,14 +2360,7 @@ function PropertiesSection({
       ) : (
         <ol className="-mx-2 flex flex-col">
           {diffRows.map((row, i) => (
-            <PropDiffRow
-              key={i}
-              row={row}
-              nodeId={node.id}
-              model={model}
-              onSelectNode={onSelectNode}
-              editor={editor}
-            />
+            <PropDiffRow key={i} row={row} nodeId={node.id} editor={editor} />
           ))}
         </ol>
       )}

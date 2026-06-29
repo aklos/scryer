@@ -79,9 +79,9 @@ NEVER describe a data shape in a responsibility statement. "Defines the lead rec
     },
     Rule {
         id: 10,
-        title: "Mentions imply links — and are written as wikilinks",
-        tags: &["link", "mention", "responsibility", "reference", "wikilink", "description"],
-        body: r#"A responsibility statement that names another node requires a link to it. Write the mention itself as a wikilink by node id: `[[node-12]]` — the UI resolves it to the node's current name, so renames never break prose — or `[[node-12|shown text]]` when the sentence needs different wording ("publishes events to the [[node-12|billing pipeline]]"). Prose becomes navigation. Use wikilinks in `description` text too whenever it names another node. A wikilink is the prose-level mention; it never replaces the structural link — declare both."#,
+        title: "Mentions imply links",
+        tags: &["link", "mention", "responsibility", "reference", "description"],
+        body: r#"A responsibility statement (or a `description`) that names another node requires a structural link to it. The prose mention and the structural link are distinct concerns — naming a node in prose never substitutes for the link the mention implies; declare both."#,
     },
     Rule {
         id: 11,

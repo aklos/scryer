@@ -76,7 +76,7 @@ pub fn initial_model_prompt(project_path: &str) -> String {
 - **The codebase is evidence, not the source of truth.** You read code to elicit responsibilities the system already holds — not to transcribe the file tree into nodes.
 - **Responsibilities are pure business statements.** A responsibility says what a node is accountable for in business terms, never how. "restricts access to private content" — yes. "restricts access via JWT" — no, the "via JWT" is mechanism; keep it out of the statement. (`directives` beside a responsibility hold prescriptive "must"/"never" constraints, but those are user-authored — never write them.)
 - **Write terse, scannable statements — not prose.** One verb-led clause per responsibility: lead with the distinguishing verb + object, then stop. No trailing "by/through/where/so that …" tails, and don't repeat the obvious domain ("the architecture model") on every line. "Renders the node/link/group canvas" — yes. "Renders the visual architecture editor where users arrange nodes, links, and groups on a canvas" — no. A node's `description` is its identity in a few words (what it IS), never a re-listing of its responsibilities — if it's a comma-list of them, omit it.
-- **Mention other nodes as wikilinks, by id.** When a description or responsibility statement mentions another node, write the mention as `[[node-id]]` — the UI resolves it to the node's current name — or `[[node-id|shown text]]` to fit the sentence. A wikilink never replaces the structural link the mention implies; declare both.
+- **Name another node? Declare the link.** When a description or responsibility statement mentions another node, declare the structural link the mention implies — the prose mention and the structural link are distinct; declare both.
 - **Every node justifies its existence through responsibilities, stated at its own altitude.** A child node exists to discharge a subset of its parent's responsibilities — so a parent's responsibilities are fewer and broader than the union of its children's, never a per-child enumeration of what each child does. A node with no responsibility — or whose responsibilities serve no ancestor commitment — is structurally vagrant.
 
 ## Procedure
@@ -131,7 +131,7 @@ pub fn enrich_subtree_prompt(
 
 - **Responsibilities are pure business statements.** What a node is accountable for in business terms, never how. "restricts access to private content" — yes. "restricts access via JWT" — no (mechanism). No technology names, no protocols. (`directives` are user-authored — never set them.)
 - **Terse, scannable, verb-led.** One clause per responsibility: distinguishing verb + object, then stop. No "by/through/so that …" tails. A `description` is the node's identity in a few words (what it IS), never a re-list of its responsibilities.
-- **Mention other nodes as wikilinks, by id.** When a statement or description mentions another node, write it as `[[node-id]]` — the UI resolves it to the node's current name — or `[[node-id|shown text]]` to fit the sentence.
+- **Name another node? Declare the link.** When a statement or description mentions another node, declare the structural link the mention implies.
 - **Ladder up — stay at each node's altitude.** Each child's responsibilities discharge a subset of its parent's, but a node states what IT is accountable for, not what a child does: a parent's responsibilities are fewer and broader than the union of its children's, never a per-child enumeration. If a line reads as describing a single child, it's one altitude too low. Since the structure came from real code, set responsibility status to `implemented` (use `proposed` only for something genuinely speculative you add).
 
 ## Current model — structure is authoritative
@@ -173,7 +173,7 @@ pub fn enrich_system_prompt(project_path: &str, system_id: &str, structure_json:
 
 ## Rules
 - Responsibilities are pure business statements at the node's own altitude — no technology words, no mechanism, no per-component enumeration. Technology belongs in the `technology` field.
-- Mention other nodes in descriptions/statements as wikilinks by id (`[[node-id]]`), and still declare the structural link.
+- When a description/statement names another node, declare the structural link the mention implies.
 - Do NOT touch anything below container level: no components, no symbols — the parallel sessions own container internals, and structure they commit while you work is not yours to edit.
 - Read manifests and a few entry-point files only — enough to state what each unit is accountable for.
 
@@ -522,6 +522,7 @@ mod tests {
             visual: None,
             appearance: None,
             notes: None,
+            directives: Vec::new(),
         }
     }
 

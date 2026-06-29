@@ -5,8 +5,7 @@
  *  - PageSection — underlined section heading with a per-section [edit] link.
  *  - Banner — the "ambox" maintenance notice pinned to the top of a page
  *    (stale claims, drift, undescribed behaviour), with verdict actions inline.
- *  - WikiLink — inline cross-reference. A plain blue link to a real page; in
- *    prose (WikiText) an unresolvable target reads red, the only redlink case.
+ *  - WikiLink — inline cross-reference. A plain blue link to a real page.
  */
 
 import {
@@ -24,7 +23,6 @@ import {
 import { createPortal } from "react-dom";
 import type { LucideProps } from "lucide-react";
 import { ArrowDownLeft, ArrowUpRight } from "lucide-react";
-import type { Node } from "./viewmodel";
 import { wordDiff } from "./wordDiff";
 
 /** A section's edit controls (Cancel/Done) render into the section header's
@@ -533,68 +531,6 @@ export function WikiLink({
       </span>
     </button>
   );
-}
-
-/** `[[Target]]` / `[[Target|shown text]]` — Wikipedia's wikilink syntax. */
-const WIKILINK_RE = /\[\[([^\][|]+?)(?:\|([^\][]+?))?\]\]/g;
-
-/**
- * Prose with inline wikilinks. Descriptions, statements, and directives are
- * written as plain text; `[[node-id]]` mentions render as live links showing
- * the node's CURRENT name (ids survive renames), `[[node-id|shown text]]`
- * overrides the display. A node name as the target also resolves — the
- * hand-typed form. A resolved target is a plain blue link; an unresolvable one
- * is red and unclickable (the dangling case: the node was deleted, or the prose
- * names something the model doesn't have).
- */
-export function WikiText({
-  text,
-  nodes,
-  onSelectNode,
-}: {
-  text: string;
-  nodes: readonly Node[];
-  onSelectNode: (id: string) => void;
-}) {
-  const parts: ReactNode[] = [];
-  const re = new RegExp(WIKILINK_RE.source, "g");
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
-    if (m.index > last) parts.push(text.slice(last, m.index));
-    const name = m[1].trim();
-    const target =
-      nodes.find((n) => n.id === name) ??
-      nodes.find((n) => n.name.trim().toLowerCase() === name.toLowerCase());
-    const shown = (m[2] ?? target?.name ?? m[1]).trim();
-    if (target) {
-      parts.push(
-        <button
-          key={m.index}
-          type="button"
-          onClick={() => onSelectNode(target.id)}
-          title={target.name}
-          className="inline rounded-sm text-left text-blue-700 hover:underline dark:text-blue-400"
-        >
-          {shown}
-        </button>,
-      );
-    } else {
-      parts.push(
-        <span
-          key={m.index}
-          title={`“${name}” doesn't resolve to any node in the model`}
-          className="text-red-700/80 dark:text-red-400/80"
-        >
-          {shown}
-        </span>,
-      );
-    }
-    last = m.index + m[0].length;
-  }
-  if (parts.length === 0) return <>{text}</>;
-  if (last < text.length) parts.push(text.slice(last));
-  return <>{parts}</>;
 }
 
 /** Scroll an element into view and flash it briefly — the citation-jump

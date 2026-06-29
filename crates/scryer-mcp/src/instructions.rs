@@ -6,8 +6,16 @@ plan a change in the model FIRST, then write code to match. Do not start editing
 behaviour change without consulting and updating the model.\n\
 \n\
 ## Every task that changes behaviour\n\
-1. ORIENT — `get_health` to see where work is needed, then `search_model` / `read_model` to load the \
-governing nodes, their responsibilities, and any binding `directives`.\n\
+1. ORIENT — figure out which phase you're in first. `get_health` reports how well the COMMITTED \
+model maps to code, so it is the right entry point only once code exists. If committed is empty (a \
+design-first model whose whole architecture lives in the plan, before anything is built), it has \
+nothing to report — `get_pending` and `read_model` show the authored plan; never read an empty \
+health report as \"nothing authored\". Otherwise lead with `get_health` to see where work is needed, \
+then `search_model` / `read_model` to load the \
+governing nodes, their responsibilities, and any binding `directives`. Directives are user-authored, \
+read-only HOW-constraints (\"must\"/\"never\" rules). They attach to a responsibility OR to a node, and \
+node-level directives CARRY DOWN: a node is bound by its own plus every ancestor's. `read_model` \
+returns the inherited set in `inheritedDirectives`; honor all of them and never edit a directive.\n\
 2. PLAN — author the intended change into the model BEFORE writing code: add/extend the nodes, \
 responsibilities, and links it implies, at the right altitude, with the intent tools (`add_person` / \
 `add_system` / `add_container` / `add_component` / `add_symbol`, `update_nodes`, `add_links`, …). \
@@ -47,10 +55,8 @@ reveals a higher-level boundary is wrong, surface the question; don't silently r
 - The codebase is evidence, not source of truth. Elicit responsibilities the system already holds; \
 don't transcribe the file tree into nodes. A good responsibility survives a rewrite in another \
 language (\"authenticate requests\"); a bad one (\"uses jsonwebtoken@9\") will not.\n\
-- When a description or responsibility mentions another node, write the mention as a wikilink by \
-id — `[[node-12]]`, or `[[node-12|shown text]]` to fit the sentence; the UI resolves the id to the \
-node's current name so renames never break prose. A wikilink never replaces the structural link the \
-mention implies — declare both.\n\
+- When a description or responsibility names another node, declare the structural link the mention \
+implies — the prose mention and the structural link are distinct; declare both.\n\
 \n\
 Each tool's own description carries how to call it and when to prefer it over a sibling — pull it \
 when you reach for the tool. Schema version is `0.3`.\n\

@@ -116,6 +116,7 @@ function diffNodes(from: ScryModel, to: ScryModel, out: ModelDiff) {
     reword(changes, "name", prev.name, n.name);
     reword(changes, "technology", prev.technology ?? "", n.technology ?? "");
     reword(changes, "description", prev.description ?? "", n.description ?? "");
+    reword(changes, "directives", (prev.directives ?? []).join("\n"), (n.directives ?? []).join("\n"));
     if (changes.length) out.changes.push({ kind: "node", id, label: n.name, changes });
   }
   for (const [id, n] of fromBy)

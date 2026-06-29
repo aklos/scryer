@@ -157,13 +157,16 @@ pub(crate) fn breadcrumb(model: &ScryModel, node_id: &str) -> String {
     names.join(" / ")
 }
 
-/// Directives are user-authored and read-only to the AI. Before committing any
-/// AI write, force every responsibility's `directives` back to whatever the
-/// prior on-disk model held for that responsibility id; ids with no prior entry
-/// get none. This lets the AI create, edit, and move responsibilities while
-/// leaving directives entirely under the user's control. Not applied to
-/// `move_responsibilities`, which preserves directives across a deliberate
-/// responsibility-id rename.
+/// Directives are user-authored and read-only to the AI — both a
+/// responsibility's `directives` and a node's own node-level `directives`.
+/// Before committing any AI write, force each back to whatever the prior
+/// on-disk model held for that id; ids with no prior entry get none. This lets
+/// the AI create, edit, and move responsibilities and nodes while leaving
+/// directives entirely under the user's control. (The interactive patch path
+/// can't reach them — they're `schemars(skip)` — but the whole-node generation
+/// primitives `set_model`/`set_node` rebuild nodes from JSON and would
+/// otherwise drop them.) Not applied to `move_responsibilities`, which
+/// preserves directives across a deliberate responsibility-id rename.
 pub(crate) fn enforce_readonly_directives(model: &mut ScryModel, prior: &ScryModel) {
     let prior_resps = prior
         .nodes
@@ -179,8 +182,18 @@ pub(crate) fn enforce_readonly_directives(model: &mut ScryModel, prior: &ScryMod
             .map(|d| (*d).clone())
             .unwrap_or_default();
     };
+    // Node-level directives, keyed by node id (same read-only guarantee).
+    let prior_node_dir: HashMap<&str, &Vec<String>> = prior
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), &n.directives))
+        .collect();
     for n in &mut model.nodes {
         n.responsibilities.iter_mut().for_each(&restore);
+        n.directives = prior_node_dir
+            .get(n.id.as_str())
+            .map(|d| (*d).clone())
+            .unwrap_or_default();
     }
     for g in &mut model.groups {
         g.responsibilities.iter_mut().for_each(&restore);

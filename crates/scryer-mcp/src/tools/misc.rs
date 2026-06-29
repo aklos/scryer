@@ -460,6 +460,7 @@ mod tests {
             visual: None,
             appearance: None,
             notes: None,
+            directives: Vec::new(),
         }
     }
 

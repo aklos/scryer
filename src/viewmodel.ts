@@ -128,10 +128,17 @@ export interface Node {
   visual?: boolean;
   appearance?: Appearance;
   /** User-authored freeform notes — self-context and traversal aids, distinct
-   *  from `description` (what the node IS) and a responsibility's `directives`.
-   *  No spec/conformance role. Supports `[[node-id]]` wikilinks. User-only:
-   *  hidden from the agent's write tools. Mirrors Rust `Node.notes`. */
+   *  from `description` (what the node IS) and this node's `directives`.
+   *  No spec/conformance role. Plain text. User-only: hidden from the agent's
+   *  write tools. Mirrors Rust `Node.notes`. */
   notes?: string;
+  /** Node-level prescriptive HOW-constraints ("must"/"never" rules), the
+   *  node-altitude twin of a responsibility's `directives`. They CARRY DOWN: a
+   *  node is bound by its own plus every ancestor's, resolved at read time (see
+   *  `inheritedDirectives`) — never copied onto descendants. User-authored,
+   *  read-only to the agent. Plain text — not part of conformance. Mirrors Rust
+   *  `Node.directives`. */
+  directives?: string[];
 }
 
 export interface Link {
@@ -312,47 +319,33 @@ export function stampTouches(prev: ScryModel, next: ScryModel): ScryModel {
   };
 }
 
-/** Rewrite `[[old]]` / `[[old|label]]` wikilink targets to the new name in one
- *  text. Returns the input unchanged when nothing matches. */
-function rewriteWikilinkText(text: string, oldName: string, newName: string): string {
-  const target = oldName.trim().toLowerCase();
-  return text.replace(
-    /\[\[([^\][|]+?)(\|[^\][]+?)?\]\]/g,
-    (whole, name: string, label: string | undefined) =>
-      name.trim().toLowerCase() === target ? `[[${newName}${label ?? ""}]]` : whole,
-  );
+export interface InheritedDirectives {
+  /** The ancestor that authored these directives. */
+  nodeId: string;
+  name: string;
+  directives: string[];
 }
 
-/** After a node rename, repoint every `[[Old Name]]` prose mention (node and
- *  group descriptions, responsibility statements, directives, node notes) at the
- *  new name so wikilinks never dangle. */
-export function rewriteWikilinks(
-  model: ScryModel,
-  oldName: string,
-  newName: string,
-): ScryModel {
-  if (!oldName.trim() || !newName.trim() || oldName === newName) return model;
-  const fix = (t: string) => rewriteWikilinkText(t, oldName, newName);
-  const fixResps = (resps: Responsibility[] | undefined) =>
-    resps?.map((r) => ({
-      ...r,
-      statement: fix(r.statement),
-      directives: r.directives?.map(fix),
-    }));
-  return {
-    ...model,
-    nodes: model.nodes.map((n) => ({
-      ...n,
-      description: n.description ? fix(n.description) : n.description,
-      responsibilities: fixResps(n.responsibilities),
-      notes: n.notes ? fix(n.notes) : n.notes,
-    })),
-    groups: model.groups.map((g) => ({
-      ...g,
-      description: g.description ? fix(g.description) : g.description,
-      responsibilities: fixResps(g.responsibilities),
-    })),
-  };
+/** The directives a node inherits from its ancestry: every ancestor's
+ *  node-level `directives`, NEAREST ancestor first, walking up to the root. The
+ *  node's OWN `directives` are excluded — the full binding set is the node's own
+ *  followed by this. Ancestors with no directives are skipped. Mirrors Rust
+ *  `inherited_directives` (`crates/scryer-core/src/lib.rs`) — keep in lockstep. */
+export function inheritedDirectives(model: ScryModel, nodeId: string): InheritedDirectives[] {
+  const byId = new Map(model.nodes.map((n) => [n.id, n] as const));
+  const out: InheritedDirectives[] = [];
+  const seen = new Set<string>();
+  let cur = byId.get(nodeId)?.parentId;
+  while (cur !== undefined && !seen.has(cur)) {
+    seen.add(cur);
+    const p = byId.get(cur);
+    if (!p) break;
+    if (p.directives && p.directives.length > 0) {
+      out.push({ nodeId: p.id, name: p.name, directives: p.directives });
+    }
+    cur = p.parentId;
+  }
+  return out;
 }
 
 export function updateNode(
@@ -360,16 +353,10 @@ export function updateNode(
   nodeId: string,
   patch: Partial<Node>,
 ): ScryModel {
-  const prev = model.nodes.find((n) => n.id === nodeId);
-  const next = {
+  return {
     ...model,
     nodes: model.nodes.map((n) => (n.id === nodeId ? { ...n, ...patch } : n)),
   };
-  // A rename repoints prose mentions everywhere — wikilinks must not dangle.
-  if (prev && patch.name !== undefined && patch.name !== prev.name) {
-    return rewriteWikilinks(next, prev.name, patch.name);
-  }
-  return next;
 }
 
 /**

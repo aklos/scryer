@@ -238,13 +238,25 @@ pub struct Node {
     pub appearance: Option<Appearance>,
     /// User-authored freeform notes for this node — self-context, traversal
     /// aids, reminders to self. Distinct from `description` (what the node IS)
-    /// and from a responsibility's `directives` (HOW-constraints): notes carry
-    /// no spec or conformance role. Supports `[[node-id]]` wikilinks. User-only:
-    /// hidden from the agent's write-tool schemas (`schemars(skip)`) but
-    /// serialized and surfaced on read.
+    /// and from this node's `directives` (HOW-constraints): notes carry
+    /// no spec or conformance role. Plain text. User-only: hidden from the
+    /// agent's write-tool schemas (`schemars(skip)`) but serialized and
+    /// surfaced on read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub notes: Option<String>,
+    /// Node-level prescriptive HOW-constraints — verb-led "must"/"never" rules
+    /// the implementation must satisfy, the node-altitude twin of a
+    /// responsibility's `directives`. These CARRY DOWN: a node is bound by its
+    /// own directives plus every ancestor's, computed at read time (never copied
+    /// onto descendants), so editing a container's directive instantly re-binds
+    /// its whole subtree. User-authored: read-only to the agent, so hidden from
+    /// write-tool input schemas (`schemars(skip)`) while still serialized for
+    /// storage and surfaced (own + inherited) on read. Plain text — not part of
+    /// conformance.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
+    pub directives: Vec<String>,
 }
 
 /// The `empty` flag — a SYMBOL that carries no semantic content of its own: no
@@ -259,6 +271,45 @@ pub fn is_node_empty(node: &Node) -> bool {
         && node.responsibilities.is_empty()
         && node.properties.is_empty()
         && node.appearance.as_ref().and_then(|a| a.status).is_none()
+}
+
+/// One ancestor's contribution to a node's inherited directives — the source
+/// node's id and name alongside the directives it carries down. Lets a reader
+/// attribute every inherited constraint to where the user authored it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InheritedDirectives {
+    pub node_id: String,
+    pub name: String,
+    pub directives: Vec<String>,
+}
+
+/// The directives a node inherits from its ancestry: every ancestor's
+/// node-level `directives`, NEAREST ancestor first, walking up to the root.
+/// A node's OWN directives are excluded (they live on the node itself) — the
+/// full binding set is `node.directives` followed by this. Ancestors with no
+/// directives are skipped. Mirrors `inheritedDirectives` in the frontend
+/// (`src/viewmodel.ts`) — keep the two in lockstep.
+pub fn inherited_directives(model: &ScryModel, node_id: &str) -> Vec<InheritedDirectives> {
+    let by_id: HashMap<&str, &Node> = model.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let mut out = Vec::new();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut cur = by_id.get(node_id).and_then(|n| n.parent_id.as_deref());
+    while let Some(pid) = cur {
+        if !seen.insert(pid) {
+            break; // cycle guard — a malformed parent chain never loops forever
+        }
+        let Some(p) = by_id.get(pid) else { break };
+        if !p.directives.is_empty() {
+            out.push(InheritedDirectives {
+                node_id: p.id.clone(),
+                name: p.name.clone(),
+                directives: p.directives.clone(),
+            });
+        }
+        cur = p.parent_id.as_deref();
+    }
+    out
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -1037,90 +1088,6 @@ pub fn next_responsibility_id(existing: &[Responsibility]) -> String {
     format!("resp-{}", max + 1)
 }
 
-// --- Wikilinks ---
-
-/// Rewrite `[[old]]` / `[[old|label]]` wikilink targets in one text. Target
-/// match is trimmed, case-insensitive — the same resolution the UI renderer
-/// uses. Returns the input unchanged when nothing matches.
-fn rewrite_wikilink_text(text: &str, old_name: &str, new_name: &str) -> String {
-    let target = old_name.trim().to_lowercase();
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(start) = rest.find("[[") {
-        let Some(end_rel) = rest[start + 2..].find("]]") else { break };
-        let inner = &rest[start + 2..start + 2 + end_rel];
-        out.push_str(&rest[..start]);
-        let (name, label) = match inner.split_once('|') {
-            Some((n, l)) => (n, Some(l)),
-            None => (inner, None),
-        };
-        if !inner.contains('[') && !inner.contains(']') && name.trim().to_lowercase() == target {
-            out.push_str("[[");
-            out.push_str(new_name);
-            if let Some(l) = label {
-                out.push('|');
-                out.push_str(l);
-            }
-            out.push_str("]]");
-        } else {
-            out.push_str(&rest[start..start + 2 + end_rel + 2]);
-        }
-        rest = &rest[start + 2 + end_rel + 2..];
-    }
-    out.push_str(rest);
-    out
-}
-
-/// Diff node names by id against `prior` and rewrite wikilinks for every
-/// rename found — the post-write hook for any tool that can rename nodes.
-pub fn rewrite_renamed_wikilinks(model: &mut ScryModel, prior: &ScryModel) {
-    let renames: Vec<(String, String)> = prior
-        .nodes
-        .iter()
-        .filter_map(|p| {
-            let n = model.nodes.iter().find(|n| n.id == p.id)?;
-            (n.name != p.name).then(|| (p.name.clone(), n.name.clone()))
-        })
-        .collect();
-    for (old, new) in renames {
-        rewrite_wikilinks(model, &old, &new);
-    }
-}
-
-/// After a node rename, repoint every `[[Old Name]]` prose mention — node and
-/// group descriptions, responsibility statements, directives — at the new
-/// name so wikilinks never dangle.
-pub fn rewrite_wikilinks(model: &mut ScryModel, old_name: &str, new_name: &str) {
-    if old_name.trim().is_empty() || new_name.trim().is_empty() || old_name == new_name {
-        return;
-    }
-    let fix = |t: &mut String| {
-        let next = rewrite_wikilink_text(t, old_name, new_name);
-        if next != *t {
-            *t = next;
-        }
-    };
-    let fix_resps = |resps: &mut Vec<Responsibility>| {
-        for r in resps {
-            fix(&mut r.statement);
-            for d in &mut r.directives {
-                fix(d);
-            }
-        }
-    };
-    for n in &mut model.nodes {
-        if let Some(d) = &mut n.description {
-            fix(d);
-        }
-        fix_resps(&mut n.responsibilities);
-    }
-    for g in &mut model.groups {
-        if let Some(d) = &mut g.description {
-            fix(d);
-        }
-        fix_resps(&mut g.responsibilities);
-    }
-}
 
 // --- Subagent settings (global, ~/.scryer/settings.json) ---
 
@@ -1222,19 +1189,6 @@ pub fn write_subagent_settings(settings: &SubagentSettings) -> Result<(), String
 mod tests {
     use super::*;
 
-    #[test]
-    fn wikilink_rewrite_handles_plain_label_and_case() {
-        let t = "Talks to [[Auth Service]] and [[auth service|the auth layer]], not [[Billing]].";
-        let out = rewrite_wikilink_text(t, "Auth Service", "Identity Service");
-        assert_eq!(
-            out,
-            "Talks to [[Identity Service]] and [[Identity Service|the auth layer]], not [[Billing]]."
-        );
-        // No match → unchanged, including unclosed/malformed brackets.
-        assert_eq!(rewrite_wikilink_text("see [[Other]]", "Auth", "X"), "see [[Other]]");
-        assert_eq!(rewrite_wikilink_text("broken [[Auth", "Auth", "X"), "broken [[Auth");
-    }
-
     /// Legacy `.scry` files written before the schema/symbol merge stored data
     /// shapes as `"kind":"schema"`. The serde alias must load them as symbols
     /// with their properties intact — there is no migration step.
@@ -1297,6 +1251,7 @@ mod tests {
             visual: None,
             appearance: None,
             notes: None,
+            directives: Vec::new(),
         });
         m
     }
@@ -1401,6 +1356,7 @@ mod lock_tests {
                         visual: None,
                         appearance: None,
                         notes: None,
+                        directives: Vec::new(),
                     };
                     m.nodes.push(node);
                     write_model_at(&r, &m).unwrap();
@@ -1437,6 +1393,7 @@ mod lock_tests {
             visual: None,
             appearance: None,
             notes: None,
+            directives: Vec::new(),
         });
         write_model_at(&r, &m).unwrap();
 
@@ -1462,6 +1419,7 @@ mod lock_tests {
             visual: None,
             appearance: None,
             notes: None,
+            directives: Vec::new(),
         });
         write_planned_at(&r, &planned).unwrap();
 
@@ -1488,6 +1446,7 @@ mod lock_tests {
             visual: None,
             appearance: None,
             notes: None,
+            directives: Vec::new(),
         }
     }
 
@@ -1747,5 +1706,39 @@ mod lock_tests {
             model.source_map.get("r1").is_none(),
             "the deleted node's responsibility anchor must not be left orphaned"
         );
+    }
+
+    #[test]
+    fn inherited_directives_walks_ancestors_nearest_first_skipping_empty() {
+        let mut m = ScryModel::default();
+        let mut root = mk_node("root", "Root", None);
+        root.directives = vec!["never log secrets".into()];
+        let mid = mk_node("mid", "Mid", Some("root")); // no directives — skipped
+        let mut leaf = mk_node("leaf", "Leaf", Some("mid"));
+        leaf.directives = vec!["leaf own rule".into()]; // own, must be excluded
+        m.nodes = vec![root, mid, leaf];
+
+        let inh = inherited_directives(&m, "leaf");
+        // Own directives excluded; empty `mid` skipped; only `root` contributes.
+        assert_eq!(inh.len(), 1);
+        assert_eq!(inh[0].node_id, "root");
+        assert_eq!(inh[0].directives, vec!["never log secrets".to_string()]);
+
+        // A root node inherits nothing.
+        assert!(inherited_directives(&m, "root").is_empty());
+    }
+
+    #[test]
+    fn inherited_directives_orders_nearest_ancestor_first() {
+        let mut m = ScryModel::default();
+        let mut root = mk_node("root", "Root", None);
+        root.directives = vec!["root rule".into()];
+        let mut mid = mk_node("mid", "Mid", Some("root"));
+        mid.directives = vec!["mid rule".into()];
+        let leaf = mk_node("leaf", "Leaf", Some("mid"));
+        m.nodes = vec![root, mid, leaf];
+
+        let inh = inherited_directives(&m, "leaf");
+        assert_eq!(inh.iter().map(|i| i.node_id.as_str()).collect::<Vec<_>>(), vec!["mid", "root"]);
     }
 }

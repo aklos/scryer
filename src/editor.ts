@@ -21,6 +21,9 @@ export interface Editor {
       properties?: SchemaProperty[];
       /** User-authored freeform notes (gutter). `""`/undefined clears it. */
       notes?: string;
+      /** User-authored node-level directives (HOW-constraints). Replaces the
+       *  whole array; `[]`/undefined clears it. */
+      directives?: string[];
     },
   ) => void;
   deleteNode: (nodeId: string) => void;

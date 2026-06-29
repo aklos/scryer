@@ -216,6 +216,11 @@ fn subtree_payload(model: &ScryModel, node_id: &str) -> Result<serde_json::Value
         "externalLinks": external_links,
         "contextNodes": context_nodes,
         "referencesForChildren": references_for_children,
+        // HOW-constraints carried down from ancestors above this subtree. The
+        // node's OWN directives are on `node.directives`; together they are the
+        // full binding set the implementation must satisfy. Each descendant
+        // additionally inherits this node's own directives (visible above).
+        "inheritedDirectives": scryer_core::inherited_directives(model, node_id),
         "sourceMap": source_map,
         "boundaries": boundaries,
     }))
@@ -945,6 +950,34 @@ impl ScryerServer {
         };
         let project = model_ref.project_path();
 
+        // Design-first guard. get_health reports the COMMITTED model as a lens
+        // over code; before anything is implemented the whole architecture lives
+        // in the plan and committed is empty, so a coverage report here is all
+        // zeros — which reads as "nothing authored" when in fact a full plan is
+        // waiting. Detect that case and redirect to the plan-layer reads instead
+        // of emitting a misleading empty report.
+        if model.nodes.is_empty() {
+            if let Ok(planned) = scryer_core::read_planned_at(&model_ref) {
+                let nodes = planned.nodes.len();
+                if nodes > 0 {
+                    let resps: usize = planned
+                        .nodes
+                        .iter()
+                        .map(|n| n.responsibilities.len())
+                        .chain(planned.groups.iter().map(|g| g.responsibilities.len()))
+                        .sum();
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Committed model is empty — nothing has been implemented yet — but the \
+                         plan holds {nodes} node(s) and {resps} responsibility/ies. You're in \
+                         design-first mode: get_health reports how well the committed model maps \
+                         to code, which is not the question yet. Read the PLAN instead — \
+                         `get_pending` for the model→code work queue, `read_model` to load the \
+                         authored nodes and responsibilities. Do NOT conclude the model is empty."
+                    ))]));
+                }
+            }
+        }
+
         // Same no-anchor bootstrap as get_drift: a model never reconciled would
         // read as "everything drifted" against no baseline. Seeding also writes
         // the anchor fingerprint baseline (git-free content snapshot).
@@ -1127,6 +1160,7 @@ mod tests {
             visual: None,
             appearance: None,
             notes: None,
+            directives: Vec::new(),
         }
     }
 

@@ -22,9 +22,9 @@ import { NodePage, type Selected } from "../../src/NodePage";
 import type { Editor } from "../../src/editor";
 import {
   buildReviewIndex,
+  ChangesPage,
   DarkCodePage,
   NeedsReviewPage,
-  RecentChangesPage,
   UnmappedClaimsPage,
 } from "../../src/SpecialPages";
 import { Powerline } from "../../src/Powerline";
@@ -196,6 +196,7 @@ export function WorkspaceShell({
           onToggle={toggle}
           editor={undefined}
           activeNodeIds={build.active ? build.activeNodeIds : EMPTY_IDS}
+          activeLevel={view === "diagram" ? diagramFocus : undefined}
         />
         {view === "diagram" ? (
           <DiagramView
@@ -210,7 +211,13 @@ export function WorkspaceShell({
           />
         ) : selected?.kind === "special" ? (
           selected.id === "changes" ? (
-            <RecentChangesPage changeLog={state.changeLog ?? []} onSelectNode={sel} />
+            <ChangesPage
+              planDiff={diff}
+              model={model}
+              committed={committed}
+              changeLog={state.changeLog ?? []}
+              onSelectNode={sel}
+            />
           ) : selected.id === "dark" ? (
             <DarkCodePage model={model} report={health} onSelectNode={sel} />
           ) : selected.id === "unmapped" ? (

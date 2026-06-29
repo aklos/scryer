@@ -231,7 +231,6 @@ impl ScryerServer {
             updated += 1;
         }
         enforce_readonly_directives(&mut model, &prior);
-        scryer_core::rewrite_renamed_wikilinks(&mut model, &prior);
 
         if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
@@ -597,7 +596,6 @@ impl ScryerServer {
             }
         }
         enforce_readonly_directives(&mut model, &prior);
-        scryer_core::rewrite_renamed_wikilinks(&mut model, &prior);
 
         if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
@@ -863,6 +861,7 @@ mod tests {
             visual: None,
             appearance: None,
             notes: None,
+            directives: Vec::new(),
         }
     }
 

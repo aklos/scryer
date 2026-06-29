@@ -159,6 +159,12 @@ fn diff_nodes(from: &ScryModel, to: &ScryModel, out: &mut ModelDiff) {
                     prev.description.as_deref().unwrap_or(""),
                     n.description.as_deref().unwrap_or(""),
                 );
+                reword(
+                    &mut changes,
+                    "directives",
+                    &prev.directives.join("\n"),
+                    &n.directives.join("\n"),
+                );
                 if !changes.is_empty() {
                     out.changes.push(ElementChange {
                         kind: ElementKind::Node,
@@ -481,6 +487,7 @@ mod tests {
             visual: None,
             appearance: None,
             notes: None,
+            directives: Vec::new(),
         }
     }
 
