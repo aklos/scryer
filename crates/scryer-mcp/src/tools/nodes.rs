@@ -194,12 +194,49 @@ impl ScryerServer {
         let prior = model.clone();
         let mut updated = 0usize;
         for u in &req.nodes {
-            let Some(n) = model.nodes.iter_mut().find(|n| n.id == u.node_id) else {
+            if !model.nodes.iter().any(|n| n.id == u.node_id) {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Node '{}' not found",
                     u.node_id
                 ))]));
-            };
+            }
+
+            // A reparent must not create a cycle: the new parent cannot be the
+            // node itself or anywhere inside its own subtree. `move_nodes`
+            // enforces this at nodes.rs:453; `update_nodes` must not be a
+            // backdoor that plants a parent-chain loop (which would then hang
+            // every ancestor walker in core). Validate against the model as it
+            // stands (including any reparents applied earlier in this batch)
+            // BEFORE mutating. The `seen` set keeps this walk terminating even
+            // if the model already holds a malformed chain.
+            if let Some(v) = &u.parent_id {
+                let mut cur = Some(v.clone());
+                let mut seen: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                while let Some(id) = cur {
+                    if id == u.node_id {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Cannot set parent of '{}' to '{}': that node is inside its own \
+                             subtree, so the move would create a cycle",
+                            u.node_id, v
+                        ))]));
+                    }
+                    if !seen.insert(id.clone()) {
+                        break;
+                    }
+                    cur = model
+                        .nodes
+                        .iter()
+                        .find(|n| n.id == id)
+                        .and_then(|n| n.parent_id.clone());
+                }
+            }
+
+            let n = model
+                .nodes
+                .iter_mut()
+                .find(|n| n.id == u.node_id)
+                .expect("existence checked above");
 
             if let Some(v) = &u.kind {
                 n.kind = parse_kind(v)?;
@@ -453,12 +490,17 @@ impl ScryerServer {
                     // The new parent must not be the node itself or inside its
                     // own subtree (that would orphan the chain into a cycle).
                     let mut cur = Some(pid.to_string());
+                    let mut seen: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
                     while let Some(id) = cur {
                         if id == mv.node_id {
                             return Ok(CallToolResult::error(vec![Content::text(format!(
                                 "Cannot move '{}' under its own subtree",
                                 mv.node_id
                             ))]));
+                        }
+                        if !seen.insert(id.clone()) {
+                            break; // cycle guard — a pre-existing parent loop never hangs the walk
                         }
                         cur = model
                             .nodes
@@ -1118,5 +1160,58 @@ mod tests {
             }))
             .unwrap();
         assert!(r.is_error.unwrap_or(false), "cycle rejected");
+    }
+
+    /// update_nodes reparents too, and must reject a cycle-creating parent the
+    /// same way move_nodes does (audit #6) — otherwise it's a backdoor that
+    /// plants a parent-chain loop and hangs every ancestor walker in core. The
+    /// rejected write must leave the plan untouched.
+    #[test]
+    fn update_nodes_rejects_a_cycle_creating_reparent() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, "Sys", None));
+        m.nodes.push(node("ca", Kind::Container, "A", Some("sys")));
+        m.nodes.push(node("comp", Kind::Component, "Comp", Some("ca")));
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+        let server = ScryerServer::new();
+        let project = dir.path().to_string_lossy().to_string();
+
+        let reparent = |node_id: &str, parent: &str| UpdateNodeItem {
+            node_id: node_id.into(),
+            parent_id: Some(parent.into()),
+            kind: None,
+            name: None,
+            description: None,
+            technology: None,
+            external: None,
+            responsibilities: None,
+            properties: None,
+            visual: None,
+        };
+
+        // Re-parent the System under its own grandchild: a cycle.
+        let r = server
+            .update_nodes(Parameters(UpdateNodeRequest {
+                project: Some(project.clone()),
+                nodes: vec![reparent("sys", "comp")],
+            }))
+            .unwrap();
+        assert!(r.is_error.unwrap_or(false), "cycle reparent rejected");
+
+        // Rejected wholesale: the plan is untouched, no loop persisted.
+        let after = scryer_core::read_planned_at(&model_ref).unwrap();
+        let sys = after.nodes.iter().find(|n| n.id == "sys").unwrap();
+        assert_eq!(sys.parent_id, None, "parent unchanged after rejection");
+
+        // A node set as its own parent is likewise rejected.
+        let r = server
+            .update_nodes(Parameters(UpdateNodeRequest {
+                project: Some(project),
+                nodes: vec![reparent("ca", "ca")],
+            }))
+            .unwrap();
+        assert!(r.is_error.unwrap_or(false), "self-parent rejected");
     }
 }

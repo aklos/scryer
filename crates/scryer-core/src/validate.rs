@@ -429,7 +429,11 @@ fn parent_of<'a>(model: &'a ScryModel, id: &str) -> Option<&'a str> {
 fn depth(model: &ScryModel, id: &str) -> usize {
     let mut d = 0usize;
     let mut cur = id.to_string();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     while let Some(p) = parent_of(model, &cur) {
+        if !seen.insert(cur.clone()) {
+            break; // cycle guard — a malformed parent chain never loops forever
+        }
         d += 1;
         cur = p.to_string();
     }
@@ -438,9 +442,13 @@ fn depth(model: &ScryModel, id: &str) -> usize {
 
 fn is_ancestor(model: &ScryModel, anc: &str, desc: &str) -> bool {
     let mut cur = parent_of(model, desc).map(str::to_string);
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     while let Some(p) = cur {
         if p == anc {
             return true;
+        }
+        if !seen.insert(p.clone()) {
+            break; // cycle guard — a malformed parent chain never loops forever
         }
         cur = parent_of(model, &p).map(str::to_string);
     }

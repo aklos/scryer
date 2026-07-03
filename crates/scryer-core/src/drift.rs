@@ -253,11 +253,15 @@ pub fn drifted_scopes(model: &ScryModel, project: &Path, sync: &SyncState) -> Ve
 /// boundary owner, so they must clear together.
 pub fn subtree_ids(model: &ScryModel, node_id: &str) -> Vec<String> {
     let mut out = vec![node_id.to_string()];
+    let mut seen: std::collections::HashSet<String> =
+        std::iter::once(node_id.to_string()).collect();
     let mut i = 0;
     while i < out.len() {
         let cur = out[i].clone();
         for n in &model.nodes {
-            if n.parent_id.as_deref() == Some(cur.as_str()) {
+            // `seen` doubles as a cycle guard: a `parent_id` loop can never
+            // re-push a node that's already in the worklist.
+            if n.parent_id.as_deref() == Some(cur.as_str()) && seen.insert(n.id.clone()) {
                 out.push(n.id.clone());
             }
         }
@@ -437,5 +441,22 @@ mod tests {
         // Anchor in the future → nothing is newer.
         let sync = SyncState { reconciled_at: now_secs() + 10, commit: None, ..Default::default() };
         assert!(drifted_scopes(&model, dir.path(), &sync).is_empty());
+    }
+
+    /// A malformed `parent_id` loop must not hang the subtree walk. Before the
+    /// cycle guard this spun forever, re-pushing the loop members unboundedly.
+    #[test]
+    fn subtree_ids_terminates_on_a_parent_cycle() {
+        let mut model = ScryModel::new();
+        let mut a = node("node-1", "A", Kind::Container);
+        let mut b = node("node-2", "B", Kind::Container);
+        a.parent_id = Some("node-2".into());
+        b.parent_id = Some("node-1".into());
+        model.nodes.push(a);
+        model.nodes.push(b);
+        let ids = subtree_ids(&model, "node-1");
+        assert!(ids.contains(&"node-1".to_string()));
+        assert!(ids.contains(&"node-2".to_string()));
+        assert_eq!(ids.len(), 2, "each cycle member visited exactly once");
     }
 }
