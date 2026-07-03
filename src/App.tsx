@@ -697,6 +697,7 @@ function Workspace({
           // the tree so it mirrors what the diagram is showing. Only while in
           // map view; undefined elsewhere disables the tint.
           activeLevel={view === "diagram" ? diagramFocus : undefined}
+          completeness={healthReport?.completeness}
         />
         {view === "diagram" ? (
           <DiagramView

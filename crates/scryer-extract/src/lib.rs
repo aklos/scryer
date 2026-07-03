@@ -58,6 +58,37 @@ pub fn extract_context(project: &Path) -> Result<ProjectContext, String> {
     extract_context_with_stats(project).map(|(context, _)| context)
 }
 
+/// Every file under `project` (project-relative, forward-slashed), skipping the
+/// same vendor/build directories the extractor ignores. A cheap walk with no
+/// parse — used to resolve boundary globs against real files (e.g. for
+/// completeness: does a node's claimed territory actually contain code?).
+pub fn list_project_files(project: &Path) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let walker = ignore::WalkBuilder::new(project)
+        .hidden(false)
+        .filter_entry(|entry| {
+            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                let name = entry.file_name().to_string_lossy();
+                if scan::SKIP_DIRS.iter().any(|&s| name == s)
+                    || scan::SKIP_BUILD_DIRS.iter().any(|&s| name == s)
+                {
+                    return false;
+                }
+            }
+            true
+        })
+        .build();
+    for entry in walker.flatten() {
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+        if let Ok(rel) = entry.path().strip_prefix(project) {
+            out.insert(rel.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    out
+}
+
 /// Extract with instrumentation for build logs and performance regression
 /// checks. Unchanged source files reuse their previous parser output.
 pub fn extract_context_with_stats(

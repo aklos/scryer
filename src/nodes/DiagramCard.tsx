@@ -11,6 +11,7 @@
 import type { NodeProps, Node as RFNode } from "@xyflow/react";
 import type { DiagramNode } from "../diagramLayout";
 import type { Mark } from "../changeMarks";
+import type { Completeness } from "../health";
 import { NodeHandles } from "./NodeHandles";
 import { ShapeBackground, resolveShape, getContentInsets } from "../shapes";
 
@@ -25,6 +26,8 @@ export interface CardData extends Record<string, unknown> {
    *  render the card with the indigo "working on this" treatment (matching the
    *  tree's active-node spinner) and cross-fade the content in once it lands. */
   pending?: boolean;
+  /** Build completeness for this node — drives the corner % + anchorage badge. */
+  completeness?: Completeness;
 }
 export type RFCard = RFNode<CardData, "card">;
 
@@ -72,6 +75,54 @@ const MARK_STROKE: Record<Mark, string> = {
   Q: "stroke-orange-500/70 dark:stroke-orange-400/50",
   X: "stroke-orange-500/70 dark:stroke-orange-400/50",
 };
+
+/** SVG path for a pie wedge from 12 o'clock, sweeping clockwise to `pct`%. */
+function wedgePath(k: number, r: number, pct: number): string {
+  if (pct >= 100) {
+    // A single arc can't close a full circle — draw it as two half-arcs.
+    return `M${k},${k - r} A${r},${r} 0 1,1 ${k},${k + r} A${r},${r} 0 1,1 ${k},${k - r} Z`;
+  }
+  const theta = (pct / 100) * 2 * Math.PI;
+  const x = k + r * Math.sin(theta);
+  const y = k - r * Math.cos(theta);
+  const large = pct > 50 ? 1 : 0;
+  return `M${k},${k} L${k},${k - r} A${r},${r} 0 ${large},1 ${x},${y} Z`;
+}
+
+/** Completeness as a semi-filled pie: the wedge fills clockwise to the % of the
+ *  node's authored claims that read through to code. Anchorage is the fill itself
+ *  — an empty ring is "nothing built / not grounded"; a dashed ring means there
+ *  is nothing to measure yet (a bare box with no leaf claims). */
+function CompletenessDot({ c }: { c: Completeness }) {
+  const K = 10; // center
+  const R = 7;
+  const measured = c.pct !== undefined;
+  return (
+    <div
+      className="pointer-events-none absolute bottom-1.5 left-2 z-10"
+      title={
+        measured
+          ? `${c.pct}% of this node's claims read through to code`
+          : "No leaf claims yet — nothing to measure"
+      }
+    >
+      <svg width="14" height="14" viewBox="0 0 20 20">
+        <circle
+          cx={K}
+          cy={K}
+          r={R}
+          fill="none"
+          stroke="var(--border)"
+          strokeWidth="1.75"
+          strokeDasharray={measured ? undefined : "2.5 2.5"}
+        />
+        {measured && c.pct! > 0 && (
+          <path d={wedgePath(K, R, c.pct!)} fill="var(--text-tertiary)" />
+        )}
+      </svg>
+    </div>
+  );
+}
 
 function isExpandable(kind: DiagramNode["kind"]): boolean {
   return kind === "system" || kind === "container" || kind === "component";
@@ -158,6 +209,10 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
   }
 
   const markStroke = data.mark && !isExternal ? MARK_STROKE[data.mark] : null;
+  // Completeness pie — hidden on ghosts (measured at the node's real home) and on
+  // nodes with no anchorable primitives at all.
+  const comp = isGhost ? undefined : data.completeness;
+  const showComp = !!comp && comp.total > 0;
 
   return (
     <div className={`relative w-[180px] transition-opacity ${dimClass}`}>
@@ -187,6 +242,10 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
         />
         <NodeHandles />
         <GeneratingFill shape={shape} kind={node.kind} external={!!isExternal} pending={data.pending} />
+
+        {/* Completeness pie, bottom-left. Hidden while the card is still
+            generating so it doesn't flash on empty. */}
+        {showComp && !data.pending && <CompletenessDot c={comp!} />}
 
         {/* Drill-in — shown on select. */}
         {expandable && selected && (

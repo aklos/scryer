@@ -10,6 +10,7 @@
 
 import { useRef, useState } from "react";
 import { Braces, ChevronRight, Loader2, Plus } from "lucide-react";
+import { completenessBadge, type Completeness } from "./health";
 import type { ScryModel, Node, Group, Kind } from "./viewmodel";
 import { childKindFor } from "./viewmodel";
 import type { Editor } from "./editor";
@@ -111,6 +112,7 @@ export function ModelTree({
   editor,
   activeNodeIds,
   activeLevel,
+  completeness,
 }: {
   model: ScryModel;
   /** Live `diff(committed, planned)` — drives the change-letter gutter. */
@@ -126,6 +128,9 @@ export function ModelTree({
    *  (null = top level). Rows at this level get a faint band so the tree mirrors
    *  the map. `undefined` (i.e. not in map view) disables the tint. */
   activeLevel: string | null | undefined;
+  /** Per-node build completeness, keyed by node id — drives the row's % +
+   *  anchorage badge. Absent until the health report loads. */
+  completeness?: Record<string, Completeness>;
 }) {
   const [width, setWidth] = useState(() => {
     const saved = Number(localStorage.getItem("scryer:treeWidth"));
@@ -198,27 +203,6 @@ export function ModelTree({
   for (const n of model.nodes) markOf.set(n.id, nodeMarks(n, diffIndex));
   const hasPlan = (id: string) => markOf.get(id)?.plan != null;
   const hasDrift = (id: string) => markOf.get(id)?.drift != null;
-
-  // Subtree mark counts — the rollup badge on a collapsed branch, so a change
-  // buried three levels down is never invisible. Plan and drift counted
-  // separately so each lens's badge reflects only its own axis.
-  const subtreePlan = new Map<string, number>();
-  const subtreeDrift = new Map<string, number>();
-  const sumMarks = (n: Node): [number, number] => {
-    const memo = subtreePlan.get(n.id);
-    if (memo !== undefined) return [memo, subtreeDrift.get(n.id) ?? 0];
-    let plan = hasPlan(n.id) ? 1 : 0;
-    let drift = hasDrift(n.id) ? 1 : 0;
-    for (const c of childIndex.get(n.id) ?? []) {
-      const [cp, cd] = sumMarks(c);
-      plan += cp;
-      drift += cd;
-    }
-    subtreePlan.set(n.id, plan);
-    subtreeDrift.set(n.id, drift);
-    return [plan, drift];
-  };
-  for (const n of model.nodes) sumMarks(n);
 
   // Lens counts shown on the segmented control — how many rows each lens lights.
   let changeCount = 0;
@@ -641,15 +625,8 @@ export function ModelTree({
       !filterActive && node.kind === "component" ? hiddenSymbolCount(node.id) : 0;
     const isDrop = dropKey === `node:${node.id}`;
     const marks = markOf.get(node.id) ?? { plan: null, drift: null };
-    // The gutter shows this node's OWN mark; a collapsed branch additionally
-    // gets a neutral count of changes buried below, so nothing hides — but the
-    // letter stays honest (we don't synthesize a type for the subtree).
+    // The gutter shows this node's OWN mark.
     const ownMark = resolveMark(marks);
-    const subPlan = subtreePlan.get(node.id) ?? 0;
-    const subDrift = subtreeDrift.get(node.id) ?? 0;
-    const rollupCount = row.isOpen
-      ? 0
-      : subPlan - (marks.plan ? 1 : 0) + (subDrift - (marks.drift ? 1 : 0));
 
     return (
       <div
@@ -725,14 +702,26 @@ export function ModelTree({
             {hiddenSyms}
           </span>
         )}
-        {rollupCount > 0 && (
-          <span
-            className="shrink-0 rounded-full bg-[var(--surface-active)] px-1.5 font-mono text-[10px] tabular-nums text-[var(--text-tertiary)]"
-            title={`${rollupCount} more change${rollupCount === 1 ? "" : "s"} in this branch`}
-          >
-            {rollupCount}
-          </span>
-        )}
+        {(() => {
+          // Arch tiers only — a symbol's completeness is near-binary noise.
+          if (node.kind === "symbol" || node.kind === "person") return null;
+          const badge = completenessBadge(completeness?.[node.id]);
+          if (!badge) return null;
+          return (
+            <span
+              className={`shrink-0 text-2xs tabular-nums ${
+                badge.grounded ? "text-[var(--text-tertiary)]" : "text-[var(--text-ghost)]"
+              }`}
+              title={
+                badge.measured
+                  ? `${badge.label} of this subtree's claims read through to code${badge.grounded ? "" : " (nothing anchored yet)"}`
+                  : "No leaf claims yet — nothing to measure"
+              }
+            >
+              {badge.label}
+            </span>
+          );
+        })()}
         {active && (
           <Loader2 className="h-3 w-3 shrink-0 animate-spin text-indigo-500 dark:text-indigo-400" />
         )}
@@ -744,13 +733,6 @@ export function ModelTree({
     const group = row.group!;
     const isSel = selected?.kind === "group" && selected.id === group.id;
     const gMark = resolveMark(groupMarks(group, diffIndex));
-    // Rolled-up change count across the group's members (their whole subtrees),
-    // shown when collapsed so a folder still reads as "has pending work".
-    const changeRollup = group.memberIds.reduce(
-      (s, id) => s + (subtreePlan.get(id) ?? 0) + (subtreeDrift.get(id) ?? 0),
-      0,
-    );
-    const rollupCount = row.isOpen ? 0 : changeRollup;
     // Declared member count, shown (quietly) only when collapsed.
     const memberCount = row.isOpen ? 0 : group.memberIds.length;
     const groupLevel =
@@ -812,14 +794,6 @@ export function ModelTree({
             title={`${memberCount} member${memberCount === 1 ? "" : "s"}`}
           >
             {memberCount}
-          </span>
-        )}
-        {rollupCount > 0 && (
-          <span
-            className="shrink-0 rounded-full bg-[var(--surface-active)] px-1.5 font-mono text-[10px] tabular-nums text-[var(--text-tertiary)]"
-            title={`${rollupCount} change${rollupCount === 1 ? "" : "s"} in this group`}
-          >
-            {rollupCount}
           </span>
         )}
       </div>

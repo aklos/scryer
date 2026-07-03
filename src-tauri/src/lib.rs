@@ -2149,6 +2149,10 @@ fn get_drift_status(cwd: String) -> Result<Vec<scryer_core::drift::DriftScope>, 
 #[serde(rename_all = "camelCase")]
 struct ModelHealthReport {
     health: scryer_core::health::ModelHealth,
+    /// Per-node build completeness (anchored primitives over authored ones),
+    /// keyed by node id. Spans committed + planned, so it is defined from
+    /// greenfield onward.
+    completeness: std::collections::BTreeMap<String, scryer_core::health::Completeness>,
     /// Anchors whose code changed/broke since the last reconcile.
     anchors: Vec<scryer_extract::anchors::AnchorObservation>,
     /// Anchors silently healed this pass (symbol moved, content unchanged).
@@ -2185,8 +2189,29 @@ async fn get_model_health(cwd: String) -> Result<ModelHealthReport, String> {
         // Keep the cross-process cache fresh for the MCP commit tool. Best-effort.
         let _ = scryer_core::build_edges::write_build_edges(project, &edges);
 
+        // Completeness spans the authored model, so resolve the plan against real
+        // files. Boundary globs can own files the parser skips (config/assets), so
+        // match against the full inventory, not just the parsed source set.
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap_or_else(|_| model.clone());
+        let all_files = scryer_extract::list_project_files(project);
+        let dead: std::collections::HashSet<&str> = check
+            .observations
+            .iter()
+            .filter(|o| {
+                matches!(
+                    o.state,
+                    scryer_extract::anchors::AnchorState::Broken
+                        | scryer_extract::anchors::AnchorState::FileMissing
+                )
+            })
+            .map(|o| o.key.as_str())
+            .collect();
+        let completeness =
+            scryer_core::health::resolve_completeness(&model, &planned, &all_files, &dead);
+
         Ok(ModelHealthReport {
             health: scryer_core::health::compute_health(&model, Some(&files)),
+            completeness,
             anchors: check.observations,
             reanchored: check.reanchored,
             derived: scryer_core::build_edges::derive_graph(&model, &edges),

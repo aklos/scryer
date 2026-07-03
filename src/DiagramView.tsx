@@ -238,9 +238,10 @@ function DiagramInner({
         mark: markFor(n.id),
         dimmed: highlight.active && !highlight.neighbors.has(n.id),
         pending: pendingIds?.has(n.id),
+        completeness: report?.completeness[n.id],
       },
     })) as Array<RFCard | RFDot>;
-  }, [scene, selectedId, markFor, highlight, pendingIds]);
+  }, [scene, selectedId, markFor, highlight, pendingIds, report]);
 
   const rfEdges = useMemo<RFEdge<EdgeData>[]>(() => {
     if (!scene) return [];

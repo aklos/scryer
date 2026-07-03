@@ -946,7 +946,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "The model's observability report — deterministic, no semantic judgment. Per node: own + subtree rollups of responsibility/property counts, vagrant/stale flags, and anchor coverage (anchorable = any committed claim on LEAF nodes; claims on structural nodes are discharged through their subtree and are never 'unmapped'). Plus: anchor observations from the git-free fingerprint check — `changed` (the anchored span's content differs from what the model last saw), `broken` (the symbol is gone), `fileMissing` — with moved-but-unchanged symbols silently re-anchored, and a declared-link audit against the extracted import graph (edge_count 0 = asserted-only; 'unmodeled' = sibling pairs the code connects but no link declares). Pass node_id to scope to one subtree with per-child summaries; omit it for the whole-model summary. Use this to decide WHERE work is needed (unmapped claims, vagrant flags, dark links) before reading full subtrees."
+        description = "The model's observability report — deterministic, no semantic judgment. Per node: own + subtree rollups of responsibility/property counts, vagrant/stale flags, and anchor coverage (anchorable = any committed claim on LEAF nodes; claims on structural nodes are discharged through their subtree and are never 'unmapped'). Plus: anchor observations from the git-free fingerprint check — `changed` (the anchored span's content differs from what the model last saw), `broken` (the symbol is gone), `fileMissing` — with moved-but-unchanged symbols silently re-anchored, and a declared-link audit against the extracted import graph (edge_count 0 = asserted-only; 'unmodeled' = sibling pairs the code connects but no link declares). Also per node: `completeness` — how much of the node's AUTHORED subtree (committed + planned) reads through to real code, so it is defined from greenfield onward. `pct` (0–100) is anchored primitives over authored ones, where a primitive is a node's boundary box (counted only when its glob owns a real file), a leaf responsibility, or a data shape (counted when its anchor resolves and is not broken/missing); a scaffolded container reads low but non-zero, greenfield reads 0. `pct` is ABSENT ('—', unmeasured) when the subtree has no leaf primitives (a bare box), so an undecomposed shell never reads 100%. Only anchor what you have implemented — that discipline is what makes the figure trustworthy. Pass node_id to scope to one subtree with per-child summaries; omit it for the whole-model summary. Use this to decide WHERE work is needed (unmapped claims, vagrant flags, dark links) before reading full subtrees."
     )]
     fn get_health(
         &self,
@@ -1018,6 +1018,35 @@ impl ScryerServer {
         // covers everything model-derivable (counts, discharge, coverage).
         let health = scryer_core::health::compute_health(&model, None);
 
+        // Completeness — how much of each node's AUTHORED subtree reads through to
+        // real code. Spans committed + planned (so it is defined from greenfield),
+        // and resolves anchors against the filesystem: a boundary box counts only
+        // when its glob owns a real file; a leaf claim only when its anchor is
+        // present and not broken/missing.
+        let completeness = {
+            let planned = scryer_core::read_planned_at(&model_ref).unwrap_or_else(|_| model.clone());
+            let files = scryer_extract::list_project_files(project);
+            // Anchors reported broken/missing are dead; `changed` still exists.
+            let dead: HashSet<&str> = anchor_check
+                .observations
+                .iter()
+                .filter(|o| {
+                    matches!(
+                        o.state,
+                        scryer_extract::anchors::AnchorState::Broken
+                            | scryer_extract::anchors::AnchorState::FileMissing
+                    )
+                })
+                .map(|o| o.key.as_str())
+                .collect();
+            scryer_core::health::resolve_completeness(&model, &planned, &files, &dead)
+        };
+        let comp_json = |id: &str| {
+            completeness
+                .get(id)
+                .map(|c| serde_json::to_value(c).unwrap_or(serde_json::Value::Null))
+        };
+
         // The import graph is cached by builds / the app's health refresh; when
         // absent the link audit is simply omitted rather than guessed.
         let derived = scryer_core::build_edges::read_build_edges(&model_ref.build_edges_path())
@@ -1049,6 +1078,7 @@ impl ScryerServer {
                             "name": n.name,
                             "kind": kind_str(&n.kind),
                             "subtree": health.nodes.get(&n.id).map(|h| counts_json(&h.subtree)),
+                            "completeness": comp_json(&n.id),
                         })
                     })
                     .collect();
@@ -1110,6 +1140,7 @@ impl ScryerServer {
                     "kind": kind_str(&node.kind),
                     "own": nh.map(|h| counts_json(&h.own)),
                     "subtree": nh.map(|h| counts_json(&h.subtree)),
+                    "completeness": comp_json(&node.id),
                     "children": children,
                     "anchors": drift_here,
                     "links": links_here,
@@ -1127,6 +1158,7 @@ impl ScryerServer {
                             "name": n.name,
                             "kind": kind_str(&n.kind),
                             "subtree": health.nodes.get(&n.id).map(|h| counts_json(&h.subtree)),
+                            "completeness": comp_json(&n.id),
                         })
                     })
                     .collect();

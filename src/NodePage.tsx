@@ -20,6 +20,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  Anchor,
   Check,
   CircleDashed,
   CornerDownRight,
@@ -55,6 +56,7 @@ import {
 } from "./viewmodel";
 import type { Editor } from "./editor";
 import type { ModelHealthReport } from "./health";
+import { completenessBadge } from "./health";
 import { FLAG_COLORS } from "./statusColors";
 import { isNodeEmpty } from "./rollup";
 import { kindIcon, typeTag } from "./kindIcon";
@@ -80,7 +82,6 @@ import {
   EditLink,
   Empty,
   EmptyFlag,
-  jumpTo,
   NAME_MAX,
   PageSection,
   sanitizeIdentifier,
@@ -623,51 +624,13 @@ function NodePageBody(props: PageProps & { node: Node }) {
           </div>
         )}
         {staleCount > 0 && (
-          <Ambox
-            tone="warning"
-            icon={<Flag className="h-3 w-3" />}
-            actions={
-              <button
-                type="button"
-                onClick={() => {
-                  const first = resps.find((r) => r.stale);
-                  if (first) jumpTo(respElementId(first.id));
-                  else {
-                    const fp = driftProps.find((p) => p.stale);
-                    if (fp) jumpTo(propElementId(node.id, fp.label));
-                  }
-                }}
-                className={NOTICE_ACTION}
-              >
-                Review
-              </button>
-            }
-          >
-            {staleCount} stale claim{staleCount === 1 ? "" : "s"}
+          <Ambox tone="warning" icon={<Flag className="h-3 w-3" />}>
+            {staleCount} stale claim{staleCount === 1 ? "" : "s"} to review below
           </Ambox>
         )}
         {vagrantCount > 0 && (
-          <Ambox
-            tone="danger"
-            icon={<Flag className="h-3 w-3" />}
-            actions={
-              <button
-                type="button"
-                onClick={() => {
-                  const first = resps.find((r) => r.vagrant);
-                  if (first) jumpTo(respElementId(first.id));
-                  else {
-                    const fp = driftProps.find((p) => p.vagrant);
-                    if (fp) jumpTo(propElementId(node.id, fp.label));
-                  }
-                }}
-                className={NOTICE_ACTION}
-              >
-                Review
-              </button>
-            }
-          >
-            {vagrantCount} undescribed in code
+          <Ambox tone="warning" icon={<Flag className="h-3 w-3" />}>
+            {vagrantCount} undescribed in code to review below
           </Ambox>
         )}
         {isNodeEmpty(node) && (
@@ -720,6 +683,26 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 </button>
               </>
             )}
+            {(() => {
+              const badge = completenessBadge(report?.completeness[node.id]);
+              if (!badge) return null;
+              return (
+                <>
+                  <span className="text-[var(--text-ghost)]">·</span>
+                  <span
+                    className="flex items-center gap-1 tabular-nums"
+                    title={
+                      badge.measured
+                        ? `${badge.label} of this node's claims read through to code`
+                        : "No leaf claims yet — nothing to measure"
+                    }
+                  >
+                    <Anchor className={`h-3 w-3 ${badge.grounded ? "" : "opacity-40"}`} />
+                    {badge.label}
+                  </span>
+                </>
+              );
+            })()}
             {isNodeEmpty(node) && <EmptyFlag />}
           </>
         }

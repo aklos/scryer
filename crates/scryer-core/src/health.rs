@@ -406,6 +406,196 @@ fn boundary_coverage(
     })
 }
 
+/// A node's build completeness — how much of its authored subtree reads through
+/// to real code. Distinct from [`HealthCounts`], which is a lens over the
+/// COMMITTED model: completeness spans the AUTHORED model (committed + planned),
+/// so it is defined from greenfield onward — the denominator is intent, the
+/// numerator is what is anchored to code that actually exists. The unit is the
+/// anchorable PRIMITIVE: a node's own boundary box (a claimed territory), each
+/// LEAF responsibility, and each data shape. A structural node's own
+/// responsibilities are NOT primitives — they discharge through the subtree.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Completeness {
+    /// Anchored primitives in the subtree: boxes whose glob matches real files,
+    /// leaf responsibilities and data shapes whose anchor resolves to live code.
+    pub anchored: u32,
+    /// Authored primitives in the subtree — the denominator (committed + planned).
+    pub total: u32,
+    /// Leaf primitives (responsibilities + data shapes) in the subtree. When this
+    /// is zero the node has nothing but boxes beneath it, so it is UNMEASURED (a
+    /// bare, undecomposed shell) and `pct` is None rather than a misleading 100%.
+    pub leaf_total: u32,
+    /// Rounded 0–100 percent, or None ("—") when there is nothing to measure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pct: Option<u32>,
+}
+
+/// What the caller resolved against the real filesystem, passed in so this module
+/// stays pure (no I/O). `real_boxes`: ids of nodes whose boundary glob owns at
+/// least one real file. `live_anchors`: `source_map` keys (a responsibility id,
+/// or a node id for a data shape) whose anchor resolves to code that exists and
+/// is not broken/missing.
+pub struct AnchorFacts<'a> {
+    pub real_boxes: &'a HashSet<String>,
+    pub live_anchors: &'a HashSet<String>,
+}
+
+/// Compute per-node build completeness over the AUTHORED model. Pass the PLANNED
+/// model (the superset of committed + planned) as `model`; `facts` carries what
+/// the caller resolved against real code. Returns a per-node subtree rollup keyed
+/// by node id.
+pub fn compute_completeness(
+    model: &ScryModel,
+    facts: &AnchorFacts,
+) -> BTreeMap<String, Completeness> {
+    let children = children_index(model);
+
+    // --- own primitives per node -----------------------------------------------
+    let mut own: HashMap<&str, Completeness> = HashMap::new();
+    for node in &model.nodes {
+        let mut c = Completeness::default();
+        // Persons are actors and externals are opaque — neither is our code, so
+        // neither carries primitives.
+        if node.kind == Kind::Person || node.external == Some(true) {
+            own.insert(node.id.as_str(), c);
+            continue;
+        }
+        // Box: a node that claims a territory (an authored boundary glob) should
+        // have that glob resolve to real files. Structural nodes get a box too;
+        // it is their own anchor. Nodes that claim no territory get none.
+        if model
+            .boundaries
+            .get(&node.id)
+            .is_some_and(|b| !b.is_empty())
+        {
+            c.total += 1;
+            if facts.real_boxes.contains(&node.id) {
+                c.anchored += 1;
+            }
+        }
+        // Leaf claims. A structural node's own responsibilities discharge through
+        // its subtree, so only LEAF responsibilities (and a leaf's data shape) are
+        // anchorable primitives.
+        let is_leaf = children
+            .get(node.id.as_str())
+            .map_or(true, |c| c.is_empty());
+        if is_leaf {
+            for r in &node.responsibilities {
+                c.total += 1;
+                c.leaf_total += 1;
+                if facts.live_anchors.contains(&r.id) {
+                    c.anchored += 1;
+                }
+            }
+            if !node.properties.is_empty() {
+                c.total += 1;
+                c.leaf_total += 1;
+                if facts.live_anchors.contains(&node.id) {
+                    c.anchored += 1;
+                }
+            }
+        }
+        own.insert(node.id.as_str(), c);
+    }
+
+    // --- subtree rollup (post-order) --------------------------------------------
+    let node_by_id: HashSet<&str> = model.nodes.iter().map(|n| n.id.as_str()).collect();
+    let roots: Vec<&str> = model
+        .nodes
+        .iter()
+        .filter(|n| {
+            n.parent_id
+                .as_deref()
+                .map_or(true, |p| !node_by_id.contains(p))
+        })
+        .map(|n| n.id.as_str())
+        .collect();
+    let mut subtree: HashMap<&str, Completeness> = HashMap::new();
+    let mut visited: HashSet<&str> = HashSet::new();
+    fn roll<'a>(
+        id: &'a str,
+        children: &HashMap<&'a str, Vec<&'a str>>,
+        own: &HashMap<&'a str, Completeness>,
+        subtree: &mut HashMap<&'a str, Completeness>,
+        visited: &mut HashSet<&'a str>,
+    ) {
+        if !visited.insert(id) {
+            return;
+        }
+        let mut c = own.get(id).cloned().unwrap_or_default();
+        if let Some(kids) = children.get(id) {
+            for kid in kids {
+                roll(kid, children, own, subtree, visited);
+                if let Some(kc) = subtree.get(kid) {
+                    c.anchored += kc.anchored;
+                    c.total += kc.total;
+                    c.leaf_total += kc.leaf_total;
+                }
+            }
+        }
+        subtree.insert(id, c);
+    }
+    for root in &roots {
+        roll(root, &children, &own, &mut subtree, &mut visited);
+    }
+    // Defensive: nodes trapped in a parent cycle never get visited above.
+    for node in &model.nodes {
+        roll(node.id.as_str(), &children, &own, &mut subtree, &mut visited);
+    }
+
+    // --- finalize percent -------------------------------------------------------
+    let mut out: BTreeMap<String, Completeness> = BTreeMap::new();
+    for node in &model.nodes {
+        let mut c = subtree.get(node.id.as_str()).cloned().unwrap_or_default();
+        c.pct = if c.leaf_total == 0 {
+            None
+        } else {
+            Some(((c.anchored as f64 / c.total as f64) * 100.0).round() as u32)
+        };
+        out.insert(node.id.clone(), c);
+    }
+    out
+}
+
+/// Resolve the authored model against the real filesystem, then compute
+/// completeness — the shared path for every caller (the MCP `get_health` tool and
+/// the app's health command), so the figure never diverges between them. Pass the
+/// committed `model` and the `planned` superset, the project's file inventory
+/// (e.g. `scryer_extract::list_project_files`), and the `source_map` keys whose
+/// code is broken/missing (from an anchor check). A boundary box counts only when
+/// its glob owns a real file; a leaf claim only when its anchor is present and
+/// not dead.
+pub fn resolve_completeness(
+    model: &ScryModel,
+    planned: &ScryModel,
+    files: &BTreeSet<String>,
+    dead_anchors: &HashSet<&str>,
+) -> BTreeMap<String, Completeness> {
+    let ownership = crate::ownership::BoundaryOwnership::new(planned);
+    let mut real_boxes: HashSet<String> = HashSet::new();
+    for n in &planned.nodes {
+        if planned.boundaries.get(&n.id).is_some_and(|b| !b.is_empty())
+            && files.iter().any(|f| ownership.owns(&n.id, f))
+        {
+            real_boxes.insert(n.id.clone());
+        }
+    }
+    let mut live_anchors: HashSet<String> = HashSet::new();
+    for (k, locs) in model.source_map.iter().chain(planned.source_map.iter()) {
+        if !locs.is_empty() && !dead_anchors.contains(k.as_str()) {
+            live_anchors.insert(k.clone());
+        }
+    }
+    compute_completeness(
+        planned,
+        &AnchorFacts {
+            real_boxes: &real_boxes,
+            live_anchors: &live_anchors,
+        },
+    )
+}
+
 /// Convenience for callers that need the leaf test outside `compute_health`
 /// (e.g. UI affordances): is this node structural (discharges through children)?
 pub fn is_structural(model: &ScryModel, node_id: &str) -> bool {
@@ -612,5 +802,124 @@ mod tests {
         assert_eq!(h.nodes["sys"].subtree.vagrant, 1);
         assert_eq!(h.nodes["sys"].subtree.last_touched_at, Some(999));
         assert_eq!(h.totals.vagrant, 1);
+    }
+
+    fn boundary(pattern: &str) -> Vec<crate::Source> {
+        vec![crate::Source { pattern: pattern.into(), comment: None }]
+    }
+
+    /// Greenfield: a planned tree with nothing anchored reads 0%, not NaN —
+    /// the denominator is the authored plan, so it is defined before any code.
+    #[test]
+    fn completeness_greenfield_reads_zero() {
+        let mut m = ScryModel::new();
+        m.nodes.push(node("api", Kind::Container, None));
+        m.boundaries.insert("api".into(), boundary("api/**/*"));
+        let mut s = node("s", Kind::Symbol, Some("api"));
+        s.responsibilities.push(resp("r1"));
+        s.responsibilities.push(resp("r2"));
+        m.nodes.push(s);
+
+        let rb = HashSet::new();
+        let la = HashSet::new();
+        let comp = compute_completeness(&m, &AnchorFacts { real_boxes: &rb, live_anchors: &la });
+        // box(api) + r1 + r2 = 3 primitives, none anchored.
+        assert_eq!(comp["api"].total, 3);
+        assert_eq!(comp["api"].anchored, 0);
+        assert_eq!(comp["api"].pct, Some(0));
+    }
+
+    /// Scaffolded: the container's glob matches real files but no behaviour is
+    /// anchored — a low, non-zero completeness, never `—`.
+    #[test]
+    fn completeness_scaffolded_container_is_low() {
+        let mut m = ScryModel::new();
+        m.nodes.push(node("api", Kind::Container, None));
+        m.boundaries.insert("api".into(), boundary("api/**/*"));
+        let mut s = node("s", Kind::Symbol, Some("api"));
+        for r in ["r1", "r2", "r3"] {
+            s.responsibilities.push(resp(r));
+        }
+        m.nodes.push(s);
+
+        let rb: HashSet<String> = ["api".to_string()].into_iter().collect();
+        let la = HashSet::new();
+        let comp = compute_completeness(&m, &AnchorFacts { real_boxes: &rb, live_anchors: &la });
+        // 1 box + 3 leaf = 4 total, only the box anchored → 25%.
+        assert_eq!(comp["api"].total, 4);
+        assert_eq!(comp["api"].anchored, 1);
+        assert_eq!(comp["api"].leaf_total, 3);
+        assert_eq!(comp["api"].pct, Some(25));
+    }
+
+    /// Everything anchored → 100%.
+    #[test]
+    fn completeness_all_anchored_is_hundred() {
+        let mut m = ScryModel::new();
+        m.nodes.push(node("api", Kind::Container, None));
+        m.boundaries.insert("api".into(), boundary("api/**/*"));
+        let mut s = node("s", Kind::Symbol, Some("api"));
+        s.responsibilities.push(resp("r1"));
+        m.nodes.push(s);
+
+        let rb: HashSet<String> = ["api".to_string()].into_iter().collect();
+        let la: HashSet<String> = ["r1".to_string()].into_iter().collect();
+        let comp = compute_completeness(&m, &AnchorFacts { real_boxes: &rb, live_anchors: &la });
+        assert_eq!(comp["api"].pct, Some(100));
+    }
+
+    /// A bare box with no leaf primitives beneath it is UNMEASURED (`—`), never a
+    /// misleading 100% just because the glob matches a directory.
+    #[test]
+    fn completeness_bare_box_is_unmeasured() {
+        let mut m = ScryModel::new();
+        m.nodes.push(node("api", Kind::Container, None));
+        m.boundaries.insert("api".into(), boundary("api/**/*"));
+
+        let rb: HashSet<String> = ["api".to_string()].into_iter().collect();
+        let la = HashSet::new();
+        let comp = compute_completeness(&m, &AnchorFacts { real_boxes: &rb, live_anchors: &la });
+        assert_eq!(comp["api"].leaf_total, 0);
+        assert_eq!(comp["api"].anchored, 1);
+        assert_eq!(comp["api"].total, 1);
+        assert_eq!(comp["api"].pct, None);
+    }
+
+    /// A structural node's OWN responsibilities are not primitives — they
+    /// discharge through the subtree; only leaf claims count.
+    #[test]
+    fn completeness_excludes_structural_own_responsibilities() {
+        let mut m = ScryModel::new();
+        let mut api = node("api", Kind::Container, None);
+        api.responsibilities.push(resp("r-struct")); // must NOT count
+        m.nodes.push(api);
+        m.boundaries.insert("api".into(), boundary("api/**/*"));
+        let mut s = node("s", Kind::Symbol, Some("api"));
+        s.responsibilities.push(resp("r-leaf"));
+        m.nodes.push(s);
+
+        let rb: HashSet<String> = ["api".to_string()].into_iter().collect();
+        let la: HashSet<String> = ["r-leaf".to_string()].into_iter().collect();
+        let comp = compute_completeness(&m, &AnchorFacts { real_boxes: &rb, live_anchors: &la });
+        // box(api) + leaf r-leaf = 2; r-struct excluded.
+        assert_eq!(comp["api"].total, 2);
+        assert_eq!(comp["api"].anchored, 2);
+        assert_eq!(comp["api"].leaf_total, 1);
+        assert_eq!(comp["api"].pct, Some(100));
+    }
+
+    /// Persons and externals are not our code — they carry no primitives.
+    #[test]
+    fn completeness_person_carries_no_primitives() {
+        let mut m = ScryModel::new();
+        let mut p = node("user", Kind::Person, None);
+        p.responsibilities.push(resp("r-p"));
+        m.nodes.push(p);
+
+        let rb = HashSet::new();
+        let la = HashSet::new();
+        let comp = compute_completeness(&m, &AnchorFacts { real_boxes: &rb, live_anchors: &la });
+        assert_eq!(comp["user"].total, 0);
+        assert_eq!(comp["user"].pct, None);
     }
 }

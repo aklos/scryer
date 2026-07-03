@@ -24,7 +24,15 @@ existing responsibility or directive, surface it; don't silently diverge.\n\
 3. BUILD — implement the code to that plan.\n\
 4. CLOSE — `mark_implemented` what you built (folds it from the plan into the committed model) and \
 `flag_drift` anything the code does that the plan didn't capture. Run `validate_model` and clear \
-every warning before you finish.\n\
+every warning before you finish. You need not finish a whole node before committing: when you build \
+in layers, fold only the responsibilities you actually built (`mark_implemented` accepts \
+`responsibilityIds`) and leave the rest in the plan. Committing a structural node asserts only that \
+its boundary exists, never that its unbuilt descendants do — so commit the skeleton you built and let \
+the pending work roll up. A node whose subtree mixes built and unbuilt work shows an intermediate \
+completeness in `get_health` — anchored primitives over authored ones — the honest state for a \
+layered build, never a reason to withhold the skeleton (rules 18-19). Never anchor a claim you have \
+not implemented: anchoring is the build checkpoint, which is what makes the completeness figure \
+trustworthy.\n\
 \n\
 If no model exists yet, build one first: `read_codebase` to see the codebase, then build top-down \
 (`fill_container` commits an existing container's subtree at once). Then work the loop above.\n\
