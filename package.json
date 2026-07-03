@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "demo": "vite --config demo/vite.config.ts",
+    "export-html": "node scripts/export-html.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
@@ -33,6 +34,7 @@
     "playwright": "^1.61.0",
     "tailwindcss": "^4.1.18",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vite-plugin-singlefile": "^2.3.3"
   }
 }
