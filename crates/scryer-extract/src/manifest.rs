@@ -231,7 +231,7 @@ fn dockerfile_base_image(text: &str) -> Option<String> {
     let mut last: Option<String> = None;
     for line in text.lines() {
         let l = line.trim();
-        if l.len() < 5 || !l[..4].eq_ignore_ascii_case("from") {
+        if l.len() < 5 || !l.get(..4).is_some_and(|p| p.eq_ignore_ascii_case("from")) {
             continue;
         }
         if !l.as_bytes()[4].is_ascii_whitespace() {
