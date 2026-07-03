@@ -768,6 +768,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   hostId={node.id}
                   resps={resps}
                   prevResps={committedResps}
+                  plannedHosts={plannedRespHosts(model)}
                   sourceMap={sourceMap}
                   projectPath={projectPath}
                   leafHost={leafHost}
@@ -910,6 +911,7 @@ function GroupPageBody(props: PageProps & { group: Group }) {
               hostId={group.id}
               resps={resps}
               prevResps={committedResps}
+              plannedHosts={plannedRespHosts(model)}
               sourceMap={sourceMap}
               projectPath={projectPath}
               leafHost={false} // group claims discharge through members
@@ -1503,9 +1505,10 @@ function DetailRail({
 /** How one claim diverges from the committed model. The Overview reads as a
  *  diff: `added` (in the plan, not yet committed), `reworded` (statement or
  *  directives moved), `deleted` (committed but dropped from the plan, shown so
- *  it can be restored), `vagrant` (code does it, the model never claimed it —
- *  adopt or reject), or `unchanged`. */
-type RespDiffKind = "added" | "reworded" | "deleted" | "vagrant" | "unchanged";
+ *  it can be restored), `relocated` (committed here but moved to another host in
+ *  the plan — shown for context, NOT restorable), `vagrant` (code does it, the
+ *  model never claimed it — adopt or reject), or `unchanged`. */
+type RespDiffKind = "added" | "reworded" | "deleted" | "relocated" | "vagrant" | "unchanged";
 
 interface RespDiffRow {
   resp: Responsibility;
@@ -1514,6 +1517,8 @@ interface RespDiffRow {
   prev?: Responsibility;
   /** Display number — null for deleted rows (they're no longer in the list). */
   index: number | null;
+  /** For `relocated`: the display name of the host that now holds this claim. */
+  movedTo?: string;
 }
 
 // Claim/property diff kinds map onto the shared change categories so the marker
@@ -1522,13 +1527,35 @@ const CHANGE_OF: Record<Exclude<RespDiffKind, "unchanged">, ChangeKind> = {
   added: "add",
   reworded: "modified",
   deleted: "delete",
+  relocated: "relocate",
   vagrant: "vagrant",
 };
 
+/** Map every planned responsibility id to the display name of the node/group
+ *  that holds it. Lets {@link buildRespDiff} tell a claim that *moved* to
+ *  another host (id still present elsewhere in the plan) from one genuinely
+ *  dropped — the former must not offer a Restore, which would re-add the id
+ *  here and duplicate it across two hosts (both diff engines key by id, so one
+ *  copy would silently vanish and corrupt the plan). */
+function plannedRespHosts(model: ScryModel): Map<string, string> {
+  const hosts = new Map<string, string>();
+  for (const n of model.nodes)
+    for (const r of n.responsibilities ?? []) hosts.set(r.id, n.name || n.id);
+  for (const g of model.groups)
+    for (const r of g.responsibilities ?? []) hosts.set(r.id, g.name || "Group");
+  return hosts;
+}
+
 /** Build the diff rows for a host's claims: planned claims in order (each tagged
  *  added / reworded / vagrant / unchanged against the committed copy), then any
- *  committed claims the plan dropped, as restorable `deleted` rows. */
-function buildRespDiff(planned: Responsibility[], committed: Responsibility[]): RespDiffRow[] {
+ *  committed claims the plan dropped — as restorable `deleted` rows, or, when the
+ *  id now lives on another host, as read-only `relocated` rows. `plannedHosts`
+ *  (respId → owning host name across the whole plan) drives that distinction. */
+function buildRespDiff(
+  planned: Responsibility[],
+  committed: Responsibility[],
+  plannedHosts?: Map<string, string>,
+): RespDiffRow[] {
   const prevById = new Map(committed.map((r) => [r.id, r]));
   const liveIds = new Set(planned.map((r) => r.id));
   const rows: RespDiffRow[] = [];
@@ -1549,7 +1576,16 @@ function buildRespDiff(planned: Responsibility[], committed: Responsibility[]): 
     rows.push({ resp: r, kind, prev, index: kind === "vagrant" ? null : ++n });
   }
   for (const r of committed)
-    if (!liveIds.has(r.id)) rows.push({ resp: r, kind: "deleted", index: null });
+    if (!liveIds.has(r.id)) {
+      // Present on some other host in the plan → relocated (context only, never
+      // restorable); present nowhere → genuinely deleted (restorable).
+      const movedTo = plannedHosts?.get(r.id);
+      rows.push(
+        movedTo
+          ? { resp: r, kind: "relocated", index: null, movedTo }
+          : { resp: r, kind: "deleted", index: null },
+      );
+    }
   return rows;
 }
 
@@ -1560,6 +1596,7 @@ function ResponsibilitiesSection({
   hostId,
   resps,
   prevResps,
+  plannedHosts,
   sourceMap,
   projectPath,
   leafHost,
@@ -1572,6 +1609,9 @@ function ResponsibilitiesSection({
   resps: Responsibility[];
   /** The committed copy of this host's claims — the diff base for the rows. */
   prevResps: Responsibility[];
+  /** respId → owning host name across the whole plan; distinguishes a relocated
+   *  claim from a deleted one so we never offer a duplicating Restore. */
+  plannedHosts: Map<string, string>;
   /** respId → source locations, for the inline `↳ file:range` peeks per claim. */
   sourceMap: Record<string, SourceLocation[]>;
   projectPath: string | null;
@@ -1582,7 +1622,7 @@ function ResponsibilitiesSection({
   editing: boolean;
   onToggle: () => void;
 }) {
-  const diffRows = buildRespDiff(resps, prevResps);
+  const diffRows = buildRespDiff(resps, prevResps, plannedHosts);
   /** Restore a dropped claim by putting the committed copy back into the plan. */
   const restore = (r: Responsibility) => {
     if (!editor) return;
@@ -1759,6 +1799,7 @@ function RespDiffRow({
   const openMenu = usePageMenu();
   const copyId = useCopyId();
   const deleted = kind === "deleted";
+  const relocated = kind === "relocated";
   const directives = resp.directives ?? [];
   const prevDirs = prev?.directives ?? [];
   // Directives the plan dropped from a kept claim — shown struck so the removal
@@ -1775,7 +1816,7 @@ function RespDiffRow({
   // string = editing the wording before accepting.
   const [rewordDraft, setRewordDraft] = useState<string | null>(null);
 
-  const contentColor = deleted
+  const contentColor = deleted || relocated
     ? "text-[var(--text-muted)]"
     : kind === "unchanged"
       ? "text-[var(--text-secondary)]"
@@ -1943,6 +1984,14 @@ function RespDiffRow({
             <button type="button" onClick={onRestore} className={BTN_GO} title="Put this committed claim back into the plan">
               Restore
             </button>
+          </div>
+        )}
+        {/* Relocated: the claim moved to another host in the plan. It still lives
+            there under the same id, so there's nothing to restore — a Restore
+            here would re-add the id and duplicate it across two hosts. */}
+        {relocated && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-[var(--text-tertiary)]">
+            <span>Moved to {row.movedTo} in the plan.</span>
           </div>
         )}
       </div>
