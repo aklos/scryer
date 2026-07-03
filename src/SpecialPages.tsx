@@ -452,7 +452,7 @@ function ChildRow({ ec, ctx }: { ec: ElementChange; ctx: RowCtx }) {
   const rewords = ec.changes.filter((c): c is Reworded => c.type === "reworded");
   const statement = rewords.find((r) => r.field === "statement");
   const secondary = rewords.filter((r) => r.field !== "statement");
-  const kind: ChangeKind = added ? "add" : deleted ? "delete" : "reword";
+  const kind: ChangeKind = added ? "add" : deleted ? "delete" : "modified";
   return (
     <div className="flex items-start gap-1.5 text-2xs leading-relaxed">
       <ChangeGlyph kind={kind} className="w-2 shrink-0 pt-px text-2xs" />
@@ -494,7 +494,7 @@ function LinkRow({ link, ctx }: { link: LinkChange; ctx: RowCtx }) {
   const rewords = ec.changes.filter((c): c is Reworded => c.type === "reworded");
   const label = rewords.find((r) => r.field === "label");
   const method = rewords.find((r) => r.field === "method");
-  const kind: ChangeKind = added ? "add" : deleted ? "delete" : "reword";
+  const kind: ChangeKind = added ? "add" : deleted ? "delete" : "modified";
   return (
     <div className="flex items-start gap-1.5 text-2xs leading-relaxed">
       <ChangeGlyph kind={kind} className="w-2 shrink-0 pt-px text-2xs" />

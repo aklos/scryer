@@ -75,15 +75,15 @@ export interface ThemeConfig {
   colorMode: ColorMode;
   /** Neutral chrome — backgrounds, borders, text (default: zinc) */
   zinc: PaletteName;
-  /** Primary accent — buttons, selection, proposed status (default: blue) */
+  /** Primary accent — buttons, selection, links (default: blue) */
   blue: PaletteName;
-  /** Implemented status, process kind, success toast (default: emerald) */
+  /** Added mark, adopt action, success toast (default: emerald) */
   emerald: PaletteName;
-  /** Changed status, warning (default: amber) */
+  /** Modified/relocate marks, code-focus source highlight (default: amber) */
   amber: PaletteName;
-  /** Deprecated status, danger, error (default: red) */
+  /** Deleted mark, danger, reject, error (default: red) */
   red: PaletteName;
-  /** Component kind, accent-alt (default: violet) */
+  /** Agent activity, syntax keywords (default: violet) */
   violet: PaletteName;
   /** Secondary accent — buttons, focus rings (default: indigo) */
   indigo: PaletteName;
@@ -110,15 +110,15 @@ export interface ThemeConfig {
 /** Role metadata for a future theme editor UI. Matches the color contract in
  *  index.css: one hue, one meaning; interaction chrome is neutral. */
 export const THEME_ROLES: { key: PaletteRole; label: string; description: string; palettes: readonly string[] }[] = [
-  { key: "zinc",    label: "Neutral",     description: "Chrome, backgrounds, borders, text",        palettes: GRAY_PALETTES },
-  { key: "blue",    label: "Proposed",    description: "Proposed status",                            palettes: CHROMATIC_PALETTES },
-  { key: "amber",   label: "Implemented", description: "Implemented status, code-focus highlight",   palettes: CHROMATIC_PALETTES },
-  { key: "emerald", label: "Verified",    description: "Verified status, success toasts",            palettes: CHROMATIC_PALETTES },
-  { key: "orange",  label: "Drift",       description: "Changed status, drift nudges, empty symbols", palettes: CHROMATIC_PALETTES },
-  { key: "red",     label: "Vagrant",     description: "Vagrant status, destructive actions, errors", palettes: CHROMATIC_PALETTES },
-  { key: "violet",  label: "Relocated",   description: "Relocated status, syntax keywords",           palettes: CHROMATIC_PALETTES },
-  { key: "indigo",  label: "Agent",       description: "Agent activity, new arrivals, accept actions", palettes: CHROMATIC_PALETTES },
-  { key: "cyan",    label: "Syntax",      description: "Syntax type names",                           palettes: CHROMATIC_PALETTES },
+  { key: "zinc",    label: "Neutral",     description: "Chrome, backgrounds, borders, text",         palettes: GRAY_PALETTES },
+  { key: "blue",    label: "Accent",      description: "Primary accent — buttons, selection, links",  palettes: CHROMATIC_PALETTES },
+  { key: "amber",   label: "Modified",    description: "Modified/relocated marks, code-focus source highlight", palettes: CHROMATIC_PALETTES },
+  { key: "emerald", label: "Added",       description: "Added mark, adopt action, success toasts",    palettes: CHROMATIC_PALETTES },
+  { key: "orange",  label: "Drift",       description: "Drift flags — vagrant + stale — and empty symbols", palettes: CHROMATIC_PALETTES },
+  { key: "red",     label: "Danger",      description: "Deleted mark, reject/destructive actions, errors", palettes: CHROMATIC_PALETTES },
+  { key: "violet",  label: "Agent",       description: "Agent activity, syntax keywords",            palettes: CHROMATIC_PALETTES },
+  { key: "indigo",  label: "Accent",      description: "Secondary accent, focus rings",              palettes: CHROMATIC_PALETTES },
+  { key: "cyan",    label: "Syntax",      description: "Syntax type names",                          palettes: CHROMATIC_PALETTES },
   { key: "slate",   label: "Unused",      description: "Reserved",                                    palettes: ALL_PALETTE_NAMES },
   { key: "teal",    label: "Unused",      description: "Reserved",                                    palettes: CHROMATIC_PALETTES },
 ];

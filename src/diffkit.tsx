@@ -22,7 +22,7 @@ export type { ChangeKind } from "./changeMarks";
  *  markers; the rest are plan changes. */
 const KIND_GLYPH: Record<ChangeKind, string> = {
   add: "+",
-  reword: "~",
+  modified: "~",
   delete: "−",
   relocate: "→",
   vagrant: "?",
@@ -33,7 +33,7 @@ const KIND_GLYPH: Record<ChangeKind, string> = {
  *  stores these chars directly, so its rows resolve colour through here. */
 const GLYPH_KIND: Record<string, ChangeKind> = {
   "+": "add",
-  "~": "reword",
+  "~": "modified",
   "−": "delete",
   "→": "relocate",
   "?": "vagrant",

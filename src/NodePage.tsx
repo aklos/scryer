@@ -1537,7 +1537,7 @@ interface RespDiffRow {
 // glyph, its hue, and the whole-element tint all come from the one diff kit.
 const CHANGE_OF: Record<Exclude<RespDiffKind, "unchanged">, ChangeKind> = {
   added: "add",
-  reworded: "reword",
+  reworded: "modified",
   deleted: "delete",
   vagrant: "vagrant",
 };

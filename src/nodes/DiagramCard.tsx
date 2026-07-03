@@ -63,13 +63,13 @@ function GeneratingFill({
 }
 
 /** Card outline stroke per change mark — same palette as the tree gutter and
- *  the dots: A green, M amber, D red, R blue, Q violet, X orange. */
+ *  the dots: A green, M/R amber (plan edits), D red, Q/X orange (drift). */
 const MARK_STROKE: Record<Mark, string> = {
   A: "stroke-emerald-500/70 dark:stroke-emerald-400/50",
   M: "stroke-amber-500/70 dark:stroke-amber-400/50",
   D: "stroke-red-500/70 dark:stroke-red-400/50",
-  R: "stroke-blue-500/70 dark:stroke-blue-400/50",
-  Q: "stroke-violet-500/70 dark:stroke-violet-400/50",
+  R: "stroke-amber-500/70 dark:stroke-amber-400/50",
+  Q: "stroke-orange-500/70 dark:stroke-orange-400/50",
   X: "stroke-orange-500/70 dark:stroke-orange-400/50",
 };
 
