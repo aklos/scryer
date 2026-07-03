@@ -437,6 +437,17 @@ export function useModelStorage(): ModelStorage {
       setNewNodeIds((cur) => accumulate(cur, newNodes, keepNodes));
       setNewRespIds((cur) => accumulate(cur, reviewableResps, keepResps));
     }
+    // An external write (an agent over MCP, the README's advertised second
+    // writer) just landed and we're about to replace the in-memory model with
+    // it. Any debounced canvas save still pending was serialized from the NOW
+    // stale pre-merge state; letting it fire would overwrite the external write
+    // on disk — and, because it also updates lastWrittenRaw, the echo-suppressor
+    // would hide the loss. Cancel it. The agentRunningRef guard alone doesn't
+    // cover this: it's only set for in-app runs, not external MCP sessions.
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
     lastWrittenRaw.current = raw;
     setModel(loaded);
   }, []);
