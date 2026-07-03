@@ -838,6 +838,49 @@ fn find_responsibility(model: &ScryModel, id: &str) -> Option<(String, Responsib
 ///
 /// (When the explicit delete tombstone lands, a tombstoned element routes through
 /// the same delete branch — one added `.filter(|x| !deleted)` at each lookup.)
+/// Strip planned-layer review markers from a responsibility entering the
+/// committed model. The committed model is the source of truth and carries
+/// neither the `vagrant` adoption marker nor the `stale`/`stale_proposal` drift
+/// markers — a fold IS the verdict that resolves them (re-implementation clears
+/// stale; an explicit fold adopts). Audit #5.
+fn clean_committed_resp(mut resp: Responsibility) -> Responsibility {
+    resp.vagrant = None;
+    resp.stale = None;
+    resp.stale_proposal = None;
+    resp
+}
+
+/// The committed copy of a planned node folded by `mark_implemented` (whole-node
+/// fold). Enforces the "committed never carries review state" invariant: clears
+/// the node's own `vagrant`/`stale` markers, DROPS un-adjudicated `vagrant`
+/// responsibilities and properties (a bulk fold must not silently commit
+/// code-discovered claims that still await an explicit adopt/reject verdict —
+/// they stay in the plan), and clears the `stale`/`stale_proposal` drift markers
+/// on everything that does fold. Audit #5.
+fn committed_node_copy(n: &Node) -> Node {
+    let mut copy = n.clone();
+    copy.vagrant = None;
+    copy.stale = None;
+    copy.responsibilities = n
+        .responsibilities
+        .iter()
+        .filter(|r| r.vagrant != Some(true))
+        .cloned()
+        .map(clean_committed_resp)
+        .collect();
+    copy.properties = n
+        .properties
+        .iter()
+        .filter(|p| p.vagrant != Some(true))
+        .cloned()
+        .map(|mut p| {
+            p.stale = None;
+            p
+        })
+        .collect();
+    copy
+}
+
 pub fn commit_element(
     r: &ModelRef,
     kind: diff::ElementKind,
@@ -863,7 +906,7 @@ pub fn commit_element(
             }
             model.nodes.retain(|n| n.id != id);
             match planned.nodes.iter().find(|n| n.id == id) {
-                Some(n) => model.nodes.push(n.clone()),
+                Some(n) => model.nodes.push(committed_node_copy(n)),
                 None => purge_from_planned = true,
             }
         }
@@ -890,6 +933,7 @@ pub fn commit_element(
             }
             match find_responsibility(&planned, id) {
                 Some((host, resp)) => {
+                    let resp = clean_committed_resp(resp);
                     if let Some(n) = model.nodes.iter_mut().find(|n| n.id == host) {
                         n.responsibilities.push(resp);
                     } else if let Some(g) = model.groups.iter_mut().find(|g| g.id == host) {
@@ -923,7 +967,13 @@ pub fn commit_element(
                 .find(|n| n.id == owner)
                 .and_then(|n| n.properties.iter().find(|p| p.label == id))
             {
-                node.properties.push(p.clone());
+                // Committed carries no review markers — an explicit property fold
+                // adopts it and resolves any drift flag. Audit #5.
+                node.properties.push(SchemaProperty {
+                    vagrant: None,
+                    stale: None,
+                    ..p.clone()
+                });
             }
         }
     }
@@ -955,10 +1005,15 @@ pub fn commit_element(
                 }
             } else if let Some(n) = planned.nodes.iter().find(|n| n.id == id) {
                 // The node's own declaration anchor, plus every responsibility it
-                // carries — committing the node moves the draft's across.
-                for k in std::iter::once(id.to_string())
-                    .chain(n.responsibilities.iter().map(|r| r.id.clone()))
-                {
+                // carries — committing the node moves the draft's across. Vagrant
+                // claims don't fold (committed_node_copy drops them), so their
+                // anchors stay in the draft alongside them. Audit #5.
+                for k in std::iter::once(id.to_string()).chain(
+                    n.responsibilities
+                        .iter()
+                        .filter(|r| r.vagrant != Some(true))
+                        .map(|r| r.id.clone()),
+                ) {
                     if let Some(locs) = planned.source_map.get(&k) {
                         model.source_map.insert(k.clone(), locs.clone());
                         planned_anchor_strip.push(k);
@@ -1564,6 +1619,68 @@ mod lock_tests {
         let model = read_model_at(&r).unwrap();
         assert_eq!(model.nodes[0].properties[0].description, "new");
         assert!(plan_diff_at(&r).unwrap().is_empty());
+    }
+
+    /// A whole-node fold must not carry un-adjudicated review state into the
+    /// source of truth (audit #5): `stale` drift flags clear on the claims that
+    /// fold, and `vagrant` code-discovered claims/properties are LEFT in the plan
+    /// awaiting an explicit adopt/reject verdict — not silently committed.
+    #[test]
+    fn commit_node_clears_stale_and_leaves_vagrant_pending() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        let mut n = mk_node("n", "Svc", None);
+        n.responsibilities.push(mk_resp("resp-1", "serves requests"));
+        m.nodes.push(n);
+        write_model_at(&r, &m).unwrap();
+
+        // Plan: resp-1 went stale (code regressed, then re-implemented), a vagrant
+        // claim resp-2 was drift-discovered, and a vagrant property was too.
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        {
+            let pn = &mut planned.nodes[0];
+            pn.responsibilities[0].stale = Some(true);
+            pn.responsibilities[0].stale_proposal = Some("serves v2 requests".into());
+            let mut vagrant = mk_resp("resp-2", "also logs metrics");
+            vagrant.vagrant = Some(true);
+            pn.responsibilities.push(vagrant);
+            pn.properties.push(SchemaProperty {
+                label: "region".into(),
+                description: String::new(),
+                vagrant: Some(true),
+                stale: None,
+                last_touched_at: None,
+            });
+        }
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Node, None, "n").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        let cn = model.nodes.iter().find(|x| x.id == "n").unwrap();
+        // The stale claim folded, with its drift markers cleared.
+        let r1 = cn.responsibilities.iter().find(|x| x.id == "resp-1").unwrap();
+        assert_eq!(r1.stale, None, "stale flag cleared on fold");
+        assert_eq!(r1.stale_proposal, None, "stale proposal cleared on fold");
+        // The vagrant claim and property did NOT bypass review into committed.
+        assert!(
+            !cn.responsibilities.iter().any(|x| x.id == "resp-2"),
+            "vagrant claim not silently committed"
+        );
+        assert!(cn.properties.is_empty(), "vagrant property not silently committed");
+
+        // They stay in the plan, still pending an adopt/reject verdict.
+        let plan = read_planned_at(&r).unwrap();
+        let pn = plan.nodes.iter().find(|x| x.id == "n").unwrap();
+        assert!(
+            pn.responsibilities.iter().any(|x| x.id == "resp-2" && x.vagrant == Some(true)),
+            "vagrant claim still pending in the plan"
+        );
+        assert!(
+            pn.properties.iter().any(|p| p.label == "region" && p.vagrant == Some(true)),
+            "vagrant property still pending in the plan"
+        );
     }
 
     /// Folding a minted chain (component → symbol) then its responsibility — the
