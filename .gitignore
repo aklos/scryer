@@ -45,3 +45,6 @@ target
 
 # Video artifacts (hosted on GitHub via README embed)
 *.mp4
+
+# Local audit notes — kept on disk, never committed
+AUDIT.md
