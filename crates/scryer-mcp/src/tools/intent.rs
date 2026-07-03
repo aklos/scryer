@@ -47,6 +47,21 @@ impl RespMinter {
         Self { next: max + 1 }
     }
 
+    /// Raise the counter past every responsibility id in `other` (the committed
+    /// model) too, so minting against the plan can't re-issue an id the plan
+    /// deleted but committed still holds (audit #3).
+    fn absorb(&mut self, other: &ScryModel) {
+        let max = other
+            .nodes
+            .iter()
+            .flat_map(|n| n.responsibilities.iter())
+            .chain(other.groups.iter().flat_map(|g| g.responsibilities.iter()))
+            .filter_map(|r| r.id.strip_prefix("resp-").and_then(|s| s.parse::<u64>().ok()))
+            .max()
+            .unwrap_or(0);
+        self.next = self.next.max(max + 1);
+    }
+
     /// Build `implemented` responsibilities from plain statements, skipping blanks.
     fn build(&mut self, statements: &[String]) -> Vec<Responsibility> {
         statements
@@ -106,6 +121,43 @@ fn err(msg: impl Into<String>) -> CallToolResult {
 fn read_planned(model_ref: &ModelRef) -> Result<ScryModel, CallToolResult> {
     scryer_core::read_planned_at(model_ref)
         .map_err(|e| err(format!("Failed to read plan at {}: {}", model_ref, e)))
+}
+
+/// The committed model, read only to raise id-minting floors. Plan-first tools
+/// author into the PLANNED draft, but a node/responsibility/group the plan
+/// DELETED still lives in committed under its id. Minting from the plan alone
+/// can re-issue that id: the pending deletion then reads as a reword and
+/// `mark_implemented` overwrites the committed node (audit #3). `fill_container`
+/// guards the same way via `IdMinter::absorb`. A missing or unreadable committed
+/// model (design-first, before any fold) is simply empty.
+fn read_committed(model_ref: &ModelRef) -> ScryModel {
+    scryer_core::read_model_at(model_ref).unwrap_or_default()
+}
+
+/// Highest numeric suffix among ids carrying `prefix` (e.g. `node-`); 0 if none.
+fn max_id_suffix<'a>(ids: impl Iterator<Item = &'a str>, prefix: &str) -> u64 {
+    ids.filter_map(|id| id.strip_prefix(prefix).and_then(|s| s.parse::<u64>().ok()))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Next `node-N` id past BOTH the planned draft and the committed model, so a
+/// node the plan deleted (still live in committed) can't have its id re-issued.
+fn next_node_id_union(planned: &ScryModel, committed: &ScryModel) -> String {
+    let max = max_id_suffix(
+        planned.nodes.iter().chain(committed.nodes.iter()).map(|n| n.id.as_str()),
+        "node-",
+    );
+    format!("node-{}", max + 1)
+}
+
+/// Next `group-N` id past both layers — same union guard as {@link next_node_id_union}.
+fn next_group_id_union(planned: &ScryModel, committed: &ScryModel) -> String {
+    let max = max_id_suffix(
+        planned.groups.iter().chain(committed.groups.iter()).map(|g| g.id.as_str()),
+        "group-",
+    );
+    format!("group-{}", max + 1)
 }
 
 /// Verify a parent node exists and is the expected kind. Returns the error
@@ -193,10 +245,12 @@ impl ScryerServer {
             Err(e) => return Ok(e),
         };
         let prior = model.clone();
+        let committed = read_committed(&model_ref);
         let mut minter = RespMinter::new(&model);
+        minter.absorb(&committed);
         let mut minted = Vec::new();
         for item in &req.items {
-            let id = scryer_core::next_node_id(&model);
+            let id = next_node_id_union(&model, &committed);
             let mut node = blank_node(id.clone(), Kind::Person, item.name.clone(), None);
             node.description = item.description.clone();
             node.responsibilities = minter.build(&item.responsibilities);
@@ -223,10 +277,12 @@ impl ScryerServer {
             Err(e) => return Ok(e),
         };
         let prior = model.clone();
+        let committed = read_committed(&model_ref);
         let mut minter = RespMinter::new(&model);
+        minter.absorb(&committed);
         let mut minted = Vec::new();
         for item in &req.items {
-            let id = scryer_core::next_node_id(&model);
+            let id = next_node_id_union(&model, &committed);
             let mut node = blank_node(id.clone(), Kind::System, item.name.clone(), None);
             node.description = item.description.clone();
             node.technology = item.technology.clone();
@@ -255,13 +311,15 @@ impl ScryerServer {
             Err(e) => return Ok(e),
         };
         let prior = model.clone();
+        let committed = read_committed(&model_ref);
         let mut minter = RespMinter::new(&model);
+        minter.absorb(&committed);
         let mut minted = Vec::new();
         for item in &req.items {
             if let Some(e) = check_parent(&model, &item.parent_id, Kind::System) {
                 return Ok(e);
             }
-            let id = scryer_core::next_node_id(&model);
+            let id = next_node_id_union(&model, &committed);
             let mut node = blank_node(
                 id.clone(),
                 Kind::Container,
@@ -304,13 +362,15 @@ impl ScryerServer {
             Err(e) => return Ok(e),
         };
         let prior = model.clone();
+        let committed = read_committed(&model_ref);
         let mut minter = RespMinter::new(&model);
+        minter.absorb(&committed);
         let mut minted = Vec::new();
         for item in &req.items {
             if let Some(e) = check_parent(&model, &item.parent_id, Kind::Container) {
                 return Ok(e);
             }
-            let id = scryer_core::next_node_id(&model);
+            let id = next_node_id_union(&model, &committed);
             let mut node = blank_node(
                 id.clone(),
                 Kind::Component,
@@ -342,7 +402,9 @@ impl ScryerServer {
             Err(e) => return Ok(e),
         };
         let prior = model.clone();
+        let committed = read_committed(&model_ref);
         let mut minter = RespMinter::new(&model);
+        minter.absorb(&committed);
         let mut minted: Vec<String> = Vec::new();
         for item in &req.items {
             if !model.nodes.iter().any(|n| n.id == item.parent_id) {
@@ -368,7 +430,7 @@ impl ScryerServer {
                     _ => {}
                 }
             }
-            let id = scryer_core::next_group_id(&model);
+            let id = next_group_id_union(&model, &committed);
             model.groups.push(Group {
                 id: id.clone(),
                 name: item.name.clone(),
@@ -411,13 +473,15 @@ impl ScryerServer {
             Err(e) => return Ok(e),
         };
         let prior = model.clone();
+        let committed = read_committed(&model_ref);
         let mut minter = RespMinter::new(&model);
+        minter.absorb(&committed);
         let mut minted = Vec::new();
         for item in &req.items {
             if let Some(e) = check_parent(&model, &item.parent_id, Kind::Component) {
                 return Ok(e);
             }
-            let id = scryer_core::next_node_id(&model);
+            let id = next_node_id_union(&model, &committed);
             let mut node = blank_node(
                 id.clone(),
                 Kind::Symbol,
@@ -502,6 +566,7 @@ impl ScryerServer {
             return Ok(err(format!("Node '{}' not found", req.node_id)));
         }
         let prior_plan = planned.clone();
+        let committed = read_committed(&model_ref);
 
         // 1. MINT vagrant nodes for code the model has no node for — the agent's
         //    declared missing rungs (a new component, a symbol for a new
@@ -557,7 +622,7 @@ impl ScryerServer {
                     }
                 },
             };
-            let id = scryer_core::next_node_id(&planned);
+            let id = next_node_id_union(&planned, &committed);
             let mut node = blank_node(id.clone(), kind, nn.name.clone(), Some(parent_id));
             node.vagrant = Some(true);
             node.description = nn.description.clone();
@@ -575,6 +640,7 @@ impl ScryerServer {
             .filter(|u| !u.statement.trim().is_empty())
             .collect();
         let mut minter = RespMinter::new(&planned);
+        minter.absorb(&committed);
         let statements: Vec<String> = items.iter().map(|u| u.statement.clone()).collect();
         let mut resps = minter.build(&statements);
         for r in resps.iter_mut() {
@@ -967,6 +1033,69 @@ mod tests {
         let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
         let plan = scryer_core::read_planned_at(&r).unwrap();
         scryer_core::write_model_at(&r, &plan).unwrap();
+    }
+
+    fn resp(id: &str, statement: &str) -> Responsibility {
+        Responsibility {
+            id: id.into(),
+            statement: statement.into(),
+            vagrant: None,
+            stale: None,
+            stale_proposal: None,
+            directives: Vec::new(),
+            last_touched_at: None,
+        }
+    }
+
+    /// Regression for audit #3: a plan-deleted node/responsibility still lives in
+    /// committed under its id, so minting must clear BOTH layers — otherwise a new
+    /// node re-uses the deleted id, the pending deletion silently becomes a reword,
+    /// and the fold overwrites the committed node.
+    #[test]
+    fn intent_mints_ids_past_the_committed_layer() {
+        // Committed: system node-1 (resp-1) + container node-2 (resp-2) — node-2 /
+        // resp-2 are the max ids in committed.
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut model = ScryModel::new();
+        let mut system = blank_node("node-1".into(), Kind::System, "Acme".into(), None);
+        system.responsibilities = vec![resp("resp-1", "is the system")];
+        let mut old = blank_node("node-2".into(), Kind::Container, "Old".into(), Some("node-1".into()));
+        old.responsibilities = vec![resp("resp-2", "does the old thing")];
+        model.nodes.push(system);
+        model.nodes.push(old);
+        scryer_core::write_model_at(&r, &model).unwrap();
+
+        // Plan deletes node-2 — the draft holds only node-1, so minting from the
+        // plan alone would re-issue node-2 / resp-2 (both still live in committed).
+        let mut plan = model.clone();
+        plan.nodes.retain(|n| n.id != "node-2");
+        scryer_core::write_planned_at(&r, &plan).unwrap();
+
+        let server = ScryerServer::new();
+        let project = dir.path().to_string_lossy().to_string();
+        server
+            .add_container(Parameters(AddContainerRequest {
+                project: Some(project),
+                items: vec![ContainerItem {
+                    parent_id: "node-1".into(),
+                    name: "New".into(),
+                    technology: None,
+                    description: None,
+                    external: false,
+                    responsibilities: vec!["does the new thing".into()],
+                    boundary_dir: None,
+                }],
+            }))
+            .unwrap();
+
+        let plan = read_plan(&dir);
+        let new = plan.nodes.iter().find(|n| n.name == "New").unwrap();
+        assert_eq!(new.id, "node-3", "node id must clear the committed max, not reuse plan-deleted node-2");
+        assert_eq!(
+            new.responsibilities[0].id, "resp-3",
+            "responsibility id must clear the committed max, not reuse plan-deleted resp-2"
+        );
     }
 
     #[test]
