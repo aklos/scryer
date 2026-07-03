@@ -2508,6 +2508,14 @@ function PreviewSection({
               </div>
             )}
           </div>
+          {accepted && (
+            <div className="flex items-center gap-2 self-start text-2xs text-amber-700 dark:text-amber-400">
+              <GitCompare className="h-3 w-3 shrink-0" />
+              <span>
+                Showing the accepted design — the component code hasn't been reconciled to it yet.
+              </span>
+            </div>
+          )}
           {(needsRepair || noFixture) && onFixture && (
             <div className="flex items-center gap-3 self-start">
               <span className="text-2xs text-[var(--text-muted)]">

@@ -709,7 +709,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "What model intent is NOT yet reflected in code — the model→code work outstanding. This is the PLAN diff: how the draft (`planned`) diverges from the committed `model`. Each entry names an element (node / responsibility / property / link / group) and what to do: `added` (implement new code), `reworded` (re-implement to the new spec), `moved` (move the code), `repointed` (re-point the relationship), `deleted` (remove the code) — with a breadcrumb path and, for responsibilities, source anchors. Implementing an entry and calling `mark_implemented` folds it from the plan into the committed model. Call this to find what needs implementing or syncing to the codebase."
+        description = "What model intent is NOT yet reflected in code — the model→code work outstanding. This is the PLAN diff: how the draft (`planned`) diverges from the committed `model`. Each entry names an element (node / responsibility / property / link / group) and what to do: `added` (implement new code), `reworded` (re-implement to the new spec), `moved` (move the code), `repointed` (re-point the relationship), `deleted` (remove the code) — with a breadcrumb path and, for responsibilities, source anchors. Implementing an entry and calling `mark_implemented` folds it from the plan into the committed model. A `reworded` claim on the `appearance` field is a planned VISUAL change — reconcile the component's code to the accepted fixture named in the entry's `appearanceInstruction`, not to a text spec. Call this to find what needs implementing or syncing to the codebase."
     )]
     fn get_pending(
         &self,
@@ -831,6 +831,20 @@ impl ScryerServer {
                     }
                 }
                 ElementKind::Link | ElementKind::Group => {}
+            }
+            // A reworded "appearance" claim is a planned VISUAL change, not a text
+            // spec: the agent can't re-implement it from the wording, so point it
+            // at the accepted fixture to reconcile the component's code against.
+            if ch.kind == ElementKind::Node {
+                if let Some(Change::Reworded { to, .. }) = ch.changes.iter().find(
+                    |c| matches!(c, Change::Reworded { field, .. } if field == "appearance"),
+                ) {
+                    v["appearanceInstruction"] = serde_json::Value::String(format!(
+                        "This node's appearance has a planned change — the model wants a new look. \
+                         Reconcile the component's code to the accepted fixture at {to} \
+                         (the fixture is the basis; do not diff its contents), then mark_implemented."
+                    ));
+                }
             }
             changes_out.push(v);
         }
@@ -1363,6 +1377,40 @@ mod tests {
         assert!(dump.contains("node-3")); // deletion surfaced
         // the untouched claim is not part of the plan
         assert!(!dump.contains("settles nightly"));
+    }
+
+    #[test]
+    fn get_pending_gives_appearance_change_a_fixture_instruction() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::Component, "Chart", None));
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+
+        // The model wants a new look: the planned node gains an accepted fixture.
+        let mut planned = m.clone();
+        planned.nodes[0].appearance = Some(scryer_core::Appearance {
+            status: Some(scryer_core::RenderState::Changed),
+            dist_path: Some(".scryer/preview/accepted/node-1.tsx".into()),
+            built_at: Some(1),
+            source_hash: None,
+        });
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        let r = server
+            .get_pending(Parameters(GetPendingRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+            }))
+            .unwrap();
+        let dump = serde_json::to_string(&result_json(&r)).unwrap();
+
+        // The visual change surfaces with purpose-built guidance, not a bare
+        // reworded field — naming the fixture and the fold that closes the loop.
+        assert!(dump.contains("appearanceInstruction"));
+        assert!(dump.contains(".scryer/preview/accepted/node-1.tsx"));
+        assert!(dump.contains("mark_implemented"));
     }
 
     #[test]

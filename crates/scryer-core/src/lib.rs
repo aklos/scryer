@@ -160,7 +160,7 @@ pub enum RenderState {
 /// `responsibilities` (behavior) and `properties` (data). Carries the built
 /// render artifact (`dist_path` + `source_hash`) used to detect drift from the
 /// look, plus the render lifecycle [`RenderState`].
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Appearance {
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1267,10 +1267,14 @@ async fn accept_visual_variation(
     std::fs::create_dir_all(accepted.parent().unwrap()).map_err(|e| e.to_string())?;
     std::fs::copy(&variant, &accepted).map_err(|e| e.to_string())?;
 
-    // Update model preview metadata
+    // Accepting a new look is a PLANNED change (the model wants the visual to
+    // change): stamp it onto the planned model so it surfaces as pending work in
+    // the plan diff, and the agent reconciles the code + `mark_implemented`s it
+    // like any other plan item — the accepted fixture is the basis.
     let parsed_ref = scryer_core::ModelRef::parse(&model_ref)?;
     let _lock = scryer_core::lock_model(&parsed_ref).ok();
-    if let Ok(mut m) = scryer_core::read_model_at(&parsed_ref) {
+    scryer_core::ensure_planned_at(&parsed_ref)?;
+    if let Ok(mut m) = scryer_core::read_planned_at(&parsed_ref) {
         if let Some(n) = m.nodes.iter_mut().find(|n| n.id == node_id) {
             n.appearance = Some(scryer_core::Appearance {
                 status: Some(scryer_core::RenderState::Changed),
@@ -1279,7 +1283,7 @@ async fn accept_visual_variation(
                 source_hash: None,
             });
         }
-        let _ = scryer_core::write_model_at(&parsed_ref, &m);
+        let _ = scryer_core::write_planned_at(&parsed_ref, &m);
     }
 
     let _ = std::fs::remove_dir_all(&vars_dir);
