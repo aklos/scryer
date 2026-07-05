@@ -24,9 +24,20 @@
 //! Properties have no id, so they are keyed by `(owner node, label)` — a label
 //! change reads as delete-plus-add, which is acceptable for plain data fields.
 
-use crate::ScryModel;
+use crate::{Kind, ScryModel};
 use serde::Serialize;
 use std::collections::BTreeMap;
+
+/// Stable string label for a node kind, for surfacing a `kind` change in a diff.
+fn kind_label(k: Kind) -> &'static str {
+    match k {
+        Kind::Person => "person",
+        Kind::System => "system",
+        Kind::Container => "container",
+        Kind::Component => "component",
+        Kind::Symbol => "symbol",
+    }
+}
 
 /// Which kind of element a change concerns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -164,6 +175,19 @@ fn diff_nodes(from: &ScryModel, to: &ScryModel, out: &mut ModelDiff) {
                     "directives",
                     &prev.directives.join("\n"),
                     &n.directives.join("\n"),
+                );
+                // `kind` and `external` are truth-bearing, not cosmetic: `kind`
+                // sets a node's altitude (parent/child legality), `external` flips
+                // anchorability and link legality. A change to either is real plan
+                // work, so surface it — otherwise it folds invisibly, or never.
+                reword(&mut changes, "kind", kind_label(prev.kind), kind_label(n.kind));
+                // Normalize None and Some(false) — both "not external" — so only a
+                // genuine flip registers, never a serialization difference.
+                reword(
+                    &mut changes,
+                    "external",
+                    if prev.external == Some(true) { "true" } else { "false" },
+                    if n.external == Some(true) { "true" } else { "false" },
                 );
                 // A visual change is a planned change like any other: the fixture
                 // is the basis, not a code diff, so we don't compare its contents —
@@ -625,6 +649,55 @@ mod tests {
                 to: "New".to_string(),
             }]
         );
+    }
+
+    /// `kind` and `external` are truth-bearing, so a change to either must surface
+    /// as a plan item — not fold invisibly. And None/Some(false) are the same
+    /// "not external", so that pairing must NOT register.
+    #[test]
+    fn node_kind_and_external_changes_surface() {
+        // kind: container → component
+        let mut from = ScryModel::new();
+        let mut a = node("a", "A", None);
+        a.kind = Kind::Container;
+        from.nodes.push(a);
+        let mut to = ScryModel::new();
+        let mut a2 = node("a", "A", None);
+        a2.kind = Kind::Component;
+        to.nodes.push(a2);
+        assert_eq!(
+            find(&diff(&from, &to), "a").changes,
+            vec![Change::Reworded {
+                field: "kind".to_string(),
+                from: "container".to_string(),
+                to: "component".to_string(),
+            }]
+        );
+
+        // external: false → true (truth-bearing flip)
+        let mut from = ScryModel::new();
+        from.nodes.push(node("a", "A", None)); // external: None
+        let mut to = ScryModel::new();
+        let mut ext = node("a", "A", None);
+        ext.external = Some(true);
+        to.nodes.push(ext);
+        assert_eq!(
+            find(&diff(&from, &to), "a").changes,
+            vec![Change::Reworded {
+                field: "external".to_string(),
+                from: "false".to_string(),
+                to: "true".to_string(),
+            }]
+        );
+
+        // None vs Some(false): both "not external" — no phantom change.
+        let mut from = ScryModel::new();
+        from.nodes.push(node("a", "A", None)); // None
+        let mut to = ScryModel::new();
+        let mut same = node("a", "A", None);
+        same.external = Some(false);
+        to.nodes.push(same);
+        assert!(diff(&from, &to).is_empty(), "None and Some(false) must not differ");
     }
 
     #[test]
