@@ -1237,18 +1237,30 @@ pub fn commit_ready_dependents(r: &ModelRef, node_id: &str) -> Result<(), String
     Ok(())
 }
 
+/// Delete the project's model and ALL state derived from it, so a model created
+/// afterward starts clean. Removing only the committed file left the draft
+/// (`planned.scry`) behind — reopening the project resurrected it as a ghost plan
+/// — and left the history log and the anchor/build fingerprints to misattribute
+/// to the next model. Infra (`.lock`, `.gitignore`) and the regenerated
+/// `preview/` scaffolding are intentionally kept.
 pub fn delete_model_at(r: &ModelRef) -> Result<(), String> {
     let model_path = r.model_path();
     if model_path.exists() {
         fs::remove_file(&model_path).map_err(|e| e.to_string())?;
     }
-    let baseline = r.baseline_path();
-    if baseline.exists() {
-        let _ = fs::remove_file(&baseline);
-    }
-    let sync = r.sync_path();
-    if sync.exists() {
-        let _ = fs::remove_file(&sync);
+    // Best-effort: every other file is derived state a fresh model must not
+    // inherit — the draft especially, which would otherwise resurrect on reopen.
+    for path in [
+        r.planned_path(),
+        r.baseline_path(),
+        r.history_path(),
+        r.sync_path(),
+        r.anchors_path(),
+        r.build_edges_path(),
+    ] {
+        if path.exists() {
+            let _ = fs::remove_file(&path);
+        }
     }
     Ok(())
 }
@@ -1532,6 +1544,37 @@ mod lock_tests {
         let dir = tempfile::tempdir().unwrap();
         let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
         (dir, r)
+    }
+
+    /// Deleting a model must clear the draft and every derived fingerprint, not
+    /// just the committed file — otherwise `planned.scry` resurrects as a ghost
+    /// plan on the next open and the history/anchor logs misattribute to the next
+    /// model. Infra (`.lock`) and `.gitignore` are kept.
+    #[test]
+    fn delete_model_clears_the_draft_and_derived_state() {
+        let (_dir, r) = temp_ref();
+        let model = ScryModel::new();
+        write_model_at(&r, &model).unwrap();
+        write_planned_at(&r, &model).unwrap();
+        save_baseline_at(&r, &model).unwrap();
+        write_sync_state(&r, &drift::SyncState::default()).unwrap();
+        fs::write(r.history_path(), "{}\n").unwrap();
+        fs::write(r.anchors_path(), "{}").unwrap();
+        fs::write(r.build_edges_path(), "{}").unwrap();
+        // Keep a guard so `.lock` exists; it must survive the delete.
+        let guard = lock_model(&r).unwrap();
+
+        delete_model_at(&r).unwrap();
+
+        assert!(!r.model_path().exists(), "committed model removed");
+        assert!(!r.planned_path().exists(), "draft removed — no ghost plan");
+        assert!(!r.baseline_path().exists(), "baseline removed");
+        assert!(!r.history_path().exists(), "history removed");
+        assert!(!r.anchors_path().exists(), "anchor fingerprints removed");
+        assert!(!r.build_edges_path().exists(), "build edges removed");
+        assert!(!r.sync_path().exists(), "reconcile anchor removed");
+        assert!(r.lock_path().exists(), "infra lock file is kept");
+        drop(guard);
     }
 
     /// A second independent handle must fail to take the lock while a guard is
