@@ -10,7 +10,7 @@ pub mod seed;
 pub mod validate;
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -823,11 +823,35 @@ pub fn plan_diff_at(r: &ModelRef) -> Result<diff::ModelDiff, String> {
 /// (single-home), `model` alone omits the agent's unfolded edits.
 pub fn working_view(committed: &ScryModel, planned: &ScryModel) -> ScryModel {
     let mut view = planned.clone();
+    // Overlay only entries whose owner is still live in the PLAN: a committed
+    // anchor or boundary for a plan-deleted element is pending GC (the deletion
+    // fold removes it), and carrying it into the view would make the gate warn
+    // about — and health count — an element the plan already removed.
+    let node_ids: HashSet<&str> = planned.nodes.iter().map(|n| n.id.as_str()).collect();
+    let resp_ids: HashSet<&str> = planned
+        .nodes
+        .iter()
+        .flat_map(|n| n.responsibilities.iter())
+        .chain(planned.groups.iter().flat_map(|g| g.responsibilities.iter()))
+        .map(|r| r.id.as_str())
+        .collect();
+    // source_map is keyed by responsibility id or by a property-bearing node id
+    // (a schema's declaration site) — the same key universe `validate` checks.
+    let property_node_ids: HashSet<&str> = planned
+        .nodes
+        .iter()
+        .filter(|n| !n.properties.is_empty())
+        .map(|n| n.id.as_str())
+        .collect();
     for (id, sources) in &committed.boundaries {
-        view.boundaries.entry(id.clone()).or_insert_with(|| sources.clone());
+        if node_ids.contains(id.as_str()) {
+            view.boundaries.entry(id.clone()).or_insert_with(|| sources.clone());
+        }
     }
     for (id, locs) in &committed.source_map {
-        view.source_map.entry(id.clone()).or_insert_with(|| locs.clone());
+        if resp_ids.contains(id.as_str()) || property_node_ids.contains(id.as_str()) {
+            view.source_map.entry(id.clone()).or_insert_with(|| locs.clone());
+        }
     }
     view
 }
@@ -1667,6 +1691,54 @@ mod lock_tests {
             "draft re-seeded clean — no shadow anchors"
         );
         assert!(plan_diff_at(&r).unwrap().is_empty(), "no pending plan survives the build");
+    }
+
+    /// The working view overlays committed's single-home anchors ONLY for
+    /// elements still live in the plan. A plan-deleted node's boundary or a
+    /// plan-deleted claim's anchor is pending GC, not a dangling reference —
+    /// carrying it into the view made the gate warn "unknown node /
+    /// responsibility" on every pending deletion, a warning the agent could not
+    /// clear without folding first.
+    #[test]
+    fn working_view_drops_committed_anchors_of_plan_deleted_elements() {
+        let mut committed = ScryModel::new();
+        let mut keep = mk_node("keep", "Keep", None);
+        keep.responsibilities.push(mk_resp("resp-1", "stays"));
+        let mut gone = mk_node("gone", "Gone", None);
+        gone.responsibilities.push(mk_resp("resp-2", "goes"));
+        committed.nodes.push(keep);
+        committed.nodes.push(gone);
+        committed
+            .boundaries
+            .insert("keep".into(), vec![Source { pattern: "keep/**".into(), comment: None }]);
+        committed
+            .boundaries
+            .insert("gone".into(), vec![Source { pattern: "gone/**".into(), comment: None }]);
+        committed.source_map.insert(
+            "resp-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "keep.rs" })).unwrap()],
+        );
+        committed.source_map.insert(
+            "resp-2".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "gone.rs" })).unwrap()],
+        );
+
+        // Plan: `gone` deleted; anchors stay single-homed in committed.
+        let mut planned = committed.clone();
+        planned.nodes.retain(|n| n.id != "gone");
+        planned.source_map.clear();
+        planned.boundaries.clear();
+
+        let view = working_view(&committed, &planned);
+        assert!(view.boundaries.contains_key("keep"), "live node's boundary overlays");
+        assert!(view.source_map.contains_key("resp-1"), "live claim's anchor overlays");
+        assert!(!view.boundaries.contains_key("gone"), "plan-deleted node's boundary does not");
+        assert!(!view.source_map.contains_key("resp-2"), "plan-deleted claim's anchor does not");
+        let warnings = validate::validate(&view);
+        assert!(
+            warnings.iter().all(|w| !w.contains("unknown")),
+            "the gate is quiet on a pending deletion: {warnings:?}"
+        );
     }
 
     /// A second independent handle must fail to take the lock while a guard is

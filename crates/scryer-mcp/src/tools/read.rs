@@ -1354,6 +1354,50 @@ mod tests {
         );
     }
 
+    /// A pending deletion must not trip the gate: the deleted element's
+    /// committed boundary and anchor are pending GC (the deletion fold removes
+    /// them), not dangling references the agent must somehow clear.
+    #[test]
+    fn validate_model_is_quiet_on_a_pending_deletion() {
+        use scryer_core::Source;
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let project = dir.path().to_string_lossy().to_string();
+
+        // Committed: an anchored, boundary-owning system.
+        let mut committed = ScryModel::new();
+        let mut sys = node("node-1", Kind::System, "Acme", None);
+        sys.responsibilities.push(resp("resp-1", "serve the API"));
+        committed.nodes.push(sys);
+        committed
+            .boundaries
+            .insert("node-1".into(), vec![Source { pattern: "src/**".into(), comment: None }]);
+        committed.source_map.insert(
+            "resp-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/api.rs" })).unwrap()],
+        );
+        scryer_core::write_model_at(&model_ref, &committed).unwrap();
+
+        // Plan deletes the system; its anchors stay single-homed in committed.
+        let mut planned = committed.clone();
+        planned.nodes.clear();
+        planned.source_map.clear();
+        planned.boundaries.clear();
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        let r = server
+            .validate_model(Parameters(ValidateModelRequest {
+                project: Some(project),
+            }))
+            .unwrap();
+        let out = serde_json::to_string(&r.content).unwrap();
+        assert!(
+            !out.contains("unknown"),
+            "no unknown-reference warnings for a pending deletion: {out}"
+        );
+    }
+
     /// get_health on a plan-only node must name the layer, not return a bare "not
     /// found": the node is authored but uncommitted, so there is no code to
     /// measure yet — the message points at the plan reads instead.
