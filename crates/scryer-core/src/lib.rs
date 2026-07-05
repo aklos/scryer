@@ -1115,7 +1115,22 @@ pub fn commit_element(
         diff::ElementKind::Link => {
             model.links.retain(|l| l.id != id);
             match planned.links.iter().find(|l| l.id == id) {
-                Some(l) => model.links.push(l.clone()),
+                Some(l) => {
+                    // Both endpoints must live in committed or the folded edge
+                    // dangles off a plan-only id — the same residence rule the
+                    // Node branch enforces for parents (item B). The ready-
+                    // dependent fold pre-filters to committed endpoints; this
+                    // guards the direct callers (explicit link_ids folds).
+                    for end in [&l.src, &l.dst] {
+                        if !model.nodes.iter().any(|n| &n.id == end) {
+                            return Err(format!(
+                                "cannot commit link '{id}': its endpoint '{end}' is not in \
+                                 the committed model yet (commit the node first)"
+                            ));
+                        }
+                    }
+                    model.links.push(l.clone());
+                }
                 None => purge_from_planned = true,
             }
         }
@@ -1130,7 +1145,37 @@ pub fn commit_element(
             }
             model.groups.retain(|g| g.id != id);
             match planned.groups.iter().find(|g| g.id == id) {
-                Some(g) => model.groups.push(committed_group_copy(g)),
+                Some(g) => {
+                    // Every member and the anchoring parent must live in
+                    // committed, or the folded group references plan-only ids —
+                    // the residence rule of item B, guarding direct group_ids
+                    // folds (the ready-dependent fold pre-filters members).
+                    if let Some(pid) = &g.parent_node_id {
+                        if !model.nodes.iter().any(|n| &n.id == pid) {
+                            return Err(format!(
+                                "cannot commit group '{id}': its anchor node '{pid}' is not \
+                                 in the committed model yet (commit the node first)"
+                            ));
+                        }
+                    }
+                    if let Some(pgid) = &g.parent_group_id {
+                        if !model.groups.iter().any(|x| &x.id == pgid) {
+                            return Err(format!(
+                                "cannot commit group '{id}': its parent group '{pgid}' is \
+                                 not in the committed model yet (commit that group first)"
+                            ));
+                        }
+                    }
+                    for mid in &g.member_ids {
+                        if !model.nodes.iter().any(|n| &n.id == mid) {
+                            return Err(format!(
+                                "cannot commit group '{id}': member '{mid}' is not in the \
+                                 committed model yet (commit the member first)"
+                            ));
+                        }
+                    }
+                    model.groups.push(committed_group_copy(g));
+                }
                 None => purge_from_planned = true,
             }
         }
@@ -1962,6 +2007,71 @@ mod lock_tests {
             read_model_at(&r).unwrap().source_map.contains_key("resp-1"),
             "committed keeps its anchor"
         );
+    }
+
+    /// A direct link fold must not plant an edge whose endpoint is plan-only —
+    /// the residence rule of item B, applied to the explicit `link_ids` path
+    /// (the ready-dependent fold pre-filters, this guards everyone else).
+    #[test]
+    fn commit_link_requires_endpoints_in_committed() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        m.nodes.push(mk_node("a", "A", None));
+        write_model_at(&r, &m).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes.push(mk_node("b", "B", None));
+        planned.links.push(Link {
+            id: "link-a-b".into(),
+            src: "a".into(),
+            dst: "b".into(),
+            label: "calls".into(),
+            method: None,
+        });
+        write_planned_at(&r, &planned).unwrap();
+
+        let err = commit_element(&r, diff::ElementKind::Link, None, "link-a-b").unwrap_err();
+        assert!(err.contains("'b'"), "error names the plan-only endpoint: {err}");
+        assert!(read_model_at(&r).unwrap().links.is_empty(), "nothing folded");
+
+        // Endpoint first, then the link folds cleanly.
+        commit_element(&r, diff::ElementKind::Node, None, "b").unwrap();
+        commit_element(&r, diff::ElementKind::Link, None, "link-a-b").unwrap();
+        assert!(read_model_at(&r).unwrap().links.iter().any(|l| l.id == "link-a-b"));
+    }
+
+    /// A direct group fold must not reference plan-only members or parents —
+    /// same residence rule, for the explicit `group_ids` path.
+    #[test]
+    fn commit_group_requires_members_in_committed() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        m.nodes.push(mk_node("a", "A", None));
+        write_model_at(&r, &m).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes.push(mk_node("b", "B", None));
+        planned.groups.push(Group {
+            id: "grp".into(),
+            name: "Pair".into(),
+            description: None,
+            member_ids: vec!["a".into(), "b".into()],
+            parent_group_id: None,
+            parent_node_id: None,
+            responsibilities: Vec::new(),
+            icon: None,
+        });
+        write_planned_at(&r, &planned).unwrap();
+
+        let err = commit_element(&r, diff::ElementKind::Group, None, "grp").unwrap_err();
+        assert!(err.contains("'b'"), "error names the plan-only member: {err}");
+        assert!(read_model_at(&r).unwrap().groups.is_empty(), "nothing folded");
+
+        commit_element(&r, diff::ElementKind::Node, None, "b").unwrap();
+        commit_element(&r, diff::ElementKind::Group, None, "grp").unwrap();
+        assert!(read_model_at(&r).unwrap().groups.iter().any(|g| g.id == "grp"));
     }
 
     /// A scoped responsibility fold is the explicit verdict: the PLAN copy's

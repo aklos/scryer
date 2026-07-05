@@ -150,6 +150,22 @@ fn fold_out_layer(model: &mut ScryModel, target_ids: &[String]) -> (usize, usize
     (relocated, before - model.nodes.len(), dropped)
 }
 
+/// Summary line for an explicit link/group fold — spells out how many of the
+/// folded ids were removals (deletion folds) vs. changes landing in committed.
+fn fold_summary(noun: &str, total: usize, removals: usize) -> String {
+    let s = if total == 1 { "" } else { "s" };
+    if removals == 0 {
+        format!("Committed {total} {noun}{s} into the model.")
+    } else if removals == total {
+        format!("Committed the removal of {total} {noun}{s} from the model.")
+    } else {
+        format!(
+            "Committed {total} {noun}{s} into the model ({removals} removal{}).",
+            if removals == 1 { "" } else { "s" }
+        )
+    }
+}
+
 /// The nearest ancestor of `id` that is NOT in `removed` — the surviving home for
 /// a descoped node's relocated claims. `None` when the whole parent chain up to
 /// the root is being removed (or `id` is top-level), so the claims have nowhere to
@@ -344,7 +360,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities. A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed) — links and groups have no id of their own to fold by, so they ride in on the node fold that makes them whole. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
+        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities. A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
     )]
     fn mark_implemented(
         &self,
@@ -356,6 +372,21 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
+
+        let empty = |v: &Option<Vec<String>>| v.as_ref().map_or(true, |x| x.is_empty());
+        if req.node_id.is_none() && empty(&req.link_ids) && empty(&req.group_ids) {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Nothing to fold — provide node_id (optionally with responsibility_ids), \
+                 and/or link_ids / group_ids."
+                    .to_string(),
+            )]));
+        }
+        if req.responsibility_ids.is_some() && req.node_id.is_none() {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "responsibility_ids requires node_id (the host whose claims you are folding)."
+                    .to_string(),
+            )]));
+        }
 
         // The plan (draft) is the source of the work being closed out: marking
         // implemented FOLDS the named elements from `planned` into the committed
@@ -371,32 +402,6 @@ impl ScryerServer {
                 ))]));
             }
         };
-        if !planned.nodes.iter().any(|n| n.id == req.node_id) {
-            // Gone from the plan but still in committed = a planned DELETION to fold:
-            // you removed the code, now remove the claim from the committed model.
-            // `commit_element` deletes a committed node whose planned copy is absent.
-            let in_committed = scryer_core::read_model_at(&model_ref)
-                .map(|m| m.nodes.iter().any(|n| n.id == req.node_id))
-                .unwrap_or(false);
-            if in_committed {
-                if let Err(e) =
-                    scryer_core::commit_element(&model_ref, ElementKind::Node, None, &req.node_id)
-                {
-                    return Ok(CallToolResult::error(vec![Content::text(e)]));
-                }
-                if let Ok(after) = scryer_core::read_model_at(&model_ref) {
-                    let _ = scryer_core::save_baseline_at(&model_ref, &after);
-                }
-                return Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Committed the removal of '{}' from the model.",
-                    req.node_id
-                ))]));
-            }
-            return Ok(CallToolResult::error(vec![Content::text(format!(
-                "Node '{}' not found in the plan",
-                req.node_id
-            ))]));
-        }
 
         // Snapshot the node's committed responsibilities so the history event can
         // show exactly what THIS fold added or reworded, not claims committed in a
@@ -412,52 +417,153 @@ impl ScryerServer {
             })
             .unwrap_or_default();
 
-        let summary = match &req.responsibility_ids {
-            // Scoped: commit exactly the named responsibilities. Their host node
-            // must already be committed (commit the whole node first otherwise).
-            Some(ids) => {
+        let mut summaries: Vec<String> = Vec::new();
+        // Set when a node-hosted fold ran — drives the history event below.
+        let mut history_node: Option<String> = None;
+
+        if let Some(node_id) = req.node_id.as_deref() {
+            if !planned.nodes.iter().any(|n| n.id == node_id) {
+                // Gone from the plan but still in committed = a planned DELETION to
+                // fold: you removed the code, now remove the claim from the committed
+                // model. `commit_element` deletes a committed node whose planned copy
+                // is absent.
+                let in_committed = scryer_core::read_model_at(&model_ref)
+                    .map(|m| m.nodes.iter().any(|n| n.id == node_id))
+                    .unwrap_or(false);
+                if !in_committed {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Node '{}' not found in the plan",
+                        node_id
+                    ))]));
+                }
+                if let Err(e) =
+                    scryer_core::commit_element(&model_ref, ElementKind::Node, None, node_id)
+                {
+                    return Ok(CallToolResult::error(vec![Content::text(e)]));
+                }
+                summaries.push(format!(
+                    "Committed the removal of '{}' from the model.",
+                    node_id
+                ));
+            } else {
+                match &req.responsibility_ids {
+                    // Scoped: commit exactly the named responsibilities. Their host
+                    // node must already be committed (commit the whole node first
+                    // otherwise).
+                    Some(ids) => {
+                        for id in ids {
+                            if let Err(e) = scryer_core::commit_element(
+                                &model_ref,
+                                ElementKind::Responsibility,
+                                None,
+                                id,
+                            ) {
+                                return Ok(CallToolResult::error(vec![Content::text(e)]));
+                            }
+                        }
+                        let n = ids.len();
+                        summaries.push(format!(
+                            "Committed {} responsibilit{} on '{}' into the model.",
+                            n,
+                            if n == 1 { "y" } else { "ies" },
+                            node_id
+                        ));
+                    }
+                    // Whole node: commit the node, folding its whole planned state
+                    // (responsibilities, properties, appearance) into the model.
+                    None => {
+                        if let Err(e) = scryer_core::commit_element(
+                            &model_ref,
+                            ElementKind::Node,
+                            None,
+                            node_id,
+                        ) {
+                            return Ok(CallToolResult::error(vec![Content::text(e)]));
+                        }
+                        // Pull in the ready plan-added links/groups incident to this
+                        // node (item A); deletions never ride along — they fold by
+                        // their own ids below.
+                        if let Err(e) =
+                            scryer_core::commit_ready_dependents(&model_ref, node_id)
+                        {
+                            return Ok(CallToolResult::error(vec![Content::text(e)]));
+                        }
+                        summaries.push(format!("Committed '{}' into the model.", node_id));
+                    }
+                }
+                history_node = Some(node_id.to_string());
+            }
+        }
+
+        // Links and groups fold by THEIR ids — the only path for a standalone
+        // change and for EVERY link/group deletion (a node fold pulls in only the
+        // ready adds incident to it, never removals).
+        if !empty(&req.link_ids) || !empty(&req.group_ids) {
+            // Fresh reads: the node fold above may have advanced both layers.
+            let committed = scryer_core::read_model_at(&model_ref).unwrap_or_default();
+            let planned_now = match scryer_core::read_planned_at(&model_ref) {
+                Ok(p) => p,
+                Err(e) => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Failed to read plan at {}: {}",
+                        model_ref, e
+                    ))]));
+                }
+            };
+            if let Some(ids) = req.link_ids.as_ref().filter(|v| !v.is_empty()) {
+                let mut removals = 0usize;
                 for id in ids {
-                    if let Err(e) = scryer_core::commit_element(
-                        &model_ref,
-                        ElementKind::Responsibility,
-                        None,
-                        id,
-                    ) {
+                    let in_plan = planned_now.links.iter().any(|l| &l.id == id);
+                    if !in_plan && !committed.links.iter().any(|l| &l.id == id) {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Link '{}' not found in the plan or the committed model",
+                            id
+                        ))]));
+                    }
+                    if !in_plan {
+                        removals += 1;
+                    }
+                    if let Err(e) =
+                        scryer_core::commit_element(&model_ref, ElementKind::Link, None, id)
+                    {
                         return Ok(CallToolResult::error(vec![Content::text(e)]));
                     }
                 }
-                let n = ids.len();
-                format!(
-                    "Committed {} responsibilit{} on '{}' into the model.",
-                    n,
-                    if n == 1 { "y" } else { "ies" },
-                    req.node_id
-                )
+                summaries.push(fold_summary("link", ids.len(), removals));
             }
-            // Whole node: commit the node, folding its whole planned state
-            // (responsibilities, properties, appearance) into the model.
-            None => {
-                if let Err(e) =
-                    scryer_core::commit_element(&model_ref, ElementKind::Node, None, &req.node_id)
-                {
-                    return Ok(CallToolResult::error(vec![Content::text(e)]));
+            if let Some(ids) = req.group_ids.as_ref().filter(|v| !v.is_empty()) {
+                let mut removals = 0usize;
+                for id in ids {
+                    let in_plan = planned_now.groups.iter().any(|g| &g.id == id);
+                    if !in_plan && !committed.groups.iter().any(|g| &g.id == id) {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Group '{}' not found in the plan or the committed model",
+                            id
+                        ))]));
+                    }
+                    if !in_plan {
+                        removals += 1;
+                    }
+                    if let Err(e) =
+                        scryer_core::commit_element(&model_ref, ElementKind::Group, None, id)
+                    {
+                        return Ok(CallToolResult::error(vec![Content::text(e)]));
+                    }
                 }
-                // Pull in links/groups this node's commit just made foldable —
-                // they have no node id of their own to fold by (item A).
-                if let Err(e) =
-                    scryer_core::commit_ready_dependents(&model_ref, &req.node_id)
-                {
-                    return Ok(CallToolResult::error(vec![Content::text(e)]));
-                }
-                format!("Committed '{}' into the model.", req.node_id)
+                summaries.push(fold_summary("group", ids.len(), removals));
             }
-        };
+        }
+
+        let summary = summaries.join(" ");
 
         // Keep the legacy baseline snapshot in step with the committed model, and
         // record the fold as an `impl` event listing the claims it discharged.
         if let Ok(after) = scryer_core::read_model_at(&model_ref) {
             let _ = scryer_core::save_baseline_at(&model_ref, &after);
-            if let Some(node) = after.nodes.iter().find(|n| n.id == req.node_id) {
+            if let Some(node) = history_node
+                .as_deref()
+                .and_then(|id| after.nodes.iter().find(|n| n.id == id))
+            {
                 let target: Vec<&scryer_core::Responsibility> = match &req.responsibility_ids {
                     Some(ids) => node.responsibilities.iter().filter(|r| ids.contains(&r.id)).collect(),
                     // Whole-node: only the responsibilities this fold newly added or
@@ -481,7 +587,7 @@ impl ScryerServer {
                         HistoryEvent::new(
                             scryer_core::drift::now_secs(),
                             EventKind::Impl,
-                            &req.node_id,
+                            &node.id,
                             "fill",
                         )
                         .with_rows(rows),
@@ -1152,7 +1258,9 @@ mod tests {
         let r = server
             .mark_implemented(Parameters(MarkImplementedRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
-                node_id: "node-2".into(),
+                node_id: Some("node-2".into()),
+                link_ids: None,
+                group_ids: None,
                 responsibility_ids: None,
             }))
             .unwrap();
@@ -1194,7 +1302,9 @@ mod tests {
         server
             .mark_implemented(Parameters(MarkImplementedRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
-                node_id: "node-1".into(),
+                node_id: Some("node-1".into()),
+                link_ids: None,
+                group_ids: None,
                 responsibility_ids: None,
             }))
             .unwrap();
@@ -1252,7 +1362,9 @@ mod tests {
         server
             .mark_implemented(Parameters(MarkImplementedRequest {
                 project: project.clone(),
-                node_id: "parent-1".into(),
+                node_id: Some("parent-1".into()),
+                link_ids: None,
+                group_ids: None,
                 responsibility_ids: None,
             }))
             .unwrap();
@@ -1299,7 +1411,9 @@ mod tests {
             server
                 .mark_implemented(Parameters(MarkImplementedRequest {
                     project: project.clone(),
-                    node_id: id.into(),
+                    node_id: Some(id.into()),
+                    link_ids: None,
+                    group_ids: None,
                     responsibility_ids: None,
                 }))
                 .unwrap();
@@ -1321,6 +1435,65 @@ mod tests {
         assert!(
             scryer_core::plan_diff_at(&model_ref).unwrap().is_empty(),
             "no pending work remains — CLOSE terminates"
+        );
+    }
+
+    /// A link deleted between two SURVIVING nodes never rides a node fold — it
+    /// folds by its own id, as does a deleted group. Without this the plan's
+    /// deletion stays pending forever and the CLOSE loop can't terminate
+    /// (audit theme 1 / item A residue).
+    #[test]
+    fn mark_implemented_folds_link_and_group_deletions() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::System, "A", None));
+        m.nodes.push(node("node-2", Kind::System, "B", None));
+        m.links.push(scryer_core::Link {
+            id: "link-node-1-node-2".into(),
+            src: "node-1".into(),
+            dst: "node-2".into(),
+            label: "calls".into(),
+            method: None,
+        });
+        m.groups.push(scryer_core::Group {
+            id: "group-1".into(),
+            name: "Pair".into(),
+            description: None,
+            member_ids: vec!["node-1".into(), "node-2".into()],
+            parent_group_id: None,
+            parent_node_id: None,
+            responsibilities: Vec::new(),
+            icon: None,
+        });
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+
+        // Plan: the link and the group are deleted; both endpoints survive.
+        scryer_core::ensure_planned_at(&model_ref).unwrap();
+        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        planned.links.clear();
+        planned.groups.clear();
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                node_id: None,
+                link_ids: Some(vec!["link-node-1-node-2".into()]),
+                group_ids: Some(vec!["group-1".into()]),
+                responsibility_ids: None,
+            }))
+            .unwrap();
+
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        assert!(committed.links.is_empty(), "link removal folded");
+        assert!(committed.groups.is_empty(), "group removal folded");
+        assert_eq!(committed.nodes.len(), 2, "endpoints untouched");
+        assert!(
+            scryer_core::plan_diff_at(&model_ref).unwrap().is_empty(),
+            "the deletion-only plan clears — CLOSE terminates"
         );
     }
 
@@ -1353,7 +1526,9 @@ mod tests {
         server
             .mark_implemented(Parameters(MarkImplementedRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
-                node_id: "node-1".into(),
+                node_id: Some("node-1".into()),
+                link_ids: None,
+                group_ids: None,
                 responsibility_ids: Some(vec!["r-b".into()]),
             }))
             .unwrap();

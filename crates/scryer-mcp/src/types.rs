@@ -144,12 +144,20 @@ pub(crate) struct ReconcileDriftRequest {
 pub(crate) struct MarkImplementedRequest {
     /// Absolute path to the project root. If omitted, uses the current working directory.
     pub project: Option<String>,
-    /// The node whose outstanding work you just implemented.
-    pub node_id: String,
-    /// Optional: specific responsibility ids to fold into the committed model. Omit to fold
-    /// EVERYTHING outstanding on the node — every planned responsibility and property, plus the
-    /// appearance.
+    /// The node whose outstanding work you just implemented. Optional when folding only
+    /// links/groups by id — at least one of node_id / link_ids / group_ids is required.
+    pub node_id: Option<String>,
+    /// Optional: specific responsibility ids to fold into the committed model (requires
+    /// node_id). Omit to fold EVERYTHING outstanding on the node — every planned
+    /// responsibility and property, plus the appearance.
     pub responsibility_ids: Option<Vec<String>>,
+    /// Optional: link ids to fold. The only way to commit a standalone link change or
+    /// DELETION — a link deletion never rides a node fold, so a plan that removes a link
+    /// between two surviving nodes stays pending until it is folded here.
+    pub link_ids: Option<Vec<String>>,
+    /// Optional: group ids to fold. Likewise the only way to commit a standalone group
+    /// change or deletion.
+    pub group_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
