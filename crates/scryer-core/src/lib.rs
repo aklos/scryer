@@ -832,6 +832,30 @@ pub fn working_view(committed: &ScryModel, planned: &ScryModel) -> ScryModel {
     view
 }
 
+/// Fold a finished from-code build into the committed layer. The built model is
+/// the PLANNED draft (container fills and the system-level enrichment both
+/// author there), but the draft is seeded clean of committed's single-home
+/// anchors — writing it over `model.scry` verbatim would wipe every boundary
+/// glob the seed minted and any `source_map` entry routed committed-only during
+/// the build. Merge instead: the draft wins (it is the build's output),
+/// committed fills the anchor/boundary gaps. The draft is then re-seeded clean,
+/// so no pending plan — and no shadow copy of the just-folded anchors — survives
+/// the build. Returns the folded model (what `model.scry` now holds) for
+/// baselining. The caller must hold the model lock.
+pub fn fold_built_model(r: &ModelRef, built: &ScryModel) -> Result<ScryModel, String> {
+    // An unreadable committed layer degrades to the plain overwrite (nothing to
+    // merge) rather than failing the whole build at its final step.
+    let committed = read_model_at(r).unwrap_or_default();
+    let folded = working_view(&committed, built);
+    write_model_at(r, &folded)?;
+    let mut seeded = folded.clone();
+    seeded.source_map.clear();
+    seeded.boundaries.clear();
+    let json = serde_json::to_string_pretty(&seeded).map_err(|e| e.to_string())?;
+    write_planned_raw_at(r, &json)?;
+    Ok(folded)
+}
+
 /// Locate a responsibility by id anywhere in a model, returning its host id
 /// (node or group) and a clone. Responsibility ids are globally unique (the
 /// minters seed past every node- and group-owned id), so this is unambiguous.
@@ -1593,6 +1617,56 @@ mod lock_tests {
         assert!(!r.sync_path().exists(), "reconcile anchor removed");
         assert!(r.lock_path().exists(), "infra lock file is kept");
         drop(guard);
+    }
+
+    /// The end-of-build fold must MERGE the draft over committed, not replace
+    /// it: the draft is seeded clean of committed's single-home anchors, so a
+    /// verbatim write wipes every boundary glob the seed minted (and any
+    /// committed-only `source_map` entry). After the fold the draft is re-seeded
+    /// clean — no pending plan and no shadow anchors survive the build.
+    #[test]
+    fn fold_built_model_keeps_committed_anchors_and_reseeds_the_draft() {
+        let (_dir, r) = temp_ref();
+        let mut committed = ScryModel::new();
+        let mut app = mk_node("app", "App", None);
+        app.responsibilities.push(mk_resp("resp-1", "serve the API"));
+        committed.nodes.push(app);
+        committed
+            .boundaries
+            .insert("app".into(), vec![Source { pattern: "src/**".into(), comment: None }]);
+        committed.source_map.insert(
+            "resp-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/api.rs" })).unwrap()],
+        );
+        write_model_at(&r, &committed).unwrap();
+
+        // The build authors into a clean-seeded draft: a new component plus its
+        // own plan-side anchor (fill_container mirrors new keys into the draft).
+        ensure_planned_at(&r).unwrap();
+        let mut built = read_planned_at(&r).unwrap();
+        let mut core = mk_node("core", "Core", Some("app"));
+        core.responsibilities.push(mk_resp("resp-2", "parse the input"));
+        built.nodes.push(core);
+        built.source_map.insert(
+            "resp-2".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/core.rs" })).unwrap()],
+        );
+
+        let folded = fold_built_model(&r, &built).unwrap();
+
+        assert!(folded.boundaries.contains_key("app"), "committed boundary glob survives the fold");
+        assert!(folded.source_map.contains_key("resp-1"), "committed-only anchor survives the fold");
+        assert!(folded.source_map.contains_key("resp-2"), "the build's own anchor lands");
+        let on_disk = read_model_at(&r).unwrap();
+        assert!(on_disk.boundaries.contains_key("app"));
+        assert!(on_disk.source_map.contains_key("resp-1"));
+
+        let planned = read_planned_at(&r).unwrap();
+        assert!(
+            planned.source_map.is_empty() && planned.boundaries.is_empty(),
+            "draft re-seeded clean — no shadow anchors"
+        );
+        assert!(plan_diff_at(&r).unwrap().is_empty(), "no pending plan survives the build");
     }
 
     /// A second independent handle must fail to take the lock while a guard is

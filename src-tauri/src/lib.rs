@@ -2053,16 +2053,21 @@ async fn start_model_build(
         // extracted truth, so model and planned end equal and no spurious pending
         // plan remains. This is what lands the system-level enrichment (and any
         // repair-session edits, which were authored into the planned draft) into
-        // the committed model the wiki reads.
-        if let Err(e) = scryer_core::write_model_at(&model_ref, &completed_model) {
-            let _ = app.emit(
-                "agent-event",
-                &scryer_acp::AgentEvent::Failed {
-                    error: format!("Could not fold the completed model into the committed layer: {e}"),
-                },
-            );
-            return;
-        }
+        // the committed model the wiki reads. The fold MERGES rather than
+        // overwrites: the draft is seeded clean of committed's single-home
+        // anchors, so a verbatim write would wipe the seed's boundary globs.
+        let completed_model = match scryer_core::fold_built_model(&model_ref, &completed_model) {
+            Ok(folded) => folded,
+            Err(e) => {
+                let _ = app.emit(
+                    "agent-event",
+                    &scryer_acp::AgentEvent::Failed {
+                        error: format!("Could not fold the completed model into the committed layer: {e}"),
+                    },
+                );
+                return;
+            }
+        };
         if let Err(e) = scryer_core::save_baseline_at(&model_ref, &completed_model) {
             emit_msg(format!("⚠ Could not save the final model baseline: {e}"));
         }
