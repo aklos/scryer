@@ -80,15 +80,30 @@ fn replace_subtree(model: &mut ScryModel, node_id: &str, nodes: &[Node], links: 
 /// of responsibilities on removed DESCENDANTS that are lost (a target's own claims
 /// are relocated, never dropped), surfaced so the loss is never silent.
 fn fold_out_layer(model: &mut ScryModel, target_ids: &[String]) -> (usize, usize, usize) {
-    let mut relocated = 0usize;
+    // The full removal set FIRST — every target plus its descendants — so
+    // relocation knows what survives and never moves a claim onto a node that is
+    // itself about to be removed.
+    let mut to_remove: HashSet<String> = target_ids.iter().cloned().collect();
+    let mut frontier: Vec<String> = target_ids.to_vec();
+    while let Some(id) = frontier.pop() {
+        for child in model.nodes.iter().filter(|n| n.parent_id.as_deref() == Some(&id)) {
+            if to_remove.insert(child.id.clone()) {
+                frontier.push(child.id.clone());
+            }
+        }
+    }
 
-    // 1) Relocate each present target's own non-vagrant responsibilities to its parent.
+    let mut relocated = 0usize;
+    let mut dropped = 0usize;
+
+    // 1) Relocate each target's own non-vagrant responsibilities to its nearest
+    //    SURVIVING ancestor. If none survives (a top-level target, or every
+    //    ancestor is also being removed) the claims are lost — count them as
+    //    dropped so the loss is never silent (both were previously miscounted:
+    //    reported "relocated" onto a doomed node, or dropped uncounted).
     for id in target_ids {
         let Some(idx) = model.nodes.iter().position(|n| &n.id == id) else {
             continue;
-        };
-        let Some(parent_id) = model.nodes[idx].parent_id.clone() else {
-            continue; // top-level node: no parent to carry the claims
         };
         let mut moving = Vec::new();
         model.nodes[idx].responsibilities.retain(|r| {
@@ -102,34 +117,26 @@ fn fold_out_layer(model: &mut ScryModel, target_ids: &[String]) -> (usize, usize
         if moving.is_empty() {
             continue;
         }
-        match model.nodes.iter_mut().find(|n| n.id == parent_id) {
-            Some(parent) => {
-                relocated += moving.len();
-                parent.responsibilities.extend(moving);
-            }
-            // Parent absent (shouldn't happen) — restore rather than lose the claims.
-            None => model.nodes[idx].responsibilities.extend(moving),
+        match surviving_ancestor(model, id, &to_remove) {
+            Some(anc) => match model.nodes.iter_mut().find(|n| n.id == anc) {
+                Some(parent) => {
+                    relocated += moving.len();
+                    parent.responsibilities.extend(moving);
+                }
+                None => model.nodes[idx].responsibilities.extend(moving),
+            },
+            None => dropped += moving.len(),
         }
     }
 
-    // 2) Expand to the full subtree of every target.
-    let mut to_remove: HashSet<String> = target_ids.iter().cloned().collect();
-    let mut frontier: Vec<String> = target_ids.to_vec();
-    while let Some(id) = frontier.pop() {
-        for child in model.nodes.iter().filter(|n| n.parent_id.as_deref() == Some(&id)) {
-            if to_remove.insert(child.id.clone()) {
-                frontier.push(child.id.clone());
-            }
-        }
-    }
-
-    // Claims on removed descendants (not the targets themselves) are lost — count them.
-    let dropped = model
+    // Claims on removed DESCENDANTS (nodes in the set that aren't targets) are
+    // lost too — count them alongside the un-relocatable targets' claims above.
+    dropped += model
         .nodes
         .iter()
         .filter(|n| to_remove.contains(&n.id) && !target_ids.iter().any(|t| t == &n.id))
         .map(|n| n.responsibilities.len())
-        .sum();
+        .sum::<usize>();
 
     let before = model.nodes.len();
     prune_code_map(model, &to_remove);
@@ -143,6 +150,25 @@ fn fold_out_layer(model: &mut ScryModel, target_ids: &[String]) -> (usize, usize
     (relocated, before - model.nodes.len(), dropped)
 }
 
+/// The nearest ancestor of `id` that is NOT in `removed` — the surviving home for
+/// a descoped node's relocated claims. `None` when the whole parent chain up to
+/// the root is being removed (or `id` is top-level), so the claims have nowhere to
+/// go and are dropped.
+fn surviving_ancestor(model: &ScryModel, id: &str, removed: &HashSet<String>) -> Option<String> {
+    let mut cur = model.nodes.iter().find(|n| n.id == id)?.parent_id.clone();
+    while let Some(pid) = cur {
+        if !removed.contains(&pid) {
+            return Some(pid);
+        }
+        cur = model
+            .nodes
+            .iter()
+            .find(|n| n.id == pid)
+            .and_then(|n| n.parent_id.clone());
+    }
+    None
+}
+
 #[tool_router(router = tool_router_nodes, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
@@ -153,7 +179,6 @@ impl ScryerServer {
         Parameters(req): Parameters<SetModelRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
-        *self.active_model.lock().unwrap() = Some(model_ref.clone());
         let _lock = match lock_or_err(&model_ref) {
             Ok(l) => l,
             Err(e) => return Ok(e),
@@ -956,6 +981,47 @@ mod tests {
             directives: Vec::new(),
             last_touched_at: None,
         }
+    }
+
+    /// A descoped node's own claim relocates to the nearest SURVIVING ancestor,
+    /// not onto a parent that is itself being removed (which would report a
+    /// "relocation" that is really a deletion). Here the container and its
+    /// component are descoped together; the component's claim bubbles past the
+    /// doomed container to the surviving system.
+    #[test]
+    fn fold_out_layer_relocates_past_a_removed_ancestor() {
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, "S", None));
+        m.nodes.push(node("con", Kind::Container, "C", Some("sys")));
+        let mut comp = node("comp", Kind::Component, "Cmp", Some("con"));
+        comp.responsibilities = vec![resp("r-comp")];
+        m.nodes.push(comp);
+
+        let (relocated, removed, dropped) =
+            fold_out_layer(&mut m, &["con".into(), "comp".into()]);
+        assert_eq!(relocated, 1, "the claim relocates to the surviving system");
+        assert_eq!(dropped, 0, "nothing is lost");
+        assert_eq!(removed, 2);
+        let sys = m.nodes.iter().find(|n| n.id == "sys").unwrap();
+        assert!(
+            sys.responsibilities.iter().any(|r| r.id == "r-comp"),
+            "the claim actually landed on the survivor"
+        );
+    }
+
+    /// A top-level target has no ancestor to catch its claims, so they are DROPPED
+    /// — and the count must reflect that, never report the loss as zero.
+    #[test]
+    fn fold_out_layer_counts_a_top_level_targets_dropped_claims() {
+        let mut m = ScryModel::new();
+        let mut sys = node("sys", Kind::System, "S", None);
+        sys.responsibilities = vec![resp("r-sys")];
+        m.nodes.push(sys);
+
+        let (relocated, removed, dropped) = fold_out_layer(&mut m, &["sys".into()]);
+        assert_eq!(relocated, 0);
+        assert_eq!(dropped, 1, "the top-level claim is dropped AND counted");
+        assert_eq!(removed, 1);
     }
 
     /// Descope: a symbol that shouldn't be modeled is removed from BOTH layers, its

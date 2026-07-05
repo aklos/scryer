@@ -623,6 +623,25 @@ impl ScryerServer {
                     }
                 },
             };
+            // The child's kind must nest legally under its parent's (the same C4
+            // rule the typed add_* tools enforce) — validating the kind alone let
+            // a container land under a component, etc. The parent is already in
+            // `planned` (an existing node, or one minted earlier this call).
+            let want_parent = match kind {
+                Kind::Container => Kind::System,
+                Kind::Component => Kind::Container,
+                Kind::Symbol => Kind::Component,
+                Kind::System | Kind::Person => {
+                    return Ok(err(format!(
+                        "newNode '{}' is a {} — those are top-level and can't be nested under a parent",
+                        nn.key,
+                        kind_str(&kind)
+                    )))
+                }
+            };
+            if let Some(e) = check_parent(&planned, &parent_id, want_parent) {
+                return Ok(e);
+            }
             let id = next_node_id_union(&planned, &committed);
             let mut node = blank_node(id.clone(), kind, nn.name.clone(), Some(parent_id));
             node.vagrant = Some(true);
@@ -977,6 +996,13 @@ impl ScryerServer {
         Parameters(req): Parameters<ReconcileDriftRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
+        // Advancing the reconcile anchor writes `.sync` and re-fingerprints the
+        // anchors; hold the model lock so this can't interleave with a concurrent
+        // model write mid-change (every other state write serializes on it).
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
         let project = model_ref.project_path();
         let state = scryer_core::drift::SyncState {
             reconciled_at: scryer_core::drift::now_secs(),
@@ -1782,6 +1808,39 @@ mod tests {
             }))
             .unwrap();
         assert!(res.is_error.unwrap_or(false), "wrong parent kind is rejected");
+    }
+
+    /// flag_drift mints new (vagrant) nodes too, and must enforce the same C4
+    /// nesting rule as the typed add_* tools — validating the kind alone let a
+    /// component land directly under the system.
+    #[test]
+    fn flag_drift_new_node_rejects_illegal_parent_kind() {
+        let (server, dir, system_id) = temp_project();
+        let project = dir.path().to_string_lossy().to_string();
+        let res = server
+            .flag_drift(Parameters(FlagDriftRequest {
+                project: Some(project),
+                node_id: system_id.clone(),
+                new_nodes: vec![NewNode {
+                    key: "k1".into(),
+                    kind: "component".into(), // a component's parent must be a container
+                    name: "Nope".into(),
+                    parent_id: Some(system_id),
+                    parent_key: None,
+                    description: None,
+                    technology: None,
+                }],
+                undescribed: vec![],
+                stale: vec![],
+                stale_nodes: vec![],
+                undescribed_properties: vec![],
+                stale_properties: vec![],
+            }))
+            .unwrap();
+        assert!(
+            res.is_error.unwrap_or(false),
+            "a component parented to the system must be rejected"
+        );
     }
 
     #[test]

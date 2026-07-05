@@ -9,9 +9,6 @@ use rmcp::{
 #[derive(Clone)]
 pub struct ScryerServer {
     tool_router: ToolRouter<Self>,
-    /// Session-level active model. Set by `read_model`; used as the
-    /// default if a tool call omits `project`.
-    pub(crate) active_model: std::sync::Arc<std::sync::Mutex<Option<scryer_core::ModelRef>>>,
 }
 
 impl ScryerServer {
@@ -23,7 +20,6 @@ impl ScryerServer {
                 + Self::tool_router_misc()
                 + Self::tool_router_generation()
                 + Self::tool_router_intent(),
-            active_model: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 }

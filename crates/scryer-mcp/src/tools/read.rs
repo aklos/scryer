@@ -346,7 +346,6 @@ impl ScryerServer {
         Parameters(req): Parameters<ReadModelRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
-        *self.active_model.lock().unwrap() = Some(model_ref.clone());
 
         let model = match read_layer(&model_ref, req.layer) {
             Ok(m) => m,
