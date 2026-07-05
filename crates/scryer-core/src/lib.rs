@@ -908,39 +908,65 @@ pub fn commit_element(
     let mut model = read_model_at(r)?;
     let planned = read_planned_at(r)?;
     let mut purge_from_planned = false;
-    // Responsibility ids carried by a committed node we're about to DELETE — held
-    // so the anchor-lockstep step below can GC their orphaned source-map entries
-    // (the responsibilities vanish with the node, but their anchors are keyed
-    // separately and would otherwise leak).
+    // Node ids removed by a DELETE fold — the target plus the subtree/links the
+    // plan agrees are gone (item C) — and the responsibility ids they carried.
+    // Held so the anchor-lockstep step below can GC their orphaned source-map
+    // entries (the elements vanish, but their anchors are keyed separately and
+    // would otherwise leak).
+    let mut deleted_node_ids: Vec<String> = Vec::new();
     let mut deleted_node_resp_ids: Vec<String> = Vec::new();
 
     match kind {
         diff::ElementKind::Node => {
-            if !planned.nodes.iter().any(|n| n.id == id) {
-                if let Some(n) = model.nodes.iter().find(|n| n.id == id) {
-                    deleted_node_resp_ids =
-                        n.responsibilities.iter().map(|r| r.id.clone()).collect();
-                }
-            }
-            model.nodes.retain(|n| n.id != id);
             match planned.nodes.iter().find(|n| n.id == id) {
                 Some(n) => {
-                    // The node's parent must already live in committed, or the
-                    // folded node dangles off a plan-only id: outline_tree can't
-                    // reach it from any root, so it vanishes from every committed
-                    // read. Fold top-down (the Responsibility branch makes the
-                    // same host-residence check). Item B.
+                    // An add/reword fold. The node's parent must already live in
+                    // committed, or the folded node dangles off a plan-only id:
+                    // outline_tree can't reach it from any root, so it vanishes
+                    // from every committed read. Fold top-down (the Responsibility
+                    // branch makes the same host-residence check). Item B.
                     if let Some(pid) = &n.parent_id {
-                        if !model.nodes.iter().any(|p| &p.id == pid) {
+                        if !model.nodes.iter().any(|p| &p.id == pid && p.id != *id) {
                             return Err(format!(
                                 "cannot commit node '{id}': its parent '{pid}' is not in the \
                                  committed model yet (commit the parent first)"
                             ));
                         }
                     }
+                    model.nodes.retain(|n| n.id != id);
                     model.nodes.push(committed_node_copy(n));
                 }
-                None => purge_from_planned = true,
+                None => {
+                    // A DELETE fold. delete_nodes removed the node, its whole
+                    // subtree, the links touching it, and its group memberships
+                    // from the PLAN; the fold must mirror that on committed or the
+                    // children reparent to a dead id (silently promoted to health
+                    // roots), links dangle, and group refs go stale — the exact
+                    // orphaning of item C. Scope removal to the subtree the plan
+                    // AGREES is gone (absent from the plan), so a still-present
+                    // child isn't clobbered into a phantom re-add.
+                    let removed: std::collections::HashSet<String> =
+                        drift::subtree_ids(&model, id)
+                            .into_iter()
+                            .filter(|nid| !planned.nodes.iter().any(|n| &n.id == nid))
+                            .collect();
+                    deleted_node_resp_ids = model
+                        .nodes
+                        .iter()
+                        .filter(|n| removed.contains(&n.id))
+                        .flat_map(|n| n.responsibilities.iter().map(|r| r.id.clone()))
+                        .collect();
+                    model.nodes.retain(|n| !removed.contains(&n.id));
+                    model
+                        .links
+                        .retain(|l| !removed.contains(&l.src) && !removed.contains(&l.dst));
+                    for g in &mut model.groups {
+                        g.member_ids.retain(|m| !removed.contains(m));
+                    }
+                    model.boundaries.retain(|k, _| !removed.contains(k));
+                    deleted_node_ids = removed.into_iter().collect();
+                    purge_from_planned = true;
+                }
             }
         }
         diff::ElementKind::Link => {
@@ -1038,9 +1064,12 @@ pub fn commit_element(
         }
         diff::ElementKind::Node => {
             if purge_from_planned {
-                // Deletion: drop the node's own declaration anchor AND the
-                // anchors of every responsibility it carried (orphaned otherwise).
-                model.source_map.remove(id);
+                // Deletion: drop the declaration anchor of every removed node in
+                // the subtree AND the anchors of every responsibility they carried
+                // (orphaned otherwise). Item C.
+                for nid in &deleted_node_ids {
+                    model.source_map.remove(nid);
+                }
                 for rid in &deleted_node_resp_ids {
                     model.source_map.remove(rid);
                 }
@@ -1683,6 +1712,92 @@ mod lock_tests {
         assert!(model.nodes.iter().any(|n| n.id == "n1"));
         assert!(!model.nodes.iter().any(|n| n.id == "n2"), "n2 removed from model");
         assert!(plan_diff_at(&r).unwrap().is_empty());
+    }
+
+    /// Folding a node DELETION cascades to committed the same way `delete_nodes`
+    /// cascaded to the plan: the whole subtree, the links touching it, its group
+    /// memberships, boundaries and anchors all go — no orphaned children left to
+    /// reparent onto a dead id (promoted to phantom health roots), no dangling
+    /// links. Item C.
+    #[test]
+    fn commit_node_delete_cascades_subtree_links_and_group_refs() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        m.nodes.push(mk_node("p", "Parent", None));
+        let mut c = mk_node("c", "Child", Some("p"));
+        c.responsibilities.push(mk_resp("r-c", "does a thing"));
+        m.nodes.push(c);
+        m.nodes.push(mk_node("keep", "Keep", None));
+        m.links.push(Link {
+            id: "l1".into(),
+            src: "c".into(),
+            dst: "keep".into(),
+            label: "calls".into(),
+            method: None,
+        });
+        m.groups.push(Group {
+            id: "grp".into(),
+            name: "G".into(),
+            description: None,
+            member_ids: vec!["c".into(), "keep".into()],
+            parent_group_id: None,
+            parent_node_id: None,
+            responsibilities: Vec::new(),
+            icon: None,
+        });
+        m.source_map.insert(
+            "r-c".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "c.rs" })).unwrap()],
+        );
+        m.boundaries.insert("c".into(), vec![Source { pattern: "c/**".into(), comment: None }]);
+        write_model_at(&r, &m).unwrap();
+
+        // Plan: the whole `p` subtree deleted (mirrors delete_nodes on the plan).
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes.retain(|n| n.id != "p" && n.id != "c");
+        planned.links.clear();
+        planned.groups[0].member_ids.retain(|x| x == "keep");
+        planned.source_map.remove("r-c");
+        planned.boundaries.remove("c");
+        write_planned_at(&r, &planned).unwrap();
+
+        // Fold the deletion of the subtree root.
+        commit_element(&r, diff::ElementKind::Node, None, "p").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        assert!(!model.nodes.iter().any(|n| n.id == "p" || n.id == "c"), "subtree removed");
+        assert!(model.nodes.iter().any(|n| n.id == "keep"), "untouched sibling kept");
+        assert!(model.links.is_empty(), "dangling link dropped");
+        assert_eq!(model.groups[0].member_ids, vec!["keep"], "dead group ref pruned");
+        assert!(!model.source_map.contains_key("r-c"), "orphaned anchor GC'd");
+        assert!(!model.boundaries.contains_key("c"), "deleted node's boundary GC'd");
+        assert!(plan_diff_at(&r).unwrap().is_empty(), "committed reconciled to the plan");
+    }
+
+    /// The delete cascade only removes what the plan AGREES is gone: a child kept
+    /// in the plan (e.g. reparented out before the delete) survives the fold of
+    /// its old parent rather than being clobbered into a phantom re-add. Item C.
+    #[test]
+    fn commit_node_delete_spares_a_child_still_in_the_plan() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        m.nodes.push(mk_node("p", "Parent", None));
+        m.nodes.push(mk_node("c", "Child", Some("p")));
+        write_model_at(&r, &m).unwrap();
+
+        // Plan: `p` deleted, but `c` reparented to root and kept.
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes.retain(|n| n.id != "p");
+        planned.nodes.iter_mut().find(|n| n.id == "c").unwrap().parent_id = None;
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Node, None, "p").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        assert!(!model.nodes.iter().any(|n| n.id == "p"), "parent deleted");
+        assert!(model.nodes.iter().any(|n| n.id == "c"), "kept child not clobbered");
     }
 
     /// A node can't fold before its parent: committing a child whose parent is

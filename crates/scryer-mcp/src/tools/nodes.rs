@@ -1063,6 +1063,60 @@ mod tests {
         assert_eq!(log[0].rows.len(), 2, "both newly-folded claims listed");
     }
 
+    /// End-to-end: `delete_nodes` stages a subtree deletion in the plan, then
+    /// `mark_implemented` folds it — and committed loses the whole subtree and its
+    /// dangling link, not just the target node. Item C.
+    #[test]
+    fn delete_nodes_then_mark_implemented_cascades_committed() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let project = Some(dir.path().to_string_lossy().to_string());
+
+        // Committed: parent → child, plus an untouched sibling and a link into it.
+        let mut m = ScryModel::new();
+        m.nodes.push(node("parent-1", Kind::Container, "Parent", None));
+        m.nodes.push(node("child-1", Kind::Component, "Child", Some("parent-1")));
+        m.nodes.push(node("keep-1", Kind::Component, "Keep", None));
+        m.links.push(Link {
+            id: "l1".into(),
+            src: "child-1".into(),
+            dst: "keep-1".into(),
+            label: "calls".into(),
+            method: None,
+        });
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+
+        let server = ScryerServer::new();
+        // Stage the deletion of the whole `parent-1` subtree in the plan.
+        server
+            .delete_nodes(Parameters(DeleteNodeRequest {
+                project: project.clone(),
+                node_ids: vec!["parent-1".into()],
+            }))
+            .unwrap();
+        // Code removed → fold the deletion.
+        server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: project.clone(),
+                node_id: "parent-1".into(),
+                responsibility_ids: None,
+            }))
+            .unwrap();
+
+        let m = scryer_core::read_model_at(&model_ref).unwrap();
+        assert!(
+            !m.nodes.iter().any(|n| n.id == "parent-1" || n.id == "child-1"),
+            "whole subtree removed from committed, not just the target"
+        );
+        assert!(m.nodes.iter().any(|n| n.id == "keep-1"), "sibling untouched");
+        assert!(m.links.is_empty(), "link into the deleted subtree dropped");
+        assert!(
+            scryer_core::plan_diff_at(&model_ref).unwrap().is_empty(),
+            "no pending deletions left stranded"
+        );
+    }
+
     /// A plan carrying `add_links` output closes fully through `mark_implemented`:
     /// the link has no node id to fold by, so it rides in on the fold of its
     /// second endpoint. After both nodes are folded, nothing is left pending —
