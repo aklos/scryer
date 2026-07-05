@@ -924,7 +924,22 @@ pub fn commit_element(
             }
             model.nodes.retain(|n| n.id != id);
             match planned.nodes.iter().find(|n| n.id == id) {
-                Some(n) => model.nodes.push(committed_node_copy(n)),
+                Some(n) => {
+                    // The node's parent must already live in committed, or the
+                    // folded node dangles off a plan-only id: outline_tree can't
+                    // reach it from any root, so it vanishes from every committed
+                    // read. Fold top-down (the Responsibility branch makes the
+                    // same host-residence check). Item B.
+                    if let Some(pid) = &n.parent_id {
+                        if !model.nodes.iter().any(|p| &p.id == pid) {
+                            return Err(format!(
+                                "cannot commit node '{id}': its parent '{pid}' is not in the \
+                                 committed model yet (commit the parent first)"
+                            ));
+                        }
+                    }
+                    model.nodes.push(committed_node_copy(n));
+                }
                 None => purge_from_planned = true,
             }
         }
@@ -1667,6 +1682,38 @@ mod lock_tests {
         let model = read_model_at(&r).unwrap();
         assert!(model.nodes.iter().any(|n| n.id == "n1"));
         assert!(!model.nodes.iter().any(|n| n.id == "n2"), "n2 removed from model");
+        assert!(plan_diff_at(&r).unwrap().is_empty());
+    }
+
+    /// A node can't fold before its parent: committing a child whose parent is
+    /// still plan-only would dangle the child off a non-existent committed id
+    /// (invisible to outline_tree). The fold errors; folding parent-then-child
+    /// succeeds. Item B.
+    #[test]
+    fn commit_node_requires_parent_in_committed() {
+        let (_dir, r) = temp_ref();
+        write_model_at(&r, &ScryModel::new()).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes.push(mk_node("p", "Parent", None));
+        planned.nodes.push(mk_node("c", "Child", Some("p")));
+        write_planned_at(&r, &planned).unwrap();
+
+        // Child first: rejected — its parent isn't committed yet.
+        let err = commit_element(&r, diff::ElementKind::Node, None, "c").unwrap_err();
+        assert!(err.contains("parent 'p'"), "error names the missing parent: {err}");
+        assert!(
+            !read_model_at(&r).unwrap().nodes.iter().any(|n| n.id == "c"),
+            "child not committed while its parent is plan-only"
+        );
+
+        // Parent then child: both land, and the plan clears.
+        commit_element(&r, diff::ElementKind::Node, None, "p").unwrap();
+        commit_element(&r, diff::ElementKind::Node, None, "c").unwrap();
+        let model = read_model_at(&r).unwrap();
+        assert!(model.nodes.iter().any(|n| n.id == "p"));
+        assert!(model.nodes.iter().any(|n| n.id == "c"));
         assert!(plan_diff_at(&r).unwrap().is_empty());
     }
 
