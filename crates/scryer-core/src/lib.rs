@@ -881,6 +881,24 @@ fn committed_node_copy(n: &Node) -> Node {
     copy
 }
 
+/// The committed copy of a planned group folded into the model. A group has no
+/// review markers of its own, but it CAN carry responsibilities (a container
+/// group's shared claims — "both surfaces deploy as one Next.js app"), so it
+/// gets the same treatment `committed_node_copy` gives a node: drop
+/// un-adjudicated `vagrant` claims (they stay in the plan awaiting a verdict)
+/// and clear `stale`/`stale_proposal` on everything that folds. Audit #5 / item A.
+fn committed_group_copy(g: &Group) -> Group {
+    let mut copy = g.clone();
+    copy.responsibilities = g
+        .responsibilities
+        .iter()
+        .filter(|r| r.vagrant != Some(true))
+        .cloned()
+        .map(clean_committed_resp)
+        .collect();
+    copy
+}
+
 pub fn commit_element(
     r: &ModelRef,
     kind: diff::ElementKind,
@@ -918,9 +936,17 @@ pub fn commit_element(
             }
         }
         diff::ElementKind::Group => {
+            // A group deletion orphans the anchors of the claims it carried, the
+            // same way a node deletion does — hold their ids for the GC below.
+            if !planned.groups.iter().any(|g| g.id == id) {
+                if let Some(g) = model.groups.iter().find(|g| g.id == id) {
+                    deleted_node_resp_ids =
+                        g.responsibilities.iter().map(|r| r.id.clone()).collect();
+                }
+            }
             model.groups.retain(|g| g.id != id);
             match planned.groups.iter().find(|g| g.id == id) {
-                Some(g) => model.groups.push(g.clone()),
+                Some(g) => model.groups.push(committed_group_copy(g)),
                 None => purge_from_planned = true,
             }
         }
@@ -1021,6 +1047,23 @@ pub fn commit_element(
                 }
             }
         }
+        diff::ElementKind::Group => {
+            // A group carries no declaration anchor of its own, but its
+            // responsibilities do — move the non-vagrant ones across (or GC them
+            // all on a group deletion), mirroring the Node branch. Item A.
+            if purge_from_planned {
+                for rid in &deleted_node_resp_ids {
+                    model.source_map.remove(rid);
+                }
+            } else if let Some(g) = planned.groups.iter().find(|g| g.id == id) {
+                for r in g.responsibilities.iter().filter(|r| r.vagrant != Some(true)) {
+                    if let Some(locs) = planned.source_map.get(&r.id) {
+                        model.source_map.insert(r.id.clone(), locs.clone());
+                        planned_anchor_strip.push(r.id.clone());
+                    }
+                }
+            }
+        }
         _ => {}
     }
 
@@ -1052,6 +1095,69 @@ pub fn commit_element(
         }
         let json = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?;
         write_planned_raw_at(r, &json)?;
+    }
+
+    Ok(())
+}
+
+/// After a node is folded into the committed model, pull in the plan-added links
+/// and groups that THIS node's commit has just made "ready". Links and groups
+/// have no node id of their own, so `mark_implemented` (keyed by node) can never
+/// fold them directly — without this a plan carrying `add_links` output or a
+/// group keeps `toImplement` above zero forever and the CLOSE loop never
+/// terminates (audit Theme 1 / item A).
+///
+/// "Ready" is deliberately scoped to dependents INCIDENT to the just-committed
+/// node, and only when their other endpoints/members are already committed:
+/// - a link is folded when it touches `node_id` (as src or dst) and both of its
+///   endpoints live in committed — the edge's code rides with its endpoints, so
+///   folding one of them is the natural moment to fold the edge;
+/// - a group is folded when it contains `node_id` and every member is committed.
+///
+/// Deletions are intentionally excluded: folding a link/group removal on an
+/// unrelated node fold would commit a removal whose code may not be gone yet.
+/// A node-scoped delete cascade owns that path.
+pub fn commit_ready_dependents(r: &ModelRef, node_id: &str) -> Result<(), String> {
+    let committed = read_model_at(r)?;
+    let committed_ids: std::collections::HashSet<&str> =
+        committed.nodes.iter().map(|n| n.id.as_str()).collect();
+    // Nothing became reachable if the node itself isn't committed (e.g. this was
+    // a deletion fold, which removes rather than adds).
+    if !committed_ids.contains(node_id) {
+        return Ok(());
+    }
+    let planned = read_planned_at(r)?;
+    let plan = diff::diff(&committed, &planned);
+
+    let is_deletion =
+        |c: &diff::ElementChange| c.changes.iter().any(|ch| matches!(ch, diff::Change::Deleted));
+
+    let ready_links: Vec<String> = plan
+        .changes
+        .iter()
+        .filter(|c| c.kind == diff::ElementKind::Link && !is_deletion(c))
+        .filter_map(|c| planned.links.iter().find(|l| l.id == c.id))
+        .filter(|l| l.src == node_id || l.dst == node_id)
+        .filter(|l| {
+            committed_ids.contains(l.src.as_str()) && committed_ids.contains(l.dst.as_str())
+        })
+        .map(|l| l.id.clone())
+        .collect();
+    for id in ready_links {
+        commit_element(r, diff::ElementKind::Link, None, &id)?;
+    }
+
+    let ready_groups: Vec<String> = plan
+        .changes
+        .iter()
+        .filter(|c| c.kind == diff::ElementKind::Group && !is_deletion(c))
+        .filter_map(|c| planned.groups.iter().find(|g| g.id == c.id))
+        .filter(|g| g.member_ids.iter().any(|m| m == node_id))
+        .filter(|g| g.member_ids.iter().all(|m| committed_ids.contains(m.as_str())))
+        .map(|g| g.id.clone())
+        .collect();
+    for id in ready_groups {
+        commit_element(r, diff::ElementKind::Group, None, &id)?;
     }
 
     Ok(())
@@ -1680,6 +1786,110 @@ mod lock_tests {
         assert!(
             pn.properties.iter().any(|p| p.label == "region" && p.vagrant == Some(true)),
             "vagrant property still pending in the plan"
+        );
+    }
+
+    /// A plan-added link folds only once BOTH its endpoints are committed, and it
+    /// folds as a side effect of the node fold — no separate id to fold by. This
+    /// is what makes the CLOSE loop terminable for a plan carrying `add_links`
+    /// output: after folding both nodes, the plan diff reaches empty. Item A.
+    #[test]
+    fn ready_link_folds_when_its_second_endpoint_commits() {
+        let (_dir, r) = temp_ref();
+        write_model_at(&r, &ScryModel::new()).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes.push(mk_node("a", "A", None));
+        planned.nodes.push(mk_node("b", "B", None));
+        planned.links.push(Link {
+            id: "l1".into(),
+            src: "a".into(),
+            dst: "b".into(),
+            label: "calls".into(),
+            method: None,
+        });
+        write_planned_at(&r, &planned).unwrap();
+
+        // Fold node `a`. The link is incident but `b` isn't committed yet, so it
+        // stays pending — folding an edge whose far end has no code would be wrong.
+        commit_element(&r, diff::ElementKind::Node, None, "a").unwrap();
+        commit_ready_dependents(&r, "a").unwrap();
+        assert!(
+            !read_model_at(&r).unwrap().links.iter().any(|l| l.id == "l1"),
+            "link waits until both endpoints are committed"
+        );
+
+        // Fold node `b` — now both endpoints live in committed, so the link rides
+        // in on this fold and the plan diff clears.
+        commit_element(&r, diff::ElementKind::Node, None, "b").unwrap();
+        commit_ready_dependents(&r, "b").unwrap();
+        assert!(
+            read_model_at(&r).unwrap().links.iter().any(|l| l.id == "l1"),
+            "link folded once its second endpoint committed"
+        );
+        assert!(plan_diff_at(&r).unwrap().is_empty(), "CLOSE loop terminates");
+    }
+
+    /// Folding a group (once its members are committed) carries the group's own
+    /// responsibilities into committed the same way a node fold does: it drops
+    /// un-adjudicated vagrant claims, clears stale markers, and moves the anchor
+    /// of the folded claim across. Item A + audit #5.
+    #[test]
+    fn ready_group_folds_and_cleans_its_responsibilities() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        m.nodes.push(mk_node("a", "A", None));
+        write_model_at(&r, &m).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        let mut claim = mk_resp("g-resp", "both surfaces deploy as one app");
+        claim.stale = Some(true);
+        let mut vagrant = mk_resp("g-vagrant", "drift-discovered claim");
+        vagrant.vagrant = Some(true);
+        planned.groups.push(Group {
+            id: "grp".into(),
+            name: "Payload".into(),
+            description: None,
+            member_ids: vec!["a".into()],
+            parent_group_id: None,
+            parent_node_id: None,
+            responsibilities: vec![claim, vagrant],
+            icon: None,
+        });
+        planned.source_map.insert(
+            "g-resp".into(),
+            vec![serde_json::from_value(serde_json::json!({
+                "pattern": "app/deploy.ts", "symbol": "deploy"
+            }))
+            .unwrap()],
+        );
+        write_planned_at(&r, &planned).unwrap();
+
+        // Fold the member node; the group rides in on that fold.
+        commit_element(&r, diff::ElementKind::Node, None, "a").unwrap();
+        commit_ready_dependents(&r, "a").unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        let g = model.groups.iter().find(|g| g.id == "grp").expect("group folded in");
+        let folded = g.responsibilities.iter().find(|x| x.id == "g-resp").unwrap();
+        assert_eq!(folded.stale, None, "stale cleared on the folded claim");
+        assert!(
+            !g.responsibilities.iter().any(|x| x.id == "g-vagrant"),
+            "vagrant claim did not bypass review into committed"
+        );
+        assert_eq!(
+            model.source_map.get("g-resp").expect("anchor carried across")[0].pattern,
+            "app/deploy.ts"
+        );
+
+        // The vagrant claim stays in the plan awaiting a verdict.
+        let plan = read_planned_at(&r).unwrap();
+        let pg = plan.groups.iter().find(|g| g.id == "grp").unwrap();
+        assert!(
+            pg.responsibilities.iter().any(|x| x.id == "g-vagrant" && x.vagrant == Some(true)),
+            "vagrant group claim still pending in the plan"
         );
     }
 

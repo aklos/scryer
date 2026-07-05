@@ -280,7 +280,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
+        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities. A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed) — links and groups have no id of their own to fold by, so they ride in on the node fold that makes them whole. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
     )]
     fn mark_implemented(
         &self,
@@ -373,6 +373,13 @@ impl ScryerServer {
             None => {
                 if let Err(e) =
                     scryer_core::commit_element(&model_ref, ElementKind::Node, None, &req.node_id)
+                {
+                    return Ok(CallToolResult::error(vec![Content::text(e)]));
+                }
+                // Pull in links/groups this node's commit just made foldable —
+                // they have no node id of their own to fold by (item A).
+                if let Err(e) =
+                    scryer_core::commit_ready_dependents(&model_ref, &req.node_id)
                 {
                     return Ok(CallToolResult::error(vec![Content::text(e)]));
                 }
@@ -1054,6 +1061,60 @@ mod tests {
         assert_eq!(log[0].kind, scryer_core::history::EventKind::Impl);
         assert_eq!(log[0].node_id, "node-1");
         assert_eq!(log[0].rows.len(), 2, "both newly-folded claims listed");
+    }
+
+    /// A plan carrying `add_links` output closes fully through `mark_implemented`:
+    /// the link has no node id to fold by, so it rides in on the fold of its
+    /// second endpoint. After both nodes are folded, nothing is left pending —
+    /// the CLOSE loop terminates. Item A.
+    #[test]
+    fn mark_implemented_folds_a_nodes_incident_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let project = Some(dir.path().to_string_lossy().to_string());
+
+        // Committed: empty. Plan: two new nodes and a link between them.
+        scryer_core::write_model_at(&model_ref, &ScryModel::new()).unwrap();
+        let mut planned = ScryModel::new();
+        planned.nodes.push(node("node-1", Kind::Component, "A", None));
+        planned.nodes.push(node("node-2", Kind::Component, "B", None));
+        planned.links.push(Link {
+            id: "l1".into(),
+            src: "node-1".into(),
+            dst: "node-2".into(),
+            label: "calls".into(),
+            method: None,
+        });
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        let mark = |id: &str| {
+            server
+                .mark_implemented(Parameters(MarkImplementedRequest {
+                    project: project.clone(),
+                    node_id: id.into(),
+                    responsibility_ids: None,
+                }))
+                .unwrap();
+        };
+
+        // Folding the first node leaves the link pending — its far end isn't built.
+        mark("node-1");
+        assert!(
+            !scryer_core::read_model_at(&model_ref).unwrap().links.iter().any(|l| l.id == "l1"),
+            "link waits for its second endpoint"
+        );
+
+        // Folding the second node pulls the link in; the plan diff reaches empty.
+        mark("node-2");
+        assert!(
+            scryer_core::read_model_at(&model_ref).unwrap().links.iter().any(|l| l.id == "l1"),
+            "link folded with its second endpoint"
+        );
+        assert!(
+            scryer_core::plan_diff_at(&model_ref).unwrap().is_empty(),
+            "no pending work remains — CLOSE terminates"
+        );
     }
 
     /// Scoped: marking a single newly-planned responsibility folds just it onto
