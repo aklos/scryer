@@ -2306,7 +2306,7 @@ fn fold_vagrant(
 
     // Clear the vagrant flag in the plan and capture host + statement, so the
     // copy `commit_element` folds is a clean, adopted claim (it folds verbatim).
-    let mut planned = scryer_core::read_planned_at(model_ref)?;
+    let mut planned = scryer_core::read_planned_seeded_at(model_ref)?;
     let mut host_id = None;
     let mut statement = None;
     for n in &mut planned.nodes {
@@ -2407,7 +2407,7 @@ fn reject_responsibility(cwd: String, resp_id: String) -> Result<(), String> {
 
     // Schedule the deletion: drop the responsibility and the minted chain from the
     // plan, so the committed-vs-plan diff reads as a deletion to carry out.
-    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+    let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
     for n in &mut planned.nodes {
         n.responsibilities.retain(|r| r.id != resp_id);
     }
@@ -2453,7 +2453,7 @@ fn fold_vagrant_property(
 ) -> Result<FoldedVagrant, String> {
     use scryer_core::diff::ElementKind;
 
-    let mut planned = scryer_core::read_planned_at(model_ref)?;
+    let mut planned = scryer_core::read_planned_seeded_at(model_ref)?;
     let cleared = planned
         .nodes
         .iter_mut()
@@ -2515,7 +2515,7 @@ fn reject_property(cwd: String, node_id: String, label: String) -> Result<(), St
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
     let folded = fold_vagrant_property(&model_ref, &node_id, &label)?;
 
-    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+    let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
     if let Some(n) = planned.nodes.iter_mut().find(|n| n.id == node_id) {
         n.properties.retain(|p| p.label != label);
     }
@@ -2629,7 +2629,7 @@ fn log_take_model(
 fn drop_responsibility(cwd: String, resp_id: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
     let mut committed = scryer_core::read_model_at(&model_ref)?;
-    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+    let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
 
     let source = committed
         .source_map
@@ -2659,7 +2659,7 @@ fn drop_responsibility(cwd: String, resp_id: String) -> Result<(), String> {
 fn reimplement_responsibility(cwd: String, resp_id: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
     let mut committed = scryer_core::read_model_at(&model_ref)?;
-    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+    let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
 
     let source = committed
         .source_map
@@ -2743,7 +2743,7 @@ fn take_property(
 fn drop_property(cwd: String, node_id: String, label: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
     let mut committed = scryer_core::read_model_at(&model_ref)?;
-    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+    let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
 
     let removed = take_property(&mut committed, &node_id, &label)
         .or_else(|| take_property(&mut planned, &node_id, &label))
@@ -2767,7 +2767,7 @@ fn drop_property(cwd: String, node_id: String, label: String) -> Result<(), Stri
 fn reimplement_property(cwd: String, node_id: String, label: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
     let mut committed = scryer_core::read_model_at(&model_ref)?;
-    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+    let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
 
     let removed = take_property(&mut committed, &node_id, &label);
 
@@ -2837,7 +2837,7 @@ fn reword_responsibility(cwd: String, resp_id: String, statement: String) -> Res
     }
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
     let mut committed = scryer_core::read_model_at(&model_ref)?;
-    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+    let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
 
     let source = committed
         .source_map
@@ -2865,7 +2865,7 @@ fn reword_responsibility(cwd: String, resp_id: String, statement: String) -> Res
 fn drop_node(cwd: String, node_id: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
     let mut committed = scryer_core::read_model_at(&model_ref)?;
-    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+    let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
 
     let in_c = committed.nodes.iter().any(|n| n.id == node_id);
     let in_p = planned.nodes.iter().any(|n| n.id == node_id);
@@ -2918,7 +2918,7 @@ fn drop_node(cwd: String, node_id: String) -> Result<(), String> {
 fn reimplement_node(cwd: String, node_id: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
     let mut committed = scryer_core::read_model_at(&model_ref)?;
-    let mut planned = scryer_core::read_planned_at(&model_ref)?;
+    let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
 
     let in_c = committed.nodes.iter().any(|n| n.id == node_id);
     let in_p = planned.nodes.iter().any(|n| n.id == node_id);
@@ -2967,6 +2967,80 @@ fn reimplement_node(cwd: String, node_id: String) -> Result<(), String> {
         None,
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod plan_seed_tests {
+    use scryer_core::{ModelRef, ScryModel};
+
+    fn resp(id: &str, statement: &str) -> scryer_core::Responsibility {
+        scryer_core::Responsibility {
+            id: id.into(),
+            statement: statement.into(),
+            vagrant: None,
+            stale: None,
+            stale_proposal: None,
+            directives: Vec::new(),
+            last_touched_at: None,
+        }
+    }
+
+    /// Regression for the plan-seed seam (audit theme 1): a canvas verdict on a
+    /// project with a COMMITTED model but no `planned.scry` yet must seed a CLEAN
+    /// draft, not persist the committed fallback (anchors and all) as the plan.
+    /// Without the seed, `read_planned_at` returns committed and writing it back
+    /// mints the draft as a full shadow of committed's source_map/boundaries.
+    #[test]
+    fn a_verdict_seeds_a_clean_plan_without_shadowing_committed_anchors() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        // Committed: a container whose responsibility carries a source anchor and
+        // whose box carries a boundary glob. NO planned.scry is written.
+        let node = |v: serde_json::Value| serde_json::from_value::<scryer_core::Node>(v).unwrap();
+        let mut model = ScryModel::new();
+        model
+            .nodes
+            .push(node(serde_json::json!({ "id": "node-1", "kind": "system", "name": "Acme" })));
+        let mut cont = node(serde_json::json!({
+            "id": "node-2", "kind": "container", "name": "API", "parentId": "node-1"
+        }));
+        cont.responsibilities = vec![resp("resp-1", "serves the API")];
+        model.nodes.push(cont);
+        model.source_map.insert(
+            "resp-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "api/mod.rs" })).unwrap()],
+        );
+        model.boundaries.insert(
+            "node-2".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "api/**/*" })).unwrap()],
+        );
+        scryer_core::write_model_at(&r, &model).unwrap();
+        assert!(!r.planned_path().exists(), "precondition: no draft exists yet");
+
+        // A canvas verdict with no prior draft (reword lands in both layers).
+        let cwd = dir.path().to_string_lossy().to_string();
+        super::reword_responsibility(cwd, "resp-1".into(), "serves the public API".into()).unwrap();
+
+        // The draft now exists and carries the reworded claim, but owns NO shadow
+        // of committed's anchors: a committed element's mapping lives in committed
+        // alone.
+        let plan = scryer_core::read_planned_at(&r).unwrap();
+        let r1 = plan
+            .nodes
+            .iter()
+            .flat_map(|n| &n.responsibilities)
+            .find(|x| x.id == "resp-1")
+            .unwrap();
+        assert_eq!(r1.statement, "serves the public API", "the verdict landed in the plan");
+        assert!(plan.source_map.is_empty(), "draft must not shadow committed's source_map");
+        assert!(plan.boundaries.is_empty(), "draft must not shadow committed's boundaries");
+
+        // Committed keeps its anchors — nothing was moved or lost.
+        let committed = scryer_core::read_model_at(&r).unwrap();
+        assert!(committed.source_map.contains_key("resp-1"));
+        assert!(committed.boundaries.contains_key("node-2"));
+    }
 }
 
 /// Run a semantic drift check: find the boundary-owning nodes whose code changed

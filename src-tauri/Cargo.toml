@@ -48,3 +48,6 @@ tree-sitter-cpp = "0.23"
 tree-sitter-c-sharp = "0.23"
 tree-sitter-php = "0.24"
 
+
+[dev-dependencies]
+tempfile = "3"

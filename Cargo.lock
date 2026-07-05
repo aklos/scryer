@@ -3563,6 +3563,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tempfile",
  "tokio",
  "toml_edit 0.22.27",
  "tree-sitter",
