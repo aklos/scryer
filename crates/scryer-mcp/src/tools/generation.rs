@@ -300,7 +300,8 @@ impl ScryerServer {
         // responsibilities, group/link labels) to the planned layer ONLY, so we
         // must (a) mint ids that don't collide with it and (b) preserve it by
         // appending this subtree to the existing draft rather than overwriting.
-        let planned_before = scryer_core::read_planned_at(&model_ref).unwrap_or_else(|_| model.clone());
+        let planned_before =
+            scryer_core::read_planned_seeded_at(&model_ref).unwrap_or_else(|_| model.clone());
 
         let mut minter = IdMinter::new(&model);
         minter.absorb(&planned_before);

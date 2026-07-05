@@ -23,7 +23,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_planned_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_seeded_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -110,7 +110,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_planned_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_seeded_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -159,7 +159,7 @@ impl ScryerServer {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
-        let mut model = match scryer_core::read_planned_at(&model_ref) {
+        let mut model = match scryer_core::read_planned_seeded_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(

@@ -794,6 +794,18 @@ pub fn ensure_planned_at(r: &ModelRef) -> Result<(), String> {
     write_planned_raw_at(r, &json)
 }
 
+/// Seed a clean plan (if none exists) and read it — the correct entry for any
+/// write that AUTHORS into the draft. Guarantees the draft owns no shadow copy of
+/// committed's anchors: without the seed, [`read_planned_at`] falls back to the
+/// committed model, so writing that back mints `planned.scry` carrying every
+/// committed `source_map`/`boundaries` entry — the single-home violation
+/// [`ensure_planned_at`] exists to prevent. The caller must hold the model lock
+/// (this seeds by writing the plan file).
+pub fn read_planned_seeded_at(r: &ModelRef) -> Result<ScryModel, String> {
+    ensure_planned_at(r)?;
+    read_planned_at(r)
+}
+
 /// The plan diff: how the draft (`planned`) diverges from the committed `model` —
 /// the planning substrate. Empty when there is no pending plan.
 pub fn plan_diff_at(r: &ModelRef) -> Result<diff::ModelDiff, String> {

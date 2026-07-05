@@ -114,12 +114,13 @@ fn err(msg: impl Into<String>) -> CallToolResult {
     CallToolResult::error(vec![Content::text(msg.into())])
 }
 
-/// Read the planned (draft) model — the authoring base. Falls back to the
-/// committed model when no plan has diverged yet. Agent authoring proposes into
-/// the plan; the committed model only changes when the work is implemented and
-/// folded (planned → model).
+/// Read the planned (draft) model — the authoring base — seeding a clean plan
+/// first so the draft never shadows committed's anchors (see
+/// [`scryer_core::read_planned_seeded_at`]). Agent authoring proposes into the
+/// plan; the committed model only changes when the work is implemented and folded
+/// (planned → model). Callers hold the model lock (this seeds by writing the plan).
 fn read_planned(model_ref: &ModelRef) -> Result<ScryModel, CallToolResult> {
-    scryer_core::read_planned_at(model_ref)
+    scryer_core::read_planned_seeded_at(model_ref)
         .map_err(|e| err(format!("Failed to read plan at {}: {}", model_ref, e)))
 }
 
@@ -558,7 +559,7 @@ impl ScryerServer {
         // its source; the user adopts it (commit — code already exists) or rejects
         // it (drop from the plan). The `vagrant` marker distinguishes "code already
         // has this, adopt?" from "intent ahead of code, implement!".
-        let mut planned = match scryer_core::read_planned_at(&model_ref) {
+        let mut planned = match scryer_core::read_planned_seeded_at(&model_ref) {
             Ok(p) => p,
             Err(e) => return Ok(err(format!("Failed to read plan: {e}"))),
         };
@@ -1096,6 +1097,67 @@ mod tests {
             new.responsibilities[0].id, "resp-3",
             "responsibility id must clear the committed max, not reuse plan-deleted resp-2"
         );
+    }
+
+    /// Regression for the plan-seed seam (audit theme 1): an authoring write to a
+    /// project with a COMMITTED model but no `planned.scry` yet must seed a CLEAN
+    /// draft first. Without the seed, `read_planned_at` falls back to the committed
+    /// model (anchors and all) and the write mints `planned.scry` as a full shadow
+    /// of committed's `source_map`/`boundaries` — the single-home violation.
+    #[test]
+    fn authoring_seeds_a_clean_plan_without_shadowing_committed_anchors() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        // Committed: a container whose responsibility carries a source anchor and
+        // whose box carries a boundary glob. NO planned.scry is written.
+        let sys = blank_node("node-1".into(), Kind::System, "Acme".into(), None);
+        let mut cont =
+            blank_node("node-2".into(), Kind::Container, "API".into(), Some("node-1".into()));
+        cont.responsibilities = vec![resp("resp-1", "serves the API")];
+        let mut model = ScryModel::new();
+        model.nodes.push(sys);
+        model.nodes.push(cont);
+        model.source_map.insert(
+            "resp-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "api/mod.rs" })).unwrap()],
+        );
+        model.boundaries.insert(
+            "node-2".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "api/**/*" })).unwrap()],
+        );
+        scryer_core::write_model_at(&r, &model).unwrap();
+        assert!(!r.planned_path().exists(), "precondition: no draft exists yet");
+
+        // An authoring write with no prior draft.
+        let server = ScryerServer::new();
+        let project = dir.path().to_string_lossy().to_string();
+        server
+            .add_container(Parameters(AddContainerRequest {
+                project: Some(project),
+                items: vec![ContainerItem {
+                    parent_id: "node-1".into(),
+                    name: "New".into(),
+                    technology: None,
+                    description: None,
+                    external: false,
+                    responsibilities: vec!["does the new thing".into()],
+                    boundary_dir: None,
+                }],
+            }))
+            .unwrap();
+
+        // The draft now exists but owns NO shadow of committed's anchors: a
+        // committed element's mapping has a single home, in committed alone.
+        let plan = read_plan(&dir);
+        assert!(plan.nodes.iter().any(|n| n.name == "New"), "the write landed in the plan");
+        assert!(plan.source_map.is_empty(), "draft must not shadow committed's source_map");
+        assert!(plan.boundaries.is_empty(), "draft must not shadow committed's boundaries");
+
+        // Committed keeps its anchors — nothing was moved or lost.
+        let committed = read_back(&dir);
+        assert!(committed.source_map.contains_key("resp-1"));
+        assert!(committed.boundaries.contains_key("node-2"));
     }
 
     #[test]
