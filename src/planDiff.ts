@@ -117,6 +117,14 @@ function diffNodes(from: ScryModel, to: ScryModel, out: ModelDiff) {
     reword(changes, "technology", prev.technology ?? "", n.technology ?? "");
     reword(changes, "description", prev.description ?? "", n.description ?? "");
     reword(changes, "directives", (prev.directives ?? []).join("\n"), (n.directives ?? []).join("\n"));
+    // `kind` and `external` are truth-bearing, not cosmetic: `kind` sets a
+    // node's altitude (parent/child legality), `external` flips anchorability
+    // and link legality. A change to either is real plan work, so surface it —
+    // otherwise it folds invisibly, or never.
+    reword(changes, "kind", prev.kind, n.kind);
+    // Normalize undefined and false — both "not external" — so only a genuine
+    // flip registers, never a serialization difference.
+    reword(changes, "external", prev.external === true ? "true" : "false", n.external === true ? "true" : "false");
     // A visual change is a planned change like any other: we don't diff the
     // fixture contents (the accepted fixture is the basis), so any appearance
     // delta surfaces as one reworded "appearance" claim pointing at the fixture.
