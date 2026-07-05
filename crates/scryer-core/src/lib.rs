@@ -1206,11 +1206,72 @@ pub fn commit_element(
 
     write_model_at(r, &model)?;
 
-    // Rewrite the draft when the fold removes the element (a committed deletion)
-    // OR when it moved an anchor out of the draft into committed — either way the
-    // draft must no longer carry it, so the single-home invariant holds.
-    if purge_from_planned || !planned_anchor_strip.is_empty() || !planned_boundary_strip.is_empty() {
-        let mut p = planned;
+    // Sync the verdict markers the fold just resolved into the DRAFT copy too.
+    // Committed entered clean (audit #5), but a lingering plan-side flag keeps
+    // the canvas offering a verdict on the already-folded element — and
+    // answering "re-implement" on one removes the folded claim from committed,
+    // silently undoing the fold. A whole-node/group fold clears only what
+    // folded: vagrant claims and properties stayed behind (still awaiting
+    // adopt/reject), so they keep their markers; a scoped claim/property fold
+    // IS the explicit adopt, so `vagrant` clears along with the drift flags.
+    let mut p = planned;
+    let mut plan_markers_cleared = false;
+    if !purge_from_planned {
+        match kind {
+            diff::ElementKind::Node => {
+                if let Some(n) = p.nodes.iter_mut().find(|n| n.id == id) {
+                    plan_markers_cleared |= n.vagrant.take().is_some() | n.stale.take().is_some();
+                    for x in n.responsibilities.iter_mut().filter(|x| x.vagrant != Some(true)) {
+                        plan_markers_cleared |=
+                            x.stale.take().is_some() | x.stale_proposal.take().is_some();
+                    }
+                    for x in n.properties.iter_mut().filter(|x| x.vagrant != Some(true)) {
+                        plan_markers_cleared |= x.stale.take().is_some();
+                    }
+                }
+            }
+            diff::ElementKind::Group => {
+                if let Some(g) = p.groups.iter_mut().find(|g| g.id == id) {
+                    for x in g.responsibilities.iter_mut().filter(|x| x.vagrant != Some(true)) {
+                        plan_markers_cleared |=
+                            x.stale.take().is_some() | x.stale_proposal.take().is_some();
+                    }
+                }
+            }
+            diff::ElementKind::Responsibility => {
+                if let Some(x) = p
+                    .nodes
+                    .iter_mut()
+                    .flat_map(|n| n.responsibilities.iter_mut())
+                    .chain(p.groups.iter_mut().flat_map(|g| g.responsibilities.iter_mut()))
+                    .find(|x| x.id == id)
+                {
+                    plan_markers_cleared |= x.vagrant.take().is_some()
+                        | x.stale.take().is_some()
+                        | x.stale_proposal.take().is_some();
+                }
+            }
+            diff::ElementKind::Property => {
+                if let Some(x) = owner_id
+                    .and_then(|o| p.nodes.iter_mut().find(|n| n.id == o))
+                    .and_then(|n| n.properties.iter_mut().find(|x| x.label == id))
+                {
+                    plan_markers_cleared |= x.vagrant.take().is_some() | x.stale.take().is_some();
+                }
+            }
+            diff::ElementKind::Link => {}
+        }
+    }
+
+    // Rewrite the draft when the fold removes the element (a committed deletion),
+    // when it moved an anchor out of the draft into committed, or when it just
+    // resolved review markers on the draft copy — in each case the draft must
+    // stop carrying what committed now owns, so the single-home invariant holds.
+    if purge_from_planned
+        || plan_markers_cleared
+        || !planned_anchor_strip.is_empty()
+        || !planned_boundary_strip.is_empty()
+    {
         if purge_from_planned {
             match kind {
                 diff::ElementKind::Node => p.nodes.retain(|n| n.id != id),
@@ -1738,6 +1799,86 @@ mod lock_tests {
         assert!(
             warnings.iter().all(|w| !w.contains("unknown")),
             "the gate is quiet on a pending deletion: {warnings:?}"
+        );
+    }
+
+    /// A scoped responsibility fold is the explicit verdict: the PLAN copy's
+    /// review markers must clear along with the committed one's, or the canvas
+    /// keeps offering a verdict on the already-folded claim — and answering
+    /// "re-implement" removes it from committed, silently undoing the fold.
+    #[test]
+    fn commit_responsibility_clears_the_plan_copies_markers() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        let mut a = mk_node("a", "A", None);
+        a.responsibilities.push(mk_resp("resp-1", "do the thing"));
+        m.nodes.push(a);
+        write_model_at(&r, &m).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        {
+            let x = &mut planned.nodes[0].responsibilities[0];
+            x.stale = Some(true);
+            x.stale_proposal = Some("new wording".into());
+        }
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Responsibility, None, "resp-1").unwrap();
+
+        let committed = read_model_at(&r).unwrap();
+        let c = &committed.nodes[0].responsibilities[0];
+        assert!(c.stale.is_none() && c.stale_proposal.is_none(), "committed entered clean");
+        let planned = read_planned_at(&r).unwrap();
+        let p = &planned.nodes[0].responsibilities[0];
+        assert!(
+            p.stale.is_none() && p.stale_proposal.is_none(),
+            "the plan copy no longer awaits a verdict"
+        );
+    }
+
+    /// A whole-node fold resolves the markers of what it folded — the node's own
+    /// flags and its claims' drift flags clear in the plan too — while a vagrant
+    /// claim, which the fold deliberately leaves behind, keeps its marker and
+    /// stays in the adopt/reject queue.
+    #[test]
+    fn commit_node_syncs_cleared_markers_into_the_plan() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        let mut a = mk_node("a", "A", None);
+        a.responsibilities.push(mk_resp("resp-1", "kept behaviour"));
+        m.nodes.push(a);
+        write_model_at(&r, &m).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        {
+            let n = &mut planned.nodes[0];
+            n.stale = Some(true);
+            n.responsibilities[0].stale = Some(true);
+            let mut vag = mk_resp("resp-2", "code-discovered");
+            vag.vagrant = Some(true);
+            n.responsibilities.push(vag);
+        }
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Node, None, "a").unwrap();
+
+        let planned = read_planned_at(&r).unwrap();
+        let n = &planned.nodes[0];
+        assert!(n.stale.is_none(), "the folded node's own drift flag clears in the plan");
+        let kept = n.responsibilities.iter().find(|x| x.id == "resp-1").unwrap();
+        assert!(kept.stale.is_none(), "the folded claim no longer awaits a verdict");
+        let vag = n.responsibilities.iter().find(|x| x.id == "resp-2").unwrap();
+        assert_eq!(vag.vagrant, Some(true), "the un-adjudicated vagrant claim stays pending");
+        assert!(
+            !read_model_at(&r)
+                .unwrap()
+                .nodes[0]
+                .responsibilities
+                .iter()
+                .any(|x| x.id == "resp-2"),
+            "the vagrant claim did not fold"
         );
     }
 
