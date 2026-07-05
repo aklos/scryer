@@ -360,7 +360,9 @@ impl ScryerServer {
         // The plan (draft) is the source of the work being closed out: marking
         // implemented FOLDS the named elements from `planned` into the committed
         // `model` via the auto-commit fold. The element must exist in the plan.
-        let planned = match scryer_core::read_planned_at(&model_ref) {
+        // Seeded read: the fold rewrites the draft, so a never-seeded project
+        // must not start from the anchor-carrying committed fallback.
+        let planned = match scryer_core::read_planned_seeded_at(&model_ref) {
             Ok(p) => p,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -1059,22 +1061,29 @@ mod tests {
             .unwrap();
 
         // Both layers must show the same model-only correction.
-        for layer in [
-            scryer_core::read_model_at(&model_ref).unwrap(),
-            scryer_core::read_planned_at(&model_ref).unwrap(),
-        ] {
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        for layer in [&committed, &planned] {
             assert!(layer.nodes.iter().all(|n| n.id != "node-2"), "main removed");
             let parent = layer.nodes.iter().find(|n| n.id == "node-1").unwrap();
             assert!(
                 parent.responsibilities.iter().any(|r| r.id == "r-main"),
                 "responsibility relocated to parent"
             );
-            assert_eq!(
-                layer.source_map.get("r-main").unwrap()[0].pattern,
-                "examples/bench.rs",
-                "source anchor preserved — file stays lit"
-            );
         }
+        assert_eq!(
+            committed.source_map.get("r-main").unwrap()[0].pattern,
+            "examples/bench.rs",
+            "source anchor preserved — file stays lit"
+        );
+        // Single home: the draft this test wrote mirrored committed's anchor
+        // (the pre-seeding shadow state), and the seeded read heals it — the
+        // anchor lives in committed only, and the working view still surfaces it.
+        assert!(!planned.source_map.contains_key("r-main"), "no shadow copy in the draft");
+        assert!(
+            scryer_core::working_view(&committed, &planned).source_map.contains_key("r-main"),
+            "the working view still lights the file"
+        );
     }
 
     /// set_node is a generation primitive describing code that ALREADY exists, so

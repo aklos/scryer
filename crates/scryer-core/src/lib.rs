@@ -116,7 +116,7 @@ pub struct SchemaProperty {
 
 /// A source-file pointer attached to a node. Wide glob + optional comment;
 /// distinct from [`SourceLocation`], which carries precise line numbers.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Source {
     /// Glob pattern for matching files, e.g. "src/auth/**/*.rs"
     pub pattern: String,
@@ -124,7 +124,7 @@ pub struct Source {
     pub comment: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceLocation {
     /// File path (relative to the project) the responsibility maps into.
@@ -741,13 +741,27 @@ pub fn write_planned_raw_at(r: &ModelRef, data: &str) -> Result<(), String> {
     fs::rename(&tmp, &r.planned_path()).map_err(|e| e.to_string())
 }
 
-/// Read the raw planned JSON, byte-for-byte. Falls back to the committed model's
-/// raw bytes when no planned file exists yet (planned == model), so the frontend
-/// can echo-dedup its own writes against exactly what it wrote.
+/// The seeded (clean) plan serialization: the committed model with its
+/// single-home `source_map`/`boundaries` cleared. A fresh plan adds nothing, so
+/// it starts with no anchors of its own — the working view reads committed's
+/// directly.
+fn seeded_plan_json(r: &ModelRef) -> Result<String, String> {
+    let mut model = read_model_at(r)?;
+    model.source_map.clear();
+    model.boundaries.clear();
+    serde_json::to_string_pretty(&model).map_err(|e| e.to_string())
+}
+
+/// Read the raw planned JSON, byte-for-byte. Falls back to the SEEDED form of
+/// the committed model when no planned file exists yet (planned == model,
+/// anchors/boundaries cleared): the canvas echoes back what it loads on its
+/// first save, and handing it committed's raw bytes would mint a draft shadowing
+/// every committed anchor — the single-home violation [`ensure_planned_at`]
+/// exists to prevent. The UI overlays committed's anchors for display itself.
 pub fn read_planned_raw_at(r: &ModelRef) -> Result<String, String> {
     let path = r.planned_path();
     if !path.exists() {
-        return read_model_raw_at(r);
+        return seeded_plan_json(r);
     }
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
@@ -783,15 +797,53 @@ pub fn ensure_planned_at(r: &ModelRef) -> Result<(), String> {
     if r.planned_path().exists() {
         return Ok(());
     }
-    let mut model = read_model_at(r)?;
     // Code-side mapping has a single home: the committed model owns every
     // committed element's anchor, and the plan overlays anchors only for the
     // elements it later adds. A fresh plan adds nothing, so it starts with no
     // anchors of its own — the working view reads committed's directly.
-    model.source_map.clear();
-    model.boundaries.clear();
-    let json = serde_json::to_string_pretty(&model).map_err(|e| e.to_string())?;
+    let json = seeded_plan_json(r)?;
     write_planned_raw_at(r, &json)
+}
+
+/// Drop the draft's `source_map`/`boundaries` entries that are value-identical
+/// to committed's — shadow copies minted before plan seeding existed (or by
+/// `set_model`, which writes both layers whole). Strictly safe: the working
+/// view falls back to committed's identical copy, so nothing any reader sees
+/// changes. Entries whose values DIVERGE are left alone — those are either
+/// genuine plan-added anchors or a real conflict to surface, never silently
+/// picked. Returns whether anything was stripped.
+fn strip_shadow_entries(committed: &ScryModel, planned: &mut ScryModel) -> bool {
+    let before = planned.source_map.len() + planned.boundaries.len();
+    planned.source_map.retain(|k, v| committed.source_map.get(k) != Some(v));
+    planned.boundaries.retain(|k, v| committed.boundaries.get(k) != Some(v));
+    before != planned.source_map.len() + planned.boundaries.len()
+}
+
+/// One-time migration for drafts minted before plan seeding: strip the shadow
+/// copies of committed's anchors/boundaries so a stale shadow can't keep winning
+/// the working view over committed's updated entry. Cheap no-op when the draft
+/// is clean (or absent); takes the model lock only when a write is needed — do
+/// NOT call while holding it (use [`read_planned_seeded_at`], which heals
+/// inline, from lock-holding paths).
+pub fn heal_shadow_draft(r: &ModelRef) -> Result<bool, String> {
+    if !r.planned_path().exists() {
+        return Ok(false);
+    }
+    // Unlocked fast path: almost every draft is already clean.
+    let committed = read_model_at(r)?;
+    let mut probe = read_planned_at(r)?;
+    if !strip_shadow_entries(&committed, &mut probe) {
+        return Ok(false);
+    }
+    let _lock = lock_model(r)?;
+    let committed = read_model_at(r)?;
+    let mut planned = read_planned_at(r)?;
+    if !strip_shadow_entries(&committed, &mut planned) {
+        return Ok(false);
+    }
+    let json = serde_json::to_string_pretty(&planned).map_err(|e| e.to_string())?;
+    write_planned_raw_at(r, &json)?;
+    Ok(true)
 }
 
 /// Seed a clean plan (if none exists) and read it — the correct entry for any
@@ -803,7 +855,17 @@ pub fn ensure_planned_at(r: &ModelRef) -> Result<(), String> {
 /// (this seeds by writing the plan file).
 pub fn read_planned_seeded_at(r: &ModelRef) -> Result<ScryModel, String> {
     ensure_planned_at(r)?;
-    read_planned_at(r)
+    let mut planned = read_planned_at(r)?;
+    // Heal legacy shadow drafts on the way in (see `heal_shadow_draft`; the
+    // caller already holds the lock, so strip and persist inline). Every write
+    // path passes through here, so old dirty drafts converge without a
+    // dedicated migration step.
+    let committed = read_model_at(r).unwrap_or_default();
+    if strip_shadow_entries(&committed, &mut planned) {
+        let json = serde_json::to_string_pretty(&planned).map_err(|e| e.to_string())?;
+        write_planned_raw_at(r, &json)?;
+    }
+    Ok(planned)
 }
 
 /// The plan diff: how the draft (`planned`) diverges from the committed `model` —
@@ -984,7 +1046,10 @@ pub fn commit_element(
     id: &str,
 ) -> Result<(), String> {
     let mut model = read_model_at(r)?;
-    let planned = read_planned_at(r)?;
+    // Seeded read: the fold's plan rewrite below persists the draft, and on a
+    // never-seeded project the bare fallback would write committed's anchors
+    // back as `planned.scry` — minting the shadow draft seeding prevents.
+    let planned = read_planned_seeded_at(r)?;
     let mut purge_from_planned = false;
     // Node ids removed by a DELETE fold — the target plus the subtree/links the
     // plan agrees are gone (item C) — and the responsibility ids they carried.
@@ -1327,7 +1392,7 @@ pub fn commit_ready_dependents(r: &ModelRef, node_id: &str) -> Result<(), String
     if !committed_ids.contains(node_id) {
         return Ok(());
     }
-    let planned = read_planned_at(r)?;
+    let planned = read_planned_seeded_at(r)?;
     let plan = diff::diff(&committed, &planned);
 
     let is_deletion =
@@ -1799,6 +1864,103 @@ mod lock_tests {
         assert!(
             warnings.iter().all(|w| !w.contains("unknown")),
             "the gate is quiet on a pending deletion: {warnings:?}"
+        );
+    }
+
+    /// With no draft on disk, the raw plan read must hand the canvas the SEEDED
+    /// form — committed's structure without its single-home anchors/boundaries.
+    /// The canvas echoes what it loads back on its first save, so the raw
+    /// committed bytes would mint a full shadow draft.
+    #[test]
+    fn read_planned_raw_fallback_is_seeded() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        let mut a = mk_node("a", "A", None);
+        a.responsibilities.push(mk_resp("resp-1", "do the thing"));
+        m.nodes.push(a);
+        m.boundaries.insert("a".into(), vec![Source { pattern: "a/**".into(), comment: None }]);
+        m.source_map.insert(
+            "resp-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "a.rs" })).unwrap()],
+        );
+        write_model_at(&r, &m).unwrap();
+
+        let raw = read_planned_raw_at(&r).unwrap();
+        let seeded: ScryModel = serde_json::from_str(&raw).unwrap();
+        assert_eq!(seeded.nodes.len(), 1, "structure carries over");
+        assert!(
+            seeded.source_map.is_empty() && seeded.boundaries.is_empty(),
+            "no shadow anchors in the fallback"
+        );
+    }
+
+    /// Healing a legacy (pre-seeding) draft strips only the entries that are
+    /// value-identical to committed's: a genuine plan-added anchor and a
+    /// diverged value both survive, and a second pass is a no-op.
+    #[test]
+    fn heal_shadow_draft_strips_only_value_equal_copies() {
+        let (_dir, r) = temp_ref();
+        let loc = |p: &str| -> Vec<SourceLocation> {
+            vec![serde_json::from_value(serde_json::json!({ "pattern": p })).unwrap()]
+        };
+        let mut m = ScryModel::new();
+        m.nodes.push(mk_node("a", "A", None));
+        m.boundaries.insert("a".into(), vec![Source { pattern: "a/**".into(), comment: None }]);
+        m.source_map.insert("resp-1".into(), loc("same.rs"));
+        m.source_map.insert("resp-2".into(), loc("committed.rs"));
+        write_model_at(&r, &m).unwrap();
+
+        // A pre-seeding draft: full shadow of committed, plus one diverged entry
+        // and one genuinely plan-added anchor.
+        let mut planned = m.clone();
+        planned.source_map.insert("resp-2".into(), loc("diverged.rs"));
+        planned.source_map.insert("resp-3".into(), loc("plan-added.rs"));
+        let json = serde_json::to_string_pretty(&planned).unwrap();
+        write_planned_raw_at(&r, &json).unwrap();
+
+        assert!(heal_shadow_draft(&r).unwrap(), "a dirty draft reports healed");
+        let healed = read_planned_at(&r).unwrap();
+        assert!(!healed.source_map.contains_key("resp-1"), "value-equal shadow stripped");
+        assert!(!healed.boundaries.contains_key("a"), "value-equal boundary stripped");
+        assert_eq!(
+            healed.source_map.get("resp-2"),
+            Some(&loc("diverged.rs")),
+            "a diverged value is never silently dropped"
+        );
+        assert!(healed.source_map.contains_key("resp-3"), "plan-added anchor survives");
+        assert!(!heal_shadow_draft(&r).unwrap(), "second pass is a no-op");
+    }
+
+    /// A fold on a never-seeded project must not mint a shadow draft: the plan
+    /// rewrite persists whatever it read, so it must read the seeded form, not
+    /// the anchor-carrying committed fallback.
+    #[test]
+    fn commit_element_on_an_unseeded_project_seeds_a_clean_draft() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        let mut a = mk_node("a", "A", None);
+        let mut resp = mk_resp("resp-1", "do the thing");
+        resp.stale = Some(true); // makes the fold's plan rewrite fire
+        a.responsibilities.push(resp);
+        m.nodes.push(a);
+        m.source_map.insert(
+            "resp-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "a.rs" })).unwrap()],
+        );
+        write_model_at(&r, &m).unwrap();
+        assert!(!r.planned_path().exists());
+
+        commit_element(&r, diff::ElementKind::Node, None, "a").unwrap();
+
+        assert!(r.planned_path().exists(), "the fold seeded the draft");
+        let planned = read_planned_at(&r).unwrap();
+        assert!(
+            planned.source_map.is_empty() && planned.boundaries.is_empty(),
+            "the persisted draft carries no shadow of committed's anchors"
+        );
+        assert!(
+            read_model_at(&r).unwrap().source_map.contains_key("resp-1"),
+            "committed keeps its anchor"
         );
     }
 

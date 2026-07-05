@@ -160,11 +160,15 @@ fn delete_model(ref_str: String) -> Result<(), String> {
 }
 
 /// Read the planned (draft) layer — the working model the canvas edits. Returns
-/// the committed model's bytes when no plan has diverged yet (planned == model),
-/// so a fresh project opens with an empty plan.
+/// the committed model's SEEDED bytes when no plan has diverged yet (planned ==
+/// model, anchors cleared), so a fresh project opens with an empty plan.
 #[tauri::command]
 fn read_planned(ref_str: String) -> Result<String, String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
+    // Heal legacy shadow drafts before the canvas loads one: whatever the
+    // frontend loads it echoes back on save, so a pre-seeding draft would keep
+    // re-minting its shadow anchors forever. No-op (and lock-free) when clean.
+    let _ = scryer_core::heal_shadow_draft(&model_ref);
     scryer_core::read_planned_raw_at(&model_ref)
 }
 
