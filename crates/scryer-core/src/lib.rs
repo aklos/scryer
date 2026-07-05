@@ -1052,7 +1052,10 @@ pub fn commit_element(
     // already keeps its anchor in committed, so it's left untouched — NOT removed
     // just because the draft doesn't carry it (that would silently unanchor a
     // reworded claim). A deletion drops the anchor from committed outright.
+    // Node BOUNDARIES follow the same single-home rule (item D) and ride along in
+    // `planned_boundary_strip`.
     let mut planned_anchor_strip: Vec<String> = Vec::new();
+    let mut planned_boundary_strip: Vec<String> = Vec::new();
     match kind {
         diff::ElementKind::Responsibility => {
             if purge_from_planned {
@@ -1073,6 +1076,10 @@ pub fn commit_element(
                 for rid in &deleted_node_resp_ids {
                     model.source_map.remove(rid);
                 }
+                // Committed boundaries for the removed nodes were already dropped
+                // in the deletion branch above (item C); strip any draft copy too
+                // so nothing lingers to keep winning ownership contests. Item D.
+                planned_boundary_strip.extend(deleted_node_ids.iter().cloned());
             } else if let Some(n) = planned.nodes.iter().find(|n| n.id == id) {
                 // The node's own declaration anchor, plus every responsibility it
                 // carries — committing the node moves the draft's across. Vagrant
@@ -1088,6 +1095,14 @@ pub fn commit_element(
                         model.source_map.insert(k.clone(), locs.clone());
                         planned_anchor_strip.push(k);
                     }
+                }
+                // A plan-added boundary has a single home too: folding the node
+                // moves its glob into committed so drifted_scopes — which runs
+                // over committed — can see the new container's region, instead of
+                // the boundary staying stranded in the draft forever. Item D.
+                if let Some(b) = planned.boundaries.get(id) {
+                    model.boundaries.insert(id.to_string(), b.clone());
+                    planned_boundary_strip.push(id.to_string());
                 }
             }
         }
@@ -1116,7 +1131,7 @@ pub fn commit_element(
     // Rewrite the draft when the fold removes the element (a committed deletion)
     // OR when it moved an anchor out of the draft into committed — either way the
     // draft must no longer carry it, so the single-home invariant holds.
-    if purge_from_planned || !planned_anchor_strip.is_empty() {
+    if purge_from_planned || !planned_anchor_strip.is_empty() || !planned_boundary_strip.is_empty() {
         let mut p = planned;
         if purge_from_planned {
             match kind {
@@ -1136,6 +1151,9 @@ pub fn commit_element(
         }
         for k in &planned_anchor_strip {
             p.source_map.remove(k);
+        }
+        for k in &planned_boundary_strip {
+            p.boundaries.remove(k);
         }
         let json = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?;
         write_planned_raw_at(r, &json)?;
@@ -1798,6 +1816,37 @@ mod lock_tests {
         let model = read_model_at(&r).unwrap();
         assert!(!model.nodes.iter().any(|n| n.id == "p"), "parent deleted");
         assert!(model.nodes.iter().any(|n| n.id == "c"), "kept child not clobbered");
+    }
+
+    /// A plan-added container's boundary has a single home: folding the node
+    /// moves its glob into committed (so drifted_scopes, which runs over
+    /// committed, can see the region) and strips it from the draft. Item D.
+    #[test]
+    fn commit_node_folds_its_plan_added_boundary_into_committed() {
+        let (_dir, r) = temp_ref();
+        write_model_at(&r, &ScryModel::new()).unwrap();
+
+        // Plan: a new container carrying a boundary glob (as fill_container writes).
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes.push(mk_node("box", "API", None));
+        planned
+            .boundaries
+            .insert("box".into(), vec![Source { pattern: "api/**".into(), comment: None }]);
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Node, None, "box").unwrap();
+
+        // Committed now owns the boundary…
+        let model = read_model_at(&r).unwrap();
+        assert_eq!(
+            model.boundaries.get("box").expect("boundary folded into committed")[0].pattern,
+            "api/**"
+        );
+        // …and the draft no longer carries it (single home).
+        let plan = read_planned_at(&r).unwrap();
+        assert!(!plan.boundaries.contains_key("box"), "boundary left the draft");
+        assert!(plan_diff_at(&r).unwrap().is_empty());
     }
 
     /// A node can't fold before its parent: committing a child whose parent is
