@@ -233,6 +233,41 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
         }
     }
 
+    // --- Responsibility id global uniqueness ---
+    // Responsibility ids must be unique across the WHOLE model (every node AND
+    // group), not merely within a host: `find_responsibility`, the id minters
+    // (`next_*_id_union`, `IdMinter::absorb`), and every source_map / fold lookup
+    // key by id alone and assume a single home. The per-host checks above catch a
+    // repeat on the same host; this catches the same id living on two hosts,
+    // where a lookup silently binds to whichever the model lists first.
+    let mut resp_hosts: HashMap<&str, Vec<&str>> = HashMap::new();
+    for n in &model.nodes {
+        for r in &n.responsibilities {
+            resp_hosts.entry(r.id.as_str()).or_default().push(n.id.as_str());
+        }
+    }
+    for g in &model.groups {
+        for r in &g.responsibilities {
+            resp_hosts.entry(r.id.as_str()).or_default().push(g.id.as_str());
+        }
+    }
+    let mut collisions: Vec<String> = Vec::new();
+    for (rid, hosts) in &resp_hosts {
+        // Distinct hosts only — a repeat on one host is already reported above.
+        let mut distinct: Vec<&str> = hosts.iter().copied().collect::<HashSet<&str>>().into_iter().collect();
+        if distinct.len() > 1 {
+            distinct.sort_unstable();
+            collisions.push(format!(
+                "Responsibility id '{}' is used on multiple hosts ({}) — responsibility ids must be globally unique",
+                rid,
+                distinct.join(", ")
+            ));
+        }
+    }
+    // HashMap order is nondeterministic; sort so the warning list is stable.
+    collisions.sort();
+    warnings.extend(collisions);
+
     // --- Code-side mapping keys ---
     // source_map is keyed by responsibility id, or by a schema node id (a
     // schema's declaration site); boundaries by node id.
@@ -758,4 +793,67 @@ fn is_valid_identifier(s: &str, allow_upper_start: bool) -> bool {
         }
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+#[cfg(test)]
+mod resp_id_tests {
+    use super::validate;
+    use crate::{Group, Node, ScryModel};
+
+    fn node(v: serde_json::Value) -> Node {
+        serde_json::from_value(v).unwrap()
+    }
+    fn group(v: serde_json::Value) -> Group {
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// A responsibility id living on two different hosts (here a node AND a group)
+    /// breaks the global-uniqueness invariant the id minters and every id-keyed
+    /// lookup rely on — the validator must flag it, naming every host.
+    #[test]
+    fn flags_a_responsibility_id_reused_across_hosts() {
+        let mut m = ScryModel::new();
+        m.nodes.push(node(serde_json::json!({
+            "id": "node-1", "kind": "system", "name": "Acme",
+            "responsibilities": [{ "id": "resp-1", "statement": "runs the show" }]
+        })));
+        m.nodes.push(node(serde_json::json!({
+            "id": "node-2", "kind": "container", "name": "API", "parentId": "node-1",
+            "responsibilities": [{ "id": "resp-1", "statement": "serves requests" }]
+        })));
+        m.groups.push(group(serde_json::json!({
+            "id": "grp-1", "name": "Deploys as one", "parentNodeId": "node-1",
+            "memberIds": ["node-2"],
+            "responsibilities": [{ "id": "resp-1", "statement": "ships together" }]
+        })));
+
+        let warnings = validate(&m);
+        let hits: Vec<&String> =
+            warnings.iter().filter(|w| w.contains("globally unique")).collect();
+        assert_eq!(hits.len(), 1, "exactly one collision warning, got: {warnings:?}");
+        let w = hits[0];
+        assert!(w.contains("resp-1"), "names the colliding id: {w}");
+        assert!(
+            w.contains("node-1") && w.contains("node-2") && w.contains("grp-1"),
+            "names every host: {w}"
+        );
+    }
+
+    /// Responsibility ids that are unique across hosts raise no collision warning.
+    #[test]
+    fn unique_responsibility_ids_pass() {
+        let mut m = ScryModel::new();
+        m.nodes.push(node(serde_json::json!({
+            "id": "node-1", "kind": "system", "name": "Acme",
+            "responsibilities": [{ "id": "resp-1", "statement": "runs the show" }]
+        })));
+        m.nodes.push(node(serde_json::json!({
+            "id": "node-2", "kind": "container", "name": "API", "parentId": "node-1",
+            "responsibilities": [{ "id": "resp-2", "statement": "serves requests" }]
+        })));
+        assert!(
+            !validate(&m).iter().any(|w| w.contains("globally unique")),
+            "distinct ids must not warn"
+        );
+    }
 }
