@@ -38,8 +38,15 @@ pub struct BoundaryOwnership {
 
 impl BoundaryOwnership {
     pub fn new(model: &ScryModel) -> Self {
-        let nodes = model
-            .boundaries
+        Self::from_boundaries(&model.boundaries)
+    }
+
+    /// Build ownership from a boundaries map directly, so callers spanning the
+    /// committed/planned seam can pass a UNION of both layers' boundaries (each
+    /// boundary has a single home — committed owns committed nodes', the draft
+    /// owns plan-added ones — so completeness must see both).
+    pub fn from_boundaries(boundaries: &HashMap<String, Vec<crate::Source>>) -> Self {
+        let nodes = boundaries
             .iter()
             .filter_map(|(node_id, sources)| {
                 let patterns: Vec<(glob::Pattern, usize)> = sources

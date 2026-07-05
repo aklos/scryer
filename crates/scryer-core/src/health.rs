@@ -572,10 +572,23 @@ pub fn resolve_completeness(
     files: &BTreeSet<String>,
     dead_anchors: &HashSet<&str>,
 ) -> BTreeMap<String, Completeness> {
-    let ownership = crate::ownership::BoundaryOwnership::new(planned);
+    // Boundaries have a single home: `ensure_planned_at` clears the draft's, so a
+    // committed container's box lives only in `model.boundaries`, while plan-added
+    // containers' boxes live only in `planned.boundaries`. Compute over the UNION
+    // (planned overlaying committed) or every committed container's box primitive
+    // silently vanishes — from both the denominator (compute_completeness reads
+    // `boundaries` to decide a node HAS a box) and the numerator (real_boxes). The
+    // node/claim structure still comes from `planned`, the authored superset; only
+    // the boundaries map is merged. Overlay onto a planned clone so both reads see
+    // the same map.
+    let mut authored = planned.clone();
+    for (id, sources) in &model.boundaries {
+        authored.boundaries.entry(id.clone()).or_insert_with(|| sources.clone());
+    }
+    let ownership = crate::ownership::BoundaryOwnership::from_boundaries(&authored.boundaries);
     let mut real_boxes: HashSet<String> = HashSet::new();
-    for n in &planned.nodes {
-        if planned.boundaries.get(&n.id).is_some_and(|b| !b.is_empty())
+    for n in &authored.nodes {
+        if authored.boundaries.get(&n.id).is_some_and(|b| !b.is_empty())
             && files.iter().any(|f| ownership.owns(&n.id, f))
         {
             real_boxes.insert(n.id.clone());
@@ -588,7 +601,7 @@ pub fn resolve_completeness(
         }
     }
     compute_completeness(
-        planned,
+        &authored,
         &AnchorFacts {
             real_boxes: &real_boxes,
             live_anchors: &live_anchors,
@@ -651,6 +664,39 @@ mod tests {
             end_line: Some(20),
             command: None,
         }
+    }
+
+    /// `resolve_completeness` reads boundaries off the model (the compute_
+    /// completeness tests hand-build `real_boxes`, so they never exercise this).
+    /// A committed container's boundary lives only in committed — the draft is
+    /// seeded with boundaries cleared — so completeness must union both layers or
+    /// the container's box vanishes from the one figure the tool owns, dropping a
+    /// scaffolded container from "low but non-zero" to 0%.
+    #[test]
+    fn resolve_completeness_counts_a_committed_containers_box() {
+        // Committed: a leaf container owning a real region, plus one unbuilt claim.
+        let mut model = ScryModel::new();
+        let mut api = node("api", Kind::Container, None);
+        api.responsibilities.push(resp("r1"));
+        model.nodes.push(api);
+        model
+            .boundaries
+            .insert("api".into(), vec![crate::Source { pattern: "api/**".into(), comment: None }]);
+
+        // The draft as `ensure_planned_at` seeds it: same nodes, boundaries CLEARED.
+        let mut planned = model.clone();
+        planned.boundaries.clear();
+
+        let files: BTreeSet<String> = ["api/handler.rs".to_string()].into_iter().collect();
+        let comp = resolve_completeness(&model, &planned, &files, &HashSet::new());
+
+        // The box counts (its glob owns a real file) alongside the one unbuilt leaf
+        // claim: total = box + claim = 2, anchored = box = 1 → the scaffolded
+        // container reads low but non-zero, instead of 0% with the box dropped.
+        let c = &comp["api"];
+        assert_eq!(c.total, 2, "box + leaf claim both counted");
+        assert_eq!(c.anchored, 1, "the box owns a file; the claim is unbuilt");
+        assert_eq!(c.pct, Some(50));
     }
 
     /// The discharge rule: a System's implemented responsibility with no anchor
