@@ -772,6 +772,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   sourceMap={sourceMap}
                   projectPath={projectPath}
                   leafHost={leafHost}
+                  mintId={(draft) => nextResponsibilityId(draft, model, committed)}
                   editor={editor}
                   editing={ed.isEditing("responsibilities")}
                   onToggle={() => ed.toggle("responsibilities")}
@@ -915,6 +916,7 @@ function GroupPageBody(props: PageProps & { group: Group }) {
               sourceMap={sourceMap}
               projectPath={projectPath}
               leafHost={false} // group claims discharge through members
+              mintId={(draft) => nextResponsibilityId(draft, model, committed)}
               editor={editor}
               editing={ed.isEditing("responsibilities")}
               onToggle={() => ed.toggle("responsibilities")}
@@ -1600,6 +1602,7 @@ function ResponsibilitiesSection({
   sourceMap,
   projectPath,
   leafHost,
+  mintId,
   editor,
   editing,
   onToggle,
@@ -1618,6 +1621,10 @@ function ResponsibilitiesSection({
   /** Whether claims here must anchor to source (leaf node). Structural hosts
    *  discharge through their subtree and never flag "unmapped". */
   leafHost: boolean;
+  /** Mint a fresh claim id clear of every host in BOTH layers (plus the
+   *  editor's own draft rows) — claim ids are globally unique, and a per-host
+   *  mint can duplicate one across hosts, silently corrupting the diff. */
+  mintId: (draft: Responsibility[]) => string;
   editor: Editor | undefined;
   editing: boolean;
   onToggle: () => void;
@@ -1651,6 +1658,7 @@ function ResponsibilitiesSection({
           hostId={hostId}
           initial={resps}
           seedNewRow={seedNewRow}
+          mintId={mintId}
           editor={editor}
           onClose={() => {
             setSeedNewRow(false);
@@ -1690,6 +1698,7 @@ function ResponsibilitiesEditor({
   hostId,
   initial,
   seedNewRow,
+  mintId,
   editor,
   onClose,
 }: {
@@ -1697,10 +1706,11 @@ function ResponsibilitiesEditor({
   hostId: string;
   initial: Responsibility[];
   seedNewRow: boolean;
+  mintId: (draft: Responsibility[]) => string;
   editor: Editor;
   onClose: () => void;
 }) {
-  const seededId = seedNewRow ? nextResponsibilityId(initial) : null;
+  const seededId = seedNewRow ? mintId(initial) : null;
   const start: Responsibility[] = seededId
     ? [...initial, { id: seededId, statement: "" }]
     : initial;
@@ -1733,7 +1743,7 @@ function ResponsibilitiesEditor({
           onClick={() =>
             setDraft((d) => [
               ...d,
-              { id: nextResponsibilityId(d), statement: "" },
+              { id: mintId(d), statement: "" },
             ])
           }
           className={BTN}

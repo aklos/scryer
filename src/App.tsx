@@ -460,7 +460,7 @@ function Workspace({
             parentId: init.parentId,
             groupId: init.groupId,
             external: init.external,
-          });
+          }, committed);
           newId = id;
           return next;
         });
@@ -474,7 +474,7 @@ function Workspace({
           let { model: next, id } = addGroupHelper(m, {
             name: "",
             parentNodeId: init.parentNodeId,
-          });
+          }, committed);
           newId = id;
           // Enclose the requested members in the same write (each is moved out of
           // any prior group), so the group never lands without its member.
@@ -490,7 +490,7 @@ function Workspace({
       addLink: (src, dst, label) => {
         let newId = "";
         updateModel((m) => {
-          const { model: next, id } = addLinkHelper(m, src, dst, label ?? "");
+          const { model: next, id } = addLinkHelper(m, src, dst, label ?? "", committed);
           newId = id;
           return next;
         });
@@ -504,7 +504,7 @@ function Workspace({
       addResponsibility: (host, hostId) => {
         let newId = "";
         updateModel((m) => {
-          const { model: next, id } = addResponsibility(m, host, hostId);
+          const { model: next, id } = addResponsibility(m, host, hostId, "", committed);
           newId = id;
           return next;
         });
@@ -603,7 +603,7 @@ function Workspace({
           .catch((e) => console.error("reimplement_property failed", e));
       },
     }),
-    [updateModel, projectPath, refreshHealth],
+    [updateModel, projectPath, refreshHealth, committed],
   );
 
   const pageEditor = writing ? undefined : editor;

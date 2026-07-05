@@ -455,32 +455,46 @@ function nextNumericId(prefix: string, existing: Iterable<string>): string {
   return `${prefix}-${max + 1}`;
 }
 
-export function nextNodeId(model: ScryModel): string {
-  return nextNumericId(
-    "node",
-    model.nodes.map((n) => n.id),
-  );
+// Minting must clear BOTH layers, like the backend's IdMinter: the plan alone
+// misses committed ids the plan has deleted, and reusing one mutates the
+// pending deletion into a reword that overwrites the old committed element on
+// fold. `committed` is optional only for the brief window before it loads.
+export function nextNodeId(model: ScryModel, committed?: ScryModel | null): string {
+  return nextNumericId("node", [
+    ...model.nodes.map((n) => n.id),
+    ...(committed?.nodes ?? []).map((n) => n.id),
+  ]);
 }
 
-export function nextGroupId(model: ScryModel): string {
-  return nextNumericId(
-    "group",
-    model.groups.map((g) => g.id),
-  );
+export function nextGroupId(model: ScryModel, committed?: ScryModel | null): string {
+  return nextNumericId("group", [
+    ...model.groups.map((g) => g.id),
+    ...(committed?.groups ?? []).map((g) => g.id),
+  ]);
 }
 
-export function nextResponsibilityId(existing: Responsibility[]): string {
-  return nextNumericId(
-    "resp",
-    existing.map((r) => r.id),
-  );
+// Claim ids are GLOBALLY unique — both diff engines and the fold key by id
+// model-wide — so mint past every host's claims in every layer: a per-host scan
+// can duplicate an id across two hosts, and one copy then silently vanishes
+// from the diff. `draft` covers editor rows not yet written to the model.
+export function nextResponsibilityId(
+  draft: Responsibility[],
+  ...models: (ScryModel | null | undefined)[]
+): string {
+  const ids = draft.map((r) => r.id);
+  for (const m of models) {
+    if (!m) continue;
+    for (const n of m.nodes) for (const r of n.responsibilities ?? []) ids.push(r.id);
+    for (const g of m.groups) for (const r of g.responsibilities ?? []) ids.push(r.id);
+  }
+  return nextNumericId("resp", ids);
 }
 
-export function nextLinkId(model: ScryModel): string {
-  return nextNumericId(
-    "link",
-    model.links.map((l) => l.id),
-  );
+export function nextLinkId(model: ScryModel, committed?: ScryModel | null): string {
+  return nextNumericId("link", [
+    ...model.links.map((l) => l.id),
+    ...(committed?.links ?? []).map((l) => l.id),
+  ]);
 }
 
 // --- Add / remove nodes ------------------------------------------------------
@@ -495,8 +509,9 @@ export function addNode(
     groupId?: string;
     external?: boolean;
   },
+  committed?: ScryModel | null,
 ): { model: ScryModel; id: string } {
-  const id = nextNodeId(model);
+  const id = nextNodeId(model, committed);
   const node: Node = {
     id,
     kind: init.kind,
@@ -566,10 +581,11 @@ export function addLink(
   src: string,
   dst: string,
   label: string = "",
+  committed?: ScryModel | null,
 ): { model: ScryModel; id: string } {
   const existing = model.links.find((l) => l.src === src && l.dst === dst);
   if (existing) return { model, id: existing.id };
-  const id = nextLinkId(model);
+  const id = nextLinkId(model, committed);
   return {
     model: { ...model, links: [...model.links, { id, src, dst, label }] },
     id,
@@ -613,8 +629,9 @@ export function addGroup(
     memberIds?: string[];
     parentNodeId?: string | null;
   },
+  committed?: ScryModel | null,
 ): { model: ScryModel; id: string } {
-  const id = nextGroupId(model);
+  const id = nextGroupId(model, committed);
   const group: Group = {
     id,
     name: init.name,
@@ -683,9 +700,10 @@ export function addResponsibility(
   host: ResponsibilityHost,
   hostId: string,
   statement: string = "",
+  committed?: ScryModel | null,
 ): { model: ScryModel; id: string } {
   const existing = getResponsibilities(model, host, hostId);
-  const id = nextResponsibilityId(existing);
+  const id = nextResponsibilityId([], model, committed);
   // A new claim is a plan until code backs it — the diff shows it as `added`.
   const resp: Responsibility = { id, statement };
   return {
