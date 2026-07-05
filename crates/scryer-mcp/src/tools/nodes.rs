@@ -29,6 +29,45 @@ fn prune_code_map(model: &mut ScryModel, removed_node_ids: &HashSet<String>) {
     model.boundaries.retain(|k, _| !removed_node_ids.contains(k));
 }
 
+/// Replace `node_id`'s whole subtree in ONE model layer with `nodes` + `links`:
+/// drop every current descendant (and its links and code-side mapping), then
+/// insert the payload nodes (skipping `node_id` itself) and any payload link
+/// whose endpoints both exist afterward. Returns `false` — leaving the layer
+/// untouched — when `node_id` isn't present, so a caller can apply the same
+/// replacement to both layers and skip whichever lacks the target.
+fn replace_subtree(model: &mut ScryModel, node_id: &str, nodes: &[Node], links: &[Link]) -> bool {
+    if !model.nodes.iter().any(|n| n.id == node_id) {
+        return false;
+    }
+    let mut to_remove: HashSet<String> = HashSet::new();
+    let mut frontier = vec![node_id.to_string()];
+    while let Some(id) = frontier.pop() {
+        for child in model.nodes.iter().filter(|n| n.parent_id.as_deref() == Some(&id)) {
+            if to_remove.insert(child.id.clone()) {
+                frontier.push(child.id.clone());
+            }
+        }
+    }
+    prune_code_map(model, &to_remove);
+    model.nodes.retain(|n| !to_remove.contains(&n.id));
+    model
+        .links
+        .retain(|l| !to_remove.contains(&l.src) && !to_remove.contains(&l.dst));
+    for n in nodes {
+        if n.id == node_id {
+            continue;
+        }
+        model.nodes.push(n.clone());
+    }
+    let node_ids: HashSet<&str> = model.nodes.iter().map(|n| n.id.as_str()).collect();
+    for l in links {
+        if node_ids.contains(l.src.as_str()) && node_ids.contains(l.dst.as_str()) {
+            model.links.push(l.clone());
+        }
+    }
+    true
+}
+
 /// Fold a set of target nodes out of ONE model layer: relocate each target's own
 /// non-vagrant responsibilities (keeping their ids and source anchors) up to its
 /// parent, then remove the target and its descendants along with their links,
@@ -567,7 +606,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "GENERATION-PIPELINE primitive — replace a node's whole subtree in one write (used during codebase→model generation to attach a container's structure to the seeded skeleton). The data payload is JSON `{ \"nodes\": [...], \"links\": [...] }` where every node in `nodes` has a parent chain rooted at `node_id`. All existing descendants of `node_id` are removed before the new subtree is inserted. Links replace any link whose endpoints are inside the subtree; links connecting to nodes outside the subtree are also accepted. For interactive editing, use the typed add_*/update_*/move_* tools instead."
+        description = "GENERATION-PIPELINE primitive — replace a node's whole subtree in one write (used during codebase→model generation to attach a container's structure to the seeded skeleton). Writes BOTH the plan and the committed model: the subtree describes code that already exists, so it lands as built, not as a pending \"implement this whole subtree\" queue in the plan diff. The data payload is JSON `{ \"nodes\": [...], \"links\": [...] }` where every node in `nodes` has a parent chain rooted at `node_id`. All existing descendants of `node_id` are removed before the new subtree is inserted. Links replace any link whose endpoints are inside the subtree; links connecting to nodes outside the subtree are also accepted. For interactive editing, use the typed add_*/update_*/move_* tools instead."
     )]
     fn set_node(
         &self,
@@ -612,42 +651,35 @@ impl ScryerServer {
             }
         };
 
-        // Compute current descendants
-        let mut to_remove: HashSet<String> = HashSet::new();
-        let mut frontier = vec![req.node_id.clone()];
-        while let Some(id) = frontier.pop() {
-            for child in model.nodes.iter().filter(|n| n.parent_id.as_deref() == Some(&id)) {
-                if to_remove.insert(child.id.clone()) {
-                    frontier.push(child.id.clone());
-                }
-            }
-        }
-
-        // Drop descendants + their links + their code-side mapping
-        prune_code_map(&mut model, &to_remove);
-        model.nodes.retain(|n| !to_remove.contains(&n.id));
-        model
-            .links
-            .retain(|l| !to_remove.contains(&l.src) && !to_remove.contains(&l.dst));
-
-        // Append new subtree nodes (skip node_id itself if accidentally included)
-        for n in payload.nodes {
-            if n.id == req.node_id {
-                continue;
-            }
-            model.nodes.push(n);
-        }
-        // Append links, skipping any whose endpoints don't exist
-        let node_ids: HashSet<&str> = model.nodes.iter().map(|n| n.id.as_str()).collect();
-        for l in payload.links {
-            if node_ids.contains(l.src.as_str()) && node_ids.contains(l.dst.as_str()) {
-                model.links.push(l);
-            }
-        }
+        // Apply the subtree replacement to the plan.
+        replace_subtree(&mut model, &req.node_id, &payload.nodes, &payload.links);
         enforce_readonly_directives(&mut model, &prior);
 
+        // Generation reverse-engineers code that ALREADY EXISTS, so the same
+        // subtree must land in the committed model too (mirroring set_model /
+        // fill_container) — otherwise the plan diff reports the whole built
+        // subtree as `added` work forever. Only when `node_id` is committed (the
+        // generation skeleton); if it lives only in the plan this stays a
+        // plan-only edit, and there is nothing to commit. Prepared before the
+        // plan write so a `None` here just means "plan-only".
+        let committed = scryer_core::read_model_at(&model_ref).ok().and_then(|mut c| {
+            let cprior = c.clone();
+            replace_subtree(&mut c, &req.node_id, &payload.nodes, &payload.links).then(|| {
+                enforce_readonly_directives(&mut c, &cprior);
+                c
+            })
+        });
+
+        // Write the plan first: if the committed write then fails, committed lags
+        // the plan (recoverable pending work), never leads it (a phantom deletion).
         if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
+        }
+        if let Some(committed) = committed {
+            if let Err(e) = scryer_core::write_model_at(&model_ref, &committed) {
+                return Ok(CallToolResult::error(vec![Content::text(e)]));
+            }
+            let _ = scryer_core::save_baseline_at(&model_ref, &committed);
         }
 
         let warnings = validate::validate(&model);
@@ -977,6 +1009,52 @@ mod tests {
                 "source anchor preserved — file stays lit"
             );
         }
+    }
+
+    /// set_node is a generation primitive describing code that ALREADY exists, so
+    /// the subtree it attaches must land in BOTH layers — otherwise `get_pending`
+    /// reports the whole built subtree as `added` work forever (the phantom
+    /// queue). After the write, committed == planned, so the plan diff is empty.
+    #[test]
+    fn set_node_commits_the_generated_subtree_to_both_layers() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        // Generation skeleton: a system, mirrored into both layers (as set_model
+        // leaves them).
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::System, "Acme", None));
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+
+        // Attach a container under the system.
+        let payload = serde_json::json!({
+            "nodes": [
+                { "id": "node-2", "kind": "container", "name": "API", "parentId": "node-1",
+                  "responsibilities": [{ "id": "resp-1", "statement": "serves requests" }] }
+            ],
+            "links": []
+        });
+        let server = ScryerServer::new();
+        server
+            .set_node(Parameters(SetNodeRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                node_id: "node-1".into(),
+                data: payload.to_string(),
+            }))
+            .unwrap();
+
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert!(
+            committed.nodes.iter().any(|n| n.id == "node-2"),
+            "the generated container lands in the committed model, not just the plan"
+        );
+        assert!(planned.nodes.iter().any(|n| n.id == "node-2"), "and in the plan");
+        assert!(
+            scryer_core::diff::diff(&committed, &planned).is_empty(),
+            "committed == planned, so the plan diff is empty — no phantom subtree queue"
+        );
     }
 
     /// mark_implemented folds a planned DELETION: a node removed from the plan (its
