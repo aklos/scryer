@@ -814,6 +814,24 @@ pub fn plan_diff_at(r: &ModelRef) -> Result<diff::ModelDiff, String> {
     Ok(diff::diff(&model, &planned))
 }
 
+/// The working view the agent operates on: the authored PLAN structure (nodes,
+/// links, groups, claims) with committed's single-home anchors overlaid, so
+/// nothing that lives only in committed — a committed container's boundary glob,
+/// a committed claim's source anchor — vanishes from a plan-based read. Plan
+/// entries win on conflict (the draft is the newer authoring). This is what a
+/// gate or health read should see: `planned` alone omits committed's anchors
+/// (single-home), `model` alone omits the agent's unfolded edits.
+pub fn working_view(committed: &ScryModel, planned: &ScryModel) -> ScryModel {
+    let mut view = planned.clone();
+    for (id, sources) in &committed.boundaries {
+        view.boundaries.entry(id.clone()).or_insert_with(|| sources.clone());
+    }
+    for (id, locs) in &committed.source_map {
+        view.source_map.entry(id.clone()).or_insert_with(|| locs.clone());
+    }
+    view
+}
+
 /// Locate a responsibility by id anywhere in a model, returning its host id
 /// (node or group) and a clone. Responsibility ids are globally unique (the
 /// minters seed past every node- and group-owned id), so this is unambiguous.

@@ -910,14 +910,18 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Run the structural validator. Returns a list of warnings: parent-kind mismatches, unknown link endpoints, group members at mixed levels, empty symbols (carrying no responsibility/property/appearance), source-map entries that reference unknown ids, and responsibility mappings whose line range covers the whole enclosing symbol (a range must be a proper subset — drop it to mean the whole definition). A clean run is a post-edit gate, not a lookup — to FIND nodes by shape on demand (e.g. every empty symbol) use `query_model`. Does NOT judge responsibility wording quality."
+        description = "Run the structural validator over your WORKING model (the plan, with committed's code anchors overlaid) — so it sees the edits you just authored, which is what makes it a post-CLOSE gate. Returns a list of warnings: parent-kind mismatches, unknown link endpoints, group members at mixed levels, empty symbols (carrying no responsibility/property/appearance), source-map entries that reference unknown ids, and responsibility mappings whose line range covers the whole enclosing symbol (a range must be a proper subset — drop it to mean the whole definition). A clean run is a post-edit gate, not a lookup — to FIND nodes by shape on demand (e.g. every empty symbol) use `query_model`. Does NOT judge responsibility wording quality."
     )]
     fn validate_model(
         &self,
         Parameters(req): Parameters<ValidateModelRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
-        let model = match scryer_core::read_model_at(&model_ref) {
+        // Validate the working view: authoring lands in the plan, so a
+        // committed-only read would miss every edit the agent is about to close
+        // out. `read_planned_at` falls back to committed when no plan diverges, so
+        // this reduces to the committed model on a clean project.
+        let committed = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -926,6 +930,16 @@ impl ScryerServer {
                 ))]));
             }
         };
+        let planned = match scryer_core::read_planned_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read plan at {}: {}",
+                    model_ref, e
+                ))]));
+            }
+        };
+        let model = scryer_core::working_view(&committed, &planned);
         let mut warnings = validate::validate(&model);
         warnings.extend(validate::validate_coverage(&model, model_ref.project_path()));
         warnings.extend(scryer_extract::anchors::whole_symbol_warnings(
@@ -1059,10 +1073,21 @@ impl ScryerServer {
         let payload = match req.node_id.as_deref() {
             Some(node_id) => {
                 let Some(node) = model.nodes.iter().find(|n| n.id == node_id) else {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Node '{}' not found",
-                        node_id
-                    ))]));
+                    // get_health is a lens over COMMITTED code. A node the agent
+                    // just authored lives only in the plan and has no code to
+                    // report on yet — say so and point at the plan reads, instead
+                    // of a bare "not found" that reads as a typo.
+                    let in_plan = scryer_core::read_planned_at(&model_ref)
+                        .map(|p| p.nodes.iter().any(|n| n.id == node_id))
+                        .unwrap_or(false);
+                    let msg = if in_plan {
+                        format!(
+                            "Node '{node_id}' exists in the plan but not the committed model — get_health reports committed code, so there is nothing to measure until you implement and fold it. Read it with read_model {{layer: plan}}, or get_pending to see its outstanding work."
+                        )
+                    } else {
+                        format!("Node '{node_id}' not found")
+                    };
+                    return Ok(CallToolResult::error(vec![Content::text(msg)]));
                 };
                 let nh = health.nodes.get(node_id);
 
@@ -1292,6 +1317,74 @@ mod tests {
             }))
             .unwrap();
         assert!(serde_json::to_string(&r.content).unwrap().contains("not found"));
+    }
+
+    /// validate_model is the CLOSE gate, but authoring lands in the PLAN — so it
+    /// must validate the working view, not committed alone. Committed here is
+    /// clean; the plan adds a structurally-invalid node (a component parented to a
+    /// system). A committed-only gate would report clean and miss it.
+    #[test]
+    fn validate_model_sees_plan_only_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let project = dir.path().to_string_lossy().to_string();
+
+        // Committed: a lone, clean system.
+        let mut committed = ScryModel::new();
+        committed.nodes.push(node("node-1", Kind::System, "Acme", None));
+        scryer_core::write_model_at(&model_ref, &committed).unwrap();
+
+        // Plan authors a component directly under the system — a parent-kind
+        // violation that lives only in the draft.
+        let mut planned = committed.clone();
+        planned
+            .nodes
+            .push(node("node-2", Kind::Component, "Orphan", Some("node-1")));
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        let r = server
+            .validate_model(Parameters(ValidateModelRequest {
+                project: Some(project),
+            }))
+            .unwrap();
+        let out = serde_json::to_string(&r.content).unwrap();
+        assert!(
+            out.contains("node-2") && out.contains("cannot have parent"),
+            "the gate must surface the plan-authored violation: {out}"
+        );
+    }
+
+    /// get_health on a plan-only node must name the layer, not return a bare "not
+    /// found": the node is authored but uncommitted, so there is no code to
+    /// measure yet — the message points at the plan reads instead.
+    #[test]
+    fn get_health_on_a_plan_only_node_names_the_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let project = dir.path().to_string_lossy().to_string();
+
+        let mut committed = ScryModel::new();
+        committed.nodes.push(node("node-1", Kind::System, "Acme", None));
+        scryer_core::write_model_at(&model_ref, &committed).unwrap();
+        let mut planned = committed.clone();
+        planned
+            .nodes
+            .push(node("node-2", Kind::Container, "API", Some("node-1")));
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        let r = server
+            .get_health(Parameters(GetHealthRequest {
+                project: Some(project),
+                node_id: Some("node-2".into()),
+            }))
+            .unwrap();
+        let out = serde_json::to_string(&r.content).unwrap();
+        assert!(
+            out.contains("plan but not the committed"),
+            "the message must name the layer: {out}"
+        );
     }
 
     #[test]

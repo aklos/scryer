@@ -572,19 +572,14 @@ pub fn resolve_completeness(
     files: &BTreeSet<String>,
     dead_anchors: &HashSet<&str>,
 ) -> BTreeMap<String, Completeness> {
-    // Boundaries have a single home: `ensure_planned_at` clears the draft's, so a
-    // committed container's box lives only in `model.boundaries`, while plan-added
-    // containers' boxes live only in `planned.boundaries`. Compute over the UNION
-    // (planned overlaying committed) or every committed container's box primitive
-    // silently vanishes — from both the denominator (compute_completeness reads
-    // `boundaries` to decide a node HAS a box) and the numerator (real_boxes). The
-    // node/claim structure still comes from `planned`, the authored superset; only
-    // the boundaries map is merged. Overlay onto a planned clone so both reads see
-    // the same map.
-    let mut authored = planned.clone();
-    for (id, sources) in &model.boundaries {
-        authored.boundaries.entry(id.clone()).or_insert_with(|| sources.clone());
-    }
+    // Boundaries and source anchors have a single home: `ensure_planned_at` clears
+    // the draft's, so a committed container's box and a committed claim's anchor
+    // live only in `model`, while plan-added ones live only in `planned`. Compute
+    // over the UNION (the working view, planned overlaying committed) or every
+    // committed container's box primitive silently vanishes — from both the
+    // denominator (compute_completeness reads `boundaries` to decide a node HAS a
+    // box) and the numerator (real_boxes / live_anchors).
+    let authored = crate::working_view(model, planned);
     let ownership = crate::ownership::BoundaryOwnership::from_boundaries(&authored.boundaries);
     let mut real_boxes: HashSet<String> = HashSet::new();
     for n in &authored.nodes {
@@ -595,7 +590,7 @@ pub fn resolve_completeness(
         }
     }
     let mut live_anchors: HashSet<String> = HashSet::new();
-    for (k, locs) in model.source_map.iter().chain(planned.source_map.iter()) {
+    for (k, locs) in &authored.source_map {
         if !locs.is_empty() && !dead_anchors.contains(k.as_str()) {
             live_anchors.insert(k.clone());
         }

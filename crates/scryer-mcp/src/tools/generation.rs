@@ -264,6 +264,18 @@ impl ScryerServer {
             Err(e) => return Ok(err(format!("Failed to read model at {model_ref}: {e}"))),
         };
         let Some(container) = model.nodes.iter().find(|n| n.id == req.container_id) else {
+            // fill_container generates against COMMITTED (it writes both layers).
+            // A container the agent just authored lives only in the plan, so name
+            // the layer and the recovery instead of a bare "not found".
+            let in_plan = scryer_core::read_planned_at(&model_ref)
+                .map(|p| p.nodes.iter().any(|n| n.id == req.container_id))
+                .unwrap_or(false);
+            if in_plan {
+                return Ok(err(format!(
+                    "Container '{}' exists in the plan but not the committed model — fill_container generates against committed (it describes code that exists). Commit it first (mark_implemented) or seed the skeleton with set_node/set_model, which write both layers.",
+                    req.container_id
+                )));
+            }
             return Ok(err(format!("Container '{}' not found", req.container_id)));
         };
         if container.kind != Kind::Container {
