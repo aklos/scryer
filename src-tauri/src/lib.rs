@@ -1,4 +1,5 @@
 mod highlight;
+mod hooks;
 mod symbols;
 
 use std::path::PathBuf;
@@ -105,6 +106,28 @@ fn watch_project(
     }
 
     state.project = None;
+
+    // The session-hook endpoint follows the watched project: opening a project
+    // brings it up, switching projects replaces it (the old server's Drop
+    // removes its discovery file, so its hooks fall silent).
+    let scryer_core::ModelRef::ProjectLocal(ref project_path) = model_ref;
+    {
+        let hook_state = app.state::<hooks::HookState>();
+        let mut hook = hook_state.0.lock().unwrap();
+        let already = hook
+            .as_ref()
+            .is_some_and(|s| s.project() == project_path.as_path());
+        if !already {
+            *hook = None; // drop the old endpoint before starting the new one
+            match hooks::start(project_path) {
+                Ok(server) => {
+                    eprintln!("[hooks] session endpoint on 127.0.0.1:{}", server.port);
+                    *hook = Some(server);
+                }
+                Err(e) => eprintln!("[hooks] endpoint not started: {e}"),
+            }
+        }
+    }
 
     let _ = std::fs::create_dir_all(&target_dir);
     let handle = app.clone();
@@ -3223,6 +3246,7 @@ pub fn run() {
         .setup(move |app| {
             app.manage(Mutex::new(WatcherState { project: None }));
             app.manage(PreviewState(tokio::sync::Mutex::new(None)));
+            app.manage(hooks::HookState(Mutex::new(None)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -3273,6 +3297,15 @@ pub fn run() {
             reimplement_node,
             cancel_agent_session,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // Drop the hook endpoint on exit so its discovery file is removed
+            // and session hooks fall silent the moment the app closes.
+            if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app.try_state::<hooks::HookState>() {
+                    *state.0.lock().unwrap() = None;
+                }
+            }
+        });
 }

@@ -136,6 +136,70 @@ pub fn locate(model: &ScryModel, file: &str, symbol: Option<&str>) -> LocateResu
     }
 }
 
+/// The full file→intent report against the model on disk: working-view locate
+/// plus the derived context every consumer wants — the breadcrumb path and the
+/// pending plan entries scoped to the located elements. The single payload
+/// generator behind the MCP `locate` tool and the session-hook overlay, so the
+/// two surfaces can never drift apart.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocateReport {
+    #[serde(flatten)]
+    pub result: LocateResult,
+    /// Root-first breadcrumb of the owner chain, e.g. "Acme / API / Auth".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Plan entries (committed→planned diff) touching the located elements.
+    pub pending: Vec<crate::diff::ElementChange>,
+}
+
+/// Resolve `file` against the project's WORKING view (plan + committed anchors)
+/// and scope the plan diff to what was located. `file` must already be
+/// project-relative and `/`-separated.
+pub fn locate_at(
+    r: &crate::ModelRef,
+    file: &str,
+    symbol: Option<&str>,
+) -> Result<LocateReport, String> {
+    let committed = crate::read_model_at(r)?;
+    let planned = crate::read_planned_at(r)?;
+    let working = crate::working_view(&committed, &planned);
+
+    let result = locate(&working, file, symbol);
+
+    let mut located_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for o in &result.owner_chain {
+        located_ids.insert(&o.id);
+    }
+    if let Some(b) = &result.boundary_owner {
+        located_ids.insert(&b.id);
+    }
+    for c in &result.claims {
+        located_ids.insert(&c.id);
+        located_ids.insert(&c.host_id);
+    }
+    let pending: Vec<crate::diff::ElementChange> = crate::plan_diff_at(r)?
+        .changes
+        .into_iter()
+        .filter(|c| {
+            located_ids.contains(c.id.as_str())
+                || c.owner_id.as_deref().is_some_and(|o| located_ids.contains(o))
+        })
+        .collect();
+
+    let path = (!result.owner_chain.is_empty()).then(|| {
+        result
+            .owner_chain
+            .iter()
+            .rev()
+            .map(|o| o.name.as_str())
+            .collect::<Vec<_>>()
+            .join(" / ")
+    });
+
+    Ok(LocateReport { result, path, pending })
+}
+
 fn owner_link(model: &ScryModel, id: &str) -> Option<OwnerLink> {
     model.nodes.iter().find(|n| n.id == id).map(|n| OwnerLink {
         id: n.id.clone(),

@@ -530,8 +530,13 @@ impl ScryerServer {
         }
         let file = file.trim_start_matches("./").to_string();
 
-        let committed = match scryer_core::read_model_at(&model_ref) {
-            Ok(m) => m,
+        // The shared payload generator: working-view locate (plan-authored
+        // claims visible, committed anchors overlaid), breadcrumb, and pending
+        // plan entries scoped to the located elements — so a code-first agent
+        // sees this file's outstanding intent without a get_pending sweep.
+        let report = match scryer_core::locate::locate_at(&model_ref, &file, req.symbol.as_deref())
+        {
+            Ok(r) => r,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Failed to read model at {}: {}",
@@ -539,46 +544,7 @@ impl ScryerServer {
                 ))]));
             }
         };
-        let planned = match scryer_core::read_planned_at(&model_ref) {
-            Ok(m) => m,
-            Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read plan at {}: {}",
-                    model_ref, e
-                ))]));
-            }
-        };
-        // The working view: plan-authored claims are visible, committed anchors
-        // and boundaries overlaid — the same state validate_model gates on.
-        let working = scryer_core::working_view(&committed, &planned);
-
-        let res = scryer_core::locate::locate(&working, &file, req.symbol.as_deref());
-
-        // Pending plan entries scoped to the located elements, so a code-first
-        // agent sees this file's outstanding intent without a get_pending sweep.
-        let mut located_ids: HashSet<&str> = HashSet::new();
-        for o in &res.owner_chain {
-            located_ids.insert(&o.id);
-        }
-        if let Some(b) = &res.boundary_owner {
-            located_ids.insert(&b.id);
-        }
-        for c in &res.claims {
-            located_ids.insert(&c.id);
-            located_ids.insert(&c.host_id);
-        }
-        let pending: Vec<serde_json::Value> = scryer_core::plan_diff_at(&model_ref)
-            .map(|d| {
-                d.changes
-                    .into_iter()
-                    .filter(|c| {
-                        located_ids.contains(c.id.as_str())
-                            || c.owner_id.as_deref().is_some_and(|o| located_ids.contains(o))
-                    })
-                    .map(|c| serde_json::to_value(&c).unwrap_or_default())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let res = report.result;
 
         // Steer the next action instead of returning a bare empty result.
         let note = if res.claims.is_empty() {
@@ -605,18 +571,17 @@ impl ScryerServer {
             None
         };
 
-        let path = res.owner_chain.first().map(|o| breadcrumb(&working, &o.id));
         let mut payload = serde_json::json!({
             "file": file,
             "symbol": req.symbol,
             "symbolMatched": req.symbol.as_deref().map(|_| res.symbol_matched),
-            "path": path,
+            "path": report.path,
             "ownerChain": res.owner_chain,
             "boundaryOwner": res.boundary_owner,
             "claims": res.claims,
             "ownDirectives": res.own_directives,
             "inheritedDirectives": res.inherited_directives,
-            "pending": pending,
+            "pending": report.pending,
             "note": note,
         });
         strip_fields_compact(&mut payload);
