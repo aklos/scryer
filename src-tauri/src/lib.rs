@@ -119,7 +119,13 @@ fn watch_project(
             .is_some_and(|s| s.project() == project_path.as_path());
         if !already {
             *hook = None; // drop the old endpoint before starting the new one
-            match hooks::start(project_path) {
+            // Touches stream to the canvas as "hook-touch" events — the live
+            // "a session is working here" signal.
+            let touch_handle = app.clone();
+            let on_touch = move |t: &hooks::Touch| {
+                let _ = touch_handle.emit("hook-touch", t);
+            };
+            match hooks::start(project_path, on_touch) {
                 Ok(server) => {
                     eprintln!("[hooks] session endpoint on 127.0.0.1:{}", server.port);
                     *hook = Some(server);

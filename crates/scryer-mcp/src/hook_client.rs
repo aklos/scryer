@@ -252,34 +252,39 @@ fn stop(ep: &Endpoint, event: &serde_json::Value) {
         return;
     };
 
-    // Only files that carry anchored claims gate the stop — touching dark or
-    // unmodeled files owes the model nothing.
-    let mut lines: Vec<String> = Vec::new();
-    for f in close["files"].as_array().into_iter().flatten() {
-        let claims = f["claims"].as_array().cloned().unwrap_or_default();
-        if claims.is_empty() {
-            continue;
-        }
-        let file = f["file"].as_str().unwrap_or("?");
-        lines.push(format!("- {file}:"));
-        for c in &claims {
-            let host = c["host"].as_str().unwrap_or("?");
-            let statement = c["statement"].as_str().unwrap_or("(data shape)");
-            lines.push(format!("    ({host}) {statement}"));
-        }
-    }
-    if lines.is_empty() {
+    // The endpoint already did the discrimination work: `needsReconcile`
+    // holds only touched files whose anchor fingerprints report the modeled
+    // spans changed, broken, or missing. Clean-modeled and unmodeled touches
+    // owe nothing — a session that edited around the claims stops freely.
+    let needs = close["needsReconcile"].as_array().cloned().unwrap_or_default();
+    if needs.is_empty() {
         return;
     }
 
+    let mut lines: Vec<String> = Vec::new();
+    for f in &needs {
+        let file = f["file"].as_str().unwrap_or("?");
+        lines.push(format!("- {file}:"));
+        for c in f["claims"].as_array().into_iter().flatten() {
+            let host = c["host"].as_str().unwrap_or("?");
+            let statement = c["statement"].as_str().unwrap_or("(data shape declaration)");
+            let state = c["state"].as_str().unwrap_or("changed");
+            lines.push(format!("    [{state}] ({host}) {statement}"));
+        }
+    }
+
     let reason = format!(
-        "Scryer close gate — this session edited {} modeled file(s) whose claims may no longer \
-         match the code:\n{}\nBefore stopping, reconcile each: if the claim still describes the \
+        "Scryer close gate — this session's edits reached the anchored span(s) of {} claim(s) \
+         in {} file(s):\n{}\nBefore stopping, reconcile each: if the claim still describes the \
          code, no write is needed; if behaviour changed, update the model over MCP (update_nodes \
          to reword the claim, update_source_map to re-anchor, mark_implemented to fold finished \
          plan work, flag_drift for new undescribed behaviour). Then finish — this gate fires \
          only once per session.",
-        lines.iter().filter(|l| l.starts_with("- ")).count(),
+        needs
+            .iter()
+            .map(|f| f["claims"].as_array().map(Vec::len).unwrap_or(0))
+            .sum::<usize>(),
+        needs.len(),
         lines.join("\n"),
     );
     emit(&serde_json::json!({ "decision": "block", "reason": reason }));

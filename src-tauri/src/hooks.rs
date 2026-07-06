@@ -72,8 +72,13 @@ fn mint_token() -> String {
 }
 
 /// Start the endpoint for `project`: bind an ephemeral loopback port, write the
-/// discovery file, and serve until the returned server is dropped.
-pub fn start(project: &Path) -> Result<HookServer, String> {
+/// discovery file, and serve until the returned server is dropped. `on_touch`
+/// fires for every recorded touch — the app forwards it to the canvas as a
+/// live "session is working here" signal.
+pub fn start(
+    project: &Path,
+    on_touch: impl Fn(&Touch) + Send + 'static,
+) -> Result<HookServer, String> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| e.to_string())?;
     listener
         .set_nonblocking(true)
@@ -105,7 +110,7 @@ pub fn start(project: &Path) -> Result<HookServer, String> {
                 match listener.accept() {
                     Ok((stream, _)) => {
                         let _ = stream.set_nodelay(true);
-                        handle_request(stream, &project, &token, &touches);
+                        handle_request(stream, &project, &token, &touches, &on_touch);
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -129,6 +134,7 @@ fn handle_request(
     project: &Path,
     token: &str,
     touches: &Arc<Mutex<Vec<Touch>>>,
+    on_touch: &(impl Fn(&Touch) + Send + 'static),
 ) {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
 
@@ -237,6 +243,7 @@ fn handle_request(
             };
             let mut log = touches.lock().unwrap();
             if !log.contains(&touch) {
+                on_touch(&touch);
                 log.push(touch);
             }
             respond(&mut stream, 200, &serde_json::json!({ "recorded": log.len() }));
@@ -378,40 +385,94 @@ fn status_payload(project: &Path) -> Result<serde_json::Value, String> {
     }))
 }
 
-/// The close-gate view: every touched file with the claims anchored to it, so
-/// a Stop hook (or the piece-5 reconcile flow) can ask "does the model still
-/// describe what you just did?" about exactly the right slice.
+/// The close-gate view, anchor-informed so it gates only what is genuinely
+/// out of sync. Touched files partition three ways:
+///
+/// - `needsReconcile` — files whose anchor fingerprints report changed /
+///   broken / missing spans, with the affected claims. These are the only
+///   ones worth blocking a session over.
+/// - `cleanModeled` — files carrying claims whose anchored spans still hash
+///   clean: the session edited around the modeled behaviour and owes nothing.
+/// - `unmodeled` — files the model doesn't map at all.
+///
+/// The fingerprint check compares against the last reconcile baseline, so a
+/// long-unreconciled file may surface pre-session changes too — still the
+/// right call: the claim needs a look and this session just worked there.
 fn close_payload(project: &Path, touched: &[Touch]) -> serde_json::Value {
     let r = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
-    let files: Vec<serde_json::Value> = {
-        let mut seen = std::collections::BTreeSet::new();
-        touched
-            .iter()
-            .filter(|t| seen.insert(t.file.clone()))
-            .map(|t| {
-                let claims = scryer_core::locate::locate_at(&r, &t.file, None)
-                    .map(|rep| {
-                        rep.result
-                            .claims
-                            .iter()
-                            .map(|c| {
-                                serde_json::json!({
-                                    "id": c.id,
-                                    "statement": c.statement,
-                                    "host": c.host_name,
-                                    "symbol": c.anchor.symbol,
-                                })
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                serde_json::json!({ "file": t.file, "claims": claims })
-            })
-            .collect()
+
+    // Out-of-sync anchors across the project (may silently re-anchor moved
+    // symbols, exactly like get_health). No baseline yet → no observations →
+    // the gate stays silent rather than crying wolf on a fresh model.
+    let observations = scryer_extract::anchors::check_anchors(&r)
+        .map(|c| c.observations)
+        .unwrap_or_default();
+
+    // Statements for observation keys come from the working view (built once).
+    let working = match (
+        scryer_core::read_model_at(&r),
+        scryer_core::read_planned_at(&r),
+    ) {
+        (Ok(c), Ok(p)) => Some(scryer_core::working_view(&c, &p)),
+        _ => None,
     };
+    let statement_of = |key: &str| -> Option<String> {
+        let w = working.as_ref()?;
+        w.nodes
+            .iter()
+            .flat_map(|n| n.responsibilities.iter())
+            .chain(w.groups.iter().flat_map(|g| g.responsibilities.iter()))
+            .find(|resp| resp.id == key)
+            .map(|resp| resp.statement.clone())
+    };
+
+    let mut files: Vec<&str> = Vec::new();
+    for t in touched {
+        if !files.contains(&t.file.as_str()) {
+            files.push(&t.file);
+        }
+    }
+
+    let mut needs: Vec<serde_json::Value> = Vec::new();
+    let mut clean_modeled: Vec<&str> = Vec::new();
+    let mut unmodeled: Vec<&str> = Vec::new();
+    for file in files {
+        let out_of_sync: Vec<serde_json::Value> = observations
+            .iter()
+            .filter(|o| o.file == file)
+            .map(|o| {
+                let mut v = serde_json::json!({
+                    "id": o.key,
+                    "host": o.host_name,
+                    "symbol": o.symbol,
+                    "state": o.state,
+                    "statement": statement_of(&o.key),
+                });
+                if let serde_json::Value::Object(map) = &mut v {
+                    map.retain(|_, val| !val.is_null());
+                }
+                v
+            })
+            .collect();
+        if !out_of_sync.is_empty() {
+            needs.push(serde_json::json!({ "file": file, "claims": out_of_sync }));
+        } else {
+            let modeled = scryer_core::locate::locate_at(&r, file, None)
+                .map(|rep| !rep.result.claims.is_empty())
+                .unwrap_or(false);
+            if modeled {
+                clean_modeled.push(file);
+            } else {
+                unmodeled.push(file);
+            }
+        }
+    }
+
     serde_json::json!({
         "touched": touched,
-        "files": files,
+        "needsReconcile": needs,
+        "cleanModeled": clean_modeled,
+        "unmodeled": unmodeled,
     })
 }
 
@@ -487,7 +548,12 @@ mod tests {
     #[test]
     fn serves_status_overlay_touch_and_close_with_token_gate() {
         let (dir, _) = temp_project();
-        let server = start(dir.path()).unwrap();
+        let touched_events = Arc::new(Mutex::new(0usize));
+        let counter = touched_events.clone();
+        let server = start(dir.path(), move |_| {
+            *counter.lock().unwrap() += 1;
+        })
+        .unwrap();
 
         // Discovery file advertises the live endpoint.
         let disc: serde_json::Value = serde_json::from_str(
@@ -519,13 +585,25 @@ mod tests {
         assert_eq!(v["claims"][0]["id"], "r-1");
         assert_eq!(v["file"], "src/auth.rs");
 
-        // Touches record (deduped) and come back per session on /close.
+        // Touches record (deduped, notifying the app once) and partition on
+        // /close: no anchor baseline exists, so the modeled file reads CLEAN
+        // (the gate must not cry wolf on a never-reconciled model).
         let body = r#"{"session":"s1","file":"src/auth.rs","symbol":"verify"}"#;
         request(server.port, &token, "POST", "/touch", body);
         request(server.port, &token, "POST", "/touch", body);
+        request(
+            server.port,
+            &token,
+            "POST",
+            "/touch",
+            r#"{"session":"s1","file":"README.md"}"#,
+        );
+        assert_eq!(*touched_events.lock().unwrap(), 2, "one notify per distinct touch");
         let (_, v) = request(server.port, &token, "GET", "/close?session=s1", "");
-        assert_eq!(v["touched"].as_array().unwrap().len(), 1, "deduped");
-        assert_eq!(v["files"][0]["claims"][0]["id"], "r-1");
+        assert_eq!(v["touched"].as_array().unwrap().len(), 2, "deduped");
+        assert!(v["needsReconcile"].as_array().unwrap().is_empty());
+        assert_eq!(v["cleanModeled"][0], "src/auth.rs");
+        assert_eq!(v["unmodeled"][0], "README.md");
         let (_, v) = request(server.port, &token, "GET", "/close?session=other", "");
         assert_eq!(v["touched"].as_array().unwrap().len(), 0);
 
@@ -539,5 +617,70 @@ mod tests {
                 || request(port, &token, "GET", "/status", "").0 == 0,
             "endpoint is inert after drop"
         );
+    }
+
+    /// With a reconcile baseline in place, /close gates on the anchor
+    /// fingerprints: editing the anchored symbol puts the claim in
+    /// needsReconcile; editing around it leaves the file cleanModeled.
+    #[test]
+    fn close_gates_on_anchor_fingerprints() {
+        let (dir, _) = temp_project();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("src/auth.rs"),
+            "fn verify() { let ok = true; }\nfn other() {}\n",
+        )
+        .unwrap();
+        let r = ModelRef::ProjectLocal(root.to_path_buf());
+        scryer_core::write_sync_state(
+            &r,
+            &scryer_core::drift::SyncState {
+                reconciled_at: scryer_core::drift::now_secs(),
+                commit: None,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        scryer_extract::anchors::write_baseline(&r).unwrap();
+
+        let server = start(root, |_| {}).unwrap();
+        let disc: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(".scryer/hook.json")).unwrap(),
+        )
+        .unwrap();
+        let token = disc["token"].as_str().unwrap().to_string();
+        let touch = r#"{"session":"s1","file":"src/auth.rs"}"#;
+        request(server.port, &token, "POST", "/touch", touch);
+
+        // The anchor check's mtime gate has 1 s granularity — step past it so
+        // the edits below are visible (same dance as the drift tests).
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        // Edit AROUND the anchored symbol: still clean, no gate.
+        std::fs::write(
+            root.join("src/auth.rs"),
+            "fn verify() { let ok = true; }\nfn other() { println!(); }\n",
+        )
+        .unwrap();
+        let (_, v) = request(server.port, &token, "GET", "/close?session=s1", "");
+        assert!(
+            v["needsReconcile"].as_array().unwrap().is_empty(),
+            "untouched anchor must not gate: {v}"
+        );
+        assert_eq!(v["cleanModeled"][0], "src/auth.rs");
+
+        // Edit the anchored symbol itself: the claim demands reconciliation.
+        std::fs::write(
+            root.join("src/auth.rs"),
+            "fn verify() { let ok = false; }\nfn other() { println!(); }\n",
+        )
+        .unwrap();
+        let (_, v) = request(server.port, &token, "GET", "/close?session=s1", "");
+        let claim = &v["needsReconcile"][0]["claims"][0];
+        assert_eq!(v["needsReconcile"][0]["file"], "src/auth.rs", "{v}");
+        assert_eq!(claim["id"], "r-1");
+        assert_eq!(claim["statement"], "serves requests");
+        assert_eq!(claim["state"], "changed");
     }
 }
