@@ -591,7 +591,15 @@ pub fn resolve_completeness(
     }
     let mut live_anchors: HashSet<String> = HashSet::new();
     for (k, locs) in &authored.source_map {
-        if !locs.is_empty() && !dead_anchors.contains(k.as_str()) {
+        // `dead_anchors` comes from the fingerprint check, which only walks the
+        // COMMITTED baseline — a plan-layer anchor never passes through it, so
+        // absence from `dead_anchors` can't vouch for one. Resolve every anchor
+        // against the file inventory instead: an anchor into a file that doesn't
+        // exist is dead regardless of layer.
+        if !locs.is_empty()
+            && !dead_anchors.contains(k.as_str())
+            && locs.iter().all(|l| files.contains(&l.pattern))
+        {
             live_anchors.insert(k.clone());
         }
     }
@@ -691,6 +699,33 @@ mod tests {
         let c = &comp["api"];
         assert_eq!(c.total, 2, "box + leaf claim both counted");
         assert_eq!(c.anchored, 1, "the box owns a file; the claim is unbuilt");
+        assert_eq!(c.pct, Some(50));
+    }
+
+    /// A plan-layer anchor never passes through the fingerprint check (it only
+    /// walks the committed baseline), so `dead_anchors` can't kill it — the file
+    /// inventory must. An anchor into a file that doesn't exist is dead, or a
+    /// fake anchor on unbuilt planned work reads as 100% complete.
+    #[test]
+    fn resolve_completeness_kills_plan_anchors_into_missing_files() {
+        let model = ScryModel::new();
+
+        // The plan: a leaf with two anchored claims — one into a real file, one
+        // into a file that was never written.
+        let mut planned = ScryModel::new();
+        let mut agent = node("agent", Kind::Component, None);
+        agent.responsibilities.push(resp("r-real"));
+        agent.responsibilities.push(resp("r-fake"));
+        planned.nodes.push(agent);
+        planned.source_map.insert("r-real".into(), vec![loc("agent/agent.py")]);
+        planned.source_map.insert("r-fake".into(), vec![loc("agent/openers.py")]);
+
+        let files: BTreeSet<String> = ["agent/agent.py".to_string()].into_iter().collect();
+        let comp = resolve_completeness(&model, &planned, &files, &HashSet::new());
+
+        let c = &comp["agent"];
+        assert_eq!(c.total, 2);
+        assert_eq!(c.anchored, 1, "only the anchor whose file exists counts");
         assert_eq!(c.pct, Some(50));
     }
 
