@@ -193,12 +193,12 @@ fn node_maps_file(model: &ScryModel, node: &crate::Node, file: &str) -> bool {
 }
 
 /// Depth in the parent tree (a top-level node is 0).
-fn node_depth(model: &ScryModel, id: &str) -> usize {
+pub(crate) fn node_depth(model: &ScryModel, id: &str) -> usize {
     node_ancestry(model, id).len().saturating_sub(1)
 }
 
 /// `[id, parent, …, root]` — the node followed by each ancestor.
-fn node_ancestry(model: &ScryModel, id: &str) -> Vec<String> {
+pub(crate) fn node_ancestry(model: &ScryModel, id: &str) -> Vec<String> {
     let mut chain = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut cur = Some(id.to_string());

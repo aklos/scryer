@@ -513,6 +513,119 @@ impl ScryerServer {
     }
 
     #[tool(
+        description = "Reverse lookup from code into the model — the tool to reach for when a task starts from a FILE ('fix the save race in useModelStorage.ts') rather than from the model. Given a project-relative `file` (and optional `symbol` to narrow to one definition), returns the intent governing that location in ONE call: every claim anchored there (with stale/vagrant flags), the owning node chain finest-first with its breadcrumb, the boundary owner of the code region, the BINDING directives (the claim's own, the finest node's, and everything inherited from its ancestors), and any pending plan entries touching the located elements. Reads the working view, so claims you just authored are visible. A file with no anchored claims still reports its boundary owner — the node whose intent governs the region. When you already know the file you're working in, one `locate` call replaces the search_model → read_model orientation dance."
+    )]
+    fn locate(
+        &self,
+        Parameters(req): Parameters<LocateRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+
+        // Normalize to the model's path convention: project-relative,
+        // `/`-separated. An absolute path inside the project is accepted.
+        let mut file = req.file.replace('\\', "/");
+        let root = model_ref.project_path().to_string_lossy().replace('\\', "/");
+        if let Some(rest) = file.strip_prefix(root.as_str()) {
+            file = rest.trim_start_matches('/').to_string();
+        }
+        let file = file.trim_start_matches("./").to_string();
+
+        let committed = match scryer_core::read_model_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read model at {}: {}",
+                    model_ref, e
+                ))]));
+            }
+        };
+        let planned = match scryer_core::read_planned_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Failed to read plan at {}: {}",
+                    model_ref, e
+                ))]));
+            }
+        };
+        // The working view: plan-authored claims are visible, committed anchors
+        // and boundaries overlaid — the same state validate_model gates on.
+        let working = scryer_core::working_view(&committed, &planned);
+
+        let res = scryer_core::locate::locate(&working, &file, req.symbol.as_deref());
+
+        // Pending plan entries scoped to the located elements, so a code-first
+        // agent sees this file's outstanding intent without a get_pending sweep.
+        let mut located_ids: HashSet<&str> = HashSet::new();
+        for o in &res.owner_chain {
+            located_ids.insert(&o.id);
+        }
+        if let Some(b) = &res.boundary_owner {
+            located_ids.insert(&b.id);
+        }
+        for c in &res.claims {
+            located_ids.insert(&c.id);
+            located_ids.insert(&c.host_id);
+        }
+        let pending: Vec<serde_json::Value> = scryer_core::plan_diff_at(&model_ref)
+            .map(|d| {
+                d.changes
+                    .into_iter()
+                    .filter(|c| {
+                        located_ids.contains(c.id.as_str())
+                            || c.owner_id.as_deref().is_some_and(|o| located_ids.contains(o))
+                    })
+                    .map(|c| serde_json::to_value(&c).unwrap_or_default())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Steer the next action instead of returning a bare empty result.
+        let note = if res.claims.is_empty() {
+            Some(match &res.boundary_owner {
+                Some(b) => format!(
+                    "No claim is anchored to {file} — dark code under '{}' ({}). Read that node \
+                     with read_model {{node: \"{}\"}} for the intent governing this region; when \
+                     you implement modeled behaviour here, anchor its claim with update_source_map.",
+                    b.name, b.id, b.id
+                ),
+                None => format!(
+                    "No model intent maps {file}: no claim anchors to it and no boundary owns it. \
+                     If work here changes behaviour, find the governing node with search_model and \
+                     plan the change there first; use update_source_map (or add_symbol) to bring \
+                     the file under the model."
+                ),
+            })
+        } else if req.symbol.is_some() && !res.symbol_matched {
+            Some(format!(
+                "Symbol '{}' matched no anchor in {file}; showing the whole file's claims.",
+                req.symbol.as_deref().unwrap_or_default()
+            ))
+        } else {
+            None
+        };
+
+        let path = res.owner_chain.first().map(|o| breadcrumb(&working, &o.id));
+        let mut payload = serde_json::json!({
+            "file": file,
+            "symbol": req.symbol,
+            "symbolMatched": req.symbol.as_deref().map(|_| res.symbol_matched),
+            "path": path,
+            "ownerChain": res.owner_chain,
+            "boundaryOwner": res.boundary_owner,
+            "claims": res.claims,
+            "ownDirectives": res.own_directives,
+            "inheritedDirectives": res.inherited_directives,
+            "pending": pending,
+            "note": note,
+        });
+        strip_fields_compact(&mut payload);
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
+        )]))
+    }
+
+    #[tool(
         description = "Query the model for nodes matching field predicates — the on-demand, structural complement to the text-based `search_model`. Supply `where`: a list of `{field, op, value}` conditions that must ALL hold (AND). Fields and operators compose freely, so any node-shape question is expressible without a bespoke flag: empty symbols = `[{field:'kind',op:'eq',value:'symbol'},{field:'empty',op:'eq',value:true}]`; under-decomposed components = `[{field:'kind',op:'eq',value:'component'},{field:'childCount',op:'eq',value:0}]`; external systems = `[{field:'kind',op:'eq',value:'system'},{field:'external',op:'eq',value:true}]`. Scope to a subtree with `under`. Returns each node's id, kind, name, breadcrumb path, and responsibility/property counts. Use this to find nodes by SHAPE instead of reading the raw `.scry` file. Capped at 200 hits."
     )]
     fn query_model(
@@ -1842,5 +1955,132 @@ mod tests {
         assert_eq!(v["subtree"]["unmapped"], 1);
         assert_eq!(v["children"][0]["id"], "leaf");
         assert_eq!(v["children"][0]["subtree"]["unmapped"], 1);
+    }
+
+    /// System > Container (boundary src/**) > Component > symbol, with the
+    /// symbol's claim anchored in `src/auth.rs` — committed. Directives on the
+    /// component and container prove the binding set rides along.
+    fn locate_project() -> (ScryerServer, tempfile::TempDir, String, ModelRef) {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, "Acme", None));
+        let mut api = node("api", Kind::Container, "API", Some("sys"));
+        api.directives = vec!["must stay stateless".into()];
+        m.nodes.push(api);
+        let mut auth = node("auth", Kind::Component, "Auth", Some("api"));
+        auth.directives = vec!["must never log tokens".into()];
+        m.nodes.push(auth);
+        let mut sym = node("vt", Kind::Symbol, "verify_token", Some("auth"));
+        sym.responsibilities = vec![resp("r-vt", "rejects forged credentials")];
+        m.nodes.push(sym);
+        m.source_map.insert(
+            "r-vt".into(),
+            vec![serde_json::from_value(
+                serde_json::json!({ "pattern": "src/auth.rs", "symbol": "verify_token" }),
+            )
+            .unwrap()],
+        );
+        m.boundaries.insert(
+            "api".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/**/*" })).unwrap()],
+        );
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        let project = dir.path().to_string_lossy().to_string();
+        (ScryerServer::new(), dir, project, model_ref)
+    }
+
+    #[test]
+    fn locate_returns_claims_chain_and_directives() {
+        let (server, _dir, project, _mr) = locate_project();
+        let v = result_json(
+            &server
+                .locate(Parameters(LocateRequest {
+                    project: Some(project),
+                    file: "src/auth.rs".into(),
+                    symbol: None,
+                }))
+                .unwrap(),
+        );
+        assert_eq!(v["claims"][0]["id"], "r-vt");
+        assert_eq!(v["claims"][0]["hostName"], "verify_token");
+        assert_eq!(v["ownerChain"][0]["id"], "vt");
+        assert_eq!(v["path"], "Acme / API / Auth / verify_token");
+        assert_eq!(v["boundaryOwner"]["id"], "api");
+        assert_eq!(v["ownDirectives"], serde_json::Value::Null, "symbol carries none");
+        let inh = serde_json::to_string(&v["inheritedDirectives"]).unwrap();
+        assert!(inh.contains("must never log tokens") && inh.contains("must stay stateless"));
+    }
+
+    #[test]
+    fn locate_sees_plan_claims_and_scopes_pending() {
+        let (server, _dir, project, model_ref) = locate_project();
+        // The plan authors a second claim on the symbol, anchored to the same
+        // file, plus an unrelated node elsewhere.
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        let mut planned = committed.clone();
+        planned
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == "vt")
+            .unwrap()
+            .responsibilities
+            .push(resp("r-new", "refuses expired tokens"));
+        planned.source_map.insert(
+            "r-new".into(),
+            vec![serde_json::from_value(
+                serde_json::json!({ "pattern": "src/auth.rs", "symbol": "verify_token" }),
+            )
+            .unwrap()],
+        );
+        planned.nodes.push(node("web", Kind::Container, "Web", Some("sys")));
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let v = result_json(
+            &server
+                .locate(Parameters(LocateRequest {
+                    project: Some(project),
+                    file: "src/auth.rs".into(),
+                    symbol: Some("verify_token".into()),
+                }))
+                .unwrap(),
+        );
+        assert_eq!(v["symbolMatched"], true);
+        let dump = serde_json::to_string(&v["claims"]).unwrap();
+        assert!(dump.contains("r-new"), "plan-authored claim visible: {dump}");
+        // Pending is scoped: the new claim shows, the unrelated container doesn't.
+        let pending = serde_json::to_string(&v["pending"]).unwrap();
+        assert!(pending.contains("r-new"), "scoped pending: {pending}");
+        assert!(!pending.contains("\"web\""), "unrelated pending excluded: {pending}");
+    }
+
+    #[test]
+    fn locate_dark_and_unowned_files_steer() {
+        let (server, _dir, project, _mr) = locate_project();
+        // Under the boundary, no anchors: dark code, steered to the owner.
+        let v = result_json(
+            &server
+                .locate(Parameters(LocateRequest {
+                    project: Some(project.clone()),
+                    file: "src/dark.rs".into(),
+                    symbol: None,
+                }))
+                .unwrap(),
+        );
+        assert!(v["claims"][0].is_null());
+        assert_eq!(v["boundaryOwner"]["id"], "api");
+        assert!(v["note"].as_str().unwrap().contains("dark code under 'API'"));
+
+        // Outside every boundary and anchor: steered to model-first authoring.
+        let v = result_json(
+            &server
+                .locate(Parameters(LocateRequest {
+                    project: Some(project),
+                    file: "docs/readme.md".into(),
+                    symbol: None,
+                }))
+                .unwrap(),
+        );
+        assert!(v["note"].as_str().unwrap().contains("No model intent maps"));
     }
 }

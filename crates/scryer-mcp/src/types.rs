@@ -41,6 +41,18 @@ pub(crate) struct ReadModelRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct LocateRequest {
+    /// Absolute path to the project root. If omitted, uses the current working directory.
+    pub project: Option<String>,
+    /// The source file to look up, relative to the project root (an absolute path
+    /// inside the project is accepted and normalized).
+    pub file: String,
+    /// Optional identifier (function/type/component name) to narrow to: returns only
+    /// the claims anchored to that symbol when any are, the whole file's otherwise.
+    pub symbol: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SearchModelRequest {
     /// Absolute path to the project root. If omitted, uses the current working directory.
     pub project: Option<String>,
