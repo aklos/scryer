@@ -781,6 +781,7 @@ function Workspace({
       />
       {settingsOpen && (
         <SettingsPanel
+          projectPath={projectPath}
           onClose={() => {
             setSettingsOpen(false);
             launchSettings.reload();

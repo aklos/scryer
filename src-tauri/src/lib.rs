@@ -623,6 +623,45 @@ fn check_claude_approved(project_path: &str) -> bool {
     false
 }
 
+/// The Claude Code hook events scryer registers, with the matcher each needs.
+/// One client command serves all of them (it dispatches on the event JSON).
+const SCRYER_HOOK_EVENTS: &[(&str, Option<&str>, u64)] = &[
+    ("SessionStart", None, 10),
+    ("PostToolUse", Some("Read"), 10),
+    ("PostToolUse", Some("Edit|Write|NotebookEdit"), 10),
+    ("Stop", None, 15),
+];
+
+/// Does this hook entry belong to scryer? Identified by the command invoking
+/// the scryer-mcp binary's `hook` subcommand — the marker `install` writes.
+fn is_scryer_hook_entry(entry: &serde_json::Value) -> bool {
+    entry["hooks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|h| h["command"].as_str())
+        .any(|c| c.contains("scryer-mcp") && c.trim_end().ends_with(" hook"))
+}
+
+/// Check if Claude Code has scryer's session hooks installed for the project.
+fn check_claude_hooks(project_path: &str) -> bool {
+    for filename in &["settings.local.json", "settings.json"] {
+        let path = PathBuf::from(project_path).join(".claude").join(filename);
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
+                let installed = root
+                    .pointer("/hooks/SessionStart")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|entries| entries.iter().any(is_scryer_hook_entry));
+                if installed {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Check if a project has .codex/config.toml with a scryer MCP entry.
 fn check_codex_toml(project_path: &str) -> bool {
     let path = PathBuf::from(project_path).join(".codex").join("config.toml");
@@ -645,6 +684,7 @@ fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value {
     let claude_mcp = project_path.as_deref().map(check_mcp_json).unwrap_or(false);
     let codex_mcp = project_path.as_deref().map(check_codex_toml).unwrap_or(false);
     let claude_approved = project_path.as_deref().map(check_claude_approved).unwrap_or(false);
+    let claude_hooks = project_path.as_deref().map(check_claude_hooks).unwrap_or(false);
 
     serde_json::json!({
         "claude": has_claude,
@@ -652,6 +692,7 @@ fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value {
         "claudeMcpEnabled": claude_mcp,
         "codexMcpEnabled": codex_mcp,
         "claudeApproved": claude_approved,
+        "claudeHooksEnabled": claude_hooks,
     })
 }
 
@@ -759,7 +800,115 @@ fn setup_mcp_integration(
 
             return Ok(settings_path.to_string_lossy().to_string());
         }
+        "claude_hooks" => {
+            let binary_path = find_scryer_mcp().ok_or("scryer-mcp binary not found")?;
+            return write_claude_hooks(&project_path, &binary_path);
+        }
         _ => Err(format!("Unknown action: {}", action)),
+    }
+}
+
+/// Explicit, per-project opt-in: write scryer's session-hook registrations
+/// into the personal settings file. The registered command no-ops in
+/// milliseconds unless the app has this project open, so installed hooks
+/// impose nothing on sessions where the user leaves Scryer closed.
+fn write_claude_hooks(project_path: &str, binary_path: &str) -> Result<String, String> {
+    let command = format!("\"{}\" hook", binary_path);
+
+    let claude_dir = PathBuf::from(project_path).join(".claude");
+    let settings_path = claude_dir.join("settings.local.json");
+    let mut root: serde_json::Value = if settings_path.exists() {
+        let contents = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&contents).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    if !root.get("hooks").is_some_and(|v| v.is_object()) {
+        root["hooks"] = serde_json::json!({});
+    }
+    // Idempotent install, two passes because PostToolUse gets TWO scryer
+    // entries: first strip every prior scryer entry per event (they all share
+    // the `… hook` command marker; foreign hooks are kept), then append the
+    // current set.
+    for (event, _, _) in SCRYER_HOOK_EVENTS {
+        let entries = root["hooks"]
+            .as_object_mut()
+            .unwrap()
+            .entry(event.to_string())
+            .or_insert_with(|| serde_json::json!([]));
+        if !entries.is_array() {
+            *entries = serde_json::json!([]);
+        }
+        entries.as_array_mut().unwrap().retain(|e| !is_scryer_hook_entry(e));
+    }
+    for (event, matcher, timeout) in SCRYER_HOOK_EVENTS {
+        let mut entry = serde_json::json!({
+            "hooks": [{ "type": "command", "command": command, "timeout": timeout }],
+        });
+        if let Some(m) = matcher {
+            entry["matcher"] = serde_json::json!(m);
+        }
+        root["hooks"][event].as_array_mut().unwrap().push(entry);
+    }
+
+    std::fs::create_dir_all(&claude_dir).map_err(|e| e.to_string())?;
+    std::fs::write(
+        &settings_path,
+        serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(settings_path.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod hook_install_tests {
+    use super::*;
+
+    /// Install twice into a settings file that already has a foreign hook:
+    /// the foreign entry survives, scryer entries don't duplicate, and both
+    /// PostToolUse matchers (Read overlay + Edit touch) are present.
+    #[test]
+    fn hook_install_is_idempotent_and_preserves_foreign_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude_dir = dir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("settings.local.json"),
+            serde_json::json!({
+                "permissions": { "allow": ["mcp__scryer"] },
+                "hooks": {
+                    "PostToolUse": [
+                        { "matcher": "Bash", "hooks": [{ "type": "command", "command": "my-linter" }] }
+                    ]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let project = dir.path().to_string_lossy().to_string();
+        assert!(!check_claude_hooks(&project));
+        write_claude_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
+        write_claude_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
+        assert!(check_claude_hooks(&project));
+
+        let root: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(claude_dir.join("settings.local.json")).unwrap(),
+        )
+        .unwrap();
+        // Untouched sections and foreign hooks survive.
+        assert_eq!(root["permissions"]["allow"][0], "mcp__scryer");
+        let post = root["hooks"]["PostToolUse"].as_array().unwrap();
+        assert!(post.iter().any(|e| e["matcher"] == "Bash"), "foreign hook kept");
+        // Exactly one scryer entry per registration, even after re-install.
+        let scryer_post: Vec<_> = post.iter().filter(|e| is_scryer_hook_entry(e)).collect();
+        assert_eq!(scryer_post.len(), 2, "Read overlay + Edit touch: {post:?}");
+        assert!(scryer_post.iter().any(|e| e["matcher"] == "Read"));
+        assert!(scryer_post.iter().any(|e| e["matcher"] == "Edit|Write|NotebookEdit"));
+        assert_eq!(root["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+        assert_eq!(root["hooks"]["Stop"].as_array().unwrap().len(), 1);
     }
 }
 

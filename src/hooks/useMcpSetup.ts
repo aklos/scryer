@@ -11,6 +11,8 @@ export interface AiToolsState {
   claudeMcpEnabled: boolean;
   codexMcpEnabled: boolean;
   claudeApproved: boolean;
+  /** Scryer's session hooks are registered in this project's Claude Code settings. */
+  claudeHooksEnabled: boolean;
 }
 
 const EMPTY: AiToolsState = {
@@ -19,6 +21,7 @@ const EMPTY: AiToolsState = {
   claudeMcpEnabled: false,
   codexMcpEnabled: false,
   claudeApproved: false,
+  claudeHooksEnabled: false,
 };
 
 export interface McpSetup {
@@ -34,6 +37,11 @@ export interface McpSetup {
   /** Write every applicable config — `.mcp.json`, `.codex/config.toml`, and
    *  tool auto-approve in `.claude/settings.local.json` — then re-detect. */
   enable: () => Promise<void>;
+  /** Explicit, separate opt-in: install scryer's Claude Code session hooks
+   *  into `.claude/settings.local.json`. Never bundled into `enable` — the
+   *  hooks change every session's behavior (while the app is open), so they
+   *  are only written when the user asks for exactly that. */
+  enableHooks: () => Promise<void>;
   dismiss: () => void;
   /** Re-read detection from disk (e.g. after a config is written externally). */
   reload: () => void;
@@ -79,6 +87,17 @@ export function useMcpSetup(projectPath: string | null): McpSetup {
     }
   }, [projectPath, tools, reload]);
 
+  const enableHooks = useCallback(async () => {
+    if (!projectPath) return;
+    setBusy(true);
+    try {
+      await invoke("setup_mcp_integration", { action: "claude_hooks", projectPath });
+      reload();
+    } finally {
+      setBusy(false);
+    }
+  }, [projectPath, reload]);
+
   const dismiss = useCallback(() => {
     if (!projectPath) return;
     setDismissedPaths((prev) => new Set(prev).add(projectPath));
@@ -88,5 +107,5 @@ export function useMcpSetup(projectPath: string | null): McpSetup {
     (tools.claude && !tools.claudeMcpEnabled) || (tools.codex && !tools.codexMcpEnabled);
   const dismissed = projectPath ? dismissedPaths.has(projectPath) : false;
 
-  return { tools, needsSetup, dismissed, busy, enable, dismiss, reload };
+  return { tools, needsSetup, dismissed, busy, enable, enableHooks, dismiss, reload };
 }

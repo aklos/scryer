@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Check, X } from "lucide-react";
 import { Input, Select } from "./ui";
 import { BTN, BTN_GO, SegField } from "./pagekit";
+import { useMcpSetup } from "./hooks/useMcpSetup";
 
 type AgentPref = "auto" | "claudeCode" | "codex";
 
@@ -91,10 +92,18 @@ const CUSTOM = "__custom__";
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-export function SettingsPanel({ onClose }: { onClose: () => void }) {
+export function SettingsPanel({
+  onClose,
+  projectPath,
+}: {
+  onClose: () => void;
+  /** Current project, when one is open — enables the per-project session-hooks action. */
+  projectPath?: string | null;
+}) {
   const [settings, setSettings] = useState<SubagentSettings>(SUBAGENT_DEFAULTS);
   const [detected, setDetected] = useState<Detected>({ claude: false, codex: false });
   const [saving, setSaving] = useState(false);
+  const mcpSetup = useMcpSetup(projectPath ?? null);
 
   useEffect(() => {
     invoke<SubagentSettings>("get_subagent_settings")
@@ -187,6 +196,35 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             value={settings.codex}
             onChange={(codex) => setSettings((s) => ({ ...s, codex }))}
           />
+
+          {projectPath && mcpSetup.tools.claude && (
+            <Field label="Session hooks (this project)">
+              {mcpSetup.tools.claudeHooksEnabled ? (
+                <p className="flex items-center gap-1 text-xs text-emerald-500">
+                  <Check className="h-3 w-3" /> Installed — active whenever Scryer has this
+                  project open
+                </p>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-2xs leading-relaxed text-[var(--text-muted)]">
+                    Let Claude Code sessions see the model as they work: the status line on
+                    start, each file's claims and directives as it reads, and a one-time close
+                    check for touched claims. Writes 4 hook entries to{" "}
+                    <span className="font-mono text-[10px]">.claude/settings.local.json</span>.
+                    Hooks are inert while Scryer is closed.
+                  </p>
+                  <button
+                    type="button"
+                    className={`${BTN} self-start`}
+                    disabled={mcpSetup.busy}
+                    onClick={() => void mcpSetup.enableHooks()}
+                  >
+                    {mcpSetup.busy ? "Installing…" : "Install hooks"}
+                  </button>
+                </div>
+              )}
+            </Field>
+          )}
         </div>
 
         <div className="flex justify-end gap-2 border-t border-[var(--border)] px-4 py-3">

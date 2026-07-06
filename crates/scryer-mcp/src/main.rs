@@ -1,4 +1,5 @@
 mod helpers;
+mod hook_client;
 mod instructions;
 mod server;
 mod tools;
@@ -17,7 +18,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Handle subcommands
     match std::env::args().nth(1).as_deref() {
         Some("init") => return init_project(),
-
+        // Claude Code session hook: event JSON on stdin, hook JSON on stdout.
+        // Silent no-op unless the Scryer app has this project open.
+        Some("hook") => return hook_client::run_hook_client(),
         _ => {}
     }
 
