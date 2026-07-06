@@ -12,6 +12,7 @@ import type { NodeProps, Node as RFNode } from "@xyflow/react";
 import type { DiagramNode } from "../diagramLayout";
 import type { Mark } from "../changeMarks";
 import type { Completeness } from "../health";
+import { CompletenessPie } from "../CompletenessPie";
 import { NodeHandles } from "./NodeHandles";
 import { ShapeBackground, resolveShape, getContentInsets } from "../shapes";
 
@@ -76,26 +77,8 @@ const MARK_STROKE: Record<Mark, string> = {
   X: "stroke-orange-500/70 dark:stroke-orange-400/50",
 };
 
-/** SVG path for a pie wedge from 12 o'clock, sweeping clockwise to `pct`%. */
-function wedgePath(k: number, r: number, pct: number): string {
-  if (pct >= 100) {
-    // A single arc can't close a full circle — draw it as two half-arcs.
-    return `M${k},${k - r} A${r},${r} 0 1,1 ${k},${k + r} A${r},${r} 0 1,1 ${k},${k - r} Z`;
-  }
-  const theta = (pct / 100) * 2 * Math.PI;
-  const x = k + r * Math.sin(theta);
-  const y = k - r * Math.cos(theta);
-  const large = pct > 50 ? 1 : 0;
-  return `M${k},${k} L${k},${k - r} A${r},${r} 0 ${large},1 ${x},${y} Z`;
-}
-
-/** Completeness as a semi-filled pie: the wedge fills clockwise to the % of the
- *  node's authored claims that read through to code. Anchorage is the fill itself
- *  — an empty ring is "nothing built / not grounded"; a dashed ring means there
- *  is nothing to measure yet (a bare box with no leaf claims). */
+/** The shared completeness pie, positioned on the card corner. */
 function CompletenessDot({ c }: { c: Completeness }) {
-  const K = 10; // center
-  const R = 7;
   const measured = c.pct !== undefined;
   return (
     <div
@@ -106,20 +89,7 @@ function CompletenessDot({ c }: { c: Completeness }) {
           : "No leaf claims yet — nothing to measure"
       }
     >
-      <svg width="14" height="14" viewBox="0 0 20 20">
-        <circle
-          cx={K}
-          cy={K}
-          r={R}
-          fill="none"
-          stroke="var(--border)"
-          strokeWidth="1.75"
-          strokeDasharray={measured ? undefined : "2.5 2.5"}
-        />
-        {measured && c.pct! > 0 && (
-          <path d={wedgePath(K, R, c.pct!)} fill="var(--text-tertiary)" />
-        )}
-      </svg>
+      <CompletenessPie c={c} />
     </div>
   );
 }

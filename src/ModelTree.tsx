@@ -10,7 +10,8 @@
 
 import { useRef, useState } from "react";
 import { Braces, ChevronRight, Loader2, Plus } from "lucide-react";
-import { completenessBadge, type Completeness } from "./health";
+import type { Completeness } from "./health";
+import { CompletenessPie } from "./CompletenessPie";
 import type { ScryModel, Node, Group, Kind } from "./viewmodel";
 import { childKindFor } from "./viewmodel";
 import type { Editor } from "./editor";
@@ -705,20 +706,16 @@ export function ModelTree({
         {(() => {
           // Arch tiers only — a symbol's completeness is near-binary noise.
           if (node.kind === "symbol" || node.kind === "person") return null;
-          const badge = completenessBadge(completeness?.[node.id]);
-          if (!badge) return null;
+          const c = completeness?.[node.id];
+          // Cleanliness = completeness: a fully built subtree (and an unmeasured
+          // bare box) shows nothing — only outstanding build work earns a pie.
+          if (!c || c.total === 0 || c.pct === undefined || c.pct >= 100) return null;
           return (
             <span
-              className={`shrink-0 text-2xs tabular-nums ${
-                badge.grounded ? "text-[var(--text-tertiary)]" : "text-[var(--text-ghost)]"
-              }`}
-              title={
-                badge.measured
-                  ? `${badge.label} of this subtree's claims read through to code${badge.grounded ? "" : " (nothing anchored yet)"}`
-                  : "No leaf claims yet — nothing to measure"
-              }
+              className="shrink-0"
+              title={`${c.pct}% of this subtree's claims read through to code`}
             >
-              {badge.label}
+              <CompletenessPie c={c} size={12} />
             </span>
           );
         })()}
