@@ -196,9 +196,32 @@ fn mtime_changed_files(project: &Path, baseline_secs: u64) -> BTreeSet<String> {
 
 /// The boundary-owning nodes whose code changed since the sync anchor. A node
 /// drifts (needs re-check) when a changed file matches one of its boundary
-/// globs. Returned in stable node-id order so a run is reproducible.
+/// globs. Changed files are gated to product code plus model-anchored files —
+/// drift asks whether changed code still satisfies claims, so assets,
+/// lockfiles, manifests, and generated churn under a boundary never demand
+/// semantic reconciliation (anything the user anchored a claim to stays in,
+/// whatever its extension). Returned in stable node-id order so a run is
+/// reproducible.
 pub fn drifted_scopes(model: &ScryModel, project: &Path, sync: &SyncState) -> Vec<DriftScope> {
     let global_changed = changed_files_since(project, sync);
+
+    // Files the model explicitly anchors (exact paths and glob anchors) are
+    // always drift-relevant, even when they aren't parseable source.
+    let anchor_paths: std::collections::HashSet<&str> = model
+        .source_map
+        .values()
+        .flatten()
+        .map(|l| l.pattern.as_str())
+        .collect();
+    let anchor_globs: Vec<glob::Pattern> = anchor_paths
+        .iter()
+        .filter_map(|p| glob::Pattern::new(p).ok())
+        .collect();
+    let relevant = |f: &str| {
+        crate::scan::is_product_code(f)
+            || anchor_paths.contains(f)
+            || anchor_globs.iter().any(|p| p.matches(f))
+    };
 
     // A node dismissed on its own measures its changes against its own (later)
     // anchor, not the global one. A node and its subtree are dismissed together
@@ -233,7 +256,7 @@ pub fn drifted_scopes(model: &ScryModel, project: &Path, sync: &SyncState) -> Ve
         };
         let hits: Vec<String> = changed
             .iter()
-            .filter(|f| ownership.owns(&node.id, f))
+            .filter(|f| relevant(f) && ownership.owns(&node.id, f))
             .cloned()
             .collect();
         if !hits.is_empty() {
@@ -329,6 +352,49 @@ mod tests {
             .changed_files
             .iter()
             .any(|f| f == "api/src/server.rs"));
+    }
+
+    #[test]
+    fn non_product_changes_never_create_scopes_unless_anchored() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("api")).unwrap();
+
+        let mut model = ScryModel::new();
+        model.nodes.push(node("node-1", "API", Kind::Container));
+        model.boundaries.insert(
+            "node-1".into(),
+            vec![Source { pattern: "api/**/*".into(), comment: None }],
+        );
+        // One claim is anchored to a non-source config file.
+        model.source_map.insert(
+            "resp-1".into(),
+            vec![serde_json::from_value(
+                serde_json::json!({ "pattern": "api/settings.yaml" }),
+            )
+            .unwrap()],
+        );
+
+        let sync = SyncState { reconciled_at: now_secs(), commit: None, ..Default::default() };
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        // Asset + lockfile churn under the boundary: no drift.
+        std::fs::write(root.join("api/icon.png"), [0u8; 4]).unwrap();
+        std::fs::write(root.join("api/pnpm-lock.yaml"), "lock").unwrap();
+        assert!(
+            drifted_scopes(&model, root, &sync).is_empty(),
+            "assets and lockfiles must not demand reconciliation"
+        );
+
+        // The anchored config file, though non-source, IS drift-relevant.
+        std::fs::write(root.join("api/settings.yaml"), "changed: true").unwrap();
+        let scopes = drifted_scopes(&model, root, &sync);
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(scopes[0].changed_files, vec!["api/settings.yaml".to_string()]);
+
+        // Product source under the boundary drifts as before.
+        std::fs::write(root.join("api/server.rs"), "fn f() {}").unwrap();
+        let scopes = drifted_scopes(&model, root, &sync);
+        assert!(scopes[0].changed_files.iter().any(|f| f == "api/server.rs"));
     }
 
     #[test]

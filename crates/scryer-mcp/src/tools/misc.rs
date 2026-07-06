@@ -65,12 +65,22 @@ impl ScryerServer {
                 _ => {}
             }
         }
+        // Warn (don't reject) on boundary globs with no directory prefix: a
+        // whole-repo glob owns every otherwise-unowned file, so drift and
+        // coverage attribute unrelated changes to this node. Collected here,
+        // reported in the write response so the author is steered immediately.
+        let mut broad_boundaries: Vec<String> = Vec::new();
         for b in &req.boundaries {
             if !model.nodes.iter().any(|n| n.id == b.node_id) {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Node '{}' not found",
                     b.node_id
                 ))]));
+            }
+            for s in &b.sources {
+                if scryer_core::ownership::pattern_specificity(&s.pattern) == 0 {
+                    broad_boundaries.push(format!("'{}' on {}", s.pattern, b.node_id));
+                }
             }
         }
 
@@ -200,6 +210,16 @@ impl ScryerServer {
             }
         }
         let mut msg = format!("Updated code-side mapping ({} entr(ies))", count);
+        if !broad_boundaries.is_empty() {
+            msg.push_str(&format!(
+                "\n\nWARNING — {} boundary glob(s) with no directory prefix: {}. Such a glob \
+                 owns every otherwise-unowned file in the repository, so drift and coverage \
+                 attribute unrelated changes to this node. Scope it to the node's real code \
+                 region (e.g. 'src/**/*').",
+                broad_boundaries.len(),
+                broad_boundaries.join(", ")
+            ));
+        }
         if !normalized.is_empty() {
             msg.push_str(&format!(
                 "\n\nNormalized {} location(s) — the line range covered the whole enclosing symbol, so it was dropped and the symbol-only anchor kept. A range must be a PROPER subset of its symbol: map the specific lines that do each responsibility's work, or omit line/endLine to mean the whole definition:",
@@ -462,6 +482,55 @@ mod tests {
             notes: None,
             directives: Vec::new(),
         }
+    }
+
+    /// A boundary glob with no directory prefix is written (the user may mean
+    /// it) but the response warns, steering the author to a scoped region.
+    #[test]
+    fn boundary_write_warns_on_whole_repo_glob() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::System, "Acme", None));
+        m.nodes.push(node("node-2", Kind::Container, "Web", Some("node-1")));
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+
+        let server = ScryerServer::new();
+        let project = dir.path().to_string_lossy().to_string();
+        let sources = |p: &str| -> Vec<scryer_core::Source> {
+            vec![serde_json::from_value(serde_json::json!({ "pattern": p })).unwrap()]
+        };
+
+        let res = server
+            .update_source_map(Parameters(UpdateSourceMapRequest {
+                project: Some(project.clone()),
+                entries: vec![],
+                schemas: vec![],
+                boundaries: vec![BoundaryEntry {
+                    node_id: "node-2".into(),
+                    sources: sources("**/*"),
+                }],
+            }))
+            .unwrap();
+        let out = serde_json::to_string(&res.content).unwrap();
+        assert!(out.contains("no directory prefix"), "warns on **/*: {out}");
+        // The write itself still lands — warn, don't reject.
+        let written = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(written.boundaries["node-2"][0].pattern, "**/*");
+
+        let res = server
+            .update_source_map(Parameters(UpdateSourceMapRequest {
+                project: Some(project),
+                entries: vec![],
+                schemas: vec![],
+                boundaries: vec![BoundaryEntry {
+                    node_id: "node-2".into(),
+                    sources: sources("web/**/*"),
+                }],
+            }))
+            .unwrap();
+        let out = serde_json::to_string(&res.content).unwrap();
+        assert!(!out.contains("no directory prefix"), "scoped glob is quiet: {out}");
     }
 
     /// update_group patches an existing group by id: rename + clear

@@ -298,6 +298,23 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
             warnings.push(format!("Boundary references unknown node '{}'", id));
         }
     }
+    // A boundary glob with no directory prefix (`**/*`, `*.rs`) owns every
+    // otherwise-unowned file in the repository — one such glob silently poisons
+    // drift and coverage attribution for the whole project.
+    for (id, sources) in &model.boundaries {
+        for s in sources {
+            if crate::ownership::pattern_specificity(&s.pattern) == 0 {
+                warnings.push(format!(
+                    "Boundary glob '{}' on '{}' has no directory prefix — it owns every \
+                     otherwise-unowned file in the repository, so unrelated changes anywhere \
+                     attribute to this node in drift and coverage. Scope it to the node's real \
+                     code region (e.g. 'src/**/*')",
+                    s.pattern,
+                    name_of(model, id),
+                ));
+            }
+        }
+    }
 
     warnings.extend(check_disconnected(model));
 
@@ -855,5 +872,32 @@ mod resp_id_tests {
             !validate(&m).iter().any(|w| w.contains("globally unique")),
             "distinct ids must not warn"
         );
+    }
+
+    /// A boundary glob with no directory prefix owns every otherwise-unowned
+    /// file in the repo — flagged; a directory-rooted glob is not.
+    #[test]
+    fn flags_whole_repo_boundary_globs() {
+        let mut m = ScryModel::new();
+        m.nodes.push(node(serde_json::json!({
+            "id": "node-1", "kind": "system", "name": "Acme",
+        })));
+        m.nodes.push(node(serde_json::json!({
+            "id": "node-2", "kind": "container", "name": "API", "parentId": "node-1",
+        })));
+        m.boundaries.insert(
+            "node-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "**/*" })).unwrap()],
+        );
+        m.boundaries.insert(
+            "node-2".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "api/**/*" })).unwrap()],
+        );
+
+        let warnings = validate(&m);
+        let hits: Vec<&String> =
+            warnings.iter().filter(|w| w.contains("no directory prefix")).collect();
+        assert_eq!(hits.len(), 1, "only the whole-repo glob warns: {warnings:?}");
+        assert!(hits[0].contains("**/*") && hits[0].contains("Acme"), "{}", hits[0]);
     }
 }

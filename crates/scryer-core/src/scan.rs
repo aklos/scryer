@@ -50,6 +50,49 @@ pub const SKIP_BUILD_DIRS: &[&str] = &[
     "pkg", // wasm-pack
 ];
 
+/// Extensions of parseable source files — one per bundled tree-sitter grammar.
+/// Kept in lockstep with `language_for_ext` in scryer-extract's `lang.rs`
+/// (a test there asserts every entry here maps to a grammar).
+pub const SOURCE_EXTS: &[&str] = &[
+    "rs", // Rust
+    "ts", "mts", "cts", "tsx", // TypeScript
+    "js", "jsx", "mjs", "cjs", // JavaScript
+    "py", "pyi", // Python
+    "go", // Go
+    "java", // Java
+    "rb", // Ruby
+    "c", "h", // C
+    "cpp", "cc", "cxx", "hpp", "hh", "hxx", // C++
+    "cs", // C#
+    "php", // PHP
+];
+
+/// Is this project-relative path product source code — a file whose change can
+/// carry architecture? True only for parseable source extensions, excluding
+/// code that exists but carries none: TypeScript declaration/mirror files
+/// (`*.d.ts`), test doubles in a `stubs/` directory, and generated sources.
+/// The single gate shared by extraction (which files mint symbols) and drift
+/// (which changed files demand reconciliation) — assets, lockfiles, and
+/// generated churn never reach a modeling agent through either path.
+pub fn is_product_code(rel_path: &str) -> bool {
+    let ext = rel_path.rsplit('.').next().unwrap_or_default();
+    if !SOURCE_EXTS.contains(&ext) {
+        return false;
+    }
+    if rel_path.ends_with(".d.ts") {
+        return false;
+    }
+    let mut segs = rel_path.split('/');
+    if segs.any(|s| s == "stubs" || s == "generated" || s == "__generated__") {
+        return false;
+    }
+    let file = rel_path.rsplit('/').next().unwrap_or(rel_path);
+    if file.contains(".generated.") || file.contains(".gen.") {
+        return false;
+    }
+    true
+}
+
 /// Classify a file by its name (not full path).
 fn classify_file(name: &str, rel_path: &Path) -> Option<Category> {
     // Manifests
@@ -454,5 +497,21 @@ mod tests {
             classify_file("main.tf", Path::new("infra/main.tf")),
             Some(Category::Infrastructure)
         ));
+    }
+
+    #[test]
+    fn product_code_is_parseable_source_only() {
+        assert!(is_product_code("src/App.tsx"));
+        assert!(is_product_code("crates/scryer-core/src/lib.rs"));
+        // Non-source: assets, lockfiles, manifests, docs.
+        assert!(!is_product_code("demo/repo-qr.png"));
+        assert!(!is_product_code("pnpm-lock.yaml"));
+        assert!(!is_product_code("package.json"));
+        assert!(!is_product_code("README.md"));
+        // Source-shaped but carries no architecture.
+        assert!(!is_product_code("src/types/api.d.ts"));
+        assert!(!is_product_code("docs/src/stubs/tauri.ts"));
+        assert!(!is_product_code("src/schema.generated.ts"));
+        assert!(!is_product_code("app/__generated__/gql.ts"));
     }
 }

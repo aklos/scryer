@@ -137,8 +137,9 @@ pub fn extract_context_with_stats(
         let rel_path = rel.to_string_lossy().replace('\\', "/");
         // Gate: non-product files mint symbol nodes for code that carries no
         // architecture. Excluded deterministically here (structural, by
-        // path/extension) so they never reach a modeling agent.
-        if !is_modelable_file(&rel_path) {
+        // path/extension) so they never reach a modeling agent. Shared with
+        // drift scoping, so both surfaces agree on what counts as product code.
+        if !scryer_core::scan::is_product_code(&rel_path) {
             continue;
         }
         source_paths.push((path.to_path_buf(), rel_path));
@@ -209,46 +210,41 @@ pub fn extract_context_with_stats(
     ))
 }
 
-/// Deterministic exclusion of non-product source files — code that exists but
-/// carries no architecture, so modeling it only inflates the node graph:
-/// TypeScript declaration/mirror files (`*.d.ts`), test doubles in a `stubs/`
-/// directory, and generated sources. Structural only (path + extension); the
-/// significance of a *real* definition is the modeling agent's semantic call,
-/// never decided here. NOTE: config files are deliberately NOT excluded — a
-/// CMS/ORM collection config (e.g. Payload, Drizzle) declares the real data
-/// model, so whether a config earns a symbol stays the agent's judgment.
-fn is_modelable_file(rel_path: &str) -> bool {
-    if rel_path.ends_with(".d.ts") {
-        return false;
-    }
-    let mut segs = rel_path.split('/');
-    if segs.any(|s| s == "stubs" || s == "generated" || s == "__generated__") {
-        return false;
-    }
-    let file = rel_path.rsplit('/').next().unwrap_or(rel_path);
-    if file.contains(".generated.") || file.contains(".gen.") {
-        return false;
-    }
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
 
+    /// The product-code gate lives in scryer-core (shared with drift scoping);
+    /// its exclusion semantics are extraction's contract, so pin them here.
+    /// NOTE: config files are deliberately NOT excluded — a CMS/ORM collection
+    /// config (e.g. Payload, Drizzle) declares the real data model, so whether
+    /// a config earns a symbol stays the agent's judgment.
     #[test]
     fn excludes_non_product_files() {
-        assert!(!is_modelable_file("docs/src/stubs/tauri.ts"));
-        assert!(!is_modelable_file("src/types/api.d.ts"));
-        assert!(!is_modelable_file("src/schema.generated.ts"));
-        assert!(!is_modelable_file("app/__generated__/gql.ts"));
+        use scryer_core::scan::is_product_code;
+        assert!(!is_product_code("docs/src/stubs/tauri.ts"));
+        assert!(!is_product_code("src/types/api.d.ts"));
+        assert!(!is_product_code("src/schema.generated.ts"));
+        assert!(!is_product_code("app/__generated__/gql.ts"));
         // real product code stays
-        assert!(is_modelable_file("crates/scryer-extract/src/manifest.rs"));
-        assert!(is_modelable_file("src/App.tsx"));
+        assert!(is_product_code("crates/scryer-extract/src/manifest.rs"));
+        assert!(is_product_code("src/App.tsx"));
         // config is NOT excluded — may declare a real data model
-        assert!(is_modelable_file("docs/src/content.config.ts"));
-        assert!(is_modelable_file("src/collections/Users.ts"));
+        assert!(is_product_code("docs/src/content.config.ts"));
+        assert!(is_product_code("src/collections/Users.ts"));
+    }
+
+    /// `scan::SOURCE_EXTS` mirrors the grammar registry: every extension the
+    /// shared product-code gate accepts must actually parse here.
+    #[test]
+    fn source_exts_stay_in_lockstep_with_grammars() {
+        for ext in scryer_core::scan::SOURCE_EXTS {
+            assert!(
+                lang::language_for_ext(ext).is_some(),
+                "scan::SOURCE_EXTS lists '{ext}' but lang.rs has no grammar for it"
+            );
+        }
     }
 
     /// Ad-hoc: dump the container/file/symbol/edge summary for an arbitrary repo.
