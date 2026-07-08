@@ -388,10 +388,13 @@ fn status_payload(project: &Path) -> Result<serde_json::Value, String> {
 /// The close-gate view, anchor-informed so it gates only what is genuinely
 /// out of sync. Touched files partition three ways:
 ///
-/// - `needsReconcile` — files whose anchor fingerprints report changed /
-///   broken / missing spans, with the affected claims. These are the only
-///   ones worth blocking a session over.
-/// - `cleanModeled` — files carrying claims whose anchored spans still hash
+/// - `needsReconcile` — files carrying a claim the check can't vouch for:
+///   either a committed anchor whose fingerprint reports changed / broken /
+///   missing, OR a plan-added / glob-pattern anchor that has no baseline to
+///   fingerprint at all. Both mean "the session touched modeled code that isn't
+///   verified clean" — the cases worth blocking on. Plan-layer and glob anchors
+///   are exactly the blindness `8ad39fc` closed in completeness.
+/// - `cleanModeled` — files whose only claims are committed anchors that hash
 ///   clean: the session edited around the modeled behaviour and owes nothing.
 /// - `unmodeled` — files the model doesn't map at all.
 ///
@@ -408,13 +411,14 @@ fn close_payload(project: &Path, touched: &[Touch]) -> serde_json::Value {
         .map(|c| c.observations)
         .unwrap_or_default();
 
-    // Statements for observation keys come from the working view (built once).
-    let working = match (
-        scryer_core::read_model_at(&r),
-        scryer_core::read_planned_at(&r),
-    ) {
-        (Ok(c), Ok(p)) => Some(scryer_core::working_view(&c, &p)),
-        _ => None,
+    // The working view names hosts and statements for observation keys, and —
+    // crucially — carries the PLAN-layer source map, the anchors the committed-
+    // only fingerprint check above can't see. `committed` is kept separately to
+    // tell fingerprint-checkable anchors from the rest. Both built once.
+    let committed = scryer_core::read_model_at(&r).ok();
+    let working = match (&committed, scryer_core::read_planned_at(&r)) {
+        (Some(c), Ok(p)) => Some(scryer_core::working_view(c, &p)),
+        _ => committed.clone(),
     };
     let statement_of = |key: &str| -> Option<String> {
         let w = working.as_ref()?;
@@ -424,6 +428,33 @@ fn close_payload(project: &Path, touched: &[Touch]) -> serde_json::Value {
             .chain(w.groups.iter().flat_map(|g| g.responsibilities.iter()))
             .find(|resp| resp.id == key)
             .map(|resp| resp.statement.clone())
+    };
+    let host_name_of = |key: &str| -> Option<String> {
+        let w = working.as_ref()?;
+        for n in &w.nodes {
+            if n.id == key || n.responsibilities.iter().any(|resp| resp.id == key) {
+                return Some(n.name.clone());
+            }
+        }
+        w.groups
+            .iter()
+            .find(|g| g.responsibilities.iter().any(|resp| resp.id == key))
+            .map(|g| g.name.clone())
+    };
+    let loc_matches = |pattern: &str, file: &str| -> bool {
+        pattern == file || glob::Pattern::new(pattern).is_ok_and(|p| p.matches(file))
+    };
+    // The fingerprint baseline covers only committed sourceMap keys with an EXACT
+    // location for the file. Anything else on the file — a plan-added anchor (no
+    // baseline yet) or a glob-pattern location (never fingerprinted, since the
+    // baseline reads the pattern as a literal path) — can't be verified, so a
+    // touch surfaces it for a look rather than passing it as clean.
+    let committed_exact = |key: &str, file: &str| -> bool {
+        committed.as_ref().is_some_and(|c| {
+            c.source_map
+                .get(key)
+                .is_some_and(|locs| locs.iter().any(|l| l.pattern == file))
+        })
     };
 
     let mut files: Vec<&str> = Vec::new();
@@ -437,7 +468,8 @@ fn close_payload(project: &Path, touched: &[Touch]) -> serde_json::Value {
     let mut clean_modeled: Vec<&str> = Vec::new();
     let mut unmodeled: Vec<&str> = Vec::new();
     for file in files {
-        let out_of_sync: Vec<serde_json::Value> = observations
+        // 1) Committed anchors the fingerprint check flagged changed/broken/missing.
+        let mut dirty: Vec<serde_json::Value> = observations
             .iter()
             .filter(|o| o.file == file)
             .map(|o| {
@@ -454,8 +486,34 @@ fn close_payload(project: &Path, touched: &[Touch]) -> serde_json::Value {
                 v
             })
             .collect();
-        if !out_of_sync.is_empty() {
-            needs.push(serde_json::json!({ "file": file, "claims": out_of_sync }));
+
+        // 2) Plan-added and glob anchors on this file — unverifiable, so a touch
+        //    surfaces them (mirrors how completeness resolves plan-layer anchors).
+        if let Some(w) = working.as_ref() {
+            let mut keys: Vec<&String> = w.source_map.keys().collect();
+            keys.sort();
+            for key in keys {
+                if committed_exact(key, file) {
+                    continue; // fingerprint-checkable — handled in (1) or genuinely clean
+                }
+                if let Some(loc) = w.source_map[key].iter().find(|l| loc_matches(&l.pattern, file)) {
+                    let mut v = serde_json::json!({
+                        "id": key,
+                        "host": host_name_of(key),
+                        "symbol": loc.symbol,
+                        "state": "unreconciled",
+                        "statement": statement_of(key),
+                    });
+                    if let serde_json::Value::Object(map) = &mut v {
+                        map.retain(|_, val| !val.is_null());
+                    }
+                    dirty.push(v);
+                }
+            }
+        }
+
+        if !dirty.is_empty() {
+            needs.push(serde_json::json!({ "file": file, "claims": dirty }));
         } else {
             let modeled = scryer_core::locate::locate_at(&r, file, None)
                 .map(|rep| !rep.result.claims.is_empty())
@@ -682,5 +740,54 @@ mod tests {
         assert_eq!(claim["id"], "r-1");
         assert_eq!(claim["statement"], "serves requests");
         assert_eq!(claim["state"], "changed");
+    }
+
+    /// A claim authored AND anchored during the session — living only in the
+    /// plan, with no committed baseline to fingerprint — must still gate the
+    /// close when the session touched its file. It can't be verified clean, so
+    /// it surfaces as `unreconciled`, not waved through as cleanModeled.
+    #[test]
+    fn close_gates_on_a_plan_authored_anchor() {
+        let (dir, _) = temp_project();
+        let root = dir.path();
+        let r = ModelRef::ProjectLocal(root.to_path_buf());
+
+        // Add a PLAN-only responsibility on `api`, anchored to a new file, and
+        // leave committed untouched — the authored-and-anchored session flow.
+        let committed = scryer_core::read_model_at(&r).unwrap();
+        let mut plan = committed.clone();
+        if let Some(api) = plan.nodes.iter_mut().find(|n| n.id == "api") {
+            api.responsibilities.push(
+                serde_json::from_value(serde_json::json!({
+                    "id": "r-2", "statement": "new plan claim"
+                }))
+                .unwrap(),
+            );
+        }
+        plan.source_map.insert(
+            "r-2".into(),
+            vec![serde_json::from_value(
+                serde_json::json!({ "pattern": "src/new.rs", "symbol": "foo" }),
+            )
+            .unwrap()],
+        );
+        scryer_core::write_planned_at(&r, &plan).unwrap();
+
+        let server = start(root, |_| {}).unwrap();
+        let disc: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(".scryer/hook.json")).unwrap(),
+        )
+        .unwrap();
+        let token = disc["token"].as_str().unwrap().to_string();
+        request(server.port, &token, "POST", "/touch", r#"{"session":"s1","file":"src/new.rs"}"#);
+
+        let (_, v) = request(server.port, &token, "GET", "/close?session=s1", "");
+        assert_eq!(v["needsReconcile"][0]["file"], "src/new.rs", "{v}");
+        let claim = &v["needsReconcile"][0]["claims"][0];
+        assert_eq!(claim["id"], "r-2");
+        assert_eq!(claim["state"], "unreconciled");
+        assert_eq!(claim["statement"], "new plan claim");
+        // The committed exact anchor's own file, untouched, must not be dragged in.
+        assert!(v["cleanModeled"].as_array().unwrap().is_empty(), "{v}");
     }
 }
