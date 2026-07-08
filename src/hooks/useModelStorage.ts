@@ -397,6 +397,44 @@ export function useModelStorage(): ModelStorage {
   // effect below. Keyed by the prev-model reference so StrictMode's double
   // updater invocation replaces the entry instead of duplicating it.
   const pendingUserRevs = useRef<{ prev: ScryModel; items: ChangeItem[] }[]>([]);
+  // The pending debounced plan write's payload, held in a ref so an external
+  // reload can cancel it BEFORE it reads (closing the clobber window) and, when
+  // the reload turns out not to touch the plan, restore it.
+  const pendingSave = useRef<{ ref: string; serialized: string } | null>(null);
+
+  // Flush the pending plan write to disk. During an agent run the agent owns
+  // the file, so we skip the write (autoLayout re-persists layout after the run
+  // ends, once we've reloaded the agent's model from disk).
+  const flushSave = useCallback(() => {
+    saveTimer.current = null;
+    const p = pendingSave.current;
+    pendingSave.current = null;
+    if (!p || agentRunningRef.current) return;
+    lastWrittenRaw.current = p.serialized;
+    invoke("write_planned", { refStr: p.ref, data: p.serialized }).catch(() => {});
+  }, []);
+
+  // (Re)arm the debounced plan write for `p`, replacing any pending one.
+  const scheduleSave = useCallback(
+    (p: { ref: string; serialized: string }) => {
+      pendingSave.current = p;
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(flushSave, SAVE_DEBOUNCE_MS);
+    },
+    [flushSave],
+  );
+
+  // Cancel the pending plan write synchronously, returning its payload so a
+  // caller can decide whether to restore it.
+  const cancelPendingSave = useCallback(() => {
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    const p = pendingSave.current;
+    pendingSave.current = null;
+    return p;
+  }, []);
 
   // Apply a freshly-read PLAN file to in-memory state: flag the ids the agent
   // introduced (and prune removed ones) for review highlighting, remember the
@@ -444,13 +482,10 @@ export function useModelStorage(): ModelStorage {
     // on disk — and, because it also updates lastWrittenRaw, the echo-suppressor
     // would hide the loss. Cancel it. The agentRunningRef guard alone doesn't
     // cover this: it's only set for in-app runs, not external MCP sessions.
-    if (saveTimer.current) {
-      clearTimeout(saveTimer.current);
-      saveTimer.current = null;
-    }
+    cancelPendingSave();
     lastWrittenRaw.current = raw;
     setModel(loaded);
-  }, []);
+  }, [cancelPendingSave]);
 
   // Apply a freshly-read COMMITTED model file (the diff base). The canvas never
   // writes this layer; it advances only when the agent folds work in or
@@ -490,11 +525,21 @@ export function useModelStorage(): ModelStorage {
       }
       const off = await listen<string>("model-changed", async (event) => {
         if (event.payload !== modelRef) return;
+        // Cancel any pending canvas save BEFORE reading: otherwise the debounce
+        // can fire inside the await below and land its now-stale snapshot on top
+        // of the external write. If the plan layer turns out unchanged (a
+        // committed-only write, or our own echo) the save was still legitimate —
+        // restore it, unless a fresher edit already replaced it mid-await.
+        const pending = cancelPendingSave();
         try {
           const planned = await invoke<string>("read_planned", { refStr: modelRef });
-          if (active && planned !== lastWrittenRaw.current) applyLoadedRaw(planned);
+          if (active && planned !== lastWrittenRaw.current) {
+            applyLoadedRaw(planned);
+          } else if (active && pending && pendingSave.current === null) {
+            scheduleSave(pending);
+          }
         } catch {
-          /* transient — ignore */
+          if (active && pending && pendingSave.current === null) scheduleSave(pending);
         }
         try {
           const committedRaw = await invoke<string>("read_model", { refStr: modelRef });
@@ -511,7 +556,7 @@ export function useModelStorage(): ModelStorage {
       active = false;
       unlisten?.();
     };
-  }, [modelRef, applyLoadedRaw, applyCommittedRaw, loadHistory]);
+  }, [modelRef, applyLoadedRaw, applyCommittedRaw, loadHistory, cancelPendingSave, scheduleSave]);
 
   const openProject = useCallback(async (path: string) => {
     setStatus("loading");
@@ -660,21 +705,11 @@ export function useModelStorage(): ModelStorage {
         // chokepoint covers every edit path (granular, EditModal bulk-commit)
         // and a layout-only edit re-dates nothing.
         const next = stampTouches(cur, edited);
-        if (saveTimer.current) clearTimeout(saveTimer.current);
-        const ref = modelRef;
-        const serialized = JSON.stringify(next, null, 2);
-        saveTimer.current = setTimeout(() => {
-          // During an agent run the agent owns the file; keep layout client-side
-          // (autoLayout re-seeds and persists it after the run ends, once we've
-          // reloaded the agent's model from disk) so we don't clobber writes.
-          if (agentRunningRef.current) return;
-          lastWrittenRaw.current = serialized;
-          invoke("write_planned", { refStr: ref, data: serialized }).catch(() => {});
-        }, SAVE_DEBOUNCE_MS);
+        scheduleSave({ ref: modelRef, serialized: JSON.stringify(next, null, 2) });
         return next;
       });
     },
-    [modelRef],
+    [modelRef, scheduleSave],
   );
 
   // Flush staged user-edit revisions into the journal once the model state
