@@ -580,7 +580,9 @@ pub fn resolve_completeness(
     // denominator (compute_completeness reads `boundaries` to decide a node HAS a
     // box) and the numerator (real_boxes / live_anchors).
     let authored = crate::working_view(model, planned);
-    let ownership = crate::ownership::BoundaryOwnership::from_boundaries(&authored.boundaries);
+    let live: HashSet<&str> = authored.nodes.iter().map(|n| n.id.as_str()).collect();
+    let ownership =
+        crate::ownership::BoundaryOwnership::from_boundaries(&authored.boundaries, &live);
     let mut real_boxes: HashSet<String> = HashSet::new();
     for n in &authored.nodes {
         if authored.boundaries.get(&n.id).is_some_and(|b| !b.is_empty())

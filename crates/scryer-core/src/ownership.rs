@@ -13,7 +13,7 @@
 //! specific glob anywhere in the model that also matches F.
 
 use crate::ScryModel;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A boundary glob's specificity: the length of its literal prefix before the
 /// first glob metacharacter. `**/*` → 0, `crates/core/**/*` → 11. The deepest
@@ -38,16 +38,27 @@ pub struct BoundaryOwnership {
 
 impl BoundaryOwnership {
     pub fn new(model: &ScryModel) -> Self {
-        Self::from_boundaries(&model.boundaries)
+        let live: HashSet<&str> = model.nodes.iter().map(|n| n.id.as_str()).collect();
+        Self::from_boundaries(&model.boundaries, &live)
     }
 
     /// Build ownership from a boundaries map directly, so callers spanning the
     /// committed/planned seam can pass a UNION of both layers' boundaries (each
     /// boundary has a single home — committed owns committed nodes', the draft
     /// owns plan-added ones — so completeness must see both).
-    pub fn from_boundaries(boundaries: &HashMap<String, Vec<crate::Source>>) -> Self {
+    ///
+    /// `live_nodes` are the ids of nodes that actually exist; a boundary keyed to
+    /// a node that no longer does (a `set_model` overwrite or a hand-edit that
+    /// dropped the node but left its boundary — write-time GC catches the tool
+    /// paths, not these) is skipped, so a dead broad glob can't double-claim files
+    /// or inflate a coverage denominator.
+    pub fn from_boundaries(
+        boundaries: &HashMap<String, Vec<crate::Source>>,
+        live_nodes: &HashSet<&str>,
+    ) -> Self {
         let nodes = boundaries
             .iter()
+            .filter(|(node_id, _)| live_nodes.contains(node_id.as_str()))
             .filter_map(|(node_id, sources)| {
                 let patterns: Vec<(glob::Pattern, usize)> = sources
                     .iter()
@@ -246,9 +257,11 @@ mod tests {
 
     fn model_with_boundaries(pairs: &[(&str, &str)]) -> ScryModel {
         let mut m = ScryModel::new();
-        for (node, glob) in pairs {
+        for (nid, glob) in pairs {
+            // Each boundary's node must be live, or ownership now filters it out.
+            m.nodes.push(node(nid, "container", nid, None, &[]));
             m.boundaries.insert(
-                node.to_string(),
+                nid.to_string(),
                 vec![serde_json::from_value(serde_json::json!({ "pattern": glob })).unwrap()],
             );
         }
@@ -275,6 +288,21 @@ mod tests {
 
         assert!(own.owns("root", "src/main.ts"));
         assert!(!own.owns("core", "src/main.ts"));
+    }
+
+    #[test]
+    fn a_boundary_without_a_live_node_is_ignored() {
+        // A broad glob left behind by a dropped node (a set_model overwrite or a
+        // hand-edit that write-time GC never saw) must not claim files.
+        let mut m = model_with_boundaries(&[("core", "crates/core/**/*")]);
+        m.boundaries.insert(
+            "ghost".to_string(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "**/*" })).unwrap()],
+        );
+        let own = BoundaryOwnership::new(&m);
+        assert!(own.owns("core", "crates/core/lib.rs"));
+        assert!(!own.owns("ghost", "src/main.ts"), "dead boundary claims nothing");
+        assert!(!own.owns("ghost", "crates/core/lib.rs"));
     }
 
     #[test]
