@@ -22,5 +22,13 @@ toml_edit = "0.22"
 glob = "0.3.3"
 strsim = "0.11"
 
+# Liveness probe for the discovery file's pid — refuse a crashed app's stale
+# endpoint before handing it the token. Both are already in the tree.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_Foundation"] }
+
 [dev-dependencies]
 tempfile = "3"

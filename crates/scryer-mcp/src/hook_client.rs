@@ -61,15 +61,62 @@ fn discover(event: &serde_json::Value) -> Option<Endpoint> {
     while let Some(d) = dir {
         let candidate = d.join(".scryer").join("hook.json");
         if let Ok(raw) = std::fs::read_to_string(&candidate) {
-            let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
-            return Some(Endpoint {
-                port: v["port"].as_u64()? as u16,
-                token: v["token"].as_str()?.to_string(),
-            });
+            // A present file ends the walk whether or not we trust it: a stale or
+            // malformed one is not a reason to keep climbing into a parent
+            // project's model.
+            return parse_live_endpoint(&raw);
         }
         dir = d.parent().map(Path::to_path_buf);
     }
     None
+}
+
+/// Parse a discovery file, returning the endpoint ONLY if the app that wrote it
+/// is still alive. A crashed app leaves `.scryer/hook.json` behind with its old
+/// port + token; a later local process binding that freed port could otherwise
+/// harvest the token this client sends (the client hands it over in the request,
+/// so the token is no defense against a squatter) and inject arbitrary text into
+/// the agent's context. The pid gate closes that window: no live author, no
+/// trust, stay silent.
+fn parse_live_endpoint(raw: &str) -> Option<Endpoint> {
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let pid = v["pid"].as_u64()? as u32;
+    if !process_alive(pid) {
+        return None;
+    }
+    Some(Endpoint {
+        port: v["port"].as_u64()? as u16,
+        token: v["token"].as_str()?.to_string(),
+    })
+}
+
+/// Is `pid` a currently-running process? Probes without signalling.
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    // kill(pid, 0): 0 → alive; EPERM → alive but not ours to signal; ESRCH → gone.
+    let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(windows)]
+fn process_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // OpenProcess by pid fails once the pid is released, so a successful open is
+    // a sufficient liveness signal for "the app is still running".
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        CloseHandle(handle);
+        true
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn process_alive(_pid: u32) -> bool {
+    true // no portable probe — fail open on exotic targets
 }
 
 /// One tiny HTTP exchange against the loopback endpoint. `None` on any
@@ -288,4 +335,42 @@ fn stop(ep: &Endpoint, event: &serde_json::Value) {
         lines.join("\n"),
     );
     emit(&serde_json::json!({ "decision": "block", "reason": reason }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn own_process_reads_as_alive() {
+        assert!(process_alive(std::process::id()));
+    }
+
+    /// A live author yields the endpoint; a discovery file with no pid — or one
+    /// whose author has exited — is not trusted, so the token is never offered.
+    #[test]
+    fn only_a_live_author_is_trusted() {
+        let live =
+            serde_json::json!({ "port": 42, "token": "tok", "pid": std::process::id() }).to_string();
+        let ep = parse_live_endpoint(&live).expect("live pid → endpoint");
+        assert_eq!(ep.port, 42);
+        assert_eq!(ep.token, "tok");
+
+        let no_pid = serde_json::json!({ "port": 42, "token": "tok" }).to_string();
+        assert!(parse_live_endpoint(&no_pid).is_none(), "a file with no pid is stale");
+    }
+
+    /// A reaped child's pid is dead, so its (fabricated) discovery file is
+    /// rejected — the crash-then-squat scenario the pid gate exists to block.
+    #[cfg(unix)]
+    #[test]
+    fn a_dead_authors_file_is_rejected() {
+        let Ok(mut child) = std::process::Command::new("true").spawn() else {
+            return; // no `true` on PATH in this sandbox — skip
+        };
+        let pid = child.id();
+        let _ = child.wait(); // reap → pid now gone (barring immediate reuse)
+        let raw = serde_json::json!({ "port": 1, "token": "t", "pid": pid }).to_string();
+        assert!(parse_live_endpoint(&raw).is_none());
+    }
 }

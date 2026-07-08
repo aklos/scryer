@@ -3642,6 +3642,7 @@ version = "0.3.1"
 dependencies = [
  "base64 0.22.1",
  "glob",
+ "libc",
  "rmcp",
  "schemars 1.2.1",
  "scryer-core",
@@ -3652,6 +3653,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml_edit 0.22.27",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

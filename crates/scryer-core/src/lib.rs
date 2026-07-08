@@ -509,7 +509,7 @@ fn ensure_project_gitignore(scryer_dir: &Path) -> Result<(), String> {
     if !gitignore.exists() {
         fs::write(
             &gitignore,
-            "*.baseline.scry\n.sync\n.tmp.*\n.lock\n.anchors.json\n.build_edges.json\npreview/\n",
+            "*.baseline.scry\n.sync\n.tmp.*\n.lock\n.anchors.json\n.build_edges.json\nhook.json\npreview/\n",
         )
         .map_err(|e| format!("Failed to create .gitignore: {}", e))?;
     }
