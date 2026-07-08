@@ -312,8 +312,14 @@ impl ScryerServer {
         // responsibilities, group/link labels) to the planned layer ONLY, so we
         // must (a) mint ids that don't collide with it and (b) preserve it by
         // appending this subtree to the existing draft rather than overwriting.
-        let planned_before =
-            scryer_core::read_planned_seeded_at(&model_ref).unwrap_or_else(|_| model.clone());
+        // Seeded read only — a plain committed fallback here would mint a shadow
+        // draft (committed's anchors/boundaries copied into the plan, the very
+        // single-home violation seeding exists to avoid). A failed read is
+        // exceptional; fail the fill rather than corrupt the draft.
+        let planned_before = match scryer_core::read_planned_seeded_at(&model_ref) {
+            Ok(p) => p,
+            Err(e) => return Ok(err(format!("Failed to read plan at {model_ref}: {e}"))),
+        };
 
         let mut minter = IdMinter::new(&model);
         minter.absorb(&planned_before);

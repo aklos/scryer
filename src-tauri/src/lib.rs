@@ -2584,6 +2584,10 @@ fn fold_vagrant(
 #[tauri::command]
 fn adopt_responsibility(cwd: String, resp_id: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    // Seeding turned this verdict's read into a writer, so it must hold the model
+    // lock across the whole read-modify-write — otherwise the canvas races the
+    // agent's MCP process and the two writers clobber each other.
+    let _lock = scryer_core::lock_model(&model_ref)?;
     let folded = fold_vagrant(&model_ref, &resp_id)?;
 
     // Keep the legacy baseline in step and log the fold as a "took code" event,
@@ -2619,6 +2623,8 @@ fn adopt_responsibility(cwd: String, resp_id: String) -> Result<(), String> {
 #[tauri::command]
 fn reject_responsibility(cwd: String, resp_id: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    // Serialize the whole read-modify-write against the agent's MCP writer.
+    let _lock = scryer_core::lock_model(&model_ref)?;
     let folded = fold_vagrant(&model_ref, &resp_id)?;
 
     // Schedule the deletion: drop the responsibility and the minted chain from the
@@ -2704,6 +2710,8 @@ fn fold_vagrant_property(
 #[tauri::command]
 fn adopt_property(cwd: String, node_id: String, label: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    // Serialize the whole read-modify-write against the agent's MCP writer.
+    let _lock = scryer_core::lock_model(&model_ref)?;
     let folded = fold_vagrant_property(&model_ref, &node_id, &label)?;
 
     if let Ok(after) = scryer_core::read_model_at(&model_ref) {
@@ -2729,6 +2737,8 @@ fn adopt_property(cwd: String, node_id: String, label: String) -> Result<(), Str
 #[tauri::command]
 fn reject_property(cwd: String, node_id: String, label: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    // Serialize the whole read-modify-write against the agent's MCP writer.
+    let _lock = scryer_core::lock_model(&model_ref)?;
     let folded = fold_vagrant_property(&model_ref, &node_id, &label)?;
 
     let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
@@ -2844,6 +2854,8 @@ fn log_take_model(
 #[tauri::command]
 fn drop_responsibility(cwd: String, resp_id: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    // Serialize the whole read-modify-write against the agent's MCP writer.
+    let _lock = scryer_core::lock_model(&model_ref)?;
     let mut committed = scryer_core::read_model_at(&model_ref)?;
     let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
 
@@ -2874,6 +2886,8 @@ fn drop_responsibility(cwd: String, resp_id: String) -> Result<(), String> {
 #[tauri::command]
 fn reimplement_responsibility(cwd: String, resp_id: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    // Serialize the whole read-modify-write against the agent's MCP writer.
+    let _lock = scryer_core::lock_model(&model_ref)?;
     let mut committed = scryer_core::read_model_at(&model_ref)?;
     let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
 
@@ -2958,6 +2972,8 @@ fn take_property(
 #[tauri::command]
 fn drop_property(cwd: String, node_id: String, label: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    // Serialize the whole read-modify-write against the agent's MCP writer.
+    let _lock = scryer_core::lock_model(&model_ref)?;
     let mut committed = scryer_core::read_model_at(&model_ref)?;
     let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
 
@@ -2982,6 +2998,8 @@ fn drop_property(cwd: String, node_id: String, label: String) -> Result<(), Stri
 #[tauri::command]
 fn reimplement_property(cwd: String, node_id: String, label: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    // Serialize the whole read-modify-write against the agent's MCP writer.
+    let _lock = scryer_core::lock_model(&model_ref)?;
     let mut committed = scryer_core::read_model_at(&model_ref)?;
     let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
 
@@ -3052,6 +3070,8 @@ fn reword_responsibility(cwd: String, resp_id: String, statement: String) -> Res
         return Err("Reworded statement is empty".into());
     }
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    // Serialize the whole read-modify-write against the agent's MCP writer.
+    let _lock = scryer_core::lock_model(&model_ref)?;
     let mut committed = scryer_core::read_model_at(&model_ref)?;
     let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
 
@@ -3080,6 +3100,8 @@ fn reword_responsibility(cwd: String, resp_id: String, statement: String) -> Res
 #[tauri::command]
 fn drop_node(cwd: String, node_id: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    // Serialize the whole read-modify-write against the agent's MCP writer.
+    let _lock = scryer_core::lock_model(&model_ref)?;
     let mut committed = scryer_core::read_model_at(&model_ref)?;
     let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
 
@@ -3133,6 +3155,8 @@ fn drop_node(cwd: String, node_id: String) -> Result<(), String> {
 #[tauri::command]
 fn reimplement_node(cwd: String, node_id: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+    // Serialize the whole read-modify-write against the agent's MCP writer.
+    let _lock = scryer_core::lock_model(&model_ref)?;
     let mut committed = scryer_core::read_model_at(&model_ref)?;
     let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
 
