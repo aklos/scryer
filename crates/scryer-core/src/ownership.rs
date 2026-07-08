@@ -193,12 +193,17 @@ pub fn owning_node_for_location(
 
 /// Does `node` claim `file` through the source map — a direct node-key mapping
 /// (a schema/symbol declaration site) or any of its responsibilities' locations?
+/// A location's pattern matches by exact path OR as a glob (the same rule
+/// `locate::anchor_matches` uses), so a claim anchored via a glob — `src/parsers/
+/// **` — still routes the finding to its host instead of falling back to the
+/// reviewed container.
 fn node_maps_file(model: &ScryModel, node: &crate::Node, file: &str) -> bool {
     let maps = |key: &str| {
-        model
-            .source_map
-            .get(key)
-            .is_some_and(|locs| locs.iter().any(|l| l.pattern == file))
+        model.source_map.get(key).is_some_and(|locs| {
+            locs.iter().any(|l| {
+                l.pattern == file || glob::Pattern::new(&l.pattern).is_ok_and(|p| p.matches(file))
+            })
+        })
     };
     maps(&node.id) || node.responsibilities.iter().any(|r| maps(&r.id))
 }
@@ -360,6 +365,18 @@ mod tests {
         assert_eq!(owning_node_for_location(&m, "c", "src/TopBar.tsx", Some("TopBar")), "tb");
         // Even with no symbol, the only node mapping the file is the symbol.
         assert_eq!(owning_node_for_location(&m, "c", "src/Other.tsx", None), "ot");
+    }
+
+    #[test]
+    fn glob_anchored_claim_routes_to_its_host() {
+        let mut m = frontend_model();
+        // Anchor the TopBar symbol's claim via a GLOB. A file the glob covers
+        // must route to that symbol, not fall back to the reviewed container.
+        m.source_map.insert(
+            "r-tb".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/parsers/**/*.rs" })).unwrap()],
+        );
+        assert_eq!(owning_node_for_location(&m, "c", "src/parsers/json.rs", None), "tb");
     }
 
     #[test]
