@@ -513,7 +513,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Reverse lookup from code into the model — the tool to reach for when a task starts from a FILE ('fix the save race in useModelStorage.ts') rather than from the model. Given a project-relative `file` (and optional `symbol` to narrow to one definition), returns the intent governing that location in ONE call: every claim anchored there (with stale/vagrant flags), the owning node chain finest-first with its breadcrumb, the boundary owner of the code region, the BINDING directives (the claim's own, the finest node's, and everything inherited from its ancestors), and any pending plan entries touching the located elements. Reads the working view, so claims you just authored are visible. A file with no anchored claims still reports its boundary owner — the node whose intent governs the region. When you already know the file you're working in, one `locate` call replaces the search_model → read_model orientation dance."
+        description = "Reverse lookup from code into the model — the tool to reach for when a task starts from a FILE ('fix the save race in useModelStorage.ts') rather than from the model. Given a project-relative `file` (and optional `symbol` to narrow to one definition), returns the intent governing that location in ONE call: every claim anchored there (with stale/vagrant flags), the owning node chain finest-first with its breadcrumb, the boundary owner of the code region, the BINDING directives (the claim's own, the finest node's, and everything inherited from its ancestors), any pending plan entries touching the located elements, and `scopeHealth` — the owning node's own + subtree coverage counts and completeness, so you see how well-modeled the surrounding scope is, not just what it intends. Reads the working view, so claims you just authored are visible. A file with no anchored claims still reports its boundary owner — the node whose intent governs the region. When you already know the file you're working in, one `locate` call replaces the search_model → read_model orientation dance."
     )]
     fn locate(
         &self,
@@ -571,6 +571,37 @@ impl ScryerServer {
             None
         };
 
+        // Scope health: the owning node's own + subtree coverage counts and its
+        // completeness, so a `locate` shows not just the intent governing this
+        // file but how well-modeled the surrounding scope is. Scoped to the finest
+        // governing node (owner_chain.first()). Side-effect-free — no anchor
+        // fingerprint check (that writes/re-anchors and is get_health's job);
+        // completeness resolves anchors against the file inventory, so a symbol
+        // whose file exists but whose content broke still reads as covered here.
+        let scope_health = res.owner_chain.first().and_then(|owner| {
+            let committed = scryer_core::read_model_at(&model_ref).ok()?;
+            let health = scryer_core::health::compute_health(&committed, None);
+            let nh = health.nodes.get(&owner.id)?;
+            let planned =
+                scryer_core::read_planned_at(&model_ref).unwrap_or_else(|_| committed.clone());
+            let files = scryer_extract::list_project_files(model_ref.project_path());
+            let completeness = scryer_core::health::resolve_completeness(
+                &committed,
+                &planned,
+                &files,
+                &HashSet::new(),
+            )
+            .get(&owner.id)
+            .cloned();
+            Some(serde_json::json!({
+                "nodeId": owner.id,
+                "name": owner.name,
+                "own": serde_json::to_value(&nh.own).unwrap_or_default(),
+                "subtree": serde_json::to_value(&nh.subtree).unwrap_or_default(),
+                "completeness": completeness,
+            }))
+        });
+
         let mut payload = serde_json::json!({
             "file": file,
             "symbol": req.symbol,
@@ -582,6 +613,7 @@ impl ScryerServer {
             "ownDirectives": res.own_directives,
             "inheritedDirectives": res.inherited_directives,
             "pending": report.pending,
+            "scopeHealth": scope_health,
             "note": note,
         });
         strip_fields_compact(&mut payload);
@@ -2039,6 +2071,33 @@ mod tests {
         assert_eq!(v["ownDirectives"], serde_json::Value::Null, "symbol carries none");
         let inh = serde_json::to_string(&v["inheritedDirectives"]).unwrap();
         assert!(inh.contains("must never log tokens") && inh.contains("must stay stateless"));
+    }
+
+    /// locate reports the owning scope's health — the finest node's own +
+    /// subtree counts and its completeness — so you see how well-modeled the
+    /// region is, not just its intent.
+    #[test]
+    fn locate_reports_owning_scope_health() {
+        let (server, dir, project, _mr) = locate_project();
+        // Make the anchored file real so the leaf claim resolves to code.
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/auth.rs"), "fn verify_token() {}\n").unwrap();
+
+        let v = result_json(
+            &server
+                .locate(Parameters(LocateRequest {
+                    project: Some(project),
+                    file: "src/auth.rs".into(),
+                    symbol: None,
+                }))
+                .unwrap(),
+        );
+        let sh = &v["scopeHealth"];
+        assert_eq!(sh["nodeId"], "vt", "scoped to the finest owning node");
+        assert_eq!(sh["name"], "verify_token");
+        assert_eq!(sh["own"]["responsibilities"], 1);
+        // The leaf's one claim resolves to a real file → fully covered.
+        assert_eq!(sh["completeness"]["pct"], 100);
     }
 
     #[test]
