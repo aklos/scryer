@@ -333,12 +333,19 @@ impl ScryerServer {
             node.responsibilities = minter.build(&item.responsibilities);
             model.nodes.push(node);
             if let Some(dir) = item.boundary_dir.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+                // Normalize project-root spellings: ".", "./", "./" + prefix. Left
+                // as-is, "." → "./**/*", which matches no project-relative path and
+                // silently owns nothing. "." means the whole repo ("**/*").
+                let dir = dir.trim_end_matches('/');
+                let dir = dir.strip_prefix("./").unwrap_or(dir);
+                let pattern = if dir.is_empty() || dir == "." {
+                    "**/*".to_string()
+                } else {
+                    format!("{dir}/**/*")
+                };
                 model.boundaries.insert(
                     id.clone(),
-                    vec![Source {
-                        pattern: format!("{}/**/*", dir.trim_end_matches('/')),
-                        comment: None,
-                    }],
+                    vec![Source { pattern, comment: None }],
                 );
             }
             minted.push(id);
@@ -1184,6 +1191,41 @@ mod tests {
         let committed = read_back(&dir);
         assert!(committed.source_map.contains_key("resp-1"));
         assert!(committed.boundaries.contains_key("node-2"));
+    }
+
+    /// A boundary_dir of "." (or "./") means the whole repo. Left literal it
+    /// becomes "./**/*", which matches no project-relative path and silently owns
+    /// nothing — normalize it to "**/*", and strip a "./" prefix on subdirs.
+    #[test]
+    fn container_boundary_dir_root_normalizes_to_whole_repo() {
+        let (server, dir, system_id) = temp_project();
+        let project = dir.path().to_string_lossy().to_string();
+        let add = |bdir: &str, name: &str| {
+            server
+                .add_container(Parameters(AddContainerRequest {
+                    project: Some(project.clone()),
+                    items: vec![ContainerItem {
+                        parent_id: system_id.clone(),
+                        name: name.into(),
+                        technology: None,
+                        description: None,
+                        external: false,
+                        responsibilities: vec![],
+                        boundary_dir: Some(bdir.into()),
+                    }],
+                }))
+                .unwrap();
+        };
+        add(".", "Root");
+        add("./src", "Src");
+
+        let m = read_plan(&dir);
+        let pat = |name: &str| {
+            let n = m.nodes.iter().find(|n| n.name == name).unwrap();
+            m.boundaries.get(&n.id).unwrap()[0].pattern.clone()
+        };
+        assert_eq!(pat("Root"), "**/*", "\".\" is the whole repo, not \"./**/*\"");
+        assert_eq!(pat("Src"), "src/**/*", "\"./\" prefix stripped");
     }
 
     #[test]

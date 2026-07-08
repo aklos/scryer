@@ -1037,7 +1037,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "The model's observability report — deterministic, no semantic judgment. Per node: own + subtree rollups of responsibility/property counts, vagrant/stale flags, and anchor coverage (anchorable = any committed claim on LEAF nodes; claims on structural nodes are discharged through their subtree and are never 'unmapped'). Plus: anchor observations from the git-free fingerprint check — `changed` (the anchored span's content differs from what the model last saw), `broken` (the symbol is gone), `fileMissing` — with moved-but-unchanged symbols silently re-anchored, and a declared-link audit against the extracted import graph (edge_count 0 = asserted-only; 'unmodeled' = sibling pairs the code connects but no link declares). Also per node: `completeness` — how much of the node's AUTHORED subtree (committed + planned) reads through to real code, so it is defined from greenfield onward. `pct` (0–100) is anchored primitives over authored ones, where a primitive is a node's boundary box (counted only when its glob owns a real file), a leaf responsibility, or a data shape (counted when its anchor resolves and is not broken/missing); a scaffolded container reads low but non-zero, greenfield reads 0. `pct` is ABSENT ('—', unmeasured) when the subtree has no leaf primitives (a bare box), so an undecomposed shell never reads 100%. Only anchor what you have implemented — that discipline is what makes the figure trustworthy. Pass node_id to scope to one subtree with per-child summaries; omit it for the whole-model summary. Use this to decide WHERE work is needed (unmapped claims, vagrant flags, dark links) before reading full subtrees."
+        description = "The model's observability report — deterministic, no semantic judgment. Per node: own + subtree rollups of responsibility/property counts, vagrant/stale flags, and anchor coverage (anchorable = any committed claim on LEAF nodes; claims on structural nodes are discharged through their subtree and are never 'unmapped'). Plus: anchor observations from the git-free fingerprint check — `changed` (the anchored span's content differs from what the model last saw), `broken` (the symbol is gone), `fileMissing` — with moved-but-unchanged symbols silently re-anchored, and a declared-link audit against the extracted import graph (edge_count 0 = asserted-only; 'unmodeled' = sibling pairs the code connects but no link declares). Also per node: `completeness` — how much of the node's AUTHORED subtree (committed + planned) reads through to real code, so it is defined from greenfield onward. `pct` (0–100) is anchored primitives over authored ones, where a primitive is a node's boundary box (counted only when its glob owns a real file), a leaf responsibility, or a data shape (counted when its anchor resolves and is not broken/missing); a scaffolded container reads low but non-zero, greenfield reads 0. `pct` is ABSENT ('—', unmeasured) when the subtree has no leaf primitives (a bare box), so an undecomposed shell never reads 100%. Only anchor what you have implemented — that discipline is what makes the figure trustworthy. Pass node_id to scope to one subtree with per-child summaries; omit it for the whole-model summary. Use this to decide WHERE work is needed (unmapped claims, vagrant flags, dark links) before reading full subtrees. `broadBoundaries` flags node boundary globs with no directory prefix (e.g. `**/*`), which silently own every otherwise-unowned file."
     )]
     fn get_health(
         &self,
@@ -1147,6 +1147,33 @@ impl ScryerServer {
             serde_json::to_value(c).unwrap_or_default()
         };
 
+        // Boundary globs with no directory prefix (`**/*`, specificity 0) own
+        // every otherwise-unowned file, so drift and coverage attribute unrelated
+        // changes to that node. update_source_map warns at write time; surface the
+        // standing state here too. `scope` limits it to a subtree (None = whole
+        // model); a boundary keyed to a dead node is skipped.
+        let broad_boundaries = |scope: Option<&HashSet<&str>>| -> Vec<serde_json::Value> {
+            let mut keys: Vec<&String> = model.boundaries.keys().collect();
+            keys.sort();
+            let mut out = Vec::new();
+            for nid in keys {
+                let Some(node) = model.nodes.iter().find(|n| &n.id == nid) else {
+                    continue;
+                };
+                if scope.is_some_and(|s| !s.contains(nid.as_str())) {
+                    continue;
+                }
+                for src in &model.boundaries[nid] {
+                    if scryer_core::ownership::pattern_specificity(&src.pattern) == 0 {
+                        out.push(serde_json::json!({
+                            "node": nid, "name": node.name, "pattern": src.pattern,
+                        }));
+                    }
+                }
+            }
+            out
+        };
+
         let payload = match req.node_id.as_deref() {
             Some(node_id) => {
                 let Some(node) = model.nodes.iter().find(|n| n.id == node_id) else {
@@ -1247,6 +1274,7 @@ impl ScryerServer {
                     "anchors": drift_here,
                     "links": links_here,
                     "unmodeled": unmodeled_here,
+                    "broadBoundaries": broad_boundaries(Some(&subtree_ids)),
                 })
             }
             None => {
@@ -1274,6 +1302,7 @@ impl ScryerServer {
                     "reanchored": anchor_check.reanchored,
                     "assertedOnlyLinks": asserted_only,
                     "unmodeled": derived.as_ref().map(|g| &g.unmodeled),
+                    "broadBoundaries": broad_boundaries(None),
                     "edgeGraph": if derived.is_some() { "from last build's dependency cache" } else { "absent — run a model build (or the app's health refresh) to derive the link audit" },
                 })
             }
@@ -1920,6 +1949,41 @@ mod tests {
         assert_eq!(v["subtree"]["unmapped"], 1);
         assert_eq!(v["children"][0]["id"], "leaf");
         assert_eq!(v["children"][0]["subtree"]["unmapped"], 1);
+    }
+
+    /// get_health surfaces boundary globs with no directory prefix (`**/*`) as
+    /// `broadBoundaries` — they silently own every otherwise-unowned file — while
+    /// a properly-scoped glob is left off the list.
+    #[test]
+    fn get_health_flags_broad_boundaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, "Sys", None));
+        m.nodes.push(node("c", Kind::Container, "Core", Some("sys")));
+        m.boundaries.insert(
+            "c".into(),
+            vec![scryer_core::Source { pattern: "**/*".into(), comment: None }],
+        );
+        m.boundaries.insert(
+            "sys".into(),
+            vec![scryer_core::Source { pattern: "src/**/*".into(), comment: None }],
+        );
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+
+        let server = ScryerServer::new();
+        let v = result_json(
+            &server
+                .get_health(Parameters(GetHealthRequest {
+                    project: Some(dir.path().to_string_lossy().to_string()),
+                    node_id: None,
+                }))
+                .unwrap(),
+        );
+        let broad = v["broadBoundaries"].as_array().unwrap();
+        assert_eq!(broad.len(), 1, "only the prefixless glob is flagged: {broad:?}");
+        assert_eq!(broad[0]["node"], "c");
+        assert_eq!(broad[0]["pattern"], "**/*");
     }
 
     /// System > Container (boundary src/**) > Component > symbol, with the
