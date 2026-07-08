@@ -184,6 +184,21 @@ fn fold_summary(noun: &str, total: usize, removals: usize) -> String {
     }
 }
 
+/// Surface the parent-residence guard's real recovery at the tool layer: core's
+/// "commit the parent first" is correct advice for one missing parent, but in a
+/// never-committed (design-first) model it is a ladder to force-committing the
+/// whole tree — `commit_ancestors` is the honest exit, so the refusal names it.
+fn ancestor_hint(e: String) -> String {
+    if e.contains("is not in the committed model yet") {
+        format!(
+            "{e} — or retry with commit_ancestors: true to fold the plan-only ancestor \
+             chain structure-only first (their unbuilt claims stay pending in the plan)"
+        )
+    } else {
+        e
+    }
+}
+
 /// The nearest ancestor of `id` that is NOT in `removed` — the surviving home for
 /// a descoped node's relocated claims. `None` when the whole parent chain up to
 /// the root is being removed (or `id` is top-level), so the claims have nowhere to
@@ -434,7 +449,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities. A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
+        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities. A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. In a DESIGN-FIRST model (never committed), folding a built leaf is refused while its ancestors are plan-only — pass `commit_ancestors: true` to fold the ancestor chain structure-only first: the ancestors' identity and boundaries land in committed while their unbuilt claims stay pending in the plan, so partial implementation reads honestly. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
     )]
     fn mark_implemented(
         &self,
@@ -520,6 +535,50 @@ impl ScryerServer {
                     node_id
                 ));
             } else {
+                if req.commit_ancestors == Some(true) {
+                    // Design-first escape: fold the plan-only ancestor chain
+                    // structure-only FIRST, so the fold below lands under committed
+                    // parents without marking the ancestors' unbuilt claims
+                    // implemented. A scoped fold needs the HOST itself committed
+                    // too, so it rides the structure cascade as well.
+                    let include_self = req.responsibility_ids.is_some();
+                    match scryer_core::commit_plan_only_ancestors(
+                        &model_ref,
+                        node_id,
+                        include_self,
+                    ) {
+                        Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+                        Ok(folded) if folded.is_empty() => {}
+                        Ok(folded) => {
+                            let scoped: std::collections::HashSet<&str> = req
+                                .responsibility_ids
+                                .iter()
+                                .flatten()
+                                .map(|s| s.as_str())
+                                .collect();
+                            let pending: usize = planned
+                                .nodes
+                                .iter()
+                                .filter(|n| folded.contains(&n.id))
+                                .map(|n| {
+                                    n.responsibilities
+                                        .iter()
+                                        .filter(|r| !scoped.contains(r.id.as_str()))
+                                        .count()
+                                        + n.properties.len()
+                                })
+                                .sum();
+                            summaries.push(format!(
+                                "Committed {} plan-only node(s) structure-only as \
+                                 scaffolding ({}); {} unbuilt claim(s) on them stay \
+                                 pending in the plan.",
+                                folded.len(),
+                                folded.join(", "),
+                                pending
+                            ));
+                        }
+                    }
+                }
                 match &req.responsibility_ids {
                     // Scoped: commit exactly the named responsibilities. Their host
                     // node must already be committed (commit the whole node first
@@ -532,7 +591,9 @@ impl ScryerServer {
                                 None,
                                 id,
                             ) {
-                                return Ok(CallToolResult::error(vec![Content::text(e)]));
+                                return Ok(CallToolResult::error(vec![Content::text(
+                                    ancestor_hint(e),
+                                )]));
                             }
                         }
                         let n = ids.len();
@@ -552,7 +613,9 @@ impl ScryerServer {
                             None,
                             node_id,
                         ) {
-                            return Ok(CallToolResult::error(vec![Content::text(e)]));
+                            return Ok(CallToolResult::error(vec![Content::text(
+                                ancestor_hint(e),
+                            )]));
                         }
                         // Pull in the ready plan-added links/groups incident to this
                         // node (item A); deletions never ride along — they fold by
@@ -1391,6 +1454,7 @@ mod tests {
                 link_ids: None,
                 group_ids: None,
                 responsibility_ids: None,
+                commit_ancestors: None,
             }))
             .unwrap();
         assert!(serde_json::to_string(&r.content).unwrap().contains("removal"));
@@ -1435,6 +1499,7 @@ mod tests {
                 link_ids: None,
                 group_ids: None,
                 responsibility_ids: None,
+                commit_ancestors: None,
             }))
             .unwrap();
 
@@ -1453,6 +1518,105 @@ mod tests {
         assert_eq!(log[0].kind, scryer_core::history::EventKind::Impl);
         assert_eq!(log[0].node_id, "node-1");
         assert_eq!(log[0].rows.len(), 2, "both newly-folded claims listed");
+    }
+
+    /// Design-first close: without `commit_ancestors` a built leaf's fold is
+    /// refused (and the refusal names the flag); with it, the plan-only chain
+    /// lands in committed structure-only — ancestors carry no claims, the leaf
+    /// folds whole, and the ancestors' unbuilt claims stay pending in the plan.
+    #[test]
+    fn mark_implemented_commit_ancestors_folds_scaffolding() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        scryer_core::write_model_at(&model_ref, &ScryModel::new()).unwrap();
+
+        let mut planned = ScryModel::new();
+        let mut sys = node("sys", Kind::System, "System", None);
+        sys.responsibilities = vec![resp("r-sys")];
+        let mut app = node("app", Kind::Container, "App", Some("sys"));
+        app.responsibilities = vec![resp("r-app")];
+        let mut leaf = node("leaf", Kind::Component, "Feature", Some("app"));
+        leaf.responsibilities = vec![resp("r-leaf")];
+        planned.nodes.extend([sys, app, leaf]);
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        let call = |commit_ancestors: Option<bool>| {
+            server
+                .mark_implemented(Parameters(MarkImplementedRequest {
+                    project: Some(dir.path().to_string_lossy().to_string()),
+                    node_id: Some("leaf".into()),
+                    responsibility_ids: None,
+                    commit_ancestors,
+                    link_ids: None,
+                    group_ids: None,
+                }))
+                .unwrap()
+        };
+
+        // Without the flag: refused, and the refusal steers at the flag.
+        let refused = call(None);
+        assert!(refused.is_error.unwrap_or(false), "plan-only parent refused");
+        let text = refused
+            .content
+            .iter()
+            .find_map(|c| c.as_text().map(|t| t.text.clone()))
+            .unwrap();
+        assert!(text.contains("commit_ancestors"), "refusal names the recovery: {text}");
+
+        // With the flag: scaffolding chain + leaf all land, honestly.
+        let ok = call(Some(true));
+        assert!(!ok.is_error.unwrap_or(false), "{ok:?}");
+        let m = scryer_core::read_model_at(&model_ref).unwrap();
+        let by_id = |id: &str| m.nodes.iter().find(|n| n.id == id).unwrap();
+        assert!(by_id("sys").responsibilities.is_empty(), "scaffolding carries no claims");
+        assert!(by_id("app").responsibilities.is_empty(), "scaffolding carries no claims");
+        assert_eq!(by_id("leaf").responsibilities.len(), 1, "built claim folded");
+        assert_eq!(
+            scryer_core::plan_diff_at(&model_ref).unwrap().changes.len(),
+            2,
+            "exactly the ancestors' unbuilt claims stay pending"
+        );
+    }
+
+    /// Partial implementation on a plan-only node: `responsibility_ids` +
+    /// `commit_ancestors` commits the chain AND the host structure-only, folds
+    /// exactly the named claims, and leaves the rest pending on the node.
+    #[test]
+    fn mark_implemented_scoped_fold_with_ancestors_commits_host_structure_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        scryer_core::write_model_at(&model_ref, &ScryModel::new()).unwrap();
+
+        let mut planned = ScryModel::new();
+        planned.nodes.push(node("app", Kind::Container, "App", None));
+        let mut c = node("c", Kind::Component, "Feature", Some("app"));
+        c.responsibilities = vec![resp("r-1"), resp("r-2")];
+        planned.nodes.push(c);
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        let r = server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                node_id: Some("c".into()),
+                responsibility_ids: Some(vec!["r-1".into()]),
+                commit_ancestors: Some(true),
+                link_ids: None,
+                group_ids: None,
+            }))
+            .unwrap();
+        assert!(!r.is_error.unwrap_or(false), "{r:?}");
+
+        let m = scryer_core::read_model_at(&model_ref).unwrap();
+        let c = m.nodes.iter().find(|n| n.id == "c").expect("host structure-committed");
+        assert_eq!(c.responsibilities.len(), 1, "only the named claim folded");
+        assert_eq!(c.responsibilities[0].id, "r-1");
+        assert!(m.nodes.iter().any(|n| n.id == "app"), "ancestor structure-committed");
+        assert!(
+            !scryer_core::plan_diff_at(&model_ref).unwrap().is_empty(),
+            "the unbuilt claim r-2 stays pending"
+        );
     }
 
     /// End-to-end: `delete_nodes` stages a subtree deletion in the plan, then
@@ -1495,6 +1659,7 @@ mod tests {
                 link_ids: None,
                 group_ids: None,
                 responsibility_ids: None,
+                commit_ancestors: None,
             }))
             .unwrap();
 
@@ -1544,6 +1709,7 @@ mod tests {
                     link_ids: None,
                     group_ids: None,
                     responsibility_ids: None,
+                    commit_ancestors: None,
                 }))
                 .unwrap();
         };
@@ -1613,6 +1779,7 @@ mod tests {
                 link_ids: Some(vec!["link-node-1-node-2".into()]),
                 group_ids: Some(vec!["group-1".into()]),
                 responsibility_ids: None,
+                commit_ancestors: None,
             }))
             .unwrap();
 
@@ -1659,6 +1826,7 @@ mod tests {
                 link_ids: None,
                 group_ids: None,
                 responsibility_ids: Some(vec!["r-b".into()]),
+                commit_ancestors: None,
             }))
             .unwrap();
 

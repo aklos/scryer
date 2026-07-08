@@ -1412,6 +1412,141 @@ pub fn commit_element(
     Ok(())
 }
 
+/// The committed copy of a plan-only ANCESTOR folded as scaffolding by
+/// `commit_plan_only_ancestors`: the node's identity and structure — kind,
+/// parent, name, description, technology, external, directives, appearance —
+/// WITHOUT its responsibilities or properties. Those stay in the plan as
+/// pending build work on a now-committed node (the ordinary incremental-add
+/// diff shape), so the committed layer keeps reflecting only what the code
+/// actually contains.
+fn structure_only_copy(n: &Node) -> Node {
+    let mut copy = committed_node_copy(n);
+    copy.responsibilities.clear();
+    copy.properties.clear();
+    copy
+}
+
+/// Commit the plan-only ancestors of `node_id` STRUCTURE-ONLY, so a built leaf
+/// can fold in a design-first model without marking the whole tree's unbuilt
+/// claims as implemented.
+///
+/// `commit_element`'s parent-residence guard (item B) refuses to fold a node
+/// whose parent is plan-only — correct against accidental orphans, but in a
+/// model that has never been committed the recovery ("commit the parent
+/// first") is a ladder to force-committing the entire tree, and a whole-node
+/// fold of an ancestor would commit every unbuilt claim it carries. This
+/// cascade is the honest middle: walk the parent chain root-ward, fold each
+/// plan-only ancestor as scaffolding (`structure_only_copy` — no claims, no
+/// properties), and leave its pending work in the plan. The caller then folds
+/// the target itself with the claims it actually built.
+///
+/// The walk stops at the first committed ancestor (the chain is anchored
+/// there). A parent id present in NEITHER layer still errors — the cascade
+/// must not paper over a genuinely dangling reference, which is the case the
+/// residence guard exists for. Returns the folded ids, root-ward.
+///
+/// `include_self` appends the target itself to the structure fold when it is
+/// plan-only — for a SCOPED claim fold ("I built these 2 of its 5 claims"),
+/// where the host must reach committed but its unfolded claims must not.
+pub fn commit_plan_only_ancestors(
+    r: &ModelRef,
+    node_id: &str,
+    include_self: bool,
+) -> Result<Vec<String>, String> {
+    let mut model = read_model_at(r)?;
+    // Seeded read: the plan rewrite below persists the draft (same rationale
+    // as commit_element).
+    let planned = read_planned_seeded_at(r)?;
+
+    let target = planned
+        .nodes
+        .iter()
+        .find(|n| n.id == node_id)
+        .ok_or_else(|| format!("node '{node_id}' not found in the plan"))?;
+
+    // Collect the plan-only stretch of the parent chain, leaf-ward order.
+    // Seen-set guards against parent cycles like every chain walker (audit #6).
+    let mut chain: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> =
+        std::iter::once(node_id.to_string()).collect();
+    let mut cur = target.parent_id.clone();
+    while let Some(pid) = cur {
+        if model.nodes.iter().any(|n| n.id == pid) {
+            break;
+        }
+        if !seen.insert(pid.clone()) {
+            return Err(format!("parent chain of '{node_id}' contains a cycle at '{pid}'"));
+        }
+        match planned.nodes.iter().find(|n| n.id == pid) {
+            Some(p) => {
+                chain.push(pid.clone());
+                cur = p.parent_id.clone();
+            }
+            None => {
+                return Err(format!(
+                    "cannot commit ancestors of '{node_id}': parent '{pid}' exists in neither \
+                     layer — fix the parent id before folding"
+                ));
+            }
+        }
+    }
+    chain.reverse(); // fold root-ward so each lands under a committed parent
+    if include_self && !model.nodes.iter().any(|n| n.id == node_id) {
+        chain.push(node_id.to_string());
+    }
+    if chain.is_empty() {
+        return Ok(chain);
+    }
+
+    // Structure folds root-ward. The node's own declaration anchor and boundary
+    // are structural and follow the single-home rule (item D): they move into
+    // committed — so drifted_scopes and ownership see the region — and leave
+    // the draft. Claim anchors stay in the draft with their pending claims.
+    let mut planned_anchor_strip: Vec<String> = Vec::new();
+    let mut planned_boundary_strip: Vec<String> = Vec::new();
+    for aid in &chain {
+        let n = planned.nodes.iter().find(|n| &n.id == aid).expect("collected from planned");
+        model.nodes.retain(|x| &x.id != aid);
+        model.nodes.push(structure_only_copy(n));
+        if let Some(locs) = planned.source_map.get(aid) {
+            model.source_map.insert(aid.clone(), locs.clone());
+            planned_anchor_strip.push(aid.clone());
+        }
+        if let Some(b) = planned.boundaries.get(aid) {
+            model.boundaries.insert(aid.clone(), b.clone());
+            planned_boundary_strip.push(aid.clone());
+        }
+    }
+
+    write_model_at(r, &model)?;
+
+    // Draft sync, mirroring commit_element: clear the node-level markers the
+    // fold just resolved (folding a vagrant ancestor IS its adopt — the built
+    // leaf demonstrably lives inside it), and strip what committed now owns.
+    // Claim/property markers are untouched: those claims didn't fold and their
+    // verdicts are still pending.
+    let mut p = planned;
+    let mut plan_markers_cleared = false;
+    for aid in &chain {
+        if let Some(n) = p.nodes.iter_mut().find(|n| &n.id == aid) {
+            plan_markers_cleared |= n.vagrant.take().is_some() | n.stale.take().is_some();
+        }
+    }
+    if plan_markers_cleared || !planned_anchor_strip.is_empty() || !planned_boundary_strip.is_empty()
+    {
+        for k in &planned_anchor_strip {
+            p.source_map.remove(k);
+        }
+        for k in &planned_boundary_strip {
+            p.boundaries.remove(k);
+        }
+        let json = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?;
+        write_planned_raw_at(r, &json)?;
+    }
+
+    Ok(chain)
+}
+
 /// After a node is folded into the committed model, pull in the plan-added links
 /// and groups that THIS node's commit has just made "ready". Links and groups
 /// have no node id of their own, so `mark_implemented` (keyed by node) can never
@@ -2566,6 +2701,126 @@ mod lock_tests {
         assert!(model.nodes.iter().any(|n| n.id == "p"));
         assert!(model.nodes.iter().any(|n| n.id == "c"));
         assert!(plan_diff_at(&r).unwrap().is_empty());
+    }
+
+    /// The scaffolding cascade behind an opt-in ancestor commit: in a
+    /// design-first model, a built leaf's plan-only ancestor chain folds
+    /// STRUCTURE-ONLY — ancestors land in committed without their unbuilt
+    /// claims (those stay pending in the plan), structural anchors
+    /// (declaration + boundary) move to their single committed home, and the
+    /// leaf itself then folds normally.
+    #[test]
+    fn commit_plan_only_ancestors_folds_structure_only() {
+        let (_dir, r) = temp_ref();
+        write_model_at(&r, &ScryModel::new()).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        let mut sys = mk_node("sys", "System", None);
+        sys.responsibilities.push(mk_resp("resp-s", "own the domain"));
+        let mut app = mk_node("app", "App", Some("sys"));
+        app.responsibilities.push(mk_resp("resp-a", "serve the api"));
+        let mut leaf = mk_node("leaf", "Feature", Some("app"));
+        leaf.responsibilities.push(mk_resp("resp-l", "do the built thing"));
+        planned.nodes.extend([sys, app, leaf]);
+        planned
+            .boundaries
+            .insert("app".into(), vec![Source { pattern: "api/**".into(), comment: None }]);
+        planned.source_map.insert(
+            "app".into(),
+            vec![SourceLocation {
+                pattern: "api/mod.rs".into(),
+                symbol: None,
+                line: None,
+                end_line: None,
+                command: None,
+            }],
+        );
+        write_planned_at(&r, &planned).unwrap();
+
+        let folded = commit_plan_only_ancestors(&r, "leaf", false).unwrap();
+        assert_eq!(folded, vec!["sys".to_string(), "app".to_string()], "root-ward order");
+
+        // Ancestors are committed as scaffolding: structure without claims.
+        let model = read_model_at(&r).unwrap();
+        let sys = model.nodes.iter().find(|n| n.id == "sys").expect("sys committed");
+        let app = model.nodes.iter().find(|n| n.id == "app").expect("app committed");
+        assert!(sys.responsibilities.is_empty(), "unbuilt claims did not fold");
+        assert!(app.responsibilities.is_empty(), "unbuilt claims did not fold");
+        assert!(!model.nodes.iter().any(|n| n.id == "leaf"), "the target itself is not folded");
+
+        // Structural anchors moved to their single committed home…
+        assert_eq!(model.boundaries.get("app").expect("boundary folded")[0].pattern, "api/**");
+        assert!(model.source_map.contains_key("app"), "declaration anchor folded");
+        let plan = read_planned_at(&r).unwrap();
+        assert!(!plan.boundaries.contains_key("app"), "boundary left the draft");
+        assert!(!plan.source_map.contains_key("app"), "anchor left the draft");
+
+        // …and the leaf now folds normally, carrying only its own built claim,
+        // while the ancestors' unbuilt claims remain the pending plan work.
+        commit_element(&r, diff::ElementKind::Node, None, "leaf").unwrap();
+        let model = read_model_at(&r).unwrap();
+        let leaf = model.nodes.iter().find(|n| n.id == "leaf").unwrap();
+        assert_eq!(leaf.responsibilities.len(), 1, "built claim folded with the leaf");
+        assert_eq!(
+            plan_diff_at(&r).unwrap().changes.len(),
+            2,
+            "exactly the ancestors' unbuilt claims stay pending"
+        );
+    }
+
+    /// No plan-only ancestors → no-op: the cascade returns empty and commits
+    /// nothing.
+    #[test]
+    fn commit_plan_only_ancestors_noop_when_parent_committed() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        m.nodes.push(mk_node("p", "Parent", None));
+        write_model_at(&r, &m).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes.push(mk_node("c", "Child", Some("p")));
+        write_planned_at(&r, &planned).unwrap();
+
+        assert!(commit_plan_only_ancestors(&r, "c", false).unwrap().is_empty());
+        assert_eq!(read_model_at(&r).unwrap().nodes.len(), 1, "committed untouched");
+    }
+
+    /// A parent id in NEITHER layer is a dangling reference, not scaffolding —
+    /// the cascade refuses instead of papering it over (the protective case
+    /// the residence guard exists for).
+    #[test]
+    fn commit_plan_only_ancestors_rejects_a_dangling_parent() {
+        let (_dir, r) = temp_ref();
+        write_model_at(&r, &ScryModel::new()).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes.push(mk_node("c", "Child", Some("ghost")));
+        write_planned_at(&r, &planned).unwrap();
+
+        let err = commit_plan_only_ancestors(&r, "c", false).unwrap_err();
+        assert!(err.contains("'ghost'"), "error names the dangling parent: {err}");
+        assert!(read_model_at(&r).unwrap().nodes.is_empty(), "nothing committed");
+    }
+
+    /// A parent cycle in the plan terminates with an error instead of hanging —
+    /// the same seen-set rule every chain walker carries (audit #6).
+    #[test]
+    fn commit_plan_only_ancestors_survives_a_parent_cycle() {
+        let (_dir, r) = temp_ref();
+        write_model_at(&r, &ScryModel::new()).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes.push(mk_node("a", "A", Some("b")));
+        planned.nodes.push(mk_node("b", "B", Some("a")));
+        planned.nodes.push(mk_node("c", "C", Some("a")));
+        write_planned_at(&r, &planned).unwrap();
+
+        let err = commit_plan_only_ancestors(&r, "c", false).unwrap_err();
+        assert!(err.contains("cycle"), "cycle detected: {err}");
     }
 
     /// Committing a responsibility that the draft moved to another host lands it

@@ -170,6 +170,14 @@ pub(crate) struct MarkImplementedRequest {
     /// Optional: group ids to fold. Likewise the only way to commit a standalone group
     /// change or deletion.
     pub group_ids: Option<Vec<String>>,
+    /// Optional: also commit the node's plan-only ANCESTORS, structure-only, before the
+    /// fold — the design-first escape. In a model that has never been committed, a fold
+    /// otherwise dead-ends on "commit the parent first", and folding an ancestor whole
+    /// would mark its unbuilt claims implemented. Structure-only commits an ancestor's
+    /// identity, kind, parent, and boundary while its responsibilities and properties
+    /// stay pending in the plan. With responsibility_ids, the host node itself is also
+    /// committed structure-only, so a partial implementation folds honestly.
+    pub commit_ancestors: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
