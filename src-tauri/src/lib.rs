@@ -786,7 +786,12 @@ fn setup_mcp_integration(
 
             let mut root: serde_json::Value = if settings_path.exists() {
                 let contents = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
-                serde_json::from_str(&contents).unwrap_or_else(|_| serde_json::json!({}))
+                serde_json::from_str(&contents).map_err(|e| {
+                    format!(
+                        "{} is not valid JSON ({e}); refusing to overwrite it — fix the file and retry.",
+                        settings_path.display()
+                    )
+                })?
             } else {
                 serde_json::json!({})
             };
@@ -825,7 +830,12 @@ fn write_claude_hooks(project_path: &str, binary_path: &str) -> Result<String, S
     let settings_path = claude_dir.join("settings.local.json");
     let mut root: serde_json::Value = if settings_path.exists() {
         let contents = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&contents).unwrap_or_else(|_| serde_json::json!({}))
+        serde_json::from_str(&contents).map_err(|e| {
+            format!(
+                "{} is not valid JSON ({e}); refusing to overwrite it — fix the file and retry.",
+                settings_path.display()
+            )
+        })?
     } else {
         serde_json::json!({})
     };
@@ -915,6 +925,25 @@ mod hook_install_tests {
         assert!(scryer_post.iter().any(|e| e["matcher"] == "Edit|Write|NotebookEdit"));
         assert_eq!(root["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
         assert_eq!(root["hooks"]["Stop"].as_array().unwrap().len(), 1);
+    }
+
+    /// A malformed settings file must ERROR the install, not get silently
+    /// replaced — a stray comma in the user's config must never cost them their
+    /// permissions and foreign hooks.
+    #[test]
+    fn hook_install_refuses_to_overwrite_malformed_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude_dir = dir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let settings = claude_dir.join("settings.local.json");
+        let original = r#"{ "permissions": { "allow": ["mcp__scryer",] } }"#; // trailing comma
+        std::fs::write(&settings, original).unwrap();
+
+        let project = dir.path().to_string_lossy().to_string();
+        let err = write_claude_hooks(&project, "/opt/scryer/scryer-mcp").unwrap_err();
+        assert!(err.contains("not valid JSON"), "{err}");
+        // The user's file is left exactly as it was.
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), original);
     }
 }
 
