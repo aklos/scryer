@@ -17,6 +17,19 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+/// How long a recorded touch stays live. A single agent run is minutes; a
+/// resumed session (same id, reconnecting hours later) must not re-gate on the
+/// prior run's edits, so touches older than this are pruned on every touch and
+/// close. Long enough not to forget a genuinely long session, short enough that
+/// a stale run's touches age out.
+const TOUCH_TTL: Duration = Duration::from_secs(2 * 3600);
+
+/// Drop touches older than [`TOUCH_TTL`].
+fn prune_touches(log: &mut Vec<(Instant, Touch)>, now: Instant) {
+    log.retain(|(at, _)| now.saturating_duration_since(*at) < TOUCH_TTL);
+}
 
 /// Managed Tauri state: the endpoint for the currently open project, if any.
 pub struct HookState(pub Mutex<Option<HookServer>>);
@@ -100,7 +113,7 @@ pub fn start(
     .map_err(|e| e.to_string())?;
 
     let shutdown = Arc::new(AtomicBool::new(false));
-    let touches: Arc<Mutex<Vec<Touch>>> = Arc::new(Mutex::new(Vec::new()));
+    let touches: Arc<Mutex<Vec<(Instant, Touch)>>> = Arc::new(Mutex::new(Vec::new()));
 
     {
         let shutdown = shutdown.clone();
@@ -133,7 +146,7 @@ fn handle_request(
     mut stream: std::net::TcpStream,
     project: &Path,
     token: &str,
-    touches: &Arc<Mutex<Vec<Touch>>>,
+    touches: &Arc<Mutex<Vec<(Instant, Touch)>>>,
     on_touch: &(impl Fn(&Touch) + Send + 'static),
 ) {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
@@ -241,20 +254,23 @@ fn handle_request(
                 file: relativize(project, file),
                 symbol: v["symbol"].as_str().map(str::to_string),
             };
+            let now = Instant::now();
             let mut log = touches.lock().unwrap();
-            if !log.contains(&touch) {
+            prune_touches(&mut log, now);
+            if !log.iter().any(|(_, t)| t == &touch) {
                 on_touch(&touch);
-                log.push(touch);
+                log.push((now, touch));
             }
             respond(&mut stream, 200, &serde_json::json!({ "recorded": log.len() }));
         }
         ("GET", "/close") => {
             let session = param("session").unwrap_or_default();
-            let log = touches.lock().unwrap();
+            let mut log = touches.lock().unwrap();
+            prune_touches(&mut log, Instant::now());
             let touched: Vec<Touch> = log
                 .iter()
-                .filter(|t| session.is_empty() || t.session == session)
-                .cloned()
+                .filter(|(_, t)| session.is_empty() || t.session == session)
+                .map(|(_, t)| t.clone())
                 .collect();
             drop(log);
             respond(&mut stream, 200, &close_payload(project, &touched));
@@ -553,6 +569,21 @@ mod tests {
             Kind::Component => "component",
             Kind::Symbol => "symbol",
         }
+    }
+
+    /// Touches older than the TTL are pruned; fresh ones survive — a resumed
+    /// session must not re-gate on a prior run's hours-old edits.
+    #[test]
+    fn prune_drops_only_stale_touches() {
+        let now = Instant::now();
+        let touch = |f: &str| Touch { session: "s".into(), file: f.into(), symbol: None };
+        let mut log = vec![
+            (now.checked_sub(TOUCH_TTL + Duration::from_secs(60)).unwrap(), touch("old.rs")),
+            (now.checked_sub(Duration::from_secs(60)).unwrap(), touch("fresh.rs")),
+        ];
+        prune_touches(&mut log, now);
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].1.file, "fresh.rs");
     }
 
     /// System > Container with a claim anchored in src/auth.rs.
