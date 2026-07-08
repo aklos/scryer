@@ -32,12 +32,19 @@ fn prune_code_map(model: &mut ScryModel, removed_node_ids: &HashSet<String>) {
 /// Replace `node_id`'s whole subtree in ONE model layer with `nodes` + `links`:
 /// drop every current descendant (and its links and code-side mapping), then
 /// insert the payload nodes (skipping `node_id` itself) and any payload link
-/// whose endpoints both exist afterward. Returns `false` — leaving the layer
-/// untouched — when `node_id` isn't present, so a caller can apply the same
-/// replacement to both layers and skip whichever lacks the target.
-fn replace_subtree(model: &mut ScryModel, node_id: &str, nodes: &[Node], links: &[Link]) -> bool {
+/// whose endpoints both exist afterward. Returns `(applied, dropped)`: `applied`
+/// is `false` — leaving the layer untouched — when `node_id` isn't present, so a
+/// caller can apply the same replacement to both layers and skip whichever lacks
+/// the target; `dropped` describes every payload link discarded for an endpoint
+/// that no node in the resulting layer provides, so the loss is never silent.
+fn replace_subtree(
+    model: &mut ScryModel,
+    node_id: &str,
+    nodes: &[Node],
+    links: &[Link],
+) -> (bool, Vec<String>) {
     if !model.nodes.iter().any(|n| n.id == node_id) {
-        return false;
+        return (false, Vec::new());
     }
     let mut to_remove: HashSet<String> = HashSet::new();
     let mut frontier = vec![node_id.to_string()];
@@ -60,12 +67,23 @@ fn replace_subtree(model: &mut ScryModel, node_id: &str, nodes: &[Node], links: 
         model.nodes.push(n.clone());
     }
     let node_ids: HashSet<&str> = model.nodes.iter().map(|n| n.id.as_str()).collect();
+    let mut dropped = Vec::new();
     for l in links {
-        if node_ids.contains(l.src.as_str()) && node_ids.contains(l.dst.as_str()) {
+        let src_ok = node_ids.contains(l.src.as_str());
+        let dst_ok = node_ids.contains(l.dst.as_str());
+        if src_ok && dst_ok {
             model.links.push(l.clone());
+        } else {
+            let reason = match (src_ok, dst_ok) {
+                (false, false) => "unknown src and dst",
+                (false, true) => "unknown src",
+                (true, false) => "unknown dst",
+                (true, true) => unreachable!(),
+            };
+            dropped.push(format!("{} -> {} ({reason})", l.src, l.dst));
         }
     }
-    true
+    (true, dropped)
 }
 
 /// Fold a set of target nodes out of ONE model layer: relocate each target's own
@@ -784,8 +802,10 @@ impl ScryerServer {
             }
         };
 
-        // Apply the subtree replacement to the plan.
-        replace_subtree(&mut model, &req.node_id, &payload.nodes, &payload.links);
+        // Apply the subtree replacement to the plan. The dropped-link report
+        // comes from the plan layer — always applied (node existence checked
+        // above) and the authoritative surface the caller edits.
+        let (_, dropped_links) = replace_subtree(&mut model, &req.node_id, &payload.nodes, &payload.links);
         enforce_readonly_directives(&mut model, &prior);
 
         // Generation reverse-engineers code that ALREADY EXISTS, so the same
@@ -797,7 +817,8 @@ impl ScryerServer {
         // plan write so a `None` here just means "plan-only".
         let committed = scryer_core::read_model_at(&model_ref).ok().and_then(|mut c| {
             let cprior = c.clone();
-            replace_subtree(&mut c, &req.node_id, &payload.nodes, &payload.links).then(|| {
+            let (applied, _) = replace_subtree(&mut c, &req.node_id, &payload.nodes, &payload.links);
+            applied.then(|| {
                 enforce_readonly_directives(&mut c, &cprior);
                 c
             })
@@ -817,6 +838,15 @@ impl ScryerServer {
 
         let warnings = validate::validate(&model);
         let mut msg = format!("Replaced subtree under {}", req.node_id);
+        if !dropped_links.is_empty() {
+            msg.push_str(&format!(
+                "\n\nDropped {} link(s) with endpoints absent from the subtree:",
+                dropped_links.len()
+            ));
+            for d in &dropped_links {
+                msg.push_str(&format!("\n- {d}"));
+            }
+        }
         if !warnings.is_empty() {
             msg.push_str(&format!("\n\n{} warning(s):", warnings.len()));
             for w in warnings {
@@ -1236,6 +1266,49 @@ mod tests {
             scryer_core::diff::diff(&committed, &planned).is_empty(),
             "committed == planned, so the plan diff is empty — no phantom subtree queue"
         );
+    }
+
+    /// A payload link whose endpoint is not in the resulting subtree is dropped
+    /// (it would dangle) — but never silently: set_node reports each drop with a
+    /// reason so a mis-keyed link is visible, not lost.
+    #[test]
+    fn set_node_reports_dropped_links_with_unknown_endpoints() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::System, "Acme", None));
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+
+        // Two components; one link joins them (kept), one points at a node that
+        // does not exist (dropped and reported).
+        let payload = serde_json::json!({
+            "nodes": [
+                { "id": "node-2", "kind": "container", "name": "API", "parentId": "node-1" },
+                { "id": "node-3", "kind": "container", "name": "DB", "parentId": "node-1" }
+            ],
+            "links": [
+                { "id": "l-ok", "src": "node-2", "dst": "node-3", "label": "queries" },
+                { "id": "l-bad", "src": "node-2", "dst": "ghost", "label": "calls" }
+            ]
+        });
+        let server = ScryerServer::new();
+        let result = server
+            .set_node(Parameters(SetNodeRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                node_id: "node-1".into(),
+                data: payload.to_string(),
+            }))
+            .unwrap();
+
+        let text = result.content.iter().find_map(|c| c.as_text().map(|t| t.text.clone())).unwrap();
+        assert!(text.contains("Dropped 1 link"), "reports the drop: {text}");
+        assert!(text.contains("node-2 -> ghost (unknown dst)"), "names the bad link: {text}");
+
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert!(planned.links.iter().any(|l| l.id == "l-ok"), "the valid link is kept");
+        assert!(!planned.links.iter().any(|l| l.id == "l-bad"), "the dangling link is dropped");
     }
 
     /// mark_implemented folds a planned DELETION: a node removed from the plan (its
