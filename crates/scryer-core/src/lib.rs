@@ -1433,6 +1433,8 @@ pub fn commit_ready_dependents(r: &ModelRef, node_id: &str) -> Result<(), String
     let committed = read_model_at(r)?;
     let committed_ids: std::collections::HashSet<&str> =
         committed.nodes.iter().map(|n| n.id.as_str()).collect();
+    let committed_group_ids: std::collections::HashSet<&str> =
+        committed.groups.iter().map(|g| g.id.as_str()).collect();
     // Nothing became reachable if the node itself isn't committed (e.g. this was
     // a deletion fold, which removes rather than adds).
     if !committed_ids.contains(node_id) {
@@ -1465,7 +1467,16 @@ pub fn commit_ready_dependents(r: &ModelRef, node_id: &str) -> Result<(), String
         .filter(|c| c.kind == diff::ElementKind::Group && !is_deletion(c))
         .filter_map(|c| planned.groups.iter().find(|g| g.id == c.id))
         .filter(|g| g.member_ids.iter().any(|m| m == node_id))
-        .filter(|g| g.member_ids.iter().all(|m| committed_ids.contains(m.as_str())))
+        // A group folds only once EVERY commit_element precondition holds — its
+        // members, its anchor node, AND its parent group. Checking members alone
+        // let a group with a plan-only parent slip through, so commit_element then
+        // errored AFTER this node's own fold already committed: a partial success
+        // reported as failure. Match all three residence checks it enforces.
+        .filter(|g| {
+            g.member_ids.iter().all(|m| committed_ids.contains(m.as_str()))
+                && g.parent_node_id.as_deref().is_none_or(|p| committed_ids.contains(p))
+                && g.parent_group_id.as_deref().is_none_or(|p| committed_group_ids.contains(p))
+        })
         .map(|g| g.id.clone())
         .collect();
     for id in ready_groups {
@@ -2072,6 +2083,49 @@ mod lock_tests {
 
         commit_element(&r, diff::ElementKind::Node, None, "b").unwrap();
         commit_element(&r, diff::ElementKind::Group, None, "grp").unwrap();
+        assert!(read_model_at(&r).unwrap().groups.iter().any(|g| g.id == "grp"));
+    }
+
+    /// commit_ready_dependents must not pick a group whose members are all
+    /// committed but whose anchor node is still plan-only — commit_element would
+    /// then error AFTER the node fold already committed (a partial success
+    /// reported as failure). It skips such a group and returns Ok; once the
+    /// anchor commits, the group folds.
+    #[test]
+    fn ready_dependents_skips_a_group_with_a_plan_only_anchor() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        m.nodes.push(mk_node("root", "Root", None));
+        write_model_at(&r, &m).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes.push(mk_node("m", "Member", Some("root"))); // foldable: parent committed
+        planned.nodes.push(mk_node("anchor", "Anchor", Some("root"))); // stays plan-only
+        planned.groups.push(Group {
+            id: "grp".into(),
+            name: "G".into(),
+            description: None,
+            member_ids: vec!["m".into()],
+            parent_group_id: None,
+            parent_node_id: Some("anchor".into()),
+            responsibilities: Vec::new(),
+            icon: None,
+        });
+        write_planned_at(&r, &planned).unwrap();
+
+        // Fold the member, then run the ready-dependent sweep: it must NOT error
+        // on the group whose anchor is still uncommitted.
+        commit_element(&r, diff::ElementKind::Node, None, "m").unwrap();
+        commit_ready_dependents(&r, "m").expect("must not fail on a not-yet-ready group");
+        assert!(
+            !read_model_at(&r).unwrap().groups.iter().any(|g| g.id == "grp"),
+            "the group is skipped while its anchor is plan-only"
+        );
+
+        // Commit the anchor, sweep again: now every precondition holds, it folds.
+        commit_element(&r, diff::ElementKind::Node, None, "anchor").unwrap();
+        commit_ready_dependents(&r, "m").unwrap();
         assert!(read_model_at(&r).unwrap().groups.iter().any(|g| g.id == "grp"));
     }
 
