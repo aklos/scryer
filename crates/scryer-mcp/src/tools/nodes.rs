@@ -299,15 +299,53 @@ impl ScryerServer {
                 ))]));
             }
 
-            // A reparent must not create a cycle: the new parent cannot be the
-            // node itself or anywhere inside its own subtree. `move_nodes`
-            // enforces this at nodes.rs:453; `update_nodes` must not be a
-            // backdoor that plants a parent-chain loop (which would then hang
-            // every ancestor walker in core). Validate against the model as it
-            // stands (including any reparents applied earlier in this batch)
-            // BEFORE mutating. The `seen` set keeps this walk terminating even
-            // if the model already holds a malformed chain.
+            // A reparent runs the SAME gate move_nodes enforces (nodes.rs:635):
+            // the new parent must exist, satisfy the kind hierarchy, not be
+            // external, and not sit inside the moved node's own subtree. Without
+            // these, update_nodes is a backdoor that silently orphans a node onto
+            // a nonexistent parent, plants an illegal pairing, hangs children off
+            // an external node, or loops the parent chain (which then hangs every
+            // ancestor walker in core). Validate against the model as it stands
+            // (reparents applied earlier in this batch included) BEFORE mutating.
             if let Some(v) = &u.parent_id {
+                // Effective kind — an update may re-kind the node in the same call.
+                let cur_kind = model
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == u.node_id)
+                    .map(|n| n.kind)
+                    .expect("existence checked above");
+                let kind = match &u.kind {
+                    Some(k) => parse_kind(k)?,
+                    None => cur_kind,
+                };
+                let Some(parent) = model.nodes.iter().find(|n| &n.id == v) else {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "New parent '{}' not found",
+                        v
+                    ))]));
+                };
+                let valid = matches!(
+                    (parent.kind, kind),
+                    (Kind::System, Kind::Container)
+                        | (Kind::Container, Kind::Component)
+                        | (Kind::Component, Kind::Symbol)
+                );
+                if !valid {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "A {:?} cannot be parented by a {:?}",
+                        kind, parent.kind
+                    ))]));
+                }
+                if parent.external == Some(true) {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "External node '{}' cannot have children",
+                        v
+                    ))]));
+                }
+                // The new parent cannot be the node itself or inside its subtree.
+                // The `seen` set keeps this walk terminating even if the model
+                // already holds a malformed chain.
                 let mut cur = Some(v.clone());
                 let mut seen: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
@@ -329,6 +367,14 @@ impl ScryerServer {
                         .and_then(|n| n.parent_id.clone());
                 }
             }
+
+            // Remembered before the mutable borrow so group eviction below can
+            // tell an actual level change from a no-op reparent.
+            let old_parent = model
+                .nodes
+                .iter()
+                .find(|n| n.id == u.node_id)
+                .and_then(|n| n.parent_id.clone());
 
             let n = model
                 .nodes
@@ -362,6 +408,16 @@ impl ScryerServer {
             }
             if let Some(v) = &u.parent_id {
                 n.parent_id = Some(v.clone());
+            }
+
+            // Groups organize siblings at one level — a reparent to a new level
+            // leaves the group (mirrors move_nodes). `n`'s borrow ends above.
+            if let Some(v) = &u.parent_id {
+                if old_parent.as_deref() != Some(v.as_str()) {
+                    for g in model.groups.iter_mut() {
+                        g.member_ids.retain(|m| m != &u.node_id);
+                    }
+                }
             }
             updated += 1;
         }
@@ -1729,5 +1785,81 @@ mod tests {
             }))
             .unwrap();
         assert!(r.is_error.unwrap_or(false), "self-parent rejected");
+    }
+
+    /// update_nodes reparenting must enforce the rest of move_nodes' gate too
+    /// (audit #6): a nonexistent parent, an illegal kind pairing, and an external
+    /// parent are all rejected, and a valid reparent evicts the node from its
+    /// old-level group.
+    #[test]
+    fn update_nodes_reparent_enforces_the_full_move_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, "Sys", None));
+        m.nodes.push(node("ca", Kind::Container, "A", Some("sys")));
+        m.nodes.push(node("cb", Kind::Container, "B", Some("sys")));
+        m.nodes.push(node("comp", Kind::Component, "Comp", Some("ca")));
+        let mut ext = node("ext", Kind::Container, "Ext", Some("sys"));
+        ext.external = Some(true);
+        m.nodes.push(ext);
+        m.groups.push(scryer_core::Group {
+            id: "g1".into(),
+            name: "Edge".into(),
+            description: None,
+            member_ids: vec!["comp".into()],
+            parent_group_id: None,
+            parent_node_id: Some("ca".into()),
+            responsibilities: Vec::new(),
+            icon: None,
+        });
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+        let server = ScryerServer::new();
+        let project = dir.path().to_string_lossy().to_string();
+
+        let reparent = |node_id: &str, parent: &str| UpdateNodeItem {
+            node_id: node_id.into(),
+            parent_id: Some(parent.into()),
+            kind: None,
+            name: None,
+            description: None,
+            technology: None,
+            external: None,
+            responsibilities: None,
+            properties: None,
+            visual: None,
+        };
+        let attempt = |item: UpdateNodeItem| {
+            server
+                .update_nodes(Parameters(UpdateNodeRequest {
+                    project: Some(project.clone()),
+                    nodes: vec![item],
+                }))
+                .unwrap()
+        };
+
+        // Nonexistent parent: rejected, not silently orphaned.
+        assert!(attempt(reparent("comp", "ghost")).is_error.unwrap_or(false), "missing parent");
+        // Illegal pairing: a component cannot be parented by a system.
+        assert!(attempt(reparent("comp", "sys")).is_error.unwrap_or(false), "kind pair");
+        // External node cannot take children.
+        assert!(attempt(reparent("comp", "ext")).is_error.unwrap_or(false), "external parent");
+
+        // The rejections left the plan untouched.
+        let after = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(
+            after.nodes.iter().find(|n| n.id == "comp").unwrap().parent_id.as_deref(),
+            Some("ca"),
+            "parent unchanged after the rejected reparents"
+        );
+
+        // Valid reparent A→B: applied, and the node leaves its old-level group.
+        assert!(!attempt(reparent("comp", "cb")).is_error.unwrap_or(false), "valid reparent");
+        let after = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(
+            after.nodes.iter().find(|n| n.id == "comp").unwrap().parent_id.as_deref(),
+            Some("cb")
+        );
+        assert!(after.groups[0].member_ids.is_empty(), "left the old-level group");
     }
 }
