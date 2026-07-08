@@ -15,9 +15,25 @@ use serde::Serialize;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// Ceiling on concurrently-handled requests. A `/status` or `/close` does a full
+/// model read + anchor scan (seconds on a big repo), so handling requests inline
+/// on the accept loop lets one slow call — or a slow/half-open client — stall
+/// every other session's hooks behind it. Each accepted connection gets its own
+/// worker thread up to this cap; past it we serve inline as backpressure so the
+/// thread count can never run away. Loopback, low volume — a small cap is ample.
+const MAX_INFLIGHT: usize = 8;
+
+/// Decrements the in-flight counter when a worker finishes (or panics).
+struct InflightGuard(Arc<AtomicUsize>);
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 /// How long a recorded touch stays live. A single agent run is minutes; a
 /// resumed session (same id, reconnecting hours later) must not re-gate on the
@@ -90,7 +106,7 @@ fn mint_token() -> String {
 /// live "session is working here" signal.
 pub fn start(
     project: &Path,
-    on_touch: impl Fn(&Touch) + Send + 'static,
+    on_touch: impl Fn(&Touch) + Send + Sync + 'static,
 ) -> Result<HookServer, String> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| e.to_string())?;
     listener
@@ -114,16 +130,37 @@ pub fn start(
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let touches: Arc<Mutex<Vec<(Instant, Touch)>>> = Arc::new(Mutex::new(Vec::new()));
+    // Shared across the accept loop and every worker thread it spawns.
+    let project = Arc::new(project.to_path_buf());
+    let token = Arc::new(token);
+    let on_touch = Arc::new(on_touch);
+    let inflight = Arc::new(AtomicUsize::new(0));
 
     {
         let shutdown = shutdown.clone();
-        let project = project.to_path_buf();
+        let project = project.clone();
         std::thread::spawn(move || {
             while !shutdown.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((stream, _)) => {
                         let _ = stream.set_nodelay(true);
-                        handle_request(stream, &project, &token, &touches, &on_touch);
+                        // Under the cap, hand the connection to a worker so a slow
+                        // request or half-open client can't block the next accept;
+                        // at the cap, serve inline as backpressure.
+                        if inflight.fetch_add(1, Ordering::SeqCst) < MAX_INFLIGHT {
+                            let project = project.clone();
+                            let token = token.clone();
+                            let touches = touches.clone();
+                            let on_touch = on_touch.clone();
+                            let guard = InflightGuard(inflight.clone());
+                            std::thread::spawn(move || {
+                                let _guard = guard;
+                                handle_request(stream, &project, &token, &touches, on_touch.as_ref());
+                            });
+                        } else {
+                            inflight.fetch_sub(1, Ordering::SeqCst);
+                            handle_request(stream, &project, &token, &touches, on_touch.as_ref());
+                        }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -569,6 +606,49 @@ mod tests {
             Kind::Component => "component",
             Kind::Symbol => "symbol",
         }
+    }
+
+    /// Concurrent clients — more than MAX_INFLIGHT, mixing status reads and
+    /// distinct touches — all succeed and the shared touch log stays consistent:
+    /// exercises both the worker path and the inline-backpressure path, and the
+    /// touches Mutex + dedup under contention.
+    #[test]
+    fn handles_concurrent_requests() {
+        let (dir, _) = temp_project();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let server = start(dir.path(), move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        })
+        .unwrap();
+        let disc: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join(".scryer/hook.json")).unwrap(),
+        )
+        .unwrap();
+        let token = disc["token"].as_str().unwrap().to_string();
+        let port = server.port;
+
+        let handles: Vec<_> = (0..16)
+            .map(|i| {
+                let token = token.clone();
+                std::thread::spawn(move || {
+                    if i % 2 == 0 {
+                        assert_eq!(request(port, &token, "GET", "/status", "").0, 200);
+                    } else {
+                        let body = format!(r#"{{"session":"s","file":"f{i}.rs"}}"#);
+                        assert_eq!(request(port, &token, "POST", "/touch", &body).0, 200);
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // The eight distinct touches (odd i) all recorded, each notified once.
+        let (_, v) = request(port, &token, "GET", "/close?session=s", "");
+        assert_eq!(v["touched"].as_array().unwrap().len(), 8);
+        assert_eq!(hits.load(Ordering::SeqCst), 8);
     }
 
     /// Touches older than the TTL are pruned; fresh ones survive — a resumed
