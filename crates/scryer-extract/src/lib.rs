@@ -594,6 +594,79 @@ def run():
         }
     }
 
+    /// End-to-end on a scratch Go module: qualified references resolve
+    /// through go.mod + import bindings from a plain `extract_context` walk,
+    /// and structs/interfaces come out as symbols (the old generic fallback
+    /// produced neither).
+    #[test]
+    fn extracts_go_module_import_edges() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let write = |rel: &str, text: &str| {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write("go.mod", "module github.com/acme/proj\n\ngo 1.22\n");
+        write(
+            "internal/db/store.go",
+            r#"package db
+
+type Store struct {
+	Name string
+}
+
+func Connect(dsn string) *Store { return &Store{Name: dsn} }
+"#,
+        );
+        write(
+            "cmd/api/main.go",
+            r#"package main
+
+import (
+	"fmt"
+
+	database "github.com/acme/proj/internal/db"
+)
+
+func main() {
+	s := database.Connect("dsn")
+	var t database.Store
+	fmt.Println(s, t)
+}
+"#,
+        );
+
+        let ctx = extract_context(dir.path()).expect("extraction");
+        assert!(
+            ctx.file_edges
+                .iter()
+                .any(|e| e.src == "cmd/api/main.go" && e.dst == "internal/db/store.go"),
+            "qualified-ref file edge missing; edges: {:?}",
+            ctx.file_edges
+        );
+        let key_of = |name: &str| {
+            ctx.files
+                .iter()
+                .flat_map(|f| &f.symbols)
+                .find(|s| s.name == name)
+                .map(|s| s.key.clone())
+                .unwrap_or_else(|| panic!("symbol {name} missing"))
+        };
+        // Struct symbols exist (audit: type_spec never matched before)…
+        let store = key_of("Store");
+        let main = key_of("main");
+        // …and both the call and the type reference yield symbol edges.
+        for dst in [key_of("Connect"), store] {
+            assert!(
+                ctx.symbol_edges
+                    .iter()
+                    .any(|e| e.src == main && e.dst == dst),
+                "symbol edge main -> {dst} missing; edges: {:?}",
+                ctx.symbol_edges
+            );
+        }
+    }
+
     #[test]
     fn repeated_extraction_reuses_unchanged_parses() {
         let dir = tempfile::tempdir().expect("temp dir");

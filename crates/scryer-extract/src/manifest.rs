@@ -26,6 +26,9 @@ pub struct Container {
     pub technology: Option<String>,
     /// Directories of other containers this one declares a path dependency on.
     pub dep_dirs: Vec<String>,
+    /// The declared go.mod module path (`module github.com/acme/proj`) — the
+    /// prefix Go import specs spell to reach this container's packages.
+    pub go_module: Option<String>,
 }
 
 /// One manifest file found in a candidate directory.
@@ -101,6 +104,7 @@ pub fn discover_containers_from_files(
             name: basename(project).unwrap_or_else(|| "project".to_string()),
             technology: None,
             dep_dirs: Vec::new(),
+            go_module: None,
         });
     }
     containers
@@ -163,6 +167,7 @@ fn container_for_dir(project: &Path, dir: &str, signals: &[Signal]) -> Option<Co
     let mut name: Option<String> = None;
     let mut dep_dirs: Vec<String> = Vec::new();
     let mut technology: Option<String> = None;
+    let mut go_module: Option<String> = None;
     // A real unit unless the only thing we saw is a Cargo workspace root.
     let mut is_unit = false;
     let mut saw_cargo_workspace_only = false;
@@ -193,6 +198,18 @@ fn container_for_dir(project: &Path, dir: &str, signals: &[Signal]) -> Option<Co
             "pyproject.toml" => {
                 is_unit = true;
                 name = name.or_else(|| pyproject_name(&text));
+            }
+            "go.mod" => {
+                is_unit = true;
+                go_module = go_module.or_else(|| go_mod_module(&text));
+                // The declared module path IS the unit's name; display the
+                // last segment ("proj" for github.com/acme/proj).
+                name = name.or_else(|| {
+                    go_module
+                        .as_deref()
+                        .and_then(|m| m.rsplit('/').next())
+                        .map(|s| s.to_string())
+                });
             }
             _ => {
                 is_unit = true;
@@ -226,7 +243,24 @@ fn container_for_dir(project: &Path, dir: &str, signals: &[Signal]) -> Option<Co
         name,
         technology,
         dep_dirs,
+        go_module,
     })
+}
+
+/// The `module <path>` directive of a go.mod, quotes tolerated.
+fn go_mod_module(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("module") {
+            if rest.starts_with([' ', '\t']) {
+                let module = rest.trim().trim_matches('"');
+                if !module.is_empty() {
+                    return Some(module.to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// The base image of the final build stage: the last `FROM <image>` line.
@@ -423,6 +457,21 @@ serde = "1"
         assert_eq!(manifest_role("pyproject.toml"), Some(false));
         assert_eq!(manifest_role("package.json"), Some(false));
         assert_eq!(manifest_role("README.md"), None);
+    }
+
+    #[test]
+    fn go_mod_module_parsed() {
+        assert_eq!(
+            go_mod_module("module github.com/acme/proj\n\ngo 1.22\n").as_deref(),
+            Some("github.com/acme/proj")
+        );
+        assert_eq!(
+            go_mod_module("// a comment\nmodule \"example.com/x\"\n").as_deref(),
+            Some("example.com/x")
+        );
+        assert_eq!(go_mod_module("go 1.22\n"), None);
+        // `module` must be a directive, not a prefix of another word.
+        assert_eq!(go_mod_module("modules-thing foo\n"), None);
     }
 
     #[test]

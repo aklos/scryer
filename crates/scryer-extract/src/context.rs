@@ -431,6 +431,19 @@ fn build_edges(
         }
     }
 
+    // Package-dir index for Go qualified references: a Go package IS a
+    // directory, so `pkg.Name` resolves among the defs of one directory.
+    let mut dir_names: HashMap<&str, HashMap<&str, Vec<(&str, &str)>>> = HashMap::new();
+    for r in recs {
+        let dir = r.file_rel.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+        dir_names
+            .entry(dir)
+            .or_default()
+            .entry(r.name.as_str())
+            .or_default()
+            .push((r.key.as_str(), r.file_rel.as_str()));
+    }
+
     for r in recs {
         ranges_by_file
             .entry(r.file_rel.as_str())
@@ -498,8 +511,28 @@ fn build_edges(
         // letting it fall through to the bare-name scopes would misattribute
         // it to a same-name local def.
         let is_python = file.ends_with(".py") || file.ends_with(".pyi");
+        let is_go = file.ends_with(".go");
         let mut imported_locals: HashMap<&str, Option<&str>> = HashMap::new();
+        // Go only: package qualifier -> package directory, joined against the
+        // file's qualified references below.
+        let mut go_pkg_dirs: HashMap<&str, String> = HashMap::new();
         for imp in &f.parse.imports {
+            if is_go {
+                // A Go import binds a package QUALIFIER, not symbols: record
+                // the binding for the qualified-reference scope and consume it
+                // so the bare qualifier ident can't misresolve locally. No
+                // file edge from the import line — a package is a directory,
+                // and edges attach to the files its symbols live in.
+                if let Some(dir) = go_import_dir(&imp.spec, containers) {
+                    for n in &imp.names {
+                        go_pkg_dirs.insert(n.local.as_str(), dir.clone());
+                    }
+                }
+                for n in &imp.names {
+                    imported_locals.insert(n.local.as_str(), None);
+                }
+                continue;
+            }
             let mut target_file: Option<&str> = None;
             let mut target_dir: Option<&str> = None;
             // Python only: the module path as a directory base, kept even when
@@ -640,6 +673,43 @@ fn build_edges(
                     }
                 }
             }
+        }
+
+        // --- Go qualified references: `pkg.Name` via the import bindings ---
+        // The qualifier is exact lexical evidence (bound by an import this
+        // file declares), and a Go package is one directory — so the name
+        // resolves among that directory's defs, unique-or-skip. A selector on
+        // a local variable simply fails the binding join.
+        if is_go {
+            for pref in &f.parse.paths {
+                let (Some(qualifier), Some(name)) =
+                    (pref.segments.first(), pref.segments.get(1))
+                else {
+                    continue;
+                };
+                let Some(dir) = go_pkg_dirs.get(qualifier.as_str()) else {
+                    continue; // local variable or external package
+                };
+                let Some(cands) = dir_names
+                    .get(dir.as_str())
+                    .and_then(|m| m.get(name.as_str()))
+                else {
+                    continue;
+                };
+                if cands.len() != 1 {
+                    continue; // ambiguous — skip, never guess
+                }
+                let (dst_key, dst_file) = cands[0];
+                if dst_file != file {
+                    file_edges.insert((file.to_string(), dst_file.to_string()));
+                }
+                if let Some(src) = enclosing(file, pref.line) {
+                    if src != dst_key {
+                        sym_edges.insert((src.to_string(), dst_key.to_string()));
+                    }
+                }
+            }
+            continue; // the Rust manifest-map scope below reads Rust semantics
         }
 
         // --- third scope: CROSS-container references via the manifest map ---
@@ -917,6 +987,35 @@ fn resolve_py_import<'a>(
         }
     }
     (None, None) // external package: consume locals, no edges
+}
+
+/// Map a Go import path to a repo directory via the containers' declared
+/// go.mod module paths: the longest module prefix wins (nested modules), the
+/// remainder is the package's subdirectory. External modules match nothing.
+fn go_import_dir(spec: &str, containers: &[Container]) -> Option<String> {
+    let mut best: Option<(usize, String)> = None;
+    for c in containers {
+        let Some(module) = c.go_module.as_deref() else {
+            continue;
+        };
+        let rest = if spec == module {
+            Some("")
+        } else {
+            spec.strip_prefix(module).and_then(|r| r.strip_prefix('/'))
+        };
+        let Some(rest) = rest else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|(len, _)| module.len() > *len) {
+            let dir = match (c.dir.is_empty(), rest.is_empty()) {
+                (true, _) => rest.to_string(),
+                (_, true) => c.dir.clone(),
+                _ => format!("{}/{}", c.dir, rest),
+            };
+            best = Some((module.len(), dir));
+        }
+    }
+    best.map(|(_, dir)| dir)
 }
 
 /// The file a Python module base denotes: the module itself (`a/b` ->
@@ -1325,6 +1424,7 @@ mod tests {
             name: name.to_string(),
             technology: None,
             dep_dirs: Vec::new(),
+            go_module: None,
         }
     }
 
@@ -2192,6 +2292,101 @@ fn add_one(x: u32) -> u32 {
             ctx.symbol_edges.is_empty(),
             "imported `fetch` must not resolve to the local store.py def"
         );
+    }
+
+    fn go_container(dir: &str, name: &str, module: &str) -> Container {
+        Container {
+            go_module: Some(module.to_string()),
+            ..container(dir, name)
+        }
+    }
+
+    /// Go: a qualified `db.Connect` reference resolves through the file's
+    /// import binding + the go.mod module path — including within ONE module,
+    /// where the old name-only scopes needed container-wide uniqueness.
+    #[test]
+    fn go_qualified_refs_resolve_within_module() {
+        let files = vec![
+            ParsedFile {
+                rel_path: "internal/db/store.go".into(),
+                source: String::new(),
+                parse: FileParse {
+                    defs: vec![def("Connect", 1, 5)],
+                    idents: vec![],
+                    paths: vec![],
+                    imports: vec![],
+                },
+            },
+            ParsedFile {
+                rel_path: "cmd/api/main.go".into(),
+                source: String::new(),
+                parse: FileParse {
+                    defs: vec![def("main", 3, 9)],
+                    idents: vec![ident("db", 5)],
+                    paths: vec![pathref(&["db", "Connect"], 5)],
+                    imports: vec![imp(
+                        "github.com/acme/proj/internal/db",
+                        &[("db", "db")],
+                        1,
+                    )],
+                },
+            },
+        ];
+        let containers = vec![go_container("", "proj", "github.com/acme/proj")];
+        let ctx = build_context("proj", &containers, &files, &[]);
+        assert!(has_file_edge(&ctx, "cmd/api/main.go", "internal/db/store.go"));
+        assert!(has_sym_edge(&ctx, "main", "Connect"));
+    }
+
+    /// Go: an ALIASED import of another module's package resolves across
+    /// containers; an external module and a selector on a local variable
+    /// yield nothing.
+    #[test]
+    fn go_aliased_cross_module_resolves_and_externals_skip() {
+        let files = vec![
+            ParsedFile {
+                rel_path: "services/auth/token.go".into(),
+                source: String::new(),
+                parse: FileParse {
+                    defs: vec![def("Verify", 1, 4)],
+                    idents: vec![],
+                    paths: vec![],
+                    imports: vec![],
+                },
+            },
+            ParsedFile {
+                rel_path: "services/billing/charge.go".into(),
+                source: String::new(),
+                parse: FileParse {
+                    defs: vec![def("Charge", 4, 12), def("Process", 14, 16)],
+                    idents: vec![ident("authsvc", 6), ident("pq", 7), ident("svc", 8)],
+                    paths: vec![
+                        pathref(&["authsvc", "Verify"], 6),
+                        pathref(&["pq", "Connect"], 7), // external module
+                        pathref(&["svc", "Process"], 8), // local variable
+                    ],
+                    imports: vec![
+                        imp("example.com/auth", &[("authsvc", "authsvc")], 1),
+                        imp("github.com/lib/pq", &[("pq", "pq")], 2),
+                    ],
+                },
+            },
+        ];
+        let containers = vec![
+            go_container("services/auth", "auth", "example.com/auth"),
+            go_container("services/billing", "billing", "example.com/billing"),
+        ];
+        let ctx = build_context("proj", &containers, &files, &[]);
+        assert!(has_file_edge(
+            &ctx,
+            "services/billing/charge.go",
+            "services/auth/token.go"
+        ));
+        assert!(has_sym_edge(&ctx, "Charge", "Verify"));
+        // Neither the external package nor the local-variable selector minted
+        // an edge: `svc.Process` must not resolve to the file's own `Process`.
+        assert_eq!(ctx.file_edges.len(), 1);
+        assert_eq!(ctx.symbol_edges.len(), 1);
     }
 
     /// A `paths` alias (`@/*` -> `src/*`) resolves a bare spec to a file, with

@@ -42,6 +42,7 @@ enum Family {
     Rust,
     TsLike,
     Python,
+    Go,
     Generic,
 }
 
@@ -50,6 +51,7 @@ fn family_for_ext(ext: &str) -> Family {
         "rs" => Family::Rust,
         "ts" | "mts" | "cts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" => Family::TsLike,
         "py" | "pyi" => Family::Python,
+        "go" => Family::Go,
         _ => Family::Generic,
     }
 }
@@ -78,13 +80,14 @@ pub struct Ident {
     pub line: u32,
 }
 
-/// A multi-segment qualified path reference — either a `use` path or a
-/// fully-qualified reference at a call/type site (`scryer_extract::anchors::
-/// write_baseline`). The resolver maps the head segment to a container (via the
-/// crate/package manifest map) and the tail to a symbol, producing the
-/// cross-container edges that bare-name resolution cannot. Currently emitted for
-/// Rust only; TS/JS emits [`ImportRef`] instead (its specs are module paths,
-/// not segment lists); the remaining languages emit neither yet.
+/// A multi-segment qualified path reference — a Rust `use` path or
+/// fully-qualified call/type site (`scryer_extract::anchors::write_baseline`),
+/// or a Go `pkg.Name` selector/type reference. The resolver maps the head
+/// segment to a container (Rust: the crate manifest map; Go: the file's
+/// import bindings) and the tail to a symbol, producing the cross-container
+/// edges that bare-name resolution cannot. TS/JS and Python emit
+/// [`ImportRef`] instead (their specs are module paths, not segment lists);
+/// the generic-fallback languages emit neither yet.
 #[derive(Debug, Clone)]
 pub struct PathRef {
     /// Path segments head-to-leaf, e.g. `["scryer_extract", "anchors", "write_baseline"]`.
@@ -165,26 +168,32 @@ pub fn parse_file_with(path: &Path, source: &str, parser: &mut Parser) -> Option
         Family::Rust => collect_rust(root, bytes, &mut defs),
         Family::TsLike => collect_ts(root, bytes, &mut defs),
         Family::Python => collect_python(root, bytes, &mut defs),
+        Family::Go => collect_go(root, bytes, &mut defs),
         Family::Generic => collect_generic(root, bytes, &mut defs),
     }
 
     let mut idents: Vec<Ident> = Vec::new();
     collect_idents(root, bytes, &mut idents);
 
-    // Qualified path references for cross-container resolution. The grammar
-    // nodes (`use_declaration`, `scoped_identifier`) are Rust-specific; TS/JS
-    // gets the equivalent signal from `imports` below. Other families leave
-    // both empty.
+    // Qualified path references for cross-container resolution: Rust `use` /
+    // scoped paths, Go `pkg.Name` selector and type references (resolved
+    // through the file's import bindings). TS/JS and Python get the
+    // equivalent signal from `imports` below; other families leave both empty.
     let mut paths: Vec<PathRef> = Vec::new();
-    if family_for_ext(ext) == Family::Rust {
-        collect_use_paths(root, bytes, &mut paths);
-        collect_qualified_paths(root, bytes, &mut paths);
+    match family_for_ext(ext) {
+        Family::Rust => {
+            collect_use_paths(root, bytes, &mut paths);
+            collect_qualified_paths(root, bytes, &mut paths);
+        }
+        Family::Go => collect_go_paths(root, bytes, &mut paths),
+        _ => {}
     }
 
     let mut imports: Vec<ImportRef> = Vec::new();
     match family_for_ext(ext) {
         Family::TsLike => collect_ts_imports(root, bytes, &mut imports),
         Family::Python => collect_py_imports(root, bytes, &mut imports),
+        Family::Go => collect_go_imports(root, bytes, &mut imports),
         _ => {}
     }
 
@@ -450,7 +459,172 @@ fn collect_python(node: Node, bytes: &[u8], defs: &mut Vec<Def>) {
     }
 }
 
-// --- Generic fallback (go, java, ruby, c, cpp, c#, php) ---
+// --- Go ---
+
+/// Top-level Go definitions. The generic fallback used to miss every struct
+/// and interface (`type_spec` has the name, and nothing in the fallback's
+/// kind set matches it) while minting bogus defs from interface method specs
+/// (`method_elem` matched "method") — Go earns its own collector.
+fn collect_go(node: Node, bytes: &[u8], defs: &mut Vec<Def>) {
+    for child in named_children(node) {
+        match child.kind() {
+            "function_declaration" | "method_declaration" => {
+                push_def(
+                    defs,
+                    field_text(child, "name", bytes),
+                    child,
+                    Vec::new(),
+                    false,
+                );
+            }
+            "type_declaration" => {
+                for spec in named_children(child) {
+                    if !matches!(spec.kind(), "type_spec" | "type_alias") {
+                        continue;
+                    }
+                    // Span the SPEC, not the whole declaration: a grouped
+                    // `type ( A …; B … )` block holds several defs.
+                    let type_node = spec.child_by_field_name("type");
+                    match type_node.map(|t| t.kind()) {
+                        Some("struct_type") => {
+                            let fields = go_struct_fields(type_node.unwrap(), bytes);
+                            push_def(defs, field_text(spec, "name", bytes), spec, fields, true);
+                        }
+                        // An interface is a method set — behavioral, like a
+                        // Rust trait, not a data shape.
+                        _ => {
+                            push_def(
+                                defs,
+                                field_text(spec, "name", bytes),
+                                spec,
+                                Vec::new(),
+                                false,
+                            );
+                        }
+                    }
+                }
+            }
+            "const_declaration" | "var_declaration" => {
+                for spec in named_children(child) {
+                    if matches!(spec.kind(), "const_spec" | "var_spec") {
+                        push_def(
+                            defs,
+                            field_text(spec, "name", bytes),
+                            spec,
+                            Vec::new(),
+                            false,
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Declared field names of a `struct_type`. A `field_declaration` may bind
+/// several names to one type (`X, Y int`); embedded fields declare no
+/// `field_identifier` and contribute none.
+fn go_struct_fields(struct_type: Node, bytes: &[u8]) -> Vec<String> {
+    let Some(list) = named_children(struct_type)
+        .into_iter()
+        .find(|n| n.kind() == "field_declaration_list")
+    else {
+        return Vec::new();
+    };
+    let mut fields = Vec::new();
+    for decl in named_children(list) {
+        if decl.kind() != "field_declaration" {
+            continue;
+        }
+        for c in named_children(decl) {
+            if c.kind() == "field_identifier" {
+                if let Ok(text) = c.utf8_text(bytes) {
+                    fields.push(text.to_string());
+                }
+            }
+        }
+    }
+    fields
+}
+
+/// Go import declarations. Each spec binds a package QUALIFIER, not symbols:
+/// the binding is the declared alias or the path's last segment (a heuristic —
+/// a package may declare a different name than its directory; under-report
+/// when it does). Dot-imports merge the package into file scope and blank
+/// imports bind nothing — both yield a spec with no names.
+fn collect_go_imports(node: Node, bytes: &[u8], out: &mut Vec<ImportRef>) {
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "import_spec" {
+            let Some(spec) = n
+                .child_by_field_name("path")
+                .and_then(|p| p.utf8_text(bytes).ok())
+                .map(|s| s.trim_matches('"').to_string())
+            else {
+                continue;
+            };
+            let binding = match n.child_by_field_name("name") {
+                Some(name) if name.kind() == "package_identifier" => {
+                    name.utf8_text(bytes).ok().map(|s| s.to_string())
+                }
+                Some(_) => None, // dot or blank import
+                None => spec.rsplit('/').next().map(|s| s.to_string()),
+            };
+            out.push(ImportRef {
+                names: binding.map(|b| vec![ImportedSym::same(&b)]).unwrap_or_default(),
+                spec,
+                line: n.start_position().row as u32 + 1,
+            });
+            continue;
+        }
+        for child in named_children(n) {
+            stack.push(child);
+        }
+    }
+}
+
+/// Qualified references — `pkg.Name` selectors whose operand is a plain
+/// identifier, and `pkg.Type` qualified type nodes. Segments are
+/// `[qualifier, name]`; the resolver joins the qualifier against the file's
+/// import bindings, so a selector on a local variable simply fails the join.
+fn collect_go_paths(node: Node, bytes: &[u8], out: &mut Vec<PathRef>) {
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        let pair = match n.kind() {
+            "selector_expression" => {
+                let operand = n.child_by_field_name("operand");
+                let field = n.child_by_field_name("field");
+                match (operand, field) {
+                    (Some(o), Some(f)) if o.kind() == "identifier" => Some((o, f)),
+                    _ => None,
+                }
+            }
+            "qualified_type" => {
+                let pkg = n.child_by_field_name("package");
+                let name = n.child_by_field_name("name");
+                match (pkg, name) {
+                    (Some(p), Some(t)) => Some((p, t)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some((qualifier, name)) = pair {
+            if let (Ok(q), Ok(nm)) = (qualifier.utf8_text(bytes), name.utf8_text(bytes)) {
+                out.push(PathRef {
+                    segments: vec![q.to_string(), nm.to_string()],
+                    line: n.start_position().row as u32 + 1,
+                });
+            }
+        }
+        for child in named_children(n) {
+            stack.push(child);
+        }
+    }
+}
+
+// --- Generic fallback (java, ruby, c, cpp, c#, php) ---
 
 fn collect_generic(node: Node, bytes: &[u8], defs: &mut Vec<Def>) {
     // Narrow substring set: clearly top-level definition kinds across grammars,
@@ -1105,6 +1279,99 @@ async function load() {
         assert!(has_import(&p, "./legacy", &[("legacy", "legacy")]));
         assert!(has_import(&p, "./side-effect", &[]));
         assert!(has_import(&p, "./lazy", &[("widget", "widget")]));
+    }
+
+    #[test]
+    fn go_defs_and_fields() {
+        let src = r#"
+package db
+
+const MaxConns = 10
+
+var registry = map[string]int{}
+
+type Store struct {
+	Conn *sql.DB
+	Name, Kind string
+}
+
+type Reader interface {
+	Read(p []byte) (int, error)
+	Close() error
+}
+
+type (
+	ID   int64
+	Pair struct{ A, B int }
+)
+
+func Connect(dsn string) (*Store, error) { return nil, nil }
+
+func (s *Store) Close() error { return nil }
+"#;
+        let p = parse_file(Path::new("f.go"), src).unwrap();
+        let n = names(&p);
+        assert!(n.contains(&"MaxConns"));
+        assert!(n.contains(&"registry"));
+        assert!(n.contains(&"Store"), "structs are symbols (audit theme 2)");
+        assert!(n.contains(&"Reader"), "interfaces are symbols");
+        assert!(n.contains(&"ID"), "grouped type specs each yield a def");
+        assert!(n.contains(&"Pair"));
+        assert!(n.contains(&"Connect"));
+        assert!(n.contains(&"Close"), "receiver methods are symbols");
+        // Interface method specs must NOT mint their own defs (the old
+        // fallback's `method_elem` bug): exactly one `Close` — the method.
+        assert_eq!(
+            p.defs.iter().filter(|d| d.name == "Close").count(),
+            1,
+            "interface method specs are not defs"
+        );
+        assert!(!n.contains(&"Read"), "interface method specs are not defs");
+
+        let store = p.defs.iter().find(|d| d.name == "Store").unwrap();
+        assert!(store.is_data_shape);
+        assert_eq!(store.fields, vec!["Conn", "Name", "Kind"]);
+        let reader = p.defs.iter().find(|d| d.name == "Reader").unwrap();
+        assert!(!reader.is_data_shape, "an interface is behavioral");
+    }
+
+    #[test]
+    fn go_imports_and_qualified_paths_captured() {
+        let src = r#"
+package main
+
+import (
+	"fmt"
+	database "github.com/acme/proj/internal/db"
+	_ "github.com/lib/pq"
+	"github.com/acme/proj/pkg/api"
+)
+
+func main() {
+	s, _ := database.Connect("dsn")
+	var h api.Handler
+	fmt.Println(s, h)
+}
+"#;
+        let p = parse_file(Path::new("f.go"), src).unwrap();
+        // Aliased import: the alias is the binding.
+        assert!(has_import(
+            &p,
+            "github.com/acme/proj/internal/db",
+            &[("database", "database")]
+        ));
+        // Default binding: the path's last segment.
+        assert!(has_import(&p, "github.com/acme/proj/pkg/api", &[("api", "api")]));
+        assert!(has_import(&p, "fmt", &[("fmt", "fmt")]));
+        // Blank import binds nothing.
+        assert!(has_import(&p, "github.com/lib/pq", &[]));
+        // Qualified references: selector at the call site, qualified type.
+        assert!(p
+            .paths
+            .iter()
+            .any(|pr| pr.segments == ["database", "Connect"] && pr.line == 12));
+        assert!(p.paths.iter().any(|pr| pr.segments == ["api", "Handler"]));
+        assert!(p.paths.iter().any(|pr| pr.segments == ["fmt", "Println"]));
     }
 
     #[test]
