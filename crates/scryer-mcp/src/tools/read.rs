@@ -336,6 +336,17 @@ fn read_layer(model_ref: &scryer_core::ModelRef, layer: Layer) -> Result<ScryMod
     }
 }
 
+/// Normalize a request path to the model's convention: project-relative,
+/// `/`-separated. An absolute path inside the project is accepted.
+fn normalize_project_rel(model_ref: &scryer_core::ModelRef, path: &str) -> String {
+    let mut file = path.replace('\\', "/");
+    let root = model_ref.project_path().to_string_lossy().replace('\\', "/");
+    if let Some(rest) = file.strip_prefix(root.as_str()) {
+        file = rest.trim_start_matches('/').to_string();
+    }
+    file.trim_start_matches("./").to_string()
+}
+
 #[tool_router(router = tool_router_read, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
@@ -515,14 +526,7 @@ impl ScryerServer {
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
 
-        // Normalize to the model's path convention: project-relative,
-        // `/`-separated. An absolute path inside the project is accepted.
-        let mut file = req.file.replace('\\', "/");
-        let root = model_ref.project_path().to_string_lossy().replace('\\', "/");
-        if let Some(rest) = file.strip_prefix(root.as_str()) {
-            file = rest.trim_start_matches('/').to_string();
-        }
-        let file = file.trim_start_matches("./").to_string();
+        let file = normalize_project_rel(&model_ref, &req.file);
 
         // The shared payload generator: working-view locate (plan-authored
         // claims visible, committed anchors overlaid), breadcrumb, and pending
@@ -606,6 +610,269 @@ impl ScryerServer {
             "pending": report.pending,
             "scopeHealth": scope_health,
             "note": note,
+        });
+        strip_fields_compact(&mut payload);
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
+        )]))
+    }
+
+    #[tool(
+        description = "One-call task-scoped orientation — start here when you have a TASK ('fix the save race in useModelStorage') instead of a model question; it replaces the get_health / get_rules / search_model / read_model dance. Pass the task in a few words and/or the project-relative files it touches. Returns, scoped to what you're about to do: per file the governing node chain, anchored claims, and BINDING directives (own + inherited, same as `locate`); per task the best-matching model nodes with their responsibilities and inherited directives; the pending plan entries touching that scope (the work queue you may be executing); the drift scopes inside it (code changed since the last reconcile); up to 3 matching modeling rules IN FULL; a `phase` verdict — plan-execution (pending intent exists: implement it), reconcile (code changed outside the plan: compare and flag_drift), or free — and the whole-loop `state` line. The whole-model tools (get_health, read_model, get_pending) remain for model-building sessions; orient is the front door for coding sessions."
+    )]
+    fn orient(
+        &self,
+        Parameters(req): Parameters<OrientRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let task = req.task.as_deref().map(str::trim).filter(|t| !t.is_empty());
+        let files: Vec<String> = req.files.unwrap_or_default();
+        if task.is_none() && files.is_empty() {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Give `task` (a few words) and/or `files` — orient scopes the model to what \
+                 you are about to do. For the whole model use read_model / get_health.",
+            )]));
+        }
+
+        let committed = match scryer_core::read_model_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(read_fail(
+                    "model", &model_ref, &e,
+                ))]));
+            }
+        };
+        let planned =
+            scryer_core::read_planned_at(&model_ref).unwrap_or_else(|_| committed.clone());
+        let working = scryer_core::working_view(&committed, &planned);
+
+        // The governing set, in two grains: `finest` nodes grow to their
+        // descendants (their subtree IS the task's scope); `chain` ancestors
+        // join by id only — growing descendants from a chain that reaches the
+        // root system would make every scope the whole model.
+        let mut finest: HashSet<String> = HashSet::new();
+        let mut chain: HashSet<String> = HashSet::new();
+
+        // Files → reverse lookup, same payload core as `locate`.
+        let mut files_out: Vec<serde_json::Value> = Vec::new();
+        for f in files.iter().take(10) {
+            let file = normalize_project_rel(&model_ref, f);
+            match scryer_core::locate::locate_at(&model_ref, &file, None) {
+                Ok(report) => {
+                    if let Some(first) = report.result.owner_chain.first() {
+                        finest.insert(first.id.clone());
+                    }
+                    for o in &report.result.owner_chain {
+                        chain.insert(o.id.clone());
+                    }
+                    if let Some(b) = &report.result.boundary_owner {
+                        // The only handle on an unmapped file is its boundary
+                        // owner — then that whole region is the scope.
+                        if report.result.owner_chain.is_empty() {
+                            finest.insert(b.id.clone());
+                        }
+                        chain.insert(b.id.clone());
+                    }
+                    let mut v = serde_json::json!({
+                        "file": file,
+                        "path": report.path,
+                        "ownerChain": report.result.owner_chain,
+                        "claims": report.result.claims,
+                        "ownDirectives": report.result.own_directives,
+                        "inheritedDirectives": report.result.inherited_directives,
+                    });
+                    strip_fields_compact(&mut v);
+                    files_out.push(v);
+                }
+                Err(e) => files_out.push(serde_json::json!({ "file": file, "error": e })),
+            }
+        }
+        if files.len() > 10 {
+            files_out.push(serde_json::json!({
+                "note": format!("{} more file(s) not looked up — locate them individually", files.len() - 10),
+            }));
+        }
+
+        // Task → best-matching nodes. Lenient scoring (unlike search_model's
+        // strict AND): a task sentence carries filler words, so a node ranks by
+        // the terms it DOES clear — at least one required — plus a coverage
+        // bonus, so multi-term matches outrank one-word coincidences.
+        let mut matches_out: Vec<serde_json::Value> = Vec::new();
+        if let Some(t) = task {
+            let terms: Vec<String> = t.split_whitespace().map(|w| w.to_lowercase()).collect();
+            let mut scored: Vec<(f64, &scryer_core::Node)> = Vec::new();
+            for n in &working.nodes {
+                let mut fields: Vec<String> = vec![n.name.to_lowercase()];
+                if let Some(d) = &n.description {
+                    fields.push(d.to_lowercase());
+                }
+                if let Some(tech) = &n.technology {
+                    fields.push(tech.to_lowercase());
+                }
+                for r in &n.responsibilities {
+                    fields.push(r.statement.to_lowercase());
+                }
+                for p in &n.properties {
+                    fields.push(p.label.to_lowercase());
+                }
+                let (mut total, mut cleared) = (0.0_f64, 0usize);
+                for term in &terms {
+                    let mut best = 0.0_f64;
+                    for fl in &fields {
+                        let (sc, _) = term_field_score(term, fl);
+                        best = best.max(sc);
+                    }
+                    if best >= fuzzy_threshold(term) {
+                        total += best;
+                        cleared += 1;
+                    }
+                }
+                if cleared > 0 {
+                    scored.push((total + cleared as f64, n));
+                }
+            }
+            scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            for (score, n) in scored.iter().take(5) {
+                finest.insert(n.id.clone());
+                let resps: Vec<&str> =
+                    n.responsibilities.iter().map(|r| r.statement.as_str()).collect();
+                let mut v = serde_json::json!({
+                    "id": n.id,
+                    "kind": kind_str(&n.kind),
+                    "name": n.name,
+                    "path": breadcrumb(&working, &n.id),
+                    "score": (score * 100.0).round() / 100.0,
+                    "responsibilities": resps,
+                    "inheritedDirectives": scryer_core::inherited_directives(&working, &n.id),
+                });
+                strip_fields_compact(&mut v);
+                matches_out.push(v);
+            }
+        }
+
+        // Scope = finest ∪ their descendants ∪ the chain ancestors (by id):
+        // pending work under a matched node is this task's work, and a drift
+        // scope attributes to a boundary owner that may sit above the finest
+        // governing node.
+        let mut scope: HashSet<String> = finest.clone();
+        let mut frontier: Vec<String> = finest.iter().cloned().collect();
+        while let Some(id) = frontier.pop() {
+            for child in working.nodes.iter().filter(|n| n.parent_id.as_deref() == Some(&id)) {
+                if scope.insert(child.id.clone()) {
+                    frontier.push(child.id.clone());
+                }
+            }
+        }
+        for id in finest.iter().chain(chain.iter()) {
+            let mut cur = id.clone();
+            while let Some(pid) = working
+                .nodes
+                .iter()
+                .find(|n| n.id == cur)
+                .and_then(|n| n.parent_id.clone())
+            {
+                scope.insert(pid.clone());
+                cur = pid;
+            }
+        }
+        scope.extend(chain.iter().cloned());
+
+        // Pending plan entries inside the scope, vagrants excluded (they are
+        // drift review, not the implement queue).
+        use scryer_core::diff::ElementKind as EK;
+        let plan = scryer_core::diff::diff(&committed, &planned);
+        let link_touches = |id: &str| {
+            planned
+                .links
+                .iter()
+                .chain(committed.links.iter())
+                .any(|l| l.id == id && (scope.contains(&l.src) || scope.contains(&l.dst)))
+        };
+        let is_vagrant = |ch: &scryer_core::diff::ElementChange| match ch.kind {
+            EK::Node => planned.nodes.iter().any(|n| n.id == ch.id && n.vagrant == Some(true)),
+            EK::Responsibility => planned
+                .nodes
+                .iter()
+                .flat_map(|n| n.responsibilities.iter())
+                .chain(planned.groups.iter().flat_map(|g| g.responsibilities.iter()))
+                .any(|r| r.id == ch.id && r.vagrant == Some(true)),
+            EK::Property => ch.owner_id.as_deref().is_some_and(|oid| {
+                planned.nodes.iter().any(|n| {
+                    n.id == oid
+                        && n.properties.iter().any(|p| p.label == ch.id && p.vagrant == Some(true))
+                })
+            }),
+            _ => false,
+        };
+        let scoped_pending: Vec<&scryer_core::diff::ElementChange> = plan
+            .changes
+            .iter()
+            .filter(|ch| {
+                let in_scope = match ch.kind {
+                    EK::Node => scope.contains(&ch.id),
+                    EK::Responsibility | EK::Property => {
+                        ch.owner_id.as_deref().is_some_and(|o| scope.contains(o))
+                    }
+                    EK::Link => link_touches(&ch.id),
+                    EK::Group => false,
+                };
+                in_scope && !is_vagrant(ch)
+            })
+            .collect();
+        let pending_total = scoped_pending.len();
+        let pending_out: Vec<serde_json::Value> = scoped_pending
+            .iter()
+            .take(20)
+            .map(|ch| serde_json::to_value(ch).unwrap_or(serde_json::Value::Null))
+            .collect();
+
+        // Drift scopes inside the scope (only meaningful once a reconcile
+        // anchor exists).
+        let drift_out: Vec<serde_json::Value> = if model_ref.sync_path().exists() {
+            let sync = scryer_core::read_sync_state(&model_ref);
+            scryer_core::drift::drifted_scopes(&committed, model_ref.project_path(), &sync)
+                .iter()
+                .filter(|sc| scope.contains(&sc.node_id))
+                .map(|sc| {
+                    serde_json::json!({
+                        "nodeId": sc.node_id,
+                        "nodeName": sc.node_name,
+                        "changedFiles": sc.changed_files,
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let drift_total = drift_out.len();
+
+        // The 2-3 rules the task is about, in full — saves the get_rules trip.
+        let rules_out: Vec<serde_json::Value> = match task {
+            Some(t) => scryer_core::rules::lookup(t)
+                .iter()
+                .take(3)
+                .map(|r| serde_json::json!({ "id": r.id, "title": r.title, "body": r.body }))
+                .collect(),
+            None => Vec::new(),
+        };
+
+        let phase = match (pending_total > 0, drift_total > 0) {
+            (true, true) => "plan-execution + reconcile: this scope has pending intent to implement AND code that changed outside the plan — get_drift the scope before building on it",
+            (true, false) => "plan-execution: pending intent exists in this scope — implement it, then mark_implemented (anchors param folds + anchors in one call)",
+            (false, true) => "reconcile: code in this scope changed since the last reconcile — compare against the claims, flag_drift findings, reconcile_drift when done",
+            (false, false) => "free: model and code agree in this scope — plan model deltas first if your change alters what the model claims (see Proportionality)",
+        };
+
+        let mut payload = serde_json::json!({
+            "task": task,
+            "files": files_out,
+            "matches": matches_out,
+            "pending": pending_out,
+            "pendingTotal": pending_total,
+            "drift": drift_out,
+            "rules": rules_out,
+            "phase": phase,
+            "state": status_header(&model_ref),
         });
         strip_fields_compact(&mut payload);
         Ok(CallToolResult::success(vec![Content::text(
@@ -2103,6 +2370,91 @@ mod tests {
         assert_eq!(sh["own"]["responsibilities"], 1);
         // The leaf's one claim resolves to a real file → fully covered.
         assert_eq!(sh["completeness"]["pct"], 100);
+    }
+
+    /// orient bundles the five-call dance: per-file governing chain +
+    /// directives, task-matched nodes, the pending entries scoped to that
+    /// region (an unrelated sibling's work stays out), the matching rules in
+    /// full, and a phase verdict.
+    #[test]
+    fn orient_bundles_scope_pending_rules_and_phase() {
+        let (server, _dir, project, model_ref) = locate_project();
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        let mut planned = committed.clone();
+        planned
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == "vt")
+            .unwrap()
+            .responsibilities
+            .push(resp("r-new", "refuses expired tokens"));
+        // Unrelated pending work elsewhere: a sibling container.
+        planned.nodes.push(node("web", Kind::Container, "Web", Some("sys")));
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let v = result_json(
+            &server
+                .orient(Parameters(OrientRequest {
+                    project: Some(project),
+                    task: Some("token symbol".into()),
+                    files: Some(vec!["src/auth.rs".into()]),
+                }))
+                .unwrap(),
+        );
+
+        // File side: the chain and the binding directives ride along.
+        assert_eq!(v["files"][0]["ownerChain"][0]["id"], "vt");
+        let inh = serde_json::to_string(&v["files"][0]["inheritedDirectives"]).unwrap();
+        assert!(inh.contains("must never log tokens"), "{inh}");
+
+        // Task side: the symbol matches on its name/claim.
+        let matches = serde_json::to_string(&v["matches"]).unwrap();
+        assert!(matches.contains("\"vt\""), "task terms reach the symbol: {matches}");
+
+        // Pending is scoped: the new claim on vt shows; the unrelated sibling
+        // container's work does not.
+        let pending = serde_json::to_string(&v["pending"]).unwrap();
+        assert!(pending.contains("r-new"), "{pending}");
+        assert!(!pending.contains("\"web\""), "sibling work stays out: {pending}");
+        assert_eq!(v["pendingTotal"], 1);
+
+        // Rules inline: "symbol" pulls rule 8 in full, capped at 3.
+        let rules = v["rules"].as_array().unwrap();
+        assert!(rules.iter().any(|r| r["id"] == 8), "rule 8 rides along: {rules:?}");
+        assert!(rules.len() <= 3);
+
+        // Phase: pending intent exists, no drift baseline → plan-execution.
+        let phase = v["phase"].as_str().unwrap();
+        assert!(phase.starts_with("plan-execution:"), "{phase}");
+    }
+
+    /// orient with neither task nor files is a usage error that steers, and a
+    /// task-only call still works against the model.
+    #[test]
+    fn orient_requires_a_scope_and_works_task_only() {
+        let (server, _dir, project, _mr) = locate_project();
+        let r = server
+            .orient(Parameters(OrientRequest {
+                project: Some(project.clone()),
+                task: None,
+                files: None,
+            }))
+            .unwrap();
+        assert!(r.is_error.unwrap_or(false));
+
+        let v = result_json(
+            &server
+                .orient(Parameters(OrientRequest {
+                    project: Some(project),
+                    task: Some("forged credentials".into()),
+                    files: None,
+                }))
+                .unwrap(),
+        );
+        let matches = serde_json::to_string(&v["matches"]).unwrap();
+        assert!(matches.contains("\"vt\""), "claim text reaches the node: {matches}");
+        let phase = v["phase"].as_str().unwrap();
+        assert!(phase.starts_with("free:"), "clean scope reads free: {phase}");
     }
 
     #[test]

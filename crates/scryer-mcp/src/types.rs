@@ -192,6 +192,18 @@ pub(crate) struct MarkImplementedRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct OrientRequest {
+    /// Absolute path to the project root. If omitted, uses the current working directory.
+    pub project: Option<String>,
+    /// The task in a few words (e.g. "fix the save race in model storage") — matched
+    /// against the model's nodes and the modeling rules. Give this, `files`, or both.
+    pub task: Option<String>,
+    /// Project-relative files the task touches — each is reverse-looked-up into its
+    /// governing nodes, anchored claims, and binding directives (same as `locate`).
+    pub files: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct GetRulesRequest {
     /// Topic to look up — free text matched against each rule's title and tags
     /// (e.g. "symbol", "group", "responsibility altitude", "links"). Returns the

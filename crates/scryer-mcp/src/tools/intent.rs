@@ -227,11 +227,26 @@ fn commit(
         .collect();
     // Accept + warn (never reject — a rejected write invites a duplicate call):
     // field-shape problems on the nodes just minted ride back on the response.
-    let warnings: Vec<String> = minted
+    let mut warnings: Vec<String> = minted
         .iter()
         .filter_map(|id| model.nodes.iter().find(|n| &n.id == id))
         .flat_map(scryer_core::validate::node_field_warnings)
         .collect();
+    // Rule 8's gist rides the response the moment an empty symbol is minted —
+    // the judgment call happens right here, not after a get_rules round-trip
+    // the agent may skip.
+    for id in minted {
+        if let Some(n) = model.nodes.iter().find(|n| &n.id == id) {
+            if n.kind == Kind::Symbol && scryer_core::is_node_empty(n) {
+                warnings.push(format!(
+                    "'{}' ({}) is EMPTY — rule 8: a symbol earns its place by carrying a \
+                     responsibility or a declared data shape; a link alone does not justify \
+                     it. Give it one, or fold it into its parent and remove it.",
+                    n.name, id
+                ));
+            }
+        }
+    }
     // The follow-through: a write returns not just ids but what those ids
     // imply next, so a single-purpose agent stays on the rails without
     // re-reading the instructions.
@@ -2035,6 +2050,64 @@ mod tests {
         assert!(
             text.contains("plan: ") && text.contains("pending"),
             "carries the loop-state header: {text}"
+        );
+    }
+
+    /// Minting an empty symbol (no claim, no data shape) puts rule 8's gist
+    /// straight into the write response — the judgment call happens here, not
+    /// after a get_rules round-trip the agent may skip.
+    #[test]
+    fn add_symbol_inlines_rule_8_when_empty() {
+        let (server, dir, system_id) = temp_project();
+        let project = dir.path().to_string_lossy().to_string();
+        server
+            .add_container(Parameters(AddContainerRequest {
+                project: Some(project.clone()),
+                items: vec![ContainerItem {
+                    parent_id: system_id,
+                    name: "API".into(),
+                    technology: None,
+                    description: None,
+                    external: false,
+                    boundary_dir: None,
+                    responsibilities: vec![],
+                }],
+            }))
+            .unwrap();
+        server
+            .add_component(Parameters(AddComponentRequest {
+                project: Some(project.clone()),
+                items: vec![ComponentItem {
+                    parent_id: "node-2".into(),
+                    name: "Auth".into(),
+                    description: None,
+                    responsibilities: vec![],
+                }],
+            }))
+            .unwrap();
+        let r = server
+            .add_symbol(Parameters(AddSymbolRequest {
+                project: Some(project),
+                items: vec![SymbolItem {
+                    parent_id: "node-3".into(),
+                    name: "helper".into(),
+                    source_file: "src/x.rs".into(),
+                    line: None,
+                    end_line: None,
+                    visual: None,
+                    responsibilities: vec![],
+                    properties: vec![],
+                }],
+            }))
+            .unwrap();
+        let text = r
+            .content
+            .iter()
+            .find_map(|c| c.as_text().map(|t| t.text.clone()))
+            .unwrap();
+        assert!(
+            text.contains("rule 8") && text.contains("EMPTY"),
+            "gist rides the response: {text}"
         );
     }
 

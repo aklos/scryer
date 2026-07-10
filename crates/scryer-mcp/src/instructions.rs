@@ -11,10 +11,11 @@ claims (the Proportionality section below draws that line).\n\
 model maps to code, so it is the right entry point only once code exists. If committed is empty (a \
 design-first model whose whole architecture lives in the plan, before anything is built), it has \
 nothing to report — `get_pending` and `read_model` show the authored plan; never read an empty \
-health report as \"nothing authored\". When the task names files or symbols you have already read, \
-start from `locate {file, symbol?}` instead — it returns the owning node chain, the claims anchored \
-there, their directives, and that scope's health in one call. Otherwise lead with `get_health` to \
-see where work is needed, then `search_model` / `read_model` to load the \
+health report as \"nothing authored\". For a CODING task, start from `orient {task, files}` — one \
+call returns the governing nodes, their claims and binding directives, the scoped pending items and \
+drift, the matching modeling rules, and which phase you're in. `locate {file, symbol?}` is its \
+single-file sibling. The whole-model reads are for model-building sessions: lead with `get_health` \
+to see where work is needed, then `search_model` / `read_model` to load the \
 governing nodes, their responsibilities, and any binding `directives`. Directives are user-authored, \
 read-only HOW-constraints (\"must\"/\"never\" rules). They attach to a responsibility OR to a node, and \
 node-level directives CARRY DOWN: a node is bound by its own plus every ancestor's. `read_model` \
