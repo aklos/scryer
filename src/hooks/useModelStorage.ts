@@ -22,6 +22,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { Node, Responsibility, ScryModel } from "../viewmodel";
 import { respTruthChanged, stampTouches } from "../viewmodel";
 import { EMPTY_DIFF, planDiff as computePlanDiff, type ModelDiff } from "../planDiff";
+import { openChange, tagEdit } from "../ledger";
 import type { HistoryEvent } from "../history";
 
 const RECENT_KEY = "scryer:recent-projects";
@@ -262,6 +263,12 @@ export interface ModelStorage {
    *  the data behind each node's History tab. Reloaded whenever the model
    *  changes. */
   history: readonly HistoryEvent[];
+  /** The ledger change canvas edits stamp into (null = unfiled). Session-local
+   *  by design — the registry/tags persist in the plan, the pointer doesn't. */
+  activeChange: string | null;
+  setActiveChange: (id: string | null) => void;
+  /** Mint + register a new change in the plan and make it active. */
+  openNewChange: (rationale: string) => void;
 
   /** Open a project. If it has no model, status becomes `needs-model`. */
   openProject: (path: string) => Promise<void>;
@@ -368,6 +375,13 @@ export function useModelStorage(): ModelStorage {
   );
   const [changeLog, setChangeLog] = useState<ChangeRevision[]>([]);
   const [history, setHistory] = useState<HistoryEvent[]>([]);
+  // The ledger change canvas edits stamp themselves into (see src/ledger.ts).
+  // Session-local by design, like the MCP server's per-session pointer: the
+  // ledger itself (registry + tags) persists in the plan file; "which change
+  // am I writing into" is re-selected per session. Null = unfiled.
+  const [activeChange, setActiveChange] = useState<string | null>(null);
+  const activeChangeRef = useRef<string | null>(activeChange);
+  activeChangeRef.current = activeChange;
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Exact bytes of our last PLANNED write. A `model-changed` event whose plan
@@ -566,6 +580,7 @@ export function useModelStorage(): ModelStorage {
     setNewNodeIds(new Set());
     setNewRespIds(new Set());
     setChangeLog([]);
+    setActiveChange(null);
     try {
       const isLegacy = await invoke<boolean>("is_legacy_model", {
         projectPath: path,
@@ -649,6 +664,7 @@ export function useModelStorage(): ModelStorage {
     setNewRespIds(new Set());
     setChangeLog([]);
     setHistory([]);
+    setActiveChange(null);
   }, []);
 
   const clearNewNode = useCallback((id: string) => {
@@ -704,7 +720,13 @@ export function useModelStorage(): ModelStorage {
         // mirror of the agent's Rust-side write stamping; doing it at this single
         // chokepoint covers every edit path (granular, EditModal bulk-commit)
         // and a layout-only edit re-dates nothing.
-        const next = stampTouches(cur, edited);
+        const dated = stampTouches(cur, edited);
+        // Ledger: stamp the active change onto what THIS edit touched — the
+        // canvas mirror of the MCP server tagging each tool write. A no-op
+        // when detached (unfiled) or when the edit changed nothing
+        // truth-bearing.
+        const active = activeChangeRef.current;
+        const next = active ? tagEdit(cur, dated, active) : dated;
         scheduleSave({ ref: modelRef, serialized: JSON.stringify(next, null, 2) });
         return next;
       });
@@ -729,6 +751,33 @@ export function useModelStorage(): ModelStorage {
       return [{ at: now, by: "user" as const, items }, ...log].slice(0, CHANGE_LOG_CAP);
     });
   }, [model]);
+
+  // Open a new ledger change (mint + register in the plan, exactly like the
+  // agent's set_change) and make it the active one — subsequent canvas edits
+  // stamp themselves into it.
+  const openNewChange = useCallback(
+    (rationale: string) => {
+      const trimmed = rationale.trim();
+      if (!trimmed) return;
+      updateModel((m) => {
+        const { model: next, id } = openChange(m, trimmed);
+        setActiveChange(id);
+        return next;
+      });
+    },
+    [updateModel],
+  );
+
+  // If the active change closes under us — its last entry folded by the agent,
+  // or it was abandoned — detach rather than stamping edits into a change the
+  // registry no longer knows (tagEdit would drop the tags silently anyway;
+  // this keeps the selector honest too).
+  useEffect(() => {
+    if (!activeChange) return;
+    if (model && !(model.changes ?? []).some((c) => c.id === activeChange)) {
+      setActiveChange(null);
+    }
+  }, [model, activeChange]);
 
   const setAgentRunning = useCallback((running: boolean) => {
     agentRunningRef.current = running;
@@ -779,6 +828,9 @@ export function useModelStorage(): ModelStorage {
     newRespIds,
     changeLog,
     history,
+    activeChange,
+    setActiveChange,
+    openNewChange,
     openProject,
     createBlankModel,
     closeProject,

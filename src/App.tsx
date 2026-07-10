@@ -116,6 +116,9 @@ function AppBody() {
       clearAllNew={storage.clearAllNew}
       openProject={storage.openProject}
       closeProject={storage.closeProject}
+      activeChange={storage.activeChange}
+      setActiveChange={storage.setActiveChange}
+      openNewChange={storage.openNewChange}
     />
   );
 }
@@ -139,6 +142,9 @@ function Workspace({
   clearAllNew,
   openProject,
   closeProject,
+  activeChange,
+  setActiveChange,
+  openNewChange,
 }: {
   model: ScryModel;
   committed: ScryModel | null;
@@ -158,6 +164,9 @@ function Workspace({
   clearAllNew: () => void;
   openProject: (path: string) => Promise<void>;
   closeProject: () => void;
+  activeChange: string | null;
+  setActiveChange: (id: string | null) => void;
+  openNewChange: (rationale: string) => void;
 }) {
   const agent = useAgentSession();
   const { report: reportFailure } = useAgentFailure();
@@ -753,6 +762,9 @@ function Workspace({
               committed={committed}
               changeLog={changeLog}
               onSelectNode={selectNode}
+              activeChange={activeChange}
+              onSetActiveChange={writing ? undefined : setActiveChange}
+              onOpenChange={writing ? undefined : openNewChange}
             />
           ) : selected.id === "dark" ? (
             <DarkCodePage model={model} report={healthReport} onSelectNode={selectNode} />

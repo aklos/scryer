@@ -195,10 +195,18 @@ export function Powerline({
             onClick={() => onOpenSpecial("changes")}
             className="rseg"
             style={sb("color-mix(in srgb, var(--text) 6.5%, var(--surface-canvas))")}
-            title="Changes — the whole plan diff against the committed model"
+            title="Changes — the whole plan diff against the committed model, grouped by the ledger's open changes"
           >
             <History className="h-3.5 w-3.5" />
-            <span>changes</span>
+            <span>
+              changes
+              {(model.changes?.length ?? 0) > 0 && (
+                <span className="text-[var(--text-muted)]">
+                  {" "}
+                  · {model.changes!.length} in flight
+                </span>
+              )}
+            </span>
           </button>
         </>
       )}

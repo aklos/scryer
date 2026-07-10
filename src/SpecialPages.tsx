@@ -30,6 +30,7 @@ import type { ScryModel, Node, Responsibility, SchemaProperty, DriftScope } from
 import type { Change, ElementChange, ModelDiff } from "./planDiff";
 import { CHANGE_COLOR, type ChangeKind, collectPlanEntries, type LinkChange, MARK_META, type PlanEntry } from "./changeMarks";
 import { ChangeGlyph, DIFF_TINT } from "./diffkit";
+import { entryChanges } from "./ledger";
 import type { Editor } from "./editor";
 import type { ModelHealthReport } from "./health";
 import { ANCHOR_STATE_LABEL, collapseAnchors, darkBoundaries } from "./health";
@@ -539,6 +540,9 @@ export function ChangesPage({
   committed,
   changeLog,
   onSelectNode,
+  activeChange,
+  onSetActiveChange,
+  onOpenChange,
 }: {
   planDiff: ModelDiff;
   /** The planned model — element names, kinds, and tree order. */
@@ -548,6 +552,12 @@ export function ChangesPage({
   /** Session edit journal — the page's only source of timestamps. */
   changeLog: readonly ChangeRevision[];
   onSelectNode: (id: string) => void;
+  /** The ledger change canvas edits currently stamp into (null = unfiled). */
+  activeChange?: string | null;
+  /** Select/detach the active change. Absent = read-only (agent writing). */
+  onSetActiveChange?: (id: string | null) => void;
+  /** Open a new named change and make it active. Absent = read-only. */
+  onOpenChange?: (rationale: string) => void;
 }) {
   const ctx = useMemo<RowCtx>(
     () => ({
@@ -562,6 +572,28 @@ export function ChangesPage({
     () => buildEntries(planDiff, model, committed, changeLog),
     [planDiff, model, committed, changeLog],
   );
+  // Ledger partition: each entry lands under every change that tags any of
+  // its parts (a carrier straddling two changes is shown in both — honest
+  // about the overlap), untagged entries under "Unfiled". With no open
+  // changes the page renders the flat list it always did.
+  const registry = model.changes ?? [];
+  const sections = useMemo(() => {
+    const byChange = new Map<string, DiffEntry[]>(registry.map((c) => [c.id, []]));
+    const unfiled: DiffEntry[] = [];
+    for (const e of entries) {
+      const tags = entryChanges(
+        e.kind,
+        e.id,
+        [...e.children, ...e.links.map((l) => l.ec)],
+        model.changeMap,
+      );
+      const known = [...tags].filter((t) => byChange.has(t));
+      if (known.length === 0) unfiled.push(e);
+      for (const t of known) byChange.get(t)?.push(e);
+    }
+    return { byChange, unfiled };
+  }, [entries, registry, model.changeMap]);
+
   return (
     <div className="flex min-w-0 flex-1 flex-col">
       <SpecialHeader
@@ -569,22 +601,145 @@ export function ChangesPage({
         subtitle="Everything the plan changes against the committed model — most recently edited first"
       />
       <SpecialBody>
-        {entries.length === 0 ? (
+        {onOpenChange && <NewChangeForm onOpen={onOpenChange} />}
+        {entries.length === 0 && registry.length === 0 ? (
           <div className="flex flex-col items-center gap-3 px-6 py-16">
             <GitCompare className="h-6 w-6 text-[var(--text-ghost)]" />
             <p className="text-xs text-[var(--text-muted)]">
               The plan matches the committed model — nothing pending.
             </p>
           </div>
-        ) : (
+        ) : registry.length === 0 ? (
           <ul className="flex flex-col" data-changes-list>
             {entries.map((e) => (
               <EntryCard key={`${e.kind}:${e.id}`} entry={e} ctx={ctx} />
             ))}
           </ul>
+        ) : (
+          <div className="flex flex-col">
+            {registry.map((c) => (
+              <ChangeSection
+                key={c.id}
+                id={c.id}
+                rationale={c.rationale}
+                entries={sections.byChange.get(c.id) ?? []}
+                ctx={ctx}
+                active={activeChange === c.id}
+                onToggleActive={
+                  onSetActiveChange &&
+                  (() => onSetActiveChange(activeChange === c.id ? null : c.id))
+                }
+              />
+            ))}
+            {sections.unfiled.length > 0 && (
+              <ChangeSection
+                id={null}
+                rationale="Unfiled — pending work belonging to no change"
+                entries={sections.unfiled}
+                ctx={ctx}
+                active={false}
+                onToggleActive={undefined}
+              />
+            )}
+          </div>
         )}
       </SpecialBody>
     </div>
+  );
+}
+
+/** Inline opener for a new ledger change: the rationale in one sentence, as
+ *  the dev would say it — it becomes the change's durable identity. */
+function NewChangeForm({ onOpen }: { onOpen: (rationale: string) => void }) {
+  const [rationale, setRationale] = useState("");
+  return (
+    <form
+      className="flex items-center gap-2 border-b border-[var(--border)] px-4 py-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!rationale.trim()) return;
+        onOpen(rationale);
+        setRationale("");
+      }}
+    >
+      <input
+        value={rationale}
+        onChange={(e) => setRationale(e.target.value)}
+        placeholder="Start a change — the task in one sentence"
+        className="min-w-0 flex-1 rounded border border-[var(--border)] bg-transparent px-2 py-1 text-xs text-[var(--text)] placeholder:text-[var(--text-ghost)] focus:outline-none focus:ring-1 focus:ring-[var(--border-strong)]"
+      />
+      <button type="submit" className={BTN} disabled={!rationale.trim()}>
+        Open
+      </button>
+    </form>
+  );
+}
+
+/** One change's partition of the pending queue: header (id chip, rationale,
+ *  count, work-here toggle) + its entry cards. `id` null = the unfiled bucket. */
+function ChangeSection({
+  id,
+  rationale,
+  entries,
+  ctx,
+  active,
+  onToggleActive,
+}: {
+  id: string | null;
+  rationale: string;
+  entries: DiffEntry[];
+  ctx: RowCtx;
+  active: boolean;
+  onToggleActive?: () => void;
+}) {
+  return (
+    <section>
+      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-[var(--border)] bg-[var(--surface)] px-4 py-1.5">
+        {id && (
+          <span className="rounded bg-[var(--surface-hover)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)]">
+            {id}
+          </span>
+        )}
+        <span
+          className={`min-w-0 flex-1 truncate text-xs ${id ? "text-[var(--text)]" : "text-[var(--text-muted)]"}`}
+          title={rationale}
+        >
+          {rationale}
+        </span>
+        <span className="text-[10px] text-[var(--text-muted)]">
+          {entries.length === 0
+            ? "no entries yet"
+            : `${entries.length} entr${entries.length === 1 ? "y" : "ies"}`}
+        </span>
+        {onToggleActive && (
+          <button
+            type="button"
+            className={BTN}
+            title={
+              active
+                ? "Canvas edits are stamping into this change — click to detach (edits go unfiled)"
+                : "Stamp subsequent canvas edits into this change"
+            }
+            onClick={onToggleActive}
+          >
+            {active ? (
+              <span className="flex items-center gap-1 text-emerald-500">
+                <Check className="h-3 w-3" /> working here
+              </span>
+            ) : (
+              "work here"
+            )}
+          </button>
+        )}
+      </div>
+      {entries.length > 0 && (
+        <ul className="flex flex-col" data-changes-list>
+          {entries.map((e) => (
+            <EntryCard key={`${id ?? "unfiled"}:${e.kind}:${e.id}`} entry={e} ctx={ctx} />
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

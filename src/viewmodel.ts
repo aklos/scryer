@@ -172,6 +172,12 @@ export interface ScryModel {
   /** Keyed by **node id** → boundary globs (coverage denominator + extraction
    *  scope). Agent-produced and regenerable; never hand-authored. */
   boundaries?: Record<string, Source[]>;
+  /** The open-change registry — named plan partitions, each carrying the
+   *  dev's rationale. Plan-layer only; see `src/ledger.ts`. */
+  changes?: import("./ledger").ChangeMeta[];
+  /** Element key (`ledger.elementKey`) → change id: which change each pending
+   *  plan entry belongs to. Untagged entries are the unfiled bucket. */
+  changeMap?: Record<string, string>;
 }
 
 export function emptyModel(): ScryModel {
