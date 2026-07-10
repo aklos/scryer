@@ -8,7 +8,7 @@ use rmcp::{
     tool, tool_router, ErrorData as McpError,
 };
 use scryer_core::{Node, ScryModel};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 /// Minimum Jaro–Winkler similarity for a query term to count as a fuzzy match
 /// on a field word. Short terms are held to a stricter bar so a 3–4 char term
@@ -1067,7 +1067,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "The model's observability report — deterministic, no semantic judgment. Per node: own + subtree rollups of responsibility/property counts, vagrant/stale flags, and anchor coverage (anchorable = any committed claim on LEAF nodes; claims on structural nodes are discharged through their subtree and are never 'unmapped'). Plus: anchor observations from the git-free fingerprint check — `changed` (the anchored span's content differs from what the model last saw), `broken` (the symbol is gone), `fileMissing` — with moved-but-unchanged symbols silently re-anchored, and a declared-link audit against the extracted import graph (edge_count 0 = asserted-only; 'unmodeled' = sibling pairs the code connects but no link declares). Also per node: `completeness` — how much of the node's AUTHORED subtree (committed + planned) reads through to real code, so it is defined from greenfield onward. `pct` (0–100) is anchored primitives over authored ones, where a primitive is a node's boundary box (counted only when its glob owns a real file), a leaf responsibility, or a data shape (counted when its anchor resolves and is not broken/missing); a scaffolded container reads low but non-zero, greenfield reads 0. `pct` is ABSENT ('—', unmeasured) when the subtree has no leaf primitives (a bare box), so an undecomposed shell never reads 100%. Only anchor what you have implemented — that discipline is what makes the figure trustworthy. Pass node_id to scope to one subtree with per-child summaries; omit it for the whole-model summary. Use this to decide WHERE work is needed (unmapped claims, vagrant flags, dark links) before reading full subtrees. `broadBoundaries` flags node boundary globs with no directory prefix (e.g. `**/*`), which silently own every otherwise-unowned file."
+        description = "The model's observability report — deterministic, no semantic judgment. Per node: own + subtree rollups of responsibility/property counts, vagrant/stale flags, and anchor coverage (anchorable = any committed claim on LEAF nodes; claims on structural nodes are discharged through their subtree and are never 'unmapped'). Plus: anchor observations from the git-free fingerprint check — `changed` (the anchored span's content differs from what the model last saw), `broken` (the symbol is gone), `fileMissing` — with moved-but-unchanged symbols silently re-anchored, and a declared-link audit against the extracted import graph (edge_count 0 = asserted-only; 'unmodeled' = sibling pairs the code connects but no link declares). Also per node: `completeness` — how much of the node's AUTHORED subtree (committed + planned) reads through to real code, so it is defined from greenfield onward. `pct` (0–100) is anchored primitives over authored ones, where a primitive is a node's boundary box (counted only when its glob owns a real file), a leaf responsibility, or a data shape (counted when its anchor resolves and is not broken/missing); a scaffolded container reads low but non-zero, greenfield reads 0. `pct` is ABSENT ('—', unmeasured) when the subtree has no leaf primitives (a bare box), so an undecomposed shell never reads 100%. Only anchor what you have implemented — that discipline is what makes the figure trustworthy. Pass node_id to scope to one subtree with per-child summaries; omit it for the whole-model summary. Use this to decide WHERE work is needed (unmapped claims, vagrant flags, dark links) before reading full subtrees. `broadBoundaries` flags node boundary globs with no directory prefix (e.g. `**/*`), which silently own every otherwise-unowned file. The whole-model summary also carries `coverage` — calibration of the deterministic layer itself: which languages' imports the link audit resolves FULLY vs by name-heuristic (a declared link between name-heuristic files can read asserted-only even when real), and `silentAnchors`, sourceMap anchors holding no fingerprint tripwire — drift can never fire for those, so treat their green as silence, not health."
     )]
     fn get_health(
         &self,
@@ -1142,9 +1142,9 @@ impl ScryerServer {
         // and resolves anchors against the filesystem: a boundary box counts only
         // when its glob owns a real file; a leaf claim only when its anchor is
         // present and not broken/missing.
+        let files = scryer_extract::list_project_files(project);
         let completeness = {
             let planned = scryer_core::read_planned_at(&model_ref).unwrap_or_else(|_| model.clone());
-            let files = scryer_extract::list_project_files(project);
             // Anchors reported broken/missing are dead; `changed` still exists.
             let dead: HashSet<&str> = anchor_check
                 .observations
@@ -1201,6 +1201,33 @@ impl ScryerServer {
             }
             out
         };
+
+        // Calibration: what the deterministic layer can and cannot see. The
+        // link audit resolves real imports for some languages and falls back
+        // to bare-name coincidence for others — a declared link between
+        // name-heuristic files can audit as asserted-only even when real.
+        // Silent anchors have no fingerprint, so no drift will EVER fire for
+        // them; without this, they read as green.
+        let link_audit_coverage = {
+            let mut tiers: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
+            for file in &files {
+                let Some(ext) = std::path::Path::new(file.as_str())
+                    .extension()
+                    .and_then(|e| e.to_str())
+                else {
+                    continue;
+                };
+                if let Some(tier) = scryer_extract::lang::import_resolution_tier(ext) {
+                    tiers.entry(tier).or_default().insert(ext);
+                }
+            }
+            serde_json::json!({
+                "full": tiers.get("full").map(|s| s.iter().collect::<Vec<_>>()).unwrap_or_default(),
+                "nameHeuristic": tiers.get("nameHeuristic").map(|s| s.iter().collect::<Vec<_>>()).unwrap_or_default(),
+            })
+        };
+        let silent_anchors =
+            scryer_extract::anchors::untracked_anchors(&model_ref).unwrap_or_default();
 
         let payload = match req.node_id.as_deref() {
             Some(node_id) => {
@@ -1332,6 +1359,13 @@ impl ScryerServer {
                     "unmodeled": derived.as_ref().map(|g| &g.unmodeled),
                     "broadBoundaries": broad_boundaries(None),
                     "edgeGraph": if derived.is_some() { "from last build's dependency cache" } else { "absent — run a model build (or the app's health refresh) to derive the link audit" },
+                    "coverage": {
+                        "linkAudit": link_audit_coverage,
+                        "linkAuditNote": "declared links between nameHeuristic-language files can read asserted-only even when real — calibrate the audit's verdict accordingly",
+                        "silentAnchors": silent_anchors.len(),
+                        "silentAnchorSample": silent_anchors.iter().take(5).collect::<Vec<_>>(),
+                        "silentAnchorNote": if silent_anchors.is_empty() { "every anchor carries a fingerprint tripwire" } else { "these anchors have NO fingerprint (file absent, symbol unresolvable, or glob matching nothing) — drift can never fire for them, so their green is silence, not health" },
+                    },
                 })
             }
         };

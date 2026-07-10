@@ -37,6 +37,21 @@ pub fn ext_of(path: &Path) -> Option<&str> {
     path.extension()?.to_str()
 }
 
+/// Import-resolution coverage tier of a source extension: `full` when the
+/// link audit sees the language's real declared imports (Rust paths, TS/JS
+/// imports + tsconfig aliases, Python module paths, Go module paths),
+/// `nameHeuristic` when it only has bare-identifier coincidence within a
+/// container — where a real cross-container link can audit as asserted-only.
+/// `None` for extensions with no grammar. Health reports this so the audit's
+/// verdict is calibrated instead of silently overstated.
+pub fn import_resolution_tier(ext: &str) -> Option<&'static str> {
+    language_for_ext(ext)?;
+    Some(match family_for_ext(ext) {
+        Family::Rust | Family::TsLike | Family::Python | Family::Go => "full",
+        Family::CLike | Family::Generic => "nameHeuristic",
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Family {
     Rust,

@@ -668,6 +668,49 @@ pub fn check_anchors(r: &ModelRef) -> Result<AnchorCheck, String> {
     })
 }
 
+/// A sourceMap anchor with NO fingerprint in the baseline: a span the
+/// tripwire cannot watch. No drift will ever fire for it, so health must say
+/// so — a silent anchor reading as green is the trust-burning failure mode.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UntrackedAnchor {
+    pub key: String,
+    pub file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+}
+
+/// Every sourceMap location the current baseline holds no fingerprint for —
+/// the file was absent at reconcile, the symbol unresolvable, or a glob
+/// matched nothing. Empty when no baseline exists yet (the first reconcile
+/// seeds it; nothing is meaningfully "untracked" before that).
+pub fn untracked_anchors(r: &ModelRef) -> Result<Vec<UntrackedAnchor>, String> {
+    let Some(baseline) = read_baseline(r) else {
+        return Ok(Vec::new());
+    };
+    let model = read_model_at(r)?;
+    let covered: HashSet<(&str, &str, Option<&str>)> = baseline
+        .anchors
+        .iter()
+        .map(|e| (e.key.as_str(), e.source_pattern(), e.symbol.as_deref()))
+        .collect();
+    let mut keys: Vec<&String> = model.source_map.keys().collect();
+    keys.sort();
+    let mut out = Vec::new();
+    for key in keys {
+        for loc in &model.source_map[key] {
+            if !covered.contains(&(key.as_str(), loc.pattern.as_str(), loc.symbol.as_deref())) {
+                out.push(UntrackedAnchor {
+                    key: key.clone(),
+                    file: loc.pattern.clone(),
+                    symbol: loc.symbol.clone(),
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Out-of-plan regressions to already-mapped code — the live drift nudge.
 ///
 /// Drift, mid-implementation, is a change the plan does NOT account for. The
@@ -1079,6 +1122,44 @@ mod tests {
         assert_eq!(check.observations.len(), 1);
         assert_eq!(check.observations[0].state, AnchorState::FileMissing);
         assert_eq!(check.observations[0].file, "src/b2.ts");
+    }
+
+    /// Anchors the baseline could not fingerprint are SILENT — no drift ever
+    /// fires for them — and must be reported, not read as green.
+    #[test]
+    fn untracked_anchors_surface_silent_spans() {
+        let (_dir, r) = project_with("src/m.ts", TS);
+        let mut m = leaf_model("alpha", "src/m.ts", 1, 3);
+        // A second claim anchored to a file that does not exist: write_baseline
+        // skips it (nothing to remember) — exactly the silent case.
+        m.nodes[0].responsibilities.push(Responsibility {
+            id: "r2".into(),
+            statement: "claims ghost code".into(),
+            vagrant: None,
+            stale: None,
+            stale_proposal: None,
+            directives: Vec::new(),
+            last_touched_at: None,
+        });
+        m.source_map.insert(
+            "r2".into(),
+            vec![SourceLocation {
+                pattern: "src/ghost.ts".into(),
+                symbol: Some("phantom".into()),
+                line: None,
+                end_line: None,
+                command: None,
+            }],
+        );
+        scryer_core::write_model_at(&r, &m).unwrap();
+        reconcile(&r);
+
+        let untracked = untracked_anchors(&r).unwrap();
+        assert_eq!(untracked.len(), 1, "{untracked:?}");
+        assert_eq!(untracked[0].key, "r2");
+        assert_eq!(untracked[0].file, "src/ghost.ts");
+        // The healthy anchor is fingerprinted, hence not reported.
+        assert!(!untracked.iter().any(|u| u.key == "r1"));
     }
 
     /// Two responsibilities on one node, anchored to `alpha` and `beta`. The
