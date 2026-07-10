@@ -110,6 +110,7 @@ function AppBody() {
       newNodeIds={storage.newNodeIds}
       clearNewNode={storage.clearNewNode}
       newRespIds={storage.newRespIds}
+      clearNewResp={storage.clearNewResp}
       changeLog={storage.changeLog}
       history={storage.history}
       clearAllNew={storage.clearAllNew}
@@ -132,6 +133,7 @@ function Workspace({
   newNodeIds,
   clearNewNode,
   newRespIds,
+  clearNewResp,
   changeLog,
   history,
   clearAllNew,
@@ -150,6 +152,7 @@ function Workspace({
   newNodeIds: ReadonlySet<string>;
   clearNewNode: (id: string) => void;
   newRespIds: ReadonlySet<string>;
+  clearNewResp: (id: string) => void;
   changeLog: ReturnType<typeof useModelStorage>["changeLog"];
   history: ReturnType<typeof useModelStorage>["history"];
   clearAllNew: () => void;
@@ -298,9 +301,12 @@ function Workspace({
       // its siblings (its parent's children). Drilling deeper is the diagram's
       // own double-click; this only reframes on selection.
       const node = modelRef.current.nodes.find((n) => n.id === id);
+      // Opening a node reviews what's on it: the unseen-claim highlights clear
+      // too, as the review page promises — not only on "Mark all reviewed".
+      for (const r of node?.responsibilities ?? []) clearNewResp(r.id);
       setDiagramFocus(node?.parentId ?? null);
     },
-    [ancestorsToExpand, clearNewNode],
+    [ancestorsToExpand, clearNewNode, clearNewResp],
   );
 
   const selectGroup = useCallback(
@@ -686,6 +692,7 @@ function Workspace({
         <ModelTree
           model={model}
           planDiff={planDiff}
+          committed={committed}
           selected={selected}
           expanded={expanded}
           onSelectNode={selectNode}
@@ -703,6 +710,7 @@ function Workspace({
           <DiagramView
             model={model}
             planDiff={planDiff}
+            committed={committed}
             report={healthReport}
             focusId={diagramFocus}
             selectedId={selected?.kind === "node" ? selected.id : null}

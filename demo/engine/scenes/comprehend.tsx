@@ -48,6 +48,7 @@ const Map = ({ focusId, selectedId }: { focusId: string | null; selectedId: stri
   <DiagramView
     model={paymentsModel}
     planDiff={EMPTY_DIFF}
+    committed={null}
     report={healthReport}
     focusId={focusId}
     selectedId={selectedId}

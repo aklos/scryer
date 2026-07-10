@@ -17,7 +17,7 @@
  */
 
 import type { Change, ElementChange, ModelDiff } from "./planDiff";
-import type { Group, Node } from "./viewmodel";
+import type { Group, Node, ScryModel } from "./viewmodel";
 
 export type Mark = "A" | "M" | "D" | "R" | "Q" | "X";
 
@@ -110,59 +110,221 @@ function driftOf(resps: { vagrant?: boolean; stale?: boolean }[] | undefined): M
   return vagrant ? "Q" : stale ? "X" : null;
 }
 
-/** The plan and drift marks for one node, computed independently so the lenses
- *  can filter on either axis. Vagrant claims feed the drift mark, not the plan
- *  mark (they're code-first, not a planned edit). */
-export function nodeMarks(node: Node, idx: DiffIndex): { plan: Mark | null; drift: Mark | null } {
-  // The node ITSELF can be vagrant — a rung the drift check minted to home
-  // code-discovered behaviour — on top of any vagrant responsibilities it holds.
-  const vagrantIds = new Set<string>();
-  const vagrantPropLabels = new Set<string>();
-  let vagrant = !!node.vagrant;
-  // The node ITSELF can be stale — its whole backing code is gone (mirror of a
-  // vagrant node) — on top of any stale responsibilities it holds.
-  let stale = !!node.stale;
-  for (const r of node.responsibilities ?? []) {
-    if (r.vagrant) {
-      vagrant = true;
-      vagrantIds.add(r.id);
-    }
-    if (r.stale) stale = true;
-  }
-  // Data fields drift the same way: a vagrant property is undescribed data (Q),
-  // a stale one is a regressed field (X).
-  for (const p of node.properties ?? []) {
-    if (p.vagrant) {
-      vagrant = true;
-      vagrantPropLabels.add(p.label);
-    }
-    if (p.stale) stale = true;
-  }
-  const childChanges: Change[] = [];
-  for (const ec of idx.byOwner.get(node.id) ?? []) {
-    if (ec.kind === "responsibility" && vagrantIds.has(ec.id)) continue; // drift, not plan
-    if (ec.kind === "property" && vagrantPropLabels.has(ec.id)) continue; // drift, not plan
-    childChanges.push(...ec.changes);
-  }
-  // A vagrant node is code-first ("adopt?"), not a planned edit — its own
-  // plan-only "added" diff is drift, not a plan mark, so it reads as Q not A.
-  const own = node.vagrant ? undefined : idx.nodeOwn.get(node.id);
-  return {
-    plan: classifyPlan(own, childChanges),
-    drift: vagrant ? "Q" : stale ? "X" : null,
-  };
+/** A node's drift mark alone (no diff needed): the node's own vagrant/stale
+ *  flag, or any flagged claim/property it holds. */
+export function nodeDrift(node: Node): Mark | null {
+  if (node.vagrant || (node.responsibilities ?? []).some((r) => r.vagrant) || (node.properties ?? []).some((p) => p.vagrant))
+    return "Q";
+  if (node.stale || (node.responsibilities ?? []).some((r) => r.stale) || (node.properties ?? []).some((p) => p.stale))
+    return "X";
+  return null;
 }
 
-export function groupMarks(group: Group, idx: DiffIndex): { plan: Mark | null; drift: Mark | null } {
-  const childChanges: Change[] = [];
-  for (const ec of idx.byOwner.get(group.id) ?? []) childChanges.push(...ec.changes);
-  return {
-    plan: classifyPlan(idx.groupOwn.get(group.id), childChanges),
-    drift: driftOf(group.responsibilities),
-  };
+/** A group's drift mark alone. */
+export function groupDrift(group: Group): Mark | null {
+  return driftOf(group.responsibilities);
 }
 
 /** The single glanceable letter for a row — the plan mark if any, else drift. */
 export function resolveMark(marks: { plan: Mark | null; drift: Mark | null }): Mark | null {
   return marks.plan ?? marks.drift;
+}
+
+export interface MarkPair {
+  plan: Mark | null;
+  drift: Mark | null;
+}
+
+// --- the shared "what does the plan change" computation ----------------------
+
+/** A changed link attributed to its carrying node (the src side — the side
+ *  that performs the relationship), with the dst kept for rendering. */
+export interface LinkChange {
+  ec: ElementChange;
+  /** Current target node id — planned, or the committed copy for a dropped link. */
+  dst: string | null;
+}
+
+/** One carrier of plan change — a node or group with its own changes, the
+ *  changes to content it owns, and the link changes it performs. THE single
+ *  definition of what the Changes lens counts, the tree gutter marks, and the
+ *  Changes page lists — one computation, so the surfaces cannot disagree.
+ *  Carriers the plan no longer holds (deleted nodes/groups) are included;
+ *  they have no tree row of their own, so the tree surfaces them as roll-ups
+ *  on the surviving branch. */
+export interface PlanEntry {
+  kind: "node" | "group";
+  id: string;
+  mark: Mark;
+  /** The element's own field / structural changes (rewords, move, members…). */
+  own: Change[];
+  /** Owned responsibility/property changes (drift-flagged ones filtered out —
+   *  vagrant content is the drift axis, not a planned edit). */
+  children: ElementChange[];
+  /** Outgoing link changes — relationships this element is the source of. */
+  links: LinkChange[];
+}
+
+export function collectPlanEntries(
+  diff: ModelDiff,
+  model: ScryModel,
+  committed: ScryModel | null,
+): PlanEntry[] {
+  const idx = indexDiff(diff);
+  const isGroup = new Set(model.groups.map((g) => g.id));
+  for (const g of committed?.groups ?? []) isGroup.add(g.id);
+  const nodeById = new Map(model.nodes.map((n) => [n.id, n] as const));
+
+  // A changed link belongs to its source node — the side that performs the
+  // relationship — so it reads under that node, not rootless.
+  const linkById = new Map(
+    [...(committed?.links ?? []), ...model.links].map((l) => [l.id, l] as const),
+  );
+  const linksBySrc = new Map<string, LinkChange[]>();
+  for (const ec of diff.changes) {
+    if (ec.kind !== "link") continue;
+    const link = linkById.get(ec.id);
+    const host = link?.src ?? link?.dst; // dropped-link fallback: either end
+    if (!host) continue;
+    const lc: LinkChange = { ec, dst: link?.dst ?? null };
+    const arr = linksBySrc.get(host);
+    if (arr) arr.push(lc);
+    else linksBySrc.set(host, [lc]);
+  }
+
+  // Every node/group that carries a change — its own, content it owns (a
+  // reworded claim surfaces its host node), or a link it performs.
+  const nodeIds = new Set<string>(idx.nodeOwn.keys());
+  const groupIds = new Set<string>(idx.groupOwn.keys());
+  for (const ownerId of idx.byOwner.keys())
+    (isGroup.has(ownerId) ? groupIds : nodeIds).add(ownerId);
+  for (const host of linksBySrc.keys()) if (!isGroup.has(host)) nodeIds.add(host);
+
+  const entries: PlanEntry[] = [];
+  const push = (kind: "node" | "group", id: string) => {
+    const node = kind === "node" ? nodeById.get(id) : undefined;
+    // The same drift filter as the gutter's nodeMarks: vagrant content (and a
+    // vagrant node's own plan-only "added") is code-first review material, not
+    // a planned edit — without this the page listed what the gutter didn't.
+    const vagrantIds = new Set<string>();
+    const vagrantProps = new Set<string>();
+    for (const r of node?.responsibilities ?? []) if (r.vagrant) vagrantIds.add(r.id);
+    for (const p of node?.properties ?? []) if (p.vagrant) vagrantProps.add(p.label);
+    const own = node?.vagrant
+      ? undefined
+      : (kind === "node" ? idx.nodeOwn : idx.groupOwn).get(id);
+    const children = (idx.byOwner.get(id) ?? []).filter(
+      (ec) =>
+        !(ec.kind === "responsibility" && vagrantIds.has(ec.id)) &&
+        !(ec.kind === "property" && vagrantProps.has(ec.id)),
+    );
+    const links = kind === "node" ? (linksBySrc.get(id) ?? []) : [];
+    const childChanges = [
+      ...children.flatMap((c) => c.changes),
+      ...links.flatMap((l) => l.ec.changes),
+    ];
+    const mark = classifyPlan(own, childChanges);
+    if (!mark) return;
+    entries.push({ kind, id, mark, own: own ?? [], children, links });
+  };
+  for (const id of nodeIds) push("node", id);
+  for (const id of groupIds) push("group", id);
+  return entries;
+}
+
+// --- subtree roll-up ----------------------------------------------------------
+
+/** Priority when several descendant marks collapse into one rolled-up letter:
+ *  a hidden deletion outranks an addition outranks structure outranks rewords;
+ *  undescribed behaviour outranks staleness. */
+const PLAN_ROLLUP: Mark[] = ["D", "A", "R", "M"];
+const DRIFT_ROLLUP: Mark[] = ["Q", "X"];
+
+/** Merge mark pairs by roll-up priority. */
+export function combineMarks(pairs: (MarkPair | undefined)[]): MarkPair {
+  const plan = new Set<Mark>();
+  const drift = new Set<Mark>();
+  for (const p of pairs) {
+    if (p?.plan) plan.add(p.plan);
+    if (p?.drift) drift.add(p.drift);
+  }
+  return {
+    plan: PLAN_ROLLUP.find((m) => plan.has(m)) ?? null,
+    drift: DRIFT_ROLLUP.find((m) => drift.has(m)) ?? null,
+  };
+}
+
+/** Subtree roll-up: every node's DESCENDANT marks (plan entries + drift flags)
+ *  bubbled onto each ancestor, so a collapsed branch still shows what it hides
+ *  (the README's "rolled-up plan and drift marks"). Deleted descendants
+ *  attribute through their committed parent — the "D" a dropped node cannot
+ *  show itself (it has no row) surfaces on the surviving branch. Groups bubble
+ *  through their anchoring level's node. */
+export function rollupMarks(
+  model: ScryModel,
+  committed: ScryModel | null,
+  entries: PlanEntry[],
+): Map<string, MarkPair> {
+  const plannedParent = new Map(model.nodes.map((n) => [n.id, n.parentId ?? null] as const));
+  const committedParent = new Map(
+    (committed?.nodes ?? []).map((n) => [n.id, n.parentId ?? null] as const),
+  );
+  // has() before get(): a planned ROOT's parent is a legitimate null, which
+  // must not fall through to the committed map.
+  const parentOf = (id: string): string | null =>
+    plannedParent.has(id)
+      ? (plannedParent.get(id) ?? null)
+      : (committedParent.get(id) ?? null);
+
+  const groupById = new Map(
+    [...model.groups, ...(committed?.groups ?? [])].map((g) => [g.id, g] as const),
+  );
+  const groupAnchor = (id: string): string | null => {
+    const g = groupById.get(id);
+    if (!g) return null;
+    return (
+      g.parentNodeId ??
+      model.nodes.find((n) => n.id === g.memberIds[0])?.parentId ??
+      null
+    );
+  };
+
+  const acc = new Map<string, { plan: Set<Mark>; drift: Set<Mark> }>();
+  const bubble = (start: string | null, axis: "plan" | "drift", mark: Mark) => {
+    let cur = start;
+    const seen = new Set<string>();
+    while (cur != null && !seen.has(cur)) {
+      seen.add(cur);
+      let slot = acc.get(cur);
+      if (!slot) {
+        slot = { plan: new Set(), drift: new Set() };
+        acc.set(cur, slot);
+      }
+      slot[axis].add(mark);
+      cur = parentOf(cur);
+    }
+  };
+
+  for (const e of entries) {
+    const start = e.kind === "group" ? groupAnchor(e.id) : parentOf(e.id);
+    bubble(start, "plan", e.mark);
+  }
+  for (const n of model.nodes) {
+    const d = nodeDrift(n);
+    if (d) bubble(n.parentId ?? null, "drift", d);
+  }
+  for (const g of model.groups) {
+    const d = groupDrift(g);
+    if (d) bubble(groupAnchor(g.id), "drift", d);
+  }
+
+  return new Map(
+    [...acc].map(([id, { plan, drift }]) => [
+      id,
+      {
+        plan: PLAN_ROLLUP.find((m) => plan.has(m)) ?? null,
+        drift: DRIFT_ROLLUP.find((m) => drift.has(m)) ?? null,
+      },
+    ]),
+  );
 }

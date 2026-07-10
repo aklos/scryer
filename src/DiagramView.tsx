@@ -32,7 +32,7 @@ import "@xyflow/react/dist/style.css";
 import { ChevronRight, CornerLeftUp } from "lucide-react";
 import type { ScryModel } from "./viewmodel";
 import type { ModelDiff } from "./planDiff";
-import { indexDiff, MARK_META, type Mark, nodeMarks, resolveMark } from "./changeMarks";
+import { collectPlanEntries, MARK_META, type Mark, nodeDrift, resolveMark, rollupMarks } from "./changeMarks";
 import { assignAllHandles } from "./edgeRouting";
 import { DiagramCard, type CardData, type RFCard } from "./nodes/DiagramCard";
 import { CenterHandle } from "./nodes/NodeHandles";
@@ -116,6 +116,7 @@ const NO_EDGES: RFEdge<EdgeData>[] = [];
 export function DiagramView({
   model,
   planDiff,
+  committed,
   report,
   focusId,
   selectedId,
@@ -126,6 +127,8 @@ export function DiagramView({
   model: ScryModel;
   /** Live plan diff — colors each node/dot by its change mark. */
   planDiff: ModelDiff;
+  /** Committed layer — parents/endpoints for deleted elements in roll-ups. */
+  committed: ScryModel | null;
   /** Health report — its derived edges drive the implied-connection ghosts. */
   report: ModelHealthReport | null;
   /** The level being shown: children of this node, or top-level when null. */
@@ -143,6 +146,7 @@ export function DiagramView({
       <DiagramInner
         model={model}
         planDiff={planDiff}
+        committed={committed}
         report={report}
         focusId={focusId}
         selectedId={selectedId}
@@ -157,6 +161,7 @@ export function DiagramView({
 function DiagramInner({
   model,
   planDiff,
+  committed,
   report,
   focusId,
   selectedId,
@@ -166,6 +171,7 @@ function DiagramInner({
 }: {
   model: ScryModel;
   planDiff: ModelDiff;
+  committed: ScryModel | null;
   report: ModelHealthReport | null;
   focusId: string | null;
   selectedId: string | null;
@@ -199,16 +205,21 @@ function DiagramInner({
     return () => window.removeEventListener("diagram-expand", onExpand);
   }, [onFocus]);
 
-  // Index the plan diff once, and look the full model node up per scene node so
-  // its change mark (plan ?? drift) can tint the card / dot.
-  const diffIndex = useMemo(() => indexDiff(planDiff), [planDiff]);
+  // Per-node change mark (plan ?? drift) from the SHARED plan-entry
+  // computation, with descendant marks rolled up — a diagram card IS its
+  // subtree's face, so a change anywhere beneath it must show on the card.
   const markFor = useMemo(() => {
+    const entries = collectPlanEntries(planDiff, model, committed);
+    const entryMark = new Map(entries.map((e) => [e.id, e.mark] as const));
+    const rolled = rollupMarks(model, committed, entries);
     const byId = new Map(model.nodes.map((n) => [n.id, n] as const));
     return (id: string): Mark | null => {
       const vm = byId.get(id);
-      return vm ? resolveMark(nodeMarks(vm, diffIndex)) : null;
+      if (!vm) return null;
+      const own = resolveMark({ plan: entryMark.get(id) ?? null, drift: nodeDrift(vm) });
+      return own ?? resolveMark(rolled.get(id) ?? { plan: null, drift: null });
     };
-  }, [model, diffIndex]);
+  }, [model, committed, planDiff]);
 
   // Subgraph highlight: when the selected node is on this level, its incident
   // edges and neighbour nodes stay lit and everything else dims. Inactive when

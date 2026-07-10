@@ -181,7 +181,9 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
     );
   }
 
-  const markStroke = data.mark && !isExternal ? MARK_STROKE[data.mark] : null;
+  // External nodes keep their dashed outline but still show a change stroke —
+  // an edited external dependency is exactly the change worth noticing.
+  const markStroke = data.mark ? MARK_STROKE[data.mark] : null;
   // Completeness pie — hidden on ghosts (measured at the node's real home) and on
   // nodes with no anchorable primitives at all.
   const comp = isGhost ? undefined : data.completeness;

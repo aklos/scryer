@@ -537,12 +537,15 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const committedResps =
     committed?.nodes.find((n) => n.id === node.id)?.responsibilities ?? [];
   const definition = sourceMap[node.id] ?? [];
-  const hasChildren = model.nodes.some((n) => n.parentId === node.id);
 
   // Leaf claims must read through to code; structural nodes discharge through
-  // their subtree, so their claims are never "unmapped". Persons (actors) and
-  // externals are out-of-system — their claims are never code-backed.
-  const leafHost = !hasChildren && !node.external && node.kind !== "person";
+  // their subtree, so their claims are never "unmapped". Leafness is COMMITTED
+  // leafness — the lens the powerline and the Unmapped page count with — so a
+  // design-ahead (plan-only) child can't discharge the pill here while the
+  // counters still count the claim. Persons (actors) and externals are
+  // out-of-system — their claims are never code-backed.
+  const hasCommittedChildren = (committed?.nodes ?? []).some((n) => n.parentId === node.id);
+  const leafHost = !hasCommittedChildren && !node.external && node.kind !== "person";
 
   // The node's own definition anchor — its file, surfaced in the type line.
   const defFile = definition[0]?.pattern;
@@ -1109,21 +1112,21 @@ function DescriptionSection({
   }
   // A reworded description (committed text present and differing) shows the
   // change inline; an added one (no committed text) reads plain — the node's
-  // own diff marker already announces it's new.
-  const reworded = !!value && prevValue !== undefined && prevValue !== "" && prevValue !== value;
+  // own diff marker already announces it's new. A CLEARED one (committed text,
+  // plan empty) is a reword to nothing: the struck old text must show, or the
+  // page reads innocent while the tree and Changes page say modified.
+  const reworded = prevValue !== undefined && prevValue !== "" && prevValue !== (value ?? "");
   return (
     <div className="group/lede relative flow-root pr-16">
       <p
         className={`text-[13.5px] leading-[1.6] ${
-          value ? "text-[var(--text-secondary)]" : "italic text-[var(--text-muted)]"
+          value || reworded ? "text-[var(--text-secondary)]" : "italic text-[var(--text-muted)]"
         }`}
       >
-        {value ? (
-          reworded ? (
-            <WordDiffText from={prevValue!} to={value} />
-          ) : (
-            value
-          )
+        {reworded ? (
+          <WordDiffText from={prevValue!} to={value ?? ""} />
+        ) : value ? (
+          value
         ) : (
           "No description."
         )}
@@ -2157,7 +2160,10 @@ interface PropDiffRow {
   index: number | null;
 }
 
-const propKey = (label: string) => label.trim().toLowerCase();
+// Property identity is the EXACT label — the same keying as planDiff.ts and
+// diff.rs — so a case-only relabel reads as delete-plus-add on every surface,
+// never "clean" here while the tree, Changes page, and get_pending say modified.
+const propKey = (label: string) => label;
 
 function buildPropDiff(planned: SchemaProperty[], committed: SchemaProperty[]): PropDiffRow[] {
   const prevByKey = new Map(committed.map((p) => [propKey(p.label), p]));

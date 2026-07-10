@@ -17,12 +17,15 @@ import { childKindFor } from "./viewmodel";
 import type { Editor } from "./editor";
 import type { ModelDiff } from "./planDiff";
 import {
-  groupMarks,
-  indexDiff,
+  collectPlanEntries,
+  combineMarks,
+  groupDrift,
   MARK_META,
   type Mark,
-  nodeMarks,
+  type MarkPair,
+  nodeDrift,
   resolveMark,
+  rollupMarks,
 } from "./changeMarks";
 import { kindIcon } from "./kindIcon";
 import { KIND_ICON } from "./kindIcons";
@@ -41,15 +44,17 @@ const ROW = "group/row relative flex items-center gap-1 rounded pr-3 h-[26px] cu
 
 // The change letter for one row — a fixed-width, centered, mono cell pinned to
 // the row's left edge so the letters line up regardless of depth. Renders an
-// empty cell when there's no mark, keeping the label column aligned.
-function ChangeGutter({ mark }: { mark: Mark | null }) {
+// empty cell when there's no mark, keeping the label column aligned. A rolled
+// mark (`dim`) is a DESCENDANT's change showing through a collapsed branch —
+// same letter and hue, dimmed so it never reads as the row's own edit.
+function ChangeGutter({ mark, dim }: { mark: Mark | null; dim?: boolean }) {
   return (
     <span
       aria-hidden={!mark}
-      title={mark ? MARK_META[mark].label : undefined}
+      title={mark ? (dim ? `${MARK_META[mark].label} — inside this branch` : MARK_META[mark].label) : undefined}
       className={`pointer-events-none absolute inset-y-0 left-0 flex items-center justify-center font-mono text-[11px] font-bold ${
         mark ? MARK_META[mark].color : ""
-      }`}
+      } ${dim ? "opacity-50" : ""}`}
       style={{ width: GUTTER }}
     >
       {mark}
@@ -105,6 +110,7 @@ function altitudeRamp(node: Node): { weight: string; color: string } {
 export function ModelTree({
   model,
   planDiff,
+  committed,
   selected,
   expanded,
   onSelectNode,
@@ -118,6 +124,9 @@ export function ModelTree({
   model: ScryModel;
   /** Live `diff(committed, planned)` — drives the change-letter gutter. */
   planDiff: ModelDiff;
+  /** The committed layer — parents for deleted elements (their D rolls up the
+   *  surviving branch) and endpoints for dropped links. */
+  committed: ScryModel | null;
   selected: Selected | null;
   expanded: ReadonlySet<string>;
   onSelectNode: (id: string) => void;
@@ -198,18 +207,26 @@ export function ModelTree({
     else childIndex.set(k, [n]);
   }
 
-  // Per-node plan/drift marks from the live plan diff, computed once.
-  const diffIndex = indexDiff(planDiff);
-  const markOf = new Map<string, { plan: Mark | null; drift: Mark | null }>();
-  for (const n of model.nodes) markOf.set(n.id, nodeMarks(n, diffIndex));
+  // Per-element plan marks from the SHARED plan-entry computation — the same
+  // one the Changes page renders, so the gutter, the lens count, and the page
+  // can never disagree. Link changes mark their source node; deleted elements
+  // (no row of their own) surface through the roll-up below.
+  const planEntries = collectPlanEntries(planDiff, model, committed);
+  const entryMark = new Map(planEntries.map((e) => [e.id, e.mark] as const));
+  const markOf = new Map<string, MarkPair>();
+  for (const n of model.nodes)
+    markOf.set(n.id, { plan: entryMark.get(n.id) ?? null, drift: nodeDrift(n) });
+  // Descendant marks bubbled per ancestor — shown on collapsed branches.
+  const rolledOf = rollupMarks(model, committed, planEntries);
   const hasPlan = (id: string) => markOf.get(id)?.plan != null;
   const hasDrift = (id: string) => markOf.get(id)?.drift != null;
 
-  // Lens counts shown on the segmented control — how many rows each lens lights.
-  let changeCount = 0;
+  // Lens counts on the segmented control. "Changes" counts plan CARRIERS —
+  // exactly the entries the Changes page lists (deleted elements and changed
+  // links included) — not just the rows that happen to exist in the tree.
+  const changeCount = planEntries.length;
   let driftCount = 0;
   for (const n of model.nodes) {
-    if (hasPlan(n.id)) changeCount++;
     if (hasDrift(n.id)) driftCount++;
   }
 
@@ -217,9 +234,15 @@ export function ModelTree({
   const filterActive = q !== "" || lens !== "all";
   let visibleIds: ReadonlySet<string> | null = null;
   if (filterActive) {
+    // A lens matches a row for its OWN mark or anything rolled up beneath it,
+    // so a plan holding only a deletion still lights the surviving branch.
+    const lensMatch = (id: string) =>
+      lens === "all" ||
+      (lens === "changes"
+        ? hasPlan(id) || rolledOf.get(id)?.plan != null
+        : hasDrift(id) || rolledOf.get(id)?.drift != null);
     const matchSelf = (n: Node) =>
-      (q === "" || (n.name || "").toLowerCase().includes(q)) &&
-      (lens === "all" || (lens === "changes" ? hasPlan(n.id) : hasDrift(n.id)));
+      (q === "" || (n.name || "").toLowerCase().includes(q)) && lensMatch(n.id);
     const set = new Set<string>();
     const walk = (n: Node): boolean => {
       let inc = matchSelf(n);
@@ -626,8 +649,15 @@ export function ModelTree({
       !filterActive && node.kind === "component" ? hiddenSymbolCount(node.id) : 0;
     const isDrop = dropKey === `node:${node.id}`;
     const marks = markOf.get(node.id) ?? { plan: null, drift: null };
-    // The gutter shows this node's OWN mark.
+    // The gutter shows this node's OWN mark; when the branch's children are
+    // not on screen (collapsed, or hidden by the altitude toggle), a
+    // descendant's mark rolls up dimmed so the change is never invisible.
     const ownMark = resolveMark(marks);
+    const childrenOnScreen = row.hasChildren && row.isOpen;
+    const rolledMark =
+      ownMark || childrenOnScreen
+        ? null
+        : resolveMark(rolledOf.get(node.id) ?? { plan: null, drift: null });
 
     return (
       <div
@@ -648,7 +678,7 @@ export function ModelTree({
               )}`
         } ${isDrop ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""}`}
       >
-        <ChangeGutter mark={ownMark} />
+        <ChangeGutter mark={ownMark ?? rolledMark} dim={!ownMark && !!rolledMark} />
         {/* Rails are suppressed on the selected row so the ancestor lines pass
             behind the selection band instead of ticking across it. */}
         {!isSel && renderRails(row)}
@@ -729,7 +759,19 @@ export function ModelTree({
   const renderGroup = (row: TreeRow): React.ReactNode => {
     const group = row.group!;
     const isSel = selected?.kind === "group" && selected.id === group.id;
-    const gMark = resolveMark(groupMarks(group, diffIndex));
+    const gMark = resolveMark({
+      plan: entryMark.get(group.id) ?? null,
+      drift: groupDrift(group),
+    });
+    // Collapsed folder: members' marks (own + their subtrees) roll up dimmed.
+    const gRolled =
+      gMark || row.isOpen
+        ? null
+        : resolveMark(
+            combineMarks(
+              group.memberIds.flatMap((m) => [markOf.get(m), rolledOf.get(m)]),
+            ),
+          );
     // Declared member count, shown (quietly) only when collapsed.
     const memberCount = row.isOpen ? 0 : group.memberIds.length;
     const groupLevel =
@@ -755,7 +797,7 @@ export function ModelTree({
               )}`
         } ${dropKey === `group:${group.id}` ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""}`}
       >
-        <ChangeGutter mark={gMark} />
+        <ChangeGutter mark={gMark ?? gRolled} dim={!gMark && !!gRolled} />
         {!isSel && renderRails(row)}
         <Chevron
           has={row.hasChildren}

@@ -189,6 +189,7 @@ export function WorkspaceShell({
         <ModelTree
           model={model}
           planDiff={diff}
+          committed={null}
           selected={selected}
           expanded={expanded}
           onSelectNode={sel}
@@ -202,6 +203,7 @@ export function WorkspaceShell({
           <DiagramView
             model={model}
             planDiff={diff}
+            committed={null}
             report={health}
             focusId={diagramFocus}
             selectedId={selected?.kind === "node" ? selected.id : null}

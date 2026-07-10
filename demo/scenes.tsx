@@ -69,6 +69,7 @@ const Diagram = () => (
   <DiagramView
     model={paymentsModel}
     planDiff={EMPTY_DIFF}
+    committed={null}
     report={healthReport}
     focusId="aperture"
     selectedId={null}

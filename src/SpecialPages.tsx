@@ -28,7 +28,7 @@ import { ConfirmPopover } from "./ConfirmPopover";
 import type { ChangeItem, ChangeRevision } from "./hooks/useModelStorage";
 import type { ScryModel, Node, Responsibility, SchemaProperty, DriftScope } from "./viewmodel";
 import type { Change, ElementChange, ModelDiff } from "./planDiff";
-import { CHANGE_COLOR, type ChangeKind, classifyPlan, indexDiff, MARK_META, type Mark } from "./changeMarks";
+import { CHANGE_COLOR, type ChangeKind, collectPlanEntries, type LinkChange, MARK_META, type PlanEntry } from "./changeMarks";
 import { ChangeGlyph, DIFF_TINT } from "./diffkit";
 import type { Editor } from "./editor";
 import type { ModelHealthReport } from "./health";
@@ -199,27 +199,11 @@ export function RevisionList({
 // `changeLog`: anything edited this session floats to the top (newest first),
 // and everything else (pending from a prior session) falls below in tree order.
 
-/** A link change, grouped under its source node (the side that "does" it),
- *  carrying the current target so we can link to where it points. */
-interface LinkChange {
-  ec: ElementChange;
-  /** Current target node id — planned, or the committed copy for a dropped link. */
-  dst: string | null;
-}
-
-/** One node's (or group's) pending divergence — its own changes plus everything
- *  it owns (claims, properties, outgoing links) — ready to render and sort. */
-interface DiffEntry {
-  kind: "node" | "group";
-  id: string;
+/** One node's (or group's) pending divergence — a shared {@link PlanEntry}
+ *  (the same computation the tree's gutter and lens count use, so the surfaces
+ *  cannot disagree) decorated with the page's display/sort fields. */
+interface DiffEntry extends PlanEntry {
   label: string;
-  mark: Mark;
-  /** The element's own field / structural changes (rewords, move, members…). */
-  own: Change[];
-  /** Owned responsibility/property changes. */
-  children: ElementChange[];
-  /** Outgoing link changes — relationships this node is the source of. */
-  links: LinkChange[];
   /** Last session touch, if any — the primary sort key. */
   at: number | null;
   by: "agent" | "user" | null;
@@ -290,63 +274,20 @@ function buildEntries(
   committed: ScryModel | null,
   changeLog: readonly ChangeRevision[],
 ): DiffEntry[] {
-  const idx = indexDiff(planDiff);
-  const isGroup = new Set(model.groups.map((g) => g.id));
   const order = treeOrder(model);
   const touched = lastTouched(changeLog);
   const names = buildNameMap(model, committed);
-  const linkById = new Map(
-    [...(committed?.links ?? []), ...model.links].map((l) => [l.id, l] as const),
-  );
 
-  // A changed link belongs to its source node — the side that performs the
-  // relationship. Group it there so it reads under that node, not rootless.
-  const linksBySrc = new Map<string, LinkChange[]>();
-  for (const ec of planDiff.changes) {
-    if (ec.kind !== "link") continue;
-    const link = linkById.get(ec.id);
-    const host = link?.src ?? link?.dst; // dropped-link fallback: hang it off either end
-    if (!host) continue;
-    const lc: LinkChange = { ec, dst: link?.dst ?? null };
-    const arr = linksBySrc.get(host);
-    if (arr) arr.push(lc);
-    else linksBySrc.set(host, [lc]);
-  }
-
-  // Every node/group that carries a change — its own, content it owns (a
-  // reworded claim surfaces its host node, like the tree's lens), or a link.
-  const nodeIds = new Set<string>(idx.nodeOwn.keys());
-  const groupIds = new Set<string>(idx.groupOwn.keys());
-  for (const ownerId of idx.byOwner.keys()) (isGroup.has(ownerId) ? groupIds : nodeIds).add(ownerId);
-  for (const host of linksBySrc.keys()) if (!isGroup.has(host)) nodeIds.add(host);
-
-  const entries: DiffEntry[] = [];
-  const push = (kind: "node" | "group", id: string) => {
-    const own = (kind === "node" ? idx.nodeOwn : idx.groupOwn).get(id) ?? [];
-    const children = idx.byOwner.get(id) ?? [];
-    const links = kind === "node" ? (linksBySrc.get(id) ?? []) : [];
-    const childChanges = [
-      ...children.flatMap((c) => c.changes),
-      ...links.flatMap((l) => l.ec.changes),
-    ];
-    const mark = classifyPlan(own, childChanges);
-    if (!mark) return;
-    const t = touched.get(id);
-    entries.push({
-      kind,
-      id,
-      label: nameOf(names, id),
-      mark,
-      own,
-      children,
-      links,
+  const entries: DiffEntry[] = collectPlanEntries(planDiff, model, committed).map((e) => {
+    const t = touched.get(e.id);
+    return {
+      ...e,
+      label: nameOf(names, e.id),
       at: t?.at ?? null,
       by: t?.by ?? null,
-      order: order.get(id) ?? Number.MAX_SAFE_INTEGER,
-    });
-  };
-  for (const id of nodeIds) push("node", id);
-  for (const id of groupIds) push("group", id);
+      order: order.get(e.id) ?? Number.MAX_SAFE_INTEGER,
+    };
+  });
 
   // Newest session edit first; untouched entries (at = null → -1) sink to the
   // bottom, where tree position decides the order.
@@ -545,13 +486,21 @@ function EntryCard({ entry, ctx }: { entry: DiffEntry; ctx: RowCtx }) {
         <span className="shrink-0 text-2xs uppercase tracking-wide text-[var(--text-ghost)]">
           {entry.kind}
         </span>
-        <button
-          type="button"
-          onClick={() => ctx.onSelectNode(entry.id)}
-          className="min-w-0 truncate text-left text-sm text-blue-700 hover:underline dark:text-blue-400"
-        >
-          {entry.label}
-        </button>
+        {/* A dropped element has no page — struck text, never a dead link
+            (the same convention as NodeRef in the detail rows). */}
+        {ctx.live.has(entry.id) ? (
+          <button
+            type="button"
+            onClick={() => ctx.onSelectNode(entry.id)}
+            className="min-w-0 truncate text-left text-sm text-blue-700 hover:underline dark:text-blue-400"
+          >
+            {entry.label}
+          </button>
+        ) : (
+          <span className="min-w-0 truncate text-sm text-[var(--text-muted)] line-through decoration-[var(--text-ghost)]">
+            {entry.label}
+          </span>
+        )}
         {entry.at != null && (
           <span className="ml-auto shrink-0 font-mono text-2xs tabular-nums text-[var(--text-muted)]">
             {timeLabel(entry.at)}
