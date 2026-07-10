@@ -2,7 +2,7 @@ mod highlight;
 mod hooks;
 mod symbols;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use notify::{recommended_watcher, EventKind, RecursiveMode, Watcher};
@@ -638,6 +638,19 @@ const SCRYER_HOOK_EVENTS: &[(&str, Option<&str>, u64)] = &[
     ("Stop", None, 15),
 ];
 
+/// The Codex hook events, served by the same client command — Codex's hook
+/// payloads use the same field names as Claude Code's. Reads fire no hooks
+/// there, so the intent overlay rides PreToolUse on the patch instead; the
+/// matcher covers both the native apply_patch tool and the Bash heredoc
+/// route (the client no-ops on Bash commands with no patch envelope).
+/// Timeouts stay explicit: Codex's default is 600 s.
+const SCRYER_CODEX_HOOK_EVENTS: &[(&str, Option<&str>, u64)] = &[
+    ("SessionStart", None, 10),
+    ("PreToolUse", Some("apply_patch|Bash"), 10),
+    ("PostToolUse", Some("apply_patch|Bash"), 10),
+    ("Stop", None, 15),
+];
+
 /// Does this hook entry belong to scryer? Identified by the command invoking
 /// the scryer-mcp binary's `hook` subcommand — the marker `install` writes.
 fn is_scryer_hook_entry(entry: &serde_json::Value) -> bool {
@@ -668,6 +681,20 @@ fn check_claude_hooks(project_path: &str) -> bool {
     false
 }
 
+/// Check if Codex has scryer's session hooks installed for the project.
+fn check_codex_hooks(project_path: &str) -> bool {
+    let path = PathBuf::from(project_path).join(".codex").join("hooks.json");
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
+            return root
+                .pointer("/hooks/SessionStart")
+                .and_then(|v| v.as_array())
+                .is_some_and(|entries| entries.iter().any(is_scryer_hook_entry));
+        }
+    }
+    false
+}
+
 /// Check if a project has .codex/config.toml with a scryer MCP entry.
 fn check_codex_toml(project_path: &str) -> bool {
     let path = PathBuf::from(project_path).join(".codex").join("config.toml");
@@ -691,6 +718,7 @@ fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value {
     let codex_mcp = project_path.as_deref().map(check_codex_toml).unwrap_or(false);
     let claude_approved = project_path.as_deref().map(check_claude_approved).unwrap_or(false);
     let claude_hooks = project_path.as_deref().map(check_claude_hooks).unwrap_or(false);
+    let codex_hooks = project_path.as_deref().map(check_codex_hooks).unwrap_or(false);
 
     serde_json::json!({
         "claude": has_claude,
@@ -699,6 +727,7 @@ fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value {
         "codexMcpEnabled": codex_mcp,
         "claudeApproved": claude_approved,
         "claudeHooksEnabled": claude_hooks,
+        "codexHooksEnabled": codex_hooks,
     })
 }
 
@@ -815,6 +844,10 @@ fn setup_mcp_integration(
             let binary_path = find_scryer_mcp().ok_or("scryer-mcp binary not found")?;
             return write_claude_hooks(&project_path, &binary_path);
         }
+        "codex_hooks" => {
+            let binary_path = find_scryer_mcp().ok_or("scryer-mcp binary not found")?;
+            return write_codex_hooks(&project_path, &binary_path);
+        }
         _ => Err(format!("Unknown action: {}", action)),
     }
 }
@@ -824,16 +857,48 @@ fn setup_mcp_integration(
 /// milliseconds unless the app has this project open, so installed hooks
 /// impose nothing on sessions where the user leaves Scryer closed.
 fn write_claude_hooks(project_path: &str, binary_path: &str) -> Result<String, String> {
+    let claude_dir = PathBuf::from(project_path).join(".claude");
+    write_scryer_hooks(
+        &claude_dir,
+        &claude_dir.join("settings.local.json"),
+        SCRYER_HOOK_EVENTS,
+        binary_path,
+    )
+}
+
+/// The same opt-in for Codex: write the registrations into the project's
+/// `.codex/hooks.json` (Codex merges it with any user-level hooks, and loads
+/// it once the `.codex/` layer is trusted). The registered command is the
+/// same `… hook` client, so the inert-while-Scryer-is-closed economics hold.
+fn write_codex_hooks(project_path: &str, binary_path: &str) -> Result<String, String> {
+    let codex_dir = PathBuf::from(project_path).join(".codex");
+    write_scryer_hooks(
+        &codex_dir,
+        &codex_dir.join("hooks.json"),
+        SCRYER_CODEX_HOOK_EVENTS,
+        binary_path,
+    )
+}
+
+/// Idempotent hook install into one file's `{"hooks": {...}}` block — both
+/// harnesses use the same entry schema. Two passes because an event may get
+/// two scryer entries: first strip every prior scryer entry per event (they
+/// all share the `… hook` command marker; foreign hooks are kept), then
+/// append the current set.
+fn write_scryer_hooks(
+    dir: &Path,
+    file_path: &Path,
+    events: &[(&str, Option<&str>, u64)],
+    binary_path: &str,
+) -> Result<String, String> {
     let command = format!("\"{}\" hook", binary_path);
 
-    let claude_dir = PathBuf::from(project_path).join(".claude");
-    let settings_path = claude_dir.join("settings.local.json");
-    let mut root: serde_json::Value = if settings_path.exists() {
-        let contents = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+    let mut root: serde_json::Value = if file_path.exists() {
+        let contents = std::fs::read_to_string(file_path).map_err(|e| e.to_string())?;
         serde_json::from_str(&contents).map_err(|e| {
             format!(
                 "{} is not valid JSON ({e}); refusing to overwrite it — fix the file and retry.",
-                settings_path.display()
+                file_path.display()
             )
         })?
     } else {
@@ -843,11 +908,7 @@ fn write_claude_hooks(project_path: &str, binary_path: &str) -> Result<String, S
     if !root.get("hooks").is_some_and(|v| v.is_object()) {
         root["hooks"] = serde_json::json!({});
     }
-    // Idempotent install, two passes because PostToolUse gets TWO scryer
-    // entries: first strip every prior scryer entry per event (they all share
-    // the `… hook` command marker; foreign hooks are kept), then append the
-    // current set.
-    for (event, _, _) in SCRYER_HOOK_EVENTS {
+    for (event, _, _) in events {
         let entries = root["hooks"]
             .as_object_mut()
             .unwrap()
@@ -858,7 +919,7 @@ fn write_claude_hooks(project_path: &str, binary_path: &str) -> Result<String, S
         }
         entries.as_array_mut().unwrap().retain(|e| !is_scryer_hook_entry(e));
     }
-    for (event, matcher, timeout) in SCRYER_HOOK_EVENTS {
+    for (event, matcher, timeout) in events {
         let mut entry = serde_json::json!({
             "hooks": [{ "type": "command", "command": command, "timeout": timeout }],
         });
@@ -868,14 +929,14 @@ fn write_claude_hooks(project_path: &str, binary_path: &str) -> Result<String, S
         root["hooks"][event].as_array_mut().unwrap().push(entry);
     }
 
-    std::fs::create_dir_all(&claude_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     std::fs::write(
-        &settings_path,
+        file_path,
         serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
 
-    Ok(settings_path.to_string_lossy().to_string())
+    Ok(file_path.to_string_lossy().to_string())
 }
 
 #[cfg(test)]
@@ -944,6 +1005,51 @@ mod hook_install_tests {
         assert!(err.contains("not valid JSON"), "{err}");
         // The user's file is left exactly as it was.
         assert_eq!(std::fs::read_to_string(&settings).unwrap(), original);
+    }
+
+    /// The Codex install writes `.codex/hooks.json` with the Codex event set —
+    /// PreToolUse carries the overlay there since reads fire no hooks — and is
+    /// just as idempotent and foreign-preserving as the Claude one.
+    #[test]
+    fn codex_hook_install_is_idempotent_and_preserves_foreign_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        let codex_dir = dir.path().join(".codex");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        std::fs::write(
+            codex_dir.join("hooks.json"),
+            serde_json::json!({
+                "hooks": {
+                    "PreToolUse": [
+                        { "matcher": "Bash", "hooks": [{ "type": "command", "command": "my-policy" }] }
+                    ]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let project = dir.path().to_string_lossy().to_string();
+        assert!(!check_codex_hooks(&project));
+        write_codex_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
+        write_codex_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
+        assert!(check_codex_hooks(&project));
+
+        let root: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(codex_dir.join("hooks.json")).unwrap(),
+        )
+        .unwrap();
+        let pre = root["hooks"]["PreToolUse"].as_array().unwrap();
+        assert!(pre.iter().any(|e| e["matcher"] == "Bash"), "foreign hook kept");
+        let scryer_pre: Vec<_> = pre.iter().filter(|e| is_scryer_hook_entry(e)).collect();
+        assert_eq!(scryer_pre.len(), 1, "no duplicates after re-install: {pre:?}");
+        assert_eq!(scryer_pre[0]["matcher"], "apply_patch|Bash");
+        assert_eq!(
+            root["hooks"]["PostToolUse"].as_array().unwrap().len(),
+            1,
+            "Codex set has ONE PostToolUse entry (no Read overlay there)"
+        );
+        assert_eq!(root["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+        assert_eq!(root["hooks"]["Stop"].as_array().unwrap().len(), 1);
     }
 }
 
@@ -2424,7 +2530,7 @@ async fn get_model_health(cwd: String) -> Result<ModelHealthReport, String> {
             scryer_core::health::resolve_completeness(&model, &planned, &all_files, &dead);
 
         Ok(ModelHealthReport {
-            health: scryer_core::health::compute_health(&model, Some(&files)),
+            health: scryer_core::health::compute_health(&model, Some(&planned), Some(&files)),
             completeness,
             anchors: check.observations,
             reanchored: check.reanchored,
