@@ -18,7 +18,19 @@ use server::ScryerServer;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Handle subcommands
     match std::env::args().nth(1).as_deref() {
-        Some("init") => return init_project(),
+        Some("init") => {
+            let mut statusline = false;
+            for a in std::env::args().skip(2) {
+                match a.as_str() {
+                    "--statusline" => statusline = true,
+                    other => {
+                        eprintln!("unknown argument '{other}'\nusage: scryer-mcp init [--statusline]");
+                        std::process::exit(2);
+                    }
+                }
+            }
+            return init_project(statusline);
+        }
         // Claude Code session hook: event JSON on stdin, hook JSON on stdout.
         // Silent no-op unless the Scryer app has this project open.
         Some("hook") => return hook_client::run_hook_client(),
@@ -27,6 +39,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let args: Vec<String> = std::env::args().skip(2).collect();
             return cli::run_status(&args);
         }
+        // Claude Code statusline command: session JSON on stdin, one line out.
+        // Prints nothing when no model is found.
+        Some("statusline") => return cli::run_statusline(),
         _ => {}
     }
 
@@ -40,8 +55,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Write project-scoped MCP config files in the current directory so that
 /// Claude Code and/or Codex discover scryer-mcp when working in this project.
-/// Only writes config for tools that are actually installed.
-fn init_project() -> Result<(), Box<dyn std::error::Error>> {
+/// Only writes config for tools that are actually installed. With
+/// `statusline`, also register the model's status one-liner as Claude Code's
+/// statusline (never clobbering a foreign one).
+fn init_project(statusline: bool) -> Result<(), Box<dyn std::error::Error>> {
     let binary_path = std::env::current_exe()?
         .canonicalize()?
         .to_string_lossy()
@@ -62,7 +79,26 @@ fn init_project() -> Result<(), Box<dyn std::error::Error>> {
 
     if has_claude {
         init_claude_code(&cwd, &binary_path)?;
+        if statusline {
+            match cli::install_statusline(&cwd, &binary_path)? {
+                cli::StatuslineInstall::Installed(path) => {
+                    eprintln!("Registered the scryer statusline in {}", path.display());
+                }
+                // statusLine is a single slot (whole-line replacement), so a
+                // foreign entry is composed with by hand, never clobbered.
+                cli::StatuslineInstall::ForeignExists(path) => {
+                    eprintln!(
+                        "A statusLine is already configured in {} — left untouched.",
+                        path.display()
+                    );
+                    eprintln!("To add scryer to it, append this to your statusline script's output:");
+                    eprintln!("  \"{binary_path}\" statusline");
+                }
+            }
+        }
         wrote_any = true;
+    } else if statusline {
+        eprintln!("--statusline is a Claude Code integration; `claude` was not found in PATH.");
     }
 
     if has_codex {
@@ -79,6 +115,9 @@ fn init_project() -> Result<(), Box<dyn std::error::Error>> {
         if has_claude {
             eprintln!("\nTo auto-approve scryer tools in Claude Code, add to .claude/settings.local.json:");
             eprintln!("  \"permissions\": {{ \"allow\": [\"mcp__scryer\"] }}");
+        }
+        if has_claude && !statusline {
+            eprintln!("\nTip: `scryer-mcp init --statusline` puts the model's status line in Claude Code's prompt.");
         }
     }
 

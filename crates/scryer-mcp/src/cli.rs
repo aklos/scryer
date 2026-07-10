@@ -44,6 +44,41 @@ pub(crate) fn run_status(args: &[String]) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
+/// `scryer-mcp statusline` — the Claude Code statusline command. Claude Code
+/// invokes it on conversation updates with a session JSON blob on stdin and
+/// shows the first stdout line under the prompt. Prints NOTHING when no model
+/// is found (a blank segment, not an error), and always exits 0. Also callable
+/// from a user's own statusline script — stdin is only read when it is piped,
+/// and an empty/foreign payload falls back to the process cwd.
+pub(crate) fn run_statusline() -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{IsTerminal, Read};
+    let mut input = String::new();
+    if !std::io::stdin().is_terminal() {
+        let _ = std::io::stdin().read_to_string(&mut input);
+    }
+    let start = match statusline_start_dir(&input).or_else(|| std::env::current_dir().ok()) {
+        Some(d) => d,
+        None => return Ok(()),
+    };
+    if let Some(project) = find_project(&start) {
+        if let Some(c) = status_counts(&scryer_core::ModelRef::ProjectLocal(project)) {
+            println!("{}", status_line(&c));
+        }
+    }
+    Ok(())
+}
+
+/// Where to start the project walk, from Claude Code's statusline payload:
+/// the workspace's project dir first (stable across `cd`), then its current
+/// dir, then the event cwd. None when stdin wasn't that payload.
+pub(crate) fn statusline_start_dir(input: &str) -> Option<PathBuf> {
+    let v: serde_json::Value = serde_json::from_str(input).ok()?;
+    ["/workspace/project_dir", "/workspace/current_dir", "/cwd"]
+        .iter()
+        .find_map(|p| v.pointer(p).and_then(|d| d.as_str()))
+        .map(PathBuf::from)
+}
+
 /// Walk up from `start` to the first directory containing `.scryer/`. The
 /// first hit ends the walk whether or not a readable model is inside — an
 /// empty or broken `.scryer` is not a reason to keep climbing into a parent
@@ -57,6 +92,66 @@ pub(crate) fn find_project(start: &Path) -> Option<PathBuf> {
         dir = d.parent().map(Path::to_path_buf);
     }
     None
+}
+
+/// Outcome of a statusline install attempt.
+pub(crate) enum StatuslineInstall {
+    /// Written (fresh, or an idempotent refresh of our own entry).
+    Installed(PathBuf),
+    /// A foreign statusline is configured — left untouched; the caller prints
+    /// how to compose instead.
+    ForeignExists(PathBuf),
+}
+
+/// Is this `statusLine` entry ours? Identified by the command invoking the
+/// scryer-mcp binary's `statusline` subcommand — the marker
+/// [`install_statusline`] writes (mirrors `is_scryer_hook_entry` in the app).
+fn is_scryer_statusline(entry: &serde_json::Value) -> bool {
+    entry["command"]
+        .as_str()
+        .is_some_and(|c| c.contains("scryer-mcp") && c.trim_end().ends_with(" statusline"))
+}
+
+/// Register `scryer-mcp statusline` as the Claude Code statusline for this
+/// project, in the personal settings file (same conventions as the app's hook
+/// install: absolute binary path, refuse to overwrite invalid JSON). Unlike
+/// hooks, `statusLine` is a SINGLE slot — a whole-line replacement — so a
+/// foreign entry is never clobbered: the caller tells the user how to append
+/// our segment to their own script instead.
+pub(crate) fn install_statusline(
+    project: &Path,
+    binary_path: &str,
+) -> Result<StatuslineInstall, String> {
+    let claude_dir = project.join(".claude");
+    let settings_path = claude_dir.join("settings.local.json");
+    let mut root: serde_json::Value = if settings_path.exists() {
+        let contents = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&contents).map_err(|e| {
+            format!(
+                "{} is not valid JSON ({e}); refusing to overwrite it — fix the file and retry.",
+                settings_path.display()
+            )
+        })?
+    } else {
+        serde_json::json!({})
+    };
+
+    let existing = root.get("statusLine");
+    if existing.is_some_and(|e| !e.is_null() && !is_scryer_statusline(e)) {
+        return Ok(StatuslineInstall::ForeignExists(settings_path));
+    }
+
+    root["statusLine"] = serde_json::json!({
+        "type": "command",
+        "command": format!("\"{binary_path}\" statusline"),
+    });
+    std::fs::create_dir_all(&claude_dir).map_err(|e| e.to_string())?;
+    std::fs::write(
+        &settings_path,
+        serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(StatuslineInstall::Installed(settings_path))
 }
 
 pub(crate) fn status_line(c: &StatusCounts) -> String {
@@ -128,6 +223,75 @@ mod tests {
 
         let c = status_counts(&r).unwrap();
         assert_eq!(status_line(&c), "scryer: 1 pending · no reconcile anchor yet");
+    }
+
+    /// The statusline start dir prefers the workspace's project dir, falls
+    /// through its variants, and rejects a non-payload stdin.
+    #[test]
+    fn statusline_start_dir_prefers_project_dir() {
+        let full = serde_json::json!({
+            "cwd": "/c",
+            "workspace": { "current_dir": "/b", "project_dir": "/a" },
+        })
+        .to_string();
+        assert_eq!(statusline_start_dir(&full), Some(PathBuf::from("/a")));
+        let cwd_only = serde_json::json!({ "cwd": "/c" }).to_string();
+        assert_eq!(statusline_start_dir(&cwd_only), Some(PathBuf::from("/c")));
+        assert_eq!(statusline_start_dir(""), None);
+        assert_eq!(statusline_start_dir("not json"), None);
+    }
+
+    /// Install is idempotent on our own entry, preserves the rest of the
+    /// settings file, and never clobbers a foreign statusline — the single
+    /// slot belongs to the user.
+    #[test]
+    fn statusline_install_is_idempotent_and_never_clobbers() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        let settings = project.join(".claude/settings.local.json");
+        std::fs::create_dir_all(project.join(".claude")).unwrap();
+        std::fs::write(
+            &settings,
+            serde_json::json!({ "permissions": { "allow": ["mcp__scryer"] } }).to_string(),
+        )
+        .unwrap();
+
+        // Fresh install, then a refresh from a moved binary: still one entry,
+        // pointing at the new path, other settings intact.
+        for path in ["/opt/scryer/scryer-mcp", "/usr/local/bin/scryer-mcp"] {
+            match install_statusline(project, path).unwrap() {
+                StatuslineInstall::Installed(p) => assert_eq!(p, settings),
+                StatuslineInstall::ForeignExists(_) => panic!("our own entry must refresh"),
+            }
+        }
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(
+            root["statusLine"]["command"],
+            "\"/usr/local/bin/scryer-mcp\" statusline"
+        );
+        assert_eq!(root["permissions"]["allow"][0], "mcp__scryer");
+
+        // A foreign statusline is reported, not replaced.
+        std::fs::write(
+            &settings,
+            serde_json::json!({
+                "statusLine": { "type": "command", "command": "my-fancy-prompt.sh" }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        match install_statusline(project, "/opt/scryer/scryer-mcp").unwrap() {
+            StatuslineInstall::ForeignExists(p) => assert_eq!(p, settings),
+            StatuslineInstall::Installed(_) => panic!("foreign statusline was clobbered"),
+        }
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(root["statusLine"]["command"], "my-fancy-prompt.sh");
+
+        // Invalid JSON is refused, not overwritten.
+        std::fs::write(&settings, "{ not json").unwrap();
+        assert!(install_statusline(project, "/opt/scryer/scryer-mcp").is_err());
     }
 
     /// With a reconcile baseline in place, the line carries real drift and
