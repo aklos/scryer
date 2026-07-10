@@ -1068,9 +1068,9 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "What model intent is NOT yet reflected in code — the model→code work outstanding. This is the PLAN diff: how the draft (`planned`) diverges from the committed `model`. Each entry names an element (node / responsibility / property / link / group) and what to do: `added` (implement new code), `reworded` (re-implement to the new spec), `moved` (move the code), `repointed` (re-point the relationship), `deleted` (remove the code) — with a breadcrumb path and, for responsibilities, source anchors. Implementing an entry and calling `mark_implemented` folds it from the plan into the committed model. A `reworded` claim on the `appearance` field is a planned VISUAL change — reconcile the component's code to the accepted fixture named in the entry's `appearanceInstruction`, not to a text spec. Call this to find what needs implementing or syncing to the codebase."
+        description = "What model intent is NOT yet reflected in code — the model→code work outstanding. This is the PLAN diff: how the draft (`planned`) diverges from the committed `model`. Each entry names an element (node / responsibility / property / link / group) and what to do: `added` (implement new code), `reworded` (re-implement to the new spec), `moved` (move the code), `repointed` (re-point the relationship), `deleted` (remove the code) — with a breadcrumb path and, for responsibilities, source anchors. Implementing an entry and calling `mark_implemented` folds it from the plan into the committed model. A `reworded` claim on the `appearance` field is a planned VISUAL change — reconcile the component's code to the accepted fixture named in the entry's `appearanceInstruction`, not to a text spec. Entries tagged to a CHANGE (a named plan partition, see `set_change`) carry its id in `change`; `openChanges` lists every open change with its rationale, and passing `change` (an id, or \"unfiled\") filters the queue to one task — an agent told to implement one change need not wade through the rest. Call this to find what needs implementing or syncing to the codebase."
     )]
-    fn get_pending(
+    pub(crate) fn get_pending(
         &self,
         Parameters(req): Parameters<GetPendingRequest>,
     ) -> Result<CallToolResult, McpError> {
@@ -1149,6 +1149,21 @@ impl ScryerServer {
             if vagrant {
                 continue;
             }
+            // Ledger: which change (named plan partition) this entry belongs to
+            // — untagged entries are the unfiled bucket. `change` filters the
+            // queue to one change ("implement THIS change"), and the summary
+            // counts follow the filter.
+            let tagged = planned.change_map.get(&scryer_core::changes::key_for(ch));
+            if let Some(want) = req.change.as_deref() {
+                let keep = if want == "unfiled" {
+                    tagged.is_none()
+                } else {
+                    tagged.map(String::as_str) == Some(want)
+                };
+                if !keep {
+                    continue;
+                }
+            }
             for c in &ch.changes {
                 match c {
                     Change::Added => to_implement += 1,
@@ -1199,10 +1214,28 @@ impl ScryerServer {
                     ));
                 }
             }
+            if let Some(cid) = tagged {
+                v["change"] = serde_json::Value::String(cid.clone());
+            }
             changes_out.push(v);
         }
 
-        let payload = serde_json::json!({
+        // The open-change registry rides every pending read: a fresh session
+        // resumes a change from here (set_change {change_id}) instead of doing
+        // archaeology on the flat queue.
+        let open_changes: Vec<serde_json::Value> = planned
+            .changes
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "id": c.id,
+                    "rationale": c.rationale,
+                    "entries": planned.change_map.values().filter(|v| *v == &c.id).count(),
+                })
+            })
+            .collect();
+
+        let mut payload = serde_json::json!({
             "summary": {
                 "toImplement": to_implement,
                 "toReimplement": to_reimplement,
@@ -1213,6 +1246,12 @@ impl ScryerServer {
             "clean": changes_out.is_empty(),
             "changes": changes_out,
         });
+        if !open_changes.is_empty() {
+            payload["openChanges"] = serde_json::Value::Array(open_changes);
+        }
+        if let Some(current) = self.session_change(&model_ref) {
+            payload["currentChange"] = serde_json::Value::String(current);
+        }
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
         )]))
@@ -2044,6 +2083,7 @@ mod tests {
         let server = ScryerServer::new();
         let r = server
             .get_pending(Parameters(GetPendingRequest {
+                change: None,
                 project: Some(dir.path().to_string_lossy().to_string()),
             }))
             .unwrap();
@@ -2085,6 +2125,7 @@ mod tests {
         let server = ScryerServer::new();
         let r = server
             .get_pending(Parameters(GetPendingRequest {
+                change: None,
                 project: Some(dir.path().to_string_lossy().to_string()),
             }))
             .unwrap();

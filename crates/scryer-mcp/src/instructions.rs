@@ -24,7 +24,11 @@ returns the inherited set in `inheritedDirectives`; honor all of them and never 
 responsibilities, and links it implies, at the right altitude, with the intent tools (`add_person` / \
 `add_system` / `add_container` / `add_component` / `add_symbol`, `update_nodes`, `add_links`, …). \
 These write the PLAN — a draft on the user's canvas — not code. If the change conflicts with an \
-existing responsibility or directive, surface it; don't silently diverge.\n\
+existing responsibility or directive, surface it; don't silently diverge. When other work may share \
+the plan (parallel sessions, a dev on the canvas), first name YOUR task: `set_change {rationale}` \
+opens a named change and your plan writes tag to it automatically, keeping workstreams separable — \
+resume a prior session's change with `set_change {change_id}` (listed in `get_pending`'s \
+`openChanges`). Quick serial edits can skip this and go unfiled.\n\
 3. BUILD — implement the code to that plan.\n\
 4. CLOSE — `mark_implemented` what you built (folds it from the plan into the committed model), \
 passing `anchors` so fold + anchor is one atomic call, and `flag_drift` anything the code does that \
@@ -39,7 +43,8 @@ the pending work roll up. A node whose subtree mixes built and unbuilt work show
 completeness in `get_health` — anchored primitives over authored ones — the honest state for a \
 layered build, never a reason to withhold the skeleton (rules 18-19). Never anchor a claim you have \
 not implemented: anchoring is the build checkpoint, which is what makes the completeness figure \
-trustworthy.\n\
+trustworthy. If you opened a change, `mark_implemented {change}` folds exactly its entries; when \
+the last one folds the change closes and its rationale is recorded in the history log.\n\
 \n\
 If no model exists yet, build one first: `read_codebase` to see the codebase, then build top-down \
 (`fill_container` commits an existing container's subtree at once). Then work the loop above.\n\

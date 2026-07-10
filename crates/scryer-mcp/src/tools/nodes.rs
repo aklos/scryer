@@ -199,6 +199,242 @@ fn ancestor_hint(e: String) -> String {
     }
 }
 
+/// Fold every plan entry tagged to one change — the `mark_implemented {change}`
+/// path ("implement THIS change" instead of element-by-element bookkeeping).
+/// Dependency order: resident nodes root-ward (each pulling its ready
+/// dependents, exactly like a whole-node fold), then claims and properties
+/// whose hosts didn't just fold, then groups, links, and node deletions. The
+/// ledger GC inside each fold retires the tags as their entries leave the
+/// diff; when the last one goes, the change closes and its rationale lands in
+/// the history log (see `scryer_core::changes`). Per-host `impl` events carry
+/// the change id. The caller holds the model lock and reports the returned
+/// summaries.
+fn fold_change_by_id(
+    model_ref: &scryer_core::ModelRef,
+    planned: &ScryModel,
+    before_stmts: &HashMap<String, String>,
+    cid: &str,
+    commit_ancestors: bool,
+) -> Result<Vec<String>, CallToolResult> {
+    use scryer_core::changes as ledger;
+    use scryer_core::diff::ElementKind as EK;
+    let fail = |e: String| CallToolResult::error(vec![Content::text(e)]);
+
+    let Some(meta) = planned.changes.iter().find(|c| c.id == cid) else {
+        let open: Vec<&str> = planned.changes.iter().map(|c| c.id.as_str()).collect();
+        return Err(fail(format!(
+            "No open change '{cid}'. Open changes: {}",
+            if open.is_empty() { "none".to_string() } else { open.join(", ") }
+        )));
+    };
+    let keys: Vec<String> = planned
+        .change_map
+        .iter()
+        .filter(|(_, v)| v.as_str() == cid)
+        .map(|(k, _)| k.clone())
+        .collect();
+    if keys.is_empty() {
+        return Ok(vec![format!(
+            "Change {cid} (\"{}\") has no tagged entries — nothing to fold; it stays open \
+             until work is written to it.",
+            meta.rationale
+        )]);
+    }
+
+    let mut resident_nodes: Vec<String> = Vec::new();
+    let mut deleted_nodes: Vec<String> = Vec::new();
+    let mut resps: Vec<String> = Vec::new();
+    let mut props: Vec<(String, String)> = Vec::new();
+    let mut groups: Vec<String> = Vec::new();
+    let mut links: Vec<String> = Vec::new();
+    for k in &keys {
+        let Some((kind, owner, id)) = ledger::parse_key(k) else { continue };
+        match kind {
+            EK::Node => {
+                if planned.nodes.iter().any(|n| n.id == id) {
+                    resident_nodes.push(id);
+                } else {
+                    deleted_nodes.push(id);
+                }
+            }
+            EK::Responsibility => resps.push(id),
+            EK::Property => props.push((owner.unwrap_or_default(), id)),
+            EK::Group => groups.push(id),
+            EK::Link => links.push(id),
+        }
+    }
+
+    // Root-ward, so each node folds under an already-committed parent. Cycle
+    // guard like every chain walker.
+    let depth = |id: &str| {
+        let mut d = 0usize;
+        let mut seen: HashSet<String> = std::iter::once(id.to_string()).collect();
+        let mut cur = planned.nodes.iter().find(|n| n.id == id).and_then(|n| n.parent_id.clone());
+        while let Some(pid) = cur {
+            if !seen.insert(pid.clone()) {
+                break;
+            }
+            d += 1;
+            cur = planned.nodes.iter().find(|n| n.id == pid).and_then(|n| n.parent_id.clone());
+        }
+        d
+    };
+    resident_nodes.sort_by_key(|id| depth(id));
+
+    let host_of_resp = |rid: &str| -> Option<String> {
+        planned
+            .nodes
+            .iter()
+            .find(|n| n.responsibilities.iter().any(|r| r.id == rid))
+            .map(|n| n.id.clone())
+            .or_else(|| {
+                planned
+                    .groups
+                    .iter()
+                    .find(|g| g.responsibilities.iter().any(|r| r.id == rid))
+                    .map(|g| g.id.clone())
+            })
+    };
+
+    // Design-first escape, composed exactly as on the single-node path: every
+    // node this fold lands on gets its plan-only ancestor chain committed
+    // structure-only first; a host that only receives scoped claims rides the
+    // cascade itself (include_self).
+    if commit_ancestors {
+        let mut hosts: Vec<String> = resident_nodes.clone();
+        hosts.extend(
+            resps
+                .iter()
+                .filter_map(|rid| host_of_resp(rid))
+                .filter(|h| planned.nodes.iter().any(|n| &n.id == h)),
+        );
+        hosts.extend(props.iter().map(|(o, _)| o.clone()));
+        hosts.sort();
+        hosts.dedup();
+        for h in hosts {
+            let include_self = !resident_nodes.contains(&h);
+            if let Err(e) = scryer_core::commit_plan_only_ancestors(model_ref, &h, include_self) {
+                return Err(fail(ancestor_hint(e)));
+            }
+        }
+    }
+
+    let mut folded_resps = 0usize;
+    let mut folded_props = 0usize;
+    for id in &resident_nodes {
+        if let Err(e) = scryer_core::commit_element(model_ref, EK::Node, None, id) {
+            return Err(fail(ancestor_hint(e)));
+        }
+        if let Err(e) = scryer_core::commit_ready_dependents(model_ref, id) {
+            return Err(fail(e));
+        }
+    }
+    for rid in &resps {
+        // A whole-node fold above already carried this claim across.
+        if host_of_resp(rid).is_some_and(|h| resident_nodes.contains(&h)) {
+            continue;
+        }
+        if let Err(e) = scryer_core::commit_element(model_ref, EK::Responsibility, None, rid) {
+            return Err(fail(ancestor_hint(e)));
+        }
+        folded_resps += 1;
+    }
+    for (owner, label) in &props {
+        if resident_nodes.contains(owner) {
+            continue;
+        }
+        if let Err(e) = scryer_core::commit_element(model_ref, EK::Property, Some(owner), label) {
+            return Err(fail(ancestor_hint(e)));
+        }
+        folded_props += 1;
+    }
+    for gid in &groups {
+        if let Err(e) = scryer_core::commit_element(model_ref, EK::Group, None, gid) {
+            return Err(fail(e));
+        }
+    }
+    for lid in &links {
+        if let Err(e) = scryer_core::commit_element(model_ref, EK::Link, None, lid) {
+            return Err(fail(e));
+        }
+    }
+    for id in &deleted_nodes {
+        if let Err(e) = scryer_core::commit_element(model_ref, EK::Node, None, id) {
+            return Err(fail(e));
+        }
+    }
+
+    // Per-host `impl` timeline events carrying the change id, mirroring the
+    // single-node path: rows are the claims THIS fold added or reworded.
+    if let Ok(after) = scryer_core::read_model_at(model_ref) {
+        let mut hosts: Vec<String> = resident_nodes.clone();
+        hosts.extend(resps.iter().filter_map(|rid| host_of_resp(rid)));
+        hosts.sort();
+        hosts.dedup();
+        let now = scryer_core::drift::now_secs();
+        for host in hosts {
+            let Some(node) = after.nodes.iter().find(|n| n.id == host) else { continue };
+            let rows: Vec<EventRow> = node
+                .responsibilities
+                .iter()
+                .filter(|r| {
+                    (resps.contains(&r.id) || resident_nodes.contains(&host))
+                        && before_stmts.get(&r.id) != Some(&r.statement)
+                })
+                .map(|r| {
+                    let marker = if before_stmts.contains_key(&r.id) { "~" } else { "+" };
+                    resp_event_row(marker, &after, r)
+                })
+                .collect();
+            if !rows.is_empty() {
+                record_event(
+                    model_ref,
+                    HistoryEvent::new(now, EventKind::Impl, &node.id, "fill")
+                        .with_change(cid)
+                        .with_rows(rows),
+                );
+            }
+        }
+    }
+
+    let planned_after = scryer_core::read_planned_at(model_ref).unwrap_or_default();
+    let closed = !planned_after.changes.iter().any(|c| c.id == cid);
+    let mut parts: Vec<String> = Vec::new();
+    if !resident_nodes.is_empty() {
+        parts.push(format!("{} node(s)", resident_nodes.len()));
+    }
+    if folded_resps > 0 {
+        parts.push(format!("{folded_resps} claim(s)"));
+    }
+    if folded_props > 0 {
+        parts.push(format!("{folded_props} propert(ies)"));
+    }
+    if !groups.is_empty() {
+        parts.push(format!("{} group(s)", groups.len()));
+    }
+    if !links.is_empty() {
+        parts.push(format!("{} link(s)", links.len()));
+    }
+    if !deleted_nodes.is_empty() {
+        parts.push(format!("{} deletion(s)", deleted_nodes.len()));
+    }
+    let mut summary = format!(
+        "Folded change {cid} (\"{}\"): {}.",
+        meta.rationale,
+        if parts.is_empty() { "nothing".to_string() } else { parts.join(", ") }
+    );
+    if closed {
+        summary.push_str(
+            " The change is fully folded and closed — its rationale is recorded in the \
+             history log.",
+        );
+    } else {
+        let left = planned_after.change_map.values().filter(|v| v.as_str() == cid).count();
+        summary.push_str(&format!(" {left} entr(ies) still pending on it."));
+    }
+    Ok(vec![summary])
+}
+
 /// The nearest ancestor of `id` that is NOT in `removed` — the surviving home for
 /// a descoped node's relocated claims. `None` when the whole parent chain up to
 /// the root is being removed (or `id` is top-level), so the claims have nowhere to
@@ -458,14 +694,22 @@ impl ScryerServer {
         }
         enforce_readonly_directives(&mut model, &prior);
 
-        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
-            return Ok(CallToolResult::error(vec![Content::text(e)]));
-        }
+        let tag_warnings = match write_planned_tagged(
+            &model_ref,
+            &mut model,
+            self.session_change(&model_ref).as_deref(),
+        ) {
+            Ok(w) => w,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+        };
 
         // Accept + warn (never reject — a rejected write invites a duplicate
         // call): field-shape problems on the nodes just touched ride back on
         // the response.
         let mut msg = format!("Updated {} node(s)", updated);
+        for w in &tag_warnings {
+            msg.push_str(&format!("\n{w}"));
+        }
         if preserved_vagrants > 0 {
             msg.push_str(&format!(
                 "\n{preserved_vagrants} vagrant (code-discovered) item(s) not in your \
@@ -493,7 +737,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities, and/or `propertyLabels` to fold only those data fields (properties are identified by label). A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. In a DESIGN-FIRST model (never committed), folding a built leaf is refused while its ancestors are plan-only — pass `commit_ancestors: true` to fold the ancestor chain structure-only first: the ancestors' identity and boundaries land in committed while their unbuilt claims stay pending in the plan, so partial implementation reads honestly. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. Pass `anchors` (same shape as update_source_map `entries`) to anchor the folded claims to code IN THE SAME CALL — 'here's what I built and where it lives' as one atomic statement; an unanchored claim reads as scaffolding and carries no drift tripwire. Every node fold's response ends with a scoped POST-FLIGHT: what's still pending on that node, which of its committed claims lack anchors, and any validation warnings this fold introduced — act on those lines; you do not need a separate validate_model run after every fold. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
+        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities, and/or `propertyLabels` to fold only those data fields (properties are identified by label). A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. In a DESIGN-FIRST model (never committed), folding a built leaf is refused while its ancestors are plan-only — pass `commit_ancestors: true` to fold the ancestor chain structure-only first: the ancestors' identity and boundaries land in committed while their unbuilt claims stay pending in the plan, so partial implementation reads honestly. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. Pass `anchors` (same shape as update_source_map `entries`) to anchor the folded claims to code IN THE SAME CALL — 'here's what I built and where it lives' as one atomic statement; an unanchored claim reads as scaffolding and carries no drift tripwire. Every node fold's response ends with a scoped POST-FLIGHT: what's still pending on that node, which of its committed claims lack anchors, and any validation warnings this fold introduced — act on those lines; you do not need a separate validate_model run after every fold. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. Pass `change` (standalone — a change id from `set_change`/`get_pending`) to fold an ENTIRE change: every plan entry tagged to it, in dependency order; when its last entry folds, the change closes and its rationale is recorded in the history log. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
     )]
     fn mark_implemented(
         &self,
@@ -507,10 +751,27 @@ impl ScryerServer {
         };
 
         let empty = |v: &Option<Vec<String>>| v.as_ref().map_or(true, |x| x.is_empty());
-        if req.node_id.is_none() && empty(&req.link_ids) && empty(&req.group_ids) {
+        if req.change.is_some()
+            && (req.node_id.is_some()
+                || !empty(&req.link_ids)
+                || !empty(&req.group_ids)
+                || req.responsibility_ids.is_some()
+                || req.property_labels.is_some())
+        {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "`change` folds an entire change and stands alone — don't combine it with \
+                 node_id / responsibility_ids / property_labels / link_ids / group_ids."
+                    .to_string(),
+            )]));
+        }
+        if req.change.is_none()
+            && req.node_id.is_none()
+            && empty(&req.link_ids)
+            && empty(&req.group_ids)
+        {
             return Ok(CallToolResult::error(vec![Content::text(
                 "Nothing to fold — provide node_id (optionally with responsibility_ids), \
-                 and/or link_ids / group_ids."
+                 link_ids / group_ids, or a `change` id to fold that whole change."
                     .to_string(),
             )]));
         }
@@ -587,6 +848,23 @@ impl ScryerServer {
         let mut summaries: Vec<String> = Vec::new();
         // Set when a node-hosted fold ran — drives the history event below.
         let mut history_node: Option<String> = None;
+
+        if let Some(cid) = req.change.as_deref() {
+            // "Implement THIS change": expand the ledger's tags into element
+            // folds. History (per-host impl events with the change id) is
+            // recorded inside; the change closes via the fold-path GC when its
+            // last entry goes.
+            match fold_change_by_id(
+                &model_ref,
+                &planned,
+                &before_stmts,
+                cid,
+                req.commit_ancestors == Some(true),
+            ) {
+                Ok(s) => summaries.extend(s),
+                Err(e) => return Ok(e),
+            }
+        }
 
         if let Some(node_id) = req.node_id.as_deref() {
             if !planned.nodes.iter().any(|n| n.id == node_id) {
@@ -857,16 +1135,37 @@ impl ScryerServer {
                     })
                     .collect();
                 if !rows.is_empty() {
-                    record_event(
-                        &model_ref,
-                        HistoryEvent::new(
-                            scryer_core::drift::now_secs(),
-                            EventKind::Impl,
-                            &node.id,
-                            "fill",
-                        )
-                        .with_rows(rows),
-                    );
+                    // Ledger attribution: if the folded work was tagged, the
+                    // impl event carries its change id — "which change
+                    // introduced this claim?" stays answerable after the fold.
+                    let cid = {
+                        use scryer_core::changes as ledger;
+                        use scryer_core::diff::ElementKind as EK;
+                        planned
+                            .change_map
+                            .get(&ledger::element_key(EK::Node, None, &node.id))
+                            .or_else(|| {
+                                target.iter().find_map(|r| {
+                                    planned.change_map.get(&ledger::element_key(
+                                        EK::Responsibility,
+                                        None,
+                                        &r.id,
+                                    ))
+                                })
+                            })
+                            .cloned()
+                    };
+                    let mut ev = HistoryEvent::new(
+                        scryer_core::drift::now_secs(),
+                        EventKind::Impl,
+                        &node.id,
+                        "fill",
+                    )
+                    .with_rows(rows);
+                    if let Some(c) = cid {
+                        ev = ev.with_change(c);
+                    }
+                    record_event(&model_ref, ev);
                 }
             }
         }
@@ -1130,9 +1429,14 @@ impl ScryerServer {
         }
 
         enforce_readonly_directives(&mut model, &prior);
-        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
-            return Ok(CallToolResult::error(vec![Content::text(e)]));
-        }
+        let tag_warnings = match write_planned_tagged(
+            &model_ref,
+            &mut model,
+            self.session_change(&model_ref).as_deref(),
+        ) {
+            Ok(w) => w,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+        };
 
         // Timeline: a `move` event per node that actually changed parent.
         let name_of = |m: &ScryModel, id: &str| {
@@ -1155,6 +1459,9 @@ impl ScryerServer {
 
         let warnings = validate::validate(&model);
         let mut msg = format!("Moved {moved} node(s).");
+        for w in &tag_warnings {
+            msg.push_str(&format!("\n{w}"));
+        }
         if !warnings.is_empty() {
             msg.push_str(&format!(
                 " {} validation warning(s) — run validate_model:",
@@ -1309,9 +1616,14 @@ impl ScryerServer {
             g.member_ids.retain(|m| !to_remove.contains(m));
         }
 
-        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
-            return Ok(CallToolResult::error(vec![Content::text(e)]));
-        }
+        let tag_warnings = match write_planned_tagged(
+            &model_ref,
+            &mut model,
+            self.session_change(&model_ref).as_deref(),
+        ) {
+            Ok(w) => w,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+        };
 
         drop(_lock);
         let mut msg = format!(
@@ -1319,6 +1631,9 @@ impl ScryerServer {
              is outstanding work until you delete it and mark_implemented each node id",
             before - model.nodes.len()
         );
+        for w in &tag_warnings {
+            msg.push_str(&format!("\n{w}"));
+        }
         if let Some(h) = status_header(&model_ref) {
             msg.push_str(&format!("\n{h}"));
         }
@@ -1469,9 +1784,14 @@ impl ScryerServer {
             moved += 1;
         }
 
-        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
-            return Ok(CallToolResult::error(vec![Content::text(e)]));
-        }
+        let tag_warnings = match write_planned_tagged(
+            &model_ref,
+            &mut model,
+            self.session_change(&model_ref).as_deref(),
+        ) {
+            Ok(w) => w,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+        };
 
         // Timeline: a `move` event on each destination node.
         let now = scryer_core::drift::now_secs();
@@ -1485,6 +1805,9 @@ impl ScryerServer {
 
         drop(_lock);
         let mut msg = format!("Moved {} responsibility(ies)", moved);
+        for w in &tag_warnings {
+            msg.push_str(&format!("\n{w}"));
+        }
         if let Some(h) = status_header(&model_ref) {
             msg.push_str(&format!("\n{h}"));
         }
@@ -1751,6 +2074,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: None,
                 anchors: None,
+                change: None,
             }))
             .unwrap();
         assert!(serde_json::to_string(&r.content).unwrap().contains("removal"));
@@ -1798,6 +2122,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: None,
                 anchors: None,
+                change: None,
             }))
             .unwrap();
 
@@ -1850,6 +2175,7 @@ mod tests {
                     link_ids: None,
                     group_ids: None,
                     anchors: None,
+                    change: None,
                 }))
                 .unwrap()
         };
@@ -1904,6 +2230,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: Some(true),
                 anchors: None,
+                change: None,
                 link_ids: None,
                 group_ids: None,
             }))
@@ -1964,6 +2291,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: None,
                 anchors: None,
+                change: None,
             }))
             .unwrap();
 
@@ -2016,6 +2344,7 @@ mod tests {
                     property_labels: None,
                     commit_ancestors: None,
                 anchors: None,
+                change: None,
                 }))
                 .unwrap();
         };
@@ -2088,6 +2417,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: None,
                 anchors: None,
+                change: None,
             }))
             .unwrap();
 
@@ -2137,6 +2467,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: None,
                 anchors: None,
+                change: None,
             }))
             .unwrap();
 
@@ -2351,6 +2682,7 @@ mod tests {
                 group_ids: None,
                 commit_ancestors: None,
                 anchors: None,
+                change: None,
             }))
             .unwrap();
         assert!(!r.is_error.unwrap_or(false), "{r:?}");
@@ -2486,6 +2818,7 @@ mod tests {
                 group_ids: None,
                 commit_ancestors: None,
                 anchors: Some(vec![anchor("resp-ghost")]),
+                change: None,
             }))
             .unwrap();
         assert!(r.is_error.unwrap_or(false), "unknown anchor id rejected");
@@ -2506,6 +2839,7 @@ mod tests {
                 group_ids: None,
                 commit_ancestors: None,
                 anchors: Some(vec![anchor("resp-1")]),
+                change: None,
             }))
             .unwrap();
         let text = r
@@ -2585,6 +2919,7 @@ mod tests {
                 group_ids: None,
                 commit_ancestors: None,
                 anchors: None,
+                change: None,
             }))
             .unwrap();
         let text = r
@@ -2605,6 +2940,196 @@ mod tests {
         assert!(
             text.contains("1 committed claim(s) on it have NO code anchor (resp-1)"),
             "the unanchored fold is named: {text}"
+        );
+    }
+
+    fn tool_text(r: &CallToolResult) -> String {
+        r.content.iter().find_map(|c| c.as_text().map(|t| t.text.clone())).unwrap()
+    }
+
+    /// The ledger loop end to end: `set_change` opens a named change, an
+    /// authoring write tags to it automatically, `get_pending` groups and
+    /// filters by it, a second session resumes it by id, and
+    /// `mark_implemented {change}` folds exactly its entries — closing the
+    /// change and recording its rationale in history.
+    #[test]
+    fn change_ledger_tags_writes_filters_pending_and_folds_by_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let project = dir.path().to_string_lossy().to_string();
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::System, "Acme", None));
+        m.nodes.push(node("node-2", Kind::Container, "API", Some("node-1")));
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+
+        let server = ScryerServer::new();
+        let r = server
+            .set_change(Parameters(SetChangeRequest {
+                project: Some(project.clone()),
+                rationale: Some("give the API rate limiting".into()),
+                change_id: None,
+                clear: None,
+            }))
+            .unwrap();
+        assert!(tool_text(&r).contains("Opened chg-1"), "{}", tool_text(&r));
+
+        // An authoring write in this session tags what it changed.
+        server
+            .add_component(Parameters(AddComponentRequest {
+                project: Some(project.clone()),
+                items: vec![ComponentItem {
+                    parent_id: "node-2".into(),
+                    name: "RateLimiter".into(),
+                    description: None,
+                    responsibilities: vec!["throttles requests per client".into()],
+                }],
+            }))
+            .unwrap();
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(planned.change_map.get("node:node-3").map(String::as_str), Some("chg-1"));
+        assert_eq!(planned.change_map.get("resp:resp-1").map(String::as_str), Some("chg-1"));
+
+        // get_pending groups by change and filters to one.
+        let r = server
+            .get_pending(Parameters(GetPendingRequest {
+                project: Some(project.clone()),
+                change: None,
+            }))
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&tool_text(&r)).unwrap();
+        assert_eq!(v["currentChange"], "chg-1");
+        assert_eq!(v["openChanges"][0]["id"], "chg-1");
+        assert_eq!(v["openChanges"][0]["rationale"], "give the API rate limiting");
+        assert!(v["changes"].as_array().unwrap().iter().all(|c| c["change"] == "chg-1"));
+        let r = server
+            .get_pending(Parameters(GetPendingRequest {
+                project: Some(project.clone()),
+                change: Some("unfiled".into()),
+            }))
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&tool_text(&r)).unwrap();
+        assert!(v["changes"].as_array().unwrap().is_empty(), "everything is tagged");
+
+        // A FRESH session (new server) resumes the change by id…
+        let session2 = ScryerServer::new();
+        let r = session2
+            .set_change(Parameters(SetChangeRequest {
+                project: Some(project.clone()),
+                rationale: None,
+                change_id: Some("chg-1".into()),
+                clear: None,
+            }))
+            .unwrap();
+        assert!(tool_text(&r).contains("Resumed chg-1"), "{}", tool_text(&r));
+
+        // …and folds the whole change in one call.
+        let r = session2
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(project.clone()),
+                node_id: None,
+                responsibility_ids: None,
+                property_labels: None,
+                link_ids: None,
+                group_ids: None,
+                commit_ancestors: None,
+                anchors: None,
+                change: Some("chg-1".into()),
+            }))
+            .unwrap();
+        let text = tool_text(&r);
+        assert!(text.contains("Folded change chg-1"), "{text}");
+        assert!(text.contains("fully folded and closed"), "{text}");
+
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        assert!(committed.nodes.iter().any(|n| n.id == "node-3"));
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert!(planned.changes.is_empty() && planned.change_map.is_empty());
+
+        // The rationale survived the fold, and the impl event knows its change.
+        let history = scryer_core::history::read_history(&model_ref);
+        let close = history
+            .iter()
+            .find(|e| e.kind == scryer_core::history::EventKind::Change)
+            .expect("a change-closed event");
+        assert_eq!(close.change_id.as_deref(), Some("chg-1"));
+        assert_eq!(close.rows[0].text, "give the API rate limiting");
+        let impl_ev = history
+            .iter()
+            .find(|e| e.kind == EventKind::Impl)
+            .expect("an impl event");
+        assert_eq!(impl_ev.change_id.as_deref(), Some("chg-1"));
+    }
+
+    /// Two changes touching the same element is the collision the ledger
+    /// exists to catch: the second session's write wins the tag, but the
+    /// response says so out loud.
+    #[test]
+    fn cross_change_retag_warns_about_the_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let project = dir.path().to_string_lossy().to_string();
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::System, "Acme", None));
+        m.nodes.push(node("node-2", Kind::Container, "API", Some("node-1")));
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+
+        let session1 = ScryerServer::new();
+        session1
+            .set_change(Parameters(SetChangeRequest {
+                project: Some(project.clone()),
+                rationale: Some("rate limiting".into()),
+                change_id: None,
+                clear: None,
+            }))
+            .unwrap();
+        session1
+            .add_component(Parameters(AddComponentRequest {
+                project: Some(project.clone()),
+                items: vec![ComponentItem {
+                    parent_id: "node-2".into(),
+                    name: "RateLimiter".into(),
+                    description: None,
+                    responsibilities: vec![],
+                }],
+            }))
+            .unwrap();
+
+        let session2 = ScryerServer::new();
+        session2
+            .set_change(Parameters(SetChangeRequest {
+                project: Some(project.clone()),
+                rationale: Some("rename things".into()),
+                change_id: None,
+                clear: None,
+            }))
+            .unwrap();
+        let r = session2
+            .update_nodes(Parameters(UpdateNodeRequest {
+                project: Some(project.clone()),
+                nodes: vec![UpdateNodeItem {
+                    node_id: "node-3".into(),
+                    name: Some("Throttler".into()),
+                    kind: None,
+                    description: None,
+                    technology: None,
+                    external: None,
+                    responsibilities: None,
+                    properties: None,
+                    visual: None,
+                    parent_id: None,
+                }],
+            }))
+            .unwrap();
+        let text = tool_text(&r);
+        assert!(
+            text.contains("conflict: node:node-3 was tagged by chg-1 (\"rate limiting\")"),
+            "{text}"
+        );
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(
+            planned.change_map.get("node:node-3").map(String::as_str),
+            Some("chg-2"),
+            "last writer wins the tag"
         );
     }
 }

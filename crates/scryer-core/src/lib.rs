@@ -1046,22 +1046,41 @@ fn clean_committed_resp(mut resp: Responsibility) -> Responsibility {
 /// responsibilities and properties (a bulk fold must not silently commit
 /// code-discovered claims that still await an explicit adopt/reject verdict —
 /// they stay in the plan), and clears the `stale`/`stale_proposal` drift markers
-/// on everything that does fold. Audit #5.
-fn committed_node_copy(n: &Node) -> Node {
+/// on everything that does fold. Audit #5. Claims tagged to a DIFFERENT change
+/// than the node get the same stay-behind treatment as vagrants: they are
+/// another task's pending work, and this fold is not their verdict
+/// (`change_map` is the plan's ledger — see [`changes::foreign_to_host`]).
+fn committed_node_copy(n: &Node, change_map: &HashMap<String, String>) -> Node {
+    use diff::ElementKind as EK;
+    let host_key = changes::element_key(EK::Node, None, &n.id);
     let mut copy = n.clone();
     copy.vagrant = None;
     copy.stale = None;
     copy.responsibilities = n
         .responsibilities
         .iter()
-        .filter(|r| r.vagrant != Some(true))
+        .filter(|r| {
+            r.vagrant != Some(true)
+                && !changes::foreign_to_host(
+                    change_map,
+                    &host_key,
+                    &changes::element_key(EK::Responsibility, None, &r.id),
+                )
+        })
         .cloned()
         .map(clean_committed_resp)
         .collect();
     copy.properties = n
         .properties
         .iter()
-        .filter(|p| p.vagrant != Some(true))
+        .filter(|p| {
+            p.vagrant != Some(true)
+                && !changes::foreign_to_host(
+                    change_map,
+                    &host_key,
+                    &changes::element_key(EK::Property, Some(&n.id), &p.label),
+                )
+        })
         .cloned()
         .map(|mut p| {
             p.stale = None;
@@ -1075,14 +1094,24 @@ fn committed_node_copy(n: &Node) -> Node {
 /// review markers of its own, but it CAN carry responsibilities (a container
 /// group's shared claims — "both surfaces deploy as one Next.js app"), so it
 /// gets the same treatment `committed_node_copy` gives a node: drop
-/// un-adjudicated `vagrant` claims (they stay in the plan awaiting a verdict)
-/// and clear `stale`/`stale_proposal` on everything that folds. Audit #5 / item A.
-fn committed_group_copy(g: &Group) -> Group {
+/// un-adjudicated `vagrant` claims (they stay in the plan awaiting a verdict),
+/// drop claims tagged to a different change (another task's pending work), and
+/// clear `stale`/`stale_proposal` on everything that folds. Audit #5 / item A.
+fn committed_group_copy(g: &Group, change_map: &HashMap<String, String>) -> Group {
+    use diff::ElementKind as EK;
+    let host_key = changes::element_key(EK::Group, None, &g.id);
     let mut copy = g.clone();
     copy.responsibilities = g
         .responsibilities
         .iter()
-        .filter(|r| r.vagrant != Some(true))
+        .filter(|r| {
+            r.vagrant != Some(true)
+                && !changes::foreign_to_host(
+                    change_map,
+                    &host_key,
+                    &changes::element_key(EK::Responsibility, None, &r.id),
+                )
+        })
         .cloned()
         .map(clean_committed_resp)
         .collect();
@@ -1127,7 +1156,7 @@ pub fn commit_element(
                         }
                     }
                     model.nodes.retain(|n| n.id != id);
-                    model.nodes.push(committed_node_copy(n));
+                    model.nodes.push(committed_node_copy(n, &planned.change_map));
                 }
                 None => {
                     // A DELETE fold. delete_nodes removed the node, its whole
@@ -1224,7 +1253,7 @@ pub fn commit_element(
                             ));
                         }
                     }
-                    model.groups.push(committed_group_copy(g));
+                    model.groups.push(committed_group_copy(g, &planned.change_map));
                 }
                 None => purge_from_planned = true,
             }
@@ -1321,12 +1350,25 @@ pub fn commit_element(
             } else if let Some(n) = planned.nodes.iter().find(|n| n.id == id) {
                 // The node's own declaration anchor, plus every responsibility it
                 // carries — committing the node moves the draft's across. Vagrant
-                // claims don't fold (committed_node_copy drops them), so their
-                // anchors stay in the draft alongside them. Audit #5.
+                // claims and claims tagged to a different change don't fold
+                // (committed_node_copy drops both), so their anchors stay in the
+                // draft alongside them. Audit #5.
+                let host_key = changes::element_key(diff::ElementKind::Node, None, id);
                 for k in std::iter::once(id.to_string()).chain(
                     n.responsibilities
                         .iter()
-                        .filter(|r| r.vagrant != Some(true))
+                        .filter(|r| {
+                            r.vagrant != Some(true)
+                                && !changes::foreign_to_host(
+                                    &planned.change_map,
+                                    &host_key,
+                                    &changes::element_key(
+                                        diff::ElementKind::Responsibility,
+                                        None,
+                                        &r.id,
+                                    ),
+                                )
+                        })
                         .map(|r| r.id.clone()),
                 ) {
                     if let Some(locs) = planned.source_map.get(&k) {
@@ -1353,7 +1395,15 @@ pub fn commit_element(
                     model.source_map.remove(rid);
                 }
             } else if let Some(g) = planned.groups.iter().find(|g| g.id == id) {
-                for r in g.responsibilities.iter().filter(|r| r.vagrant != Some(true)) {
+                let host_key = changes::element_key(diff::ElementKind::Group, None, id);
+                for r in g.responsibilities.iter().filter(|r| {
+                    r.vagrant != Some(true)
+                        && !changes::foreign_to_host(
+                            &planned.change_map,
+                            &host_key,
+                            &changes::element_key(diff::ElementKind::Responsibility, None, &r.id),
+                        )
+                }) {
                     if let Some(locs) = planned.source_map.get(&r.id) {
                         model.source_map.insert(r.id.clone(), locs.clone());
                         planned_anchor_strip.push(r.id.clone());
@@ -1376,23 +1426,63 @@ pub fn commit_element(
     // IS the explicit adopt, so `vagrant` clears along with the drift flags.
     let mut p = planned;
     let mut plan_markers_cleared = false;
+    // Same stay-behind set as committed_node_copy: markers clear only on what
+    // actually folded, so vagrant claims AND claims tagged to another change
+    // keep theirs (this fold was not their verdict).
+    let ledger = p.change_map.clone();
+    let stays = |host_key: &str, elem_key: String| {
+        changes::foreign_to_host(&ledger, host_key, &elem_key)
+    };
     if !purge_from_planned {
         match kind {
             diff::ElementKind::Node => {
+                let host_key = changes::element_key(diff::ElementKind::Node, None, id);
                 if let Some(n) = p.nodes.iter_mut().find(|n| n.id == id) {
                     plan_markers_cleared |= n.vagrant.take().is_some() | n.stale.take().is_some();
-                    for x in n.responsibilities.iter_mut().filter(|x| x.vagrant != Some(true)) {
+                    for x in n.responsibilities.iter_mut().filter(|x| {
+                        x.vagrant != Some(true)
+                            && !stays(
+                                &host_key,
+                                changes::element_key(
+                                    diff::ElementKind::Responsibility,
+                                    None,
+                                    &x.id,
+                                ),
+                            )
+                    }) {
                         plan_markers_cleared |=
                             x.stale.take().is_some() | x.stale_proposal.take().is_some();
                     }
-                    for x in n.properties.iter_mut().filter(|x| x.vagrant != Some(true)) {
+                    let owner = id;
+                    for x in n.properties.iter_mut().filter(|x| {
+                        x.vagrant != Some(true)
+                            && !stays(
+                                &host_key,
+                                changes::element_key(
+                                    diff::ElementKind::Property,
+                                    Some(owner),
+                                    &x.label,
+                                ),
+                            )
+                    }) {
                         plan_markers_cleared |= x.stale.take().is_some();
                     }
                 }
             }
             diff::ElementKind::Group => {
+                let host_key = changes::element_key(diff::ElementKind::Group, None, id);
                 if let Some(g) = p.groups.iter_mut().find(|g| g.id == id) {
-                    for x in g.responsibilities.iter_mut().filter(|x| x.vagrant != Some(true)) {
+                    for x in g.responsibilities.iter_mut().filter(|x| {
+                        x.vagrant != Some(true)
+                            && !stays(
+                                &host_key,
+                                changes::element_key(
+                                    diff::ElementKind::Responsibility,
+                                    None,
+                                    &x.id,
+                                ),
+                            )
+                    }) {
                         plan_markers_cleared |=
                             x.stale.take().is_some() | x.stale_proposal.take().is_some();
                     }
@@ -1481,7 +1571,9 @@ pub fn commit_element(
 /// diff shape), so the committed layer keeps reflecting only what the code
 /// actually contains.
 fn structure_only_copy(n: &Node) -> Node {
-    let mut copy = committed_node_copy(n);
+    // The claim/property filtering inside committed_node_copy is moot here —
+    // everything it kept is cleared — so no change map is consulted.
+    let mut copy = committed_node_copy(n, &HashMap::new());
     copy.responsibilities.clear();
     copy.properties.clear();
     copy

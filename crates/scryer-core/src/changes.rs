@@ -129,6 +129,22 @@ pub fn tag(model: &mut ScryModel, keys: &[String], change_id: &str) -> Vec<(Stri
     conflicts
 }
 
+/// Whether folding the element at `host_key` must NOT carry the element at
+/// `elem_key` along: the element belongs to a different change than its host,
+/// so it is another task's pending work — a whole-node fold leaves it in the
+/// plan exactly as it leaves vagrants. Untagged elements ride any fold (the
+/// unfiled serial workflow), and an element always rides its own change.
+pub fn foreign_to_host(
+    map: &std::collections::HashMap<String, String>,
+    host_key: &str,
+    elem_key: &str,
+) -> bool {
+    match map.get(elem_key) {
+        None => false,
+        Some(c) => map.get(host_key) != Some(c),
+    }
+}
+
 /// What a [`gc`] pass did: how many dead keys it pruned, and which changes
 /// that pruning finished (removed from the registry; the caller records them
 /// via [`record_closed`] and persists the plan when `pruned > 0`).
@@ -275,6 +291,65 @@ mod tests {
         assert_eq!(closes.len(), 1);
         assert_eq!(closes[0].change_id.as_deref(), Some(tagged.as_str()));
         assert_eq!(closes[0].driver, "abandoned");
+    }
+
+    /// A whole-node fold carries only its own change's claims: a claim tagged
+    /// to a DIFFERENT change stays pending in the plan (it is another task's
+    /// work), so folding change A can never silently complete change B.
+    #[test]
+    fn whole_node_fold_leaves_foreign_tagged_claims_in_the_plan() {
+        let tmp = tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(tmp.path().to_path_buf());
+        let committed: ScryModel = serde_json::from_value(serde_json::json!({
+            "version": crate::SCRY_VERSION,
+            "nodes": [{ "id": "n1", "kind": "system", "name": "S" }],
+            "links": [],
+        }))
+        .unwrap();
+        write_model_at(&r, &committed).unwrap();
+
+        let mut plan: ScryModel = serde_json::from_value(serde_json::json!({
+            "version": crate::SCRY_VERSION,
+            "nodes": [
+                { "id": "n1", "kind": "system", "name": "S" },
+                { "id": "n2", "kind": "container", "name": "C", "parentId": "n1",
+                  "responsibilities": [
+                      { "id": "r2", "statement": "task A's claim" },
+                      { "id": "r3", "statement": "task B's claim" },
+                  ] },
+            ],
+            "links": [],
+        }))
+        .unwrap();
+        let a = open_change(&mut plan, "task A", 100);
+        let b = open_change(&mut plan, "task B", 200);
+        tag(
+            &mut plan,
+            &[
+                element_key(ElementKind::Node, None, "n2"),
+                element_key(ElementKind::Responsibility, None, "r2"),
+            ],
+            &a,
+        );
+        tag(&mut plan, &[element_key(ElementKind::Responsibility, None, "r3")], &b);
+        write_planned_at(&r, &plan).unwrap();
+
+        commit_element(&r, ElementKind::Node, None, "n2").unwrap();
+
+        let committed = read_model_at(&r).unwrap();
+        let n2 = committed.nodes.iter().find(|n| n.id == "n2").unwrap();
+        assert!(n2.responsibilities.iter().any(|x| x.id == "r2"));
+        assert!(
+            !n2.responsibilities.iter().any(|x| x.id == "r3"),
+            "task B's claim must not ride task A's fold"
+        );
+        let planned = read_planned_at(&r).unwrap();
+        assert_eq!(planned.changes.len(), 1, "task B stays open");
+        assert_eq!(planned.changes[0].id, b);
+        assert_eq!(
+            planned.change_map.keys().collect::<Vec<_>>(),
+            vec![&element_key(ElementKind::Responsibility, None, "r3")]
+        );
     }
 
     /// A whole-build fold closes every open change and re-seeds both layers

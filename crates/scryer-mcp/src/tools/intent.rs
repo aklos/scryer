@@ -226,13 +226,15 @@ fn commit(
     prior: &ScryModel,
     minted: &[String],
     reused: &[String],
+    change: Option<&str>,
     lock: scryer_core::ModelLock,
 ) -> Result<CallToolResult, McpError> {
     enforce_readonly_directives(&mut model, prior);
 
-    if let Err(e) = scryer_core::write_planned_at(model_ref, &model) {
-        return Ok(err(e));
-    }
+    let tag_warnings = match write_planned_tagged(model_ref, &mut model, change) {
+        Ok(w) => w,
+        Err(e) => return Ok(err(e)),
+    };
 
     let added: Vec<serde_json::Value> = minted
         .iter()
@@ -250,6 +252,7 @@ fn commit(
         .filter_map(|id| model.nodes.iter().find(|n| &n.id == id))
         .flat_map(scryer_core::validate::node_field_warnings)
         .collect();
+    warnings.extend(tag_warnings);
     // Rule 8's gist rides the response the moment an empty symbol is minted —
     // the judgment call happens right here, not after a get_rules round-trip
     // the agent may skip.
@@ -344,7 +347,15 @@ impl ScryerServer {
             model.nodes.push(node);
             minted.push(id);
         }
-        commit(&model_ref, model, &prior, &minted, &reused, _lock)
+        commit(
+            &model_ref,
+            model,
+            &prior,
+            &minted,
+            &reused,
+            self.session_change(&model_ref).as_deref(),
+            _lock,
+        )
     }
 
     #[tool(
@@ -383,7 +394,15 @@ impl ScryerServer {
             model.nodes.push(node);
             minted.push(id);
         }
-        commit(&model_ref, model, &prior, &minted, &reused, _lock)
+        commit(
+            &model_ref,
+            model,
+            &prior,
+            &minted,
+            &reused,
+            self.session_change(&model_ref).as_deref(),
+            _lock,
+        )
     }
 
     #[tool(
@@ -448,13 +467,21 @@ impl ScryerServer {
             }
             minted.push(id);
         }
-        commit(&model_ref, model, &prior, &minted, &reused, _lock)
+        commit(
+            &model_ref,
+            model,
+            &prior,
+            &minted,
+            &reused,
+            self.session_change(&model_ref).as_deref(),
+            _lock,
+        )
     }
 
     #[tool(
         description = "Add one or more components under a container. Give responsibilities at the component's own altitude — one accountability each, not what an individual symbol does. Plain responsibility statements; ids and status set for you. How to cluster components (cohesion + dependency graph, not one-per-file) and pitch altitude: get_rules{topic:'component'}."
     )]
-    fn add_component(
+    pub(crate) fn add_component(
         &self,
         Parameters(req): Parameters<AddComponentRequest>,
     ) -> Result<CallToolResult, McpError> {
@@ -495,7 +522,15 @@ impl ScryerServer {
             model.nodes.push(node);
             minted.push(id);
         }
-        commit(&model_ref, model, &prior, &minted, &reused, _lock)
+        commit(
+            &model_ref,
+            model,
+            &prior,
+            &minted,
+            &reused,
+            self.session_change(&model_ref).as_deref(),
+            _lock,
+        )
     }
 
     #[tool(
@@ -569,11 +604,19 @@ impl ScryerServer {
         // Groups aren't nodes, so commit by hand (the node-returning `commit`
         // helper doesn't apply): enforce read-only invariants, write, baseline.
         enforce_readonly_directives(&mut model, &prior);
-        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
-            return Ok(err(e));
-        }
+        let tag_warnings = match write_planned_tagged(
+            &model_ref,
+            &mut model,
+            self.session_change(&model_ref).as_deref(),
+        ) {
+            Ok(w) => w,
+            Err(e) => return Ok(err(e)),
+        };
         drop(_lock);
         let mut msg = format!("Created {} group(s): {}", minted.len(), minted.join(", "));
+        for w in &tag_warnings {
+            msg.push_str(&format!("\n{w}"));
+        }
         if !reused_groups.is_empty() {
             msg.push_str(&format!(
                 "\n{} group(s) already existed (same name and parent) and were returned, not \
@@ -676,7 +719,15 @@ impl ScryerServer {
             model.nodes.push(node);
             minted.push(id);
         }
-        commit(&model_ref, model, &prior, &minted, &reused, _lock)
+        commit(
+            &model_ref,
+            model,
+            &prior,
+            &minted,
+            &reused,
+            self.session_change(&model_ref).as_deref(),
+            _lock,
+        )
     }
 
     #[tool(

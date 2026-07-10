@@ -258,13 +258,19 @@ impl ScryerServer {
         }
         enforce_readonly_directives(&mut model, &prior);
 
-        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
-            return Ok(CallToolResult::error(vec![Content::text(e)]));
+        let tag_warnings = match write_planned_tagged(
+            &model_ref,
+            &mut model,
+            self.session_change(&model_ref).as_deref(),
+        ) {
+            Ok(w) => w,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+        };
+        let mut msg = format!("Wrote {} group(s)", count);
+        for w in &tag_warnings {
+            msg.push_str(&format!("\n{w}"));
         }
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Wrote {} group(s)",
-            count
-        ))]))
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     #[tool(
@@ -348,11 +354,19 @@ impl ScryerServer {
         }
         enforce_readonly_directives(&mut model, &prior);
 
-        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
-            return Ok(CallToolResult::error(vec![Content::text(e)]));
-        }
+        let tag_warnings = match write_planned_tagged(
+            &model_ref,
+            &mut model,
+            self.session_change(&model_ref).as_deref(),
+        ) {
+            Ok(w) => w,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+        };
         drop(_lock);
         let mut msg = format!("Updated {} group(s)", updated);
+        for w in &tag_warnings {
+            msg.push_str(&format!("\n{w}"));
+        }
         if let Some(h) = status_header(&model_ref) {
             msg.push_str(&format!("\n{h}"));
         }
@@ -391,17 +405,145 @@ impl ScryerServer {
             ))]));
         }
 
-        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
-            return Ok(CallToolResult::error(vec![Content::text(e)]));
-        }
+        let tag_warnings = match write_planned_tagged(
+            &model_ref,
+            &mut model,
+            self.session_change(&model_ref).as_deref(),
+        ) {
+            Ok(w) => w,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+        };
         drop(_lock);
         let mut msg = format!("Deleted group '{}'", req.group_id);
+        for w in &tag_warnings {
+            msg.push_str(&format!("\n{w}"));
+        }
         if let Some(h) = status_header(&model_ref) {
             msg.push_str(&format!("\n{h}"));
         }
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
+    #[tool(
+        description = "Select which CHANGE this session's plan writes belong to — a named partition of the plan carrying the dev's rationale, so parallel workstreams stay separable and review/fold can work per task. Pass `rationale` (the task in one sentence, as the dev put it) to OPEN a new change, or `change_id` to RESUME an open one from a prior session (list them via get_pending's openChanges). After this, every plan write in this session is tagged to the change automatically; `mark_implemented {change}` folds exactly its entries, and the change closes when its last entry folds — the rationale survives in the history log. Pass `clear: true` to detach (writes go unfiled, today's serial behavior). With no arguments, reports the current selection and the open changes. Use this at the start of a task when other work may share the plan; skip it for quick serial edits."
+    )]
+    pub(crate) fn set_change(
+        &self,
+        Parameters(req): Parameters<SetChangeRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+
+        let open_changes_line = |m: &scryer_core::ScryModel| -> String {
+            if m.changes.is_empty() {
+                return "No open changes.".to_string();
+            }
+            let mut s = String::from("Open changes:");
+            for c in &m.changes {
+                let entries = m.change_map.values().filter(|v| *v == &c.id).count();
+                s.push_str(&format!(
+                    "\n  {} — \"{}\" ({} tagged entr{})",
+                    c.id,
+                    c.rationale,
+                    entries,
+                    if entries == 1 { "y" } else { "ies" }
+                ));
+            }
+            s
+        };
+
+        if req.clear == Some(true) {
+            self.set_session_change(None);
+            return Ok(CallToolResult::success(vec![Content::text(
+                "Detached — writes in this session now go unfiled.".to_string(),
+            )]));
+        }
+
+        match (
+            req.rationale.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+            req.change_id.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        ) {
+            (Some(_), Some(_)) => Ok(CallToolResult::error(vec![Content::text(
+                "Pass rationale (open a new change) OR change_id (resume one), not both."
+                    .to_string(),
+            )])),
+            // Open: register the change in the plan under the lock, then point
+            // the session at it.
+            (Some(rationale), None) => {
+                let _lock = match lock_or_err(&model_ref) {
+                    Ok(l) => l,
+                    Err(e) => return Ok(e),
+                };
+                let mut plan = match scryer_core::read_planned_seeded_at(&model_ref) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return Ok(CallToolResult::error(vec![Content::text(read_fail(
+                            "plan", &model_ref, &e,
+                        ))]));
+                    }
+                };
+                let id = scryer_core::changes::open_change(
+                    &mut plan,
+                    rationale,
+                    scryer_core::drift::now_secs(),
+                );
+                if let Err(e) = scryer_core::write_planned_at(&model_ref, &plan) {
+                    return Ok(CallToolResult::error(vec![Content::text(e)]));
+                }
+                drop(_lock);
+                self.set_session_change(Some((
+                    model_ref.project_path().to_path_buf(),
+                    id.clone(),
+                )));
+                Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Opened {id} — \"{rationale}\". Plan writes in this session are now \
+                     tagged to it; fold it with mark_implemented {{change: \"{id}\"}} when \
+                     the code is done."
+                ))]))
+            }
+            // Resume: the change object persists in the plan; the session just
+            // points at it again.
+            (None, Some(cid)) => {
+                let plan = match scryer_core::read_planned_at(&model_ref) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return Ok(CallToolResult::error(vec![Content::text(read_fail(
+                            "plan", &model_ref, &e,
+                        ))]));
+                    }
+                };
+                let Some(meta) = plan.changes.iter().find(|c| c.id == cid) else {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "No open change '{cid}'.\n{}",
+                        open_changes_line(&plan)
+                    ))]));
+                };
+                let entries = plan.change_map.values().filter(|v| *v == cid).count();
+                self.set_session_change(Some((
+                    model_ref.project_path().to_path_buf(),
+                    cid.to_string(),
+                )));
+                Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Resumed {cid} — \"{}\" ({} tagged entr{}). Plan writes in this \
+                     session are now tagged to it.",
+                    meta.rationale,
+                    entries,
+                    if entries == 1 { "y" } else { "ies" }
+                ))]))
+            }
+            // Report.
+            (None, None) => {
+                let plan = scryer_core::read_planned_at(&model_ref).unwrap_or_default();
+                let current = match self.session_change(&model_ref) {
+                    Some(id) => format!("Current change: {id}."),
+                    None => "No current change — writes go unfiled.".to_string(),
+                };
+                Ok(CallToolResult::success(vec![Content::text(format!(
+                    "{current}\n{}",
+                    open_changes_line(&plan)
+                ))]))
+            }
+        }
+    }
 }
 
 #[cfg(test)]

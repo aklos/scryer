@@ -113,6 +113,26 @@ pub(crate) struct QueryModelRequest {
 pub(crate) struct GetPendingRequest {
     /// Absolute path to the project root. If omitted, uses the current working directory.
     pub project: Option<String>,
+    /// Filter the queue to ONE change's entries — a change id from `openChanges`
+    /// (or from `set_change`), or the literal "unfiled" for entries belonging to
+    /// no change. Omit for the whole queue.
+    pub change: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SetChangeRequest {
+    /// Absolute path to the project root. If omitted, uses the current working directory.
+    pub project: Option<String>,
+    /// Open a NEW change: the task in one sentence, as the dev put it (e.g.
+    /// "make drift track vagrant properties too"). This rationale is the
+    /// change's durable identity — it survives the fold in the history log.
+    pub rationale: Option<String>,
+    /// Resume an EXISTING open change by id (see `get_pending`'s `openChanges`).
+    /// A new session picks up the change object, not archaeology.
+    pub change_id: Option<String>,
+    /// Detach from the current change: subsequent writes this session go
+    /// unfiled (the serial workflow).
+    pub clear: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -189,6 +209,13 @@ pub(crate) struct MarkImplementedRequest {
     /// the work (`pattern` file, `symbol` enclosing definition, `line`/`endLine` a
     /// PROPER subset of it — omit them to mean the whole definition).
     pub anchors: Option<Vec<SourceMapEntry>>,
+    /// Fold an ENTIRE change by id: every plan entry tagged to it, in dependency
+    /// order (nodes root-ward, then claims/properties, then groups and links,
+    /// then deletions). Standalone — do not combine with node_id / link_ids /
+    /// group_ids; `commit_ancestors` composes (plan-only hosts fold
+    /// structure-only first). When the fold takes the change's last entry, the
+    /// change closes and its rationale lands in the history log.
+    pub change: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

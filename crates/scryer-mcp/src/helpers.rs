@@ -244,6 +244,46 @@ pub(crate) fn read_fail(layer: &str, model_ref: &ModelRef, e: &str) -> String {
     }
 }
 
+/// Write the plan, first tagging what THIS write changed to the session's
+/// current change (see `ScryerServer::session_change`) — computed as the diff
+/// between the plan on disk and the model being written, so every authoring
+/// tool gets attribution without bespoke bookkeeping, deletions included. No
+/// current change (or one this plan's registry doesn't know) writes unfiled,
+/// exactly as before. Returns conflict warnings for the tool's response: a key
+/// already tagged by a DIFFERENT change is two tasks touching the same element
+/// — the collision the ledger exists to catch before the code merges.
+pub(crate) fn write_planned_tagged(
+    model_ref: &ModelRef,
+    model: &mut ScryModel,
+    change_id: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let mut warnings = Vec::new();
+    if let Some(cid) = change_id {
+        if model.changes.iter().any(|c| c.id == cid) {
+            let before = scryer_core::read_planned_at(model_ref).unwrap_or_default();
+            let keys: Vec<String> = scryer_core::diff::diff(&before, model)
+                .changes
+                .iter()
+                .map(scryer_core::changes::key_for)
+                .collect();
+            for (key, prev) in scryer_core::changes::tag(model, &keys, cid) {
+                let rationale = model
+                    .changes
+                    .iter()
+                    .find(|c| c.id == prev)
+                    .map(|c| c.rationale.clone())
+                    .unwrap_or_default();
+                warnings.push(format!(
+                    "conflict: {key} was tagged by {prev} (\"{rationale}\") and is now \
+                     retagged to {cid} — two changes are touching the same element"
+                ));
+            }
+        }
+    }
+    scryer_core::write_planned_at(model_ref, model)?;
+    Ok(warnings)
+}
+
 /// Plan-diff element count with vagrants excluded — the same queue
 /// `get_pending` reports (vagrant elements are drift review, never the
 /// implement queue).
@@ -292,6 +332,8 @@ pub(crate) fn pending_changes(
 /// response headers and the `status`/`statusline` CLI subcommands.
 pub(crate) struct StatusCounts {
     pub pending: usize,
+    /// Open changes in the plan's ledger — named workstreams in flight.
+    pub open_changes: usize,
     /// None until a reconcile baseline exists — drift and anchor states have
     /// nothing to measure against, and reporting zeros would fake certainty.
     pub baseline: Option<BaselineCounts>,
@@ -311,8 +353,9 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
     let committed = scryer_core::read_model_at(model_ref).ok()?;
     let planned = scryer_core::read_planned_at(model_ref).ok()?;
     let pending = pending_change_count(&committed, &planned);
+    let open_changes = planned.changes.len();
     if !model_ref.sync_path().exists() {
-        return Some(StatusCounts { pending, baseline: None });
+        return Some(StatusCounts { pending, open_changes, baseline: None });
     }
     let sync = scryer_core::read_sync_state(model_ref);
     let scopes =
@@ -326,6 +369,7 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
     let changed = check.observations.len() - broken;
     Some(StatusCounts {
         pending,
+        open_changes,
         baseline: Some(BaselineCounts {
             drift_scopes: scopes,
             anchors_changed: changed,
@@ -340,11 +384,21 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
 /// orientation tools. Same locking contract as [`status_counts`].
 pub(crate) fn status_header(model_ref: &ModelRef) -> Option<String> {
     let c = status_counts(model_ref)?;
+    // Open changes ride the header only when the ledger is in use — the
+    // serial (unfiled) workflow keeps its unchanged line.
+    let changes = if c.open_changes > 0 {
+        format!(" · changes: {} open", c.open_changes)
+    } else {
+        String::new()
+    };
     Some(match c.baseline {
         // Never reconciled: drift/anchors have no baseline to report against.
-        None => format!("plan: {} pending · drift: no reconcile anchor yet", c.pending),
+        None => format!(
+            "plan: {} pending · drift: no reconcile anchor yet{changes}",
+            c.pending
+        ),
         Some(b) => format!(
-            "plan: {} pending · drift: {} scope(s) · anchors: {} changed, {} broken",
+            "plan: {} pending · drift: {} scope(s) · anchors: {} changed, {} broken{changes}",
             c.pending, b.drift_scopes, b.anchors_changed, b.anchors_broken
         ),
     })

@@ -373,10 +373,17 @@ pub(crate) fn install_statusline(
 }
 
 pub(crate) fn status_line(c: &StatusCounts) -> String {
+    // "2 changes in flight" — the ledger's in-progress workstreams; silent in
+    // the serial (unfiled) workflow.
+    let changes = match c.open_changes {
+        0 => String::new(),
+        1 => " · 1 change in flight".to_string(),
+        n => format!(" · {n} changes in flight"),
+    };
     match &c.baseline {
-        None => format!("scryer: {} pending · no reconcile anchor yet", c.pending),
+        None => format!("scryer: {} pending · no reconcile anchor yet{changes}", c.pending),
         Some(b) => format!(
-            "scryer: {} pending · {} drift scope(s) · anchors: {} broken, {} changed",
+            "scryer: {} pending · {} drift scope(s) · anchors: {} broken, {} changed{changes}",
             c.pending, b.drift_scopes, b.anchors_broken, b.anchors_changed
         ),
     }
@@ -385,6 +392,7 @@ pub(crate) fn status_line(c: &StatusCounts) -> String {
 fn status_json(c: &StatusCounts) -> String {
     let v = serde_json::json!({
         "pending": c.pending,
+        "openChanges": c.open_changes,
         "driftScopes": c.baseline.as_ref().map(|b| b.drift_scopes),
         "anchorsBroken": c.baseline.as_ref().map(|b| b.anchors_broken),
         "anchorsChanged": c.baseline.as_ref().map(|b| b.anchors_changed),

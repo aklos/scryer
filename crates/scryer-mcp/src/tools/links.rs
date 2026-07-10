@@ -106,9 +106,14 @@ impl ScryerServer {
             ))]));
         }
 
-        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
-            return Ok(CallToolResult::error(vec![Content::text(e)]));
-        }
+        let tag_warnings = match write_planned_tagged(
+            &model_ref,
+            &mut model,
+            self.session_change(&model_ref).as_deref(),
+        ) {
+            Ok(w) => w,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+        };
 
         drop(_lock);
         let mut msg = format!(
@@ -117,6 +122,9 @@ impl ScryerServer {
             added.len(),
             added.join(", ")
         );
+        for w in &tag_warnings {
+            msg.push_str(&format!("\n{w}"));
+        }
         if !reused.is_empty() {
             msg.push_str(&format!(
                 "\n{} identical link(s) already existed and were returned, not duplicated: {}",
@@ -167,12 +175,20 @@ impl ScryerServer {
             updated += 1;
         }
 
-        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
-            return Ok(CallToolResult::error(vec![Content::text(e)]));
-        }
+        let tag_warnings = match write_planned_tagged(
+            &model_ref,
+            &mut model,
+            self.session_change(&model_ref).as_deref(),
+        ) {
+            Ok(w) => w,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+        };
 
         drop(_lock);
         let mut msg = format!("Updated {} link(s)", updated);
+        for w in &tag_warnings {
+            msg.push_str(&format!("\n{w}"));
+        }
         if let Some(h) = status_header(&model_ref) {
             msg.push_str(&format!("\n{h}"));
         }
@@ -202,9 +218,14 @@ impl ScryerServer {
         let before = model.links.len();
         model.links.retain(|l| !target.contains(l.id.as_str()));
 
-        if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
-            return Ok(CallToolResult::error(vec![Content::text(e)]));
-        }
+        let tag_warnings = match write_planned_tagged(
+            &model_ref,
+            &mut model,
+            self.session_change(&model_ref).as_deref(),
+        ) {
+            Ok(w) => w,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+        };
 
         drop(_lock);
         let mut msg = format!(
@@ -212,6 +233,9 @@ impl ScryerServer {
              (it never rides a node fold)",
             before - model.links.len()
         );
+        for w in &tag_warnings {
+            msg.push_str(&format!("\n{w}"));
+        }
         if let Some(h) = status_header(&model_ref) {
             msg.push_str(&format!("\n{h}"));
         }
