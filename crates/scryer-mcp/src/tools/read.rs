@@ -1307,7 +1307,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "The model's observability report — deterministic, no semantic judgment. Per node: own + subtree rollups of responsibility/property counts, vagrant/stale flags, and anchor coverage (anchorable = any committed claim on LEAF nodes; claims on structural nodes are discharged through their subtree and are never 'unmapped'). Plus: anchor observations from the git-free fingerprint check — `changed` (the anchored span's content differs from what the model last saw), `broken` (the symbol is gone), `fileMissing` — with moved-but-unchanged symbols silently re-anchored, and a declared-link audit against the extracted import graph (edge_count 0 = asserted-only; 'unmodeled' = sibling pairs the code connects but no link declares). Also per node: `completeness` — how much of the node's AUTHORED subtree (committed + planned) reads through to real code, so it is defined from greenfield onward. `pct` (0–100) is anchored primitives over authored ones, where a primitive is a node's boundary box (counted only when its glob owns a real file), a leaf responsibility, or a data shape (counted when its anchor resolves and is not broken/missing); a scaffolded container reads low but non-zero, greenfield reads 0. `pct` is ABSENT ('—', unmeasured) when the subtree has no leaf primitives (a bare box), so an undecomposed shell never reads 100%. Only anchor what you have implemented — that discipline is what makes the figure trustworthy. Pass node_id to scope to one subtree with per-child summaries; omit it for the whole-model summary. Use this to decide WHERE work is needed (unmapped claims, vagrant flags, dark links) before reading full subtrees. `broadBoundaries` flags node boundary globs with no directory prefix (e.g. `**/*`), which silently own every otherwise-unowned file. The whole-model summary also carries `coverage` — calibration of the deterministic layer itself: which languages' imports the link audit resolves FULLY vs by name-heuristic (a declared link between name-heuristic files can read asserted-only even when real), and `silentAnchors`, sourceMap anchors holding no fingerprint tripwire — drift can never fire for those, so treat their green as silence, not health."
+        description = "The model's observability report — deterministic, no semantic judgment. Per node: own + subtree rollups of responsibility/property counts, vagrant/stale flags, and anchor coverage (anchorable = any committed claim on LEAF nodes; claims on structural nodes are discharged through their subtree and are never 'unmapped'). Plus anchor state from the git-free fingerprint check — `changed` (the anchored span's content differs from what the model last saw), `broken` (the symbol is gone), `fileMissing` — with moved-but-unchanged symbols silently re-anchored. The whole-model summary AGGREGATES anchors per container scope (`anchorSummary.byScope`: 'API: 31 changed, 5 broken'); the flat per-anchor list appears only on the node-scoped call. Also a declared-link audit against the extracted import graph (edge_count 0 = asserted-only; 'unmodeled' = sibling pairs the code connects but no link declares). Also per node: `completeness` — how much of the node's AUTHORED subtree (committed + planned) reads through to real code, so it is defined from greenfield onward. `pct` (0–100) is anchored primitives over authored ones, where a primitive is a node's boundary box (counted only when its glob owns a real file), a leaf responsibility, or a data shape (counted when its anchor resolves and is not broken/missing); a scaffolded container reads low but non-zero, greenfield reads 0. `pct` is ABSENT ('—', unmeasured) when the subtree has no leaf primitives (a bare box), so an undecomposed shell never reads 100%. Only anchor what you have implemented — that discipline is what makes the figure trustworthy. Pass node_id to scope to one subtree with per-child summaries; omit it for the whole-model summary. Use this to decide WHERE work is needed (unmapped claims, vagrant flags, dark links) before reading full subtrees. `broadBoundaries` flags node boundary globs with no directory prefix (e.g. `**/*`), which silently own every otherwise-unowned file. The whole-model summary also carries `coverage` — calibration of the deterministic layer itself: which languages' imports the link audit resolves FULLY vs by name-heuristic (a declared link between name-heuristic files can read asserted-only even when real), and `silentAnchors`, sourceMap anchors holding no fingerprint tripwire — drift can never fire for those, so treat their green as silence, not health."
     )]
     fn get_health(
         &self,
@@ -1592,10 +1592,80 @@ impl ScryerServer {
                 let asserted_only = derived
                     .as_ref()
                     .map(|g| g.link_audit.iter().filter(|a| a.edge_count == 0).count());
+
+                // Anchor observations aggregated per owning CONTAINER scope —
+                // "Desktop UI: 31 changed, 5 broken" — so a busy repo costs a
+                // handful of lines, not a wall. The flat per-anchor list stays
+                // on the node-scoped call, where it is small and actionable.
+                let scope_of = |host_id: &str| -> (String, String) {
+                    let mut cur = host_id;
+                    let mut root = host_id;
+                    while let Some(n) = model.nodes.iter().find(|n| n.id == cur) {
+                        if n.kind == scryer_core::Kind::Container {
+                            return (n.id.clone(), n.name.clone());
+                        }
+                        root = cur;
+                        match n.parent_id.as_deref() {
+                            Some(p) => cur = p,
+                            None => break,
+                        }
+                    }
+                    let name = model
+                        .nodes
+                        .iter()
+                        .find(|n| n.id == root)
+                        .map(|n| n.name.clone())
+                        .unwrap_or_else(|| root.to_string());
+                    (root.to_string(), name)
+                };
+                use scryer_extract::anchors::AnchorState;
+                let mut per_scope: BTreeMap<(String, String), (usize, usize, usize)> =
+                    BTreeMap::new();
+                let (mut n_changed, mut n_broken, mut n_missing) = (0usize, 0usize, 0usize);
+                for o in &anchor_check.observations {
+                    let e = per_scope.entry(scope_of(&o.host_id)).or_default();
+                    match o.state {
+                        AnchorState::Changed => {
+                            e.0 += 1;
+                            n_changed += 1;
+                        }
+                        AnchorState::Broken => {
+                            e.1 += 1;
+                            n_broken += 1;
+                        }
+                        AnchorState::FileMissing => {
+                            e.2 += 1;
+                            n_missing += 1;
+                        }
+                    }
+                }
+                let mut by_scope: Vec<((String, String), (usize, usize, usize))> =
+                    per_scope.into_iter().collect();
+                by_scope.sort_by_key(|(_, (c, b, m))| std::cmp::Reverse(c + b + m));
+                let by_scope: Vec<serde_json::Value> = by_scope
+                    .into_iter()
+                    .map(|((id, name), (c, b, m))| {
+                        serde_json::json!({
+                            "nodeId": id, "name": name,
+                            "changed": c, "broken": b, "fileMissing": m,
+                        })
+                    })
+                    .collect();
+
                 serde_json::json!({
                     "totals": counts_json(&health.totals),
+                    "totalsNote": "totals.stale counts claims semantically FLAGGED stale by a \
+                                   drift review (flag_drift) — it is NOT the anchor tripwire \
+                                   count. 0 stale next to changed/broken anchors means those \
+                                   anchors AWAIT review, not that all is clean.",
                     "roots": roots,
-                    "anchors": anchor_check.observations,
+                    "anchorSummary": {
+                        "changed": n_changed,
+                        "broken": n_broken,
+                        "fileMissing": n_missing,
+                        "byScope": by_scope,
+                        "note": "per-anchor detail is node-scoped — get_health {nodeId} for a scope's exact anchors",
+                    },
                     "reanchored": anchor_check.reanchored,
                     "assertedOnlyLinks": asserted_only,
                     "unmodeled": derived.as_ref().map(|g| &g.unmodeled),
@@ -2188,6 +2258,73 @@ mod tests {
             .unwrap()
             .iter()
             .any(|f| f == "api/src/server.rs"));
+    }
+
+    /// Whole-model get_health aggregates anchor observations per container
+    /// scope — a busy repo costs a handful of lines, not a flat wall — and the
+    /// exact anchors stay on the node-scoped call. totals carries the
+    /// stale-is-not-anchor-state note.
+    #[test]
+    fn get_health_aggregates_anchors_per_scope() {
+        use scryer_core::Source;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let model_ref = ModelRef::ProjectLocal(root.to_path_buf());
+        std::fs::create_dir_all(root.join("api/src")).unwrap();
+        std::fs::write(root.join("api/src/server.rs"), "fn v1() {}\n").unwrap();
+
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, "Acme", None));
+        m.nodes.push(node("api", Kind::Container, "API", Some("sys")));
+        let mut sym = node("h", Kind::Symbol, "handler", Some("api"));
+        sym.responsibilities = vec![resp("r-h", "serves requests")];
+        m.nodes.push(sym);
+        m.source_map.insert(
+            "r-h".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "api/src/server.rs" }))
+                .unwrap()],
+        );
+        m.boundaries
+            .insert("api".into(), vec![Source { pattern: "api/**/*".into(), comment: None }]);
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        let project = root.to_string_lossy().to_string();
+        let server = ScryerServer::new();
+
+        // First call seeds the baseline; then the anchored file changes.
+        let _ = server
+            .get_health(Parameters(GetHealthRequest { project: Some(project.clone()), node_id: None }))
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(root.join("api/src/server.rs"), "fn v2() {}\n").unwrap();
+
+        let v = result_json(
+            &server
+                .get_health(Parameters(GetHealthRequest { project: Some(project.clone()), node_id: None }))
+                .unwrap(),
+        );
+        assert!(v.get("anchors").is_none(), "no flat list on the whole-model call");
+        assert_eq!(v["anchorSummary"]["changed"], 1);
+        assert_eq!(v["anchorSummary"]["byScope"][0]["nodeId"], "api");
+        assert_eq!(v["anchorSummary"]["byScope"][0]["name"], "API");
+        assert_eq!(v["anchorSummary"]["byScope"][0]["changed"], 1);
+        assert!(
+            v["totalsNote"].as_str().unwrap().contains("NOT the anchor tripwire count"),
+            "stale is annotated"
+        );
+
+        // Node-scoped call still carries the exact anchors.
+        let v = result_json(
+            &server
+                .get_health(Parameters(GetHealthRequest {
+                    project: Some(project),
+                    node_id: Some("api".into()),
+                }))
+                .unwrap(),
+        );
+        let anchors = v["anchors"].as_array().unwrap();
+        assert_eq!(anchors.len(), 1, "{anchors:?}");
+        assert_eq!(anchors[0]["file"], "api/src/server.rs");
     }
 
     /// get_health: structural claims are discharged (never unmapped), leaf
