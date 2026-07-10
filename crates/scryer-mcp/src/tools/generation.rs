@@ -261,7 +261,7 @@ impl ScryerServer {
         };
         let mut model = match scryer_core::read_model_at(&model_ref) {
             Ok(model) => model,
-            Err(e) => return Ok(err(format!("Failed to read model at {model_ref}: {e}"))),
+            Err(e) => return Ok(err(read_fail("model", &model_ref, &e))),
         };
         let Some(container) = model.nodes.iter().find(|n| n.id == req.container_id) else {
             // fill_container generates against COMMITTED (it writes both layers).
@@ -318,7 +318,7 @@ impl ScryerServer {
         // exceptional; fail the fill rather than corrupt the draft.
         let planned_before = match scryer_core::read_planned_seeded_at(&model_ref) {
             Ok(p) => p,
-            Err(e) => return Ok(err(format!("Failed to read plan at {model_ref}: {e}"))),
+            Err(e) => return Ok(err(read_fail("plan", &model_ref, &e))),
         };
 
         let mut minter = IdMinter::new(&model);

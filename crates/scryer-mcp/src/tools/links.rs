@@ -26,10 +26,7 @@ impl ScryerServer {
         let mut model = match scryer_core::read_planned_seeded_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
             }
         };
 
@@ -100,11 +97,17 @@ impl ScryerServer {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Added {} link(s): {}",
+        drop(_lock);
+        let mut msg = format!(
+            "Added {} link(s): {} — in the PLAN; a link folds when a whole-node fold makes \
+             both endpoints committed, or explicitly via mark_implemented link_ids",
             added.len(),
             added.join(", ")
-        ))]))
+        );
+        if let Some(h) = status_header(&model_ref) {
+            msg.push_str(&format!("\n{h}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     #[tool(
@@ -122,10 +125,7 @@ impl ScryerServer {
         let mut model = match scryer_core::read_planned_seeded_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
             }
         };
 
@@ -151,10 +151,12 @@ impl ScryerServer {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Updated {} link(s)",
-            updated
-        ))]))
+        drop(_lock);
+        let mut msg = format!("Updated {} link(s)", updated);
+        if let Some(h) = status_header(&model_ref) {
+            msg.push_str(&format!("\n{h}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     #[tool(
@@ -172,10 +174,7 @@ impl ScryerServer {
         let mut model = match scryer_core::read_planned_seeded_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
             }
         };
 
@@ -187,10 +186,16 @@ impl ScryerServer {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Deleted {} link(s)",
+        drop(_lock);
+        let mut msg = format!(
+            "Deleted {} link(s) — a link DELETION folds only via mark_implemented link_ids \
+             (it never rides a node fold)",
             before - model.links.len()
-        ))]))
+        );
+        if let Some(h) = status_header(&model_ref) {
+            msg.push_str(&format!("\n{h}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 }
 

@@ -121,7 +121,7 @@ fn err(msg: impl Into<String>) -> CallToolResult {
 /// (planned → model). Callers hold the model lock (this seeds by writing the plan).
 fn read_planned(model_ref: &ModelRef) -> Result<ScryModel, CallToolResult> {
     scryer_core::read_planned_seeded_at(model_ref)
-        .map_err(|e| err(format!("Failed to read plan at {}: {}", model_ref, e)))
+        .map_err(|e| err(read_fail("plan", &model_ref, &e)))
 }
 
 /// The committed model, read only to raise id-minting floors. Plan-first tools
@@ -199,12 +199,16 @@ fn blank_node(id: String, kind: Kind, name: String, parent_id: Option<String>) -
 }
 
 /// Enforce read-only invariants, write, snapshot the baseline, and return the
-/// minted nodes (compact denormalized view) so the agent has their ids.
+/// minted nodes (compact denormalized view) so the agent has their ids — plus
+/// the follow-through (what a plan write implies next) and the loop-state
+/// header. Takes the tool's model lock so it can release it before the header
+/// computation (which takes the lock itself).
 fn commit(
     model_ref: &ModelRef,
     mut model: ScryModel,
     prior: &ScryModel,
     minted: &[String],
+    lock: scryer_core::ModelLock,
 ) -> Result<CallToolResult, McpError> {
     enforce_readonly_directives(&mut model, prior);
 
@@ -228,11 +232,23 @@ fn commit(
         .filter_map(|id| model.nodes.iter().find(|n| &n.id == id))
         .flat_map(scryer_core::validate::node_field_warnings)
         .collect();
-    let payload = if warnings.is_empty() {
-        serde_json::json!({ "added": added })
-    } else {
-        serde_json::json!({ "added": added, "warnings": warnings })
-    };
+    // The follow-through: a write returns not just ids but what those ids
+    // imply next, so a single-purpose agent stays on the rails without
+    // re-reading the instructions.
+    let next = format!(
+        "In the PLAN — outstanding work until built (get_pending). Declare the links their \
+         descriptions imply (add_links). When built: mark_implemented {} — its `anchors` \
+         param folds and anchors in one call.",
+        minted.join(", ")
+    );
+    let mut payload = serde_json::json!({ "added": added, "next": next });
+    if !warnings.is_empty() {
+        payload["warnings"] = serde_json::json!(warnings);
+    }
+    drop(lock);
+    if let Some(h) = status_header(model_ref) {
+        payload["state"] = serde_json::json!(h);
+    }
     Ok(CallToolResult::success(vec![Content::text(
         serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
     )]))
@@ -269,7 +285,7 @@ impl ScryerServer {
             model.nodes.push(node);
             minted.push(id);
         }
-        commit(&model_ref, model, &prior, &minted)
+        commit(&model_ref, model, &prior, &minted, _lock)
     }
 
     #[tool(
@@ -303,7 +319,7 @@ impl ScryerServer {
             model.nodes.push(node);
             minted.push(id);
         }
-        commit(&model_ref, model, &prior, &minted)
+        commit(&model_ref, model, &prior, &minted, _lock)
     }
 
     #[tool(
@@ -361,7 +377,7 @@ impl ScryerServer {
             }
             minted.push(id);
         }
-        commit(&model_ref, model, &prior, &minted)
+        commit(&model_ref, model, &prior, &minted, _lock)
     }
 
     #[tool(
@@ -401,7 +417,7 @@ impl ScryerServer {
             model.nodes.push(node);
             minted.push(id);
         }
-        commit(&model_ref, model, &prior, &minted)
+        commit(&model_ref, model, &prior, &minted, _lock)
     }
 
     #[tool(
@@ -468,11 +484,12 @@ impl ScryerServer {
         if let Err(e) = scryer_core::write_planned_at(&model_ref, &model) {
             return Ok(err(e));
         }
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Created {} group(s): {}",
-            minted.len(),
-            minted.join(", ")
-        ))]))
+        drop(_lock);
+        let mut msg = format!("Created {} group(s): {}", minted.len(), minted.join(", "));
+        if let Some(h) = status_header(&model_ref) {
+            msg.push_str(&format!("\n{h}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     #[tool(
@@ -556,7 +573,7 @@ impl ScryerServer {
             model.nodes.push(node);
             minted.push(id);
         }
-        commit(&model_ref, model, &prior, &minted)
+        commit(&model_ref, model, &prior, &minted, _lock)
     }
 
     #[tool(
@@ -1003,6 +1020,10 @@ impl ScryerServer {
                 msg.push_str(&format!("\n  stale node {}: {}", sn.node_id, sn.reason));
             }
         }
+        drop(_lock);
+        if let Some(h) = status_header(&model_ref) {
+            msg.push_str(&format!("\n{h}"));
+        }
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
@@ -1035,9 +1056,14 @@ impl ScryerServer {
             Some(c) => format!(" at commit {}", &c[..c.len().min(12)]),
             None => String::new(),
         };
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        drop(_lock);
+        let mut msg = format!(
             "Reconciled — drift anchor advanced to now{commit_note}. Only code changes after this point will surface in get_drift."
-        ))]))
+        );
+        if let Some(h) = status_header(&model_ref) {
+            msg.push_str(&format!("\n{h}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 }
 
@@ -1972,6 +1998,71 @@ mod tests {
         assert!(
             drift::drifted_scopes(&model, root, &fresh).is_empty(),
             "post-reconcile, the prior change no longer reads as drift"
+        );
+    }
+
+    /// A plan write returns the created ids PLUS the follow-through (what those
+    /// ids imply next) and the one-line loop-state header — the response
+    /// steers the next action instead of returning data and stopping.
+    #[test]
+    fn add_component_steers_with_follow_through_and_state() {
+        let (server, dir, system_id) = temp_project();
+        let project = dir.path().to_string_lossy().to_string();
+        let r = server
+            .add_container(Parameters(AddContainerRequest {
+                project: Some(project.clone()),
+                items: vec![ContainerItem {
+                    parent_id: system_id,
+                    name: "API".into(),
+                    technology: None,
+                    description: None,
+                    external: false,
+                    boundary_dir: None,
+                    responsibilities: vec![],
+                }],
+            }))
+            .unwrap();
+        let text = r
+            .content
+            .iter()
+            .find_map(|c| c.as_text().map(|t| t.text.clone()))
+            .unwrap();
+        assert!(text.contains("\"next\""), "carries the follow-through: {text}");
+        assert!(
+            text.contains("mark_implemented node-2"),
+            "names the fold call for the minted id: {text}"
+        );
+        assert!(
+            text.contains("plan: ") && text.contains("pending"),
+            "carries the loop-state header: {text}"
+        );
+    }
+
+    /// With no model on disk, a write must steer at the bootstrap path — not
+    /// strand the agent with a raw "os error 2".
+    #[test]
+    fn missing_model_error_steers_bootstrap() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = ScryerServer::new();
+        let r = server
+            .add_container(Parameters(AddContainerRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                items: vec![ContainerItem {
+                    parent_id: "node-1".into(),
+                    name: "API".into(),
+                    technology: None,
+                    description: None,
+                    external: false,
+                    boundary_dir: None,
+                    responsibilities: vec![],
+                }],
+            }))
+            .unwrap();
+        assert!(r.is_error.unwrap_or(false));
+        let text = serde_json::to_string(&r.content).unwrap();
+        assert!(
+            text.contains("No model exists") && text.contains("read_codebase"),
+            "steers at the bootstrap, no raw os error: {text}"
         );
     }
 }

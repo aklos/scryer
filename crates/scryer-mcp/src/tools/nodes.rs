@@ -297,10 +297,7 @@ impl ScryerServer {
         let mut model = match scryer_core::read_planned_seeded_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
             }
         };
 
@@ -488,6 +485,10 @@ impl ScryerServer {
             msg.push_str(&format!("\nwarning: {}", w));
         }
 
+        drop(_lock);
+        if let Some(h) = status_header(&model_ref) {
+            msg.push_str(&format!("\n{h}"));
+        }
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
@@ -531,10 +532,7 @@ impl ScryerServer {
         let planned = match scryer_core::read_planned_seeded_at(&model_ref) {
             Ok(p) => p,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read plan at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("plan", &model_ref, &e))]));
             }
         };
 
@@ -753,10 +751,7 @@ impl ScryerServer {
             let planned_now = match scryer_core::read_planned_at(&model_ref) {
                 Ok(p) => p,
                 Err(e) => {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Failed to read plan at {}: {}",
-                        model_ref, e
-                    ))]));
+                    return Ok(CallToolResult::error(vec![Content::text(read_fail("plan", &model_ref, &e))]));
                 }
             };
             if let Some(ids) = req.link_ids.as_ref().filter(|v| !v.is_empty()) {
@@ -1029,6 +1024,10 @@ impl ScryerServer {
             }
         }
 
+        drop(_lock);
+        if let Some(h) = status_header(&model_ref) {
+            msg.push_str(&format!("\n{h}"));
+        }
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
@@ -1047,10 +1046,7 @@ impl ScryerServer {
         let mut model = match scryer_core::read_planned_seeded_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
             }
         };
         let prior = model.clone();
@@ -1168,6 +1164,10 @@ impl ScryerServer {
                 msg.push_str(&format!("\n- {}", w));
             }
         }
+        drop(_lock);
+        if let Some(h) = status_header(&model_ref) {
+            msg.push_str(&format!("\n{h}"));
+        }
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
@@ -1186,10 +1186,7 @@ impl ScryerServer {
         let mut model = match scryer_core::read_planned_seeded_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
             }
         };
 
@@ -1286,10 +1283,7 @@ impl ScryerServer {
         let mut model = match scryer_core::read_planned_seeded_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
             }
         };
 
@@ -1319,10 +1313,16 @@ impl ScryerServer {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Deleted {} node(s) (including descendants)",
+        drop(_lock);
+        let mut msg = format!(
+            "Deleted {} node(s) (including descendants) — staged in the plan; the code removal \
+             is outstanding work until you delete it and mark_implemented each node id",
             before - model.nodes.len()
-        ))]))
+        );
+        if let Some(h) = status_header(&model_ref) {
+            msg.push_str(&format!("\n{h}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     #[tool(
@@ -1341,19 +1341,13 @@ impl ScryerServer {
         let mut planned = match scryer_core::read_planned_seeded_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read plan at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("plan", &model_ref, &e))]));
             }
         };
         let mut committed = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
             }
         };
 
@@ -1398,6 +1392,10 @@ impl ScryerServer {
                 if dropped == 1 { "y" } else { "ies" }
             ));
         }
+        drop(_lock);
+        if let Some(h) = status_header(&model_ref) {
+            msg.push_str(&format!("\n{h}"));
+        }
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
@@ -1416,10 +1414,7 @@ impl ScryerServer {
         let mut model = match scryer_core::read_planned_seeded_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
             }
         };
 
@@ -1488,9 +1483,12 @@ impl ScryerServer {
             );
         }
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Moved {} responsibility(ies)", moved
-        ))]))
+        drop(_lock);
+        let mut msg = format!("Moved {} responsibility(ies)", moved);
+        if let Some(h) = status_header(&model_ref) {
+            msg.push_str(&format!("\n{h}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 }
 

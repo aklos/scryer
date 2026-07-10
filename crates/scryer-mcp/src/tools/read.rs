@@ -350,10 +350,7 @@ impl ScryerServer {
         let model = match read_layer(&model_ref, req.layer) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
             }
         };
         // Keep the legacy committed-model baseline fresh only when committed was actually
@@ -430,10 +427,7 @@ impl ScryerServer {
         let model = match read_layer(&model_ref, req.layer) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
             }
         };
         // Keep the legacy committed-model baseline fresh only when committed was actually
@@ -538,10 +532,7 @@ impl ScryerServer {
         {
             Ok(r) => r,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
             }
         };
         let res = report.result;
@@ -633,10 +624,7 @@ impl ScryerServer {
         let model = match read_layer(&model_ref, req.layer) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
             }
         };
         // Keep the legacy committed-model baseline fresh only when committed was actually
@@ -747,10 +735,7 @@ impl ScryerServer {
         let model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
             }
         };
         let project = model_ref.project_path();
@@ -826,19 +811,13 @@ impl ScryerServer {
         let model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
             }
         };
         let planned = match scryer_core::read_planned_at(&model_ref) {
             Ok(p) => p,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read plan at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("plan", &model_ref, &e))]));
             }
         };
 
@@ -1031,19 +1010,13 @@ impl ScryerServer {
         let committed = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
             }
         };
         let planned = match scryer_core::read_planned_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read plan at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("plan", &model_ref, &e))]));
             }
         };
         let model = scryer_core::working_view(&committed, &planned);
@@ -1077,10 +1050,7 @@ impl ScryerServer {
         let model = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Failed to read model at {}: {}",
-                    model_ref, e
-                ))]));
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
             }
         };
         let project = model_ref.project_path();

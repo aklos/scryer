@@ -228,6 +228,86 @@ pub(crate) fn resolve_model_ref(req_project: Option<&str>) -> Result<ModelRef, M
     Ok(ModelRef::ProjectLocal(path))
 }
 
+/// Error text for a failed model/plan read. A missing file means NO MODEL
+/// EXISTS yet — steer at the bootstrap path instead of stranding the agent
+/// with a raw "os error 2".
+pub(crate) fn read_fail(layer: &str, model_ref: &ModelRef, e: &str) -> String {
+    if e.contains("os error 2") || e.contains("No such file") {
+        format!(
+            "No model exists at {model_ref} yet ({layer} file is absent). Start with \
+             `read_codebase` to see the codebase, then build top-down: `add_system` / \
+             `add_container` / `fill_container`. If you meant a different project, pass \
+             its absolute path as `project`."
+        )
+    } else {
+        format!("Failed to read {layer} at {model_ref}: {e}")
+    }
+}
+
+/// Plan-diff element count with vagrants excluded — the same queue
+/// `get_pending` reports (vagrant elements are drift review, never the
+/// implement queue).
+pub(crate) fn pending_change_count(committed: &ScryModel, planned: &ScryModel) -> usize {
+    use scryer_core::diff::ElementKind as EK;
+    let plan = scryer_core::diff::diff(committed, planned);
+    plan.changes
+        .iter()
+        .filter(|ch| {
+            let vagrant = match ch.kind {
+                EK::Node => planned
+                    .nodes
+                    .iter()
+                    .any(|n| n.id == ch.id && n.vagrant == Some(true)),
+                EK::Responsibility => planned
+                    .nodes
+                    .iter()
+                    .flat_map(|n| n.responsibilities.iter())
+                    .chain(planned.groups.iter().flat_map(|g| g.responsibilities.iter()))
+                    .any(|r| r.id == ch.id && r.vagrant == Some(true)),
+                EK::Property => ch.owner_id.as_deref().is_some_and(|oid| {
+                    planned.nodes.iter().any(|n| {
+                        n.id == oid
+                            && n.properties
+                                .iter()
+                                .any(|p| p.label == ch.id && p.vagrant == Some(true))
+                    })
+                }),
+                _ => false,
+            };
+            !vagrant
+        })
+        .count()
+}
+
+/// One-line loop-state header for write responses — `plan: N pending · drift:
+/// N scope(s) · anchors: N changed, N broken` — so the model's state stays
+/// ambient across a coding session without the agent re-polling the
+/// orientation tools. Best-effort: None when there is no committed model to
+/// report on. MUST be called with the model lock RELEASED — the anchor check
+/// takes the lock itself (it re-anchors moved-but-unchanged symbols in place).
+pub(crate) fn status_header(model_ref: &ModelRef) -> Option<String> {
+    let committed = scryer_core::read_model_at(model_ref).ok()?;
+    let planned = scryer_core::read_planned_at(model_ref).ok()?;
+    let pending = pending_change_count(&committed, &planned);
+    if !model_ref.sync_path().exists() {
+        // Never reconciled: drift/anchors have no baseline to report against.
+        return Some(format!("plan: {pending} pending · drift: no reconcile anchor yet"));
+    }
+    let sync = scryer_core::read_sync_state(model_ref);
+    let scopes =
+        scryer_core::drift::drifted_scopes(&committed, model_ref.project_path(), &sync).len();
+    let check = scryer_extract::anchors::check_anchors(model_ref).unwrap_or_default();
+    let broken = check
+        .observations
+        .iter()
+        .filter(|o| !matches!(o.state, scryer_extract::anchors::AnchorState::Changed))
+        .count();
+    let changed = check.observations.len() - broken;
+    Some(format!(
+        "plan: {pending} pending · drift: {scopes} scope(s) · anchors: {changed} changed, {broken} broken"
+    ))
+}
+
 /// Apply responsibility anchor entries (the `entries` shape of
 /// `update_source_map`) to their SINGLE home: the committed model owns every
 /// committed claim's anchor; the planned draft holds anchors only for claims it
