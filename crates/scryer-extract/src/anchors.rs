@@ -39,6 +39,34 @@ pub struct AnchorEntry {
     pub end: u32,
     /// FNV-1a 64 hex of the span text (line endings normalized).
     pub hash: String,
+    /// How many same-named defs the file held at baseline time (symbol anchors
+    /// only; 0 = unknown or not a symbol anchor). Lets the checker tell "my
+    /// def was deleted while a sibling survives" (count shrank, no content
+    /// match → broken) from "my def was edited in place" (changed).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub peers: u32,
+    /// The originating sourceMap GLOB when this entry came from expanding one
+    /// (`file` is then a concrete matched file). Links the entry back to its
+    /// model location, which spells the glob, not the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+}
+
+impl AnchorEntry {
+    /// What the model's sourceMap location spells for this entry: the glob it
+    /// was expanded from, or the literal file path.
+    fn source_pattern(&self) -> &str {
+        self.pattern.as_deref().unwrap_or(&self.file)
+    }
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+/// A sourceMap pattern with glob metacharacters claims territory, not a file.
+fn is_glob_pattern(p: &str) -> bool {
+    p.contains(['*', '?', '['])
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -104,6 +132,28 @@ fn fnv1a64_continue(mut h: u64, bytes: &[u8]) -> u64 {
         h = h.wrapping_mul(0x100000001b3);
     }
     h
+}
+
+/// 1-based start lines of every `len`-line window whose content hashes to
+/// `hash`, up to `limit` (the caller treats more than one as ambiguous, so
+/// scanning further is wasted work). This is what lets a LINE-ONLY anchor
+/// survive an insertion above it: the remembered content is searched for,
+/// not just re-read at the remembered position.
+fn find_spans_by_hash(lines: &[&str], len: u32, hash: &str, limit: usize) -> Vec<u32> {
+    let mut out = Vec::new();
+    let n = lines.len() as u32;
+    if len == 0 || n < len {
+        return out;
+    }
+    for start in 1..=(n - len + 1) {
+        if span_hash(lines, start, start + len - 1) == hash {
+            out.push(start);
+            if out.len() >= limit {
+                break;
+            }
+        }
+    }
+    out
 }
 
 /// Per-call parse memo: each touched file is parsed at most once.
@@ -246,39 +296,73 @@ pub fn whole_symbol_warnings(model: &ScryModel, project: &Path) -> Vec<String> {
 /// Resolve and fingerprint every sourceMap anchor against the working tree as
 /// it stands, and write the baseline. Call at every reconcile point (build
 /// completion, drift-check completion, `reconcile_drift`, sync seeding).
-/// Anchors whose file is missing are skipped — there is nothing to remember.
+/// Glob patterns expand to one entry per matched file (whole-file span, or
+/// the symbol's span where one is named) — they used to fall out of the
+/// baseline silently. Anchors whose file is missing are skipped — there is
+/// nothing to remember.
 pub fn write_baseline(r: &ModelRef) -> Result<usize, String> {
     let model = read_model_at(r)?;
     let project = r.project_path();
     let mut cache = FileCache::new();
     let mut anchors: Vec<AnchorEntry> = Vec::new();
+    // Walked lazily — only when a glob anchor exists.
+    let mut project_files: Option<std::collections::BTreeSet<String>> = None;
 
     let mut keys: Vec<&String> = model.source_map.keys().collect();
     keys.sort();
     for key in keys {
         for loc in &model.source_map[key] {
-            let Some((source, parse)) = cache.get(project, &loc.pattern) else {
-                continue;
+            let mut fingerprint = |file: &str, from_glob: Option<&str>| {
+                let Some((source, parse)) = cache.get(project, file) else {
+                    return;
+                };
+                let lines: Vec<&str> = source.lines().collect();
+                // Glob expansions ignore the loc's line range (it describes no
+                // single file); literal anchors keep it.
+                let (line, end_line) = if from_glob.is_some() {
+                    (None, None)
+                } else {
+                    (loc.line, loc.end_line)
+                };
+                let Ok((start, end)) = resolve_span(
+                    source,
+                    parse.as_ref(),
+                    loc.symbol.as_deref(),
+                    line,
+                    line,
+                    end_line,
+                ) else {
+                    return; // symbol unresolvable right now — nothing to remember
+                };
+                let peers = match (&loc.symbol, parse) {
+                    (Some(name), Some(p)) => {
+                        p.defs.iter().filter(|d| &d.name == name).count() as u32
+                    }
+                    _ => 0,
+                };
+                anchors.push(AnchorEntry {
+                    key: key.clone(),
+                    file: file.to_string(),
+                    symbol: loc.symbol.clone(),
+                    start,
+                    end,
+                    hash: span_hash(&lines, start, end),
+                    peers,
+                    pattern: from_glob.map(|g| g.to_string()),
+                });
             };
-            let lines: Vec<&str> = source.lines().collect();
-            let Ok((start, end)) = resolve_span(
-                source,
-                parse.as_ref(),
-                loc.symbol.as_deref(),
-                loc.line,
-                loc.line,
-                loc.end_line,
-            ) else {
-                continue; // symbol unresolvable right now — nothing to remember
-            };
-            anchors.push(AnchorEntry {
-                key: key.clone(),
-                file: loc.pattern.clone(),
-                symbol: loc.symbol.clone(),
-                start,
-                end,
-                hash: span_hash(&lines, start, end),
-            });
+            if is_glob_pattern(&loc.pattern) {
+                let Ok(pattern) = glob::Pattern::new(&loc.pattern) else {
+                    continue;
+                };
+                let files = project_files
+                    .get_or_insert_with(|| crate::list_project_files(project));
+                for file in files.iter().filter(|f| pattern.matches(f)) {
+                    fingerprint(file, Some(&loc.pattern));
+                }
+            } else {
+                fingerprint(&loc.pattern, None);
+            }
         }
     }
 
@@ -294,11 +378,69 @@ fn read_baseline(r: &ModelRef) -> Option<AnchorBaseline> {
     serde_json::from_str(&raw).ok()
 }
 
+/// Fate of one checked anchor: computed against current content (borrowing
+/// the parse cache), then applied to the model and baseline.
+enum Fate {
+    /// Content still at the remembered span.
+    Quiet,
+    /// Same content at a new span — re-anchor silently.
+    Move(u32, u32),
+    Changed,
+    Broken,
+}
+
+/// Search other project files (same extension) for a missing file's anchor
+/// content. Returns the unique `(file, start, end)` hosting the remembered
+/// span — `None` when nothing, or more than one place, matches: a rescue is a
+/// silent sourceMap rewrite, so it must never guess. Content-exact only; a
+/// file renamed AND edited in one step stays `fileMissing`.
+fn rescue_missing(
+    entry: &AnchorEntry,
+    project: &Path,
+    candidates: &[String],
+    cache: &mut FileCache,
+) -> Option<(String, u32, u32)> {
+    let ext = Path::new(&entry.file).extension().and_then(|e| e.to_str());
+    let len = entry.end.saturating_sub(entry.start) + 1;
+    let mut found: Option<(String, u32, u32)> = None;
+    for cand in candidates {
+        if *cand == entry.file || Path::new(cand).extension().and_then(|e| e.to_str()) != ext {
+            continue;
+        }
+        let Some((source, parse)) = cache.get(project, cand) else {
+            continue;
+        };
+        let lines: Vec<&str> = source.lines().collect();
+        let spans: Vec<(u32, u32)> = match (&entry.symbol, parse) {
+            (Some(name), Some(p)) => p
+                .defs
+                .iter()
+                .filter(|d| &d.name == name)
+                .map(|d| (d.start_line, d.end_line.max(d.start_line)))
+                .filter(|&(s, e)| span_hash(&lines, s, e) == entry.hash)
+                .collect(),
+            (Some(_), None) => Vec::new(), // a symbol anchor needs a parse
+            (None, _) => find_spans_by_hash(&lines, len, &entry.hash, 2)
+                .into_iter()
+                .map(|s| (s, s + len - 1))
+                .collect(),
+        };
+        for (s, e) in spans {
+            if found.is_some() {
+                return None; // ambiguous, within or across files
+            }
+            found = Some((cand.clone(), s, e));
+        }
+    }
+    found
+}
+
 /// Check every fingerprinted anchor whose file was touched since the sync
 /// anchor. Moved-but-unchanged symbols are re-anchored in place (sourceMap line
 /// ranges + baseline updated, model written under the lock); content changes
-/// and broken anchors come back as observations. No baseline → empty (the
-/// first reconcile seeds it).
+/// and broken anchors come back as observations. A missing file gets one
+/// content-hash rescue attempt (rename tracking) before it reports. No
+/// baseline → empty (the first reconcile seeds it).
 pub fn check_anchors(r: &ModelRef) -> Result<AnchorCheck, String> {
     let Some(mut baseline) = read_baseline(r) else {
         return Ok(AnchorCheck::default());
@@ -348,6 +490,9 @@ pub fn check_anchors(r: &ModelRef) -> Result<AnchorCheck, String> {
     let mut reanchored = 0usize;
     let mut model_dirty = false;
     let mut baseline_dirty = false;
+    // Rescue candidates for missing files — the project walk runs at most
+    // once per check, and only when a file actually disappeared.
+    let mut rescue_candidates: Option<Vec<String>> = None;
 
     for entry in baseline.anchors.iter_mut() {
         let file_exists = exists.get(&entry.file).copied().unwrap_or(true);
@@ -355,10 +500,11 @@ pub fn check_anchors(r: &ModelRef) -> Result<AnchorCheck, String> {
             continue;
         }
         // The anchor may have been edited/removed since the baseline — only
-        // check entries the model still carries (matched by file + symbol).
+        // check entries the model still carries (matched by the loc's spelled
+        // pattern — the glob for expanded entries — plus symbol).
         let still_anchored = model.source_map.get(&entry.key).is_some_and(|locs| {
             locs.iter()
-                .any(|l| l.pattern == entry.file && l.symbol == entry.symbol)
+                .any(|l| l.pattern == entry.source_pattern() && l.symbol == entry.symbol)
         });
         if !still_anchored {
             continue;
@@ -376,47 +522,127 @@ pub fn check_anchors(r: &ModelRef) -> Result<AnchorCheck, String> {
             state,
         };
 
+        if !file_exists {
+            // The mtime walk can't see a rename (`mv` preserves mtimes) and a
+            // deleted file has nothing to re-read — but the baseline remembers
+            // the exact content. Search same-extension project files for it:
+            // exactly one match is a rename to follow, anything else stays
+            // missing (never guess). A glob-expanded entry searches only
+            // within its own glob's territory, and never rewrites the model —
+            // the loc still spells the glob, which covers the new path.
+            let candidates = rescue_candidates.get_or_insert_with(|| {
+                crate::list_project_files(&project).into_iter().collect()
+            });
+            let rescued = match &entry.pattern {
+                Some(source_glob) => glob::Pattern::new(source_glob).ok().and_then(|p| {
+                    let scoped: Vec<String> = candidates
+                        .iter()
+                        .filter(|c| p.matches(c))
+                        .cloned()
+                        .collect();
+                    rescue_missing(entry, &project, &scoped, &mut cache)
+                }),
+                None => rescue_missing(entry, &project, candidates, &mut cache),
+            };
+            match rescued {
+                Some((new_file, start, end)) => {
+                    if entry.pattern.is_none() {
+                        if let Some(locs) = model.source_map.get_mut(&entry.key) {
+                            for l in locs.iter_mut() {
+                                if l.pattern == entry.file && l.symbol == entry.symbol {
+                                    l.pattern = new_file.clone();
+                                    if l.line.is_some() {
+                                        l.line = Some(start);
+                                        l.end_line = Some(end);
+                                    }
+                                    model_dirty = true;
+                                }
+                            }
+                        }
+                    }
+                    entry.file = new_file;
+                    entry.start = start;
+                    entry.end = end;
+                    baseline_dirty = true;
+                    reanchored += 1;
+                }
+                None => out.push(observe(AnchorState::FileMissing, entry)),
+            }
+            continue;
+        }
         let Some((source, parse)) = cache.get(&project, &entry.file) else {
-            out.push(observe(AnchorState::FileMissing, entry));
+            out.push(observe(AnchorState::FileMissing, entry)); // unreadable
             continue;
         };
         let lines: Vec<&str> = source.lines().collect();
 
-        let resolved = resolve_span(
-            source,
-            parse.as_ref(),
-            entry.symbol.as_deref(),
-            Some(entry.start),
-            Some(entry.start),
-            Some(entry.end),
-        );
-        let Ok((start, end)) = resolved else {
-            out.push(observe(AnchorState::Broken, entry));
-            continue;
-        };
-        let hash = span_hash(&lines, start, end);
-
-        if hash != entry.hash {
-            out.push(observe(AnchorState::Changed, entry));
-            continue;
-        }
-        if (start, end) != (entry.start, entry.end) {
-            // Same content, new position: re-anchor silently. Update every
-            // matching sourceMap location that recorded line numbers, and the
-            // baseline span, so the lens stays sharp without flagging anything.
-            if let Some(locs) = model.source_map.get_mut(&entry.key) {
-                for l in locs.iter_mut() {
-                    if l.pattern == entry.file && l.symbol == entry.symbol && l.line.is_some() {
-                        l.line = Some(start);
-                        l.end_line = Some(end);
-                        model_dirty = true;
-                    }
+        let fate = if let (Some(name), Some(parse)) = (entry.symbol.as_deref(), parse.as_ref()) {
+            let defs: Vec<&lang::Def> = parse.defs.iter().filter(|d| d.name == name).collect();
+            if defs.is_empty() {
+                Fate::Broken
+            } else {
+                // Hash-first: the def carrying the REMEMBERED content is the
+                // anchored one, even when a same-named sibling sits nearer to
+                // the old position (Rust impl methods share one flat
+                // namespace, so nearest-wins used to adopt the wrong def).
+                let matched: Option<(u32, u32)> = defs
+                    .iter()
+                    .map(|d| (d.start_line, d.end_line.max(d.start_line)))
+                    .filter(|&(s, e)| span_hash(&lines, s, e) == entry.hash)
+                    .min_by_key(|(s, _)| s.abs_diff(entry.start));
+                match matched {
+                    Some((s, e)) if (s, e) == (entry.start, entry.end) => Fate::Quiet,
+                    Some((s, e)) => Fate::Move(s, e),
+                    // No def carries the remembered content AND the same-name
+                    // population shrank: the anchored def was deleted, and
+                    // blaming a surviving sibling would report a false
+                    // "changed" (or silently rewrite the sourceMap).
+                    None if entry.peers > 0 && (defs.len() as u32) < entry.peers => Fate::Broken,
+                    None => Fate::Changed,
                 }
             }
-            entry.start = start;
-            entry.end = end;
-            baseline_dirty = true;
-            reanchored += 1;
+        } else {
+            // No symbol (or no grammar): the recorded range first, then a
+            // content search — an insertion above a line-only anchor MOVES it,
+            // and before this search that always read as a false "changed"
+            // (the re-anchor branch could never fire).
+            let line_count = lines.len().max(1) as u32;
+            let end_clamped = entry.end.min(line_count).max(entry.start);
+            if span_hash(&lines, entry.start, end_clamped) == entry.hash {
+                Fate::Quiet
+            } else {
+                let len = entry.end - entry.start + 1;
+                match find_spans_by_hash(&lines, len, &entry.hash, 2)[..] {
+                    [s] => Fate::Move(s, s + len - 1),
+                    _ => Fate::Changed, // gone, or ambiguous duplicates
+                }
+            }
+        };
+
+        match fate {
+            Fate::Quiet => {}
+            Fate::Move(start, end) => {
+                // Same content, new position: re-anchor silently. Update every
+                // matching sourceMap location that recorded line numbers, and
+                // the baseline span, so the lens stays sharp without flagging
+                // anything.
+                if let Some(locs) = model.source_map.get_mut(&entry.key) {
+                    for l in locs.iter_mut() {
+                        if l.pattern == entry.file && l.symbol == entry.symbol && l.line.is_some()
+                        {
+                            l.line = Some(start);
+                            l.end_line = Some(end);
+                            model_dirty = true;
+                        }
+                    }
+                }
+                entry.start = start;
+                entry.end = end;
+                baseline_dirty = true;
+                reanchored += 1;
+            }
+            Fate::Changed => out.push(observe(AnchorState::Changed, entry)),
+            Fate::Broken => out.push(observe(AnchorState::Broken, entry)),
         }
     }
 
@@ -679,6 +905,179 @@ mod tests {
         let check = check_anchors(&r).unwrap();
         assert_eq!(check.observations.len(), 1);
         assert_eq!(check.observations[0].state, AnchorState::FileMissing);
+    }
+
+    /// A line-only anchor (no symbol) survives insertions above it: the
+    /// remembered content is FOUND in the file, not just re-read at the stale
+    /// position — which used to guarantee a false `changed`.
+    #[test]
+    fn line_only_anchor_survives_insertion_above() {
+        let src = "top\n\nconst A = 1;\nconst B = 2;\nconst C = 3;\n";
+        let (_dir, r) = project_with("src/m.ts", src);
+        let mut m = leaf_model("ignored", "src/m.ts", 3, 5);
+        m.source_map.get_mut("r1").unwrap()[0].symbol = None;
+        scryer_core::write_model_at(&r, &m).unwrap();
+        reconcile(&r);
+
+        touch_gate();
+        std::fs::write(r.project_path().join("src/m.ts"), format!("// pad\n// pad\n{src}"))
+            .unwrap();
+        let check = check_anchors(&r).unwrap();
+        assert!(check.observations.is_empty(), "{:?}", check.observations);
+        assert_eq!(check.reanchored, 1);
+        let m = read_model_at(&r).unwrap();
+        let loc = &m.source_map["r1"][0];
+        assert_eq!(loc.line, Some(5), "anchor followed its content down");
+        assert_eq!(loc.end_line, Some(7));
+
+        // Healed: quiet on the next check. A real edit still trips it.
+        assert!(check_anchors(&r).unwrap().observations.is_empty());
+        touch_gate();
+        let padded = format!("// pad\n// pad\n{src}").replace("const B = 2;", "const B = 99;");
+        std::fs::write(r.project_path().join("src/m.ts"), padded).unwrap();
+        let check = check_anchors(&r).unwrap();
+        assert_eq!(check.observations.len(), 1);
+        assert_eq!(check.observations[0].state, AnchorState::Changed);
+    }
+
+    /// A renamed file (mv preserves mtimes, so the walk can't see it) is
+    /// rescued through the content hash: the sourceMap follows the file, no
+    /// observation fires. Renamed AND edited stays fileMissing — never guess.
+    #[test]
+    fn renamed_file_is_rescued_by_content() {
+        let (_dir, r) = project_with("src/m.ts", TS);
+        scryer_core::write_model_at(&r, &leaf_model("alpha", "src/m.ts", 1, 3)).unwrap();
+        reconcile(&r);
+
+        std::fs::rename(
+            r.project_path().join("src/m.ts"),
+            r.project_path().join("src/renamed.ts"),
+        )
+        .unwrap();
+        let check = check_anchors(&r).unwrap();
+        assert!(check.observations.is_empty(), "{:?}", check.observations);
+        assert_eq!(check.reanchored, 1);
+        let m = read_model_at(&r).unwrap();
+        assert_eq!(m.source_map["r1"][0].pattern, "src/renamed.ts");
+        assert!(check_anchors(&r).unwrap().observations.is_empty());
+
+        // Rename + edit in one step: the remembered content exists nowhere.
+        reconcile(&r);
+        std::fs::remove_file(r.project_path().join("src/renamed.ts")).unwrap();
+        std::fs::write(
+            r.project_path().join("src/again.ts"),
+            TS.replace("return 1;", "return 7;"),
+        )
+        .unwrap();
+        let check = check_anchors(&r).unwrap();
+        assert_eq!(check.observations.len(), 1);
+        assert_eq!(check.observations[0].state, AnchorState::FileMissing);
+    }
+
+    /// Hash-first symbol resolution: a same-named sibling appearing NEARER to
+    /// the old position must not be adopted while the true (content-equal)
+    /// def sits further down — nearest-wins used to re-anchor to the sibling.
+    #[test]
+    fn moved_symbol_outranks_nearer_same_named_sibling() {
+        let v1 = "impl A {\n    fn parse(&self) -> u32 {\n        1\n    }\n}\n";
+        let (_dir, r) = project_with("src/d.rs", v1);
+        scryer_core::write_model_at(&r, &leaf_model("parse", "src/d.rs", 2, 4)).unwrap();
+        reconcile(&r);
+
+        touch_gate();
+        // A different `parse` now occupies the OLD position; ours moved down.
+        let v2 = "impl C {\n    fn parse(&self) -> u32 {\n        3\n    }\n}\nimpl A {\n    fn parse(&self) -> u32 {\n        1\n    }\n}\n";
+        std::fs::write(r.project_path().join("src/d.rs"), v2).unwrap();
+        let check = check_anchors(&r).unwrap();
+        assert!(check.observations.is_empty(), "{:?}", check.observations);
+        assert_eq!(check.reanchored, 1);
+        let m = read_model_at(&r).unwrap();
+        assert_eq!(
+            m.source_map["r1"][0].line,
+            Some(7),
+            "re-anchored to the content-equal def, not the nearer sibling"
+        );
+    }
+
+    /// Deleting the anchored def while a same-named sibling survives is
+    /// BROKEN — not a `changed` misattributed to the sibling.
+    #[test]
+    fn deleted_def_with_surviving_sibling_is_broken() {
+        let v1 = "impl A {\n    fn parse(&self) -> u32 {\n        1\n    }\n}\nimpl B {\n    fn parse(&self) -> u32 {\n        2\n    }\n}\n";
+        let (_dir, r) = project_with("src/d.rs", v1);
+        scryer_core::write_model_at(&r, &leaf_model("parse", "src/d.rs", 2, 4)).unwrap();
+        reconcile(&r);
+
+        touch_gate();
+        // impl A's parse (the anchored one) is deleted; B's slides into the
+        // exact old position with different content.
+        let v2 = "impl B {\n    fn parse(&self) -> u32 {\n        2\n    }\n}\n";
+        std::fs::write(r.project_path().join("src/d.rs"), v2).unwrap();
+        let check = check_anchors(&r).unwrap();
+        assert_eq!(check.observations.len(), 1);
+        assert_eq!(
+            check.observations[0].state,
+            AnchorState::Broken,
+            "population shrank with no content match — the anchored def is gone"
+        );
+    }
+
+    /// A GLOB anchor claims territory: the baseline fingerprints every
+    /// matched file, so an edit inside the territory trips the wire (these
+    /// anchors used to fall out of the baseline silently), a rename within it
+    /// heals quietly without touching the model's glob, and a deletion
+    /// surfaces as fileMissing.
+    #[test]
+    fn glob_anchor_territory_is_fingerprinted() {
+        let (_dir, r) = project_with("src/a.ts", "export function alpha() {\n    return 1;\n}\n");
+        std::fs::write(
+            r.project_path().join("src/b.ts"),
+            "export function beta() {\n    return 2;\n}\n",
+        )
+        .unwrap();
+        let mut m = leaf_model("ignored", "src/*.ts", 1, 1);
+        m.source_map.get_mut("r1").unwrap()[0].symbol = None;
+        m.source_map.get_mut("r1").unwrap()[0].line = None;
+        m.source_map.get_mut("r1").unwrap()[0].end_line = None;
+        scryer_core::write_model_at(&r, &m).unwrap();
+        reconcile(&r);
+        assert!(check_anchors(&r).unwrap().observations.is_empty());
+
+        // Edit one matched file → changed, scoped to the concrete file.
+        touch_gate();
+        std::fs::write(
+            r.project_path().join("src/b.ts"),
+            "export function beta() {\n    return 99;\n}\n",
+        )
+        .unwrap();
+        let check = check_anchors(&r).unwrap();
+        assert_eq!(check.observations.len(), 1);
+        assert_eq!(check.observations[0].state, AnchorState::Changed);
+        assert_eq!(check.observations[0].file, "src/b.ts");
+
+        // Rename within the territory → healed silently, the glob loc intact.
+        reconcile(&r);
+        std::fs::rename(
+            r.project_path().join("src/b.ts"),
+            r.project_path().join("src/b2.ts"),
+        )
+        .unwrap();
+        let check = check_anchors(&r).unwrap();
+        assert!(check.observations.is_empty(), "{:?}", check.observations);
+        assert_eq!(check.reanchored, 1);
+        let m = read_model_at(&r).unwrap();
+        assert_eq!(
+            m.source_map["r1"][0].pattern, "src/*.ts",
+            "the model still spells the glob"
+        );
+
+        // Delete a matched file → fileMissing for that file.
+        reconcile(&r);
+        std::fs::remove_file(r.project_path().join("src/b2.ts")).unwrap();
+        let check = check_anchors(&r).unwrap();
+        assert_eq!(check.observations.len(), 1);
+        assert_eq!(check.observations[0].state, AnchorState::FileMissing);
+        assert_eq!(check.observations[0].file, "src/b2.ts");
     }
 
     /// Two responsibilities on one node, anchored to `alpha` and `beta`. The
