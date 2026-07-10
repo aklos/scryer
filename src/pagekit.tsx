@@ -35,11 +35,12 @@ const SectionActionsContext = createContext<HTMLElement | null>(null);
 const EMPTY_HINT =
   "Empty — no responsibilities or properties. Give it a business responsibility or remove the node.";
 
-// Field length caps, in characters. The description cap mirrors the backend
-// validator (scryer-core `DESCRIPTION_MAX_CHARS`); the name cap is a UI-only
-// limit on human-authored titles (symbol names are exempt — they're bound to
-// real code identifiers).
+// Field length caps, in characters. The description and technology caps mirror
+// the backend validator (scryer-core `DESCRIPTION_MAX_CHARS` /
+// `TECHNOLOGY_MAX_CHARS`); the name cap is a UI-only limit on human-authored
+// titles (symbol names are exempt — they're bound to real code identifiers).
 export const DESCRIPTION_MAX = 200;
+export const TECHNOLOGY_MAX = 80;
 export const NAME_MAX = 40;
 
 /** Inline word-level diff: unchanged text plain, added words highlighted, removed

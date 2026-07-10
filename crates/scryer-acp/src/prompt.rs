@@ -84,7 +84,7 @@ pub fn initial_model_prompt(project_path: &str) -> String {
 1. Call `get_rules` to load the modeling rules.
 2. Call `read_codebase` with path "{project_path}" to get the annotated directory tree. Read the manifests it surfaces (package.json, Cargo.toml, fly.toml, Dockerfile, .env.example, etc.) to identify deployable units, data stores, external services, and frameworks.3. **Build the system level.** Call `set_model` with the persons (real users / actors), the system itself, and external systems (third-party services the system depends on — Stripe, S3, Resend, etc.; mark these `external: true`). Add system-level links: persons and external systems connect to the SYSTEM itself, not to its internal containers — those are container-level relationships added when you drill in. Every person/external must link to the system, or it appears disconnected on the system-context diagram. For each node, write 1–4 responsibilities. Set responsibility status to `implemented` on responsibilities derived from existing code, `proposed` on anything speculative.
 4. **Add containers.** Call `set_node` on the system id with a payload containing the containers (web apps, APIs, workers, databases, message queues, file stores). For each container:
-   - Set `kind: "container"`, `name` describes the role ("Website", "Worker", "CMS"), `technology` describes what it IS as software ("Next.js 14", "PostgreSQL 16", "S3 Bucket").
+   - Set `kind: "container"`, `name` describes the role ("Website", "Worker", "CMS"), `technology` names what it IS as software, as a short badge ("Next.js 14", "PostgreSQL 16", "S3 Bucket") — a few words, never a sentence; explanatory prose goes in `description`.
    - Write 2–6 responsibilities — pure business statements about what the container is accountable for. No technology words in the statement.
    - Include container-level links (Person→Container, Container→Container, Container→External).
 5. **Group containers.** Call `set_groups` to create deployment-unit groups for containers that ship together (e.g. multiple containers running inside one Next.js app, multiple AWS resources provisioned by one Terraform module). A group can carry its own deployment-shaped responsibilities ("deploys atomically", "must fit in 256 MB").
@@ -96,7 +96,7 @@ pub fn initial_model_prompt(project_path: &str) -> String {
 ## Don'ts
 
 - Don't add responsibilities the codebase doesn't already evidence. If the codebase doesn't handle a concern, the model shouldn't claim it does.
-- Don't put technology vocabulary inside responsibility statements. The `technology` field is the place for that. (`directives` are user-authored constraints — never set them.)
+- Don't put technology vocabulary inside responsibility statements. The `technology` field names the stack — a short badge, not relocated prose; explanation belongs in `description`. (`directives` are user-authored constraints — never set them.)
 - Don't model framework internals (e.g. ORM layers, admin panels that come with a CMS) as separate containers unless they have a distinct user-facing surface that warrants its own tour.
 - Don't draw a separate edge for each interaction between two nodes — one link per relationship.
 "#
@@ -165,14 +165,14 @@ pub fn enrich_system_prompt(project_path: &str, system_id: &str, structure_json:
     format!(
         r#"You have the scryer MCP server (schema v0.3). The architecture model for the project at {project_path} was just seeded MECHANICALLY from its manifests: a system node and one container per deployable unit (with boundary globs and raw dependency links) already exist — their ids are below. Separate agent sessions are filling each container's components IN PARALLEL with you right now. Your job is everything at the SYSTEM and CONTAINER level that a manifest can't say:
 
-1. **Refine the minted containers** via `update_nodes` (batch ONE call): `name` = the unit's role ("Desktop App", "MCP Server", "Docs Site" — the minted names are raw manifest names), `technology` = what it IS as software ("Tauri 2 + React", "Rust MCP server"), and 2–6 terse, verb-led business responsibilities per container (status `implemented`). Write the system node's own responsibilities (1–4, broader than any container's) and a short description of what the system IS.
+1. **Refine the minted containers** via `update_nodes` (batch ONE call): `name` = the unit's role ("Desktop App", "MCP Server", "Docs Site" — the minted names are raw manifest names), `technology` = what it IS as software, as a short badge ("Tauri 2 + React", "Rust MCP server" — a few words, prose goes in `description`), and 2–6 terse, verb-led business responsibilities per container (status `implemented`). Write the system node's own responsibilities (1–4, broader than any container's) and a short description of what the system IS.
 2. **Add persons and externals.** `add_person` for real users/actors the code evidences; `add_system` with external=true for third-party systems it depends on (only if evident from manifests/config — e.g. Stripe, S3, a managed database). Link them to the SYSTEM (id below) with `add_links`, never to containers.
 3. **Add non-code containers** the manifests evidence but the scan can't mint — a managed database, a queue, a bucket — with `add_container` (parentId = the system id). Do NOT add, remove, rename-to-something-unrelated, or re-parent the minted code-bearing containers; refining their name/technology/responsibilities is yours, their existence is not.
 4. **Label the links.** The minted container→container links carry no labels: `update_links` each with a clear label ("invokes", "reads models from"). Add missing container→container, container→external links with `add_links`.
 5. **Group deploy units** with `add_group` ONLY when several containers ship/package together. Independent services get no groups — most small projects need none.
 
 ## Rules
-- Responsibilities are pure business statements at the node's own altitude — no technology words, no mechanism, no per-component enumeration. Technology belongs in the `technology` field.
+- Responsibilities are pure business statements at the node's own altitude — no technology words, no mechanism, no per-component enumeration. The stack NAME belongs in the `technology` field (a short badge); mechanism explanations belong in `description`.
 - When a description/statement names another node, declare the structural link the mention implies.
 - Do NOT touch anything below container level: no components, no symbols — the parallel sessions own container internals, and structure they commit while you work is not yours to edit.
 - Read manifests and a few entry-point files only — enough to state what each unit is accountable for.

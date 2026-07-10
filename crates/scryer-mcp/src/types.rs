@@ -239,6 +239,8 @@ pub(crate) struct UpdateNodeItem {
     pub kind: Option<String>,
     pub name: Option<String>,
     pub description: Option<String>,
+    /// Short badge naming the stack (e.g. "Next.js 14", "Tauri 2 + React"), a few
+    /// words at most — explanatory prose belongs in `description`.
     pub technology: Option<String>,
     pub external: Option<bool>,
     /// Full replacement of responsibilities. Pass an empty array to clear.
@@ -422,7 +424,7 @@ pub(crate) struct SystemItem {
     pub name: String,
     /// Identity in a few words (what it IS). Optional.
     pub description: Option<String>,
-    /// Technology identity, mainly for externals (e.g. "Stripe", "S3"). Omit for the system you are modeling.
+    /// Technology identity as a short badge, mainly for externals (e.g. "Stripe", "S3"). Omit for the system you are modeling.
     pub technology: Option<String>,
     /// true for a third-party system your system depends on; omit for the system being modeled.
     #[serde(default)]
@@ -445,7 +447,7 @@ pub(crate) struct ContainerItem {
     /// ID of the parent system (must be a system node).
     pub parent_id: String,
     pub name: String,
-    /// What it IS as software (e.g. "Next.js 14", "PostgreSQL 16", "S3 Bucket"). No mechanism vocabulary in responsibilities — put it here.
+    /// What it IS as software, as a short badge (e.g. "Next.js 14", "PostgreSQL 16", "S3 Bucket") — a few words, not a sentence. Keep mechanism vocabulary out of responsibilities; NAME the stack here and put any explanatory prose in `description`.
     pub technology: Option<String>,
     pub description: Option<String>,
     /// true for an external/third-party container.

@@ -442,10 +442,23 @@ impl ScryerServer {
             return Ok(CallToolResult::error(vec![Content::text(e)]));
         }
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Updated {} node(s)",
-            updated
-        ))]))
+        // Accept + warn (never reject — a rejected write invites a duplicate
+        // call): field-shape problems on the nodes just touched ride back on
+        // the response.
+        let mut msg = format!("Updated {} node(s)", updated);
+        let touched: std::collections::HashSet<&str> =
+            req.nodes.iter().map(|u| u.node_id.as_str()).collect();
+        let warnings: Vec<String> = model
+            .nodes
+            .iter()
+            .filter(|n| touched.contains(n.id.as_str()))
+            .flat_map(scryer_core::validate::node_field_warnings)
+            .collect();
+        for w in &warnings {
+            msg.push_str(&format!("\nwarning: {}", w));
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     #[tool(

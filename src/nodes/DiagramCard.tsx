@@ -164,11 +164,14 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
             className="flex w-full flex-col items-center transition-opacity duration-500"
             style={{ opacity: data.pending ? 0 : 1 }}
           >
-            <div className="w-full break-words text-center text-sm font-semibold leading-tight">
+            <div className="line-clamp-2 w-full break-words text-center text-sm font-semibold leading-tight">
               {node.name || "Untitled"}
             </div>
             {node.description && (
-              <div className="mt-2 w-full overflow-hidden break-words text-center text-[10px] leading-snug text-[var(--text-muted)]">
+              <div
+                className="line-clamp-4 mt-2 w-full break-words text-center text-[10px] leading-snug text-[var(--text-muted)]"
+                title={node.description}
+              >
                 {node.description}
               </div>
             )}
@@ -252,16 +255,26 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
             className="flex w-full flex-col items-center transition-opacity duration-500"
             style={{ opacity: data.pending ? 0 : 1 }}
           >
-            <div className="w-full break-words text-center text-sm font-semibold leading-tight">
+            {/* Per-field clamps: worst case (2+2+4 lines) still fits the 160px
+                card, so a paragraph-length technology or description can never
+                push the stack out of the shape (unclamped, the centered flex
+                overflowed BOTH ends — beheaded title, text under the icons). */}
+            <div className="line-clamp-2 w-full break-words text-center text-sm font-semibold leading-tight">
               {node.name || "Untitled"}
             </div>
             {node.technology && (
-              <div className="mt-0.5 text-center text-[10px] tracking-wider text-[var(--text-tertiary)]">
+              <div
+                className="line-clamp-2 mt-0.5 text-center text-[10px] tracking-wider text-[var(--text-tertiary)]"
+                title={node.technology}
+              >
                 {node.technology}
               </div>
             )}
             {node.description && (
-              <div className="mt-2 w-full overflow-hidden break-words text-center text-[10px] leading-snug text-[var(--text-muted)]">
+              <div
+                className="line-clamp-4 mt-2 w-full break-words text-center text-[10px] leading-snug text-[var(--text-muted)]"
+                title={node.description}
+              >
                 {node.description}
               </div>
             )}

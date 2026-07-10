@@ -87,6 +87,7 @@ import {
   sanitizeIdentifier,
   SectionEditor,
   SegField,
+  TECHNOLOGY_MAX,
   WordDiffText,
 } from "./pagekit";
 
@@ -658,6 +659,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 <Editable
                   initial={node.technology ?? ""}
                   placeholder="technology"
+                  maxLength={TECHNOLOGY_MAX}
                   onCommit={(t) => editor?.updateNode(node.id, { technology: t.trim() || undefined })}
                   className="font-mono text-[var(--text-secondary)]"
                 />

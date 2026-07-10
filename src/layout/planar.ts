@@ -567,10 +567,11 @@ function buildLeafDirections(
 // ── Face-aware leaf placement ─────────────────────────────────────────
 
 /**
- * Three-pass leaf placement:
+ * Two-pass leaf placement for the star / non-planar / multi-block paths
+ * (the Tutte path seeds leaves into faces and relaxes them via
+ * hierarchicalBalloon instead):
  *   1. assign each leaf to one of its parent's faces (or -1 for outer-contour fan)
- *   2. expand cramped faces so each (parent, face) has room for its leaves
- *   3. position leaves in the expanded layout
+ *   2. position leaves on the layout
  *
  * Returns leafId → face index (−1 for outer-contour fan), used for diagnostics
  * and for any later passes that want to reason about which face a leaf landed in.
@@ -586,7 +587,6 @@ function placeLeaves(
 ): Map<string, number> {
   if (leaves.length === 0) return new Map();
   const assignments = assignLeavesToFaces(leaves, faces, outerFace, outerContour);
-  balloonRelax(positions, coreEdges, faces, assignments, leaves);
   positionLeaves(positions, leaves, faces, assignments, coreEdges, leafDirections);
   return assignments;
 }
@@ -647,150 +647,773 @@ function assignLeavesToFaces(
   return assignments;
 }
 
-/**
- * "Balloon" relaxation: treat each cramped face as a balloon with outward
- * radial pressure, and each core edge as a spring holding its natural Tutte
- * length. Iterate force-directed until equilibrium.
- *
- * Unlike constrained Tutte with pinned outer face, this lets the outer
- * boundary drift outward where a cramped face pushes against it — so the
- * graph grows locally near the cramp, not uniformly. Non-cramped regions
- * stay put because edge springs resist compression/extension.
- *
- * Planarity is preserved for small-to-moderate expansions starting from a
- * planar Tutte layout; no explicit crossing check (would add on demand).
- */
-function balloonRelax(
+// ── Pixel-space box geometry ───────────────────────────────────────────
+//
+// Grid units are anisotropic (1 col = 300px, 1 row = 180px on the canvas),
+// so all clearance math runs on PIXEL coordinates and treats every node as
+// its real card rectangle. Margins are folded into the box half-extents —
+// horizontal larger than vertical because edge labels need horizontal room —
+// so box-box and box-edge checks inherit the anisotropy from one place.
+// (Min center-to-center: 300px horizontally, 240px vertically.)
+
+const PX_CELL_W = 300; // must match CELL_W/CELL_H in diagramLayout.ts
+const PX_CELL_H = 180;
+const CARD_HALF_W = 90; // 180×160 px card (DiagramView CARD_W/CARD_H)
+const CARD_HALF_H = 80;
+const MARGIN_X = 60; // per-side → 120px horizontal border gap
+const MARGIN_Y = 40; // per-side → 80px vertical border gap
+const NODE_HALF_W = CARD_HALF_W + MARGIN_X;
+const NODE_HALF_H = CARD_HALF_H + MARGIN_Y;
+const EDGE_GAP = 30; // desired extra space beyond the inflated box
+const EDGE_GAP_MIN = 4; // hard floor beyond the inflated box
+const NODE_GAP = 30; // soft zone beyond the inflated extents
+
+/** Extent of the inflated node box in direction (nx, ny) (unit vector). */
+function rectExtent(nx: number, ny: number): number {
+  return NODE_HALF_W * Math.abs(nx) + NODE_HALF_H * Math.abs(ny);
+}
+
+/** Pixel-space working copy of a layout: flat coordinate arrays + edge list. */
+interface PxCtx {
+  n: number;
+  ids: string[];
+  idx: Map<string, number>;
+  x: number[];
+  y: number[];
+  es: [number, number][];
+  incident: Set<number>[];
+}
+
+function buildPxCtx(
   positions: Map<string, { col: number; row: number }>,
-  coreEdges: EdgePair[],
-  faces: string[][],
-  assignments: Map<string, number>,
-  leaves: { id: string; parent: string }[],
+  ids: string[],
+  edges: EdgePair[],
+): PxCtx {
+  const idx = new Map<string, number>();
+  ids.forEach((id, i) => idx.set(id, i));
+  const x = ids.map((id) => (positions.get(id)?.col ?? 0) * PX_CELL_W);
+  const y = ids.map((id) => (positions.get(id)?.row ?? 0) * PX_CELL_H);
+  const es: [number, number][] = [];
+  const seen = new Set<string>();
+  for (const [u, v] of edges) {
+    const ui = idx.get(u),
+      vi = idx.get(v);
+    if (ui === undefined || vi === undefined || ui === vi) continue;
+    const key = ui < vi ? `${ui},${vi}` : `${vi},${ui}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      es.push([ui, vi]);
+    }
+  }
+  const incident: Set<number>[] = Array.from(
+    { length: ids.length },
+    () => new Set(),
+  );
+  es.forEach(([a, b], ei) => {
+    incident[a].add(ei);
+    incident[b].add(ei);
+  });
+  return { n: ids.length, ids, idx, x, y, es, incident };
+}
+
+function writeBackPx(
+  ctx: PxCtx,
+  positions: Map<string, { col: number; row: number }>,
 ): void {
-  const leafParent = new Map<string, string>();
-  for (const { id, parent } of leaves) leafParent.set(id, parent);
+  for (let i = 0; i < ctx.n; i++)
+    positions.set(ctx.ids[i], {
+      col: ctx.x[i] / PX_CELL_W,
+      row: ctx.y[i] / PX_CELL_H,
+    });
+}
 
-  // Faces that carry leaves (with their parent set)
-  const parentsByFace = new Map<number, Set<string>>();
-  for (const [leafId, fi] of assignments) {
-    if (fi < 0) continue;
-    const parent = leafParent.get(leafId);
-    if (!parent) continue;
-    if (!parentsByFace.has(fi)) parentsByFace.set(fi, new Set());
-    parentsByFace.get(fi)!.add(parent);
+function pxSegDist(
+  px2: number,
+  py2: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): { d: number; cx: number; cy: number } {
+  const dx = bx - ax,
+    dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 > 0 ? ((px2 - ax) * dx + (py2 - ay) * dy) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + t * dx,
+    cy = ay + t * dy;
+  return { d: Math.hypot(px2 - cx, py2 - cy), cx, cy };
+}
+
+/** Does any edge incident to v properly cross any other edge, at current coords? */
+function ctxVertexMoveCrosses(ctx: PxCtx, v: number): boolean {
+  const { x, y, es, incident } = ctx;
+  for (const ei of incident[v]) {
+    const [a, b] = es[ei];
+    for (let j = 0; j < es.length; j++) {
+      if (j === ei) continue;
+      const [c, d] = es[j];
+      if (c === a || c === b || d === a || d === b) continue;
+      const d1x = x[b] - x[a],
+        d1y = y[b] - y[a];
+      const d2x = x[d] - x[c],
+        d2y = y[d] - y[c];
+      const cr = d1x * d2y - d1y * d2x;
+      if (Math.abs(cr) < 1e-12) continue;
+      const t = ((x[c] - x[a]) * d2y - (y[c] - y[a]) * d2x) / cr;
+      const u = ((x[c] - x[a]) * d1y - (y[c] - y[a]) * d1x) / cr;
+      if (t > 0 && t < 1 && u > 0 && u < 1) return true;
+    }
   }
-  if (parentsByFace.size === 0) return;
+  return false;
+}
 
-  // Natural length per edge = its current Tutte length.
-  const natural = new Map<string, number>();
-  const edgeKey = (u: string, v: string) => (u < v ? `${u}\0${v}` : `${v}\0${u}`);
-  for (const [u, v] of coreEdges) {
-    const pu = positions.get(u);
-    const pv = positions.get(v);
-    if (!pu || !pv) continue;
-    natural.set(edgeKey(u, v), Math.hypot(pu.col - pv.col, pu.row - pv.row));
-  }
+/** Clearance (px) of box v's inflated border to edge ei. */
+function ctxClearance(ctx: PxCtx, v: number, ei: number): number {
+  const { x, y, es } = ctx;
+  const [a, b] = es[ei];
+  const { d, cx: qx, cy: qy } = pxSegDist(x[v], y[v], x[a], y[a], x[b], y[b]);
+  let nx = x[v] - qx,
+    ny = y[v] - qy;
+  const nd = Math.hypot(nx, ny) || 1e-6;
+  nx /= nd;
+  ny /= nd;
+  return d - rectExtent(nx, ny);
+}
 
-  // Leaf placement parameters (must match positionLeaves):
-  //   NODE_MARGIN — distance from parent to leaf along face axis.
-  // Non-connected constraint:
-  //   NON_EDGE_GAP — minimum distance between leaf and *any other* face
-  //   vertex (which the leaf isn't connected to). Smaller than NODE_MARGIN
-  //   because non-connected nodes only need to not overlap, not fit a label.
-  const NODE_MARGIN = 1.8;
-  const NON_EDGE_GAP = 1.6;
-  const K_FACE = 0.5;
-  const K_EDGE = 0.5;
-  const STEP = 0.15;
-  const MAX_ITER = 500;
-  const CONVERGED = 0.0005;
+/** Border gap (px) between the inflated boxes of vertices i and j. */
+function ctxBoxGap(ctx: PxCtx, i: number, j: number): number {
+  const { x, y } = ctx;
+  const dx = x[j] - x[i],
+    dy = y[j] - y[i];
+  const d = Math.hypot(dx, dy) || 1e-6;
+  return d - 2 * rectExtent(dx / d, dy / d);
+}
 
-  for (let iter = 0; iter < MAX_ITER; iter++) {
-    const forces = new Map<string, [number, number]>();
-    for (const id of positions.keys()) forces.set(id, [0, 0]);
-
-    // Targeted face pressure: for each (parent, face) with leaves, predict
-    // where the leaf will land (parent + NODE_MARGIN · dir→opposite-centroid),
-    // then for each *other* face vertex, if that vertex is too close to the
-    // predicted leaf position, push it directly away from the leaf.
-    // This only pushes what's cramped, in the direction it actually needs
-    // to move, without translating the rest of the graph.
-    for (const [fi, parents] of parentsByFace) {
-      const face = faces[fi];
-      if (face.length < 3) continue;
-
-      for (const parent of parents) {
-        const pp = positions.get(parent);
-        if (!pp) continue;
-        const opposite = face.filter((v) => v !== parent);
-        if (opposite.length === 0) continue;
-        let ox = 0, oy = 0;
-        for (const v of opposite) {
-          const p = positions.get(v)!;
-          ox += p.col; oy += p.row;
+/**
+ * Relax a subset of vertices ("movers") against the whole drawing: springs on
+ * their edges, repulsion from every box, repulsion + hard projection away
+ * from every non-incident edge — each move verified by an exact crossing
+ * check (with step-halving), so planarity is never lost. Everything outside
+ * the mover set stays fixed. This is relaxation, not placement: movers drift
+ * to where there is room.
+ *
+ * Wedges between edges can only open if the offending edge's endpoints give
+ * way, so mover endpoints of a too-close edge receive a counter-push.
+ */
+function relaxMovers(ctx: PxCtx, movers: number[], iters: number): void {
+  if (movers.length === 0) return;
+  const { n, x, y, es, incident } = ctx;
+  const moverSet = new Set(movers);
+  for (let iter = 0; iter < iters; iter++) {
+    const fx = new Map<number, number>();
+    const fy = new Map<number, number>();
+    for (const v of movers) {
+      fx.set(v, 0);
+      fy.set(v, 0);
+    }
+    // springs on incident edges (only mover ends move)
+    for (const [a, b] of es) {
+      const am = moverSet.has(a),
+        bm = moverSet.has(b);
+      if (!am && !bm) continue;
+      const dx = x[b] - x[a],
+        dy = y[b] - y[a];
+      const d = Math.hypot(dx, dy) || 1e-6;
+      const f = (0.12 * (d - 620)) / d;
+      if (am) {
+        fx.set(a, fx.get(a)! + dx * f);
+        fy.set(a, fy.get(a)! + dy * f);
+      }
+      if (bm) {
+        fx.set(b, fx.get(b)! - dx * f);
+        fy.set(b, fy.get(b)! - dy * f);
+      }
+    }
+    for (const v of movers) {
+      // box repulsion (movers vs everything)
+      for (let w = 0; w < n; w++) {
+        if (w === v) continue;
+        const dx = x[v] - x[w],
+          dy = y[v] - y[w];
+        const d = Math.hypot(dx, dy) || 1e-6;
+        const nx = dx / d,
+          ny = dy / d;
+        const gap = d - 2 * rectExtent(nx, ny);
+        if (gap > NODE_GAP * 2) continue;
+        const f = (1.2 * Math.max(0.05, NODE_GAP * 2 - gap)) / (NODE_GAP * 2);
+        fx.set(v, fx.get(v)! + nx * f * 40);
+        fy.set(v, fy.get(v)! + ny * f * 40);
+      }
+      // edge clearance repulsion (movers vs all non-incident edges)
+      for (let ei = 0; ei < es.length; ei++) {
+        if (incident[v].has(ei)) continue;
+        const [a, b] = es[ei];
+        const { d, cx: qx, cy: qy } = pxSegDist(
+          x[v],
+          y[v],
+          x[a],
+          y[a],
+          x[b],
+          y[b],
+        );
+        let nx = x[v] - qx,
+          ny = y[v] - qy;
+        const nd = Math.hypot(nx, ny) || 1e-6;
+        nx /= nd;
+        ny /= nd;
+        const clearance = d - rectExtent(nx, ny);
+        if (clearance >= EDGE_GAP * 1.5) continue;
+        const f =
+          (1.4 * Math.max(0.1, EDGE_GAP * 1.5 - clearance)) / (EDGE_GAP * 1.5);
+        fx.set(v, fx.get(v)! + nx * f * 40);
+        fy.set(v, fy.get(v)! + ny * f * 40);
+        const wgt = clearance < 0 ? 30 : 15;
+        if (moverSet.has(a)) {
+          fx.set(a, fx.get(a)! - nx * f * wgt);
+          fy.set(a, fy.get(a)! - ny * f * wgt);
         }
-        ox /= opposite.length; oy /= opposite.length;
-        const dxo = ox - pp.col;
-        const dyo = oy - pp.row;
-        const do_ = Math.hypot(dxo, dyo);
-        if (do_ < 0.001) continue;
-
-        const leafX = pp.col + NODE_MARGIN * (dxo / do_);
-        const leafY = pp.row + NODE_MARGIN * (dyo / do_);
-
-        for (const X of opposite) {
-          const pX = positions.get(X)!;
-          const dx = pX.col - leafX;
-          const dy = pX.row - leafY;
-          const d = Math.hypot(dx, dy);
-          const cramp = NON_EDGE_GAP - d;
-          if (cramp <= 0) continue;
-          const f = forces.get(X)!;
-          f[0] += (dx / d) * cramp * K_FACE;
-          f[1] += (dy / d) * cramp * K_FACE;
+        if (moverSet.has(b)) {
+          fx.set(b, fx.get(b)! - nx * f * wgt);
+          fy.set(b, fy.get(b)! - ny * f * wgt);
         }
       }
     }
-
-    // Edge springs toward natural length.
-    for (const [u, v] of coreEdges) {
-      const pu = positions.get(u);
-      const pv = positions.get(v);
-      if (!pu || !pv) continue;
-      const dx = pv.col - pu.col;
-      const dy = pv.row - pu.row;
-      const current = Math.hypot(dx, dy);
-      if (current < 0.001) continue;
-      const target = natural.get(edgeKey(u, v)) ?? current;
-      const mag = ((current - target) * K_EDGE) / current;
-      const fu = forces.get(u)!;
-      const fv = forces.get(v)!;
-      fu[0] += dx * mag;
-      fu[1] += dy * mag;
-      fv[0] -= dx * mag;
-      fv[1] -= dy * mag;
-    }
-
-    // Apply forces
-    let maxMove = 0;
-    for (const [id, p] of positions) {
-      const [fx, fy] = forces.get(id)!;
-      const mx = fx * STEP, my = fy * STEP;
-      p.col += mx;
-      p.row += my;
+    let moved = 0;
+    for (const v of movers) {
+      let mx = fx.get(v)!,
+        my = fy.get(v)!;
       const m = Math.hypot(mx, my);
-      if (m > maxMove) maxMove = m;
+      const lim = 50;
+      if (m > lim && m > 0) {
+        mx *= lim / m;
+        my *= lim / m;
+      }
+      for (let h = 0; h < 4; h++) {
+        x[v] += mx;
+        y[v] += my;
+        if (!ctxVertexMoveCrosses(ctx, v)) {
+          moved = Math.max(moved, Math.hypot(mx, my));
+          break;
+        }
+        x[v] -= mx;
+        y[v] -= my;
+        mx /= 2;
+        my /= 2;
+      }
     }
+    // clearance constraint projection for movers
+    for (const v of movers) {
+      for (let ei = 0; ei < es.length; ei++) {
+        if (incident[v].has(ei)) continue;
+        const [a, b] = es[ei];
+        const { d, cx: qx, cy: qy } = pxSegDist(
+          x[v],
+          y[v],
+          x[a],
+          y[a],
+          x[b],
+          y[b],
+        );
+        let nx = x[v] - qx,
+          ny = y[v] - qy;
+        const nd = Math.hypot(nx, ny) || 1e-6;
+        nx /= nd;
+        ny /= nd;
+        const clearance = d - rectExtent(nx, ny);
+        if (clearance >= EDGE_GAP_MIN) continue;
+        const deficit = EDGE_GAP_MIN - clearance;
+        x[v] += nx * deficit * 0.6;
+        y[v] += ny * deficit * 0.6;
+        if (ctxVertexMoveCrosses(ctx, v)) {
+          x[v] -= nx * deficit * 0.6;
+          y[v] -= ny * deficit * 0.6;
+        }
+      }
+    }
+    if (moved < 0.1) break;
+  }
+}
 
-    // Anchor against graph-wide drift: recenter to centroid = (0, 0) each step.
-    // Without this, forces on cramped-face vertices translate the whole graph
-    // in that direction because the edge springs drag non-cramp vertices along.
-    let cx = 0, cy = 0;
-    for (const p of positions.values()) { cx += p.col; cy += p.row; }
-    cx /= positions.size; cy /= positions.size;
-    for (const p of positions.values()) { p.col -= cx; p.row -= cy; }
+/**
+ * Backstop: fix absolute-space clearance deficits by uniform scale-up — but
+ * only while scaling actually helps (a wedge is a shape problem: scaling a
+ * near-zero clearance keeps it near zero, so bail on stalls).
+ */
+function backstopScale(
+  positions: Map<string, { col: number; row: number }>,
+  nodeIds: string[],
+  edges: EdgePair[],
+): void {
+  let prev = -Infinity;
+  for (let pass = 0; pass < 6; pass++) {
+    const worst = minRectEdgeClearance(positions, nodeIds, edges);
+    if (worst >= EDGE_GAP_MIN) break;
+    if (worst <= prev + 2) break;
+    prev = worst;
+    let cx = 0,
+      cy = 0;
+    for (const p of positions.values()) {
+      cx += p.col;
+      cy += p.row;
+    }
+    cx /= positions.size;
+    cy /= positions.size;
+    for (const p of positions.values()) {
+      p.col = cx + (p.col - cx) * 1.2;
+      p.row = cy + (p.row - cy) * 1.2;
+    }
+  }
+}
 
-    if (maxMove < CONVERGED) break;
+/** Min clearance (px) between any inflated box border and a non-incident edge. */
+function minRectEdgeClearance(
+  positions: Map<string, { col: number; row: number }>,
+  nodeIds: string[],
+  edges: EdgePair[],
+): number {
+  let worst = Infinity;
+  const px = new Map(
+    [...positions].map(([id, p]) => [
+      id,
+      { x: p.col * PX_CELL_W, y: p.row * PX_CELL_H },
+    ]),
+  );
+  for (const id of nodeIds) {
+    const p = px.get(id);
+    if (!p) continue;
+    for (const [u, v] of edges) {
+      if (u === id || v === id) continue;
+      const pu = px.get(u),
+        pv = px.get(v);
+      if (!pu || !pv) continue;
+      const dx = pv.x - pu.x,
+        dy = pv.y - pu.y;
+      const len2 = dx * dx + dy * dy;
+      let t = len2 > 0 ? ((p.x - pu.x) * dx + (p.y - pu.y) * dy) / len2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const cx = pu.x + t * dx,
+        cy = pu.y + t * dy;
+      let nx = p.x - cx,
+        ny = p.y - cy;
+      const nd = Math.hypot(nx, ny) || 1e-6;
+      nx /= nd;
+      ny /= nd;
+      worst = Math.min(worst, nd - rectExtent(nx, ny));
+    }
+  }
+  return worst;
+}
+
+// ── Hierarchical minimal ballooning ────────────────────────────────────
+//
+// Replaces both the old global min-edge rescale (which blew the whole graph
+// up to fix one cramped spot) and the force-only balloonRelax (which had no
+// planarity guarantee). The control structure:
+//
+//   Loop: find the worst cramped box (too close to a non-incident edge, or
+//   overlapping another box). Take its MINIMAL containing region — the union
+//   of real faces incident to it (for a leaf: the face it lives in). First
+//   RELAX the region's interior inside the fixed boundary (springs +
+//   clearance projection + exact crossing checks — relaxation, not
+//   placement). If the region genuinely lacks room, DILATE it rigidly about
+//   its centroid — checked against the untouched outside; if blocked, ASCEND
+//   to the parent region (add all faces incident to the boundary) and retry.
+//   Then re-check everything and iterate.
+//
+// Room flows top-down (a region only grows into slack its parent already
+// has, and the need only propagates outward when a level is genuinely
+// blocked), content relaxes bottom-up into the granted room. The far field —
+// in particular the outer contour — never moves unless the need truly
+// reaches it, which is what preserves the Tutte look. Rigid dilation is
+// shape-preserving, so stall detection stops the loop when the remaining
+// violations are wedges that scaling cannot fix (the final backstop in the
+// caller handles pure absolute-space deficits).
+
+interface BalloonRegion {
+  interior: Set<string>;
+  boundary: string[]; // ordered cycle
+  memberFaces: Set<number>;
+}
+
+function hierarchicalBalloon(
+  positions: Map<string, { col: number; row: number }>,
+  allIds: string[],
+  allEdges: EdgePair[],
+  faces: string[][],
+  outerFi: number,
+  leafFace: Map<string, number>, // leafId → face index it inhabits (−1: outer fan)
+  leafParent: Map<string, string>,
+): void {
+  const ctx = buildPxCtx(positions, allIds, allEdges);
+  const { n, idx, x, y, es, incident } = ctx;
+  if (n <= 2) return;
+
+  const vertexMoveCrosses = (v: number) => ctxVertexMoveCrosses(ctx, v);
+  const clearanceOf = (v: number, ei: number) => ctxClearance(ctx, v, ei);
+  const boxGap = (i: number, j: number) => ctxBoxGap(ctx, i, j);
+
+  interface Violation {
+    v: number;
+    kind: "edge" | "box";
+    other: number;
+    amount: number;
+  }
+  function worstViolation(): Violation | null {
+    let worst: Violation | null = null;
+    for (let v = 0; v < n; v++) {
+      for (let ei = 0; ei < es.length; ei++) {
+        if (incident[v].has(ei)) continue;
+        const c = clearanceOf(v, ei);
+        if (c < EDGE_GAP_MIN && (worst === null || c < worst.amount))
+          worst = { v, kind: "edge", other: ei, amount: c };
+      }
+      for (let w = v + 1; w < n; w++) {
+        const g = boxGap(v, w) - NODE_GAP;
+        if (g < 0) {
+          const score = g - EDGE_GAP_MIN; // comparable scale to edge clearance
+          if (worst === null || score < worst.amount)
+            worst = { v, kind: "box", other: w, amount: score };
+        }
+      }
+    }
+    return worst;
+  }
+
+  // ── region machinery (faces = REAL pre-augmentation face cycles) ─────
+  function regionFromFaces(memberFaces: Set<number>): BalloonRegion | null {
+    // boundary = directed face edges whose reverse is not present
+    const dir = new Set<string>();
+    for (const fi of memberFaces) {
+      const f = faces[fi];
+      for (let i = 0; i < f.length; i++)
+        dir.add(`${f[i]}>${f[(i + 1) % f.length]}`);
+    }
+    const succ = new Map<string, string[]>();
+    let startTail: string | null = null;
+    for (const de of dir) {
+      const [tail, head] = de.split(">");
+      if (dir.has(`${head}>${tail}`)) continue; // internal (shared) edge
+      if (!succ.has(tail)) succ.set(tail, []);
+      succ.get(tail)!.push(head);
+      startTail = tail;
+    }
+    if (!startTail) return null;
+    const boundary: string[] = [];
+    let cur = startTail;
+    const usedHeads = new Set<string>();
+    for (let guard = 0; guard < 500; guard++) {
+      boundary.push(cur);
+      const outs = succ.get(cur) ?? [];
+      let next: string | null = null;
+      for (const h of outs) {
+        const k = `${cur}>${h}`;
+        if (!usedHeads.has(k)) {
+          usedHeads.add(k);
+          next = h;
+          break;
+        }
+      }
+      if (next === null) break;
+      cur = next;
+      if (cur === startTail) break;
+    }
+    const boundarySet = new Set(boundary);
+    const interior = new Set<string>();
+    for (const fi of memberFaces)
+      for (const vtx of faces[fi]) if (!boundarySet.has(vtx)) interior.add(vtx);
+    // leaves are interior inhabitants wherever their parent is part of the
+    // region (by face assignment when known, else by parent membership)
+    for (const [leafId, fi] of leafFace) {
+      const par = leafParent.get(leafId);
+      if (
+        memberFaces.has(fi) ||
+        (par && (interior.has(par) || boundarySet.has(par)))
+      )
+        interior.add(leafId);
+    }
+    return { interior, boundary, memberFaces };
+  }
+  function minimalRegionFor(id: string): BalloonRegion | null {
+    const member = new Set<number>();
+    if (leafFace.has(id)) {
+      const fi = leafFace.get(id)!;
+      if (fi >= 0 && fi !== outerFi) member.add(fi);
+      else {
+        // outer-fan leaf: region = faces incident to its parent
+        const par = leafParent.get(id);
+        for (let fi2 = 0; fi2 < faces.length; fi2++)
+          if (fi2 !== outerFi && par && faces[fi2].includes(par))
+            member.add(fi2);
+      }
+    } else {
+      for (let fi = 0; fi < faces.length; fi++)
+        if (fi !== outerFi && faces[fi].includes(id)) member.add(fi);
+    }
+    if (member.size === 0) return null;
+    return regionFromFaces(member);
+  }
+  function parentRegion(r: BalloonRegion): BalloonRegion | null {
+    const member = new Set(r.memberFaces);
+    const before = member.size;
+    for (const b of r.boundary)
+      for (let fi = 0; fi < faces.length; fi++)
+        if (fi !== outerFi && faces[fi].includes(b)) member.add(fi);
+    if (member.size === before) return null; // top of the hierarchy
+    return regionFromFaces(member);
+  }
+
+  // ── relax: interior of region only, boundary + outside fixed ─────────
+  function relax(region: BalloonRegion, iters: number): void {
+    const movers = [...region.interior]
+      .map((id) => idx.get(id)!)
+      .filter((i) => i !== undefined);
+    relaxMovers(ctx, movers, iters);
+  }
+
+  // ── dilate region rigidly about boundary centroid; blocked → false ───
+  function tryDilate(region: BalloonRegion, s: number): boolean {
+    const members = new Set<number>(
+      [
+        ...region.boundary.map((id) => idx.get(id)!),
+        ...[...region.interior].map((id) => idx.get(id)!),
+      ].filter((i) => i !== undefined) as number[],
+    );
+    let cx2 = 0,
+      cy2 = 0,
+      cnt = 0;
+    for (const b of region.boundary) {
+      const i = idx.get(b);
+      if (i === undefined) continue;
+      cx2 += x[i];
+      cy2 += y[i];
+      cnt++;
+    }
+    if (cnt === 0) return false;
+    cx2 /= cnt;
+    cy2 /= cnt;
+    const sx = x.slice(),
+      sy = y.slice();
+    for (const i of members) {
+      x[i] = cx2 + (x[i] - cx2) * s;
+      y[i] = cy2 + (y[i] - cy2) * s;
+    }
+    const revert = () => {
+      for (let k = 0; k < n; k++) {
+        x[k] = sx[k];
+        y[k] = sy[k];
+      }
+    };
+    // exact planarity check for all moved vertices
+    for (const i of members) {
+      if (vertexMoveCrosses(i)) {
+        revert();
+        return false;
+      }
+    }
+    // slack check: moved boxes must keep floor clearance to OUTSIDE edges,
+    // and outside boxes to moved edges — otherwise we did not have room.
+    for (const i of members) {
+      for (let ei = 0; ei < es.length; ei++) {
+        if (incident[i].has(ei)) continue;
+        const [a, b] = es[ei];
+        if (members.has(a) && members.has(b)) continue; // internal: relax's job
+        if (clearanceOf(i, ei) < EDGE_GAP_MIN) {
+          revert();
+          return false;
+        }
+      }
+    }
+    for (let v2 = 0; v2 < n; v2++) {
+      if (members.has(v2)) continue;
+      for (let ei = 0; ei < es.length; ei++) {
+        const [a, b] = es[ei];
+        if (!members.has(a) && !members.has(b)) continue;
+        if (incident[v2].has(ei)) continue;
+        if (clearanceOf(v2, ei) < EDGE_GAP_MIN) {
+          revert();
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  // ── main loop ─────────────────────────────────────────────────────
+  let prevWorst = -Infinity;
+  let stall = 0;
+  for (let pass = 0; pass < 80; pass++) {
+    const viol = worstViolation();
+    if (!viol) break;
+    // stall detection: rigid dilation is shape-preserving, so violations that
+    // scaling can't fix (wedges, slivers) must not drive unbounded growth
+    if (viol.amount <= prevWorst + 1) {
+      if (++stall >= 4) break;
+    } else stall = 0;
+    prevWorst = viol.amount;
+
+    const id = allIds[viol.v];
+    let region = minimalRegionFor(id);
+    if (!region) break;
+    let handled = false;
+    for (let level = 0; level < 8 && !handled; level++) {
+      relax(region, 60);
+      const still = worstViolation();
+      if (
+        !still ||
+        (still.amount >= viol.amount - 1e-6 &&
+          !(still.v === viol.v && still.kind === viol.kind))
+      ) {
+        handled = true;
+        break;
+      }
+      if (still.amount >= 0) {
+        handled = true;
+        break;
+      }
+      // need room: dilate, growth sized to worst deficit vs region radius
+      let rad = 0;
+      let bcx = 0,
+        bcy = 0,
+        bcnt = 0;
+      for (const b of region.boundary) {
+        const i = idx.get(b);
+        if (i === undefined) continue;
+        bcx += x[i];
+        bcy += y[i];
+        bcnt++;
+      }
+      if (bcnt > 0) {
+        bcx /= bcnt;
+        bcy /= bcnt;
+      }
+      for (const b of region.boundary) {
+        const i = idx.get(b);
+        if (i === undefined) continue;
+        rad = Math.max(rad, Math.hypot(x[i] - bcx, y[i] - bcy));
+      }
+      const need = Math.max(80, -still.amount * 2);
+      const s = Math.min(1.6, 1 + need / Math.max(rad, 200));
+      if (tryDilate(region, s)) {
+        relax(region, 60);
+        const after = worstViolation();
+        if (!after || after.amount >= 0 || after.v !== viol.v) {
+          handled = true;
+          break;
+        }
+        continue; // same level: dilate more if still short of room
+      }
+      // blocked → ascend; residue at the top is the backstop's job
+      const parent = parentRegion(region);
+      if (!parent) break;
+      region = parent;
+    }
+  }
+  writeBackPx(ctx, positions);
+}
+
+/**
+ * Seed each leaf INSIDE its assigned face, close to its parent — deliberately
+ * conservative: within the parent's clearance disk (a segment from the parent
+ * shorter than the parent's distance to any non-incident edge cannot cross
+ * anything). Real placement is the balloon relaxation's job; this only
+ * provides a crossing-free start.
+ */
+function seedLeaves(
+  positions: Map<string, { col: number; row: number }>,
+  leaves: { id: string; parent: string }[],
+  assignments: Map<string, number>,
+  faces: string[][],
+  coreEdges: EdgePair[],
+): void {
+  if (leaves.length === 0) return;
+  const toPx = (p: { col: number; row: number }) => ({
+    col: p.col * PX_CELL_W,
+    row: p.row * PX_CELL_H,
+  });
+  const segDist = (
+    p: { col: number; row: number },
+    a: { col: number; row: number },
+    b: { col: number; row: number },
+  ) => {
+    const dx = b.col - a.col,
+      dy = b.row - a.row;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 > 0 ? ((p.col - a.col) * dx + (p.row - a.row) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p.col - (a.col + t * dx), p.row - (a.row + t * dy));
+  };
+
+  // group leaves by (parent, face) for fanning
+  const groups = new Map<string, { id: string; parent: string }[]>();
+  for (const leaf of leaves) {
+    const key = `${leaf.parent}\0${assignments.get(leaf.id) ?? -1}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(leaf);
+  }
+  // graph centroid for outer-fan direction
+  let gcx = 0,
+    gcy = 0;
+  for (const p of positions.values()) {
+    gcx += p.col;
+    gcy += p.row;
+  }
+  gcx /= positions.size;
+  gcy /= positions.size;
+
+  for (const [key, group] of groups) {
+    const parentId = group[0].parent;
+    const fi = Number(key.split("\0")[1]);
+    const pp = positions.get(parentId);
+    if (!pp) {
+      for (const l of group) positions.set(l.id, { col: 0, row: 0 });
+      continue;
+    }
+    const ppx = toPx(pp);
+    let clearPx = Infinity;
+    for (const [u, v] of coreEdges) {
+      if (u === parentId || v === parentId) continue;
+      const pu = positions.get(u),
+        pv = positions.get(v);
+      if (!pu || !pv) continue;
+      clearPx = Math.min(clearPx, segDist(ppx, toPx(pu), toPx(pv)));
+    }
+    const safeDistPx = Math.min(540, clearPx === Infinity ? 540 : clearPx * 0.45);
+    // direction: face centroid (interior) or outward from graph centroid (fan)
+    let baseAngle: number;
+    if (fi >= 0 && faces[fi]) {
+      const face = faces[fi].filter((v) => v !== parentId);
+      let ox = 0,
+        oy = 0,
+        cnt = 0;
+      for (const v of face) {
+        const p = positions.get(v);
+        if (p) {
+          ox += p.col;
+          oy += p.row;
+          cnt++;
+        }
+      }
+      if (cnt > 0) {
+        ox /= cnt;
+        oy /= cnt;
+      }
+      baseAngle = Math.atan2(oy - pp.row, ox - pp.col);
+    } else {
+      baseAngle = Math.atan2(pp.row - gcy, pp.col - gcx);
+      if (!isFinite(baseAngle)) baseAngle = 0;
+    }
+    const N = group.length;
+    const spread = Math.min(Math.PI * 0.5, 0.5 * (N - 1));
+    for (let i = 0; i < N; i++) {
+      const t = N === 1 ? 0 : (i / (N - 1) - 0.5) * spread;
+      // stagger distances slightly so siblings never coincide
+      const dPx = safeDistPx * (0.7 + (0.3 * ((i % 3) + 1)) / 3);
+      positions.set(group[i].id, {
+        col: pp.col + (dPx * Math.cos(baseAngle + t)) / PX_CELL_W,
+        row: pp.row + (dPx * Math.sin(baseAngle + t)) / PX_CELL_H,
+      });
+    }
   }
 }
 
@@ -1204,27 +1827,58 @@ function tuttePlace(
     py.set(id, 0);
   }
 
-  // Barycentric relaxation: each interior vertex → average of neighbors
-  for (let iter = 0; iter < 500; iter++) {
-    let maxMove = 0;
-    for (const id of interiorIds) {
-      const neighbors = embedding.get(id) ?? [];
-      if (neighbors.length === 0) continue;
-      let sx = 0,
-        sy = 0;
+  // Solve the Tutte system exactly: for each interior vertex i,
+  //   deg(i)·p_i − Σ_{j∈N(i)∩interior} p_j = Σ_{j∈N(i)∩boundary} p_j
+  // by dense Gaussian elimination with partial pivoting (n ≤ 50, so a dense
+  // solve is instant). Iterative relaxation is NOT an option here: its
+  // convergence stalls on chain-like interiors — after the iteration cap the
+  // interior is still mid-collapse, with vertices stacked on each other,
+  // which reads as zero-length edges and crossings downstream.
+  {
+    const m = interiorIds.length;
+    const iIdx = new Map(interiorIds.map((id, i) => [id, i]));
+    const A: number[][] = Array.from({ length: m }, () => new Array(m).fill(0));
+    const bx = new Array(m).fill(0);
+    const by = new Array(m).fill(0);
+    for (let i = 0; i < m; i++) {
+      const neighbors = embedding.get(interiorIds[i]) ?? [];
+      A[i][i] = Math.max(neighbors.length, 1);
       for (const nbr of neighbors) {
-        sx += px.get(nbr) ?? 0;
-        sy += py.get(nbr) ?? 0;
+        const j = iIdx.get(nbr);
+        if (j !== undefined) A[i][j] -= 1;
+        else {
+          bx[i] += px.get(nbr) ?? 0;
+          by[i] += py.get(nbr) ?? 0;
+        }
       }
-      const newX = sx / neighbors.length;
-      const newY = sy / neighbors.length;
-      const move =
-        Math.abs(newX - (px.get(id) ?? 0)) + Math.abs(newY - (py.get(id) ?? 0));
-      maxMove = Math.max(maxMove, move);
-      px.set(id, newX);
-      py.set(id, newY);
     }
-    if (maxMove < 0.001) break; // converged
+    for (let col = 0; col < m; col++) {
+      let piv = col;
+      for (let r = col + 1; r < m; r++)
+        if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+      if (Math.abs(A[piv][col]) < 1e-12) continue;
+      [A[col], A[piv]] = [A[piv], A[col]];
+      [bx[col], bx[piv]] = [bx[piv], bx[col]];
+      [by[col], by[piv]] = [by[piv], by[col]];
+      for (let r = col + 1; r < m; r++) {
+        const f = A[r][col] / A[col][col];
+        if (f === 0) continue;
+        for (let c = col; c < m; c++) A[r][c] -= f * A[col][c];
+        bx[r] -= f * bx[col];
+        by[r] -= f * by[col];
+      }
+    }
+    for (let row = m - 1; row >= 0; row--) {
+      if (Math.abs(A[row][row]) < 1e-12) continue;
+      let sx = bx[row],
+        sy = by[row];
+      for (let c = row + 1; c < m; c++) {
+        sx -= A[row][c] * (px.get(interiorIds[c]) ?? 0);
+        sy -= A[row][c] * (py.get(interiorIds[c]) ?? 0);
+      }
+      px.set(interiorIds[row], sx / A[row][row]);
+      py.set(interiorIds[row], sy / A[row][row]);
+    }
   }
 
   // Build positions
@@ -1484,18 +2138,63 @@ function stitchBlock(
   // Block's centroid direction from the shared vertex (in local frame).
   const localAngle = Math.atan2(by - bp.row, bx - bp.col);
 
-  const rotation = outAngle - localAngle;
-  const cosR = Math.cos(rotation);
-  const sinR = Math.sin(rotation);
+  const baseRotation = outAngle - localAngle;
 
-  for (const [v, p] of blockPositions) {
-    if (v === sharedVertex) continue;
-    const dx = p.col - bp.col;
-    const dy = p.row - bp.row;
-    const rx = dx * cosR - dy * sinR;
-    const ry = dx * sinR + dy * cosR;
-    globalPositions.set(v, { col: gp.col + rx, row: gp.row + ry });
+  const place = (rotation: number, into: Map<string, { col: number; row: number }>) => {
+    const cosR = Math.cos(rotation);
+    const sinR = Math.sin(rotation);
+    for (const [v, p] of blockPositions) {
+      if (v === sharedVertex) continue;
+      const dx = p.col - bp.col;
+      const dy = p.row - bp.row;
+      const rx = dx * cosR - dy * sinR;
+      const ry = dx * sinR + dy * cosR;
+      into.set(v, { col: gp.col + rx, row: gp.row + ry });
+    }
+  };
+
+  // Worst box-border gap (px) between the candidate block placement and the
+  // already-placed nodes — the stitch rotation is a free parameter, so scan
+  // for the orientation that avoids landing the block on its siblings.
+  const gapScore = (candidate: Map<string, { col: number; row: number }>): number => {
+    let worst = Infinity;
+    for (const [, cp] of candidate) {
+      for (const [gid, gpp] of globalPositions) {
+        if (candidate.has(gid)) continue;
+        const dx = (gpp.col - cp.col) * PX_CELL_W;
+        const dy = (gpp.row - cp.row) * PX_CELL_H;
+        const d = Math.hypot(dx, dy) || 1e-6;
+        worst = Math.min(worst, d - 2 * rectExtent(dx / d, dy / d));
+      }
+    }
+    return worst;
+  };
+
+  const OFFSETS = [
+    0,
+    Math.PI / 6, -Math.PI / 6,
+    Math.PI / 3, -Math.PI / 3,
+    Math.PI / 2, -Math.PI / 2,
+    (2 * Math.PI) / 3, -(2 * Math.PI) / 3,
+    (5 * Math.PI) / 6, -(5 * Math.PI) / 6,
+    Math.PI,
+  ];
+  let best: Map<string, { col: number; row: number }> | null = null;
+  let bestScore = -Infinity;
+  for (const off of OFFSETS) {
+    const candidate = new Map<string, { col: number; row: number }>();
+    place(baseRotation + off, candidate);
+    const score = gapScore(candidate);
+    if (score >= 0) {
+      best = candidate;
+      break; // outward-most collision-free orientation wins
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = candidate;
+    }
   }
+  if (best) for (const [v, p] of best) globalPositions.set(v, p);
 }
 
 /**
@@ -1565,6 +2264,27 @@ async function layoutMultiBlock(
       leafDirections,
     );
   }
+
+  // Clearance pass over the stitched whole: the fan placement and the seams
+  // between blocks carry no clearance guarantee, so relax the leaves against
+  // everything (blocks stay rigid), then let the backstop fix any absolute
+  // deficit that remains.
+  const allIds = [...allPositions.keys()];
+  const np = new Set(allNonPlanar.map(([a, b]) => (a < b ? `${a}\0${b}` : `${b}\0${a}`)));
+  const clearEdges: EdgePair[] = [
+    ...blocks.flatMap((b) => b.edges),
+    ...leaves.map((l) => [l.id, l.parent] as EdgePair),
+  ].filter(([a, b]) => !np.has(a < b ? `${a}\0${b}` : `${b}\0${a}`));
+  if (leaves.length > 0) {
+    const ctx = buildPxCtx(allPositions, allIds, clearEdges);
+    relaxMovers(
+      ctx,
+      leaves.map((l) => ctx.idx.get(l.id)!).filter((i) => i !== undefined),
+      120,
+    );
+    writeBackPx(ctx, allPositions);
+  }
+  backstopScale(allPositions, allIds, clearEdges);
 
   return { positions: allPositions, nonPlanarEdges: allNonPlanar };
 }
@@ -1716,30 +2436,10 @@ export async function planarLayout(
     preTrOuter,
   );
 
-  // Step 6: Normalize — uniform scale to compact size
+  // Step 6: Center. (No global scaling here — the old min-edge rescale is
+  // exactly what blew whole diagrams up to fix one cramped spot. Room-making
+  // is hierarchicalBalloon's job below; it works locally.)
   {
-    // Scale so shortest edge = 2× node diagonal. Ensures no cramping.
-    // Must match CELL_W/CELL_H in layout.ts (300 × 180, anisotropic).
-    const NODE_CELL_W = (180 + 80) / 300;
-    const NODE_CELL_H = (160 + 80) / 180;
-    const minEdgeTarget =
-      Math.sqrt(NODE_CELL_W * NODE_CELL_W + NODE_CELL_H * NODE_CELL_H) * 1.2;
-
-    let minEdgeLen = Infinity;
-    for (const [u, v] of coreEdges) {
-      const pu = positions.get(u),
-        pv = positions.get(v);
-      if (pu && pv) {
-        const d = Math.sqrt((pu.col - pv.col) ** 2 + (pu.row - pv.row) ** 2);
-        if (d > 0.001) minEdgeLen = Math.min(minEdgeLen, d);
-      }
-    }
-    const scale =
-      minEdgeLen < Infinity && minEdgeLen < minEdgeTarget
-        ? minEdgeTarget / minEdgeLen
-        : 1;
-
-    // Center and scale
     let cx = 0,
       cy = 0;
     for (const p of positions.values()) {
@@ -1749,22 +2449,57 @@ export async function planarLayout(
     cx /= positions.size;
     cy /= positions.size;
     for (const p of positions.values()) {
-      p.col = (p.col - cx) * scale;
-      p.row = (p.row - cy) * scale;
+      p.col = p.col - cx;
+      p.row = p.row - cy;
     }
   }
 
-  // Step 7: assign leaves → balloon-relax cramped faces → position leaves.
-  // Balloon uses only the real (non-dummy) planar edges for its springs.
-  placeLeaves(
-    positions,
+  // Step 7: assign leaves to faces, seed them crossing-free near their
+  // parents, then let hierarchical minimal ballooning make room for
+  // everything — cramped regions expand into their parents' slack (contour
+  // last), inhabitants relax into the granted room.
+  const assignments = assignLeavesToFaces(
     leaves,
     originalFaces,
     preTrOuter,
     outerContour,
-    coreClassification.planarEdges,
-    leafDirections,
   );
+  seedLeaves(
+    positions,
+    leaves,
+    assignments,
+    originalFaces,
+    coreClassification.planarEdges,
+  );
+
+  let outerFi = -1;
+  for (let fi = 0; fi < originalFaces.length; fi++) {
+    if (originalFaces[fi].length < 3) continue;
+    if (outerFi === -1 || originalFaces[fi].length > originalFaces[outerFi].length)
+      outerFi = fi;
+  }
+  const leafFaceMap = new Map<string, number>();
+  const leafParentMap = new Map<string, string>();
+  for (const l of leaves) {
+    leafFaceMap.set(l.id, assignments.get(l.id) ?? -1);
+    leafParentMap.set(l.id, l.parent);
+  }
+  const allIds = [...coreIds, ...leaves.map((l) => l.id)];
+  const allEdges: EdgePair[] = [
+    ...coreClassification.planarEdges,
+    ...leaves.map((l) => [l.id, l.parent] as EdgePair),
+  ];
+  hierarchicalBalloon(
+    positions,
+    allIds,
+    allEdges,
+    originalFaces,
+    outerFi,
+    leafFaceMap,
+    leafParentMap,
+  );
+
+  backstopScale(positions, allIds, allEdges);
 
   return {
     positions,

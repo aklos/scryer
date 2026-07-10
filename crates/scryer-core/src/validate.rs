@@ -7,6 +7,41 @@ use std::path::Path;
 /// description never trips this warning.
 pub const DESCRIPTION_MAX_CHARS: usize = 200;
 
+/// Maximum technology length, in Unicode scalar values. Technology is a badge
+/// ("Next.js 14", "Tauri 2 + React"), rendered as a one-to-two-line tag on the
+/// diagram card — agents that evict mechanism prose from responsibilities tend
+/// to dump it here, where it belongs in the description instead. The frontend
+/// caps its technology editor at the same value.
+pub const TECHNOLOGY_MAX_CHARS: usize = 80;
+
+/// Field-shape warnings for a single node (length caps on card-rendered
+/// fields). Split out so MCP write tools can accept-and-warn on exactly the
+/// nodes they touched, without dragging in unrelated model-wide warnings.
+pub fn node_field_warnings(n: &crate::Node) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if let Some(desc) = &n.description {
+        let chars = desc.chars().count();
+        if chars > DESCRIPTION_MAX_CHARS {
+            warnings.push(format!(
+                "Node {} (\"{}\") description exceeds {} characters ({})",
+                n.id, n.name, DESCRIPTION_MAX_CHARS, chars
+            ));
+        }
+    }
+    if let Some(tech) = &n.technology {
+        let chars = tech.chars().count();
+        if chars > TECHNOLOGY_MAX_CHARS {
+            warnings.push(format!(
+                "Node {} (\"{}\") technology exceeds {} characters ({}) — technology is a \
+                 short badge (\"Next.js 14\", \"PostgreSQL 16\"); move explanatory prose \
+                 into the description",
+                n.id, n.name, TECHNOLOGY_MAX_CHARS, chars
+            ));
+        }
+    }
+    warnings
+}
+
 /// Run structural validation. Returns a list of human-readable warnings.
 pub fn validate(model: &ScryModel) -> Vec<String> {
     let mut warnings: Vec<String> = Vec::new();
@@ -82,15 +117,7 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
             }
         }
 
-        if let Some(desc) = &n.description {
-            let chars = desc.chars().count();
-            if chars > DESCRIPTION_MAX_CHARS {
-                warnings.push(format!(
-                    "Node {} (\"{}\") description exceeds {} characters ({})",
-                    n.id, n.name, DESCRIPTION_MAX_CHARS, chars
-                ));
-            }
-        }
+        warnings.extend(node_field_warnings(n));
 
         // Symbol names are source identifiers. Types, classes, interfaces, and
         // React components legitimately start uppercase, so an uppercase start

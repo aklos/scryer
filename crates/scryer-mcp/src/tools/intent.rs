@@ -221,7 +221,18 @@ fn commit(
             v
         })
         .collect();
-    let payload = serde_json::json!({ "added": added });
+    // Accept + warn (never reject — a rejected write invites a duplicate call):
+    // field-shape problems on the nodes just minted ride back on the response.
+    let warnings: Vec<String> = minted
+        .iter()
+        .filter_map(|id| model.nodes.iter().find(|n| &n.id == id))
+        .flat_map(scryer_core::validate::node_field_warnings)
+        .collect();
+    let payload = if warnings.is_empty() {
+        serde_json::json!({ "added": added })
+    } else {
+        serde_json::json!({ "added": added, "warnings": warnings })
+    };
     Ok(CallToolResult::success(vec![Content::text(
         serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
     )]))
@@ -1130,6 +1141,47 @@ mod tests {
             new.responsibilities[0].id, "resp-3",
             "responsibility id must clear the committed max, not reuse plan-deleted resp-2"
         );
+    }
+
+    /// Accept + warn on field shape: a paragraph-length `technology` (the card
+    /// renders it as a short badge) is committed anyway — rejecting would invite
+    /// a duplicate tool call — but the response must carry the warning telling
+    /// the agent to move the prose to `description`.
+    #[test]
+    fn long_technology_is_accepted_with_a_warning() {
+        let (server, dir, system_id) = temp_project();
+        let project = dir.path().to_string_lossy().to_string();
+        let prose = "Standalone Vite widget bundled as a shadow-DOM-isolated IIFE, \
+                     embedded on the host's pages via a tag-manager loader script";
+        let res = server
+            .add_container(Parameters(AddContainerRequest {
+                project: Some(project),
+                items: vec![ContainerItem {
+                    parent_id: system_id,
+                    name: "Browser Embed".into(),
+                    technology: Some(prose.into()),
+                    description: None,
+                    external: false,
+                    responsibilities: vec!["runs the chat in the prospect's browser".into()],
+                    boundary_dir: None,
+                }],
+            }))
+            .unwrap();
+
+        let text = res
+            .content
+            .iter()
+            .filter_map(|c| c.as_text().map(|t| t.text.clone()))
+            .collect::<String>();
+        assert!(
+            text.contains("technology exceeds"),
+            "response must warn about the oversized technology field: {text}"
+        );
+
+        // Accepted regardless: the node exists in the plan with the value as passed.
+        let plan = read_plan(&dir);
+        let node = plan.nodes.iter().find(|n| n.name == "Browser Embed").unwrap();
+        assert_eq!(node.technology.as_deref(), Some(prose));
     }
 
     /// Regression for the plan-seed seam (audit theme 1): an authoring write to a
