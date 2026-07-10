@@ -279,19 +279,31 @@ pub(crate) fn pending_change_count(committed: &ScryModel, planned: &ScryModel) -
         .count()
 }
 
-/// One-line loop-state header for write responses — `plan: N pending · drift:
-/// N scope(s) · anchors: N changed, N broken` — so the model's state stays
-/// ambient across a coding session without the agent re-polling the
-/// orientation tools. Best-effort: None when there is no committed model to
-/// report on. MUST be called with the model lock RELEASED — the anchor check
-/// takes the lock itself (it re-anchors moved-but-unchanged symbols in place).
-pub(crate) fn status_header(model_ref: &ModelRef) -> Option<String> {
+/// The loop-state counts behind every ambient status line — shared by the MCP
+/// response headers and the `status`/`statusline` CLI subcommands.
+pub(crate) struct StatusCounts {
+    pub pending: usize,
+    /// None until a reconcile baseline exists — drift and anchor states have
+    /// nothing to measure against, and reporting zeros would fake certainty.
+    pub baseline: Option<BaselineCounts>,
+}
+
+pub(crate) struct BaselineCounts {
+    pub drift_scopes: usize,
+    pub anchors_changed: usize,
+    pub anchors_broken: usize,
+}
+
+/// Compute [`StatusCounts`] straight from disk. Best-effort: None when there
+/// is no committed model to report on. MUST be called with the model lock
+/// RELEASED — the anchor check takes the lock itself (it re-anchors
+/// moved-but-unchanged symbols in place).
+pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
     let committed = scryer_core::read_model_at(model_ref).ok()?;
     let planned = scryer_core::read_planned_at(model_ref).ok()?;
     let pending = pending_change_count(&committed, &planned);
     if !model_ref.sync_path().exists() {
-        // Never reconciled: drift/anchors have no baseline to report against.
-        return Some(format!("plan: {pending} pending · drift: no reconcile anchor yet"));
+        return Some(StatusCounts { pending, baseline: None });
     }
     let sync = scryer_core::read_sync_state(model_ref);
     let scopes =
@@ -303,9 +315,30 @@ pub(crate) fn status_header(model_ref: &ModelRef) -> Option<String> {
         .filter(|o| !matches!(o.state, scryer_extract::anchors::AnchorState::Changed))
         .count();
     let changed = check.observations.len() - broken;
-    Some(format!(
-        "plan: {pending} pending · drift: {scopes} scope(s) · anchors: {changed} changed, {broken} broken"
-    ))
+    Some(StatusCounts {
+        pending,
+        baseline: Some(BaselineCounts {
+            drift_scopes: scopes,
+            anchors_changed: changed,
+            anchors_broken: broken,
+        }),
+    })
+}
+
+/// One-line loop-state header for write responses — `plan: N pending · drift:
+/// N scope(s) · anchors: N changed, N broken` — so the model's state stays
+/// ambient across a coding session without the agent re-polling the
+/// orientation tools. Same locking contract as [`status_counts`].
+pub(crate) fn status_header(model_ref: &ModelRef) -> Option<String> {
+    let c = status_counts(model_ref)?;
+    Some(match c.baseline {
+        // Never reconciled: drift/anchors have no baseline to report against.
+        None => format!("plan: {} pending · drift: no reconcile anchor yet", c.pending),
+        Some(b) => format!(
+            "plan: {} pending · drift: {} scope(s) · anchors: {} changed, {} broken",
+            c.pending, b.drift_scopes, b.anchors_changed, b.anchors_broken
+        ),
+    })
 }
 
 /// Apply responsibility anchor entries (the `entries` shape of

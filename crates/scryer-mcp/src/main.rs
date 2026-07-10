@@ -1,3 +1,4 @@
+mod cli;
 mod helpers;
 mod hook_client;
 mod instructions;
@@ -21,6 +22,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Claude Code session hook: event JSON on stdin, hook JSON on stdout.
         // Silent no-op unless the Scryer app has this project open.
         Some("hook") => return hook_client::run_hook_client(),
+        // Loop-state one-liner for humans, straight from disk (no app needed).
+        Some("status") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            return cli::run_status(&args);
+        }
         _ => {}
     }
 
