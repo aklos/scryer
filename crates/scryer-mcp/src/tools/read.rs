@@ -1249,7 +1249,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Annotated project directory tree. Surfaces manifests ([manifest]), infrastructure configs ([infrastructure]), and environment templates ([environment]). Use before modeling to identify deployable units, data stores, external integrations, and frameworks. Respects .gitignore and skips build output / dependency directories."
+        description = "Annotated project directory tree — the codebase itself, not just its manifests: source files render (capped per directory so generated trees cannot drown the shape), with manifests ([manifest]), infrastructure configs ([infrastructure]), and environment templates ([environment]) called out. Use before modeling to identify deployable units, data stores, external integrations, and frameworks. Respects .gitignore and skips build output / dependency directories."
     )]
     fn read_codebase(
         &self,
@@ -1338,14 +1338,49 @@ impl ScryerServer {
                         .map(|n| n.responsibilities.len())
                         .chain(planned.groups.iter().map(|g| g.responsibilities.len()))
                         .sum();
-                    return Ok(CallToolResult::success(vec![Content::text(format!(
-                        "Committed model is empty — nothing has been implemented yet — but the \
-                         plan holds {nodes} node(s) and {resps} responsibility/ies. You're in \
-                         design-first mode: get_health reports how well the committed model maps \
-                         to code, which is not the question yet. Read the PLAN instead — \
-                         `get_pending` for the model→code work queue, `read_model` to load the \
-                         authored nodes and responsibilities. Do NOT conclude the model is empty."
-                    ))]));
+                    // Completeness IS meaningful from greenfield — its
+                    // denominator is authored intent (committed + planned), so
+                    // the design-first answer is real numbers with a real
+                    // denominator (0% of 50 primitives), not a refusal.
+                    let files = scryer_extract::list_project_files(project);
+                    let completeness = scryer_core::health::resolve_completeness(
+                        &model,
+                        &planned,
+                        &files,
+                        &HashSet::new(),
+                    );
+                    let roots: Vec<serde_json::Value> = planned
+                        .nodes
+                        .iter()
+                        .filter(|n| n.parent_id.is_none())
+                        .map(|n| {
+                            serde_json::json!({
+                                "id": n.id,
+                                "name": n.name,
+                                "kind": kind_str(&n.kind),
+                                "completeness": completeness
+                                    .get(&n.id)
+                                    .map(|c| serde_json::to_value(c).unwrap_or_default()),
+                            })
+                        })
+                        .collect();
+                    let payload = serde_json::json!({
+                        "designFirst": true,
+                        "planNodes": nodes,
+                        "planResponsibilities": resps,
+                        "completeness": roots,
+                        "guidance": "Committed model is empty — nothing has been implemented \
+                             yet — but the plan holds the authored architecture. Coverage and \
+                             anchor reporting start once work folds in (mark_implemented); \
+                             `completeness` above is already real: anchored primitives over \
+                             AUTHORED ones, so it grows from 0 as you build. Read the plan \
+                             with get_pending (the model→code work queue) and read_model. Do \
+                             NOT conclude the model is empty.",
+                    });
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        serde_json::to_string_pretty(&payload)
+                            .unwrap_or_else(|_| "{}".to_string()),
+                    )]));
                 }
             }
         }
@@ -2325,6 +2360,46 @@ mod tests {
         let anchors = v["anchors"].as_array().unwrap();
         assert_eq!(anchors.len(), 1, "{anchors:?}");
         assert_eq!(anchors[0]["file"], "api/src/server.rs");
+    }
+
+    /// Design-first: with an empty committed model and an authored plan,
+    /// get_health redirects — but WITH real numbers: completeness is defined
+    /// from greenfield (denominator = authored intent), so the caller sees
+    /// 0%-of-N, not a refusal to compute.
+    #[test]
+    fn get_health_design_first_reports_completeness() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        scryer_core::write_model_at(&model_ref, &ScryModel::new()).unwrap();
+        let mut planned = ScryModel::new();
+        planned.nodes.push(node("sys", Kind::System, "Acme", None));
+        let mut c = node("api", Kind::Container, "API", Some("sys"));
+        c.responsibilities = vec![resp("r-1", "serves requests"), resp("r-2", "persists data")];
+        planned.nodes.push(c);
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        let v = result_json(
+            &server
+                .get_health(Parameters(GetHealthRequest {
+                    project: Some(dir.path().to_string_lossy().to_string()),
+                    node_id: None,
+                }))
+                .unwrap(),
+        );
+        assert_eq!(v["designFirst"], true);
+        assert_eq!(v["planNodes"], 2);
+        assert_eq!(v["planResponsibilities"], 2);
+        let comp = &v["completeness"][0];
+        assert_eq!(comp["id"], "sys");
+        assert_eq!(
+            comp["completeness"]["pct"], 0,
+            "greenfield reads 0 WITH a denominator: {v}"
+        );
+        assert!(
+            v["guidance"].as_str().unwrap().contains("Do NOT conclude the model is empty"),
+            "{v}"
+        );
     }
 
     /// get_health: structural claims are discharged (never unmapped), leaf

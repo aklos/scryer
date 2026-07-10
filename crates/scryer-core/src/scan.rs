@@ -220,8 +220,14 @@ impl TreeNode {
 
     /// Render this tree as annotated text.
     fn render(&self, out: &mut String, prefix: &str, depth: usize, max_context_depth: usize) {
+        // Files-per-directory cap: the tree must SHOW the codebase (the
+        // design-first flow starts from it), but a generated or vendored
+        // directory with hundreds of files should not drown the shape.
+        const FILE_CAP: usize = 25;
+
         // Separate children into categories
         let mut annotated_files: Vec<(&str, &str)> = Vec::new();
+        let mut plain_files: Vec<&str> = Vec::new();
         let mut interesting_dirs: Vec<(&str, &TreeNode)> = Vec::new();
         let mut context_dirs: Vec<(&str, &TreeNode)> = Vec::new();
         let mut hidden_count: usize = 0;
@@ -238,11 +244,14 @@ impl TreeNode {
             } else if let Some(label) = child.annotation {
                 annotated_files.push((name.as_str(), label));
             } else {
-                hidden_count += 1;
+                plain_files.push(name.as_str());
             }
         }
+        let shown_plain = plain_files.len().min(FILE_CAP);
+        hidden_count += plain_files.len() - shown_plain;
 
         let total_items = annotated_files.len()
+            + shown_plain
             + interesting_dirs.len()
             + context_dirs.len()
             + if hidden_count > 0 { 1 } else { 0 };
@@ -259,6 +268,14 @@ impl TreeNode {
                 " ".repeat(padding),
                 label
             ));
+        }
+
+        // Then the plain source files — the codebase itself, not just its
+        // manifests.
+        for name in plain_files.iter().take(shown_plain) {
+            idx += 1;
+            let connector = if idx == total_items { "└── " } else { "├── " };
+            out.push_str(&format!("{}{}{}\n", prefix, connector, name));
         }
 
         // Interesting dirs (have annotated descendants) — recurse
@@ -440,7 +457,9 @@ pub fn project_structure(path: &Path) -> Result<String, String> {
     root.propagate_annotations();
 
     let mut output = String::from(".\n");
-    root.render(&mut output, "", 0, 1);
+    // Depth 4 keeps real source structure visible (crate/src/module files)
+    // while the walker's skip lists keep build output and vendored trees out.
+    root.render(&mut output, "", 0, 4);
 
     Ok(output)
 }
@@ -448,6 +467,34 @@ pub fn project_structure(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tree must show the CODEBASE, not just its manifests: source files
+    /// render (capped per directory), and structure stays visible several
+    /// levels deep — the design-first flow starts from this tree.
+    #[test]
+    fn project_structure_shows_source_files_with_a_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("api/src/handlers")).unwrap();
+        std::fs::write(root.join("api/Cargo.toml"), "[package]\nname='api'").unwrap();
+        std::fs::write(root.join("api/src/main.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("api/src/handlers/auth.rs"), "").unwrap();
+        // A directory over the per-dir file cap collapses its tail.
+        std::fs::create_dir_all(root.join("api/generated")).unwrap();
+        for i in 0..30 {
+            std::fs::write(root.join(format!("api/generated/f{i:02}.rs")), "").unwrap();
+        }
+
+        let tree = project_structure(root).unwrap();
+        assert!(tree.contains("main.rs"), "source files render: {tree}");
+        assert!(tree.contains("auth.rs"), "nested source structure renders: {tree}");
+        assert!(tree.contains("Cargo.toml"), "{tree}");
+        assert!(
+            tree.contains("f00.rs") && !tree.contains("f29.rs"),
+            "per-dir cap holds: {tree}"
+        );
+        assert!(tree.contains("(5 more)"), "the collapsed tail is counted: {tree}");
+    }
 
     #[test]
     fn classify_known_files() {
