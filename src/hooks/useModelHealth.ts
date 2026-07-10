@@ -17,15 +17,27 @@ export function useModelHealth(
 ): { report: ModelHealthReport | null; refresh: () => void } {
   const [report, setReport] = useState<ModelHealthReport | null>(null);
   const inFlight = useRef(false);
+  // A refresh issued mid-fetch used to be DROPPED — the caller had a reason
+  // (a verdict just changed what the anchors mean), so queue one trailing
+  // re-fetch and run it when the current one lands.
+  const queued = useRef(false);
 
   const fetchReport = useCallback(() => {
-    if (!projectPath || inFlight.current) return;
+    if (!projectPath) return;
+    if (inFlight.current) {
+      queued.current = true;
+      return;
+    }
     inFlight.current = true;
     invoke<ModelHealthReport>("get_model_health", { cwd: projectPath })
       .then((r) => setReport(r))
       .catch(() => {})
       .finally(() => {
         inFlight.current = false;
+        if (queued.current) {
+          queued.current = false;
+          fetchReport();
+        }
       });
   }, [projectPath]);
 

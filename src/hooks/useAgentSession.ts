@@ -20,6 +20,11 @@ export interface AgentSession {
   /** Most recent human-readable line from the agent stream (tool calls,
    *  message snippets, status) — drives the live activity readout. */
   activity: string | null;
+  /** How the LAST run ended — `null` while none has, or one is in flight.
+   *  Callers reacting to the running→idle edge must branch on this: a failed
+   *  run's artifacts don't exist, so treating every falling edge as success
+   *  (e.g. flipping a modal to "ready") shows tiles that 404. */
+  outcome: "completed" | "failed" | "cancelled" | null;
   /** B5 repair path: write realistic fixture props for a component whose
    *  deterministic preview rendered empty or crashed. */
   startFixture: (
@@ -39,7 +44,12 @@ export function useAgentSession(): AgentSession {
   const [label, setLabel] = useState("");
   const [lastTool, setLastTool] = useState<string | null>(null);
   const [activity, setActivity] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<AgentSession["outcome"]>(null);
   const unlisten = useRef<(() => void) | null>(null);
+  // Synchronous re-entry guard. The `running` STATE is async — two launches in
+  // one tick both read false, and the loser's teardown then unhooks the
+  // winner's listener. The ref flips before anything async happens.
+  const runningRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -49,11 +59,22 @@ export function useAgentSession(): AgentSession {
 
   const startSession = useCallback(
     (command: string, taskLabel: string, args: Record<string, unknown>) => {
-      if (running) return;
+      if (runningRef.current) return;
+      runningRef.current = true;
       setRunning(true);
+      setOutcome(null);
       setLabel(taskLabel);
       setLastTool(null);
       setActivity("starting…");
+
+      const end = (how: NonNullable<AgentSession["outcome"]>) => {
+        unlisten.current?.();
+        unlisten.current = null;
+        runningRef.current = false;
+        setOutcome(how);
+        setRunning(false);
+        setActivity(null);
+      };
 
       (async () => {
         const off = await listen<AgentEvent>("agent-event", (event) => {
@@ -79,20 +100,21 @@ export function useAgentSession(): AgentSession {
                 error: p.error,
                 consequence: "No changes were made to your model — this run is ephemeral.",
               });
-              unlisten.current?.();
-              unlisten.current = null;
-              setRunning(false);
-              setActivity(null);
+              end("failed");
               break;
             case "completed":
+              end("completed");
+              break;
             case "cancelled":
-              unlisten.current?.();
-              unlisten.current = null;
-              setRunning(false);
-              setActivity(null);
+              end("cancelled");
               break;
           }
         });
+        if (!runningRef.current) {
+          // The run already ended (fast failure) before the listener attached.
+          off();
+          return;
+        }
         unlisten.current = off;
 
         try {
@@ -103,14 +125,11 @@ export function useAgentSession(): AgentSession {
             error: String(e),
             consequence: "Nothing was changed — the run never started.",
           });
-          unlisten.current?.();
-          unlisten.current = null;
-          setRunning(false);
-          setActivity(null);
+          end("failed");
         }
       })();
     },
-    [running, report],
+    [report],
   );
 
   const startFixture = useCallback(
@@ -143,5 +162,5 @@ export function useAgentSession(): AgentSession {
     }
   }, []);
 
-  return { running, label, lastTool, activity, startFixture, startVariation, cancel };
+  return { running, label, lastTool, activity, outcome, startFixture, startVariation, cancel };
 }

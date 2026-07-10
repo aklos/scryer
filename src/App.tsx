@@ -12,7 +12,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { VariationState } from "./NodePage";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ToastProvider } from "./Toast";
-import { AgentFailureProvider } from "./AgentFailure";
+import { AgentFailureProvider, useAgentFailure } from "./AgentFailure";
 import { ModelTree } from "./ModelTree";
 import { TopBar, type WorkspaceView } from "./TopBar";
 import { DiagramView } from "./DiagramView";
@@ -160,6 +160,7 @@ function Workspace({
   closeProject: () => void;
 }) {
   const agent = useAgentSession();
+  const { report: reportFailure } = useAgentFailure();
 
   // Per-node fills also own the file while running: suppress canvas write-back.
   useEffect(() => {
@@ -190,20 +191,27 @@ function Workspace({
   );
 
   // Cheap, agent-free nudge: which scopes have code changes since the last
-  // reconcile. Refreshes on open and whenever an agent run finishes.
+  // reconcile. Refreshes on open, when ANY writer finishes (builds and
+  // per-node fills alike), and after verdict actions that change what counts
+  // as drift — not only on whole-model builds.
   const [driftScopes, setDriftScopes] = useState<DriftScope[]>([]);
-  useEffect(() => {
-    if (!projectPath || build.active) return;
-    let live = true;
+  const refreshDrift = useCallback(() => {
+    if (!projectPath) return;
     invoke<DriftScope[]>("get_drift_status", { cwd: projectPath })
-      .then((s) => {
-        if (live) setDriftScopes(Array.isArray(s) ? s : []);
-      })
+      .then((s) => setDriftScopes(Array.isArray(s) ? s : []))
       .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [projectPath, build.active]);
+  }, [projectPath]);
+  useEffect(() => {
+    if (writing) return;
+    refreshDrift();
+  }, [writing, refreshDrift]);
+
+  // One observability refresh for verdict/anchor actions: health and the
+  // drift nudge move together, so a verdict can't clear one and not the other.
+  const refreshObservability = useCallback(() => {
+    refreshHealth();
+    refreshDrift();
+  }, [refreshHealth, refreshDrift]);
 
   const [selected, setSelected] = useState<Selected | null>(null);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
@@ -398,10 +406,15 @@ function Workspace({
 
   useEffect(() => {
     if (prevRunning.current && !agent.running && variationState?.status === "generating") {
-      setVariationState((prev) => prev ? { ...prev, status: "ready" } : null);
+      // Only a COMPLETED run has tiles to show — promoting on any falling edge
+      // presented iframes that 404 after a failure. A failed/cancelled run
+      // closes the modal (the failure dialog has already told the user).
+      setVariationState((prev) =>
+        prev ? (agent.outcome === "completed" ? { ...prev, status: "ready" } : null) : null,
+      );
     }
     prevRunning.current = agent.running;
-  }, [agent.running, variationState?.status]);
+  }, [agent.running, agent.outcome, variationState?.status]);
 
   const onStartVariation = useCallback(
     (nodeId: string, prompt: string, count?: number, baseVariationIdx?: number) => {
@@ -435,18 +448,33 @@ function Workspace({
           setPreviewKey((k) => k + 1);
           void reloadFromDisk();
         })
-        .catch(() => {});
+        // A swallowed failure here closed nothing and changed nothing — the
+        // user kept clicking Accept into silence. Say what happened; the
+        // variation set stays up so they can retry or discard.
+        .catch((e) =>
+          reportFailure({
+            title: "Accepting the variation failed",
+            error: String(e),
+            consequence: "The component is unchanged — the variations are still here to retry or discard.",
+          }),
+        );
     },
-    [projectPath, modelRefStr, reloadFromDisk],
+    [projectPath, modelRefStr, reloadFromDisk, reportFailure],
   );
 
   const onDiscardVariations = useCallback(
     (nodeId: string) => {
       if (!projectPath) return;
-      invoke("discard_visual_variations", { cwd: projectPath, nodeId }).catch(() => {});
+      invoke("discard_visual_variations", { cwd: projectPath, nodeId }).catch((e) =>
+        reportFailure({
+          title: "Discarding the variations failed",
+          error: String(e),
+          consequence: "Variation files may remain on disk under .scryer.",
+        }),
+      );
       setVariationState(null);
     },
-    [projectPath],
+    [projectPath, reportFailure],
   );
 
   const onSelectVariation = useCallback((idx: number | null) => {
@@ -525,7 +553,7 @@ function Workspace({
         // Backend folds the claim into the committed model (the code already
         // exists); the file watcher then re-reads both layers into the UI.
         invoke("adopt_responsibility", { cwd: projectPath, respId })
-          .then(() => refreshHealth())
+          .then(() => refreshObservability())
           .catch((e) => console.error("adopt_responsibility failed", e));
       },
       rejectResponsibility: (respId) => {
@@ -533,21 +561,21 @@ function Workspace({
         // Backend folds the claim into the committed model then drops it from the
         // plan, leaving a deletion work item; the watcher re-reads both layers.
         invoke("reject_responsibility", { cwd: projectPath, respId })
-          .then(() => refreshHealth())
+          .then(() => refreshObservability())
           .catch((e) => console.error("reject_responsibility failed", e));
       },
       dropResponsibility: (respId) => {
         if (!projectPath) return;
         // Code is right: delete the stale claim from both layers; watcher refreshes.
         invoke("drop_responsibility", { cwd: projectPath, respId })
-          .then(() => refreshHealth())
+          .then(() => refreshObservability())
           .catch((e) => console.error("drop_responsibility failed", e));
       },
       reimplementResponsibility: (respId) => {
         if (!projectPath) return;
         // Model is right: remove from committed so it reads as an Added to-do.
         invoke("reimplement_responsibility", { cwd: projectPath, respId })
-          .then(() => refreshHealth())
+          .then(() => refreshObservability())
           .catch((e) => console.error("reimplement_responsibility failed", e));
       },
       rewordResponsibility: (respId, statement) => {
@@ -555,21 +583,21 @@ function Workspace({
         // Code diverged: the new wording already matches it, so write it to both
         // layers and clear the flag — no to-do, the model just catches up.
         invoke("reword_responsibility", { cwd: projectPath, respId, statement })
-          .then(() => refreshHealth())
+          .then(() => refreshObservability())
           .catch((e) => console.error("reword_responsibility failed", e));
       },
       dropNode: (nodeId) => {
         if (!projectPath) return;
         // Code is right: delete the stale node + subtree from both layers.
         invoke("drop_node", { cwd: projectPath, nodeId })
-          .then(() => refreshHealth())
+          .then(() => refreshObservability())
           .catch((e) => console.error("drop_node failed", e));
       },
       reimplementNode: (nodeId) => {
         if (!projectPath) return;
         // Model is right: keep the subtree in the plan as a rebuild to-do.
         invoke("reimplement_node", { cwd: projectPath, nodeId })
-          .then(() => refreshHealth())
+          .then(() => refreshObservability())
           .catch((e) => console.error("reimplement_node failed", e));
       },
       moveResponsibility: (fromNodeId, toNodeId, respId) =>
@@ -583,7 +611,7 @@ function Workspace({
         // Backend folds the field into the committed model (the code already
         // exists); the file watcher then re-reads both layers into the UI.
         invoke("adopt_property", { cwd: projectPath, nodeId, label })
-          .then(() => refreshHealth())
+          .then(() => refreshObservability())
           .catch((e) => console.error("adopt_property failed", e));
       },
       rejectProperty: (nodeId, label) => {
@@ -591,21 +619,21 @@ function Workspace({
         // Backend folds the field into committed then drops it from the plan,
         // leaving a deletion work item; the watcher re-reads both layers.
         invoke("reject_property", { cwd: projectPath, nodeId, label })
-          .then(() => refreshHealth())
+          .then(() => refreshObservability())
           .catch((e) => console.error("reject_property failed", e));
       },
       dropProperty: (nodeId, label) => {
         if (!projectPath) return;
         // Code is right: delete the stale field from both layers; watcher refreshes.
         invoke("drop_property", { cwd: projectPath, nodeId, label })
-          .then(() => refreshHealth())
+          .then(() => refreshObservability())
           .catch((e) => console.error("drop_property failed", e));
       },
       reimplementProperty: (nodeId, label) => {
         if (!projectPath) return;
         // Model is right: remove from committed so it reads as an Added to-do.
         invoke("reimplement_property", { cwd: projectPath, nodeId, label })
-          .then(() => refreshHealth())
+          .then(() => refreshObservability())
           .catch((e) => console.error("reimplement_property failed", e));
       },
     }),
@@ -632,7 +660,7 @@ function Workspace({
       // Optimistic: drop the node + descendants now; the per-node anchor makes it stick.
       setDriftScopes((scopes) => scopes.filter((s) => !subtree.has(s.nodeId)));
       invoke("reconcile_drift_node", { cwd: projectPath, nodeId })
-        .then(() => refreshHealth())
+        .then(() => refreshObservability())
         .catch(() => {});
     },
     [projectPath, model.nodes, refreshHealth],
@@ -644,7 +672,7 @@ function Workspace({
     if (!projectPath) return;
     setDriftScopes([]);
     invoke("reconcile_drift", { cwd: projectPath })
-      .then(() => refreshHealth())
+      .then(() => refreshObservability())
       .catch(() => {});
   }, [projectPath, refreshHealth]);
 
