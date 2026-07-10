@@ -1269,15 +1269,21 @@ export function DarkCodePage({
  *  Anchorable = a leaf, non-external, non-person node. Each contributes its
  *  responsibilities (keyed by resp id), plus — if it declares any properties —
  *  one data-shape claim keyed by the node id. */
-export function findUnmappedClaims(committed: ScryModel | null): {
+export function findUnmappedClaims(committed: ScryModel | null, planned: ScryModel | null): {
   claims: ClaimRef[];
   shapes: Node[];
 } {
   const claims: ClaimRef[] = [];
   const shapes: Node[] = [];
   if (!committed) return { claims, shapes };
+  // Leafness spans the AUTHORED tree (committed + plan) — mirrors
+  // compute_health: a design-ahead child makes its parent structural, so the
+  // parent's claims discharge through the subtree-to-be instead of reading as
+  // blind spots.
   const hasChildren = new Set(
-    committed.nodes.map((n) => n.parentId).filter(Boolean) as string[],
+    [...committed.nodes, ...(planned?.nodes ?? [])]
+      .map((n) => n.parentId)
+      .filter(Boolean) as string[],
   );
   const sourceMap = committed.sourceMap ?? {};
   const anchored = (id: string) => (sourceMap[id] ?? []).length > 0;
@@ -1293,14 +1299,17 @@ export function findUnmappedClaims(committed: ScryModel | null): {
 
 export function UnmappedClaimsPage({
   committed,
+  model,
   report,
   onSelectNode,
 }: {
   committed: ScryModel | null;
+  /** The planned layer — leafness spans both, like compute_health. */
+  model: ScryModel | null;
   report: ModelHealthReport | null;
   onSelectNode: (id: string) => void;
 }) {
-  const { claims, shapes } = findUnmappedClaims(committed);
+  const { claims, shapes } = findUnmappedClaims(committed, model);
   const total = claims.length + shapes.length;
   const totals = report?.health.totals;
   const coverage =

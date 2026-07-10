@@ -55,7 +55,16 @@ impl ScryerServer {
                     item.src, item.dst
                 ))]));
             }
-            let id = scryer_core::make_link_id(&item.src, &item.dst);
+            // Parallel edges (same endpoints, different labels) must NOT share
+            // an id: both diff engines key links by id, so a collision merges
+            // two links into one element — and folding then deletes both.
+            let base = scryer_core::make_link_id(&item.src, &item.dst);
+            let mut id = base.clone();
+            let mut n = 2;
+            while model.links.iter().any(|l| l.id == id) {
+                id = format!("{base}-{n}");
+                n += 1;
+            }
             let link = Link {
                 id: id.clone(),
                 src: item.src.clone(),
@@ -132,7 +141,8 @@ impl ScryerServer {
                 l.label = v.clone();
             }
             if let Some(v) = &u.method {
-                l.method = Some(v.clone());
+                // Empty string = CLEAR — method could be set but never removed.
+                l.method = if v.is_empty() { None } else { Some(v.clone()) };
             }
             updated += 1;
         }
@@ -181,5 +191,90 @@ impl ScryerServer {
             "Deleted {} link(s)",
             before - model.links.len()
         ))]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use scryer_core::{Kind, ModelRef, Node, ScryModel};
+
+    fn node(id: &str, name: &str) -> Node {
+        Node {
+            id: id.into(),
+            kind: Kind::Container,
+            name: name.into(),
+            vagrant: None,
+            stale: None,
+            parent_id: None,
+            external: None,
+            technology: None,
+            description: None,
+            responsibilities: Vec::new(),
+            properties: Vec::new(),
+            icon: None,
+            visual: None,
+            appearance: None,
+            notes: None,
+            directives: Vec::new(),
+        }
+    }
+
+    /// Parallel edges (same endpoints, different labels) mint DISTINCT ids —
+    /// both diff engines key links by id, so a collision merged two links
+    /// into one element and folding deleted both. And update_links clears
+    /// `method` with an empty string (it could be set but never removed).
+    #[test]
+    fn parallel_links_get_distinct_ids_and_method_clears() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        m.nodes.push(node("a", "A"));
+        m.nodes.push(node("b", "B"));
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+        let server = ScryerServer::new();
+        let project = dir.path().to_string_lossy().to_string();
+
+        let r = server
+            .add_links(Parameters(AddLinkRequest {
+                project: Some(project.clone()),
+                links: vec![
+                    AddLinkItem {
+                        src: "a".into(),
+                        dst: "b".into(),
+                        label: "reads from".into(),
+                        method: Some("REST".into()),
+                    },
+                    AddLinkItem {
+                        src: "a".into(),
+                        dst: "b".into(),
+                        label: "streams events to".into(),
+                        method: None,
+                    },
+                ],
+            }))
+            .unwrap();
+        assert!(!r.is_error.unwrap_or(false), "{r:?}");
+
+        let after = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(after.links.len(), 2);
+        assert_ne!(after.links[0].id, after.links[1].id, "parallel edges stay distinct");
+
+        // Clear the first link's method with an empty string.
+        let first = after.links[0].id.clone();
+        let r = server
+            .update_links(Parameters(UpdateLinkRequest {
+                project: Some(project),
+                links: vec![UpdateLinkItem {
+                    link_id: first.clone(),
+                    label: None,
+                    method: Some(String::new()),
+                }],
+            }))
+            .unwrap();
+        assert!(!r.is_error.unwrap_or(false), "{r:?}");
+        let after = scryer_core::read_planned_at(&model_ref).unwrap();
+        let l = after.links.iter().find(|l| l.id == first).unwrap();
+        assert_eq!(l.method, None, "empty string cleared the method");
     }
 }

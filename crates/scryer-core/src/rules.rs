@@ -160,6 +160,9 @@ pub fn rules_index() -> String {
     for r in RULES {
         s.push_str(&format!("{}. {} [{}]\n", r.id, r.title, r.tags.join(", ")));
     }
+    // Ids are stable references (instructions cite rules by number), so a
+    // retired rule leaves a gap rather than renumbering everything after it.
+    s.push_str("(Rule ids are stable references; 13 was retired, not omitted by mistake.)\n");
     s
 }
 

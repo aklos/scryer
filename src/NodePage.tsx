@@ -539,13 +539,15 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const definition = sourceMap[node.id] ?? [];
 
   // Leaf claims must read through to code; structural nodes discharge through
-  // their subtree, so their claims are never "unmapped". Leafness is COMMITTED
-  // leafness — the lens the powerline and the Unmapped page count with — so a
-  // design-ahead (plan-only) child can't discharge the pill here while the
-  // counters still count the claim. Persons (actors) and externals are
-  // out-of-system — their claims are never code-backed.
-  const hasCommittedChildren = (committed?.nodes ?? []).some((n) => n.parentId === node.id);
-  const leafHost = !hasCommittedChildren && !node.external && node.kind !== "person";
+  // their subtree, so their claims are never "unmapped". Leafness spans the
+  // AUTHORED tree (committed + plan) — the same union compute_health and the
+  // Unmapped page use — so the pill and the counters always agree, and a
+  // design-ahead child discharges the parent's claims everywhere at once.
+  // Persons (actors) and externals are out-of-system — never code-backed.
+  const hasAuthoredChildren =
+    model.nodes.some((n) => n.parentId === node.id) ||
+    (committed?.nodes ?? []).some((n) => n.parentId === node.id);
+  const leafHost = !hasAuthoredChildren && !node.external && node.kind !== "person";
 
   // The node's own definition anchor — its file, surfaced in the type line.
   const defFile = definition[0]?.pattern;

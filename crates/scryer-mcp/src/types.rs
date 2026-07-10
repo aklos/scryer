@@ -160,9 +160,12 @@ pub(crate) struct MarkImplementedRequest {
     /// links/groups by id — at least one of node_id / link_ids / group_ids is required.
     pub node_id: Option<String>,
     /// Optional: specific responsibility ids to fold into the committed model (requires
-    /// node_id). Omit to fold EVERYTHING outstanding on the node — every planned
-    /// responsibility and property, plus the appearance.
+    /// node_id). Omit (along with property_labels) to fold EVERYTHING outstanding on the
+    /// node — every planned responsibility and property, plus the appearance.
     pub responsibility_ids: Option<Vec<String>>,
+    /// Optional: specific property labels to fold (requires node_id) — the partial-fold
+    /// counterpart of responsibility_ids for data fields, which are identified by label.
+    pub property_labels: Option<Vec<String>>,
     /// Optional: link ids to fold. The only way to commit a standalone link change or
     /// DELETION — a link deletion never rides a node fold, so a plan that removes a link
     /// between two surviving nodes stays pending until it is folded here.
@@ -238,12 +241,17 @@ pub(crate) struct UpdateNodeItem {
     /// Node kind: "person", "system", "container", "component", or "symbol".
     pub kind: Option<String>,
     pub name: Option<String>,
+    /// New description. Pass an empty string to CLEAR it (omit to leave unchanged).
     pub description: Option<String>,
     /// Short badge naming the stack (e.g. "Next.js 14", "Tauri 2 + React"), a few
-    /// words at most — explanatory prose belongs in `description`.
+    /// words at most — explanatory prose belongs in `description`. Pass an empty
+    /// string to CLEAR it.
     pub technology: Option<String>,
+    /// Pass false to clear the external marking.
     pub external: Option<bool>,
-    /// Full replacement of responsibilities. Pass an empty array to clear.
+    /// Full replacement of responsibilities. Pass an empty array to clear. Vagrant
+    /// (code-discovered) claims awaiting a verdict survive a replacement that omits
+    /// them — they leave only through an explicit adopt/reject.
     pub responsibilities: Option<Vec<Responsibility>>,
     /// Full replacement of field declarations for a data-shape symbol. Pass an empty array to clear.
     pub properties: Option<Vec<SchemaProperty>>,

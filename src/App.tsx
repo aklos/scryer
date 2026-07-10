@@ -759,6 +759,7 @@ function Workspace({
           ) : selected.id === "unmapped" ? (
             <UnmappedClaimsPage
               committed={committed}
+              model={model}
               report={healthReport}
               onSelectNode={selectNode}
             />

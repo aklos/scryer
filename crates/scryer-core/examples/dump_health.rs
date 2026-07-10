@@ -6,7 +6,7 @@ fn main() {
     let r = scryer_core::ModelRef::ProjectLocal(project.clone().into());
     let model = scryer_core::read_model_at(&r).expect("read model");
 
-    let health = scryer_core::health::compute_health(&model, None);
+    let health = scryer_core::health::compute_health(&model, None, None);
     let t = &health.totals;
     println!(
         "totals: {} resps, {} props | vagrant {} stale {} | anchorable {} anchored {} unmapped {}",

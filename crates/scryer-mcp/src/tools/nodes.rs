@@ -306,6 +306,7 @@ impl ScryerServer {
 
         let prior = model.clone();
         let mut updated = 0usize;
+        let mut preserved_vagrants = 0usize;
         for u in &req.nodes {
             if !model.nodes.iter().any(|n| n.id == u.node_id) {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -403,20 +404,42 @@ impl ScryerServer {
             if let Some(v) = &u.name {
                 n.name = v.clone();
             }
+            // Empty string = CLEAR — without this, description/technology/
+            // external could be set but never removed through this tool.
             if let Some(v) = &u.description {
-                n.description = Some(v.clone());
+                n.description = if v.is_empty() { None } else { Some(v.clone()) };
             }
             if let Some(v) = &u.technology {
-                n.technology = Some(v.clone());
+                n.technology = if v.is_empty() { None } else { Some(v.clone()) };
             }
             if let Some(v) = u.external {
-                n.external = Some(v);
+                n.external = if v { Some(true) } else { None };
             }
             if let Some(v) = &u.responsibilities {
+                // Replacement never bypasses the review queue: a vagrant
+                // (code-discovered) claim awaiting the user's adopt/reject
+                // verdict survives a replacement that omits it — deleting it
+                // silently would resolve the verdict nobody gave.
+                let kept: Vec<_> = n
+                    .responsibilities
+                    .iter()
+                    .filter(|r| r.vagrant == Some(true) && !v.iter().any(|nv| nv.id == r.id))
+                    .cloned()
+                    .collect();
+                preserved_vagrants += kept.len();
                 n.responsibilities = v.clone();
+                n.responsibilities.extend(kept);
             }
             if let Some(v) = &u.properties {
+                let kept: Vec<_> = n
+                    .properties
+                    .iter()
+                    .filter(|p| p.vagrant == Some(true) && !v.iter().any(|nv| nv.label == p.label))
+                    .cloned()
+                    .collect();
+                preserved_vagrants += kept.len();
                 n.properties = v.clone();
+                n.properties.extend(kept);
             }
             if let Some(v) = u.visual {
                 n.visual = if v { Some(true) } else { None };
@@ -446,6 +469,13 @@ impl ScryerServer {
         // call): field-shape problems on the nodes just touched ride back on
         // the response.
         let mut msg = format!("Updated {} node(s)", updated);
+        if preserved_vagrants > 0 {
+            msg.push_str(&format!(
+                "\n{preserved_vagrants} vagrant (code-discovered) item(s) not in your \
+                 replacement array were KEPT — they await an adopt/reject verdict and \
+                 leave only through one."
+            ));
+        }
         let touched: std::collections::HashSet<&str> =
             req.nodes.iter().map(|u| u.node_id.as_str()).collect();
         let warnings: Vec<String> = model
@@ -462,7 +492,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities. A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. In a DESIGN-FIRST model (never committed), folding a built leaf is refused while its ancestors are plan-only — pass `commit_ancestors: true` to fold the ancestor chain structure-only first: the ancestors' identity and boundaries land in committed while their unbuilt claims stay pending in the plan, so partial implementation reads honestly. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
+        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities, and/or `propertyLabels` to fold only those data fields (properties are identified by label). A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. In a DESIGN-FIRST model (never committed), folding a built leaf is refused while its ancestors are plan-only — pass `commit_ancestors: true` to fold the ancestor chain structure-only first: the ancestors' identity and boundaries land in committed while their unbuilt claims stay pending in the plan, so partial implementation reads honestly. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
     )]
     fn mark_implemented(
         &self,
@@ -483,9 +513,12 @@ impl ScryerServer {
                     .to_string(),
             )]));
         }
-        if req.responsibility_ids.is_some() && req.node_id.is_none() {
+        if (req.responsibility_ids.is_some() || req.property_labels.is_some())
+            && req.node_id.is_none()
+        {
             return Ok(CallToolResult::error(vec![Content::text(
-                "responsibility_ids requires node_id (the host whose claims you are folding)."
+                "responsibility_ids / property_labels require node_id (the host whose \
+                 claims you are folding)."
                     .to_string(),
             )]));
         }
@@ -554,7 +587,8 @@ impl ScryerServer {
                     // parents without marking the ancestors' unbuilt claims
                     // implemented. A scoped fold needs the HOST itself committed
                     // too, so it rides the structure cascade as well.
-                    let include_self = req.responsibility_ids.is_some();
+                    let include_self =
+                        req.responsibility_ids.is_some() || req.property_labels.is_some();
                     match scryer_core::commit_plan_only_ancestors(
                         &model_ref,
                         node_id,
@@ -592,11 +626,14 @@ impl ScryerServer {
                         }
                     }
                 }
-                match &req.responsibility_ids {
-                    // Scoped: commit exactly the named responsibilities. Their host
-                    // node must already be committed (commit the whole node first
-                    // otherwise).
-                    Some(ids) => {
+                let scoped =
+                    req.responsibility_ids.is_some() || req.property_labels.is_some();
+                match scoped {
+                    // Scoped: commit exactly the named responsibilities and/or
+                    // property labels. Their host node must already be committed
+                    // (commit the whole node first otherwise).
+                    true => {
+                        let ids = req.responsibility_ids.as_deref().unwrap_or(&[]);
                         for id in ids {
                             if let Err(e) = scryer_core::commit_element(
                                 &model_ref,
@@ -609,17 +646,45 @@ impl ScryerServer {
                                 )]));
                             }
                         }
-                        let n = ids.len();
+                        // Properties are identified by (host node, label) — the
+                        // partial-fold path responsibilities always had.
+                        let labels = req.property_labels.as_deref().unwrap_or(&[]);
+                        for label in labels {
+                            if let Err(e) = scryer_core::commit_element(
+                                &model_ref,
+                                ElementKind::Property,
+                                Some(node_id),
+                                label,
+                            ) {
+                                return Ok(CallToolResult::error(vec![Content::text(
+                                    ancestor_hint(e),
+                                )]));
+                            }
+                        }
+                        let mut parts: Vec<String> = Vec::new();
+                        if !ids.is_empty() {
+                            parts.push(format!(
+                                "{} responsibilit{}",
+                                ids.len(),
+                                if ids.len() == 1 { "y" } else { "ies" }
+                            ));
+                        }
+                        if !labels.is_empty() {
+                            parts.push(format!(
+                                "{} propert{}",
+                                labels.len(),
+                                if labels.len() == 1 { "y" } else { "ies" }
+                            ));
+                        }
                         summaries.push(format!(
-                            "Committed {} responsibilit{} on '{}' into the model.",
-                            n,
-                            if n == 1 { "y" } else { "ies" },
+                            "Committed {} on '{}' into the model.",
+                            parts.join(" and "),
                             node_id
                         ));
                     }
                     // Whole node: commit the node, folding its whole planned state
                     // (responsibilities, properties, appearance) into the model.
-                    None => {
+                    false => {
                         if let Err(e) = scryer_core::commit_element(
                             &model_ref,
                             ElementKind::Node,
@@ -1467,6 +1532,7 @@ mod tests {
                 link_ids: None,
                 group_ids: None,
                 responsibility_ids: None,
+                property_labels: None,
                 commit_ancestors: None,
             }))
             .unwrap();
@@ -1512,6 +1578,7 @@ mod tests {
                 link_ids: None,
                 group_ids: None,
                 responsibility_ids: None,
+                property_labels: None,
                 commit_ancestors: None,
             }))
             .unwrap();
@@ -1560,6 +1627,7 @@ mod tests {
                     project: Some(dir.path().to_string_lossy().to_string()),
                     node_id: Some("leaf".into()),
                     responsibility_ids: None,
+                    property_labels: None,
                     commit_ancestors,
                     link_ids: None,
                     group_ids: None,
@@ -1614,6 +1682,7 @@ mod tests {
                 project: Some(dir.path().to_string_lossy().to_string()),
                 node_id: Some("c".into()),
                 responsibility_ids: Some(vec!["r-1".into()]),
+                property_labels: None,
                 commit_ancestors: Some(true),
                 link_ids: None,
                 group_ids: None,
@@ -1672,6 +1741,7 @@ mod tests {
                 link_ids: None,
                 group_ids: None,
                 responsibility_ids: None,
+                property_labels: None,
                 commit_ancestors: None,
             }))
             .unwrap();
@@ -1722,6 +1792,7 @@ mod tests {
                     link_ids: None,
                     group_ids: None,
                     responsibility_ids: None,
+                    property_labels: None,
                     commit_ancestors: None,
                 }))
                 .unwrap();
@@ -1792,6 +1863,7 @@ mod tests {
                 link_ids: Some(vec!["link-node-1-node-2".into()]),
                 group_ids: Some(vec!["group-1".into()]),
                 responsibility_ids: None,
+                property_labels: None,
                 commit_ancestors: None,
             }))
             .unwrap();
@@ -1839,6 +1911,7 @@ mod tests {
                 link_ids: None,
                 group_ids: None,
                 responsibility_ids: Some(vec!["r-b".into()]),
+                property_labels: None,
                 commit_ancestors: None,
             }))
             .unwrap();
@@ -1966,6 +2039,105 @@ mod tests {
             }))
             .unwrap();
         assert!(r.is_error.unwrap_or(false), "self-parent rejected");
+    }
+
+    /// update_nodes clear semantics + review-queue protection: an empty string
+    /// clears description/technology (they could be set but never removed),
+    /// and a responsibilities replacement that omits a VAGRANT claim keeps it —
+    /// a code-discovered claim leaves only through an explicit verdict.
+    #[test]
+    fn update_nodes_clears_fields_and_keeps_vagrants() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        let mut c = node("comp", Kind::Component, "Comp", None);
+        c.description = Some("old words".into());
+        c.technology = Some("React".into());
+        c.responsibilities.push(resp("r-keep"));
+        let mut vagrant = resp("r-vagrant");
+        vagrant.vagrant = Some(true);
+        c.responsibilities.push(vagrant);
+        m.nodes.push(c);
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+        let server = ScryerServer::new();
+        let project = dir.path().to_string_lossy().to_string();
+
+        let r = server
+            .update_nodes(Parameters(UpdateNodeRequest {
+                project: Some(project),
+                nodes: vec![UpdateNodeItem {
+                    node_id: "comp".into(),
+                    description: Some(String::new()),
+                    technology: Some(String::new()),
+                    responsibilities: Some(vec![resp("r-keep")]),
+                    kind: None,
+                    name: None,
+                    external: None,
+                    properties: None,
+                    visual: None,
+                    parent_id: None,
+                }],
+            }))
+            .unwrap();
+        assert!(!r.is_error.unwrap_or(false));
+
+        let after = scryer_core::read_planned_at(&model_ref).unwrap();
+        let comp = after.nodes.iter().find(|n| n.id == "comp").unwrap();
+        assert_eq!(comp.description, None, "empty string cleared it");
+        assert_eq!(comp.technology, None);
+        assert!(
+            comp.responsibilities.iter().any(|r| r.id == "r-vagrant"),
+            "the vagrant claim survived the replacement"
+        );
+        assert!(comp.responsibilities.iter().any(|r| r.id == "r-keep"));
+        assert_eq!(comp.responsibilities.len(), 2);
+    }
+
+    /// property_labels partial-folds data fields the way responsibility_ids
+    /// always could for claims: the named property lands in committed while
+    /// the rest of the node's plan stays pending.
+    #[test]
+    fn mark_implemented_folds_named_properties() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let prop = |label: &str, desc: &str| scryer_core::SchemaProperty {
+            label: label.into(),
+            description: desc.into(),
+            vagrant: None,
+            stale: None,
+            last_touched_at: None,
+        };
+        let mut committed = ScryModel::new();
+        let mut shape = node("shape", Kind::Symbol, "Lead", None);
+        shape.properties.push(prop("email", "v1"));
+        committed.nodes.push(shape);
+        scryer_core::write_model_at(&model_ref, &committed).unwrap();
+        let mut planned = committed.clone();
+        planned.nodes[0].properties = vec![prop("email", "v2"), prop("age", "new field")];
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        let r = server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                node_id: Some("shape".into()),
+                responsibility_ids: None,
+                property_labels: Some(vec!["email".into()]),
+                link_ids: None,
+                group_ids: None,
+                commit_ancestors: None,
+            }))
+            .unwrap();
+        assert!(!r.is_error.unwrap_or(false), "{r:?}");
+
+        let after = scryer_core::read_model_at(&model_ref).unwrap();
+        let shape = after.nodes.iter().find(|n| n.id == "shape").unwrap();
+        let email = shape.properties.iter().find(|p| p.label == "email").unwrap();
+        assert_eq!(email.description, "v2", "named fold landed");
+        assert!(
+            !shape.properties.iter().any(|p| p.label == "age"),
+            "the unnamed property stays pending in the plan"
+        );
     }
 
     /// update_nodes reparenting must enforce the rest of move_nodes' gate too

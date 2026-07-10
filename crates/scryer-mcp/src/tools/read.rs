@@ -580,10 +580,10 @@ impl ScryerServer {
         // whose file exists but whose content broke still reads as covered here.
         let scope_health = res.owner_chain.first().and_then(|owner| {
             let committed = scryer_core::read_model_at(&model_ref).ok()?;
-            let health = scryer_core::health::compute_health(&committed, None);
-            let nh = health.nodes.get(&owner.id)?;
             let planned =
                 scryer_core::read_planned_at(&model_ref).unwrap_or_else(|_| committed.clone());
+            let health = scryer_core::health::compute_health(&committed, Some(&planned), None);
+            let nh = health.nodes.get(&owner.id)?;
             let files = scryer_extract::list_project_files(model_ref.project_path());
             let completeness = scryer_core::health::resolve_completeness(
                 &committed,
@@ -1134,8 +1134,13 @@ impl ScryerServer {
         };
 
         // Boundary darkness needs the extractor's file inventory; health here
-        // covers everything model-derivable (counts, discharge, coverage).
-        let health = scryer_core::health::compute_health(&model, None);
+        // covers everything model-derivable (counts, discharge, coverage). The
+        // plan layer widens the leaf verdict: a design-ahead child makes its
+        // parent structural, matching completeness's union view.
+        let planned_for_health =
+            scryer_core::read_planned_at(&model_ref).unwrap_or_else(|_| model.clone());
+        let health =
+            scryer_core::health::compute_health(&model, Some(&planned_for_health), None);
 
         // Completeness — how much of each node's AUTHORED subtree reads through to
         // real code. Spans committed + planned (so it is defined from greenfield),

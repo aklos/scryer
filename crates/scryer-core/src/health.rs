@@ -107,18 +107,31 @@ pub struct ModelHealth {
 
 /// Compute the model's health. `files` is the project's modelable source-file
 /// inventory (project-relative, as produced by the extractor); pass `None` to
-/// skip boundary coverage (pure model math only).
-pub fn compute_health(model: &ScryModel, files: Option<&BTreeSet<String>>) -> ModelHealth {
+/// skip boundary coverage (pure model math only). `planned` (the draft layer)
+/// widens the structural/leaf verdict to the AUTHORED tree: a committed node
+/// whose children exist only in the plan — rule 18's layered build —
+/// discharges its claims through that subtree-to-be; counting them "unmapped"
+/// here while completeness (which reads the union) counts them structural
+/// gave opposite verdicts in one payload.
+pub fn compute_health(
+    model: &ScryModel,
+    planned: Option<&ScryModel>,
+    files: Option<&BTreeSet<String>>,
+) -> ModelHealth {
     let children = children_index(model);
     let node_by_id: HashMap<&str, &crate::Node> =
         model.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let planned_parents: HashSet<&str> = planned
+        .map(|p| p.nodes.iter().filter_map(|n| n.parent_id.as_deref()).collect())
+        .unwrap_or_default();
 
     // --- own counts per node ---------------------------------------------------
     let mut own: HashMap<&str, HealthCounts> = HashMap::new();
     for node in &model.nodes {
         let is_leaf = children
             .get(node.id.as_str())
-            .map_or(true, |c| c.is_empty());
+            .map_or(true, |c| c.is_empty())
+            && !planned_parents.contains(node.id.as_str());
         let external = node.external == Some(true);
         // Persons are actors and externals are out-of-system; neither is backed
         // by code in this model, so their claims are never anchorable (and so
@@ -230,9 +243,14 @@ pub fn compute_health(model: &ScryModel, files: Option<&BTreeSet<String>>) -> Mo
     for root in &roots {
         accumulate(root, &children, &own, &group_extra, &mut subtree, &mut visited);
     }
-    // Defensive: nodes trapped in a parent cycle never get visited above.
+    // Defensive: nodes trapped in a parent cycle never get visited above. Each
+    // unvisited node seeds its own accumulation AND joins the totals — they
+    // are not under any root, so without this their counts simply vanished
+    // from the whole-model rollup.
+    let mut cycle_roots: Vec<&str> = Vec::new();
     for node in &model.nodes {
         if !visited.contains(node.id.as_str()) {
+            cycle_roots.push(node.id.as_str());
             accumulate(
                 node.id.as_str(),
                 &children,
@@ -245,7 +263,7 @@ pub fn compute_health(model: &ScryModel, files: Option<&BTreeSet<String>>) -> Mo
     }
 
     let mut totals = unparented_groups;
-    for root in &roots {
+    for root in roots.iter().chain(cycle_roots.iter()) {
         if let Some(h) = subtree.get(root) {
             totals.merge(h);
         }
@@ -743,7 +761,7 @@ mod tests {
         leaf.responsibilities.push(resp("r-leaf"));
         m.nodes.push(leaf);
 
-        let h = compute_health(&m, None);
+        let h = compute_health(&m, None, None);
         let sys_h = &h.nodes["sys"];
         assert_eq!(sys_h.own.anchorable, 0, "system claims discharge structurally");
         assert_eq!(sys_h.own.unmapped, 0);
@@ -751,6 +769,49 @@ mod tests {
         assert_eq!(h.nodes["leaf"].own.unmapped, 1);
         assert_eq!(sys_h.subtree.unmapped, 1);
         assert_eq!(sys_h.subtree.responsibilities, 2);
+    }
+
+    /// A committed node whose children exist only in the PLAN (a layered,
+    /// design-ahead build) is structural, not leaf: its claims discharge
+    /// through the subtree-to-be instead of reading as blind spots — the
+    /// verdict completeness (which reads the union) already gives.
+    #[test]
+    fn planned_children_make_a_node_structural() {
+        let mut m = ScryModel::new();
+        let mut container = node("box", Kind::Container, None);
+        container.responsibilities.push(resp("r-box"));
+        m.nodes.push(container);
+
+        // Committed alone: childless → the claim reads unmapped.
+        let h = compute_health(&m, None, None);
+        assert_eq!(h.nodes["box"].own.unmapped, 1);
+
+        // With a design-ahead child in the plan: structural, no blind spot.
+        let mut planned = m.clone();
+        planned.nodes.push(node("kid", Kind::Component, Some("box")));
+        let h = compute_health(&m, Some(&planned), None);
+        assert_eq!(h.nodes["box"].own.anchorable, 0);
+        assert_eq!(h.nodes["box"].own.unmapped, 0);
+    }
+
+    /// Nodes trapped in a parent cycle still count in the whole-model totals —
+    /// they are under no root, so without the cycle-roots merge their claims
+    /// simply vanished from the rollup.
+    #[test]
+    fn cycle_trapped_nodes_count_in_totals() {
+        let mut m = ScryModel::new();
+        let mut a = node("a", Kind::Component, Some("b"));
+        a.responsibilities.push(resp("r-a"));
+        m.nodes.push(a);
+        let mut b = node("b", Kind::Component, Some("a"));
+        b.responsibilities.push(resp("r-b"));
+        m.nodes.push(b);
+
+        let h = compute_health(&m, None, None);
+        assert_eq!(
+            h.totals.responsibilities, 2,
+            "cycle-trapped claims reach the totals"
+        );
     }
 
     /// A person is an actor, not code. Its implemented responsibilities are
@@ -763,7 +824,7 @@ mod tests {
         dev.responsibilities.push(resp("r-2"));
         m.nodes.push(dev);
 
-        let h = compute_health(&m, None);
+        let h = compute_health(&m, None, None);
         let dev_h = &h.nodes["dev"];
         assert_eq!(dev_h.own.anchorable, 0, "a person's claims are not code-backed");
         assert_eq!(dev_h.own.unmapped, 0);
@@ -784,7 +845,7 @@ mod tests {
         m.nodes.push(b);
         m.source_map.insert("r-a".into(), vec![loc("src/a.ts")]);
 
-        let h = compute_health(&m, None);
+        let h = compute_health(&m, None, None);
         let c = &h.nodes["c"];
         assert_eq!(c.subtree.anchorable, 2, "both committed leaf claims");
         assert_eq!(c.subtree.anchored, 1);
@@ -806,12 +867,12 @@ mod tests {
         });
         m.nodes.push(shape);
 
-        let h = compute_health(&m, None);
+        let h = compute_health(&m, None, None);
         assert_eq!(h.nodes["shape"].own.anchorable, 1);
         assert_eq!(h.nodes["shape"].own.unmapped, 1, "no definition anchor yet");
 
         m.source_map.insert("shape".into(), vec![loc("src/types.ts")]);
-        let h = compute_health(&m, None);
+        let h = compute_health(&m, None, None);
         assert_eq!(h.nodes["shape"].own.unmapped, 0);
     }
 
@@ -834,7 +895,7 @@ mod tests {
             .into_iter()
             .map(String::from)
             .collect();
-        let h = compute_health(&m, Some(&files));
+        let h = compute_health(&m, None, Some(&files));
         let b = h.nodes["api"].boundary.as_ref().expect("boundary coverage");
         assert_eq!(b.total_files, 2, "web/app.ts is outside the boundary");
         assert_eq!(b.anchored_files, 1);
@@ -858,7 +919,7 @@ mod tests {
             icon: None,
         });
 
-        let h = compute_health(&m, None);
+        let h = compute_health(&m, None, None);
         assert_eq!(h.nodes["sys"].subtree.responsibilities, 1);
         assert_eq!(h.nodes["sys"].subtree.anchorable, 0, "group claims are structural");
         assert_eq!(h.totals.responsibilities, 1);
@@ -876,7 +937,7 @@ mod tests {
         m.nodes.push(leaf);
         m.source_map.insert("r1".into(), vec![loc("src/x.ts")]);
 
-        let h = compute_health(&m, None);
+        let h = compute_health(&m, None, None);
         assert_eq!(h.nodes["sys"].subtree.vagrant, 1);
         assert_eq!(h.nodes["sys"].subtree.last_touched_at, Some(999));
         assert_eq!(h.totals.vagrant, 1);
