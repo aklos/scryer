@@ -766,9 +766,7 @@ impl ScryerServer {
         if !model_ref.sync_path().exists() {
             let _ = scryer_core::write_sync_state(
                 &model_ref,
-                &scryer_core::drift::SyncState {
-                    reconciled_at: scryer_core::drift::now_secs(),
-                    commit: scryer_core::drift::head_commit(project), ..Default::default() },
+                &scryer_core::drift::SyncState::anchored_now(scryer_core::drift::head_commit(project)),
             );
             let _ = scryer_extract::anchors::write_baseline(&model_ref);
             let payload = serde_json::json!({
@@ -1124,9 +1122,7 @@ impl ScryerServer {
         } else {
             let _ = scryer_core::write_sync_state(
                 &model_ref,
-                &scryer_core::drift::SyncState {
-                    reconciled_at: scryer_core::drift::now_secs(),
-                    commit: scryer_core::drift::head_commit(project), ..Default::default() },
+                &scryer_core::drift::SyncState::anchored_now(scryer_core::drift::head_commit(project)),
             );
             let _ = scryer_extract::anchors::write_baseline(&model_ref);
             scryer_extract::anchors::AnchorCheck::default()

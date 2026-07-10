@@ -794,21 +794,16 @@ mod tests {
 
     /// Reconcile the working tree as it stands: sync anchor now + baseline.
     fn reconcile(r: &ModelRef) {
-        scryer_core::write_sync_state(
-            r,
-            &SyncState {
-                reconciled_at: drift::now_secs(),
-                commit: None,
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        scryer_core::write_sync_state(r, &SyncState::anchored_now(None)).unwrap();
         write_baseline(r).unwrap();
     }
 
     fn touch_gate() {
-        // mtime granularity — edits must land in a newer second than the anchor.
-        std::thread::sleep(std::time::Duration::from_millis(1100));
+        // The sync anchor is nanosecond-precise; a token gap keeps the edit
+        // strictly after it even on coarse-clock filesystems. (This used to be
+        // 1100ms to clear whole-second mtime granularity — the same-second
+        // blindness the ns anchor fixed.)
+        std::thread::sleep(std::time::Duration::from_millis(25));
     }
 
     /// An edit elsewhere in the file is not drift for this anchor; an edit

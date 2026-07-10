@@ -712,10 +712,20 @@ pub fn read_sync_state(r: &ModelRef) -> drift::SyncState {
 }
 
 /// Write the drift reconcile anchor. Best-effort, non-atomic (like the baseline).
+///
+/// A state with an EMPTY file inventory gets one snapshotted here — "what
+/// product files existed at this anchor" is the deletion tripwire, and it must
+/// describe the tree at write time. Callers that carry a state read from disk
+/// (per-node dismissals editing `nodes` only) keep their inventory, so older
+/// deletions stay visible to the nodes that haven't reconciled them.
 pub fn write_sync_state(r: &ModelRef, state: &drift::SyncState) -> Result<(), String> {
     let dir = r.dir();
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let json = serde_json::to_string_pretty(state).map_err(|e| e.to_string())?;
+    let mut state = state.clone();
+    if state.files.is_empty() {
+        state.files = drift::product_file_inventory(r.project_path());
+    }
+    let json = serde_json::to_string_pretty(&state).map_err(|e| e.to_string())?;
     fs::write(r.sync_path(), json).map_err(|e| e.to_string())
 }
 

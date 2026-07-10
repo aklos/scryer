@@ -27,16 +27,42 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct SyncState {
     /// Unix seconds of the last reconcile — the mtime-fallback baseline.
     pub reconciled_at: u64,
+    /// Unix NANOSECONDS of the last reconcile. At whole-second granularity an
+    /// edit landing in the same second as the reconcile was permanently
+    /// invisible; a ns anchor closes that window on filesystems that store ns
+    /// mtimes. `None` (old `.sync` files) falls back to the seconds rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconciled_at_ns: Option<u64>,
     /// Git commit the model was last reconciled against, when the project is a
     /// git repo. Precise: ignores touches that didn't change content.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
+    /// Product-code files present at the reconcile — the deletion tripwire.
+    /// The mtime walk only sees files that exist, so a deletion-only change
+    /// used to produce zero drift; inventory files that no longer exist now
+    /// count as changed. Populated by `write_sync_state` when empty.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub files: BTreeSet<String>,
     /// Per-node reconcile overrides. A node dismissed on its own (with its whole
     /// subtree) gets its own anchor here, so its boundary's changes clear without
     /// moving the project-wide anchor and silencing every other node. Empty in
     /// the common case; a node falls back to the global anchor above.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub nodes: BTreeMap<String, NodeAnchor>,
+}
+
+impl SyncState {
+    /// A fresh global anchor at this instant — seconds for compatibility, ns
+    /// for the same-second gate — against the given commit. The file
+    /// inventory is left empty; `write_sync_state` snapshots it.
+    pub fn anchored_now(commit: Option<String>) -> Self {
+        SyncState {
+            reconciled_at: now_secs(),
+            reconciled_at_ns: Some(now_ns()),
+            commit,
+            ..Default::default()
+        }
+    }
 }
 
 /// A single node's reconcile anchor — same shape as the global one, applied only
@@ -46,7 +72,27 @@ pub struct SyncState {
 pub struct NodeAnchor {
     pub reconciled_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconciled_at_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
+    /// Global-inventory files already missing when this node was dismissed —
+    /// deletions the dismissal reconciled. Excluded from this node's deletion
+    /// set so they stop re-reporting here while other owners still see them.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub missing: BTreeSet<String>,
+}
+
+impl NodeAnchor {
+    /// A per-node anchor at this instant. `missing` should carry the global
+    /// inventory's currently-deleted files (the deletions being dismissed).
+    pub fn now(commit: Option<String>, missing: BTreeSet<String>) -> Self {
+        NodeAnchor {
+            reconciled_at: now_secs(),
+            reconciled_at_ns: Some(now_ns()),
+            commit,
+            missing,
+        }
+    }
 }
 
 /// A boundary-owning node whose code changed since the last reconcile, so it
@@ -64,6 +110,13 @@ pub fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+pub fn now_ns() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
         .unwrap_or(0)
 }
 
@@ -101,14 +154,22 @@ pub fn head_commit(project: &Path) -> Option<String> {
 /// set with a content diff: keep only files whose bytes actually differ from the
 /// anchor commit (or are untracked). That drops touch-without-edit and
 /// edit-then-revert noise while still respecting the mtime gate.
+///
+/// Deletions ride a different signal entirely: the sync inventory. A file the
+/// reconcile saw that no longer exists is a change — the walk can never see it
+/// (there is no mtime to read), so it bypasses the gate and the refinement.
 pub fn changed_files_since(project: &Path, sync: &SyncState) -> BTreeSet<String> {
-    let touched = mtime_changed_files(project, sync.reconciled_at);
-    if touched.is_empty() {
-        return touched;
+    let mut touched = mtime_changed_files(project, sync.reconciled_at, sync.reconciled_at_ns);
+    if !touched.is_empty() {
+        if let Some(commit) = &sync.commit {
+            if let Some(content_changed) = git_changed_files(project, commit) {
+                touched = touched.intersection(&content_changed).cloned().collect();
+            }
+        }
     }
-    if let Some(commit) = &sync.commit {
-        if let Some(content_changed) = git_changed_files(project, commit) {
-            return touched.intersection(&content_changed).cloned().collect();
+    for file in &sync.files {
+        if !project.join(file).exists() {
+            touched.insert(file.clone());
         }
     }
     touched
@@ -156,11 +217,39 @@ fn git_changed_files(project: &Path, commit: &str) -> Option<BTreeSet<String>> {
     Some(out)
 }
 
-/// Files whose mtime is newer than `baseline_secs`. Honors the same directory
+/// Files whose mtime is newer than the anchor. With a ns anchor the comparison
+/// is nanosecond-exact (a same-second edit is visible); without one (old
+/// `.sync` files) it falls back to whole seconds. Honors the same directory
 /// skipping as the rest of scryer (SKIP_DIRS / SKIP_BUILD_DIRS, .gitignore).
-fn mtime_changed_files(project: &Path, baseline_secs: u64) -> BTreeSet<String> {
+fn mtime_changed_files(
+    project: &Path,
+    baseline_secs: u64,
+    baseline_ns: Option<u64>,
+) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    let walker = ignore::WalkBuilder::new(project)
+    for entry in project_walker(project).flatten() {
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(mtime) = meta.modified() else { continue };
+        let since_epoch = mtime.duration_since(UNIX_EPOCH).unwrap_or_default();
+        let newer = match baseline_ns {
+            Some(anchor_ns) => since_epoch.as_nanos() as u64 > anchor_ns,
+            None => since_epoch.as_secs() > baseline_secs,
+        };
+        if newer {
+            if let Ok(rel) = entry.path().strip_prefix(project) {
+                out.insert(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    out
+}
+
+/// The shared project walk: everything except vendor/build dirs.
+fn project_walker(project: &Path) -> ignore::Walk {
+    ignore::WalkBuilder::new(project)
         .hidden(false)
         .filter_entry(|entry| {
             if entry.file_type().is_some_and(|ft| ft.is_dir()) {
@@ -173,21 +262,21 @@ fn mtime_changed_files(project: &Path, baseline_secs: u64) -> BTreeSet<String> {
             }
             true
         })
-        .build();
+        .build()
+}
 
-    for entry in walker.flatten() {
+/// The product-code files present right now — the deletion tripwire's
+/// inventory, snapshotted into `.sync` at every reconcile.
+pub fn product_file_inventory(project: &Path) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for entry in project_walker(project).flatten() {
         if !entry.file_type().is_some_and(|ft| ft.is_file()) {
             continue;
         }
-        let Ok(meta) = entry.metadata() else { continue };
-        let Ok(mtime) = meta.modified() else { continue };
-        let secs = mtime
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        if secs > baseline_secs {
-            if let Ok(rel) = entry.path().strip_prefix(project) {
-                out.insert(rel.to_string_lossy().replace('\\', "/"));
+        if let Ok(rel) = entry.path().strip_prefix(project) {
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            if scan::is_product_code(&rel) {
+                out.insert(rel);
             }
         }
     }
@@ -241,13 +330,22 @@ pub fn drifted_scopes(model: &ScryModel, project: &Path, sync: &SyncState) -> Ve
         }
         let changed: &BTreeSet<String> = match sync.nodes.get(&node.id) {
             Some(anchor) => override_cache
-                .entry((anchor.reconciled_at, anchor.commit.clone()))
+                // ns key: two dismissals in the same second stay distinct.
+                .entry((
+                    anchor.reconciled_at_ns.unwrap_or(anchor.reconciled_at),
+                    anchor.commit.clone(),
+                ))
                 .or_insert_with(|| {
+                    // The node measures against its own (later) time anchor,
+                    // and against the GLOBAL inventory minus the deletions its
+                    // dismissal already reconciled (`missing`).
                     changed_files_since(
                         project,
                         &SyncState {
                             reconciled_at: anchor.reconciled_at,
+                            reconciled_at_ns: anchor.reconciled_at_ns,
                             commit: anchor.commit.clone(),
+                            files: sync.files.difference(&anchor.missing).cloned().collect(),
                             nodes: BTreeMap::new(),
                         },
                     )
@@ -488,10 +586,101 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(1100));
         sync.nodes.insert(
             "node-1".into(),
-            NodeAnchor { reconciled_at: now_secs(), commit: None },
+            NodeAnchor::now(None, std::collections::BTreeSet::new()),
         );
         let scopes = drifted_scopes(&model, root, &sync);
         assert_eq!(scopes.len(), 1, "only the non-dismissed node still drifts");
+        assert_eq!(scopes[0].node_id, "node-2");
+    }
+
+    /// An edit landing in the same second as the reconcile is visible: the ns
+    /// anchor closes the 1s-granularity window. No sleep — that's the point.
+    #[test]
+    fn same_second_edit_is_visible() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.rs"), "fn a() {}").unwrap();
+        let sync = SyncState::anchored_now(None);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::fs::write(dir.path().join("a.rs"), "fn a2() {}").unwrap();
+        let changed = changed_files_since(dir.path(), &sync);
+        assert!(changed.contains("a.rs"), "{changed:?}");
+    }
+
+    /// Deletion-only changes surface: the sync inventory remembers what
+    /// existed, a missing inventory file is a change the mtime walk can never
+    /// see, and drifted_scopes maps it to the boundary owner.
+    #[test]
+    fn deletion_only_change_creates_a_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("api/src")).unwrap();
+        std::fs::write(root.join("api/src/server.rs"), "fn a() {}").unwrap();
+
+        let mut model = ScryModel::new();
+        model.nodes.push(node("node-1", "API", Kind::Container));
+        model.boundaries.insert(
+            "node-1".into(),
+            vec![Source { pattern: "api/**/*".into(), comment: None }],
+        );
+
+        let r = crate::ModelRef::ProjectLocal(root.to_path_buf());
+        crate::write_sync_state(&r, &SyncState::anchored_now(None)).unwrap();
+        let sync = crate::read_sync_state(&r);
+        assert!(
+            sync.files.contains("api/src/server.rs"),
+            "the reconcile snapshots the product-file inventory"
+        );
+
+        std::fs::remove_file(root.join("api/src/server.rs")).unwrap();
+        let changed = changed_files_since(root, &sync);
+        assert!(changed.contains("api/src/server.rs"), "{changed:?}");
+        let scopes = drifted_scopes(&model, root, &sync);
+        assert_eq!(scopes.len(), 1, "the deletion reaches its boundary owner");
+        assert_eq!(scopes[0].node_id, "node-1");
+        assert!(scopes[0].changed_files.iter().any(|f| f == "api/src/server.rs"));
+    }
+
+    /// A dismissal reconciles the deletions it saw (`missing`): they stop
+    /// counting for that node while other owners keep seeing their own.
+    #[test]
+    fn dismissed_deletion_clears_for_that_node_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("api/src")).unwrap();
+        std::fs::create_dir_all(root.join("web/src")).unwrap();
+        std::fs::write(root.join("api/src/server.rs"), "fn a() {}").unwrap();
+        std::fs::write(root.join("web/src/app.ts"), "const x = 1;").unwrap();
+
+        let mut model = ScryModel::new();
+        model.nodes.push(node("node-1", "API", Kind::Container));
+        model.nodes.push(node("node-2", "Web", Kind::Container));
+        model.boundaries.insert(
+            "node-1".into(),
+            vec![Source { pattern: "api/**/*".into(), comment: None }],
+        );
+        model.boundaries.insert(
+            "node-2".into(),
+            vec![Source { pattern: "web/**/*".into(), comment: None }],
+        );
+
+        let r = crate::ModelRef::ProjectLocal(root.to_path_buf());
+        crate::write_sync_state(&r, &SyncState::anchored_now(None)).unwrap();
+        let mut sync = crate::read_sync_state(&r);
+
+        std::fs::remove_file(root.join("api/src/server.rs")).unwrap();
+        std::fs::remove_file(root.join("web/src/app.ts")).unwrap();
+        assert_eq!(drifted_scopes(&model, root, &sync).len(), 2);
+
+        // Dismiss node-1: its anchor records the deletions it reconciled.
+        sync.nodes.insert(
+            "node-1".into(),
+            NodeAnchor::now(
+                None,
+                std::iter::once("api/src/server.rs".to_string()).collect(),
+            ),
+        );
+        let scopes = drifted_scopes(&model, root, &sync);
+        assert_eq!(scopes.len(), 1, "the dismissed deletion cleared");
         assert_eq!(scopes[0].node_id, "node-2");
     }
 

@@ -2288,9 +2288,9 @@ async fn start_model_build(
         // every anchor so the check is content-addressed, not git-dependent.
         let _ = scryer_core::write_sync_state(
             &model_ref,
-            &scryer_core::drift::SyncState {
-                reconciled_at: scryer_core::drift::now_secs(),
-                commit: scryer_core::drift::head_commit(std::path::Path::new(&cwd)), ..Default::default() },
+            &scryer_core::drift::SyncState::anchored_now(
+                scryer_core::drift::head_commit(std::path::Path::new(&cwd)),
+            ),
         );
         if let Err(e) = scryer_extract::anchors::write_baseline(&model_ref) {
             emit_msg(format!("⚠ Could not fingerprint anchors: {e}"));
@@ -2343,9 +2343,7 @@ fn get_drift_status(cwd: String) -> Result<Vec<scryer_core::drift::DriftScope>, 
     if !model_ref.sync_path().exists() {
         let _ = scryer_core::write_sync_state(
             &model_ref,
-            &scryer_core::drift::SyncState {
-                reconciled_at: scryer_core::drift::now_secs(),
-                commit: scryer_core::drift::head_commit(project), ..Default::default() },
+            &scryer_core::drift::SyncState::anchored_now(scryer_core::drift::head_commit(project)),
         );
         let _ = scryer_extract::anchors::write_baseline(&model_ref);
         return Ok(Vec::new());
@@ -2448,9 +2446,7 @@ fn reconcile_drift(cwd: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
     scryer_core::write_sync_state(
         &model_ref,
-        &scryer_core::drift::SyncState {
-            reconciled_at: scryer_core::drift::now_secs(),
-            commit: scryer_core::drift::head_commit(project), ..Default::default() },
+        &scryer_core::drift::SyncState::anchored_now(scryer_core::drift::head_commit(project)),
     )?;
     // Re-fingerprint: "reconciled" means the anchors as they stand are the truth.
     scryer_extract::anchors::write_baseline(&model_ref).map(|_| ())
@@ -2467,10 +2463,16 @@ fn reconcile_drift_node(cwd: String, node_id: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
     let model = scryer_core::read_model_at(&model_ref).map_err(|e| e.to_string())?;
     let mut sync = scryer_core::read_sync_state(&model_ref);
-    let anchor = scryer_core::drift::NodeAnchor {
-        reconciled_at: scryer_core::drift::now_secs(),
-        commit: scryer_core::drift::head_commit(project),
-    };
+    // Deletions the dismissal reconciles: inventory files currently absent.
+    // They stop counting for this subtree while other owners still see them.
+    let missing: std::collections::BTreeSet<String> = sync
+        .files
+        .iter()
+        .filter(|f| !project.join(f).exists())
+        .cloned()
+        .collect();
+    let anchor =
+        scryer_core::drift::NodeAnchor::now(scryer_core::drift::head_commit(project), missing);
     for id in scryer_core::drift::subtree_ids(&model, &node_id) {
         sync.nodes.insert(id, anchor.clone());
     }
@@ -3342,9 +3344,9 @@ async fn start_drift_check(
         let write_anchor = || {
             let _ = scryer_core::write_sync_state(
                 &model_ref,
-                &scryer_core::drift::SyncState {
-                    reconciled_at: scryer_core::drift::now_secs(),
-                    commit: scryer_core::drift::head_commit(std::path::Path::new(&cwd)), ..Default::default() },
+                &scryer_core::drift::SyncState::anchored_now(
+                scryer_core::drift::head_commit(std::path::Path::new(&cwd)),
+            ),
             );
             let _ = scryer_extract::anchors::write_baseline(&model_ref);
         };

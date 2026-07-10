@@ -1022,9 +1022,7 @@ impl ScryerServer {
             Err(e) => return Ok(e),
         };
         let project = model_ref.project_path();
-        let state = scryer_core::drift::SyncState {
-            reconciled_at: scryer_core::drift::now_secs(),
-            commit: scryer_core::drift::head_commit(project), ..Default::default() };
+        let state = scryer_core::drift::SyncState::anchored_now(scryer_core::drift::head_commit(project));
         if let Err(e) = scryer_core::write_sync_state(&model_ref, &state) {
             return Ok(err(format!("Failed to write reconcile anchor: {e}")));
         }
@@ -1954,7 +1952,7 @@ mod tests {
         scryer_core::write_model_at(&model_ref, &model).unwrap();
 
         // Anchor in the past + a file touched after it → the scope is drifted.
-        let old = drift::SyncState { reconciled_at: drift::now_secs(), commit: None, ..Default::default() };
+        let old = drift::SyncState::anchored_now(None);
         scryer_core::write_sync_state(&model_ref, &old).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(1100));
         std::fs::write(root.join("api/src/server.rs"), "fn v2() {}").unwrap();

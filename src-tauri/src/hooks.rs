@@ -804,11 +804,7 @@ mod tests {
         let r = ModelRef::ProjectLocal(root.to_path_buf());
         scryer_core::write_sync_state(
             &r,
-            &scryer_core::drift::SyncState {
-                reconciled_at: scryer_core::drift::now_secs(),
-                commit: None,
-                ..Default::default()
-            },
+            &scryer_core::drift::SyncState::anchored_now(None),
         )
         .unwrap();
         scryer_extract::anchors::write_baseline(&r).unwrap();
