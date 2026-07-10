@@ -3616,6 +3616,7 @@ dependencies = [
 name = "scryer-extract"
 version = "0.3.1"
 dependencies = [
+ "glob",
  "ignore",
  "rayon",
  "scryer-core",

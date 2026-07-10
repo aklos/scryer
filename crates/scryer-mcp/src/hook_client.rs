@@ -1,13 +1,21 @@
-//! `scryer-mcp hook` — the Claude Code session-hook client.
+//! `scryer-mcp hook` — the session-hook client for Claude Code and Codex.
 //!
-//! Claude Code invokes this once per hook event with the event JSON on stdin.
-//! The client bridges the event to the desktop app's loopback endpoint
-//! (advertised in `.scryer/hook.json` while the app has the project open):
+//! The harness invokes this once per hook event with the event JSON on stdin.
+//! Both harnesses use the same field names and output schema, so one client
+//! serves both, dispatching on the event and tool names. It bridges the event
+//! to the desktop app's loopback endpoint (advertised in `.scryer/hook.json`
+//! while the app has the project open):
 //!
 //! - SessionStart      → GET /status   → inject the model's status line
 //! - PostToolUse Read  → GET /overlay  → inject the file's governing intent
 //! - PostToolUse Edit… → POST /touch   → record the touch, say nothing
 //! - Stop              → GET /close    → block once with unreconciled claims
+//!
+//! Codex names its tools differently — edits arrive as `apply_patch` (or a
+//! Bash `apply_patch` heredoc) carrying a patch envelope instead of a file
+//! path, and reads fire no hooks at all — so there the overlay rides
+//! PreToolUse on the patch (intent lands just before the edit) and touches
+//! are recorded per file named in the envelope.
 //!
 //! Every failure path — no discovery file, endpoint gone, malformed input —
 //! exits 0 with no output: installed hooks are inert unless the Scryer app is
@@ -37,6 +45,7 @@ pub fn run_hook_client() -> Result<(), Box<dyn std::error::Error>> {
 
     match event["hook_event_name"].as_str().unwrap_or_default() {
         "SessionStart" => session_start(&endpoint),
+        "PreToolUse" => pre_tool_use(&endpoint, &event),
         "PostToolUse" => post_tool_use(&endpoint, &event),
         "Stop" => stop(&endpoint, &event),
         _ => {}
@@ -163,10 +172,12 @@ fn emit(v: &serde_json::Value) {
 fn session_start(ep: &Endpoint) {
     let Some(status) = call(ep, "GET", "/status", "") else { return };
     let Some(line) = status["statusLine"].as_str() else { return };
+    // Harness-neutral wording: on Claude Code the overlay arrives as files are
+    // read, on Codex as they are edited — "work in" covers both truthfully.
     let context = format!(
         "{line}\nThe Scryer app is open on this project, so its architecture model is live and \
-         binding. As you read files, the claims and directives governing them are injected \
-         automatically; `locate {{file}}` (MCP) answers on demand, `get_pending` lists \
+         binding. The claims and directives governing a file are injected automatically as you \
+         work in it; `locate {{file}}` (MCP) answers on demand, `get_pending` lists \
          outstanding plan work."
     );
     emit(&serde_json::json!({
@@ -178,11 +189,9 @@ fn session_start(ep: &Endpoint) {
 }
 
 fn post_tool_use(ep: &Endpoint, event: &serde_json::Value) {
-    let tool = event["tool_name"].as_str().unwrap_or_default();
-    let Some(file) = event["tool_input"]["file_path"].as_str() else { return };
-
-    match tool {
+    match event["tool_name"].as_str().unwrap_or_default() {
         "Read" => {
+            let Some(file) = event["tool_input"]["file_path"].as_str() else { return };
             let Some(overlay) = call(
                 ep,
                 "GET",
@@ -201,12 +210,107 @@ fn post_tool_use(ep: &Endpoint, event: &serde_json::Value) {
             }
         }
         "Edit" | "Write" | "NotebookEdit" => {
-            let session = event["session_id"].as_str().unwrap_or_default();
-            let body = serde_json::json!({ "session": session, "file": file }).to_string();
-            let _ = call(ep, "POST", "/touch", &body);
-            // No output: touch recording must cost the session zero tokens.
+            let Some(file) = event["tool_input"]["file_path"].as_str() else { return };
+            touch(ep, event, file);
+        }
+        // Codex: edits carry a patch envelope, not a file_path.
+        "apply_patch" | "Bash" => {
+            for file in patched_files(event) {
+                touch(ep, event, &file);
+            }
         }
         _ => {}
+    }
+}
+
+/// Record one touched file. No output: touch recording must cost the session
+/// zero tokens.
+fn touch(ep: &Endpoint, event: &serde_json::Value, file: &str) {
+    let session = event["session_id"].as_str().unwrap_or_default();
+    let body = serde_json::json!({ "session": session, "file": file }).to_string();
+    let _ = call(ep, "POST", "/touch", &body);
+}
+
+/// Bound the pre-edit injection on sweeping patches: past a handful of files
+/// the overlay stops being "the intent for what you're touching" and becomes
+/// a wall of text the agent learns to skim.
+const OVERLAY_FILE_CAP: usize = 5;
+
+/// Codex reads fire no hook events, so the intent overlay rides the edit
+/// instead: just before a patch lands, inject the claims and directives
+/// governing the files it names. Claude Code never sends this event (scryer
+/// doesn't register PreToolUse there — post-Read is the better moment).
+fn pre_tool_use(ep: &Endpoint, event: &serde_json::Value) {
+    let mut sections: Vec<String> = Vec::new();
+    for file in patched_files(event).iter().take(OVERLAY_FILE_CAP) {
+        let Some(overlay) = call(
+            ep,
+            "GET",
+            &format!("/overlay?file={}", percent_encode(file)),
+            "",
+        ) else {
+            continue;
+        };
+        if let Some(text) = render_overlay(&overlay) {
+            sections.push(text);
+        }
+    }
+    if sections.is_empty() {
+        return;
+    }
+    emit(&serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": sections.join("\n\n"),
+        }
+    }));
+}
+
+/// File paths named by the apply_patch envelope in this tool call, if any.
+/// The native `apply_patch` tool carries the envelope in `tool_input.command`;
+/// newer Codex builds route edits through Bash as an `apply_patch <<'EOF'`
+/// heredoc with the same envelope inside, so both tools get the same parse.
+/// Envelope paths are cwd-relative — absolutized here so the endpoint's
+/// project-prefix stripping works even when the session runs in a subdirectory.
+fn patched_files(event: &serde_json::Value) -> Vec<String> {
+    let command = event["tool_input"]["command"].as_str().unwrap_or_default();
+    let cwd = event["cwd"].as_str().unwrap_or_default();
+    envelope_files(command)
+        .into_iter()
+        .map(|f| absolutize(cwd, &f))
+        .collect()
+}
+
+/// Parse `*** Add File:` / `*** Update File:` / `*** Delete File:` markers
+/// (and a rename's `*** Move to:` target) out of an apply_patch envelope.
+/// Anything without a `*** Begin Patch` line is not an envelope — that check
+/// is what lets every ordinary Bash command no-op without an HTTP call.
+fn envelope_files(command: &str) -> Vec<String> {
+    if !command.contains("*** Begin Patch") {
+        return Vec::new();
+    }
+    let mut files: Vec<String> = Vec::new();
+    for line in command.lines() {
+        let line = line.trim();
+        let path = ["*** Add File:", "*** Update File:", "*** Delete File:", "*** Move to:"]
+            .iter()
+            .find_map(|marker| line.strip_prefix(marker));
+        if let Some(p) = path {
+            let p = p.trim();
+            if !p.is_empty() && !files.iter().any(|f| f == p) {
+                files.push(p.to_string());
+            }
+        }
+    }
+    files
+}
+
+fn absolutize(cwd: &str, file: &str) -> String {
+    let p = Path::new(file);
+    if p.is_absolute() || cwd.is_empty() {
+        file.to_string()
+    } else {
+        Path::new(cwd).join(p).to_string_lossy().to_string()
     }
 }
 
@@ -358,6 +462,61 @@ mod tests {
 
         let no_pid = serde_json::json!({ "port": 42, "token": "tok" }).to_string();
         assert!(parse_live_endpoint(&no_pid).is_none(), "a file with no pid is stale");
+    }
+
+    /// The envelope parser lifts every named file exactly once — add, update,
+    /// a rename's move-to target, delete — and reads the same envelope out of
+    /// a Bash heredoc wrapper, since newer Codex routes edits through Bash.
+    #[test]
+    fn envelope_files_parses_native_and_heredoc_patches() {
+        let envelope = "*** Begin Patch\n\
+                        *** Add File: src/new.rs\n\
+                        +fn hello() {}\n\
+                        *** Update File: src/lib.rs\n\
+                        *** Move to: src/renamed.rs\n\
+                        @@ fn old\n\
+                        -a\n\
+                        +b\n\
+                        *** Update File: src/lib.rs\n\
+                        *** Delete File: src/gone.rs\n\
+                        *** End Patch";
+        assert_eq!(
+            envelope_files(envelope),
+            vec!["src/new.rs", "src/lib.rs", "src/renamed.rs", "src/gone.rs"],
+            "each file once, rename target included"
+        );
+
+        let heredoc = format!("apply_patch <<'PATCH'\n{envelope}\nPATCH");
+        assert_eq!(envelope_files(&heredoc).len(), 4, "heredoc wrapper parses the same");
+
+        assert!(
+            envelope_files("cargo test && git status").is_empty(),
+            "an ordinary command is not an envelope"
+        );
+    }
+
+    /// Envelope paths are cwd-relative; the endpoint strips the project prefix
+    /// from absolute paths, so the client absolutizes against the event's cwd —
+    /// and leaves already-absolute paths alone.
+    #[test]
+    fn patched_files_absolutizes_against_the_events_cwd() {
+        let event = serde_json::json!({
+            "tool_name": "apply_patch",
+            "cwd": "/repo/sub",
+            "tool_input": {
+                "command": "*** Begin Patch\n*** Update File: src/lib.rs\n*** End Patch"
+            }
+        });
+        assert_eq!(patched_files(&event), vec!["/repo/sub/src/lib.rs"]);
+
+        let event = serde_json::json!({
+            "tool_name": "Bash",
+            "cwd": "/repo",
+            "tool_input": {
+                "command": "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: /repo/src/lib.rs\n*** End Patch\nEOF"
+            }
+        });
+        assert_eq!(patched_files(&event), vec!["/repo/src/lib.rs"], "absolute path untouched");
     }
 
     /// A reaped child's pid is dead, so its (fabricated) discovery file is
