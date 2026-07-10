@@ -516,6 +516,84 @@ export function App() {
         }
     }
 
+    /// End-to-end on a scratch uv-style Python workspace: cross-package
+    /// imports resolve through declared pyproject names (hyphens -> import
+    /// underscores), relative imports within the package, symbol edges at
+    /// usage sites — from a plain `extract_context` walk.
+    #[test]
+    fn extracts_py_monorepo_import_edges() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let write = |rel: &str, text: &str| {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write(
+            "packages/lib/pyproject.toml",
+            "[project]\nname = \"acme-lib\"\nversion = \"1.0\"\n",
+        );
+        write(
+            "packages/lib/src/acme_lib/dates.py",
+            "def fmt_date(d):\n    return str(d)\n",
+        );
+        write(
+            "packages/app/pyproject.toml",
+            "[project]\nname = \"acme-app\"\nversion = \"1.0\"\n",
+        );
+        write(
+            "packages/app/src/acme_app/helpers.py",
+            "def helper():\n    return 1\n",
+        );
+        write(
+            "packages/app/src/acme_app/main.py",
+            r#"from acme_lib.dates import fmt_date
+from .helpers import helper
+
+def run():
+    helper()
+    return fmt_date(1)
+"#,
+        );
+
+        let ctx = extract_context(dir.path()).expect("extraction");
+        let has_file_edge = |src: &str, dst: &str| {
+            ctx.file_edges.iter().any(|e| e.src == src && e.dst == dst)
+        };
+        assert!(
+            has_file_edge(
+                "packages/app/src/acme_app/main.py",
+                "packages/lib/src/acme_lib/dates.py"
+            ),
+            "cross-package import edge missing; edges: {:?}",
+            ctx.file_edges
+        );
+        assert!(
+            has_file_edge(
+                "packages/app/src/acme_app/main.py",
+                "packages/app/src/acme_app/helpers.py"
+            ),
+            "relative import edge missing; edges: {:?}",
+            ctx.file_edges
+        );
+        let key_of = |name: &str| {
+            ctx.files
+                .iter()
+                .flat_map(|f| &f.symbols)
+                .find(|s| s.name == name)
+                .map(|s| s.key.clone())
+                .unwrap()
+        };
+        let run = key_of("run");
+        for dst in ["fmt_date", "helper"] {
+            let dst = key_of(dst);
+            assert!(
+                ctx.symbol_edges.iter().any(|e| e.src == run && e.dst == dst),
+                "symbol edge run -> {dst} missing; edges: {:?}",
+                ctx.symbol_edges
+            );
+        }
+    }
+
     #[test]
     fn repeated_extraction_reuses_unchanged_parses() {
         let dir = tempfile::tempdir().expect("temp dir");

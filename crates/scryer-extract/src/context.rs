@@ -417,6 +417,20 @@ fn build_edges(
     }
     let inventory: HashSet<&str> = files.iter().map(|f| f.rel_path.as_str()).collect();
 
+    // Every directory holding files — lets a Python module path resolve to a
+    // PACKAGE (for submodule fallback) even when its `__init__.py` carries no
+    // defs and was dropped upstream.
+    let mut package_dirs: HashSet<String> = HashSet::new();
+    for f in files {
+        let mut p = f.rel_path.as_str();
+        while let Some((dir, _)) = p.rsplit_once('/') {
+            if !package_dirs.insert(dir.to_string()) {
+                break; // ancestors already inserted
+            }
+            p = dir;
+        }
+    }
+
     for r in recs {
         ranges_by_file
             .entry(r.file_rel.as_str())
@@ -472,21 +486,35 @@ fn build_edges(
             .filter(|a| a.dir.is_empty() || file.starts_with(&format!("{}/", a.dir)))
             .max_by_key(|a| a.dir.len());
 
-        // --- TS/JS imports: the language's declared cross-file/container form ---
+        // --- TS/JS/Python imports: the languages' declared cross-file/container form ---
         // Resolve each import to a target file (relative specs against the
         // importing file's directory; bare specs through the package map +
-        // subpath), emit the file edge, and index the LOCAL bindings so the
-        // ident pass below can attach symbol edges at the usage sites — the
-        // import line itself is module-scoped, exactly like a Rust `use`.
-        // Every recognized import consumes its locals even when unresolved
-        // (external package, unparsed target): the name is lexically bound to
-        // another module, so letting it fall through to the bare-name scopes
-        // would misattribute it to a same-name local def.
+        // subpath; Python module paths against the container/src/root roots),
+        // emit the file edge, and index the LOCAL bindings so the ident pass
+        // below can attach symbol edges at the usage sites — the import line
+        // itself is module-scoped, exactly like a Rust `use`. Every recognized
+        // import consumes its locals even when unresolved (external package,
+        // unparsed target): the name is lexically bound to another module, so
+        // letting it fall through to the bare-name scopes would misattribute
+        // it to a same-name local def.
+        let is_python = file.ends_with(".py") || file.ends_with(".pyi");
         let mut imported_locals: HashMap<&str, Option<&str>> = HashMap::new();
         for imp in &f.parse.imports {
             let mut target_file: Option<&str> = None;
             let mut target_dir: Option<&str> = None;
-            if imp.spec.starts_with('.') {
+            // Python only: the module path as a directory base, kept even when
+            // no module FILE resolved, for the submodule fallback below.
+            let mut module_base: Option<String> = None;
+            if is_python {
+                (target_file, module_base) = resolve_py_import(
+                    file,
+                    &imp.spec,
+                    container_dir,
+                    &crate_to_dir,
+                    &inventory,
+                    &package_dirs,
+                );
+            } else if imp.spec.starts_with('.') {
                 target_file = resolve_relative(file, &imp.spec)
                     .and_then(|base| find_module_file(&base, &inventory));
             } else if !imp.spec.starts_with('/') {
@@ -534,6 +562,21 @@ fn build_edges(
                         imported_locals.insert(n.local.as_str(), Some(dst_key));
                     }
                     None => {
+                        // Python: the imported name may be a SUBMODULE, not a
+                        // symbol (`from . import sibling`, `from pkg import
+                        // mod`) — file-level evidence to that module's file.
+                        if let Some(base) = &module_base {
+                            let sub = if base.is_empty() {
+                                n.name.clone()
+                            } else {
+                                format!("{base}/{}", n.name)
+                            };
+                            if let Some(subfile) = py_module_file(&sub, &inventory) {
+                                if subfile != file {
+                                    file_edges.insert((file.to_string(), subfile.to_string()));
+                                }
+                            }
+                        }
                         imported_locals.insert(n.local.as_str(), None);
                     }
                 }
@@ -801,6 +844,89 @@ fn resolve_ts_alias<'a>(
         format!("{base_url}/{spec}")
     };
     find_module_file(&base, inventory)
+}
+
+/// Resolve a Python module spec from `file` into `(module file, module base
+/// path)`. Relative specs climb one directory per extra leading dot; absolute
+/// specs try the importing container's roots (its dir, then `dir/src` for the
+/// src layout), the project root, and — via the declared package-name map —
+/// the named container's roots. The base comes back even when no module FILE
+/// exists (a defs-less `__init__.py` never enters the inventory) so
+/// `from pkg import name` can still resolve `name` as a submodule.
+fn resolve_py_import<'a>(
+    file: &str,
+    spec: &str,
+    container_dir: Option<&str>,
+    crate_to_dir: &HashMap<String, &'a str>,
+    inventory: &HashSet<&'a str>,
+    package_dirs: &HashSet<String>,
+) -> (Option<&'a str>, Option<String>) {
+    let join = |root: &str, path: &str| {
+        if root.is_empty() {
+            path.to_string()
+        } else {
+            format!("{root}/{path}")
+        }
+    };
+    if let Some(stripped) = spec.strip_prefix('.') {
+        let level = 1 + stripped.bytes().take_while(|b| *b == b'.').count();
+        let rest = &spec[level..];
+        let dir = file.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+        let mut parts: Vec<&str> = if dir.is_empty() {
+            Vec::new()
+        } else {
+            dir.split('/').collect()
+        };
+        for _ in 1..level {
+            if parts.pop().is_none() {
+                return (None, None); // climbed past the project root
+            }
+        }
+        let base = if rest.is_empty() {
+            parts.join("/")
+        } else {
+            join(&parts.join("/"), &rest.replace('.', "/"))
+        };
+        let target = py_module_file(&base, inventory);
+        let known = target.is_some() || package_dirs.contains(&base);
+        return (target, known.then_some(base));
+    }
+    let path = spec.replace('.', "/");
+    let head = spec.split('.').next().unwrap_or("");
+    let mut roots: Vec<String> = Vec::new();
+    if let Some(cd) = container_dir {
+        roots.push(cd.to_string());
+        roots.push(join(cd, "src"));
+    }
+    roots.push(String::new());
+    if let Some(&dst) = crate_to_dir.get(head) {
+        roots.push(dst.to_string());
+        roots.push(join(dst, "src"));
+    }
+    let mut seen: HashSet<&str> = HashSet::new();
+    for root in &roots {
+        if !seen.insert(root.as_str()) {
+            continue;
+        }
+        let base = join(root, &path);
+        if let Some(f) = py_module_file(&base, inventory) {
+            return (Some(f), Some(base));
+        }
+        if package_dirs.contains(&base) {
+            return (None, Some(base));
+        }
+    }
+    (None, None) // external package: consume locals, no edges
+}
+
+/// The file a Python module base denotes: the module itself (`a/b` ->
+/// `a/b.py`), its stub, or the package's `__init__`.
+fn py_module_file<'a>(base: &str, inventory: &HashSet<&'a str>) -> Option<&'a str> {
+    let hit = |c: String| inventory.get(c.as_str()).copied();
+    hit(format!("{base}.py"))
+        .or_else(|| hit(format!("{base}.pyi")))
+        .or_else(|| hit(format!("{base}/__init__.py")))
+        .or_else(|| hit(format!("{base}/__init__.pyi")))
 }
 
 /// Split a bare import spec into (package name, subpath): `@acme/ui/button` ->
@@ -1963,6 +2089,109 @@ fn add_one(x: u32) -> u32 {
             "packages/ui/src/Button.tsx"
         ));
         assert!(has_sym_edge(&ctx, "App", "Button"));
+    }
+
+    /// Python absolute imports resolve through the src layout of the
+    /// importing container, with symbol edges at usage sites.
+    #[test]
+    fn py_absolute_import_resolves_same_container() {
+        let files = vec![
+            ts_file("src/app/util.py", vec![def("helper", 1, 3)], vec![], vec![]),
+            ts_file(
+                "src/app/main.py",
+                vec![def("run", 3, 9)],
+                vec![ident("helper", 5)],
+                vec![imp("app.util", &[("helper", "helper")], 1)],
+            ),
+        ];
+        let containers = vec![container("", "myapp")];
+        let ctx = build_context("proj", &containers, &files, &[]);
+        assert!(has_file_edge(&ctx, "src/app/main.py", "src/app/util.py"));
+        assert!(has_sym_edge(&ctx, "run", "helper"));
+    }
+
+    /// The Python analog of the audit's litmus case: a cross-package import in
+    /// a uv/poetry-style workspace resolves through the DECLARED distribution
+    /// name (`acme-lib` imported as `acme_lib`), hyphens normalized like the
+    /// Rust crate map.
+    #[test]
+    fn py_cross_container_import_resolves_via_declared_name() {
+        let files = vec![
+            ts_file(
+                "packages/lib/src/acme_lib/dates.py",
+                vec![def("fmt_date", 1, 3)],
+                vec![],
+                vec![],
+            ),
+            ts_file(
+                "packages/app/src/acme_app/main.py",
+                vec![def("run", 3, 9)],
+                vec![ident("fmt_date", 5)],
+                vec![imp("acme_lib.dates", &[("fmt_date", "fmt_date")], 1)],
+            ),
+        ];
+        let containers = vec![
+            container("packages/app", "acme-app"),
+            container("packages/lib", "acme-lib"),
+        ];
+        let ctx = build_context("proj", &containers, &files, &[]);
+        assert!(has_file_edge(
+            &ctx,
+            "packages/app/src/acme_app/main.py",
+            "packages/lib/src/acme_lib/dates.py"
+        ));
+        assert!(has_sym_edge(&ctx, "run", "fmt_date"));
+    }
+
+    /// Relative imports: `.sibling` resolves within the package, `..config`
+    /// climbs a level, and `from . import other` falls back to the SUBMODULE
+    /// file when the name isn't a symbol of the package module.
+    #[test]
+    fn py_relative_imports_resolve() {
+        let files = vec![
+            ts_file("pkg/sibling.py", vec![def("calc", 1, 3)], vec![], vec![]),
+            ts_file("pkg/other.py", vec![def("stuff", 1, 3)], vec![], vec![]),
+            ts_file("config.py", vec![def("load", 1, 3)], vec![], vec![]),
+            ts_file(
+                "pkg/mod.py",
+                vec![def("run", 4, 12)],
+                vec![ident("calc", 6), ident("load", 7)],
+                vec![
+                    imp(".sibling", &[("calc", "calc")], 1),
+                    imp(".", &[("other", "other")], 2),
+                    imp("..config", &[("load", "load")], 3),
+                ],
+            ),
+        ];
+        let containers = vec![container("", "app")];
+        let ctx = build_context("proj", &containers, &files, &[]);
+        assert!(has_file_edge(&ctx, "pkg/mod.py", "pkg/sibling.py"));
+        assert!(has_file_edge(&ctx, "pkg/mod.py", "pkg/other.py"));
+        assert!(has_file_edge(&ctx, "pkg/mod.py", "config.py"));
+        assert!(has_sym_edge(&ctx, "run", "calc"));
+        assert!(has_sym_edge(&ctx, "run", "load"));
+    }
+
+    /// An import from an external distribution consumes its locals: the usage
+    /// must not be misattributed to a same-name def elsewhere in the container.
+    #[test]
+    fn py_external_import_consumes_locals_without_edges() {
+        let files = vec![
+            ts_file("store.py", vec![def("fetch", 1, 3)], vec![], vec![]),
+            ts_file(
+                "main.py",
+                vec![def("run", 3, 8)],
+                vec![ident("fetch", 5)],
+                vec![imp("requests.api", &[("fetch", "fetch")], 1)],
+            ),
+        ];
+        let containers = vec![container("", "app")];
+        let ctx = build_context("proj", &containers, &files, &[]);
+        assert!(ctx.file_edges.is_empty(), "no edges to external modules");
+        assert!(
+            ctx.symbol_edges.is_empty(),
+            "imported `fetch` must not resolve to the local store.py def"
+        );
     }
 
     /// A `paths` alias (`@/*` -> `src/*`) resolves a bare spec to a file, with

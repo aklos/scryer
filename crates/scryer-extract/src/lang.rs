@@ -93,19 +93,22 @@ pub struct PathRef {
     pub line: u32,
 }
 
-/// One module import in a TS/JS file: `import`/`export … from`, `require(…)`,
-/// or a dynamic `import(…)`. The resolver maps a relative `spec` to a file and
-/// a bare `spec` to a container (via the declared package-name map), then the
-/// `names` to symbols there — the TS/JS counterpart of [`PathRef`]. Only
-/// literal string specs are captured; a computed spec has no unambiguous
-/// target and guessing would mint false edges.
+/// One module import: a TS/JS `import`/`export … from` / `require(…)` /
+/// dynamic `import(…)`, or a Python `import` / `from … import`. The resolver
+/// maps the `spec` to a file (relative specs, module paths) or a container
+/// (bare package specs, via the declared package-name map), then the `names`
+/// to symbols there — the import-flavored counterpart of [`PathRef`]. Only
+/// literal specs are captured; a computed spec has no unambiguous target and
+/// guessing would mint false edges.
 #[derive(Debug, Clone)]
 pub struct ImportRef {
-    /// Verbatim module specifier: `./zoom`, `../lib/dates`, `@acme/ui`,
-    /// `lodash/merge`.
+    /// Verbatim module specifier. TS/JS: `./zoom`, `../lib/dates`, `@acme/ui`,
+    /// `lodash/merge`. Python: a dotted module path, keeping relative-import
+    /// dots (`app.util`, `.sibling`, `..pkg.mod`, `.`).
     pub spec: String,
-    /// Imported symbols. Empty for namespace (`* as ns`), side-effect, and
-    /// `export *` forms — those carry file-level evidence only.
+    /// Imported symbols. Empty for whole-module forms — TS namespace
+    /// (`* as ns`), side-effect, `export *`; Python `import a.b`, `import *` —
+    /// which carry file-level evidence only.
     pub names: Vec<ImportedSym>,
     /// 1-based line of the import statement or call site.
     pub line: u32,
@@ -179,8 +182,10 @@ pub fn parse_file_with(path: &Path, source: &str, parser: &mut Parser) -> Option
     }
 
     let mut imports: Vec<ImportRef> = Vec::new();
-    if family_for_ext(ext) == Family::TsLike {
-        collect_ts_imports(root, bytes, &mut imports);
+    match family_for_ext(ext) {
+        Family::TsLike => collect_ts_imports(root, bytes, &mut imports),
+        Family::Python => collect_py_imports(root, bytes, &mut imports),
+        _ => {}
     }
 
     Some(FileParse {
@@ -606,6 +611,86 @@ fn flatten_use(node: Node, bytes: &[u8]) -> Vec<Vec<String>> {
     }
 }
 
+// --- Python module imports (cross-file/container resolution input) ---
+
+/// Walk the whole tree for `import a.b [as x]` and
+/// `from [dots]mod import x [as y], …` — function-local imports are idiomatic
+/// Python, so the walk is unconditional. A plain `import a.b` binds the module
+/// object, not a symbol: file-level evidence only. `from m import *` likewise.
+fn collect_py_imports(root: Node, bytes: &[u8], out: &mut Vec<ImportRef>) {
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "import_statement" => {
+                let line = n.start_position().row as u32 + 1;
+                for child in named_children(n) {
+                    let module = match child.kind() {
+                        "dotted_name" => Some(child),
+                        // `import a.b as x`: the module is the `name` field.
+                        "aliased_import" => child.child_by_field_name("name"),
+                        _ => None,
+                    };
+                    if let Some(spec) = module.and_then(|m| m.utf8_text(bytes).ok()) {
+                        out.push(ImportRef {
+                            spec: spec.to_string(),
+                            names: Vec::new(),
+                            line,
+                        });
+                    }
+                }
+                continue;
+            }
+            "import_from_statement" => {
+                let Some(spec) = n
+                    .child_by_field_name("module_name")
+                    .and_then(|m| m.utf8_text(bytes).ok())
+                else {
+                    continue;
+                };
+                let module_id = n.child_by_field_name("module_name").map(|m| m.id());
+                let mut names = Vec::new();
+                for child in named_children(n) {
+                    if Some(child.id()) == module_id {
+                        continue;
+                    }
+                    match child.kind() {
+                        "dotted_name" => {
+                            if let Ok(name) = child.utf8_text(bytes) {
+                                names.push(ImportedSym::same(name));
+                            }
+                        }
+                        "aliased_import" => {
+                            let name = child
+                                .child_by_field_name("name")
+                                .and_then(|m| m.utf8_text(bytes).ok());
+                            let local = child
+                                .child_by_field_name("alias")
+                                .and_then(|a| a.utf8_text(bytes).ok());
+                            if let (Some(name), Some(local)) = (name, local) {
+                                names.push(ImportedSym {
+                                    name: name.to_string(),
+                                    local: local.to_string(),
+                                });
+                            }
+                        }
+                        _ => {} // wildcard_import: file-level evidence only
+                    }
+                }
+                out.push(ImportRef {
+                    spec: spec.to_string(),
+                    names,
+                    line: n.start_position().row as u32 + 1,
+                });
+                continue;
+            }
+            _ => {}
+        }
+        for child in named_children(n) {
+            stack.push(child);
+        }
+    }
+}
+
 // --- TS/JS module imports (cross-file/container resolution input) ---
 
 /// Walk the whole tree for the four import forms: `import … from "spec"`,
@@ -1020,6 +1105,39 @@ async function load() {
         assert!(has_import(&p, "./legacy", &[("legacy", "legacy")]));
         assert!(has_import(&p, "./side-effect", &[]));
         assert!(has_import(&p, "./lazy", &[("widget", "widget")]));
+    }
+
+    #[test]
+    fn py_imports_captured() {
+        let src = r#"
+import os
+import app.util as u
+from app.dates import fmt_date, parse as parse_date
+from . import sibling
+from ..pkg.mod import Thing
+from app.legacy import *
+
+def local_scope():
+    from app.lazy import widget
+    return widget
+"#;
+        let p = parse_file(Path::new("f.py"), src).unwrap();
+        // Plain `import` binds the module object: file-level evidence only.
+        assert!(has_import(&p, "os", &[]));
+        assert!(has_import(&p, "app.util", &[]));
+        // `from … import` names symbols; `as` keeps the source name + local.
+        assert!(has_import(
+            &p,
+            "app.dates",
+            &[("fmt_date", "fmt_date"), ("parse", "parse_date")]
+        ));
+        // Relative specs keep their dots for the resolver.
+        assert!(has_import(&p, ".", &[("sibling", "sibling")]));
+        assert!(has_import(&p, "..pkg.mod", &[("Thing", "Thing")]));
+        // Wildcard: file-level only.
+        assert!(has_import(&p, "app.legacy", &[]));
+        // Function-local imports are captured too.
+        assert!(has_import(&p, "app.lazy", &[("widget", "widget")]));
     }
 
     #[test]

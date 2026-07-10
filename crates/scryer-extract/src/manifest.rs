@@ -190,6 +190,10 @@ fn container_for_dir(project: &Path, dir: &str, signals: &[Signal]) -> Option<Co
                 name = name.or(pkg_name);
                 dep_dirs.extend(deps);
             }
+            "pyproject.toml" => {
+                is_unit = true;
+                name = name.or_else(|| pyproject_name(&text));
+            }
             _ => {
                 is_unit = true;
                 if sig.deploy && technology.is_none() && sig.filename.starts_with("Dockerfile") {
@@ -292,6 +296,25 @@ fn parse_cargo(text: &str, manifest_dir: &str) -> CargoManifest {
         }
     }
     CargoManifest::Package { pkg_name, deps }
+}
+
+/// The declared distribution name of a pyproject: PEP 621 `[project] name`,
+/// falling back to classic Poetry's `[tool.poetry] name`. This is what a
+/// cross-package `import` spells (modulo `-` -> `_`), so it feeds the
+/// package-name map exactly like a crate/npm name.
+fn pyproject_name(text: &str) -> Option<String> {
+    let value = text.parse::<toml::Value>().ok()?;
+    value
+        .get("project")
+        .and_then(|p| p.get("name"))
+        .or_else(|| {
+            value
+                .get("tool")
+                .and_then(|t| t.get("poetry"))
+                .and_then(|p| p.get("name"))
+        })
+        .and_then(|n| n.as_str())
+        .map(|s| s.to_string())
 }
 
 fn parse_package_json(text: &str, manifest_dir: &str) -> (Option<String>, Vec<String>) {
@@ -400,6 +423,19 @@ serde = "1"
         assert_eq!(manifest_role("pyproject.toml"), Some(false));
         assert_eq!(manifest_role("package.json"), Some(false));
         assert_eq!(manifest_role("README.md"), None);
+    }
+
+    #[test]
+    fn pyproject_names_parsed() {
+        assert_eq!(
+            pyproject_name("[project]\nname = \"acme-lib\"\nversion = \"1.0\"\n").as_deref(),
+            Some("acme-lib")
+        );
+        assert_eq!(
+            pyproject_name("[tool.poetry]\nname = \"acme-poetry\"\n").as_deref(),
+            Some("acme-poetry")
+        );
+        assert_eq!(pyproject_name("[build-system]\nrequires = []\n"), None);
     }
 
     #[test]
