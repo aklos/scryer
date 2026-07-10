@@ -198,6 +198,23 @@ fn blank_node(id: String, kind: Kind, name: String, parent_id: Option<String>) -
     }
 }
 
+/// Retry-safe node dedupe: an existing node with the same kind, parent, and
+/// (trimmed) name is the SAME intent restated — a retried tool call must get
+/// that node back, not mint a sibling duplicate.
+fn existing_same_node(
+    model: &ScryModel,
+    kind: Kind,
+    parent: Option<&str>,
+    name: &str,
+) -> Option<String> {
+    let name = name.trim();
+    model
+        .nodes
+        .iter()
+        .find(|n| n.kind == kind && n.parent_id.as_deref() == parent && n.name.trim() == name)
+        .map(|n| n.id.clone())
+}
+
 /// Enforce read-only invariants, write, snapshot the baseline, and return the
 /// minted nodes (compact denormalized view) so the agent has their ids — plus
 /// the follow-through (what a plan write implies next) and the loop-state
@@ -208,6 +225,7 @@ fn commit(
     mut model: ScryModel,
     prior: &ScryModel,
     minted: &[String],
+    reused: &[String],
     lock: scryer_core::ModelLock,
 ) -> Result<CallToolResult, McpError> {
     enforce_readonly_directives(&mut model, prior);
@@ -250,13 +268,34 @@ fn commit(
     // The follow-through: a write returns not just ids but what those ids
     // imply next, so a single-purpose agent stays on the rails without
     // re-reading the instructions.
+    let all_ids: Vec<&str> = minted
+        .iter()
+        .chain(reused.iter())
+        .map(|s| s.as_str())
+        .collect();
     let next = format!(
         "In the PLAN — outstanding work until built (get_pending). Declare the links their \
          descriptions imply (add_links). When built: mark_implemented {} — its `anchors` \
          param folds and anchors in one call.",
-        minted.join(", ")
+        all_ids.join(", ")
     );
     let mut payload = serde_json::json!({ "added": added, "next": next });
+    if !reused.is_empty() {
+        let views: Vec<serde_json::Value> = reused
+            .iter()
+            .filter_map(|id| model.nodes.iter().find(|n| &n.id == id))
+            .map(|n| {
+                let mut v = denormalize_node(n, &model);
+                strip_fields_compact(&mut v);
+                v
+            })
+            .collect();
+        payload["reused"] = serde_json::json!(views);
+        payload["reusedNote"] = serde_json::json!(
+            "these already existed (same kind, parent, and name) and were returned, not \
+             duplicated — patch them with update_nodes if you meant something different"
+        );
+    }
     if !warnings.is_empty() {
         payload["warnings"] = serde_json::json!(warnings);
     }
@@ -292,7 +331,12 @@ impl ScryerServer {
         let mut minter = RespMinter::new(&model);
         minter.absorb(&committed);
         let mut minted = Vec::new();
+        let mut reused = Vec::new();
         for item in &req.items {
+            if let Some(id) = existing_same_node(&model, Kind::Person, None, &item.name) {
+                reused.push(id);
+                continue;
+            }
             let id = next_node_id_union(&model, &committed);
             let mut node = blank_node(id.clone(), Kind::Person, item.name.clone(), None);
             node.description = item.description.clone();
@@ -300,7 +344,7 @@ impl ScryerServer {
             model.nodes.push(node);
             minted.push(id);
         }
-        commit(&model_ref, model, &prior, &minted, _lock)
+        commit(&model_ref, model, &prior, &minted, &reused, _lock)
     }
 
     #[tool(
@@ -324,7 +368,12 @@ impl ScryerServer {
         let mut minter = RespMinter::new(&model);
         minter.absorb(&committed);
         let mut minted = Vec::new();
+        let mut reused = Vec::new();
         for item in &req.items {
+            if let Some(id) = existing_same_node(&model, Kind::System, None, &item.name) {
+                reused.push(id);
+                continue;
+            }
             let id = next_node_id_union(&model, &committed);
             let mut node = blank_node(id.clone(), Kind::System, item.name.clone(), None);
             node.description = item.description.clone();
@@ -334,7 +383,7 @@ impl ScryerServer {
             model.nodes.push(node);
             minted.push(id);
         }
-        commit(&model_ref, model, &prior, &minted, _lock)
+        commit(&model_ref, model, &prior, &minted, &reused, _lock)
     }
 
     #[tool(
@@ -358,9 +407,16 @@ impl ScryerServer {
         let mut minter = RespMinter::new(&model);
         minter.absorb(&committed);
         let mut minted = Vec::new();
+        let mut reused = Vec::new();
         for item in &req.items {
             if let Some(e) = check_parent(&model, &item.parent_id, Kind::System) {
                 return Ok(e);
+            }
+            if let Some(id) =
+                existing_same_node(&model, Kind::Container, Some(&item.parent_id), &item.name)
+            {
+                reused.push(id);
+                continue;
             }
             let id = next_node_id_union(&model, &committed);
             let mut node = blank_node(
@@ -392,7 +448,7 @@ impl ScryerServer {
             }
             minted.push(id);
         }
-        commit(&model_ref, model, &prior, &minted, _lock)
+        commit(&model_ref, model, &prior, &minted, &reused, _lock)
     }
 
     #[tool(
@@ -416,9 +472,16 @@ impl ScryerServer {
         let mut minter = RespMinter::new(&model);
         minter.absorb(&committed);
         let mut minted = Vec::new();
+        let mut reused = Vec::new();
         for item in &req.items {
             if let Some(e) = check_parent(&model, &item.parent_id, Kind::Container) {
                 return Ok(e);
+            }
+            if let Some(id) =
+                existing_same_node(&model, Kind::Component, Some(&item.parent_id), &item.name)
+            {
+                reused.push(id);
+                continue;
             }
             let id = next_node_id_union(&model, &committed);
             let mut node = blank_node(
@@ -432,7 +495,7 @@ impl ScryerServer {
             model.nodes.push(node);
             minted.push(id);
         }
-        commit(&model_ref, model, &prior, &minted, _lock)
+        commit(&model_ref, model, &prior, &minted, &reused, _lock)
     }
 
     #[tool(
@@ -456,6 +519,7 @@ impl ScryerServer {
         let mut minter = RespMinter::new(&model);
         minter.absorb(&committed);
         let mut minted: Vec<String> = Vec::new();
+        let mut reused_groups: Vec<String> = Vec::new();
         for item in &req.items {
             if !model.nodes.iter().any(|n| n.id == item.parent_id) {
                 return Ok(err(format!("Parent node '{}' not found", item.parent_id)));
@@ -480,6 +544,15 @@ impl ScryerServer {
                     _ => {}
                 }
             }
+            // Retry-safe: an existing group with the same name under the same
+            // parent node is returned, not duplicated.
+            if let Some(g) = model.groups.iter().find(|g| {
+                g.name.trim() == item.name.trim()
+                    && g.parent_node_id.as_deref() == Some(item.parent_id.as_str())
+            }) {
+                reused_groups.push(g.id.clone());
+                continue;
+            }
             let id = next_group_id_union(&model, &committed);
             model.groups.push(Group {
                 id: id.clone(),
@@ -501,6 +574,14 @@ impl ScryerServer {
         }
         drop(_lock);
         let mut msg = format!("Created {} group(s): {}", minted.len(), minted.join(", "));
+        if !reused_groups.is_empty() {
+            msg.push_str(&format!(
+                "\n{} group(s) already existed (same name and parent) and were returned, not \
+                 duplicated: {}",
+                reused_groups.len(),
+                reused_groups.join(", ")
+            ));
+        }
         if let Some(h) = status_header(&model_ref) {
             msg.push_str(&format!("\n{h}"));
         }
@@ -528,9 +609,16 @@ impl ScryerServer {
         let mut minter = RespMinter::new(&model);
         minter.absorb(&committed);
         let mut minted = Vec::new();
+        let mut reused = Vec::new();
         for item in &req.items {
             if let Some(e) = check_parent(&model, &item.parent_id, Kind::Component) {
                 return Ok(e);
+            }
+            if let Some(id) =
+                existing_same_node(&model, Kind::Symbol, Some(&item.parent_id), &item.name)
+            {
+                reused.push(id);
+                continue;
             }
             let id = next_node_id_union(&model, &committed);
             let mut node = blank_node(
@@ -588,7 +676,7 @@ impl ScryerServer {
             model.nodes.push(node);
             minted.push(id);
         }
-        commit(&model_ref, model, &prior, &minted, _lock)
+        commit(&model_ref, model, &prior, &minted, &reused, _lock)
     }
 
     #[tool(
@@ -2108,6 +2196,48 @@ mod tests {
         assert!(
             text.contains("rule 8") && text.contains("EMPTY"),
             "gist rides the response: {text}"
+        );
+    }
+
+    /// A retried add_* call (same kind, parent, and name) returns the existing
+    /// node instead of minting a sibling duplicate — agents retry, and a
+    /// duplicate from a retry is a workflow bug even though no single call
+    /// misbehaved.
+    #[test]
+    fn retried_add_returns_existing_node_not_a_duplicate() {
+        let (server, dir, system_id) = temp_project();
+        let project = dir.path().to_string_lossy().to_string();
+        let call = || {
+            server
+                .add_container(Parameters(AddContainerRequest {
+                    project: Some(project.clone()),
+                    items: vec![ContainerItem {
+                        parent_id: system_id.clone(),
+                        name: "API".into(),
+                        technology: None,
+                        description: None,
+                        external: false,
+                        boundary_dir: None,
+                        responsibilities: vec![],
+                    }],
+                }))
+                .unwrap()
+        };
+        let first = call();
+        let text = serde_json::to_string(&first.content).unwrap();
+        assert!(text.contains("node-2"), "{text}");
+
+        let second = call();
+        let text = serde_json::to_string(&second.content).unwrap();
+        assert!(
+            text.contains("reused") && text.contains("node-2"),
+            "the retry returns the existing node: {text}"
+        );
+        let plan = read_plan(&dir);
+        assert_eq!(
+            plan.nodes.iter().filter(|n| n.name == "API").count(),
+            1,
+            "no duplicate minted"
         );
     }
 

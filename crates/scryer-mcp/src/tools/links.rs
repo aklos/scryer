@@ -33,6 +33,7 @@ impl ScryerServer {
         let node_ids: HashSet<String> =
             model.nodes.iter().map(|n| n.id.clone()).collect();
         let mut added: Vec<String> = Vec::new();
+        let mut reused: Vec<String> = Vec::new();
         for item in &req.links {
             if !node_ids.contains(&item.src) {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -51,6 +52,18 @@ impl ScryerServer {
                     "Self-link rejected: {} -> {}",
                     item.src, item.dst
                 ))]));
+            }
+            // Retry-safe: an IDENTICAL link (same endpoints and label) already
+            // in the model is returned, not duplicated — a retried tool call
+            // that mints a parallel copy is a workflow bug even though no
+            // single call misbehaved.
+            if let Some(existing) = model
+                .links
+                .iter()
+                .find(|l| l.src == item.src && l.dst == item.dst && l.label == item.label)
+            {
+                reused.push(existing.id.clone());
+                continue;
             }
             // Parallel edges (same endpoints, different labels) must NOT share
             // an id: both diff engines key links by id, so a collision merges
@@ -104,6 +117,13 @@ impl ScryerServer {
             added.len(),
             added.join(", ")
         );
+        if !reused.is_empty() {
+            msg.push_str(&format!(
+                "\n{} identical link(s) already existed and were returned, not duplicated: {}",
+                reused.len(),
+                reused.join(", ")
+            ));
+        }
         if let Some(h) = status_header(&model_ref) {
             msg.push_str(&format!("\n{h}"));
         }
@@ -281,5 +301,47 @@ mod tests {
         let after = scryer_core::read_planned_at(&model_ref).unwrap();
         let l = after.links.iter().find(|l| l.id == first).unwrap();
         assert_eq!(l.method, None, "empty string cleared the method");
+    }
+
+    /// A retried add_links with an identical link (same endpoints and label)
+    /// returns the existing id — it must not mint a parallel -2 copy. A
+    /// genuinely different label on the same endpoints still creates the
+    /// parallel edge.
+    #[test]
+    fn retried_add_links_reuses_identical_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        m.nodes.push(node("a", "A"));
+        m.nodes.push(node("b", "B"));
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+        let server = ScryerServer::new();
+        let project = dir.path().to_string_lossy().to_string();
+        let call = |label: &str| {
+            server
+                .add_links(Parameters(AddLinkRequest {
+                    project: Some(project.clone()),
+                    links: vec![AddLinkItem {
+                        src: "a".into(),
+                        dst: "b".into(),
+                        label: label.into(),
+                        method: None,
+                    }],
+                }))
+                .unwrap()
+        };
+        call("queries");
+        let text = serde_json::to_string(&call("queries").content).unwrap();
+        assert!(
+            text.contains("already existed"),
+            "retry reuses the identical link: {text}"
+        );
+        let plan = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(plan.links.len(), 1, "no parallel duplicate");
+
+        // Different label = a real parallel edge, still allowed.
+        call("streams to");
+        let plan = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(plan.links.len(), 2);
     }
 }
