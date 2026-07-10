@@ -11,7 +11,7 @@
 //! same ambient signal, one pulled, one pushed), and `--json` returns the
 //! counts under the same keys as `GET /status`.
 
-use crate::helpers::{status_counts, StatusCounts};
+use crate::helpers::{pending_changes, status_counts, StatusCounts};
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run_status(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -92,6 +92,224 @@ pub(crate) fn find_project(start: &Path) -> Option<PathBuf> {
         dir = d.parent().map(Path::to_path_buf);
     }
     None
+}
+
+/// `scryer-mcp check` — the opt-in CI gate. Exit 0 clean, 1 findings, 2 no
+/// model / unusable repo (a misconfigured CI step should be loud, unlike
+/// `status`). Default failure conditions: validator warnings on the working
+/// view (the same trio the `validate_model` tool runs) and anchors whose code
+/// is gone — broken/missing fingerprints plus a baseline-free existence sweep.
+/// `--fail-on-drift` and `--fail-on-pending` gate stricter teams; without the
+/// flags those dimensions are reported as notes, and dimensions that CANNOT be
+/// verified (no committed baseline / reconcile anchor) say so instead of
+/// passing silently.
+pub(crate) fn run_check(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut fail_on_drift = false;
+    let mut fail_on_pending = false;
+    let mut start: Option<PathBuf> = None;
+    for a in args {
+        match a.as_str() {
+            "--fail-on-drift" => fail_on_drift = true,
+            "--fail-on-pending" => fail_on_pending = true,
+            _ if !a.starts_with('-') && start.is_none() => start = Some(PathBuf::from(a)),
+            other => {
+                eprintln!(
+                    "unknown argument '{other}'\nusage: scryer-mcp check [--fail-on-drift] [--fail-on-pending] [path]"
+                );
+                std::process::exit(2);
+            }
+        }
+    }
+    let start = match start {
+        Some(p) => p,
+        None => std::env::current_dir()?,
+    };
+    let Some(project) = find_project(&start) else {
+        eprintln!("scryer check: no model found (searched up from {})", start.display());
+        std::process::exit(2);
+    };
+    let r = scryer_core::ModelRef::ProjectLocal(project.clone());
+    let report = match check_report(&r, fail_on_drift, fail_on_pending) {
+        Ok(rep) => rep,
+        Err(e) => {
+            eprintln!("scryer check: {e}");
+            std::process::exit(2);
+        }
+    };
+    if report.failures.is_empty() {
+        println!("scryer check: clean ({})", project.display());
+    } else {
+        println!("scryer check: {} finding(s)", report.failures.len());
+        for f in &report.failures {
+            println!("- {f}");
+        }
+    }
+    for n in &report.notes {
+        println!("note: {n}");
+    }
+    if !report.failures.is_empty() {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+pub(crate) struct CheckReport {
+    /// Findings that fail the gate.
+    pub failures: Vec<String>,
+    /// Non-gating observations: dimensions opted out of, or unverifiable ones
+    /// — named explicitly so a vacuous pass never reads as a real one.
+    pub notes: Vec<String>,
+}
+
+pub(crate) fn check_report(
+    r: &scryer_core::ModelRef,
+    fail_on_drift: bool,
+    fail_on_pending: bool,
+) -> Result<CheckReport, String> {
+    use scryer_extract::anchors::AnchorState;
+
+    let committed = scryer_core::read_model_at(r)?;
+    let planned = scryer_core::read_planned_at(r)?;
+    let working = scryer_core::working_view(&committed, &planned);
+    let project = r.project_path();
+    let mut failures: Vec<String> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+
+    // 1) The validator trio the `validate_model` tool runs, on the working view.
+    let mut warnings = scryer_core::validate::validate(&working);
+    warnings.extend(scryer_core::validate::validate_coverage(&working, project));
+    warnings.extend(scryer_extract::anchors::whole_symbol_warnings(&working, project));
+    failures.extend(warnings.into_iter().map(|w| format!("validator: {w}")));
+
+    // 2) Anchor fingerprints, when a committed baseline exists. Changed spans
+    //    are drift (unreconciled churn), not breakage — they gate only under
+    //    --fail-on-drift. Broken/missing spans always gate: the model points
+    //    at code that is gone.
+    let mut swept: std::collections::HashSet<(String, String)> = Default::default();
+    if r.anchors_path().exists() {
+        let check = scryer_extract::anchors::check_anchors(r)?;
+        let mut changed = 0usize;
+        for o in &check.observations {
+            match o.state {
+                AnchorState::Changed => changed += 1,
+                AnchorState::Broken => {
+                    swept.insert((o.key.clone(), o.file.clone()));
+                    failures.push(format!(
+                        "anchor: '{}' ({}) → {}{} — anchored span not found",
+                        o.key,
+                        o.host_name,
+                        o.file,
+                        o.symbol.as_deref().map(|s| format!(" `{s}`")).unwrap_or_default()
+                    ));
+                }
+                AnchorState::FileMissing => {
+                    swept.insert((o.key.clone(), o.file.clone()));
+                    failures.push(format!(
+                        "anchor: '{}' ({}) → {} — file is gone",
+                        o.key, o.host_name, o.file
+                    ));
+                }
+            }
+        }
+        if changed > 0 {
+            let line = format!("{changed} anchored claim(s) changed since the last reconcile");
+            if fail_on_drift {
+                failures.push(format!("drift: {line}"));
+            } else {
+                notes.push(format!("{line} (not gating — pass --fail-on-drift)"));
+            }
+        }
+    } else {
+        notes.push(
+            "anchor fingerprints unverified — no baseline (.scryer/.anchors.json). A reconcile \
+             (get_health / get_drift over MCP) writes it; commit it for CI to check against."
+                .into(),
+        );
+    }
+
+    // 3) Baseline-free existence sweep: an exact-path anchor whose file is
+    //    gone fails even before any reconcile baseline exists. Globs are
+    //    completeness's domain (get_health), not a gate.
+    let mut keys: Vec<&String> = working.source_map.keys().collect();
+    keys.sort();
+    for key in keys {
+        for loc in &working.source_map[key] {
+            if loc.pattern.contains(['*', '?', '[']) {
+                continue;
+            }
+            if swept.contains(&(key.clone(), loc.pattern.clone())) {
+                continue; // already reported off its fingerprint
+            }
+            if !project.join(&loc.pattern).exists() {
+                failures.push(format!("anchor: '{}' → {} — file does not exist", key, loc.pattern));
+            }
+        }
+    }
+
+    // 4) Scope drift (mtime ∩ git-diff when the anchor carries a commit, so a
+    //    fresh CI checkout doesn't false-alarm).
+    if r.sync_path().exists() {
+        let sync = scryer_core::read_sync_state(r);
+        let scopes = scryer_core::drift::drifted_scopes(&committed, project, &sync);
+        if !scopes.is_empty() {
+            if fail_on_drift {
+                for s in &scopes {
+                    let mut preview = s.changed_files.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+                    if s.changed_files.len() > 3 {
+                        preview.push_str(&format!(", … {} more", s.changed_files.len() - 3));
+                    }
+                    failures.push(format!(
+                        "drift: '{}' — {} changed file(s): {}",
+                        s.node_name,
+                        s.changed_files.len(),
+                        preview
+                    ));
+                }
+            } else {
+                notes.push(format!(
+                    "{} drifted scope(s) (not gating — pass --fail-on-drift)",
+                    scopes.len()
+                ));
+            }
+        }
+    } else if fail_on_drift {
+        notes.push(
+            "drift unverifiable — no reconcile anchor (.scryer/.sync). A reconcile writes it; \
+             commit it for CI to measure against."
+                .into(),
+        );
+    }
+
+    // 5) Outstanding plan work.
+    let pending = pending_changes(&committed, &planned);
+    if !pending.is_empty() {
+        if fail_on_pending {
+            for ch in pending.iter().take(10) {
+                failures.push(format!("pending: {} '{}'", kind_label(&ch.kind), ch.label));
+            }
+            if pending.len() > 10 {
+                failures.push(format!("pending: … {} more", pending.len() - 10));
+            }
+        } else {
+            notes.push(format!(
+                "{} pending plan item(s) (not gating — pass --fail-on-pending)",
+                pending.len()
+            ));
+        }
+    }
+
+    Ok(CheckReport { failures, notes })
+}
+
+fn kind_label(k: &scryer_core::diff::ElementKind) -> &'static str {
+    use scryer_core::diff::ElementKind as EK;
+    match k {
+        EK::Node => "node",
+        EK::Link => "link",
+        EK::Responsibility => "responsibility",
+        EK::Property => "property",
+        EK::Group => "group",
+    }
 }
 
 /// Outcome of a statusline install attempt.
@@ -223,6 +441,121 @@ mod tests {
 
         let c = status_counts(&r).unwrap();
         assert_eq!(status_line(&c), "scryer: 1 pending · no reconcile anchor yet");
+    }
+
+    /// A clean, fully-anchored model passes — and the unverifiable anchor
+    /// dimension is NAMED in the notes, never silently vacuous. Pending work
+    /// is a note by default and a listed failure under --fail-on-pending.
+    #[test]
+    fn check_gates_pending_only_when_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/auth.rs"), "fn verify() {}\n").unwrap();
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, "Acme", None));
+        let mut api = node("api", Kind::Container, "API", Some("sys"));
+        api.responsibilities = vec![serde_json::from_value(
+            serde_json::json!({ "id": "r-1", "statement": "verifies requests" }),
+        )
+        .unwrap()];
+        m.nodes.push(api);
+        m.source_map.insert(
+            "r-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/auth.rs" })).unwrap()],
+        );
+        scryer_core::write_model_at(&r, &m).unwrap();
+
+        let rep = check_report(&r, false, false).unwrap();
+        assert!(rep.failures.is_empty(), "clean model: {:?}", rep.failures);
+        assert!(
+            rep.notes.iter().any(|n| n.contains("no baseline")),
+            "unverified anchors must be named: {:?}",
+            rep.notes
+        );
+
+        // Add a pending plan item: a note by default, a failure when gating.
+        let mut plan = m.clone();
+        plan.nodes.push(node("worker", Kind::Container, "Worker", Some("sys")));
+        plan.links.push(scryer_core::Link {
+            id: "l-1".into(),
+            src: "api".into(),
+            dst: "worker".into(),
+            label: "enqueues".into(),
+            method: None,
+        });
+        scryer_core::write_planned_at(&r, &plan).unwrap();
+        let rep = check_report(&r, false, false).unwrap();
+        assert!(rep.failures.is_empty(), "{:?}", rep.failures);
+        assert!(rep.notes.iter().any(|n| n.contains("pending plan item")));
+        let rep = check_report(&r, false, true).unwrap();
+        assert!(
+            rep.failures.iter().any(|f| f.starts_with("pending: node 'Worker'")),
+            "{:?}",
+            rep.failures
+        );
+    }
+
+    /// An exact-path anchor whose file is gone fails the gate even with no
+    /// fingerprint baseline — and with a baseline, the same anchor is reported
+    /// once off its fingerprint, not twice.
+    #[test]
+    fn check_fails_on_missing_anchor_files_without_duplicates() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/auth.rs"), "fn verify() {}\n").unwrap();
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, "Acme", None));
+        let mut api = node("api", Kind::Container, "API", Some("sys"));
+        api.responsibilities = vec![serde_json::from_value(
+            serde_json::json!({ "id": "r-1", "statement": "verifies requests" }),
+        )
+        .unwrap()];
+        m.nodes.push(api);
+        m.source_map.insert(
+            "r-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/auth.rs" })).unwrap()],
+        );
+        scryer_core::write_model_at(&r, &m).unwrap();
+
+        // No baseline: the existence sweep catches the deleted file.
+        std::fs::remove_file(dir.path().join("src/auth.rs")).unwrap();
+        let rep = check_report(&r, false, false).unwrap();
+        let hits = rep.failures.iter().filter(|f| f.contains("src/auth.rs")).count();
+        assert_eq!(hits, 1, "sweep reports the gone file once: {:?}", rep.failures);
+
+        // With a baseline: reported off the fingerprint, still exactly once.
+        std::fs::write(dir.path().join("src/auth.rs"), "fn verify() {}\n").unwrap();
+        scryer_extract::anchors::write_baseline(&r).unwrap();
+        std::fs::remove_file(dir.path().join("src/auth.rs")).unwrap();
+        let rep = check_report(&r, false, false).unwrap();
+        let hits: Vec<&String> =
+            rep.failures.iter().filter(|f| f.contains("src/auth.rs")).collect();
+        assert_eq!(hits.len(), 1, "fingerprint + sweep must not double-report: {:?}", rep.failures);
+        assert!(hits[0].contains("file is gone"), "{:?}", hits);
+    }
+
+    /// Validator warnings gate by default — here a source-map entry pointing
+    /// at an id the model doesn't hold.
+    #[test]
+    fn check_fails_on_validator_warnings() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, "Acme", None));
+        m.source_map.insert(
+            "ghost-id".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/x.rs" })).unwrap()],
+        );
+        scryer_core::write_model_at(&r, &m).unwrap();
+
+        let rep = check_report(&r, false, false).unwrap();
+        assert!(
+            rep.failures.iter().any(|f| f.starts_with("validator:") && f.contains("ghost-id")),
+            "{:?}",
+            rep.failures
+        );
     }
 
     /// The statusline start dir prefers the workspace's project dir, falls

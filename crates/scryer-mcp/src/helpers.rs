@@ -248,10 +248,19 @@ pub(crate) fn read_fail(layer: &str, model_ref: &ModelRef, e: &str) -> String {
 /// `get_pending` reports (vagrant elements are drift review, never the
 /// implement queue).
 pub(crate) fn pending_change_count(committed: &ScryModel, planned: &ScryModel) -> usize {
+    pending_changes(committed, planned).len()
+}
+
+/// The plan-diff elements behind [`pending_change_count`], for callers that
+/// list the queue rather than count it.
+pub(crate) fn pending_changes(
+    committed: &ScryModel,
+    planned: &ScryModel,
+) -> Vec<scryer_core::diff::ElementChange> {
     use scryer_core::diff::ElementKind as EK;
     let plan = scryer_core::diff::diff(committed, planned);
     plan.changes
-        .iter()
+        .into_iter()
         .filter(|ch| {
             let vagrant = match ch.kind {
                 EK::Node => planned
@@ -276,7 +285,7 @@ pub(crate) fn pending_change_count(committed: &ScryModel, planned: &ScryModel) -
             };
             !vagrant
         })
-        .count()
+        .collect()
 }
 
 /// The loop-state counts behind every ambient status line — shared by the MCP
