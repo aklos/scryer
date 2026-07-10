@@ -83,7 +83,8 @@ pub struct Ident {
 /// write_baseline`). The resolver maps the head segment to a container (via the
 /// crate/package manifest map) and the tail to a symbol, producing the
 /// cross-container edges that bare-name resolution cannot. Currently emitted for
-/// Rust only; empty for other languages (each needs its own import grammar).
+/// Rust only; TS/JS emits [`ImportRef`] instead (its specs are module paths,
+/// not segment lists); the remaining languages emit neither yet.
 #[derive(Debug, Clone)]
 pub struct PathRef {
     /// Path segments head-to-leaf, e.g. `["scryer_extract", "anchors", "write_baseline"]`.
@@ -92,12 +93,52 @@ pub struct PathRef {
     pub line: u32,
 }
 
+/// One module import in a TS/JS file: `import`/`export … from`, `require(…)`,
+/// or a dynamic `import(…)`. The resolver maps a relative `spec` to a file and
+/// a bare `spec` to a container (via the declared package-name map), then the
+/// `names` to symbols there — the TS/JS counterpart of [`PathRef`]. Only
+/// literal string specs are captured; a computed spec has no unambiguous
+/// target and guessing would mint false edges.
+#[derive(Debug, Clone)]
+pub struct ImportRef {
+    /// Verbatim module specifier: `./zoom`, `../lib/dates`, `@acme/ui`,
+    /// `lodash/merge`.
+    pub spec: String,
+    /// Imported symbols. Empty for namespace (`* as ns`), side-effect, and
+    /// `export *` forms — those carry file-level evidence only.
+    pub names: Vec<ImportedSym>,
+    /// 1-based line of the import statement or call site.
+    pub line: u32,
+}
+
+/// One imported symbol: the name in the SOURCE module (what an edge targets)
+/// and the local binding usage sites spell. They differ only for `{ x as y }`
+/// renames and `{ key: local }` require-destructures; for a default import or
+/// whole-module `require` binding the local name doubles as the (guessed,
+/// resolved unique-or-skip) source name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedSym {
+    pub name: String,
+    pub local: String,
+}
+
+impl ImportedSym {
+    fn same(name: &str) -> Self {
+        ImportedSym {
+            name: name.to_string(),
+            local: name.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FileParse {
     pub defs: Vec<Def>,
     pub idents: Vec<Ident>,
     /// Qualified path references for cross-container resolution. See [`PathRef`].
     pub paths: Vec<PathRef>,
+    /// TS/JS module imports for cross-file/container resolution. See [`ImportRef`].
+    pub imports: Vec<ImportRef>,
 }
 
 /// Parse a source file into its definitions + identifier occurrences. Returns
@@ -127,19 +168,26 @@ pub fn parse_file_with(path: &Path, source: &str, parser: &mut Parser) -> Option
     let mut idents: Vec<Ident> = Vec::new();
     collect_idents(root, bytes, &mut idents);
 
-    // Qualified path references for cross-container resolution. Rust-only for
-    // now; the grammar nodes (`use_declaration`, `scoped_identifier`) are
-    // Rust-specific. Other families leave `paths` empty.
+    // Qualified path references for cross-container resolution. The grammar
+    // nodes (`use_declaration`, `scoped_identifier`) are Rust-specific; TS/JS
+    // gets the equivalent signal from `imports` below. Other families leave
+    // both empty.
     let mut paths: Vec<PathRef> = Vec::new();
     if family_for_ext(ext) == Family::Rust {
         collect_use_paths(root, bytes, &mut paths);
         collect_qualified_paths(root, bytes, &mut paths);
     }
 
+    let mut imports: Vec<ImportRef> = Vec::new();
+    if family_for_ext(ext) == Family::TsLike {
+        collect_ts_imports(root, bytes, &mut imports);
+    }
+
     Some(FileParse {
         defs,
         idents,
         paths,
+        imports,
     })
 }
 
@@ -558,6 +606,180 @@ fn flatten_use(node: Node, bytes: &[u8]) -> Vec<Vec<String>> {
     }
 }
 
+// --- TS/JS module imports (cross-file/container resolution input) ---
+
+/// Walk the whole tree for the four import forms: `import … from "spec"`,
+/// `export … from "spec"`, `require("spec")`, and dynamic `import("spec")`.
+/// `import`/`export` statements are module-level, but `require`/`import()` can
+/// sit anywhere, so the walk is unconditional.
+fn collect_ts_imports(root: Node, bytes: &[u8], out: &mut Vec<ImportRef>) {
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "import_statement" => {
+                if let Some(spec) = string_literal(n.child_by_field_name("source"), bytes) {
+                    let mut names = Vec::new();
+                    for child in named_children(n) {
+                        if child.kind() == "import_clause" {
+                            ts_import_clause_names(child, bytes, &mut names);
+                        }
+                    }
+                    out.push(ImportRef {
+                        spec,
+                        names,
+                        line: n.start_position().row as u32 + 1,
+                    });
+                }
+                continue; // nothing else importable inside
+            }
+            "export_statement" => {
+                // Only a RE-export (`export { x } from "m"`, `export * from "m"`)
+                // is an import; a plain export wraps a declaration — descend.
+                if let Some(spec) = string_literal(n.child_by_field_name("source"), bytes) {
+                    let mut names = Vec::new();
+                    for child in named_children(n) {
+                        if child.kind() == "export_clause" {
+                            for item in named_children(child) {
+                                if item.kind() == "export_specifier" {
+                                    // `export { a as b } from "m"`: the source
+                                    // module's symbol is `a`; a re-export binds
+                                    // no local name, so `local` mirrors it.
+                                    if let Some(name) = field_text(item, "name", bytes) {
+                                        names.push(ImportedSym::same(&name));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    out.push(ImportRef {
+                        spec,
+                        names,
+                        line: n.start_position().row as u32 + 1,
+                    });
+                    continue;
+                }
+            }
+            "call_expression" => {
+                let is_import_call = n.child_by_field_name("function").is_some_and(|f| {
+                    f.kind() == "import"
+                        || (f.kind() == "identifier" && f.utf8_text(bytes) == Ok("require"))
+                });
+                if is_import_call {
+                    if let Some(spec) = call_string_arg(n, bytes) {
+                        out.push(ImportRef {
+                            spec,
+                            names: ts_binding_names(n, bytes),
+                            line: n.start_position().row as u32 + 1,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+        for child in named_children(n) {
+            stack.push(child);
+        }
+    }
+}
+
+/// Names bound by an import clause: the default-import local binding and each
+/// named specifier (`{ a as b }` -> source `a`, local `b`). A namespace import
+/// (`* as ns`) binds the whole module, not a symbol — contributes none.
+fn ts_import_clause_names(clause: Node, bytes: &[u8], names: &mut Vec<ImportedSym>) {
+    for child in named_children(clause) {
+        match child.kind() {
+            "identifier" => {
+                if let Ok(text) = child.utf8_text(bytes) {
+                    names.push(ImportedSym::same(text));
+                }
+            }
+            "named_imports" => {
+                for item in named_children(child) {
+                    if item.kind() == "import_specifier" {
+                        if let Some(name) = field_text(item, "name", bytes) {
+                            let local = field_text(item, "alias", bytes).unwrap_or_else(|| name.clone());
+                            names.push(ImportedSym { name, local });
+                        }
+                    }
+                }
+            }
+            _ => {} // namespace_import
+        }
+    }
+}
+
+/// The literal text of a `string` node, or `None` for anything computed
+/// (template strings, identifiers, concatenations).
+fn string_literal(node: Option<Node>, bytes: &[u8]) -> Option<String> {
+    let node = node?;
+    if node.kind() != "string" {
+        return None;
+    }
+    let text: String = named_children(node)
+        .into_iter()
+        .filter(|c| c.kind() == "string_fragment")
+        .filter_map(|c| c.utf8_text(bytes).ok())
+        .collect();
+    (!text.is_empty()).then_some(text)
+}
+
+/// First argument of a call when it is a literal string (`require("m")`,
+/// `import("m", opts)`).
+fn call_string_arg(call: Node, bytes: &[u8]) -> Option<String> {
+    let args = call.child_by_field_name("arguments")?;
+    string_literal(named_children(args).into_iter().next(), bytes)
+}
+
+/// Names bound by a `require`/dynamic-import call's enclosing declarator:
+/// `const { a, b: c } = require("m")` -> `[a/a, b/c]`, `const x = require("m")`
+/// -> `[x/x]`, unwrapping one `await` for `const { a } = await import("m")`.
+/// Anything else (bare call, member access) binds no symbol names.
+fn ts_binding_names(call: Node, bytes: &[u8]) -> Vec<ImportedSym> {
+    let mut value = call;
+    if let Some(p) = value.parent() {
+        if p.kind() == "await_expression" {
+            value = p;
+        }
+    }
+    let Some(declarator) = value.parent().filter(|p| p.kind() == "variable_declarator") else {
+        return Vec::new();
+    };
+    if declarator.child_by_field_name("value").map(|v| v.id()) != Some(value.id()) {
+        return Vec::new();
+    }
+    let Some(name_node) = declarator.child_by_field_name("name") else {
+        return Vec::new();
+    };
+    match name_node.kind() {
+        "identifier" => name_node
+            .utf8_text(bytes)
+            .ok()
+            .map(|s| vec![ImportedSym::same(s)])
+            .unwrap_or_default(),
+        "object_pattern" => named_children(name_node)
+            .into_iter()
+            .filter_map(|c| match c.kind() {
+                "shorthand_property_identifier_pattern" => {
+                    c.utf8_text(bytes).ok().map(ImportedSym::same)
+                }
+                // `{ a: local }`: source-side name `a`, bound as `local`.
+                "pair_pattern" => {
+                    let name = field_text(c, "key", bytes)?;
+                    let local = field_text(c, "value", bytes).unwrap_or_else(|| name.clone());
+                    Some(ImportedSym { name, local })
+                }
+                // `{ a = fallback }`: source-side name `a`.
+                "object_assignment_pattern" => c
+                    .child_by_field_name("left")
+                    .and_then(|l| l.utf8_text(bytes).ok())
+                    .map(ImportedSym::same),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -729,8 +951,101 @@ pub fn run() {
 
     #[test]
     fn non_rust_has_no_paths() {
-        // Path capture is Rust-only for now; other families stay empty.
+        // Segment-path capture is Rust-only; TS/JS speaks `imports` instead.
         let p = parse_file(Path::new("f.ts"), "import {x} from './y';\n").unwrap();
         assert!(p.paths.is_empty());
+        assert!(!p.imports.is_empty());
+        // And the converse: Rust never emits `imports`.
+        let r = parse_file(Path::new("f.rs"), "use scryer_core::drift;\n").unwrap();
+        assert!(r.imports.is_empty());
+    }
+
+    /// An import appears in the capture iff spec + (name, local) pairs match,
+    /// regardless of line.
+    fn has_import(p: &FileParse, spec: &str, names: &[(&str, &str)]) -> bool {
+        let names: Vec<ImportedSym> = names
+            .iter()
+            .map(|(name, local)| ImportedSym {
+                name: name.to_string(),
+                local: local.to_string(),
+            })
+            .collect();
+        p.imports.iter().any(|i| i.spec == spec && i.names == names)
+    }
+
+    #[test]
+    fn ts_esm_imports_captured() {
+        let src = r#"
+import Button, { Card as C, type Kind } from "@acme/ui";
+import * as helpers from "./helpers";
+import "./styles.css";
+export { fmtDate as fd } from "../lib/dates";
+export * from "./reexports";
+"#;
+        let p = parse_file(Path::new("f.ts"), src).unwrap();
+        // Default binding + named specifiers; `as` renames keep the SOURCE name
+        // as the edge target and the alias as the local binding.
+        assert!(has_import(
+            &p,
+            "@acme/ui",
+            &[("Button", "Button"), ("Card", "C"), ("Kind", "Kind")]
+        ));
+        // Namespace and side-effect imports: file-level evidence, no names.
+        assert!(has_import(&p, "./helpers", &[]));
+        assert!(has_import(&p, "./styles.css", &[]));
+        // Re-exports are imports of the source module; no local binding exists,
+        // so local mirrors the source name.
+        assert!(has_import(&p, "../lib/dates", &[("fmtDate", "fmtDate")]));
+        assert!(has_import(&p, "./reexports", &[]));
+    }
+
+    #[test]
+    fn ts_require_and_dynamic_import_captured() {
+        let src = r#"
+const { readFile, stat: statFn } = require("node:fs/promises");
+const legacy = require("./legacy");
+require("./side-effect");
+async function load() {
+  const { widget } = await import("./lazy");
+}
+"#;
+        let p = parse_file(Path::new("f.js"), src).unwrap();
+        // Destructured require: source-side name, destructure rename kept as local.
+        assert!(has_import(
+            &p,
+            "node:fs/promises",
+            &[("readFile", "readFile"), ("stat", "statFn")]
+        ));
+        // Whole-module binding: the local name, resolved unique-or-skip later.
+        assert!(has_import(&p, "./legacy", &[("legacy", "legacy")]));
+        assert!(has_import(&p, "./side-effect", &[]));
+        assert!(has_import(&p, "./lazy", &[("widget", "widget")]));
+    }
+
+    #[test]
+    fn ts_computed_specs_skipped() {
+        // A computed module spec has no unambiguous target: no capture.
+        let src = r#"
+const name = "./plugin";
+const a = require(name);
+const b = require(`./gen/${name}`);
+async function f(p: string) { return import(p); }
+"#;
+        let p = parse_file(Path::new("f.ts"), src).unwrap();
+        assert!(p.imports.is_empty(), "computed specs must not be captured");
+    }
+
+    #[test]
+    fn ts_import_lines_attributed() {
+        let src = "import { a } from \"./x\";\n\nconst y = require(\"./z\");\n";
+        let p = parse_file(Path::new("f.ts"), src).unwrap();
+        assert_eq!(
+            p.imports.iter().find(|i| i.spec == "./x").unwrap().line,
+            1
+        );
+        assert_eq!(
+            p.imports.iter().find(|i| i.spec == "./z").unwrap().line,
+            3
+        );
     }
 }

@@ -15,11 +15,13 @@ pub mod anchors;
 pub mod context;
 pub mod lang;
 pub mod manifest;
+pub mod tsconfig;
 
 pub use context::{
     build_context, compact_scope, slice_container, slice_scope, ContainerFacts, Edge, FileContext,
     ProjectContext, PromptScopeContext, ScopeContext, SymbolContext,
 };
+pub use tsconfig::TsAliases;
 
 use context::ParsedFile;
 use rayon::prelude::*;
@@ -145,6 +147,7 @@ pub fn extract_context_with_stats(
         source_paths.push((path.to_path_buf(), rel_path));
     }
     let containers = manifest::discover_containers_from_files(project, &all_files);
+    let ts_aliases = tsconfig::discover_ts_aliases(project, &all_files);
 
     // Parsing dominates extraction on code-heavy repositories. Parse files in
     // parallel while reusing one parser per Rayon worker. Sorting afterward
@@ -199,7 +202,7 @@ pub fn extract_context_with_stats(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "project".to_string());
 
-    let context = build_context(&project_name, &containers, &files);
+    let context = build_context(&project_name, &containers, &files, &ts_aliases);
     Ok((
         context,
         ExtractionStats {
@@ -417,6 +420,100 @@ mod tests {
             scoped.containers.iter().any(|c| c.dir == scope),
             "the scope's own container is present"
         );
+    }
+
+    /// End-to-end on a scratch pnpm-workspace repo: tsconfig alias imports
+    /// (through real JSONC + `extends`), package-name imports across
+    /// containers, and relative imports must all produce edges from a plain
+    /// `extract_context` walk — the full wiring, no hand-built parses.
+    #[test]
+    fn extracts_ts_monorepo_import_edges() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let write = |rel: &str, text: &str| {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write("package.json", r#"{"name":"monorepo"}"#);
+        write("pnpm-workspace.yaml", "packages:\n  - packages/*\n");
+        write(
+            "tsconfig.base.json",
+            r#"{
+  // workspace-wide aliases, Nx-style, with a trailing comma
+  "compilerOptions": { "paths": { "~shared/*": ["./packages/shared/src/*"], } },
+}"#,
+        );
+        write("packages/ui/package.json", r#"{"name":"@acme/ui"}"#);
+        write(
+            "packages/ui/src/Button.tsx",
+            "export function Button() { return <button/>; }\n",
+        );
+        write("packages/shared/package.json", r#"{"name":"@acme/shared"}"#);
+        write(
+            "packages/shared/src/dates.ts",
+            "export function fmtDate(d: Date) { return String(d); }\n",
+        );
+        write("packages/app/package.json", r#"{"name":"@acme/app"}"#);
+        write(
+            "packages/app/tsconfig.json",
+            r#"{ "extends": "../../tsconfig.base.json" }"#,
+        );
+        write(
+            "packages/app/src/helpers.ts",
+            "export function helper() { return 1; }\n",
+        );
+        write(
+            "packages/app/src/App.tsx",
+            r#"import { Button } from "@acme/ui";
+import { fmtDate } from "~shared/dates";
+import { helper } from "./helpers";
+export function App() {
+  helper();
+  return <Button title={fmtDate(new Date())} />;
+}
+"#,
+        );
+
+        let ctx = extract_context(dir.path()).expect("extraction");
+        let has_file_edge = |src: &str, dst: &str| {
+            ctx.file_edges.iter().any(|e| e.src == src && e.dst == dst)
+        };
+        // package-name import across containers
+        assert!(
+            has_file_edge("packages/app/src/App.tsx", "packages/ui/src/Button.tsx"),
+            "package import edge missing; edges: {:?}",
+            ctx.file_edges
+        );
+        // tsconfig alias through extends + JSONC
+        assert!(
+            has_file_edge("packages/app/src/App.tsx", "packages/shared/src/dates.ts"),
+            "alias import edge missing; edges: {:?}",
+            ctx.file_edges
+        );
+        // relative import
+        assert!(
+            has_file_edge("packages/app/src/App.tsx", "packages/app/src/helpers.ts"),
+            "relative import edge missing; edges: {:?}",
+            ctx.file_edges
+        );
+        // usage-site symbol edges: App -> Button / fmtDate / helper
+        let key_of = |name: &str| {
+            ctx.files
+                .iter()
+                .flat_map(|f| &f.symbols)
+                .find(|s| s.name == name)
+                .map(|s| s.key.clone())
+                .unwrap()
+        };
+        let app = key_of("App");
+        for dst in ["Button", "fmtDate", "helper"] {
+            let dst = key_of(dst);
+            assert!(
+                ctx.symbol_edges.iter().any(|e| e.src == app && e.dst == dst),
+                "symbol edge App -> {dst} missing; edges: {:?}",
+                ctx.symbol_edges
+            );
+        }
     }
 
     #[test]

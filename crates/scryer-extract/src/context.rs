@@ -14,6 +14,7 @@
 //! map, not the model.
 
 use crate::lang::{Def, FileParse};
+use crate::tsconfig::TsAliases;
 use crate::manifest::Container;
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -200,6 +201,7 @@ pub fn build_context(
     project_name: &str,
     containers: &[Container],
     files: &[ParsedFile],
+    ts_aliases: &[TsAliases],
 ) -> ProjectContext {
     // Containers, sorted by dir for a stable order.
     let mut containers_sorted: Vec<&Container> = containers.iter().collect();
@@ -262,7 +264,7 @@ pub fn build_context(
         });
     }
 
-    let (symbol_edges, file_edges) = build_edges(files, &recs, containers);
+    let (symbol_edges, file_edges) = build_edges(files, &recs, containers, ts_aliases);
 
     let mut context = ProjectContext {
         project_name: project_name.to_string(),
@@ -343,9 +345,12 @@ struct SymRec {
 /// *unambiguously* in scope (declared exactly once) — names declared more than
 /// once (`new`, `build`, …) are skipped, which removes most false edges.
 /// Symbols resolve within their file; files resolve within their container, so a
-/// file using another file's symbol yields a file→file edge. Edges are
-/// intentionally UNDER-reported: absence of an edge is not absence of a
-/// dependency, and resolution is weaker for the generic-fallback languages
+/// file using another file's symbol yields a file→file edge. Cross-container
+/// resolution rides the languages' declared forms: Rust qualified paths
+/// (`PathRef`, via the crate map) and TS/JS imports (`ImportRef`, via the
+/// package map and file-path resolution). Edges are intentionally
+/// UNDER-reported: absence of an edge is not absence of a dependency, and
+/// resolution is weaker for the generic-fallback languages
 /// (go/java/ruby/c/cpp/c#/php), where only coarse definitions and bare
 /// identifiers are seen.
 /// Bare identifier names that overwhelmingly denote universal trait/inherent
@@ -387,6 +392,7 @@ fn build_edges(
     files: &[ParsedFile],
     recs: &[SymRec],
     containers: &[Container],
+    ts_aliases: &[TsAliases],
 ) -> (Vec<Edge>, Vec<Edge>) {
     let mut ranges_by_file: HashMap<&str, Vec<(u32, u32, &str)>> = HashMap::new();
     let mut container_of_file: HashMap<&str, &str> = HashMap::new();
@@ -401,6 +407,15 @@ fn build_edges(
     for c in containers {
         crate_to_dir.insert(c.name.replace('-', "_"), c.dir.as_str());
     }
+
+    // The TS/JS counterpart: a bare import spec's package name -> container.
+    // VERBATIM declared names (npm names keep `@scope/` and hyphens), plus the
+    // file inventory for resolving relative and subpath specs to actual files.
+    let mut pkg_to_dir: HashMap<&str, &str> = HashMap::new();
+    for c in containers {
+        pkg_to_dir.insert(c.name.as_str(), c.dir.as_str());
+    }
+    let inventory: HashSet<&str> = files.iter().map(|f| f.rel_path.as_str()).collect();
 
     for r in recs {
         ranges_by_file
@@ -450,7 +465,94 @@ fn build_edges(
     for f in files {
         let file = f.rel_path.as_str();
         let container_dir = container_of_file.get(file).copied();
+
+        // The nearest (longest-dir) tsconfig governs this file's bare specs.
+        let alias_config = ts_aliases
+            .iter()
+            .filter(|a| a.dir.is_empty() || file.starts_with(&format!("{}/", a.dir)))
+            .max_by_key(|a| a.dir.len());
+
+        // --- TS/JS imports: the language's declared cross-file/container form ---
+        // Resolve each import to a target file (relative specs against the
+        // importing file's directory; bare specs through the package map +
+        // subpath), emit the file edge, and index the LOCAL bindings so the
+        // ident pass below can attach symbol edges at the usage sites — the
+        // import line itself is module-scoped, exactly like a Rust `use`.
+        // Every recognized import consumes its locals even when unresolved
+        // (external package, unparsed target): the name is lexically bound to
+        // another module, so letting it fall through to the bare-name scopes
+        // would misattribute it to a same-name local def.
+        let mut imported_locals: HashMap<&str, Option<&str>> = HashMap::new();
+        for imp in &f.parse.imports {
+            let mut target_file: Option<&str> = None;
+            let mut target_dir: Option<&str> = None;
+            if imp.spec.starts_with('.') {
+                target_file = resolve_relative(file, &imp.spec)
+                    .and_then(|base| find_module_file(&base, &inventory));
+            } else if !imp.spec.starts_with('/') {
+                // tsconfig `paths`/`baseUrl` first — TS applies them before
+                // package resolution — then the declared package map.
+                target_file =
+                    alias_config.and_then(|cfg| resolve_ts_alias(&imp.spec, cfg, &inventory));
+                if target_file.is_none() {
+                    let (pkg, subpath) = split_package_spec(&imp.spec);
+                    match pkg_to_dir.get(pkg) {
+                        // Self-referencing package import: the same-container
+                        // scopes above already cover it — don't consume.
+                        Some(&dir) if Some(dir) == container_dir => continue,
+                        Some(&dir) => {
+                            target_dir = Some(dir);
+                            target_file = find_package_file(dir, subpath, &inventory);
+                        }
+                        None => {} // external package: consume locals, no edges
+                    }
+                }
+            }
+            if let Some(t) = target_file.filter(|t| *t != file) {
+                file_edges.insert((file.to_string(), t.to_string()));
+            }
+            for n in &imp.names {
+                // Resolve in the target module file when one was found, else
+                // container-wide — the unique-or-skip discipline throughout.
+                let hit = target_file
+                    .and_then(|t| file_names.get(t))
+                    .and_then(|m| m.get(n.name.as_str()))
+                    .filter(|d| d.len() == 1)
+                    .map(|d| (d[0], None))
+                    .or_else(|| {
+                        target_dir
+                            .and_then(|dir| cont_names.get(dir))
+                            .and_then(|m| m.get(n.name.as_str()))
+                            .filter(|c| c.len() == 1)
+                            .map(|c| (c[0].0, Some(c[0].1)))
+                    });
+                match hit {
+                    Some((dst_key, dst_file)) => {
+                        if let Some(df) = dst_file.filter(|df| *df != file) {
+                            file_edges.insert((file.to_string(), df.to_string()));
+                        }
+                        imported_locals.insert(n.local.as_str(), Some(dst_key));
+                    }
+                    None => {
+                        imported_locals.insert(n.local.as_str(), None);
+                    }
+                }
+            }
+        }
+
         for ident in &f.parse.idents {
+            // Imported locals take precedence over every bare-name scope: the
+            // binding is a per-file lexical fact, so it even overrides the
+            // universal-name skip (`import { get } from "./api"` is exact
+            // evidence in a way a bare `get` is not).
+            if let Some(&dst) = imported_locals.get(ident.name.as_str()) {
+                if let (Some(dst_key), Some(src)) = (dst, enclosing(file, ident.line)) {
+                    if src != dst_key {
+                        sym_edges.insert((src.to_string(), dst_key.to_string()));
+                    }
+                }
+                continue;
+            }
             // Universal trait/inherent method & constructor names (`Vec::new`,
             // `x.clone()`, `T::from`, …) carry no dependency signal: the name-only
             // resolver can't tell `ScryModel::new` from `Vec::new`, so a single
@@ -573,6 +675,147 @@ fn module_name(file_rel: &str) -> &str {
         }
     }
     stem
+}
+
+/// Known TS/JS source extensions, in resolution priority order.
+const TS_EXTS: &[&str] = &["ts", "tsx", "js", "jsx", "mts", "cts", "mjs", "cjs"];
+
+/// Resolve a relative import spec against the importing file's location into a
+/// normalized project-relative base path (extension handling is
+/// [`find_module_file`]'s job). `None` when `..` escapes the project root.
+fn resolve_relative(file_rel: &str, spec: &str) -> Option<String> {
+    let dir = file_rel.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    let mut parts: Vec<&str> = if dir.is_empty() {
+        Vec::new()
+    } else {
+        dir.split('/').collect()
+    };
+    for comp in spec.split('/') {
+        match comp {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            other => parts.push(other),
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// Find the file a TS/JS module base path denotes, in the candidate order
+/// Node/bundlers use: the exact path, the `.ts` twins of an emitted-extension
+/// spec (NodeNext code writes `./x.js` for the source `./x.ts`), bare source
+/// extensions, then directory index files. First hit wins — the same
+/// deterministic preference a bundler applies.
+fn find_module_file<'a>(base: &str, inventory: &HashSet<&'a str>) -> Option<&'a str> {
+    let hit = |c: String| inventory.get(c.as_str()).copied();
+    if let Some(f) = hit(base.to_string()) {
+        return Some(f);
+    }
+    for (emitted, twins) in [
+        ("js", &["ts", "tsx"][..]),
+        ("mjs", &["mts"][..]),
+        ("cjs", &["cts"][..]),
+    ] {
+        if let Some(stem) = base.strip_suffix(&format!(".{emitted}")) {
+            if let Some(f) = twins.iter().find_map(|t| hit(format!("{stem}.{t}"))) {
+                return Some(f);
+            }
+        }
+    }
+    for ext in TS_EXTS {
+        if let Some(f) = hit(format!("{base}.{ext}")) {
+            return Some(f);
+        }
+    }
+    for ext in TS_EXTS {
+        if let Some(f) = hit(format!("{base}/index.{ext}")) {
+            return Some(f);
+        }
+    }
+    None
+}
+
+/// Find the module file a bare package spec denotes inside the target
+/// container: `dir/<subpath>`, then under `dir/src/` (the dominant monorepo
+/// source layout); a spec with no subpath falls to the index-file candidates.
+/// `None` is fine — symbol names still resolve container-wide.
+fn find_package_file<'a>(dir: &str, subpath: &str, inventory: &HashSet<&'a str>) -> Option<&'a str> {
+    let join = |a: &str, b: &str| {
+        if a.is_empty() {
+            b.to_string()
+        } else {
+            format!("{a}/{b}")
+        }
+    };
+    let bases = if subpath.is_empty() {
+        vec![dir.to_string(), join(dir, "src")]
+    } else {
+        vec![join(dir, subpath), join(&join(dir, "src"), subpath)]
+    };
+    bases.iter().find_map(|b| find_module_file(b, inventory))
+}
+
+/// Resolve a bare spec through a governing tsconfig: `paths` patterns first
+/// (an exact pattern beats a `*` pattern; among `*` patterns the longest
+/// matched prefix wins, as tsc picks), each target tried in declared order
+/// with `*` substituted; then a `baseUrl`-relative file. `None` falls through
+/// to package resolution.
+fn resolve_ts_alias<'a>(
+    spec: &str,
+    config: &TsAliases,
+    inventory: &HashSet<&'a str>,
+) -> Option<&'a str> {
+    let mut best: Option<(usize, String, &[String])> = None; // (specificity, captured, targets)
+    for (pattern, targets) in &config.paths {
+        match pattern.split_once('*') {
+            None => {
+                if pattern == spec {
+                    best = Some((usize::MAX, String::new(), targets));
+                }
+            }
+            Some((prefix, suffix)) => {
+                if spec.len() >= prefix.len() + suffix.len()
+                    && spec.starts_with(prefix)
+                    && spec.ends_with(suffix)
+                    && best.as_ref().is_none_or(|(l, ..)| prefix.len() > *l)
+                {
+                    let captured = spec[prefix.len()..spec.len() - suffix.len()].to_string();
+                    best = Some((prefix.len(), captured, targets));
+                }
+            }
+        }
+    }
+    if let Some((_, captured, targets)) = best {
+        for target in targets {
+            let base = target.replacen('*', &captured, 1);
+            if let Some(f) = find_module_file(&base, inventory) {
+                return Some(f);
+            }
+        }
+    }
+    let base_url = config.base_url.as_deref()?;
+    let base = if base_url.is_empty() {
+        spec.to_string()
+    } else {
+        format!("{base_url}/{spec}")
+    };
+    find_module_file(&base, inventory)
+}
+
+/// Split a bare import spec into (package name, subpath): `@acme/ui/button` ->
+/// `("@acme/ui", "button")`, `lodash` -> `("lodash", "")`.
+fn split_package_spec(spec: &str) -> (&str, &str) {
+    let mut slashes = spec.match_indices('/').map(|(i, _)| i);
+    let cut = if spec.starts_with('@') {
+        slashes.nth(1)
+    } else {
+        slashes.next()
+    };
+    match cut {
+        Some(i) => (&spec[..i], &spec[i + 1..]),
+        None => (spec, ""),
+    }
 }
 
 fn sorted_edges(set: HashSet<(String, String)>) -> Vec<Edge> {
@@ -959,6 +1202,63 @@ mod tests {
         }
     }
 
+    fn imp(spec: &str, names: &[(&str, &str)], line: u32) -> crate::lang::ImportRef {
+        crate::lang::ImportRef {
+            spec: spec.to_string(),
+            names: names
+                .iter()
+                .map(|(name, local)| crate::lang::ImportedSym {
+                    name: name.to_string(),
+                    local: local.to_string(),
+                })
+                .collect(),
+            line,
+        }
+    }
+
+    /// A TS-ish ParsedFile: only what build_edges reads.
+    fn ts_file(
+        rel_path: &str,
+        defs: Vec<Def>,
+        idents: Vec<Ident>,
+        imports: Vec<crate::lang::ImportRef>,
+    ) -> ParsedFile {
+        ParsedFile {
+            rel_path: rel_path.to_string(),
+            source: String::new(),
+            parse: FileParse {
+                defs,
+                idents,
+                paths: vec![],
+                imports,
+            },
+        }
+    }
+
+    /// The synthetic key of the unique symbol named `name` across the context.
+    fn key_of(ctx: &ProjectContext, name: &str) -> String {
+        let keys: Vec<&str> = ctx
+            .files
+            .iter()
+            .flat_map(|f| &f.symbols)
+            .filter(|s| s.name == name)
+            .map(|s| s.key.as_str())
+            .collect();
+        assert_eq!(keys.len(), 1, "expected exactly one symbol named {name}");
+        keys[0].to_string()
+    }
+
+    fn has_file_edge(ctx: &ProjectContext, src: &str, dst: &str) -> bool {
+        ctx.file_edges.iter().any(|e| e.src == src && e.dst == dst)
+    }
+
+    fn has_sym_edge(ctx: &ProjectContext, src: &str, dst: &str) -> bool {
+        let (src, dst) = (key_of(ctx, src), key_of(ctx, dst));
+        ctx.symbol_edges
+            .iter()
+            .any(|e| e.src == src && e.dst == dst)
+    }
+
     #[test]
     fn builds_symbol_and_file_edges() {
         // helper.rs declares `helper`. main.rs declares `run` (lines 1..10) and
@@ -972,6 +1272,7 @@ mod tests {
                     defs: vec![def("helper", 1, 3)],
                     idents: vec![ident("helper", 1)],
                     paths: vec![],
+                    imports: vec![],
                 },
             },
             ParsedFile {
@@ -981,11 +1282,12 @@ mod tests {
                     defs: vec![def("run", 1, 10), def("compute", 12, 14)],
                     idents: vec![ident("run", 1), ident("compute", 5), ident("helper", 6)],
                     paths: vec![],
+                    imports: vec![],
                 },
             },
         ];
         let containers = vec![container("", "proj")];
-        let ctx = build_context("proj", &containers, &files);
+        let ctx = build_context("proj", &containers, &files, &[]);
 
         assert_eq!(ctx.files.len(), 2);
         // Synthetic keys, never node-N.
@@ -1035,6 +1337,7 @@ mod tests {
                     defs: vec![def("new", 1, 3)],
                     idents: vec![],
                     paths: vec![],
+                    imports: vec![],
                 },
             },
             ParsedFile {
@@ -1044,11 +1347,12 @@ mod tests {
                     defs: vec![def("run", 1, 10)],
                     idents: vec![ident("new", 5)],
                     paths: vec![],
+                    imports: vec![],
                 },
             },
         ];
         let containers = vec![container("", "proj")];
-        let ctx = build_context("proj", &containers, &files);
+        let ctx = build_context("proj", &containers, &files, &[]);
 
         assert!(
             !ctx.symbol_edges.iter().any(|e| e.dst.contains("#new@")),
@@ -1069,11 +1373,12 @@ mod tests {
                 defs: vec![def("x", 1, 2)],
                 idents: vec![],
                 paths: vec![],
+                imports: vec![],
             },
         }];
         let containers = vec![container("", "p")];
-        let a = build_context("p", &containers, &files);
-        let b = build_context("p", &containers, &files);
+        let a = build_context("p", &containers, &files, &[]);
+        let b = build_context("p", &containers, &files, &[]);
         assert_eq!(
             serde_json::to_string(&a).unwrap(),
             serde_json::to_string(&b).unwrap()
@@ -1090,6 +1395,7 @@ mod tests {
                     defs: vec![def("serve", 1, 5)],
                     idents: vec![ident("util", 3)],
                     paths: vec![],
+                    imports: vec![],
                 },
             },
             ParsedFile {
@@ -1099,11 +1405,12 @@ mod tests {
                     defs: vec![def("util", 1, 2)],
                     idents: vec![],
                     paths: vec![],
+                    imports: vec![],
                 },
             },
         ];
         let containers = vec![container("", "proj")];
-        let ctx = build_context("proj", &containers, &files);
+        let ctx = build_context("proj", &containers, &files, &[]);
         // server.ts -> util.ts crosses the api/ boundary.
         let scoped = slice_scope(&ctx, "api");
         assert_eq!(scoped.files.len(), 1);
@@ -1133,10 +1440,11 @@ fn add_one(x: u32) -> u32 {
                 defs: vec![def("add_one", 3, 5)],
                 idents: vec![],
                 paths: vec![],
+                imports: vec![],
             },
         }];
         let containers = vec![container("", "p")];
-        let ctx = build_context("p", &containers, &files);
+        let ctx = build_context("p", &containers, &files, &[]);
         let compact = compact_scope(&slice_container(&ctx, ""));
 
         let code = compact.files[0].symbols[0].code.as_deref().unwrap();
@@ -1161,10 +1469,11 @@ fn add_one(x: u32) -> u32 {
                 defs: vec![def("big", 1, 202)],
                 idents: vec![],
                 paths: vec![],
+                imports: vec![],
             },
         }];
         let containers = vec![container("", "p")];
-        let ctx = build_context("p", &containers, &files);
+        let ctx = build_context("p", &containers, &files, &[]);
         let compact = compact_scope(&slice_container(&ctx, ""));
         let code = compact.files[0].symbols[0].code.as_deref().unwrap();
         let shown = code.lines().count() - 1;
@@ -1188,10 +1497,11 @@ fn add_one(x: u32) -> u32 {
                     defs: vec![def(&format!("f{n}"), 1, 202)],
                     idents: vec![],
                     paths: vec![],
+                    imports: vec![],
                 },
             })
             .collect();
-        let ctx = build_context("p", &containers, &many);
+        let ctx = build_context("p", &containers, &many, &[]);
         let compact = compact_scope(&slice_container(&ctx, ""));
         let max_code_lines = compact
             .files
@@ -1222,6 +1532,7 @@ fn add_one(x: u32) -> u32 {
                     defs: vec![def("serve", 1, 20), def("route", 22, 30)],
                     idents: vec![ident("route", 5), ident("util", 8)],
                     paths: vec![],
+                    imports: vec![],
                 },
             },
             ParsedFile {
@@ -1231,11 +1542,12 @@ fn add_one(x: u32) -> u32 {
                     defs: vec![def("util", 1, 4)],
                     idents: vec![],
                     paths: vec![],
+                    imports: vec![],
                 },
             },
         ];
         let containers = vec![container("api", "api")];
-        let ctx = build_context("proj", &containers, &files);
+        let ctx = build_context("proj", &containers, &files, &[]);
         let scope = slice_container(&ctx, "api");
         let compact = compact_scope(&scope);
 
@@ -1279,6 +1591,7 @@ fn add_one(x: u32) -> u32 {
                     defs: vec![def("write_baseline", 1, 5)],
                     idents: vec![],
                     paths: vec![],
+                    imports: vec![],
                 },
             },
             ParsedFile {
@@ -1288,6 +1601,7 @@ fn add_one(x: u32) -> u32 {
                     defs: vec![def("run", 1, 10)],
                     idents: vec![],
                     paths: vec![pathref(&["scryer_extract", "anchors", "write_baseline"], 6)],
+                    imports: vec![],
                 },
             },
         ];
@@ -1295,7 +1609,7 @@ fn add_one(x: u32) -> u32 {
             container("crates/scryer-extract", "scryer-extract"),
             container("crates/scryer-mcp", "scryer-mcp"),
         ];
-        let ctx = build_context("proj", &containers, &files);
+        let ctx = build_context("proj", &containers, &files, &[]);
 
         assert!(
             ctx.file_edges.iter().any(|e| {
@@ -1326,6 +1640,7 @@ fn add_one(x: u32) -> u32 {
                     defs: vec![def("Anchor", 1, 3)],
                     idents: vec![],
                     paths: vec![],
+                    imports: vec![],
                 },
             },
             ParsedFile {
@@ -1335,6 +1650,7 @@ fn add_one(x: u32) -> u32 {
                     defs: vec![def("run", 1, 4)],
                     idents: vec![],
                     paths: vec![pathref(&["scryer_extract", "Anchor"], 2)],
+                    imports: vec![],
                 },
             },
         ];
@@ -1342,7 +1658,7 @@ fn add_one(x: u32) -> u32 {
             container("crates/scryer-extract", "scryer-extract"),
             container("crates/scryer-mcp", "scryer-mcp"),
         ];
-        let ctx = build_context("proj", &containers, &files);
+        let ctx = build_context("proj", &containers, &files, &[]);
         assert!(ctx
             .file_edges
             .iter()
@@ -1361,6 +1677,7 @@ fn add_one(x: u32) -> u32 {
                     defs: vec![def("Thing", 1, 3)],
                     idents: vec![],
                     paths: vec![],
+                    imports: vec![],
                 },
             },
             ParsedFile {
@@ -1370,6 +1687,7 @@ fn add_one(x: u32) -> u32 {
                     defs: vec![def("Thing", 1, 3)],
                     idents: vec![],
                     paths: vec![],
+                    imports: vec![],
                 },
             },
             ParsedFile {
@@ -1379,6 +1697,7 @@ fn add_one(x: u32) -> u32 {
                     defs: vec![def("run", 1, 4)],
                     idents: vec![],
                     paths: vec![pathref(&["dep", "Thing"], 2)],
+                    imports: vec![],
                 },
             },
         ];
@@ -1386,7 +1705,7 @@ fn add_one(x: u32) -> u32 {
             container("crates/dep", "dep"),
             container("crates/app", "app"),
         ];
-        let ctx = build_context("proj", &containers, &files);
+        let ctx = build_context("proj", &containers, &files, &[]);
         assert!(
             !ctx.file_edges
                 .iter()
@@ -1407,6 +1726,7 @@ fn add_one(x: u32) -> u32 {
                     defs: vec![def("assist", 1, 3)],
                     idents: vec![],
                     paths: vec![],
+                    imports: vec![],
                 },
             },
             ParsedFile {
@@ -1417,6 +1737,7 @@ fn add_one(x: u32) -> u32 {
                     idents: vec![],
                     // `use dep::helpers;` — leaf is the module, not a symbol.
                     paths: vec![pathref(&["dep", "helpers"], 1)],
+                    imports: vec![],
                 },
             },
         ];
@@ -1424,7 +1745,7 @@ fn add_one(x: u32) -> u32 {
             container("crates/dep", "dep"),
             container("crates/app", "app"),
         ];
-        let ctx = build_context("proj", &containers, &files);
+        let ctx = build_context("proj", &containers, &files, &[]);
         assert!(
             ctx.file_edges.iter().any(|e| {
                 e.src == "crates/app/src/m.rs" && e.dst == "crates/dep/src/helpers.rs"
@@ -1448,11 +1769,324 @@ fn add_one(x: u32) -> u32 {
                     pathref(&["app", "Helper"], 2), // own crate -> handled elsewhere
                     pathref(&["crate", "Helper"], 3),
                 ],
+                imports: vec![],
             },
         }];
         let containers = vec![container("crates/app", "app")];
-        let ctx = build_context("proj", &containers, &files);
+        let ctx = build_context("proj", &containers, &files, &[]);
         // No cross-container edges: std is external, app is self.
         assert!(ctx.file_edges.is_empty(), "no cross-crate edges expected");
+    }
+
+    /// The audit's litmus case: `import { Button } from "@acme/ui"` across a
+    /// pnpm workspace produced ZERO edges. The package name maps to the ui
+    /// container verbatim; the usage site yields the symbol edge.
+    #[test]
+    fn ts_package_import_resolves_cross_container() {
+        let files = vec![
+            ts_file(
+                "packages/ui/src/Button.tsx",
+                vec![def("Button", 1, 8)],
+                vec![],
+                vec![],
+            ),
+            ts_file(
+                "packages/app/src/App.tsx",
+                vec![def("App", 3, 9)],
+                vec![ident("Button", 5)],
+                vec![imp("@acme/ui", &[("Button", "Button")], 1)],
+            ),
+        ];
+        let containers = vec![
+            container("packages/app", "@acme/app"),
+            container("packages/ui", "@acme/ui"),
+        ];
+        let ctx = build_context("proj", &containers, &files, &[]);
+        assert!(has_file_edge(
+            &ctx,
+            "packages/app/src/App.tsx",
+            "packages/ui/src/Button.tsx"
+        ));
+        assert!(has_sym_edge(&ctx, "App", "Button"));
+    }
+
+    /// Relative imports resolve exactly — extension candidates, directory
+    /// index files, `as`-renamed usage sites — even when the bare name is
+    /// ambiguous container-wide (two `helper` defs), which the name-only
+    /// scopes must skip.
+    #[test]
+    fn ts_relative_import_resolves_file_and_symbols() {
+        let files = vec![
+            ts_file("src/util.ts", vec![def("helper", 1, 3)], vec![], vec![]),
+            ts_file("src/other.ts", vec![def("helper", 1, 3)], vec![], vec![]),
+            ts_file(
+                "src/widgets/index.ts",
+                vec![def("Widget", 1, 4)],
+                vec![],
+                vec![],
+            ),
+            ts_file(
+                "src/main.ts",
+                vec![def("run", 3, 9)],
+                vec![ident("h", 5), ident("Widget", 6)],
+                vec![
+                    imp("./util", &[("helper", "h")], 1),
+                    imp("./widgets", &[("Widget", "Widget")], 2),
+                ],
+            ),
+        ];
+        let containers = vec![container("", "app")];
+        let ctx = build_context("proj", &containers, &files, &[]);
+        assert!(has_file_edge(&ctx, "src/main.ts", "src/util.ts"));
+        assert!(has_file_edge(&ctx, "src/main.ts", "src/widgets/index.ts"));
+        // The alias `h` resolves to util.ts's `helper`, not other.ts's.
+        let run = key_of(&ctx, "run");
+        let util_helper = ctx
+            .files
+            .iter()
+            .find(|f| f.rel_path == "src/util.ts")
+            .unwrap()
+            .symbols[0]
+            .key
+            .clone();
+        assert!(ctx
+            .symbol_edges
+            .iter()
+            .any(|e| e.src == run && e.dst == util_helper));
+        assert!(has_sym_edge(&ctx, "run", "Widget"));
+    }
+
+    /// NodeNext-style specs write the EMITTED `.js` extension for a `.ts`
+    /// source; namespace/side-effect imports carry file evidence only.
+    #[test]
+    fn ts_emitted_extension_and_bare_imports_resolve_to_files() {
+        let files = vec![
+            ts_file("src/util.ts", vec![def("helper", 1, 3)], vec![], vec![]),
+            ts_file(
+                "src/main.ts",
+                vec![def("run", 2, 6)],
+                vec![],
+                vec![
+                    imp("./util.js", &[("helper", "helper")], 1),
+                    imp("./helpers", &[], 2), // unresolvable: no such file
+                ],
+            ),
+            ts_file("src/setup.ts", vec![def("init", 1, 2)], vec![], vec![]),
+            ts_file(
+                "src/boot.ts",
+                vec![def("boot", 2, 4)],
+                vec![],
+                vec![imp("./setup", &[], 1)], // side-effect import
+            ),
+        ];
+        let containers = vec![container("", "app")];
+        let ctx = build_context("proj", &containers, &files, &[]);
+        assert!(has_file_edge(&ctx, "src/main.ts", "src/util.ts"));
+        assert!(has_file_edge(&ctx, "src/boot.ts", "src/setup.ts"));
+        assert!(!ctx.file_edges.iter().any(|e| e.dst.contains("helpers")));
+    }
+
+    /// An import binding is exact lexical evidence: it overrides the
+    /// universal-name skip that blocks bare `get` idents.
+    #[test]
+    fn ts_imported_universal_name_resolves() {
+        let files = vec![
+            ts_file("src/api.ts", vec![def("get", 1, 3)], vec![], vec![]),
+            ts_file(
+                "src/main.ts",
+                vec![def("run", 3, 7)],
+                vec![ident("get", 5)],
+                vec![imp("./api", &[("get", "get")], 1)],
+            ),
+        ];
+        let containers = vec![container("", "app")];
+        let ctx = build_context("proj", &containers, &files, &[]);
+        assert!(has_file_edge(&ctx, "src/main.ts", "src/api.ts"));
+        assert!(has_sym_edge(&ctx, "run", "get"));
+    }
+
+    /// An import from an UNMAPPED package still consumes its local bindings:
+    /// the usage must not be misattributed to a same-name def elsewhere in the
+    /// container. Same for a `..` spec escaping the project root.
+    #[test]
+    fn ts_external_import_consumes_locals_without_edges() {
+        let files = vec![
+            ts_file("src/store.ts", vec![def("merge", 1, 3)], vec![], vec![]),
+            ts_file(
+                "src/main.ts",
+                vec![def("run", 3, 8)],
+                vec![ident("merge", 5), ident("outside", 6)],
+                vec![
+                    imp("lodash", &[("merge", "merge")], 1),
+                    imp("../../elsewhere", &[("outside", "outside")], 2),
+                ],
+            ),
+        ];
+        let containers = vec![container("", "app")];
+        let ctx = build_context("proj", &containers, &files, &[]);
+        assert!(ctx.file_edges.is_empty(), "no edges to external modules");
+        assert!(
+            ctx.symbol_edges.is_empty(),
+            "imported `merge` must not resolve to the local store.ts def"
+        );
+    }
+
+    /// End-to-end through real parsing (no hand-built idents): a pnpm-workspace
+    /// shape where the app imports `{ Button }` from `@acme/ui` and uses it as
+    /// a JSX element. Guards the whole chain: import capture, package-map
+    /// resolution, and JSX usage-site identifiers.
+    #[test]
+    fn ts_pnpm_workspace_end_to_end() {
+        let parse = |rel: &str, src: &str| ParsedFile {
+            rel_path: rel.to_string(),
+            source: src.to_string(),
+            parse: crate::lang::parse_file(std::path::Path::new(rel), src).unwrap(),
+        };
+        let files = vec![
+            parse(
+                "packages/ui/src/Button.tsx",
+                "export function Button() { return <button/>; }\n",
+            ),
+            parse(
+                "packages/app/src/App.tsx",
+                "import { Button } from \"@acme/ui\";\nexport function App() {\n  return <Button />;\n}\n",
+            ),
+        ];
+        let containers = vec![
+            container("packages/app", "@acme/app"),
+            container("packages/ui", "@acme/ui"),
+        ];
+        let ctx = build_context("proj", &containers, &files, &[]);
+        assert!(has_file_edge(
+            &ctx,
+            "packages/app/src/App.tsx",
+            "packages/ui/src/Button.tsx"
+        ));
+        assert!(has_sym_edge(&ctx, "App", "Button"));
+    }
+
+    /// A `paths` alias (`@/*` -> `src/*`) resolves a bare spec to a file, with
+    /// symbol edges at the usage site; alias resolution takes precedence over
+    /// the package map.
+    #[test]
+    fn ts_alias_import_resolves() {
+        let files = vec![
+            ts_file(
+                "src/components/Button.tsx",
+                vec![def("Button", 1, 6)],
+                vec![],
+                vec![],
+            ),
+            ts_file(
+                "src/App.tsx",
+                vec![def("App", 3, 9)],
+                vec![ident("Button", 5)],
+                vec![imp("@/components/Button", &[("Button", "Button")], 1)],
+            ),
+        ];
+        let containers = vec![container("", "app")];
+        let aliases = vec![TsAliases {
+            dir: String::new(),
+            base_url: None,
+            paths: vec![("@/*".to_string(), vec!["src/*".to_string()])],
+        }];
+        let ctx = build_context("proj", &containers, &files, &aliases);
+        assert!(has_file_edge(
+            &ctx,
+            "src/App.tsx",
+            "src/components/Button.tsx"
+        ));
+        assert!(has_sym_edge(&ctx, "App", "Button"));
+    }
+
+    /// A bare spec with no matching alias pattern resolves as a
+    /// `baseUrl`-relative file; exact (starless) patterns match too. The
+    /// governing config is the NEAREST one up the tree.
+    #[test]
+    fn ts_baseurl_and_exact_alias_resolve_via_nearest_config() {
+        let files = vec![
+            ts_file(
+                "packages/app/src/util/format.ts",
+                vec![def("fmt", 1, 3)],
+                vec![],
+                vec![],
+            ),
+            ts_file(
+                "packages/app/src/config.ts",
+                vec![def("Config", 1, 5)],
+                vec![],
+                vec![],
+            ),
+            ts_file(
+                "packages/app/src/main.ts",
+                vec![def("run", 3, 9)],
+                vec![ident("fmt", 5), ident("Config", 6)],
+                vec![
+                    imp("util/format", &[("fmt", "fmt")], 1),
+                    imp("config", &[("Config", "Config")], 2),
+                ],
+            ),
+        ];
+        let containers = vec![container("packages/app", "app")];
+        let aliases = vec![
+            // A root config that would resolve nothing — must NOT govern.
+            TsAliases {
+                dir: String::new(),
+                base_url: Some("elsewhere".to_string()),
+                paths: vec![],
+            },
+            TsAliases {
+                dir: "packages/app".to_string(),
+                base_url: Some("packages/app/src".to_string()),
+                paths: vec![(
+                    "config".to_string(),
+                    vec!["packages/app/src/config.ts".to_string()],
+                )],
+            },
+        ];
+        let ctx = build_context("proj", &containers, &files, &aliases);
+        assert!(has_file_edge(
+            &ctx,
+            "packages/app/src/main.ts",
+            "packages/app/src/util/format.ts"
+        ));
+        assert!(has_file_edge(
+            &ctx,
+            "packages/app/src/main.ts",
+            "packages/app/src/config.ts"
+        ));
+        assert!(has_sym_edge(&ctx, "run", "fmt"));
+        assert!(has_sym_edge(&ctx, "run", "Config"));
+    }
+
+    /// A subpath spec (`@acme/ui/button`) resolves through the package dir,
+    /// including the `src/` monorepo layout.
+    #[test]
+    fn ts_package_subpath_resolves_through_src() {
+        let files = vec![
+            ts_file(
+                "packages/ui/src/button.ts",
+                vec![def("Button", 1, 6)],
+                vec![],
+                vec![],
+            ),
+            ts_file(
+                "packages/app/src/App.tsx",
+                vec![def("App", 3, 9)],
+                vec![ident("Button", 5)],
+                vec![imp("@acme/ui/button", &[("Button", "Button")], 1)],
+            ),
+        ];
+        let containers = vec![
+            container("packages/app", "@acme/app"),
+            container("packages/ui", "@acme/ui"),
+        ];
+        let ctx = build_context("proj", &containers, &files, &[]);
+        assert!(has_file_edge(
+            &ctx,
+            "packages/app/src/App.tsx",
+            "packages/ui/src/button.ts"
+        ));
+        assert!(has_sym_edge(&ctx, "App", "Button"));
     }
 }

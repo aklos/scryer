@@ -323,8 +323,9 @@ fn parse_package_json(text: &str, manifest_dir: &str) -> (Option<String>, Vec<St
 }
 
 /// Resolve `rel` against `base_dir` (both project-relative, `/`-separated),
-/// collapsing `.`/`..`. Returns a normalized project-relative directory string.
-fn resolve_rel(base_dir: &str, rel: &str) -> Option<String> {
+/// collapsing `.`/`..`. Returns a normalized project-relative string, `None`
+/// when `..` escapes the project root. Shared with tsconfig alias resolution.
+pub(crate) fn resolve_rel(base_dir: &str, rel: &str) -> Option<String> {
     let mut parts: Vec<&str> = if base_dir.is_empty() {
         Vec::new()
     } else {
