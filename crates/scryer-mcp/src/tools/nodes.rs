@@ -492,11 +492,11 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities, and/or `propertyLabels` to fold only those data fields (properties are identified by label). A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. In a DESIGN-FIRST model (never committed), folding a built leaf is refused while its ancestors are plan-only — pass `commit_ancestors: true` to fold the ancestor chain structure-only first: the ancestors' identity and boundaries land in committed while their unbuilt claims stay pending in the plan, so partial implementation reads honestly. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
+        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities, and/or `propertyLabels` to fold only those data fields (properties are identified by label). A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. In a DESIGN-FIRST model (never committed), folding a built leaf is refused while its ancestors are plan-only — pass `commit_ancestors: true` to fold the ancestor chain structure-only first: the ancestors' identity and boundaries land in committed while their unbuilt claims stay pending in the plan, so partial implementation reads honestly. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. Pass `anchors` (same shape as update_source_map `entries`) to anchor the folded claims to code IN THE SAME CALL — 'here's what I built and where it lives' as one atomic statement; an unanchored claim reads as scaffolding and carries no drift tripwire. Every node fold's response ends with a scoped POST-FLIGHT: what's still pending on that node, which of its committed claims lack anchors, and any validation warnings this fold introduced — act on those lines; you do not need a separate validate_model run after every fold. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
     )]
     fn mark_implemented(
         &self,
-        Parameters(req): Parameters<MarkImplementedRequest>,
+        Parameters(mut req): Parameters<MarkImplementedRequest>,
     ) -> Result<CallToolResult, McpError> {
         use scryer_core::diff::ElementKind;
         let model_ref = resolve_model_ref(req.project.as_deref())?;
@@ -541,8 +541,9 @@ impl ScryerServer {
         // Snapshot the node's committed responsibilities so the history event can
         // show exactly what THIS fold added or reworded, not claims committed in a
         // prior pass (a whole-node commit re-folds the node's full planned state).
-        let before_stmts: HashMap<String, String> = scryer_core::read_model_at(&model_ref)
-            .ok()
+        let committed_before = scryer_core::read_model_at(&model_ref).ok();
+        let before_stmts: HashMap<String, String> = committed_before
+            .as_ref()
             .map(|m| {
                 m.nodes
                     .iter()
@@ -551,6 +552,39 @@ impl ScryerServer {
                     .collect()
             })
             .unwrap_or_default();
+        // Pre-fold structural warnings on the working view — the post-flight
+        // reports only what THIS call introduced, not the model's standing debt.
+        let warnings_before: std::collections::HashSet<String> = {
+            let empty = scryer_core::ScryModel::default();
+            scryer_core::validate::validate(&scryer_core::working_view(
+                committed_before.as_ref().unwrap_or(&empty),
+                &planned,
+            ))
+            .into_iter()
+            .collect()
+        };
+
+        // Fold-time anchors are validated BEFORE any fold runs, so a bad id
+        // fails the whole call instead of leaving a fold half-anchored.
+        if let Some(entries) = req.anchors.as_ref() {
+            let known: std::collections::HashSet<&str> = planned
+                .nodes
+                .iter()
+                .flat_map(|n| n.responsibilities.iter())
+                .chain(planned.groups.iter().flat_map(|g| g.responsibilities.iter()))
+                .map(|r| r.id.as_str())
+                .chain(before_stmts.keys().map(|k| k.as_str()))
+                .collect();
+            for e in entries {
+                if !known.contains(e.responsibility_id.as_str()) {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "anchors: responsibility '{}' not found in the plan or the \
+                         committed model — nothing was folded",
+                        e.responsibility_id
+                    ))]));
+                }
+            }
+        }
 
         let mut summaries: Vec<String> = Vec::new();
         // Set when a node-hosted fold ran — drives the history event below.
@@ -769,6 +803,37 @@ impl ScryerServer {
             }
         }
 
+        // Fold-time anchors, applied AFTER the folds so each claim's anchor
+        // lands in its single home (a just-committed claim's anchor belongs to
+        // the committed layer, not a shadow copy in the draft).
+        let mut anchor_notes: Vec<String> = Vec::new();
+        if let Some(entries) = req.anchors.take().filter(|v| !v.is_empty()) {
+            let n = entries.len();
+            let mut planned_now = match scryer_core::read_planned_seeded_at(&model_ref) {
+                Ok(p) => p,
+                Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+            };
+            let mut committed_now = scryer_core::read_model_at(&model_ref).ok();
+            let (normalized, committed_dirty) = apply_resp_anchor_entries(
+                model_ref.project_path(),
+                &mut planned_now,
+                &mut committed_now,
+                entries,
+            );
+            if let Err(e) = scryer_core::write_planned_at(&model_ref, &planned_now) {
+                return Ok(CallToolResult::error(vec![Content::text(e)]));
+            }
+            if committed_dirty {
+                if let Some(c) = committed_now {
+                    if let Err(e) = scryer_core::write_model_at(&model_ref, &c) {
+                        return Ok(CallToolResult::error(vec![Content::text(e)]));
+                    }
+                }
+            }
+            summaries.push(format!("Anchored {} claim(s).", n));
+            anchor_notes = normalized;
+        }
+
         let summary = summaries.join(" ");
 
         // Keep the legacy baseline snapshot in step with the committed model, and
@@ -811,7 +876,160 @@ impl ScryerServer {
             }
         }
 
-        Ok(CallToolResult::success(vec![Content::text(summary)]))
+        // Scoped post-flight: what this fold left behind on the node — the
+        // consistency burden lives here, not in the agent's memory of which
+        // follow-up tools it was supposed to call.
+        let mut msg = summary;
+        for n in &anchor_notes {
+            msg.push_str(&format!(
+                "\nnormalized: {} — the range covered the whole symbol, so the \
+                 symbol-only anchor was kept (a range must be a proper subset)",
+                n
+            ));
+        }
+        if let Some(node_id) = req.node_id.as_deref() {
+            let committed = scryer_core::read_model_at(&model_ref).unwrap_or_default();
+            let planned_after =
+                scryer_core::read_planned_at(&model_ref).unwrap_or_default();
+            let mut lines: Vec<String> = Vec::new();
+
+            // Still pending on this node (vagrants excluded — they are drift
+            // review, not the implement queue; matches get_pending).
+            use scryer_core::diff::{Change, ElementKind as EK};
+            let plan = scryer_core::diff::diff(&committed, &planned_after);
+            let is_vagrant = |ch: &scryer_core::diff::ElementChange| match ch.kind {
+                EK::Node => planned_after
+                    .nodes
+                    .iter()
+                    .any(|n| n.id == ch.id && n.vagrant == Some(true)),
+                EK::Responsibility => planned_after
+                    .nodes
+                    .iter()
+                    .flat_map(|n| n.responsibilities.iter())
+                    .chain(
+                        planned_after
+                            .groups
+                            .iter()
+                            .flat_map(|g| g.responsibilities.iter()),
+                    )
+                    .any(|r| r.id == ch.id && r.vagrant == Some(true)),
+                EK::Property => ch.owner_id.as_deref().is_some_and(|oid| {
+                    planned_after.nodes.iter().any(|n| {
+                        n.id == oid
+                            && n.properties
+                                .iter()
+                                .any(|p| p.label == ch.id && p.vagrant == Some(true))
+                    })
+                }),
+                _ => false,
+            };
+            let link_touches = |id: &str| {
+                planned_after
+                    .links
+                    .iter()
+                    .chain(committed.links.iter())
+                    .any(|l| l.id == id && (l.src == node_id || l.dst == node_id))
+            };
+            let pending = plan
+                .changes
+                .iter()
+                .filter(|ch| {
+                    let scoped = match ch.kind {
+                        EK::Node => ch.id == node_id,
+                        EK::Responsibility | EK::Property => {
+                            ch.owner_id.as_deref() == Some(node_id)
+                        }
+                        EK::Link => link_touches(&ch.id),
+                        EK::Group => false,
+                    };
+                    scoped && !is_vagrant(ch)
+                })
+                .count();
+            if pending > 0 {
+                let deletions = plan
+                    .changes
+                    .iter()
+                    .filter(|ch| {
+                        (ch.id == node_id
+                            || ch.owner_id.as_deref() == Some(node_id)
+                            || (ch.kind == EK::Link && link_touches(&ch.id)))
+                            && ch.changes.contains(&Change::Deleted)
+                    })
+                    .count();
+                let hint = if deletions > 0 {
+                    " (deletions fold only by explicit ids — pass link_ids / the node id)"
+                } else {
+                    ""
+                };
+                lines.push(format!(
+                    "{pending} change(s) touching this node still pending in the plan{hint} — get_pending lists them"
+                ));
+            }
+
+            // Unanchored committed claims — LEAF nodes only: a structural node's
+            // claims discharge through its subtree and never anchor directly.
+            if let Some(node) = committed.nodes.iter().find(|n| n.id == node_id) {
+                let has_children = committed
+                    .nodes
+                    .iter()
+                    .chain(planned_after.nodes.iter())
+                    .any(|n| n.parent_id.as_deref() == Some(node_id));
+                if !has_children {
+                    let anchored = |key: &str| {
+                        committed.source_map.contains_key(key)
+                            || planned_after.source_map.contains_key(key)
+                    };
+                    let mut unanchored: Vec<&str> = node
+                        .responsibilities
+                        .iter()
+                        .filter(|r| !anchored(&r.id))
+                        .map(|r| r.id.as_str())
+                        .collect();
+                    if !node.properties.is_empty() && !anchored(&node.id) {
+                        unanchored.push("the schema declaration");
+                    }
+                    if !unanchored.is_empty() {
+                        lines.push(format!(
+                            "{} committed claim(s) on it have NO code anchor ({}) — they read \
+                             as scaffolding and carry no drift tripwire; anchor them via the \
+                             `anchors` param or update_source_map",
+                            unanchored.len(),
+                            unanchored.join(", ")
+                        ));
+                    }
+                }
+            }
+
+            // Validation warnings this call introduced (standing debt stays out).
+            let new_warnings: Vec<String> = scryer_core::validate::validate(
+                &scryer_core::working_view(&committed, &planned_after),
+            )
+            .into_iter()
+            .filter(|w| !warnings_before.contains(w))
+            .collect();
+            for w in new_warnings.iter().take(3) {
+                lines.push(format!("new warning: {}", w));
+            }
+            if new_warnings.len() > 3 {
+                lines.push(format!(
+                    "…and {} more new warning(s) — validate_model lists them",
+                    new_warnings.len() - 3
+                ));
+            }
+
+            if lines.is_empty() {
+                msg.push_str(&format!(
+                    "\npost-flight '{node_id}': plan clear on this node, no new warnings."
+                ));
+            } else {
+                msg.push_str(&format!("\npost-flight '{node_id}':"));
+                for l in &lines {
+                    msg.push_str(&format!("\n- {}", l));
+                }
+            }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     #[tool(
@@ -1534,6 +1752,7 @@ mod tests {
                 responsibility_ids: None,
                 property_labels: None,
                 commit_ancestors: None,
+                anchors: None,
             }))
             .unwrap();
         assert!(serde_json::to_string(&r.content).unwrap().contains("removal"));
@@ -1580,6 +1799,7 @@ mod tests {
                 responsibility_ids: None,
                 property_labels: None,
                 commit_ancestors: None,
+                anchors: None,
             }))
             .unwrap();
 
@@ -1631,6 +1851,7 @@ mod tests {
                     commit_ancestors,
                     link_ids: None,
                     group_ids: None,
+                    anchors: None,
                 }))
                 .unwrap()
         };
@@ -1684,6 +1905,7 @@ mod tests {
                 responsibility_ids: Some(vec!["r-1".into()]),
                 property_labels: None,
                 commit_ancestors: Some(true),
+                anchors: None,
                 link_ids: None,
                 group_ids: None,
             }))
@@ -1743,6 +1965,7 @@ mod tests {
                 responsibility_ids: None,
                 property_labels: None,
                 commit_ancestors: None,
+                anchors: None,
             }))
             .unwrap();
 
@@ -1794,6 +2017,7 @@ mod tests {
                     responsibility_ids: None,
                     property_labels: None,
                     commit_ancestors: None,
+                anchors: None,
                 }))
                 .unwrap();
         };
@@ -1865,6 +2089,7 @@ mod tests {
                 responsibility_ids: None,
                 property_labels: None,
                 commit_ancestors: None,
+                anchors: None,
             }))
             .unwrap();
 
@@ -1913,6 +2138,7 @@ mod tests {
                 responsibility_ids: Some(vec!["r-b".into()]),
                 property_labels: None,
                 commit_ancestors: None,
+                anchors: None,
             }))
             .unwrap();
 
@@ -2126,6 +2352,7 @@ mod tests {
                 link_ids: None,
                 group_ids: None,
                 commit_ancestors: None,
+                anchors: None,
             }))
             .unwrap();
         assert!(!r.is_error.unwrap_or(false), "{r:?}");
@@ -2214,5 +2441,172 @@ mod tests {
             Some("cb")
         );
         assert!(after.groups[0].member_ids.is_empty(), "left the old-level group");
+    }
+
+    /// Fold + anchor is one atomic statement: `anchors` on mark_implemented
+    /// writes the just-committed claim's anchor into its single home (the
+    /// committed layer, no shadow copy in the draft), and an unknown
+    /// responsibility id fails the call BEFORE anything folds.
+    #[test]
+    fn mark_implemented_anchors_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut committed = ScryModel::new();
+        committed.nodes.push(node("sys", Kind::System, "Acme", None));
+        committed.nodes.push(node("cont", Kind::Container, "API", Some("sys")));
+        committed.nodes.push(node("comp", Kind::Component, "Auth", Some("cont")));
+        let mut planned = committed.clone();
+        planned
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == "comp")
+            .unwrap()
+            .responsibilities
+            .push(resp("resp-1"));
+        scryer_core::write_model_at(&model_ref, &committed).unwrap();
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        let project = dir.path().to_string_lossy().to_string();
+        let anchor = |rid: &str| SourceMapEntry {
+            responsibility_id: rid.into(),
+            locations: vec![serde_json::from_value(
+                serde_json::json!({ "pattern": "src/auth.rs" }),
+            )
+            .unwrap()],
+        };
+
+        // Unknown responsibility id: rejected up front, nothing folded.
+        let r = server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(project.clone()),
+                node_id: Some("comp".into()),
+                responsibility_ids: None,
+                property_labels: None,
+                link_ids: None,
+                group_ids: None,
+                commit_ancestors: None,
+                anchors: Some(vec![anchor("resp-ghost")]),
+            }))
+            .unwrap();
+        assert!(r.is_error.unwrap_or(false), "unknown anchor id rejected");
+        let m = scryer_core::read_model_at(&model_ref).unwrap();
+        assert!(
+            m.nodes.iter().find(|n| n.id == "comp").unwrap().responsibilities.is_empty(),
+            "nothing folded on the failed call"
+        );
+
+        // Valid: fold + anchor in one call.
+        let r = server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(project),
+                node_id: Some("comp".into()),
+                responsibility_ids: None,
+                property_labels: None,
+                link_ids: None,
+                group_ids: None,
+                commit_ancestors: None,
+                anchors: Some(vec![anchor("resp-1")]),
+            }))
+            .unwrap();
+        let text = r
+            .content
+            .iter()
+            .find_map(|c| c.as_text().map(|t| t.text.clone()))
+            .unwrap();
+        assert!(text.contains("Anchored 1 claim(s)"), "{text}");
+        assert!(
+            text.contains("post-flight 'comp': plan clear on this node"),
+            "anchored + folded reads clean: {text}"
+        );
+
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        assert_eq!(
+            committed.source_map["resp-1"][0].pattern, "src/auth.rs",
+            "anchor lives in the committed layer"
+        );
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert!(
+            !planned.source_map.contains_key("resp-1"),
+            "no shadow copy in the draft"
+        );
+    }
+
+    /// The fold response carries a scoped post-flight: what's still pending on
+    /// the node (with the deletions-need-explicit-ids hint) and which committed
+    /// claims have no code anchor — the consistency burden lives in the tool,
+    /// not in the agent remembering four follow-up calls.
+    #[test]
+    fn mark_implemented_postflight_reports_leftovers() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut committed = ScryModel::new();
+        committed.nodes.push(node("sys", Kind::System, "Acme", None));
+        committed.nodes.push(node("cont", Kind::Container, "API", Some("sys")));
+        committed.nodes.push(node("comp", Kind::Component, "Auth", Some("cont")));
+        committed.nodes.push(node("peer", Kind::Component, "Billing", Some("cont")));
+        // A committed link the plan REMOVES — deletions never ride a node fold.
+        committed.links.push(Link {
+            id: "l-old".into(),
+            src: "comp".into(),
+            dst: "peer".into(),
+            label: "notifies".into(),
+            method: None,
+        });
+        let mut planned = committed.clone();
+        planned.links.clear();
+        planned
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == "comp")
+            .unwrap()
+            .responsibilities
+            .push(resp("resp-1"));
+        // A plan-added link to a plan-only node: not ready, stays pending.
+        planned.nodes.push(node("newco", Kind::Component, "Tokens", Some("cont")));
+        planned.links.push(Link {
+            id: "l-new".into(),
+            src: "comp".into(),
+            dst: "newco".into(),
+            label: "mints via".into(),
+            method: None,
+        });
+        scryer_core::write_model_at(&model_ref, &committed).unwrap();
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        let r = server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                node_id: Some("comp".into()),
+                responsibility_ids: None,
+                property_labels: None,
+                link_ids: None,
+                group_ids: None,
+                commit_ancestors: None,
+                anchors: None,
+            }))
+            .unwrap();
+        let text = r
+            .content
+            .iter()
+            .find_map(|c| c.as_text().map(|t| t.text.clone()))
+            .unwrap();
+
+        assert!(text.contains("post-flight 'comp':"), "{text}");
+        assert!(
+            text.contains("2 change(s) touching this node still pending"),
+            "the unready link add and the link deletion: {text}"
+        );
+        assert!(
+            text.contains("deletions fold only by explicit ids"),
+            "steers at the unterminable-queue trap: {text}"
+        );
+        assert!(
+            text.contains("1 committed claim(s) on it have NO code anchor (resp-1)"),
+            "the unanchored fold is named: {text}"
+        );
     }
 }

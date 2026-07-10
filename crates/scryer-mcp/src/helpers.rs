@@ -227,3 +227,75 @@ pub(crate) fn resolve_model_ref(req_project: Option<&str>) -> Result<ModelRef, M
     };
     Ok(ModelRef::ProjectLocal(path))
 }
+
+/// Apply responsibility anchor entries (the `entries` shape of
+/// `update_source_map`) to their SINGLE home: the committed model owns every
+/// committed claim's anchor; the planned draft holds anchors only for claims it
+/// ADDS. Whole-symbol line ranges are normalized to symbol-only anchors (the
+/// honest encoding for "this whole definition"), reported in the returned
+/// notes. Mutates the models in place; the CALLER validates ids beforehand and
+/// persists both layers afterwards (writing `committed` only when the returned
+/// flag is true). Shared by `update_source_map` and `mark_implemented`'s
+/// fold-time `anchors`.
+pub(crate) fn apply_resp_anchor_entries(
+    project: &std::path::Path,
+    planned: &mut ScryModel,
+    committed: &mut Option<ScryModel>,
+    mut entries: Vec<crate::types::SourceMapEntry>,
+) -> (Vec<String>, bool) {
+    let mut normalized: Vec<String> = Vec::new();
+    {
+        let mut resolver = scryer_extract::anchors::ExtentResolver::new(project);
+        for entry in &mut entries {
+            for loc in &mut entry.locations {
+                let (Some(sym), Some(line)) = (loc.symbol.clone(), loc.line) else {
+                    continue;
+                };
+                let end = loc.end_line.unwrap_or(line);
+                let Some(extent) = resolver.extent(&loc.pattern, &sym, Some(line)) else {
+                    continue;
+                };
+                if scryer_extract::anchors::covers_extent(line, end, extent) {
+                    loc.line = None;
+                    loc.end_line = None;
+                    normalized.push(format!(
+                        "{}: {} L{}-{} covered the whole symbol `{}` (L{}-{})",
+                        entry.responsibility_id, loc.pattern, line, end, sym, extent.0, extent.1
+                    ));
+                }
+            }
+        }
+    }
+
+    let committed_resp_ids: std::collections::HashSet<String> = match committed.as_ref() {
+        Some(c) => c
+            .nodes
+            .iter()
+            .flat_map(|n| n.responsibilities.iter())
+            .chain(c.groups.iter().flat_map(|g| g.responsibilities.iter()))
+            .map(|r| r.id.clone())
+            .collect(),
+        None => Default::default(),
+    };
+    let mut committed_dirty = false;
+    for entry in entries {
+        let key = entry.responsibility_id;
+        if entry.locations.is_empty() {
+            planned.source_map.remove(&key);
+            if committed_resp_ids.contains(&key) {
+                if let Some(c) = committed.as_mut() {
+                    committed_dirty |= c.source_map.remove(&key).is_some();
+                }
+            }
+        } else if committed_resp_ids.contains(&key) {
+            planned.source_map.remove(&key);
+            if let Some(c) = committed.as_mut() {
+                c.source_map.insert(key, entry.locations);
+                committed_dirty = true;
+            }
+        } else {
+            planned.source_map.insert(key, entry.locations);
+        }
+    }
+    (normalized, committed_dirty)
+}

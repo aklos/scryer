@@ -25,9 +25,12 @@ responsibilities, and links it implies, at the right altitude, with the intent t
 These write the PLAN — a draft on the user's canvas — not code. If the change conflicts with an \
 existing responsibility or directive, surface it; don't silently diverge.\n\
 3. BUILD — implement the code to that plan.\n\
-4. CLOSE — `mark_implemented` what you built (folds it from the plan into the committed model) and \
-`flag_drift` anything the code does that the plan didn't capture. Run `validate_model` and clear \
-every warning before you finish. You need not finish a whole node before committing: when you build \
+4. CLOSE — `mark_implemented` what you built (folds it from the plan into the committed model), \
+passing `anchors` so fold + anchor is one atomic call, and `flag_drift` anything the code does that \
+the plan didn't capture. The fold response ends with a scoped post-flight (what's still pending on \
+the node, unanchored claims, new warnings) — act on it; a separate `validate_model` run is for \
+structural sessions that touched many nodes, not for every fold. You need not finish a whole node \
+before committing: when you build \
 in layers, fold only the responsibilities you actually built (`mark_implemented` accepts \
 `responsibilityIds`) and leave the rest in the plan. Committing a structural node asserts only that \
 its boundary exists, never that its unbuilt descendants do — so commit the skeleton you built and let \

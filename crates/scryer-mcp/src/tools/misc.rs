@@ -84,35 +84,6 @@ impl ScryerServer {
             }
         }
 
-        // Normalize whole-symbol mappings: an explicit line range must be a
-        // PROPER subset of its enclosing symbol. A range covering the whole
-        // extent is stripped to the symbol-only anchor (the honest encoding
-        // for "this whole definition") and reported back so the agent learns.
-        let mut normalized: Vec<String> = Vec::new();
-        {
-            let mut resolver =
-                scryer_extract::anchors::ExtentResolver::new(model_ref.project_path());
-            for entry in &mut req.entries {
-                for loc in &mut entry.locations {
-                    let (Some(sym), Some(line)) = (loc.symbol.clone(), loc.line) else {
-                        continue;
-                    };
-                    let end = loc.end_line.unwrap_or(line);
-                    let Some(extent) = resolver.extent(&loc.pattern, &sym, Some(line)) else {
-                        continue;
-                    };
-                    if scryer_extract::anchors::covers_extent(line, end, extent) {
-                        loc.line = None;
-                        loc.end_line = None;
-                        normalized.push(format!(
-                            "{}: {} L{}-{} covered the whole symbol `{}` (L{}-{})",
-                            entry.responsibility_id, loc.pattern, line, end, sym, extent.0, extent.1
-                        ));
-                    }
-                }
-            }
-        }
-
         // Code-side mapping has a SINGLE home, keyed by element: the committed
         // model owns every committed element's anchor; the planned draft holds
         // anchors only for elements it ADDS (not yet committed). So route by
@@ -121,43 +92,23 @@ impl ScryerServer {
         // plan-added element's anchor stays in the draft and folds into committed
         // later (auto_commit carries it across). The working view merges the two
         // layers for display (see `effectiveSourceMap`), so a committed-side
-        // write surfaces immediately without the draft mirroring it.
+        // write surfaces immediately without the draft mirroring it. Whole-symbol
+        // line ranges are normalized to symbol-only anchors and reported back so
+        // the agent learns. Routing + normalization shared with mark_implemented's
+        // fold-time `anchors` (see apply_resp_anchor_entries).
         let mut committed = scryer_core::read_model_at(&model_ref).ok();
-        let (committed_resp_ids, committed_node_ids): (HashSet<String>, HashSet<String>) =
-            match committed.as_ref() {
-                Some(c) => (
-                    c.nodes
-                        .iter()
-                        .flat_map(|n| n.responsibilities.iter())
-                        .chain(c.groups.iter().flat_map(|g| g.responsibilities.iter()))
-                        .map(|r| r.id.clone())
-                        .collect(),
-                    c.nodes.iter().map(|n| n.id.clone()).collect(),
-                ),
-                None => (HashSet::new(), HashSet::new()),
-            };
-        let mut committed_dirty = false;
+        let committed_node_ids: HashSet<String> = match committed.as_ref() {
+            Some(c) => c.nodes.iter().map(|n| n.id.clone()).collect(),
+            None => HashSet::new(),
+        };
 
         let count = req.entries.len() + req.schemas.len() + req.boundaries.len();
-        for entry in req.entries {
-            let key = entry.responsibility_id;
-            if entry.locations.is_empty() {
-                model.source_map.remove(&key);
-                if committed_resp_ids.contains(&key) {
-                    if let Some(c) = committed.as_mut() {
-                        committed_dirty |= c.source_map.remove(&key).is_some();
-                    }
-                }
-            } else if committed_resp_ids.contains(&key) {
-                model.source_map.remove(&key);
-                if let Some(c) = committed.as_mut() {
-                    c.source_map.insert(key, entry.locations);
-                    committed_dirty = true;
-                }
-            } else {
-                model.source_map.insert(key, entry.locations);
-            }
-        }
+        let (normalized, mut committed_dirty) = apply_resp_anchor_entries(
+            model_ref.project_path(),
+            &mut model,
+            &mut committed,
+            std::mem::take(&mut req.entries),
+        );
         for s in req.schemas {
             let key = s.node_id;
             if s.locations.is_empty() {

@@ -181,6 +181,14 @@ pub(crate) struct MarkImplementedRequest {
     /// stay pending in the plan. With responsibility_ids, the host node itself is also
     /// committed structure-only, so a partial implementation folds honestly.
     pub commit_ancestors: Option<bool>,
+    /// Optional: anchor claims to code in the SAME call — "here's what I built and
+    /// where it lives" as one atomic statement, instead of a separate
+    /// update_source_map you can forget (an unanchored claim reads as scaffolding
+    /// and carries no drift tripwire). Same shape as update_source_map `entries`:
+    /// locations keyed by responsibility id, each the SPECIFIC line range that does
+    /// the work (`pattern` file, `symbol` enclosing definition, `line`/`endLine` a
+    /// PROPER subset of it — omit them to mean the whole definition).
+    pub anchors: Option<Vec<SourceMapEntry>>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
