@@ -13,6 +13,8 @@ export interface AiToolsState {
   claudeApproved: boolean;
   /** Scryer's session hooks are registered in this project's Claude Code settings. */
   claudeHooksEnabled: boolean;
+  /** Scryer's session hooks are registered in this project's `.codex/hooks.json`. */
+  codexHooksEnabled: boolean;
 }
 
 const EMPTY: AiToolsState = {
@@ -22,6 +24,7 @@ const EMPTY: AiToolsState = {
   codexMcpEnabled: false,
   claudeApproved: false,
   claudeHooksEnabled: false,
+  codexHooksEnabled: false,
 };
 
 export interface McpSetup {
@@ -37,11 +40,12 @@ export interface McpSetup {
   /** Write every applicable config — `.mcp.json`, `.codex/config.toml`, and
    *  tool auto-approve in `.claude/settings.local.json` — then re-detect. */
   enable: () => Promise<void>;
-  /** Explicit, separate opt-in: install scryer's Claude Code session hooks
-   *  into `.claude/settings.local.json`. Never bundled into `enable` — the
-   *  hooks change every session's behavior (while the app is open), so they
-   *  are only written when the user asks for exactly that. */
-  enableHooks: () => Promise<void>;
+  /** Explicit, separate opt-in: install scryer's session hooks for one tool —
+   *  Claude Code (`.claude/settings.local.json`) or Codex (`.codex/hooks.json`).
+   *  Never bundled into `enable` — the hooks change every session's behavior
+   *  (while the app is open), so they are only written when the user asks for
+   *  exactly that. */
+  enableHooks: (tool: "claude" | "codex") => Promise<void>;
   dismiss: () => void;
   /** Re-read detection from disk (e.g. after a config is written externally). */
   reload: () => void;
@@ -87,16 +91,20 @@ export function useMcpSetup(projectPath: string | null): McpSetup {
     }
   }, [projectPath, tools, reload]);
 
-  const enableHooks = useCallback(async () => {
-    if (!projectPath) return;
-    setBusy(true);
-    try {
-      await invoke("setup_mcp_integration", { action: "claude_hooks", projectPath });
-      reload();
-    } finally {
-      setBusy(false);
-    }
-  }, [projectPath, reload]);
+  const enableHooks = useCallback(
+    async (tool: "claude" | "codex") => {
+      if (!projectPath) return;
+      setBusy(true);
+      try {
+        const action = tool === "codex" ? "codex_hooks" : "claude_hooks";
+        await invoke("setup_mcp_integration", { action, projectPath });
+        reload();
+      } finally {
+        setBusy(false);
+      }
+    },
+    [projectPath, reload],
+  );
 
   const dismiss = useCallback(() => {
     if (!projectPath) return;

@@ -197,31 +197,31 @@ export function SettingsPanel({
             onChange={(codex) => setSettings((s) => ({ ...s, codex }))}
           />
 
-          {projectPath && mcpSetup.tools.claude && (
+          {projectPath && (mcpSetup.tools.claude || mcpSetup.tools.codex) && (
             <Field label="Session hooks (this project)">
-              {mcpSetup.tools.claudeHooksEnabled ? (
-                <p className="flex items-center gap-1 text-xs text-emerald-500">
-                  <Check className="h-3 w-3" /> Installed — active whenever Scryer has this
-                  project open
-                </p>
-              ) : (
-                <div className="flex flex-col gap-1.5">
-                  <p className="text-2xs leading-relaxed text-[var(--text-muted)]">
-                    Let Claude Code sessions see the model as they work: the status line on
-                    start, each file's claims and directives as it reads, and a one-time close
-                    check for touched claims. Writes 4 hook entries to{" "}
-                    <span className="font-mono text-[10px]">.claude/settings.local.json</span>.
-                    Hooks are inert while Scryer is closed.
-                  </p>
-                  <button
-                    type="button"
-                    className={`${BTN} self-start`}
-                    disabled={mcpSetup.busy}
-                    onClick={() => void mcpSetup.enableHooks()}
-                  >
-                    {mcpSetup.busy ? "Installing…" : "Install hooks"}
-                  </button>
-                </div>
+              <p className="text-2xs leading-relaxed text-[var(--text-muted)]">
+                Let agent sessions see the model as they work: the status line on start, each
+                file's claims and directives as they work in it, and a one-time close check for
+                touched claims. Hooks are inert while Scryer is closed — installed per tool,
+                active whenever Scryer has this project open.
+              </p>
+              {mcpSetup.tools.claude && (
+                <HooksRow
+                  name="Claude Code"
+                  target=".claude/settings.local.json"
+                  installed={mcpSetup.tools.claudeHooksEnabled}
+                  busy={mcpSetup.busy}
+                  onInstall={() => void mcpSetup.enableHooks("claude")}
+                />
+              )}
+              {mcpSetup.tools.codex && (
+                <HooksRow
+                  name="Codex"
+                  target=".codex/hooks.json"
+                  installed={mcpSetup.tools.codexHooksEnabled}
+                  busy={mcpSetup.busy}
+                  onInstall={() => void mcpSetup.enableHooks("codex")}
+                />
               )}
             </Field>
           )}
@@ -255,6 +255,39 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
         {label}
       </span>
       {children}
+    </div>
+  );
+}
+
+/** One tool's hook-install state: installed check, or the target file + button. */
+function HooksRow({
+  name,
+  target,
+  installed,
+  busy,
+  onInstall,
+}: {
+  name: string;
+  target: string;
+  installed: boolean;
+  busy: boolean;
+  onInstall: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-xs text-[var(--text)]">{name}</span>
+      {installed ? (
+        <span className="flex items-center gap-1 text-xs text-emerald-500">
+          <Check className="h-3 w-3" /> Installed
+        </span>
+      ) : (
+        <span className="flex items-center gap-2">
+          <span className="font-mono text-[10px] text-[var(--text-muted)]">{target}</span>
+          <button type="button" className={BTN} disabled={busy} onClick={onInstall}>
+            {busy ? "Installing…" : "Install"}
+          </button>
+        </span>
+      )}
     </div>
   );
 }
