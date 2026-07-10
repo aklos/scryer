@@ -1,4 +1,5 @@
 pub mod build_edges;
+pub mod changes;
 pub mod diff;
 pub mod drift;
 pub mod health;
@@ -365,6 +366,17 @@ pub struct ScryModel {
     /// within its parent's. Agent-produced and regenerable; never hand-authored.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub boundaries: HashMap<String, Vec<Source>>,
+    /// The open-change registry — named partitions of the plan, each carrying
+    /// the dev's rationale. PLAN-LAYER ONLY: the committed model never carries
+    /// change state ([`write_model_at`] strips it). See [`crate::changes`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changes: Vec<changes::ChangeMeta>,
+    /// Maps **element key** ([`changes::element_key`]) → change id: which
+    /// change each pending plan entry belongs to. Untagged entries are the
+    /// unfiled bucket (the zero-friction serial workflow). Plan-layer only,
+    /// like `changes`; kept honest by [`changes::gc`].
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub change_map: HashMap<String, String>,
 }
 
 impl ScryModel {
@@ -376,6 +388,8 @@ impl ScryModel {
             groups: Vec::new(),
             source_map: HashMap::new(),
             boundaries: HashMap::new(),
+            changes: Vec::new(),
+            change_map: HashMap::new(),
         }
     }
 }
@@ -592,6 +606,11 @@ pub fn write_model_at(r: &ModelRef, model: &ScryModel) -> Result<(), String> {
     let prior = read_model_at(r).ok();
     let mut stamped = model.clone();
     stamp_touches(&mut stamped, prior.as_ref(), drift::now_secs());
+    // Change state lives and dies with the DRAFT (see `crate::changes`); the
+    // committed layer never carries it. Strip here rather than trust every
+    // caller — a plan-derived model (fold, set_model) rides through this path.
+    stamped.changes.clear();
+    stamped.change_map.clear();
     let json = serde_json::to_string_pretty(&stamped).map_err(|e| e.to_string())?;
     write_model_raw_at(r, &json)
 }
@@ -798,6 +817,18 @@ pub fn write_planned_at(r: &ModelRef, model: &ScryModel) -> Result<(), String> {
     let prior = read_planned_at(r).ok();
     let mut stamped = model.clone();
     stamp_touches(&mut stamped, prior.as_ref(), drift::now_secs());
+    // Ledger GC on the authoring path: an edit can revert a tagged element
+    // back to its committed form, killing the pending entry its tag named. A
+    // change emptied that way closes as "abandoned" — the fold paths close
+    // theirs as "folded" via their own gc call.
+    if !(stamped.change_map.is_empty() && stamped.changes.is_empty()) {
+        if let Ok(committed) = read_model_at(r) {
+            let gc = changes::gc(&committed, &mut stamped);
+            for meta in &gc.closed {
+                changes::record_closed(r, meta, "abandoned");
+            }
+        }
+    }
     let json = serde_json::to_string_pretty(&stamped).map_err(|e| e.to_string())?;
     write_planned_raw_at(r, &json)
 }
@@ -943,7 +974,15 @@ pub fn fold_built_model(r: &ModelRef, built: &ScryModel) -> Result<ScryModel, St
     // An unreadable committed layer degrades to the plain overwrite (nothing to
     // merge) rather than failing the whole build at its final step.
     let committed = read_model_at(r).unwrap_or_default();
-    let folded = working_view(&committed, built);
+    let mut folded = working_view(&committed, built);
+    // The whole draft folds, so every open change folds with it — record each
+    // before its registry entry vanishes, then strip the change state: neither
+    // the committed layer nor the re-seeded (empty) plan carries any.
+    for meta in &folded.changes {
+        changes::record_closed(r, meta, "folded");
+    }
+    folded.changes.clear();
+    folded.change_map.clear();
     write_model_at(r, &folded)?;
     let mut seeded = folded.clone();
     seeded.source_map.clear();
@@ -1384,37 +1423,49 @@ pub fn commit_element(
         }
     }
 
+    if purge_from_planned {
+        match kind {
+            diff::ElementKind::Node => p.nodes.retain(|n| n.id != id),
+            diff::ElementKind::Link => p.links.retain(|l| l.id != id),
+            diff::ElementKind::Group => p.groups.retain(|g| g.id != id),
+            diff::ElementKind::Responsibility => {
+                for n in &mut p.nodes {
+                    n.responsibilities.retain(|x| x.id != id);
+                }
+                for g in &mut p.groups {
+                    g.responsibilities.retain(|x| x.id != id);
+                }
+            }
+            diff::ElementKind::Property => {}
+        }
+    }
+    for k in &planned_anchor_strip {
+        p.source_map.remove(k);
+    }
+    for k in &planned_boundary_strip {
+        p.boundaries.remove(k);
+    }
+
+    // Ledger GC against the post-fold layers: the element just folded (or was
+    // delete-folded) no longer diverges, so any change tag naming it is dead.
+    // A change this prune empties is finished — record it as folded, with its
+    // rationale, before the registry entry disappears.
+    let gc = changes::gc(&model, &mut p);
+    for meta in &gc.closed {
+        changes::record_closed(r, meta, "folded");
+    }
+
     // Rewrite the draft when the fold removes the element (a committed deletion),
-    // when it moved an anchor out of the draft into committed, or when it just
-    // resolved review markers on the draft copy — in each case the draft must
-    // stop carrying what committed now owns, so the single-home invariant holds.
+    // when it moved an anchor out of the draft into committed, when it resolved
+    // review markers on the draft copy, or when it retired change tags — in each
+    // case the draft must stop carrying what committed now owns, so the
+    // single-home invariant holds.
     if purge_from_planned
         || plan_markers_cleared
         || !planned_anchor_strip.is_empty()
         || !planned_boundary_strip.is_empty()
+        || gc.pruned > 0
     {
-        if purge_from_planned {
-            match kind {
-                diff::ElementKind::Node => p.nodes.retain(|n| n.id != id),
-                diff::ElementKind::Link => p.links.retain(|l| l.id != id),
-                diff::ElementKind::Group => p.groups.retain(|g| g.id != id),
-                diff::ElementKind::Responsibility => {
-                    for n in &mut p.nodes {
-                        n.responsibilities.retain(|x| x.id != id);
-                    }
-                    for g in &mut p.groups {
-                        g.responsibilities.retain(|x| x.id != id);
-                    }
-                }
-                diff::ElementKind::Property => {}
-            }
-        }
-        for k in &planned_anchor_strip {
-            p.source_map.remove(k);
-        }
-        for k in &planned_boundary_strip {
-            p.boundaries.remove(k);
-        }
         let json = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?;
         write_planned_raw_at(r, &json)?;
     }
@@ -1542,14 +1593,26 @@ pub fn commit_plan_only_ancestors(
             plan_markers_cleared |= n.vagrant.take().is_some() | n.stale.take().is_some();
         }
     }
-    if plan_markers_cleared || !planned_anchor_strip.is_empty() || !planned_boundary_strip.is_empty()
+    for k in &planned_anchor_strip {
+        p.source_map.remove(k);
+    }
+    for k in &planned_boundary_strip {
+        p.boundaries.remove(k);
+    }
+
+    // Ledger GC, mirroring commit_element: a folded ancestor's own node tag is
+    // dead (its structure no longer diverges), while the tags on its still-
+    // pending claims survive with them.
+    let gc = changes::gc(&model, &mut p);
+    for meta in &gc.closed {
+        changes::record_closed(r, meta, "folded");
+    }
+
+    if plan_markers_cleared
+        || !planned_anchor_strip.is_empty()
+        || !planned_boundary_strip.is_empty()
+        || gc.pruned > 0
     {
-        for k in &planned_anchor_strip {
-            p.source_map.remove(k);
-        }
-        for k in &planned_boundary_strip {
-            p.boundaries.remove(k);
-        }
         let json = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?;
         write_planned_raw_at(r, &json)?;
     }

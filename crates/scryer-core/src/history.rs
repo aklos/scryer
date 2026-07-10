@@ -28,6 +28,10 @@ pub enum EventKind {
     Move,
     /// A node first entered the committed model (`fill_container`).
     Born,
+    /// A plan change closed — its last pending entry folded (or was reverted).
+    /// The one event kind that spans nodes: `node_id` is empty, `change_id`
+    /// names the change, and the rows carry its rationale.
+    Change,
 }
 
 /// One diff row inside an event: a marker glyph, its text, and an optional source
@@ -66,7 +70,12 @@ pub struct HistoryEvent {
     pub driver: String,
     pub kind: EventKind,
     /// The node this event is about — the per-node History tab filters on it.
+    /// Empty for [`EventKind::Change`] events, which span nodes.
     pub node_id: String,
+    /// The plan change this event belonged to, when its work was tagged — how
+    /// "which change introduced this claim?" gets answered after the fold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rows: Vec<EventRow>,
 }
@@ -79,12 +88,18 @@ impl HistoryEvent {
             driver: driver.to_string(),
             kind,
             node_id: node_id.into(),
+            change_id: None,
             rows: Vec::new(),
         }
     }
 
     pub fn with_rows(mut self, rows: Vec<EventRow>) -> Self {
         self.rows = rows;
+        self
+    }
+
+    pub fn with_change(mut self, change_id: impl Into<String>) -> Self {
+        self.change_id = Some(change_id.into());
         self
     }
 }
