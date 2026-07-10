@@ -119,16 +119,9 @@ pub struct DerivedGraph {
     pub resolved_edges: Vec<ResolvedEdge>,
 }
 
-/// Glob specificity for boundary-fallback ownership — higher wins. `.0` is the
-/// literal-prefix length (chars before the first wildcard), `.1` the pattern
-/// length as a tiebreak. So `crates/acp/**/*` (long literal prefix) outranks a
-/// catch-all `**/*` (zero), and a contested file lands in its real owner.
-fn glob_specificity(pattern: &str) -> (usize, usize) {
-    let prefix = pattern
-        .find(|c| matches!(c, '*' | '?' | '['))
-        .unwrap_or(pattern.len());
-    (prefix, pattern.len())
-}
+// Glob specificity comes from `ownership::pattern_rank` — the ONE ranking all
+// ownership decisions share, so the link audit can never attribute a contested
+// file differently from health/drift.
 
 /// Join the cached import graph onto the model. Deterministic; resolution is
 /// best-effort (unresolvable endpoints are skipped, never guessed).
@@ -204,7 +197,7 @@ pub fn derive_graph(model: &ScryModel, edges: &BuildEdges) -> DerivedGraph {
             let depth = depth_of(id.as_str());
             for s in sources {
                 if let Ok(pat) = glob::Pattern::new(&s.pattern) {
-                    v.push((id.as_str(), pat, glob_specificity(&s.pattern), depth));
+                    v.push((id.as_str(), pat, crate::ownership::pattern_rank(&s.pattern), depth));
                 }
             }
         }

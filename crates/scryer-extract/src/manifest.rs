@@ -361,7 +361,11 @@ fn dockerfile_base_image(text: &str) -> Option<String> {
         if !l.as_bytes()[4].is_ascii_whitespace() {
             continue;
         }
-        let image = l[4..].trim().split_whitespace().next().unwrap_or("");
+        // Skip option tokens: `FROM --platform=linux/amd64 node:18`.
+        let image = l[4..]
+            .split_whitespace()
+            .find(|t| !t.starts_with("--"))
+            .unwrap_or("");
         if image.is_empty() || image.contains('$') {
             continue;
         }

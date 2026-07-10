@@ -654,8 +654,14 @@ pub fn check_anchors(r: &ModelRef) -> Result<AnchorCheck, String> {
         let _ = std::fs::write(r.anchors_path(), json);
     }
 
-    out.sort_by(|a, b| (&a.host_id, &a.key, &a.file).cmp(&(&b.host_id, &b.key, &b.file)));
-    out.dedup_by(|a, b| a.key == b.key && a.file == b.file && a.state == b.state);
+    out.sort_by(|a, b| {
+        (&a.host_id, &a.key, &a.file, &a.symbol).cmp(&(&b.host_id, &b.key, &b.file, &b.symbol))
+    });
+    // Dedup on symbol too: two sibling anchors of one claim in one file are
+    // distinct observations, not duplicates.
+    out.dedup_by(|a, b| {
+        a.key == b.key && a.file == b.file && a.symbol == b.symbol && a.state == b.state
+    });
     Ok(AnchorCheck {
         observations: out,
         reanchored,

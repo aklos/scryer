@@ -43,6 +43,7 @@ enum Family {
     TsLike,
     Python,
     Go,
+    CLike,
     Generic,
 }
 
@@ -52,6 +53,7 @@ fn family_for_ext(ext: &str) -> Family {
         "ts" | "mts" | "cts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" => Family::TsLike,
         "py" | "pyi" => Family::Python,
         "go" => Family::Go,
+        "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => Family::CLike,
         _ => Family::Generic,
     }
 }
@@ -169,6 +171,7 @@ pub fn parse_file_with(path: &Path, source: &str, parser: &mut Parser) -> Option
         Family::TsLike => collect_ts(root, bytes, &mut defs),
         Family::Python => collect_python(root, bytes, &mut defs),
         Family::Go => collect_go(root, bytes, &mut defs),
+        Family::CLike => collect_c(root, bytes, &mut defs),
         Family::Generic => collect_generic(root, bytes, &mut defs),
     }
 
@@ -226,13 +229,16 @@ fn line_span(node: Node) -> (u32, u32) {
     )
 }
 
+/// Accepts what the grammars call an identifier: `$`-named JS/TS symbols
+/// (`$store`) and unicode identifiers included — the old ASCII-only gate
+/// silently dropped their definitions entirely.
 fn is_identifier(s: &str) -> bool {
     let mut chars = s.chars();
     match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        Some(c) if c.is_alphabetic() || c == '_' || c == '$' => {}
         _ => return false,
     }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    chars.all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }
 
 fn push_def(
@@ -624,7 +630,98 @@ fn collect_go_paths(node: Node, bytes: &[u8], out: &mut Vec<PathRef>) {
     }
 }
 
-// --- Generic fallback (java, ruby, c, cpp, c#, php) ---
+// --- C / C++ ---
+
+/// C/C++ definitions. The generic fallback extracted NO functions here —
+/// tree-sitter's C grammars put the name under `declarator`, not a `name`
+/// field — while `struct foo x;` use sites minted phantom one-line defs
+/// (`struct_specifier` matched "struct" and has a `name`). Only specifiers
+/// WITH a body are definitions; function bodies are not descended into, so
+/// locals never become symbols.
+fn collect_c(root: Node, bytes: &[u8], defs: &mut Vec<Def>) {
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "function_definition" => {
+                if let Some(declarator) = n.child_by_field_name("declarator") {
+                    push_def(defs, c_declarator_name(declarator, bytes), n, Vec::new(), false);
+                }
+                continue; // never descend into bodies: locals are not symbols
+            }
+            // `typedef struct {…} Foo;` — the new name lives in the declarator;
+            // a named underlying struct is picked up by the descent.
+            "type_definition" => {
+                if let Some(declarator) = n.child_by_field_name("declarator") {
+                    push_def(defs, c_declarator_name(declarator, bytes), n, Vec::new(), false);
+                }
+            }
+            "struct_specifier" | "union_specifier" | "class_specifier" => {
+                if let (Some(name), Some(body)) =
+                    (field_text(n, "name", bytes), n.child_by_field_name("body"))
+                {
+                    let fields = c_struct_fields(body, bytes);
+                    push_def(defs, Some(name), n, fields, true);
+                }
+            }
+            "enum_specifier" => {
+                if let (Some(name), Some(body)) =
+                    (field_text(n, "name", bytes), n.child_by_field_name("body"))
+                {
+                    let fields = named_children(body)
+                        .into_iter()
+                        .filter(|e| e.kind() == "enumerator")
+                        .filter_map(|e| field_text(e, "name", bytes))
+                        .collect();
+                    push_def(defs, Some(name), n, fields, true);
+                }
+            }
+            _ => {}
+        }
+        // Descend everywhere else: namespaces, class bodies (inline methods),
+        // extern "C" blocks, preprocessor conditionals.
+        for child in named_children(n) {
+            stack.push(child);
+        }
+    }
+}
+
+/// The name inside a (possibly nested) C/C++ declarator: `*foo(...)`,
+/// `Foo::bar(...)`, `(*fp)(...)` — unwrap declarator wrappers until an
+/// identifier-like node (or the `name` of a qualified one) appears.
+fn c_declarator_name(node: Node, bytes: &[u8]) -> Option<String> {
+    let mut cur = node;
+    loop {
+        match cur.kind() {
+            "identifier" | "field_identifier" | "type_identifier" => {
+                return cur.utf8_text(bytes).ok().map(|s| s.to_string());
+            }
+            // `Foo::bar` — the def's own name is the last segment.
+            "qualified_identifier" => cur = cur.child_by_field_name("name")?,
+            _ => cur = cur.child_by_field_name("declarator")?,
+        }
+    }
+}
+
+/// Declared field names of a struct/union/class body, skipping method
+/// definitions and anonymous members. One declaration can bind several names
+/// (`int x, y;`) — the `declarator` field repeats.
+fn c_struct_fields(body: Node, bytes: &[u8]) -> Vec<String> {
+    let mut fields = Vec::new();
+    for decl in named_children(body) {
+        if decl.kind() != "field_declaration" {
+            continue;
+        }
+        let mut cur = decl.walk();
+        for declarator in decl.children_by_field_name("declarator", &mut cur) {
+            if let Some(name) = c_declarator_name(declarator, bytes) {
+                fields.push(name);
+            }
+        }
+    }
+    fields
+}
+
+// --- Generic fallback (java, ruby, c#, php) ---
 
 fn collect_generic(node: Node, bytes: &[u8], defs: &mut Vec<Def>) {
     // Narrow substring set: clearly top-level definition kinds across grammars,
@@ -1372,6 +1469,97 @@ func main() {
             .any(|pr| pr.segments == ["database", "Connect"] && pr.line == 12));
         assert!(p.paths.iter().any(|pr| pr.segments == ["api", "Handler"]));
         assert!(p.paths.iter().any(|pr| pr.segments == ["fmt", "Println"]));
+    }
+
+    #[test]
+    fn c_defs_and_fields() {
+        let src = r#"
+#include <stdio.h>
+
+#define MAX 10
+
+struct Point {
+    int x, y;
+    char *label;
+};
+
+enum Color { RED, GREEN };
+
+typedef struct { int a; } Wrapped;
+
+static int counter;
+
+int add(int a, int b) {
+    struct Point local;
+    return a + b;
+}
+
+char *render(struct Point *p) {
+    return p->label;
+}
+"#;
+        let p = parse_file(Path::new("f.c"), src).unwrap();
+        let n = names(&p);
+        assert!(n.contains(&"add"), "functions are symbols (audit theme 2)");
+        assert!(n.contains(&"render"), "pointer-returning functions too");
+        assert!(n.contains(&"Point"));
+        assert!(n.contains(&"Color"));
+        assert!(n.contains(&"Wrapped"), "typedef names are symbols");
+        // `struct Point local;` inside a body must NOT mint a phantom def, and
+        // locals are not symbols.
+        assert_eq!(
+            p.defs.iter().filter(|d| d.name == "Point").count(),
+            1,
+            "a struct USE site is not a definition"
+        );
+        assert!(!n.contains(&"local"));
+
+        let point = p.defs.iter().find(|d| d.name == "Point").unwrap();
+        assert!(point.is_data_shape);
+        assert_eq!(point.fields, vec!["x", "y", "label"]);
+        let color = p.defs.iter().find(|d| d.name == "Color").unwrap();
+        assert_eq!(color.fields, vec!["RED", "GREEN"]);
+    }
+
+    #[test]
+    fn cpp_defs() {
+        let src = r#"
+namespace app {
+
+class Widget {
+public:
+    int size;
+    void draw() { }
+private:
+    int state_;
+};
+
+int Widget_helper() { return 1; }
+
+}
+
+void app::Widget_out_of_line() { }
+"#;
+        let p = parse_file(Path::new("f.cpp"), src).unwrap();
+        let n = names(&p);
+        assert!(n.contains(&"Widget"), "classes inside namespaces");
+        assert!(n.contains(&"draw"), "inline methods are symbols");
+        assert!(n.contains(&"Widget_helper"));
+        assert!(
+            n.contains(&"Widget_out_of_line"),
+            "qualified out-of-line defs take the last name segment"
+        );
+        let widget = p.defs.iter().find(|d| d.name == "Widget").unwrap();
+        assert_eq!(widget.fields, vec!["size", "state_"]);
+    }
+
+    #[test]
+    fn dollar_and_unicode_identifiers_kept() {
+        let src = "export const $store = 1;\nexport function übersetzen() { return 1; }\n";
+        let p = parse_file(Path::new("f.ts"), src).unwrap();
+        let n = names(&p);
+        assert!(n.contains(&"$store"), "JS $-names are real symbols");
+        assert!(n.contains(&"übersetzen"), "unicode identifiers too");
     }
 
     #[test]

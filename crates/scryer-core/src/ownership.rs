@@ -24,10 +24,18 @@ pub fn pattern_specificity(pattern: &str) -> usize {
         .unwrap_or(pattern.len())
 }
 
+/// Full ordering rank for contested files: literal-prefix length first,
+/// pattern length as the tiebreak (`src/**/*.ts` outranks `src/**/*`). The
+/// ONE ranking every ownership decision uses — health/drift attribution and
+/// the link audit diverged here once, attributing the same file differently.
+pub fn pattern_rank(pattern: &str) -> (usize, usize) {
+    (pattern_specificity(pattern), pattern.len())
+}
+
 struct NodeBoundaries {
     node_id: String,
-    /// (compiled glob, specificity) for each boundary pattern that compiled.
-    patterns: Vec<(glob::Pattern, usize)>,
+    /// (compiled glob, rank) for each boundary pattern that compiled.
+    patterns: Vec<(glob::Pattern, (usize, usize))>,
 }
 
 /// Resolves file ownership across the whole model by most-specific matching
@@ -60,12 +68,12 @@ impl BoundaryOwnership {
             .iter()
             .filter(|(node_id, _)| live_nodes.contains(node_id.as_str()))
             .filter_map(|(node_id, sources)| {
-                let patterns: Vec<(glob::Pattern, usize)> = sources
+                let patterns: Vec<(glob::Pattern, (usize, usize))> = sources
                     .iter()
                     .filter_map(|s| {
                         glob::Pattern::new(&s.pattern)
                             .ok()
-                            .map(|p| (p, pattern_specificity(&s.pattern)))
+                            .map(|p| (p, pattern_rank(&s.pattern)))
                     })
                     .collect();
                 if patterns.is_empty() {
@@ -80,25 +88,25 @@ impl BoundaryOwnership {
         Self { nodes }
     }
 
-    /// The highest specificity among every node's boundaries that match `file`,
+    /// The highest rank among every node's boundaries that match `file`,
     /// or `None` when no boundary matches it at all.
-    fn winning_specificity(&self, file: &str) -> Option<usize> {
+    fn winning_specificity(&self, file: &str) -> Option<(usize, usize)> {
         self.nodes
             .iter()
             .flat_map(|n| n.patterns.iter())
             .filter(|(p, _)| p.matches(file))
-            .map(|(_, spec)| *spec)
+            .map(|(_, rank)| *rank)
             .max()
     }
 
-    /// The specificity of `node_id`'s best boundary matching `file`, or `None`.
-    fn node_match(&self, node_id: &str, file: &str) -> Option<usize> {
+    /// The rank of `node_id`'s best boundary matching `file`, or `None`.
+    fn node_match(&self, node_id: &str, file: &str) -> Option<(usize, usize)> {
         self.nodes
             .iter()
             .filter(|n| n.node_id == node_id)
             .flat_map(|n| n.patterns.iter())
             .filter(|(p, _)| p.matches(file))
-            .map(|(_, spec)| *spec)
+            .map(|(_, rank)| *rank)
             .max()
     }
 
@@ -128,7 +136,7 @@ impl BoundaryOwnership {
                     .patterns
                     .iter()
                     .filter(|(p, _)| p.matches(file))
-                    .any(|(_, spec)| *spec == win)
+                    .any(|(_, rank)| *rank == win)
                 {
                     out.entry(n.node_id.clone()).or_default().push(file.to_string());
                 }

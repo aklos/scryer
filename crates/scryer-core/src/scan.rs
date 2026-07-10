@@ -137,8 +137,8 @@ fn classify_file(name: &str, rel_path: &Path) -> Option<Category> {
     {
         return Some(Category::Infrastructure);
     }
-    // CI/CD
-    let rel_str = rel_path.to_string_lossy();
+    // CI/CD — normalized so the `/`-separated prefixes match on Windows too.
+    let rel_str = rel_path.to_string_lossy().replace('\\', "/");
     if rel_str.starts_with(".github/workflows/") && (name.ends_with(".yml") || name.ends_with(".yaml"))
     {
         return Some(Category::Infrastructure);
@@ -352,7 +352,10 @@ pub fn manifest_dirs(path: &Path) -> Vec<(String, String)> {
         };
         let file_name = rel.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if classify_file(file_name, rel) == Some(Category::Manifest) {
-            let dir = rel.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+            let dir = rel
+                .parent()
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
             if !dir.is_empty() {
                 results.push((dir, file_name.to_string()));
             }
