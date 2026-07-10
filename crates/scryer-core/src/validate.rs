@@ -345,6 +345,11 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
 
     warnings.extend(check_disconnected(model));
 
+    // The same fact must never cost two lines: every duplicated warning teaches
+    // the reader to skim, and a skimmed gate is no gate.
+    let mut seen: HashSet<String> = HashSet::new();
+    warnings.retain(|w| seen.insert(w.clone()));
+
     warnings
 }
 
@@ -383,7 +388,11 @@ fn check_disconnected(model: &ScryModel) -> Vec<String> {
                        warnings: &mut Vec<String>| {
         let visible: HashSet<&str> = owned.union(refs).copied().collect();
         let connected = connected_within(&visible);
-        for oid in owned {
+        // Sorted so the warning list is stable across runs (owned is a HashSet).
+        let mut ordered: Vec<&str> = owned.iter().copied().collect();
+        ordered.sort_unstable_by_key(|oid| (&by_id[oid].name, *oid));
+        let mut linkless: Vec<String> = Vec::new();
+        for oid in ordered {
             if connected.contains(oid) {
                 continue;
             }
@@ -393,12 +402,26 @@ fn check_disconnected(model: &ScryModel) -> Vec<String> {
                     "'{}' ({}) has links but none at this level — it will appear disconnected in the {}",
                     n.name, kind_name(&n.kind), view
                 ));
-            } else if owned.len() > 1 {
-                warnings.push(format!(
-                    "'{}' ({}) has no links — it will appear disconnected",
-                    n.name, kind_name(&n.kind)
-                ));
+            } else if owned.len() > 1 && n.kind != Kind::Symbol {
+                // Symbols justify themselves through their claims (rule 8) — the
+                // dependency graph at code level is legitimately sparse (data
+                // types, UI leaves, entry points), so no per-symbol nag here.
+                linkless.push(format!("'{}' ({})", n.name, kind_name(&n.kind)));
             }
+        }
+        // One rolled-up warning per view instead of one per node, so a sparse
+        // diagram costs one line, not a wall the agent learns to skip.
+        match linkless.len() {
+            0 => {}
+            1 => warnings.push(format!(
+                "{} has no links — it will appear disconnected in the {}",
+                linkless[0], view
+            )),
+            _ => warnings.push(format!(
+                "{} have no links — they will appear disconnected in the {}",
+                linkless.join(", "),
+                view
+            )),
         }
     };
 
@@ -926,5 +949,141 @@ mod resp_id_tests {
             warnings.iter().filter(|w| w.contains("no directory prefix")).collect();
         assert_eq!(hits.len(), 1, "only the whole-repo glob warns: {warnings:?}");
         assert!(hits[0].contains("**/*") && hits[0].contains("Acme"), "{}", hits[0]);
+    }
+}
+
+#[cfg(test)]
+mod disconnect_tests {
+    use super::validate;
+    use crate::{Node, ScryModel};
+
+    fn node(v: serde_json::Value) -> Node {
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// Component → Symbol scaffolding with `n` linkless sibling symbols under
+    /// one component, each carrying a responsibility (so the empty-symbol
+    /// warning stays out of the way).
+    fn model_with_symbols(n: usize) -> ScryModel {
+        let mut m = ScryModel::new();
+        m.nodes.push(node(serde_json::json!({
+            "id": "sys", "kind": "system", "name": "Acme",
+        })));
+        m.nodes.push(node(serde_json::json!({
+            "id": "cont", "kind": "container", "name": "API", "parentId": "sys",
+        })));
+        m.nodes.push(node(serde_json::json!({
+            "id": "comp", "kind": "component", "name": "Auth", "parentId": "cont",
+        })));
+        for i in 0..n {
+            m.nodes.push(node(serde_json::json!({
+                "id": format!("sym-{i}"), "kind": "symbol",
+                "name": format!("helper_{i}"), "parentId": "comp",
+                "responsibilities": [{ "id": format!("r-{i}"), "statement": "does a thing" }]
+            })));
+        }
+        m
+    }
+
+    /// Symbols justify themselves through claims (rule 8) — a linkless symbol
+    /// must not warn, however many siblings it has. The code-level dependency
+    /// graph is legitimately sparse.
+    #[test]
+    fn linkless_symbols_never_warn() {
+        let m = model_with_symbols(5);
+        let warnings = validate(&m);
+        assert!(
+            !warnings.iter().any(|w| w.contains("disconnected") && w.contains("symbol")),
+            "no per-symbol disconnect noise: {warnings:?}"
+        );
+    }
+
+    /// A symbol whose links all render elsewhere still gets the (rarer,
+    /// actionable) "links but none at this level" flag — only the bulk
+    /// "no links" nag is dropped for symbols.
+    #[test]
+    fn symbol_with_invisible_links_still_warns() {
+        let mut m = model_with_symbols(2);
+        // Link sym-0 to the container: legal only via reference propagation,
+        // but here nothing makes "API" a reference on the symbol view, so the
+        // link renders nowhere at sym-0's level.
+        m.links.push(serde_json::from_value(serde_json::json!({
+            "id": "l1", "src": "sym-0", "dst": "cont", "label": "uses"
+        })).unwrap());
+        let warnings = validate(&m);
+        assert!(
+            warnings.iter().any(|w| w.contains("has links but none at this level")
+                && w.contains("helper_0")),
+            "invisible-link symbols still flagged: {warnings:?}"
+        );
+    }
+
+    /// Linkless components roll up to ONE warning per view naming every
+    /// culprit, not one line per node — a sparse diagram costs a line, not a
+    /// wall the agent learns to skim.
+    #[test]
+    fn linkless_components_roll_up_per_view() {
+        let mut m = ScryModel::new();
+        m.nodes.push(node(serde_json::json!({
+            "id": "sys", "kind": "system", "name": "Acme",
+        })));
+        m.nodes.push(node(serde_json::json!({
+            "id": "cont", "kind": "container", "name": "API", "parentId": "sys",
+        })));
+        for (id, name) in [("c1", "Auth"), ("c2", "Billing"), ("c3", "Search")] {
+            m.nodes.push(node(serde_json::json!({
+                "id": id, "kind": "component", "name": name, "parentId": "cont",
+            })));
+        }
+        let warnings = validate(&m);
+        let hits: Vec<&String> = warnings
+            .iter()
+            .filter(|w| w.contains("have no links") || w.contains("has no links"))
+            .collect();
+        assert_eq!(hits.len(), 1, "one rolled-up line, got: {warnings:?}");
+        let w = hits[0];
+        assert!(
+            w.contains("'Auth' (component)")
+                && w.contains("'Billing' (component)")
+                && w.contains("'Search' (component)"),
+            "names every culprit with its kind: {w}"
+        );
+        assert!(w.contains("component view of 'API'"), "scoped to the view: {w}");
+    }
+
+    /// A single linkless node keeps the singular wording and gains the view
+    /// scope; a lone node on its view (owned.len() == 1) still never warns.
+    #[test]
+    fn single_linkless_component_warns_singular_and_scoped() {
+        let mut m = ScryModel::new();
+        m.nodes.push(node(serde_json::json!({
+            "id": "sys", "kind": "system", "name": "Acme",
+        })));
+        m.nodes.push(node(serde_json::json!({
+            "id": "cont", "kind": "container", "name": "API", "parentId": "sys",
+        })));
+        m.nodes.push(node(serde_json::json!({
+            "id": "c1", "kind": "component", "name": "Auth", "parentId": "cont",
+        })));
+        m.nodes.push(node(serde_json::json!({
+            "id": "c2", "kind": "component", "name": "Billing", "parentId": "cont",
+        })));
+        m.links.push(serde_json::from_value(serde_json::json!({
+            "id": "l1", "src": "c2", "dst": "c1", "label": "bills via"
+        })).unwrap());
+        // c1/c2 are connected; add a third that isn't.
+        m.nodes.push(node(serde_json::json!({
+            "id": "c3", "kind": "component", "name": "Search", "parentId": "cont",
+        })));
+        let warnings = validate(&m);
+        let hits: Vec<&String> =
+            warnings.iter().filter(|w| w.contains("has no links")).collect();
+        assert_eq!(hits.len(), 1, "{warnings:?}");
+        assert!(
+            hits[0].contains("'Search' (component) has no links")
+                && hits[0].contains("component view of 'API'"),
+            "{}",
+            hits[0]
+        );
     }
 }
