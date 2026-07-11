@@ -32,7 +32,10 @@ resume a prior session's change with `set_change {change_id}` (listed in `get_pe
 3. BUILD — implement the code to that plan.\n\
 4. CLOSE — `mark_implemented` what you built (folds it from the plan into the committed model), \
 passing `anchors` so fold + anchor is one atomic call, and `flag_drift` anything the code does that \
-the plan didn't capture. The fold response ends with a scoped post-flight (what's still pending on \
+the plan didn't capture. If you wrote a test for a claim, pass `verifiedBy` in the same call to link \
+it (`pattern` = test file, `symbol` = the test function) — the claim then reads as test-backed in \
+health, and the test's fingerprint is watched like any anchor. Optional and proportional: never \
+write a test just to satisfy the field; an untested claim is simply visible, not a violation. The fold response ends with a scoped post-flight (what's still pending on \
 the node, unanchored claims, new warnings) — act on it; a separate `validate_model` run is for \
 structural sessions that touched many nodes, not for every fold. You need not finish a whole node \
 before committing: when you build \

@@ -404,20 +404,43 @@ pub(crate) fn status_header(model_ref: &ModelRef) -> Option<String> {
     })
 }
 
+/// Which claim-keyed anchor map a batch of entries writes: implementation
+/// anchors (`source_map`) or backing tests (`verify_map`).
+#[derive(Clone, Copy)]
+pub(crate) enum RespAnchorDim {
+    Source,
+    Verify,
+}
+
+impl RespAnchorDim {
+    fn map_of<'m>(
+        &self,
+        m: &'m mut ScryModel,
+    ) -> &'m mut std::collections::HashMap<String, Vec<scryer_core::SourceLocation>> {
+        match self {
+            RespAnchorDim::Source => &mut m.source_map,
+            RespAnchorDim::Verify => &mut m.verify_map,
+        }
+    }
+}
+
 /// Apply responsibility anchor entries (the `entries` shape of
 /// `update_source_map`) to their SINGLE home: the committed model owns every
 /// committed claim's anchor; the planned draft holds anchors only for claims it
-/// ADDS. Whole-symbol line ranges are normalized to symbol-only anchors (the
-/// honest encoding for "this whole definition"), reported in the returned
-/// notes. Mutates the models in place; the CALLER validates ids beforehand and
-/// persists both layers afterwards (writing `committed` only when the returned
-/// flag is true). Shared by `update_source_map` and `mark_implemented`'s
-/// fold-time `anchors`.
+/// ADDS. `dim` picks the dimension — implementation anchors or backing tests —
+/// which share the routing and normalization verbatim. Whole-symbol line ranges
+/// are normalized to symbol-only anchors (the honest encoding for "this whole
+/// definition" — for a verify entry, "this whole test"), reported in the
+/// returned notes. Mutates the models in place; the CALLER validates ids
+/// beforehand and persists both layers afterwards (writing `committed` only
+/// when the returned flag is true). Shared by `update_source_map` and
+/// `mark_implemented`'s fold-time `anchors`/`verified_by`.
 pub(crate) fn apply_resp_anchor_entries(
     project: &std::path::Path,
     planned: &mut ScryModel,
     committed: &mut Option<ScryModel>,
     mut entries: Vec<crate::types::SourceMapEntry>,
+    dim: RespAnchorDim,
 ) -> (Vec<String>, bool) {
     let mut normalized: Vec<String> = Vec::new();
     {
@@ -457,20 +480,20 @@ pub(crate) fn apply_resp_anchor_entries(
     for entry in entries {
         let key = entry.responsibility_id;
         if entry.locations.is_empty() {
-            planned.source_map.remove(&key);
+            dim.map_of(planned).remove(&key);
             if committed_resp_ids.contains(&key) {
                 if let Some(c) = committed.as_mut() {
-                    committed_dirty |= c.source_map.remove(&key).is_some();
+                    committed_dirty |= dim.map_of(c).remove(&key).is_some();
                 }
             }
         } else if committed_resp_ids.contains(&key) {
-            planned.source_map.remove(&key);
+            dim.map_of(planned).remove(&key);
             if let Some(c) = committed.as_mut() {
-                c.source_map.insert(key, entry.locations);
+                dim.map_of(c).insert(key, entry.locations);
                 committed_dirty = true;
             }
         } else {
-            planned.source_map.insert(key, entry.locations);
+            dim.map_of(planned).insert(key, entry.locations);
         }
     }
     (normalized, committed_dirty)

@@ -737,7 +737,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities, and/or `propertyLabels` to fold only those data fields (properties are identified by label). A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. In a DESIGN-FIRST model (never committed), folding a built leaf is refused while its ancestors are plan-only — pass `commit_ancestors: true` to fold the ancestor chain structure-only first: the ancestors' identity and boundaries land in committed while their unbuilt claims stay pending in the plan, so partial implementation reads honestly. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. Pass `anchors` (same shape as update_source_map `entries`) to anchor the folded claims to code IN THE SAME CALL — 'here's what I built and where it lives' as one atomic statement; an unanchored claim reads as scaffolding and carries no drift tripwire. Every node fold's response ends with a scoped POST-FLIGHT: what's still pending on that node, which of its committed claims lack anchors, and any validation warnings this fold introduced — act on those lines; you do not need a separate validate_model run after every fold. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. Pass `change` (standalone — a change id from `set_change`/`get_pending`) to fold an ENTIRE change: every plan entry tagged to it, in dependency order; when its last entry folds, the change closes and its rationale is recorded in the history log. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
+        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities, and/or `propertyLabels` to fold only those data fields (properties are identified by label). A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. In a DESIGN-FIRST model (never committed), folding a built leaf is refused while its ancestors are plan-only — pass `commit_ancestors: true` to fold the ancestor chain structure-only first: the ancestors' identity and boundaries land in committed while their unbuilt claims stay pending in the plan, so partial implementation reads honestly. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. Pass `anchors` (same shape as update_source_map `entries`) to anchor the folded claims to code IN THE SAME CALL — 'here's what I built and where it lives' as one atomic statement; an unanchored claim reads as scaffolding and carries no drift tripwire. Pass `verifiedBy` (same shape) to record each claim's BACKING TEST alongside — 'and this test demonstrates it' (`pattern` = test file, `symbol` = the test function; optional `command` records how to run it, never executed). Optional and proportional: not every claim needs a test, absence is simply visible in health — but if you just wrote the test, this is the cheapest moment to link it. Every node fold's response ends with a scoped POST-FLIGHT: what's still pending on that node, which of its committed claims lack anchors, and any validation warnings this fold introduced — act on those lines; you do not need a separate validate_model run after every fold. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. Pass `change` (standalone — a change id from `set_change`/`get_pending`) to fold an ENTIRE change: every plan entry tagged to it, in dependency order; when its last entry folds, the change closes and its rationale is recorded in the history log. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
     )]
     fn mark_implemented(
         &self,
@@ -823,9 +823,10 @@ impl ScryerServer {
             .collect()
         };
 
-        // Fold-time anchors are validated BEFORE any fold runs, so a bad id
-        // fails the whole call instead of leaving a fold half-anchored.
-        if let Some(entries) = req.anchors.as_ref() {
+        // Fold-time anchors and backing tests are validated BEFORE any fold
+        // runs, so a bad id fails the whole call instead of leaving a fold
+        // half-anchored.
+        if req.anchors.is_some() || req.verified_by.is_some() {
             let known: std::collections::HashSet<&str> = planned
                 .nodes
                 .iter()
@@ -834,13 +835,16 @@ impl ScryerServer {
                 .map(|r| r.id.as_str())
                 .chain(before_stmts.keys().map(|k| k.as_str()))
                 .collect();
-            for e in entries {
-                if !known.contains(e.responsibility_id.as_str()) {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "anchors: responsibility '{}' not found in the plan or the \
-                         committed model — nothing was folded",
-                        e.responsibility_id
-                    ))]));
+            for (field, entries) in [("anchors", &req.anchors), ("verifiedBy", &req.verified_by)]
+            {
+                for e in entries.iter().flatten() {
+                    if !known.contains(e.responsibility_id.as_str()) {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "{}: responsibility '{}' not found in the plan or the \
+                             committed model — nothing was folded",
+                            field, e.responsibility_id
+                        ))]));
+                    }
                 }
             }
         }
@@ -1076,23 +1080,46 @@ impl ScryerServer {
             }
         }
 
-        // Fold-time anchors, applied AFTER the folds so each claim's anchor
-        // lands in its single home (a just-committed claim's anchor belongs to
-        // the committed layer, not a shadow copy in the draft).
+        // Fold-time anchors and backing tests, applied AFTER the folds so each
+        // claim's entry lands in its single home (a just-committed claim's
+        // anchor belongs to the committed layer, not a shadow copy in the
+        // draft). One read-modify-write covers both dimensions.
         let mut anchor_notes: Vec<String> = Vec::new();
-        if let Some(entries) = req.anchors.take().filter(|v| !v.is_empty()) {
-            let n = entries.len();
+        let anchors = req.anchors.take().filter(|v| !v.is_empty());
+        let verified_by = req.verified_by.take().filter(|v| !v.is_empty());
+        if anchors.is_some() || verified_by.is_some() {
             let mut planned_now = match scryer_core::read_planned_seeded_at(&model_ref) {
                 Ok(p) => p,
                 Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
             };
             let mut committed_now = scryer_core::read_model_at(&model_ref).ok();
-            let (normalized, committed_dirty) = apply_resp_anchor_entries(
-                model_ref.project_path(),
-                &mut planned_now,
-                &mut committed_now,
-                entries,
-            );
+            let mut committed_dirty = false;
+            if let Some(entries) = anchors {
+                let n = entries.len();
+                let (normalized, dirty) = apply_resp_anchor_entries(
+                    model_ref.project_path(),
+                    &mut planned_now,
+                    &mut committed_now,
+                    entries,
+                    RespAnchorDim::Source,
+                );
+                committed_dirty |= dirty;
+                summaries.push(format!("Anchored {} claim(s).", n));
+                anchor_notes = normalized;
+            }
+            if let Some(entries) = verified_by {
+                let n = entries.len();
+                let (normalized, dirty) = apply_resp_anchor_entries(
+                    model_ref.project_path(),
+                    &mut planned_now,
+                    &mut committed_now,
+                    entries,
+                    RespAnchorDim::Verify,
+                );
+                committed_dirty |= dirty;
+                summaries.push(format!("Recorded backing test(s) for {} claim(s).", n));
+                anchor_notes.extend(normalized);
+            }
             if let Err(e) = scryer_core::write_planned_at(&model_ref, &planned_now) {
                 return Ok(CallToolResult::error(vec![Content::text(e)]));
             }
@@ -1103,8 +1130,6 @@ impl ScryerServer {
                     }
                 }
             }
-            summaries.push(format!("Anchored {} claim(s).", n));
-            anchor_notes = normalized;
         }
 
         let summary = summaries.join(" ");
@@ -2074,6 +2099,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: None,
                 anchors: None,
+                verified_by: None,
                 change: None,
             }))
             .unwrap();
@@ -2122,6 +2148,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: None,
                 anchors: None,
+                verified_by: None,
                 change: None,
             }))
             .unwrap();
@@ -2175,6 +2202,7 @@ mod tests {
                     link_ids: None,
                     group_ids: None,
                     anchors: None,
+                    verified_by: None,
                     change: None,
                 }))
                 .unwrap()
@@ -2230,6 +2258,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: Some(true),
                 anchors: None,
+                verified_by: None,
                 change: None,
                 link_ids: None,
                 group_ids: None,
@@ -2291,6 +2320,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: None,
                 anchors: None,
+                verified_by: None,
                 change: None,
             }))
             .unwrap();
@@ -2344,6 +2374,7 @@ mod tests {
                     property_labels: None,
                     commit_ancestors: None,
                 anchors: None,
+                verified_by: None,
                 change: None,
                 }))
                 .unwrap();
@@ -2417,6 +2448,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: None,
                 anchors: None,
+                verified_by: None,
                 change: None,
             }))
             .unwrap();
@@ -2467,6 +2499,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: None,
                 anchors: None,
+                verified_by: None,
                 change: None,
             }))
             .unwrap();
@@ -2682,6 +2715,7 @@ mod tests {
                 group_ids: None,
                 commit_ancestors: None,
                 anchors: None,
+                verified_by: None,
                 change: None,
             }))
             .unwrap();
@@ -2818,6 +2852,7 @@ mod tests {
                 group_ids: None,
                 commit_ancestors: None,
                 anchors: Some(vec![anchor("resp-ghost")]),
+                verified_by: None,
                 change: None,
             }))
             .unwrap();
@@ -2839,6 +2874,7 @@ mod tests {
                 group_ids: None,
                 commit_ancestors: None,
                 anchors: Some(vec![anchor("resp-1")]),
+                verified_by: None,
                 change: None,
             }))
             .unwrap();
@@ -2863,6 +2899,79 @@ mod tests {
             !planned.source_map.contains_key("resp-1"),
             "no shadow copy in the draft"
         );
+    }
+
+    /// `verifiedBy` records a claim's backing test in the same fold call: the
+    /// entry lands in the committed verify_map (single home, like fold-time
+    /// anchors), an unknown id is rejected up front, and the response says
+    /// what was recorded.
+    #[test]
+    fn mark_implemented_records_backing_tests() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut committed = ScryModel::new();
+        committed.nodes.push(node("comp", Kind::Component, "Auth", None));
+        scryer_core::write_model_at(&model_ref, &committed).unwrap();
+        scryer_core::ensure_planned_at(&model_ref).unwrap();
+        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        planned.nodes[0].responsibilities.push(resp("resp-1"));
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let verify = |rid: &str| SourceMapEntry {
+            responsibility_id: rid.into(),
+            locations: vec![serde_json::from_value(
+                serde_json::json!({ "pattern": "tests/auth.rs", "symbol": "forged_rejected",
+                                    "command": "cargo test forged_rejected" }),
+            )
+            .unwrap()],
+        };
+        let server = ScryerServer::new();
+        let project = dir.path().to_string_lossy().to_string();
+
+        // Unknown id: rejected before anything folds.
+        let r = server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(project.clone()),
+                node_id: Some("comp".into()),
+                responsibility_ids: None,
+                property_labels: None,
+                link_ids: None,
+                group_ids: None,
+                commit_ancestors: None,
+                anchors: None,
+                verified_by: Some(vec![verify("resp-ghost")]),
+                change: None,
+            }))
+            .unwrap();
+        assert!(r.is_error.unwrap_or(false), "unknown verifiedBy id rejected");
+
+        let r = server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(project),
+                node_id: Some("comp".into()),
+                responsibility_ids: None,
+                property_labels: None,
+                link_ids: None,
+                group_ids: None,
+                commit_ancestors: None,
+                anchors: None,
+                verified_by: Some(vec![verify("resp-1")]),
+                change: None,
+            }))
+            .unwrap();
+        let text = r
+            .content
+            .iter()
+            .find_map(|c| c.as_text().map(|t| t.text.clone()))
+            .unwrap();
+        assert!(text.contains("Recorded backing test(s) for 1 claim(s)"), "{text}");
+
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        let loc = &committed.verify_map["resp-1"][0];
+        assert_eq!(loc.pattern, "tests/auth.rs", "backing test lives in the committed layer");
+        assert_eq!(loc.command.as_deref(), Some("cargo test forged_rejected"));
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert!(!planned.verify_map.contains_key("resp-1"), "no shadow copy in the draft");
     }
 
     /// The fold response carries a scoped post-flight: what's still pending on
@@ -2919,6 +3028,7 @@ mod tests {
                 group_ids: None,
                 commit_ancestors: None,
                 anchors: None,
+                verified_by: None,
                 change: None,
             }))
             .unwrap();
@@ -3033,6 +3143,7 @@ mod tests {
                 group_ids: None,
                 commit_ancestors: None,
                 anchors: None,
+                verified_by: None,
                 change: Some("chg-1".into()),
             }))
             .unwrap();

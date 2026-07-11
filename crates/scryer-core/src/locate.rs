@@ -40,6 +40,15 @@ pub struct LocatedClaim {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub directives: Vec<String>,
     pub anchor: SourceLocation,
+    /// The claim's backing tests (its `verify_map` entry), when it has any.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub verified_by: Vec<SourceLocation>,
+    /// True when this claim surfaced because its BACKING TEST covers the
+    /// located file — `anchor` is then the test's location, and the claim's
+    /// implementation lives elsewhere. Locating a test file answers "what
+    /// does this test back?".
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub via_test: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -73,18 +82,26 @@ fn pattern_covers(pattern: &str, file: &str) -> bool {
 /// anchored to that identifier when any are; otherwise all of the file's claims
 /// are returned with `symbol_matched: false`.
 pub fn locate(model: &ScryModel, file: &str, symbol: Option<&str>) -> LocateResult {
-    // Every (key, anchor) pair whose anchor covers the file.
-    let mut hits: Vec<(&str, &SourceLocation)> = model
+    // Every (key, anchor) pair whose anchor covers the file — implementation
+    // anchors first, then verify anchors (so locating a test file surfaces
+    // the claims it backs; the bool marks the dimension).
+    let mut hits: Vec<(&str, &SourceLocation, bool)> = model
         .source_map
         .iter()
-        .flat_map(|(key, locs)| locs.iter().map(move |l| (key.as_str(), l)))
-        .filter(|(_, l)| pattern_covers(&l.pattern, file))
+        .flat_map(|(key, locs)| locs.iter().map(move |l| (key.as_str(), l, false)))
+        .chain(
+            model
+                .verify_map
+                .iter()
+                .flat_map(|(key, locs)| locs.iter().map(move |l| (key.as_str(), l, true))),
+        )
+        .filter(|(_, l, _)| pattern_covers(&l.pattern, file))
         .collect();
     let mut symbol_matched = false;
     if let Some(sym) = symbol {
         let narrowed: Vec<_> = hits
             .iter()
-            .filter(|(_, l)| l.symbol.as_deref() == Some(sym))
+            .filter(|(_, l, _)| l.symbol.as_deref() == Some(sym))
             .cloned()
             .collect();
         if !narrowed.is_empty() {
@@ -95,7 +112,7 @@ pub fn locate(model: &ScryModel, file: &str, symbol: Option<&str>) -> LocateResu
 
     let claims: Vec<LocatedClaim> = hits
         .iter()
-        .filter_map(|(key, loc)| resolve_claim(model, key, loc))
+        .filter_map(|(key, loc, via_test)| resolve_claim(model, key, loc, *via_test))
         .collect();
 
     let boundary_owner = boundary_owner(model, file);
@@ -225,7 +242,13 @@ fn boundary_owner(model: &ScryModel, file: &str) -> Option<OwnerLink> {
 /// Resolve a source-map key to the claim it anchors: a responsibility on a
 /// node or group, or a node-keyed data-shape declaration. Keys resolving to
 /// nothing (validator territory) are skipped.
-fn resolve_claim(model: &ScryModel, key: &str, loc: &SourceLocation) -> Option<LocatedClaim> {
+fn resolve_claim(
+    model: &ScryModel,
+    key: &str,
+    loc: &SourceLocation,
+    via_test: bool,
+) -> Option<LocatedClaim> {
+    let verified_by = || model.verify_map.get(key).cloned().unwrap_or_default();
     for n in &model.nodes {
         if let Some(r) = n.responsibilities.iter().find(|r| r.id == key) {
             return Some(LocatedClaim {
@@ -237,6 +260,8 @@ fn resolve_claim(model: &ScryModel, key: &str, loc: &SourceLocation) -> Option<L
                 vagrant: r.vagrant,
                 directives: r.directives.clone(),
                 anchor: loc.clone(),
+                verified_by: verified_by(),
+                via_test,
             });
         }
         // A node-keyed anchor: the declaration site of a data-shape symbol.
@@ -250,6 +275,8 @@ fn resolve_claim(model: &ScryModel, key: &str, loc: &SourceLocation) -> Option<L
                 vagrant: n.vagrant,
                 directives: n.directives.clone(),
                 anchor: loc.clone(),
+                verified_by: Vec::new(),
+                via_test,
             });
         }
     }
@@ -264,6 +291,8 @@ fn resolve_claim(model: &ScryModel, key: &str, loc: &SourceLocation) -> Option<L
                 vagrant: r.vagrant,
                 directives: r.directives.clone(),
                 anchor: loc.clone(),
+                verified_by: verified_by(),
+                via_test,
             });
         }
     }
@@ -366,6 +395,29 @@ mod tests {
         let res = locate(&m, "src/auth/token.rs", None);
         assert_eq!(res.claims.len(), 1);
         assert_eq!(res.claims[0].id, "r-vt");
+    }
+
+    /// Locating an implementation file reports each claim's backing tests in
+    /// `verified_by`; locating the TEST file surfaces the claims it backs,
+    /// marked `via_test` with the test's location as the anchor.
+    #[test]
+    fn verify_entries_ride_claims_and_reverse_from_the_test_file() {
+        let mut m = model();
+        m.verify_map
+            .insert("r-vt".into(), vec![loc("tests/auth.rs", Some("forged_token_rejected"))]);
+
+        let res = locate(&m, "src/auth.rs", None);
+        let vt = res.claims.iter().find(|c| c.id == "r-vt").unwrap();
+        assert_eq!(vt.verified_by.len(), 1, "backing test rides the claim");
+        assert!(!vt.via_test, "matched via its implementation anchor");
+        let hp = res.claims.iter().find(|c| c.id == "r-hp").unwrap();
+        assert!(hp.verified_by.is_empty());
+
+        let res = locate(&m, "tests/auth.rs", None);
+        assert_eq!(res.claims.len(), 1, "the test file locates the claim it backs");
+        assert_eq!(res.claims[0].id, "r-vt");
+        assert!(res.claims[0].via_test);
+        assert_eq!(res.claims[0].anchor.pattern, "tests/auth.rs");
     }
 
     #[test]

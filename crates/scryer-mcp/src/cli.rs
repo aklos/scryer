@@ -229,11 +229,18 @@ pub(crate) fn check_report(
 
     // 3) Baseline-free existence sweep: an exact-path anchor whose file is
     //    gone fails even before any reconcile baseline exists. Globs are
-    //    completeness's domain (get_health), not a gate.
-    let mut keys: Vec<&String> = working.source_map.keys().collect();
-    keys.sort();
-    for key in keys {
-        for loc in &working.source_map[key] {
+    //    completeness's domain (get_health), not a gate. Verify anchors sweep
+    //    too, under their namespaced key — a claim's backing test that no
+    //    longer exists is exactly what a CI gate is for.
+    let mut keyed: Vec<(String, &Vec<scryer_core::SourceLocation>)> = working
+        .source_map
+        .iter()
+        .map(|(k, v)| (k.clone(), v))
+        .chain(working.verify_map.iter().map(|(k, v)| (scryer_core::verify_key(k), v)))
+        .collect();
+    keyed.sort_by(|a, b| a.0.cmp(&b.0));
+    for (key, locs) in keyed {
+        for loc in locs {
             if loc.pattern.contains(['*', '?', '[']) {
                 continue;
             }
@@ -500,6 +507,44 @@ mod tests {
         assert!(
             rep.failures.iter().any(|f| f.starts_with("pending: node 'Worker'")),
             "{:?}",
+            rep.failures
+        );
+    }
+
+    /// A claim's backing test that no longer exists gates like any exact-path
+    /// anchor, under its `verify:` key — a "test-backed" claim whose test is
+    /// gone is exactly what a CI gate exists to catch.
+    #[test]
+    fn check_fails_on_missing_verify_test_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/auth.rs"), "fn verify() {}\n").unwrap();
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, "Acme", None));
+        let mut api = node("api", Kind::Container, "API", Some("sys"));
+        api.responsibilities = vec![serde_json::from_value(
+            serde_json::json!({ "id": "r-1", "statement": "verifies requests" }),
+        )
+        .unwrap()];
+        m.nodes.push(api);
+        m.source_map.insert(
+            "r-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/auth.rs" })).unwrap()],
+        );
+        m.verify_map.insert(
+            "r-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "tests/gone.rs" }))
+                .unwrap()],
+        );
+        scryer_core::write_model_at(&r, &m).unwrap();
+
+        let rep = check_report(&r, false, false).unwrap();
+        assert!(
+            rep.failures
+                .iter()
+                .any(|f| f.contains("verify:r-1") && f.contains("tests/gone.rs")),
+            "missing backing test gates: {:?}",
             rep.failures
         );
     }

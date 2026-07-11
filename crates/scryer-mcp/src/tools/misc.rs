@@ -12,7 +12,7 @@ use std::collections::HashSet;
 #[tool_router(router = tool_router_misc, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "Write the code-side mapping (agent-produced, regenerable). `entries` set source locations keyed by responsibility id — the conformance numerator (where reality discharges a responsibility). Each location is the SPECIFIC line range that does the work: `pattern` = file, `line`/`endLine` = the range, `symbol` = the enclosing definition (anchor + context). A line range must be a PROPER subset of its symbol — when one responsibility is the whole definition's work, omit `line`/`endLine` (a symbol-only anchor means the whole definition). Ranges that cover the whole symbol are normalized to symbol-only anchors and reported back. `schemas` set the declaration location of a schema-kind node (which has properties, not responsibilities) — keyed by node id, normally one location: `pattern` = file, `symbol` = the type name, `line`/`endLine` = the declaration range. `boundaries` set directory globs keyed by node id — the coverage denominator (the code region a node owns); use for containers/components, keeping a child's boundary within its parent's. Pass an empty `locations`/`sources` array to clear an entry."
+        description = "Write the code-side mapping (agent-produced, regenerable). `entries` set source locations keyed by responsibility id — the conformance numerator (where reality discharges a responsibility). Each location is the SPECIFIC line range that does the work: `pattern` = file, `line`/`endLine` = the range, `symbol` = the enclosing definition (anchor + context). A line range must be a PROPER subset of its symbol — when one responsibility is the whole definition's work, omit `line`/`endLine` (a symbol-only anchor means the whole definition). Ranges that cover the whole symbol are normalized to symbol-only anchors and reported back. `verify_entries` record each claim's BACKING TESTS — keyed by responsibility id like `entries`, but pointing at the test that demonstrates the claim (`pattern` = test file, `symbol` = the test function; symbol-only means the whole test; optional `command` records how to run it, never executed). A separate dimension: where a claim is implemented vs. where it is verified. `schemas` set the declaration location of a schema-kind node (which has properties, not responsibilities) — keyed by node id, normally one location: `pattern` = file, `symbol` = the type name, `line`/`endLine` = the declaration range. `boundaries` set directory globs keyed by node id — the coverage denominator (the code region a node owns); use for containers/components, keeping a child's boundary within its parent's. Pass an empty `locations`/`sources` array to clear an entry."
     )]
     fn update_source_map(
         &self,
@@ -37,7 +37,7 @@ impl ScryerServer {
             .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
             .map(|r| r.id.as_str())
             .collect();
-        for entry in &req.entries {
+        for entry in req.entries.iter().chain(req.verify_entries.iter()) {
             if !resp_ids.contains(entry.responsibility_id.as_str()) {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Responsibility '{}' not found",
@@ -99,13 +99,27 @@ impl ScryerServer {
             None => HashSet::new(),
         };
 
-        let count = req.entries.len() + req.schemas.len() + req.boundaries.len();
-        let (normalized, mut committed_dirty) = apply_resp_anchor_entries(
+        let count = req.entries.len()
+            + req.verify_entries.len()
+            + req.schemas.len()
+            + req.boundaries.len();
+        let (mut normalized, mut committed_dirty) = apply_resp_anchor_entries(
             model_ref.project_path(),
             &mut model,
             &mut committed,
             std::mem::take(&mut req.entries),
+            RespAnchorDim::Source,
         );
+        // Backing tests: same routing, the verify dimension.
+        let (normalized_verify, verify_dirty) = apply_resp_anchor_entries(
+            model_ref.project_path(),
+            &mut model,
+            &mut committed,
+            std::mem::take(&mut req.verify_entries),
+            RespAnchorDim::Verify,
+        );
+        normalized.extend(normalized_verify);
+        committed_dirty |= verify_dirty;
         for s in req.schemas {
             let key = s.node_id;
             if s.locations.is_empty() {
@@ -573,6 +587,68 @@ mod tests {
         }
     }
 
+    /// `verify_entries` (claim → backing test) follow the same single-home
+    /// routing as `entries`: a committed claim's entry lands in the committed
+    /// verify_map with no draft shadow; a plan-added claim's stays in the
+    /// draft until its claim folds.
+    #[test]
+    fn verify_entries_route_to_the_single_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let resp = |id: &str| -> scryer_core::Responsibility {
+            serde_json::from_value(serde_json::json!({ "id": id, "statement": "does" })).unwrap()
+        };
+        let mut committed = ScryModel::new();
+        let mut comp = node("comp", Kind::Component, "Comp", None);
+        comp.responsibilities.push(resp("r-c"));
+        committed.nodes.push(comp);
+        scryer_core::write_model_at(&model_ref, &committed).unwrap();
+        scryer_core::ensure_planned_at(&model_ref).unwrap();
+        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        planned
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == "comp")
+            .unwrap()
+            .responsibilities
+            .push(resp("r-p"));
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let entry = |rid: &str, file: &str| SourceMapEntry {
+            responsibility_id: rid.into(),
+            locations: vec![
+                serde_json::from_value(serde_json::json!({ "pattern": file })).unwrap(),
+            ],
+        };
+        let server = ScryerServer::new();
+        let res = server
+            .update_source_map(Parameters(UpdateSourceMapRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                entries: vec![],
+                verify_entries: vec![
+                    entry("r-c", "tests/c.rs"),
+                    entry("r-p", "tests/p.rs"),
+                ],
+                schemas: vec![],
+                boundaries: vec![],
+            }))
+            .unwrap();
+        assert!(!res.is_error.unwrap_or(false));
+
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        assert_eq!(
+            committed.verify_map["r-c"][0].pattern, "tests/c.rs",
+            "committed claim's backing test lives in committed"
+        );
+        assert!(!committed.verify_map.contains_key("r-p"));
+        let draft = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(
+            draft.verify_map["r-p"][0].pattern, "tests/p.rs",
+            "plan-added claim's backing test stays in the draft"
+        );
+        assert!(!draft.verify_map.contains_key("r-c"), "no shadow copy in the draft");
+    }
+
     /// A boundary glob with no directory prefix is written (the user may mean
     /// it) but the response warns, steering the author to a scoped region.
     #[test]
@@ -594,6 +670,7 @@ mod tests {
             .update_source_map(Parameters(UpdateSourceMapRequest {
                 project: Some(project.clone()),
                 entries: vec![],
+                verify_entries: vec![],
                 schemas: vec![],
                 boundaries: vec![BoundaryEntry {
                     node_id: "node-2".into(),
@@ -611,6 +688,7 @@ mod tests {
             .update_source_map(Parameters(UpdateSourceMapRequest {
                 project: Some(project),
                 entries: vec![],
+                verify_entries: vec![],
                 schemas: vec![],
                 boundaries: vec![BoundaryEntry {
                     node_id: "node-2".into(),
