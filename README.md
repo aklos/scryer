@@ -48,7 +48,7 @@ Built on an opinionated [C4](https://c4model.com/) hierarchy (person, system, co
 
 - **Wiki-style node pages** — Every node, down to individual symbols, gets a page that leads with whatever helps you plan changes to that kind of thing: responsibilities for handlers and services (each mapped to source lines), properties for data types, a live rendered preview for visual components. Source code shows as reference, with structured metadata — kind, technology, status, connections — surfaced inline on the page. Edit any section in place.
 - **Model tree** — An IDE-style explorer for defining the model: create, rename, move, group, and delete nodes. Groups are folders. Rolled-up plan and drift marks show per row, so you see the model's health at a glance.
-- **Responsibilities & directives** — Each node states what it's responsible for (responsibilities) and, optionally, how the agent should implement it (directives, e.g. "authenticate with JWTs"). Responsibilities are language-independent and survive a rewrite. Each one is mapped to the source lines that implement it.
+- **Responsibilities & directives** — Each node states what it's responsible for (responsibilities) and, optionally, how the agent should implement it (directives, e.g. "authenticate with JWTs"). Responsibilities are language-independent and survive a rewrite. Each one is mapped to the source lines that implement it, and optionally to the test that demonstrates it.
 - **The plan** — Scryer holds a committed model (what the code satisfies) and a planned draft (what you and the agent edit). Their difference is the plan: the model→code work queue, shown as add/move/delete/reword marks until the agent implements them and they fold into the committed model.
 - **Live component previews** — Visual components (React/TSX) render deterministically through a per-project Vite dev server, with no agent and no per-component build. Prompt for variations, compare live renders, and accept the one you want.
 - **Observability layer** — An always-on, deterministic health report over the model↔code relationship (no LLM): plan and drift rollup, source-anchor coverage, and an import-graph audit of declared links against actual imports. The import graph resolves real declared imports for Rust, TypeScript/JavaScript (including tsconfig path aliases), Python, and Go; Java, Ruby, C/C++, C#, and PHP are covered by a conservative name-matching heuristic, and the health report says which tier applies so the audit's verdict is calibrated. It tells you where work is needed before you read a single page.
@@ -149,7 +149,7 @@ For Claude Code, you can also auto-approve Scryer's tools so the agent doesn't p
 **Reading & observability:**
 - `read_model` — the model, or a scoped subtree, with responsibilities, links, and context. Auto-resolves the model linked to the current working directory.
 - `search_model` / `query_model` — find nodes by text or by structure.
-- `get_health` — deterministic observability: rolled-up plan and drift marks, vagrant/stale flags, source-anchor coverage, and an import-graph audit of declared links.
+- `get_health` — deterministic observability: rolled-up plan and drift marks, vagrant/stale flags, source-anchor and test-backing coverage, and an import-graph audit of declared links.
 - `get_pending` — the plan: model→code work not yet built.
 - `get_drift` — boundary-owning nodes whose code changed since the last reconcile (cheap, deterministic — no LLM verdict).
 - `get_rules` — the authoritative C4 modeling rules and workflow guidance.
@@ -160,11 +160,11 @@ For Claude Code, you can also auto-approve Scryer's tools so the agent doesn't p
 - `add_person` / `add_system` / `add_container` / `add_component` / `add_symbol` — mint nodes from plain responsibility statements.
 - `add_group` / `update_group` / `delete_group` — group sibling nodes (a secondary packaging axis).
 - `add_links` / `update_links` / `delete_links` — typed relationships between nodes.
-- `update_source_map` — link nodes and responsibilities to files and line ranges.
+- `update_source_map` — link nodes and responsibilities to files and line ranges, and claims to their backing tests.
 
 **Building & reconciliation:**
 - `fill_container` — fill in a whole container's subtree at once when extracting from existing code (generation pipeline).
-- `mark_implemented` — fold implemented work from the plan into the committed model.
+- `mark_implemented` — fold implemented work from the plan into the committed model, anchoring claims and linking their tests in the same call.
 - `flag_drift` / `reconcile_drift` — record undescribed behavior or stale claims, then advance the drift anchor.
 - `update_nodes` / `delete_nodes` / `descope` / `move_nodes` / `move_responsibilities` — interactive edits and refinement (`descope` drops a node from the model while leaving its code in place).
 - `set_model` / `set_node` / `set_groups` — generation-pipeline primitives for whole-model / whole-subtree / bulk-group writes.
