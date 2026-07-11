@@ -21,6 +21,10 @@ export interface HealthCounts {
   anchored: number;
   /** anchorable − anchored — the lens's blind spots. */
   unmapped: number;
+  /** Claims carrying a backing test (a verify entry). A separate dimension
+   *  from `anchored` — implemented vs. demonstrated — and not gated on
+   *  leafness (a structural claim backed by an integration test counts). */
+  verified: number;
   /** Unix seconds of the most recent truth-bearing edit in scope. */
   lastTouchedAt?: number;
 }
@@ -147,6 +151,21 @@ export const ANCHOR_STATE_LABEL: Record<AnchorState, string> = {
   broken: "symbol gone",
   fileMissing: "file gone",
 };
+
+/** Per-claim state of the BACKING TEST's fingerprint, from the verify-namespaced
+ *  anchor observations (`verify:{respId}`). A claim absent here has an intact
+ *  (or not-yet-fingerprinted) test link. broken/fileMissing outrank changed. */
+export function verifyStatesOf(
+  report: ModelHealthReport | null,
+): Record<string, AnchorState> {
+  const out: Record<string, AnchorState> = {};
+  for (const o of report?.anchors ?? []) {
+    if (!o.key.startsWith("verify:")) continue;
+    const id = o.key.slice("verify:".length);
+    if (out[id] === undefined || o.state !== "changed") out[id] = o.state;
+  }
+  return out;
+}
 
 /** Fold anchor observations that share host + file + symbol + state into one
  *  row each. The key omits `key` (the responsibility/node id) precisely because

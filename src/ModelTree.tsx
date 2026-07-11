@@ -9,8 +9,8 @@
  */
 
 import { useRef, useState } from "react";
-import { Braces, ChevronRight, Loader2, Plus } from "lucide-react";
-import type { Completeness } from "./health";
+import { Braces, ChevronRight, FlaskConical, Loader2, Plus } from "lucide-react";
+import type { Completeness, NodeHealth } from "./health";
 import { CompletenessPie } from "./CompletenessPie";
 import type { ScryModel, Node, Group, Kind } from "./viewmodel";
 import { childKindFor } from "./viewmodel";
@@ -120,6 +120,7 @@ export function ModelTree({
   activeNodeIds,
   activeLevel,
   completeness,
+  health,
 }: {
   model: ScryModel;
   /** Live `diff(committed, planned)` — drives the change-letter gutter. */
@@ -141,6 +142,8 @@ export function ModelTree({
   /** Per-node build completeness, keyed by node id — drives the row's % +
    *  anchorage badge. Absent until the health report loads. */
   completeness?: Record<string, Completeness>;
+  /** Per-node health counts, keyed by node id — drives the test-backed rollup. */
+  health?: Record<string, NodeHealth>;
 }) {
   const [width, setWidth] = useState(() => {
     const saved = Number(localStorage.getItem("scryer:treeWidth"));
@@ -746,6 +749,23 @@ export function ModelTree({
               title={`${c.pct}% of this subtree's claims read through to code`}
             >
               <CompletenessPie c={c} size={12} />
+            </span>
+          );
+        })()}
+        {(() => {
+          // Test-backed rollup: shown on arch tiers when any claim in the
+          // subtree carries a backing test. Quietly additive — ghost-toned,
+          // count only; the title carries the fraction.
+          if (node.kind === "symbol" || node.kind === "person") return null;
+          const h = health?.[node.id]?.subtree;
+          if (!h?.verified) return null;
+          return (
+            <span
+              className="flex shrink-0 items-center gap-px text-2xs tabular-nums text-[var(--text-ghost)]"
+              title={`${h.verified} of ${h.responsibilities} claim${h.responsibilities === 1 ? "" : "s"} in this subtree backed by a test`}
+            >
+              <FlaskConical className="h-2.5 w-2.5" />
+              {h.verified}
             </span>
           );
         })()}

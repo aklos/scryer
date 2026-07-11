@@ -226,6 +226,15 @@ export function effectiveSourceMap(
   return { ...(committed?.sourceMap ?? {}), ...(working.sourceMap ?? {}) };
 }
 
+/** The backing tests visible in the working view — same single-home merge as
+ *  {@link effectiveSourceMap}, for the verify dimension. Display-only. */
+export function effectiveVerifyMap(
+  committed: ScryModel | null,
+  working: ScryModel,
+): Record<string, SourceLocation[]> {
+  return { ...(committed?.verifyMap ?? {}), ...(working.verifyMap ?? {}) };
+}
+
 /** Child kind for a parent kind (used when adding a new node). */
 export function childKindFor(parentKind: Kind | "root"): Kind {
   switch (parentKind) {

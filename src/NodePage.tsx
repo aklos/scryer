@@ -23,6 +23,7 @@ import {
   Anchor,
   Check,
   CircleDashed,
+  FlaskConical,
   CornerDownRight,
   Eye,
   FileClock,
@@ -50,14 +51,15 @@ import type {
 import type { InheritedDirectives } from "./viewmodel";
 import {
   effectiveSourceMap,
+  effectiveVerifyMap,
   inheritedDirectives,
   isDataShape,
   nextResponsibilityId,
 } from "./viewmodel";
 import type { Editor } from "./editor";
-import type { ModelHealthReport } from "./health";
-import { completenessBadge } from "./health";
-import { FLAG_COLORS } from "./statusColors";
+import type { AnchorState, ModelHealthReport } from "./health";
+import { completenessBadge, verifyStatesOf } from "./health";
+import { FLAG_COLORS, VERIFY_PILLS } from "./statusColors";
 import { isNodeEmpty } from "./rollup";
 import { kindIcon, typeTag } from "./kindIcon";
 import { lookupIcon } from "./IconPicker";
@@ -531,6 +533,9 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const KindIcon = lookupIcon(node.icon) ?? kindIcon(node);
 
   const sourceMap = effectiveSourceMap(committed, model);
+  const verifyMap = effectiveVerifyMap(committed, model);
+  // Per-claim fingerprint state of the backing test (verify: observations).
+  const verifyStates = useMemo(() => verifyStatesOf(report), [report]);
   const dataShape = isDataShape(node);
   const resps = node.responsibilities ?? [];
   // The committed copy of this node's claims — the diff base for the Overview.
@@ -710,6 +715,22 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 </>
               );
             })()}
+            {(() => {
+              const h = report?.health.nodes[node.id]?.subtree;
+              if (!h?.verified) return null;
+              return (
+                <>
+                  <span className="text-[var(--text-ghost)]">·</span>
+                  <span
+                    className="flex items-center gap-1 tabular-nums"
+                    title={`${h.verified} of ${h.responsibilities} claim${h.responsibilities === 1 ? "" : "s"} in this subtree backed by a test`}
+                  >
+                    <FlaskConical className="h-3 w-3" />
+                    {h.verified}/{h.responsibilities}
+                  </span>
+                </>
+              );
+            })()}
             {isNodeEmpty(node) && <EmptyFlag />}
           </>
         }
@@ -777,6 +798,8 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   prevResps={committedResps}
                   plannedHosts={plannedRespHosts(model)}
                   sourceMap={sourceMap}
+                  verifyMap={verifyMap}
+                  verifyStates={verifyStates}
                   projectPath={projectPath}
                   leafHost={leafHost}
                   mintId={(draft) => nextResponsibilityId(draft, model, committed)}
@@ -856,6 +879,8 @@ function GroupPageBody(props: PageProps & { group: Group }) {
     .filter((n): n is Node => Boolean(n));
 
   const sourceMap = effectiveSourceMap(committed, model);
+  const verifyMap = effectiveVerifyMap(committed, model);
+  const verifyStates = useMemo(() => verifyStatesOf(props.report), [props.report]);
   const resps = group.responsibilities ?? [];
   const committedResps =
     committed?.groups.find((g) => g.id === group.id)?.responsibilities ?? [];
@@ -921,6 +946,8 @@ function GroupPageBody(props: PageProps & { group: Group }) {
               prevResps={committedResps}
               plannedHosts={plannedRespHosts(model)}
               sourceMap={sourceMap}
+              verifyMap={verifyMap}
+              verifyStates={verifyStates}
               projectPath={projectPath}
               leafHost={false} // group claims discharge through members
               mintId={(draft) => nextResponsibilityId(draft, model, committed)}
@@ -1607,6 +1634,8 @@ function ResponsibilitiesSection({
   prevResps,
   plannedHosts,
   sourceMap,
+  verifyMap,
+  verifyStates,
   projectPath,
   leafHost,
   mintId,
@@ -1624,6 +1653,10 @@ function ResponsibilitiesSection({
   plannedHosts: Map<string, string>;
   /** respId → source locations, for the inline `↳ file:range` peeks per claim. */
   sourceMap: Record<string, SourceLocation[]>;
+  /** respId → backing-test locations (the verify dimension). */
+  verifyMap: Record<string, SourceLocation[]>;
+  /** respId → fingerprint state of the backing test, when it regressed. */
+  verifyStates: Record<string, AnchorState>;
   projectPath: string | null;
   /** Whether claims here must anchor to source (leaf node). Structural hosts
    *  discharge through their subtree and never flag "unmapped". */
@@ -1682,6 +1715,8 @@ function ResponsibilitiesSection({
               row={row}
               host={host}
               locations={sourceMap[row.resp.id] ?? []}
+              verifyLocations={verifyMap[row.resp.id] ?? []}
+              verifyState={verifyStates[row.resp.id] ?? null}
               projectPath={projectPath}
               leafHost={leafHost}
               onRestore={() => restore(row.resp)}
@@ -1798,6 +1833,8 @@ function RespDiffRow({
   row,
   host,
   locations,
+  verifyLocations,
+  verifyState,
   projectPath,
   leafHost,
   onRestore,
@@ -1807,6 +1844,10 @@ function RespDiffRow({
   host: "node" | "group";
   /** This claim's source locations — rendered inline with expandable peeks. */
   locations: SourceLocation[];
+  /** The claim's backing tests (verify dimension). */
+  verifyLocations: SourceLocation[];
+  /** Fingerprint state of the backing test, when it regressed since reconcile. */
+  verifyState: AnchorState | null;
   projectPath: string | null;
   leafHost: boolean;
   onRestore: () => void;
@@ -1828,7 +1869,10 @@ function RespDiffRow({
   // but anchors to no source is a blind spot. Added/vagrant claims are plan-only
   // or code-first, so they're never "unmapped".
   const unmapped = leafHost && locations.length === 0 && (kind === "unchanged" || kind === "reworded");
-  const hasMeta = resp.stale === true || unmapped;
+  // The verification pill shows on live claims only — a deleted/relocated
+  // row's test link is context, not a badge.
+  const tested = !deleted && !relocated && verifyLocations.length > 0;
+  const hasMeta = resp.stale === true || unmapped || tested;
   // Drift's reword proposal: `null` = showing the accept/edit affordance, a
   // string = editing the wording before accepting.
   const [rewordDraft, setRewordDraft] = useState<string | null>(null);
@@ -1891,6 +1935,49 @@ function RespDiffRow({
                 unmapped
               </span>
             )}
+            {tested && (() => {
+              const t = verifyLocations[0];
+              const where = `${t.pattern}${t.symbol ? ` \`${t.symbol}\`` : ""}`;
+              if (verifyState === "broken" || verifyState === "fileMissing") {
+                return (
+                  <span
+                    className={VERIFY_PILLS.gone}
+                    title={`The backing test is gone: ${where} no longer resolves. Re-link the claim to a live test, or clear the entry.`}
+                  >
+                    test gone
+                  </span>
+                );
+              }
+              const open = () =>
+                void invoke("open_in_editor", {
+                  file: t.pattern,
+                  line: t.line ?? null,
+                  projectPath,
+                });
+              if (verifyState === "changed") {
+                return (
+                  <button
+                    type="button"
+                    onClick={open}
+                    className={FLAG_COLORS.stale.pill}
+                    title={`The backing test changed since the last reconcile: ${where}. Check it still demonstrates this claim.`}
+                  >
+                    test changed
+                  </button>
+                );
+              }
+              return (
+                <button
+                  type="button"
+                  onClick={open}
+                  className={VERIFY_PILLS.tested}
+                  title={`Backed by ${where} — click to open`}
+                >
+                  <FlaskConical className="h-2.5 w-2.5" />
+                  tested
+                </button>
+              );
+            })()}
           </span>
         )}
 

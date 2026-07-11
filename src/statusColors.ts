@@ -29,3 +29,11 @@ export const FLAG_COLORS = {
     label: "Stale",
   },
 } as const;
+
+/** Verification pills — the claim's backing test. Emerald = linked and intact;
+ *  red = the linked test's anchor broke (symbol or file gone). A CHANGED test
+ *  reuses the drift-orange stale pill: same "re-check this" axis. */
+export const VERIFY_PILLS = {
+  tested: `${PILL_BASE} bg-emerald-500/10 text-emerald-700 ring-emerald-500/25 dark:bg-emerald-400/10 dark:text-emerald-300 dark:ring-emerald-400/25`,
+  gone: `${PILL_BASE} bg-red-500/10 text-red-700 ring-red-500/25 dark:bg-red-400/10 dark:text-red-300 dark:ring-red-400/25`,
+} as const;
