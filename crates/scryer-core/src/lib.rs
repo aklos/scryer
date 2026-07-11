@@ -361,6 +361,15 @@ pub struct ScryModel {
     /// regenerable; never hand-authored.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub source_map: HashMap<String, Vec<SourceLocation>>,
+    /// Maps **responsibility id** → the locations of the tests that back that
+    /// claim (the verification handle: where a test demonstrates the claim
+    /// holds). A separate dimension from `source_map` — where a claim is
+    /// implemented vs. where it is verified — and a claim may carry either,
+    /// both, or neither. Follows `source_map`'s single-home layer rule:
+    /// committed owns committed claims' entries, the draft holds only
+    /// plan-added ones. Agent-produced; never executed by scryer.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub verify_map: HashMap<String, Vec<SourceLocation>>,
     /// Maps **node id** → boundary globs: the region of code a node owns (the
     /// coverage denominator + extraction scope). A child's boundary should sit
     /// within its parent's. Agent-produced and regenerable; never hand-authored.
@@ -387,6 +396,7 @@ impl ScryModel {
             links: Vec::new(),
             groups: Vec::new(),
             source_map: HashMap::new(),
+            verify_map: HashMap::new(),
             boundaries: HashMap::new(),
             changes: Vec::new(),
             change_map: HashMap::new(),
@@ -772,12 +782,13 @@ pub fn write_planned_raw_at(r: &ModelRef, data: &str) -> Result<(), String> {
 }
 
 /// The seeded (clean) plan serialization: the committed model with its
-/// single-home `source_map`/`boundaries` cleared. A fresh plan adds nothing, so
-/// it starts with no anchors of its own — the working view reads committed's
-/// directly.
+/// single-home `source_map`/`verify_map`/`boundaries` cleared. A fresh plan
+/// adds nothing, so it starts with no anchors of its own — the working view
+/// reads committed's directly.
 fn seeded_plan_json(r: &ModelRef) -> Result<String, String> {
     let mut model = read_model_at(r)?;
     model.source_map.clear();
+    model.verify_map.clear();
     model.boundaries.clear();
     serde_json::to_string_pretty(&model).map_err(|e| e.to_string())
 }
@@ -855,10 +866,12 @@ pub fn ensure_planned_at(r: &ModelRef) -> Result<(), String> {
 /// genuine plan-added anchors or a real conflict to surface, never silently
 /// picked. Returns whether anything was stripped.
 fn strip_shadow_entries(committed: &ScryModel, planned: &mut ScryModel) -> bool {
-    let before = planned.source_map.len() + planned.boundaries.len();
+    let before =
+        planned.source_map.len() + planned.verify_map.len() + planned.boundaries.len();
     planned.source_map.retain(|k, v| committed.source_map.get(k) != Some(v));
+    planned.verify_map.retain(|k, v| committed.verify_map.get(k) != Some(v));
     planned.boundaries.retain(|k, v| committed.boundaries.get(k) != Some(v));
-    before != planned.source_map.len() + planned.boundaries.len()
+    before != planned.source_map.len() + planned.verify_map.len() + planned.boundaries.len()
 }
 
 /// One-time migration for drafts minted before plan seeding: strip the shadow
@@ -957,6 +970,13 @@ pub fn working_view(committed: &ScryModel, planned: &ScryModel) -> ScryModel {
             view.source_map.entry(id.clone()).or_insert_with(|| locs.clone());
         }
     }
+    // verify_map is keyed by responsibility id only (a test backs a claim,
+    // never a declaration site).
+    for (id, locs) in &committed.verify_map {
+        if resp_ids.contains(id.as_str()) {
+            view.verify_map.entry(id.clone()).or_insert_with(|| locs.clone());
+        }
+    }
     view
 }
 
@@ -986,6 +1006,7 @@ pub fn fold_built_model(r: &ModelRef, built: &ScryModel) -> Result<ScryModel, St
     write_model_at(r, &folded)?;
     let mut seeded = folded.clone();
     seeded.source_map.clear();
+    seeded.verify_map.clear();
     seeded.boundaries.clear();
     let json = serde_json::to_string_pretty(&seeded).map_err(|e| e.to_string())?;
     write_planned_raw_at(r, &json)?;
@@ -1320,16 +1341,25 @@ pub fn commit_element(
     // just because the draft doesn't carry it (that would silently unanchor a
     // reworded claim). A deletion drops the anchor from committed outright.
     // Node BOUNDARIES follow the same single-home rule (item D) and ride along in
-    // `planned_boundary_strip`.
+    // `planned_boundary_strip`. VERIFY entries (claim → backing test) are
+    // claim-keyed like anchors and move/GC in lockstep with them.
     let mut planned_anchor_strip: Vec<String> = Vec::new();
+    let mut planned_verify_strip: Vec<String> = Vec::new();
     let mut planned_boundary_strip: Vec<String> = Vec::new();
     match kind {
         diff::ElementKind::Responsibility => {
             if purge_from_planned {
                 model.source_map.remove(id);
-            } else if let Some(locs) = planned.source_map.get(id) {
-                model.source_map.insert(id.to_string(), locs.clone());
-                planned_anchor_strip.push(id.to_string());
+                model.verify_map.remove(id);
+            } else {
+                if let Some(locs) = planned.source_map.get(id) {
+                    model.source_map.insert(id.to_string(), locs.clone());
+                    planned_anchor_strip.push(id.to_string());
+                }
+                if let Some(locs) = planned.verify_map.get(id) {
+                    model.verify_map.insert(id.to_string(), locs.clone());
+                    planned_verify_strip.push(id.to_string());
+                }
             }
         }
         diff::ElementKind::Node => {
@@ -1342,6 +1372,7 @@ pub fn commit_element(
                 }
                 for rid in &deleted_node_resp_ids {
                     model.source_map.remove(rid);
+                    model.verify_map.remove(rid);
                 }
                 // Committed boundaries for the removed nodes were already dropped
                 // in the deletion branch above (item C); strip any draft copy too
@@ -1373,7 +1404,11 @@ pub fn commit_element(
                 ) {
                     if let Some(locs) = planned.source_map.get(&k) {
                         model.source_map.insert(k.clone(), locs.clone());
-                        planned_anchor_strip.push(k);
+                        planned_anchor_strip.push(k.clone());
+                    }
+                    if let Some(locs) = planned.verify_map.get(&k) {
+                        model.verify_map.insert(k.clone(), locs.clone());
+                        planned_verify_strip.push(k);
                     }
                 }
                 // A plan-added boundary has a single home too: folding the node
@@ -1393,6 +1428,7 @@ pub fn commit_element(
             if purge_from_planned {
                 for rid in &deleted_node_resp_ids {
                     model.source_map.remove(rid);
+                    model.verify_map.remove(rid);
                 }
             } else if let Some(g) = planned.groups.iter().find(|g| g.id == id) {
                 let host_key = changes::element_key(diff::ElementKind::Group, None, id);
@@ -1407,6 +1443,10 @@ pub fn commit_element(
                     if let Some(locs) = planned.source_map.get(&r.id) {
                         model.source_map.insert(r.id.clone(), locs.clone());
                         planned_anchor_strip.push(r.id.clone());
+                    }
+                    if let Some(locs) = planned.verify_map.get(&r.id) {
+                        model.verify_map.insert(r.id.clone(), locs.clone());
+                        planned_verify_strip.push(r.id.clone());
                     }
                 }
             }
@@ -1532,6 +1572,9 @@ pub fn commit_element(
     for k in &planned_anchor_strip {
         p.source_map.remove(k);
     }
+    for k in &planned_verify_strip {
+        p.verify_map.remove(k);
+    }
     for k in &planned_boundary_strip {
         p.boundaries.remove(k);
     }
@@ -1553,6 +1596,7 @@ pub fn commit_element(
     if purge_from_planned
         || plan_markers_cleared
         || !planned_anchor_strip.is_empty()
+        || !planned_verify_strip.is_empty()
         || !planned_boundary_strip.is_empty()
         || gc.pruned > 0
     {
@@ -1654,7 +1698,8 @@ pub fn commit_plan_only_ancestors(
     // Structure folds root-ward. The node's own declaration anchor and boundary
     // are structural and follow the single-home rule (item D): they move into
     // committed — so drifted_scopes and ownership see the region — and leave
-    // the draft. Claim anchors stay in the draft with their pending claims.
+    // the draft. Claim anchors (and claim-keyed verify entries) stay in the
+    // draft with their pending claims.
     let mut planned_anchor_strip: Vec<String> = Vec::new();
     let mut planned_boundary_strip: Vec<String> = Vec::new();
     for aid in &chain {
@@ -2145,6 +2190,10 @@ mod lock_tests {
             "resp-1".into(),
             vec![serde_json::from_value(serde_json::json!({ "pattern": "src/api.rs" })).unwrap()],
         );
+        committed.verify_map.insert(
+            "resp-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "tests/api.rs" })).unwrap()],
+        );
         write_model_at(&r, &committed).unwrap();
 
         // The build authors into a clean-seeded draft: a new component plus its
@@ -2163,6 +2212,7 @@ mod lock_tests {
 
         assert!(folded.boundaries.contains_key("app"), "committed boundary glob survives the fold");
         assert!(folded.source_map.contains_key("resp-1"), "committed-only anchor survives the fold");
+        assert!(folded.verify_map.contains_key("resp-1"), "committed-only verify entry survives");
         assert!(folded.source_map.contains_key("resp-2"), "the build's own anchor lands");
         let on_disk = read_model_at(&r).unwrap();
         assert!(on_disk.boundaries.contains_key("app"));
@@ -2170,7 +2220,9 @@ mod lock_tests {
 
         let planned = read_planned_at(&r).unwrap();
         assert!(
-            planned.source_map.is_empty() && planned.boundaries.is_empty(),
+            planned.source_map.is_empty()
+                && planned.verify_map.is_empty()
+                && planned.boundaries.is_empty(),
             "draft re-seeded clean — no shadow anchors"
         );
         assert!(plan_diff_at(&r).unwrap().is_empty(), "no pending plan survives the build");
@@ -2205,18 +2257,29 @@ mod lock_tests {
             "resp-2".into(),
             vec![serde_json::from_value(serde_json::json!({ "pattern": "gone.rs" })).unwrap()],
         );
+        committed.verify_map.insert(
+            "resp-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "keep_test.rs" })).unwrap()],
+        );
+        committed.verify_map.insert(
+            "resp-2".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "gone_test.rs" })).unwrap()],
+        );
 
         // Plan: `gone` deleted; anchors stay single-homed in committed.
         let mut planned = committed.clone();
         planned.nodes.retain(|n| n.id != "gone");
         planned.source_map.clear();
+        planned.verify_map.clear();
         planned.boundaries.clear();
 
         let view = working_view(&committed, &planned);
         assert!(view.boundaries.contains_key("keep"), "live node's boundary overlays");
         assert!(view.source_map.contains_key("resp-1"), "live claim's anchor overlays");
+        assert!(view.verify_map.contains_key("resp-1"), "live claim's verify entry overlays");
         assert!(!view.boundaries.contains_key("gone"), "plan-deleted node's boundary does not");
         assert!(!view.source_map.contains_key("resp-2"), "plan-deleted claim's anchor does not");
+        assert!(!view.verify_map.contains_key("resp-2"), "plan-deleted claim's verify entry does not");
         let warnings = validate::validate(&view);
         assert!(
             warnings.iter().all(|w| !w.contains("unknown")),
@@ -2240,13 +2303,19 @@ mod lock_tests {
             "resp-1".into(),
             vec![serde_json::from_value(serde_json::json!({ "pattern": "a.rs" })).unwrap()],
         );
+        m.verify_map.insert(
+            "resp-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "a_test.rs" })).unwrap()],
+        );
         write_model_at(&r, &m).unwrap();
 
         let raw = read_planned_raw_at(&r).unwrap();
         let seeded: ScryModel = serde_json::from_str(&raw).unwrap();
         assert_eq!(seeded.nodes.len(), 1, "structure carries over");
         assert!(
-            seeded.source_map.is_empty() && seeded.boundaries.is_empty(),
+            seeded.source_map.is_empty()
+                && seeded.verify_map.is_empty()
+                && seeded.boundaries.is_empty(),
             "no shadow anchors in the fallback"
         );
     }
@@ -2265,6 +2334,7 @@ mod lock_tests {
         m.boundaries.insert("a".into(), vec![Source { pattern: "a/**".into(), comment: None }]);
         m.source_map.insert("resp-1".into(), loc("same.rs"));
         m.source_map.insert("resp-2".into(), loc("committed.rs"));
+        m.verify_map.insert("resp-1".into(), loc("same_test.rs"));
         write_model_at(&r, &m).unwrap();
 
         // A pre-seeding draft: full shadow of committed, plus one diverged entry
@@ -2278,6 +2348,7 @@ mod lock_tests {
         assert!(heal_shadow_draft(&r).unwrap(), "a dirty draft reports healed");
         let healed = read_planned_at(&r).unwrap();
         assert!(!healed.source_map.contains_key("resp-1"), "value-equal shadow stripped");
+        assert!(!healed.verify_map.contains_key("resp-1"), "value-equal verify shadow stripped");
         assert!(!healed.boundaries.contains_key("a"), "value-equal boundary stripped");
         assert_eq!(
             healed.source_map.get("resp-2"),
@@ -2286,6 +2357,64 @@ mod lock_tests {
         );
         assert!(healed.source_map.contains_key("resp-3"), "plan-added anchor survives");
         assert!(!heal_shadow_draft(&r).unwrap(), "second pass is a no-op");
+    }
+
+    /// Verify entries (claim → backing test) ride the fold in lockstep with
+    /// claim anchors: committing a plan-added claim MOVES its verify entry into
+    /// committed and strips the draft copy; a node-deletion fold GCs the verify
+    /// entries of every claim the removed subtree carried.
+    #[test]
+    fn commit_element_moves_and_gcs_verify_entries() {
+        let (_dir, r) = temp_ref();
+        let loc = |p: &str| -> Vec<SourceLocation> {
+            vec![serde_json::from_value(serde_json::json!({ "pattern": p })).unwrap()]
+        };
+        let mut m = ScryModel::new();
+        m.nodes.push(mk_node("host", "Host", None));
+        write_model_at(&r, &m).unwrap();
+
+        // Plan: a new claim on the committed host, anchored and test-backed.
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        planned
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == "host")
+            .unwrap()
+            .responsibilities
+            .push(mk_resp("resp-1", "parse the input"));
+        planned.source_map.insert("resp-1".into(), loc("src/parse.rs"));
+        planned.verify_map.insert("resp-1".into(), loc("tests/parse.rs"));
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Responsibility, None, "resp-1").unwrap();
+
+        let committed = read_model_at(&r).unwrap();
+        assert_eq!(
+            committed.verify_map.get("resp-1"),
+            Some(&loc("tests/parse.rs")),
+            "the verify entry folds into committed with its claim"
+        );
+        let draft = read_planned_at(&r).unwrap();
+        assert!(
+            draft.source_map.is_empty() && draft.verify_map.is_empty(),
+            "the draft stops carrying what committed now owns"
+        );
+
+        // Plan: delete the host outright; the deletion fold GCs the verify
+        // entry along with the claim's anchor (nothing leaks keyed to a dead id).
+        let mut planned = read_planned_at(&r).unwrap();
+        planned.nodes.retain(|n| n.id != "host");
+        write_planned_at(&r, &planned).unwrap();
+
+        commit_element(&r, diff::ElementKind::Node, None, "host").unwrap();
+
+        let committed = read_model_at(&r).unwrap();
+        assert!(committed.nodes.is_empty(), "the deletion folded");
+        assert!(
+            committed.source_map.is_empty() && committed.verify_map.is_empty(),
+            "anchor and verify entries of the deleted subtree's claims are GC'd"
+        );
     }
 
     /// A fold on a never-seeded project must not mint a shadow draft: the plan

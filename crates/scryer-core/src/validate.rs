@@ -320,6 +320,12 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
             ));
         }
     }
+    // verify_map is keyed by responsibility id only: a test backs a claim.
+    for id in model.verify_map.keys() {
+        if !resp_ids.contains(id.as_str()) {
+            warnings.push(format!("Verify map references unknown responsibility '{}'", id));
+        }
+    }
     for id in model.boundaries.keys() {
         if !node_ids.contains(id.as_str()) {
             warnings.push(format!("Boundary references unknown node '{}'", id));
@@ -983,6 +989,31 @@ mod disconnect_tests {
             })));
         }
         m
+    }
+
+    /// verify_map keys must name a live responsibility — a test can only back
+    /// a claim that exists. (Node ids are not legal keys, unlike source_map's
+    /// declaration anchors.)
+    #[test]
+    fn verify_map_unknown_key_warns() {
+        let mut m = model_with_symbols(1);
+        m.verify_map.insert(
+            "r-0".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "tests/a.rs" })).unwrap()],
+        );
+        m.verify_map.insert(
+            "r-ghost".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "tests/b.rs" })).unwrap()],
+        );
+        let warnings = validate(&m);
+        assert!(
+            warnings.iter().any(|w| w.contains("Verify map") && w.contains("r-ghost")),
+            "unknown verify key flagged: {warnings:?}"
+        );
+        assert!(
+            !warnings.iter().any(|w| w.contains("Verify map") && w.contains("'r-0'")),
+            "a live claim's verify entry is quiet: {warnings:?}"
+        );
     }
 
     /// Symbols justify themselves through claims (rule 8) — a linkless symbol

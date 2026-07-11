@@ -169,6 +169,11 @@ export interface ScryModel {
   /** Keyed by **responsibility id** → line-precise locations (conformance
    *  numerator). Agent-produced and regenerable; never hand-authored. */
   sourceMap?: Record<string, SourceLocation[]>;
+  /** Keyed by **responsibility id** → locations of the tests that back the
+   *  claim (verification handle). A separate dimension from `sourceMap` —
+   *  where a claim is implemented vs. where it is verified. Same single-home
+   *  layer rule. Agent-produced; never executed. */
+  verifyMap?: Record<string, SourceLocation[]>;
   /** Keyed by **node id** → boundary globs (coverage denominator + extraction
    *  scope). Agent-produced and regenerable; never hand-authored. */
   boundaries?: Record<string, Source[]>;
@@ -558,6 +563,9 @@ export function removeNode(model: ScryModel, nodeId: string): ScryModel {
   const sourceMap = { ...(model.sourceMap ?? {}) };
   for (const id of removedRespIds) delete sourceMap[id];
   for (const id of remove) delete sourceMap[id];
+  // verifyMap is keyed by responsibility id only (a test backs a claim).
+  const verifyMap = { ...(model.verifyMap ?? {}) };
+  for (const id of removedRespIds) delete verifyMap[id];
   const boundaries = { ...(model.boundaries ?? {}) };
   for (const id of remove) delete boundaries[id];
   return {
@@ -571,6 +579,7 @@ export function removeNode(model: ScryModel, nodeId: string): ScryModel {
       memberIds: g.memberIds.filter((m) => !remove.has(m)),
     })),
     sourceMap,
+    verifyMap,
     boundaries,
   };
 }
