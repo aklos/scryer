@@ -31,6 +31,11 @@ export const PALETTES: Record<string, PaletteValues> = {
   // text tiers clear readable contrast on #0c0e12 (tertiary ≥5:1, muted ≥4:1)
   // without washing out the light-mode tiers that share the same shades.
   graphite:{ 50: "#f5f7fa", 100: "#eef2f6", 200: "#e6edf3", 300: "#b6c1cd", 400: "#8b96a5", 500: "#6e7a8a", 600: "#566171", 700: "#3e4859", 800: "#20262f", 900: "#14171d", 950: "#0c0e12" },
+  // The scryer house accent — a ramp anchored on the logo's own blues:
+  // 400 = #52b7fc (the front stroke), 500 = #129dfc (the back stroke). The
+  // 600/700 tiers darken the same hue far enough for white-on-fill buttons
+  // and light-mode link text. (The logo's teal #52fcdf stays unmapped.)
+  azure:   { 50: "#eff9ff", 100: "#daf1fe", 200: "#bde6fd", 300: "#8ed6fd", 400: "#52b7fc", 500: "#129dfc", 600: "#0778cf", 700: "#0765b0", 800: "#0a5590", 900: "#0e4877", 950: "#092e4f" },
   red:     { 50: "#fef2f2", 100: "#fee2e2", 200: "#fecaca", 300: "#fca5a5", 400: "#f87171", 500: "#ef4444", 600: "#dc2626", 700: "#b91c1c", 800: "#991b1b", 900: "#7f1d1d", 950: "#450a0a" },
   orange:  { 50: "#fff7ed", 100: "#ffedd5", 200: "#fed7aa", 300: "#fdba74", 400: "#fb923c", 500: "#f97316", 600: "#ea580c", 700: "#c2410c", 800: "#9a3412", 900: "#7c2d12", 950: "#431407" },
   amber:   { 50: "#fffbeb", 100: "#fef3c7", 200: "#fde68a", 300: "#fcd34d", 400: "#fbbf24", 500: "#f59e0b", 600: "#d97706", 700: "#b45309", 800: "#92400e", 900: "#78350f", 950: "#451a03" },
@@ -57,7 +62,7 @@ export const PALETTES: Record<string, PaletteValues> = {
 export const GRAY_PALETTES = ["graphite", "slate", "gray", "zinc", "neutral", "stone"] as const;
 export const CHROMATIC_PALETTES = [
   "red", "orange", "amber", "yellow", "lime", "green", "emerald",
-  "teal", "cyan", "sky", "blue", "indigo", "violet", "purple", "fuchsia", "pink", "rose",
+  "teal", "cyan", "sky", "azure", "blue", "indigo", "violet", "purple", "fuchsia", "pink", "rose",
 ] as const;
 export const ALL_PALETTE_NAMES = [...GRAY_PALETTES, ...CHROMATIC_PALETTES] as const;
 export type PaletteName = (typeof ALL_PALETTE_NAMES)[number];
@@ -129,7 +134,7 @@ export const THEME_ROLES: { key: PaletteRole; label: string; description: string
 export const DEFAULT_THEME: ThemeConfig = {
   colorMode: "system",
   zinc: "graphite",
-  blue: "blue",
+  blue: "azure",
   emerald: "emerald",
   amber: "amber",
   red: "red",
@@ -153,10 +158,11 @@ export const DEFAULT_THEME: ThemeConfig = {
 const STORAGE_KEY = "scryer:theme";
 
 // Bumped when the default chrome changes so existing installs adopt it. v2 =
-// the graphite (mockup) cool blue-grey neutral + its canvas/node shades.
-const THEME_VERSION = 2;
-/** The neutral-chrome fields a version migration re-seeds from the defaults. */
-const CHROME_KEYS = ["zinc", "canvasLight", "nodeLight", "canvasDark", "nodeDark"] as const;
+// the graphite (mockup) cool blue-grey neutral + its canvas/node shades; v3 =
+// the azure accent (the logo's own blues) as the default blue role.
+const THEME_VERSION = 3;
+/** The chrome fields a version migration re-seeds from the defaults. */
+const CHROME_KEYS = ["zinc", "blue", "canvasLight", "nodeLight", "canvasDark", "nodeDark"] as const;
 
 /** Resolve a shade after applying an offset, clamping to valid range. */
 function shiftShade(shade: Shade, offset: number): Shade {
