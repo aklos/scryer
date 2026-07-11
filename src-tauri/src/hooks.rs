@@ -474,6 +474,8 @@ fn close_payload(project: &Path, touched: &[Touch]) -> serde_json::Value {
         _ => committed.clone(),
     };
     let statement_of = |key: &str| -> Option<String> {
+        // A verify-anchor observation names the claim its test backs.
+        let key = scryer_core::verify_resp_id(key).unwrap_or(key);
         let w = working.as_ref()?;
         w.nodes
             .iter()

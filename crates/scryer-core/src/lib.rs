@@ -410,6 +410,26 @@ impl Default for ScryModel {
     }
 }
 
+// --- Verify-anchor key namespace ---
+
+/// Prefix distinguishing a `verify_map` anchor from a `source_map` anchor in
+/// shared key spaces (the anchor-fingerprint baseline, anchor observations).
+/// Model maps themselves never carry it — `verify_map` keys are bare
+/// responsibility ids; the prefix exists so one baseline can fingerprint both
+/// dimensions without a second file.
+pub const VERIFY_KEY_PREFIX: &str = "verify:";
+
+/// The baseline/observation key for a responsibility's verify anchor.
+pub fn verify_key(resp_id: &str) -> String {
+    format!("{VERIFY_KEY_PREFIX}{resp_id}")
+}
+
+/// The responsibility id behind a verify-namespaced key, or `None` for a
+/// plain source-map key.
+pub fn verify_resp_id(key: &str) -> Option<&str> {
+    key.strip_prefix(VERIFY_KEY_PREFIX)
+}
+
 // --- ModelRef (project-local only in v0.3) ---
 
 /// Identifies a model's storage location. v0.3 supports project-local models only;

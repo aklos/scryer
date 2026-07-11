@@ -48,6 +48,12 @@ pub struct HealthCounts {
     /// `anchorable - anchored` — blind spots: the lens claims code it cannot
     /// show.
     pub unmapped: u32,
+    /// Responsibilities carrying a verify entry (a backing test). A separate
+    /// dimension from `anchored` — where a claim is implemented vs. where it
+    /// is demonstrated — and NOT gated on `anchorable`: a structural claim
+    /// legitimately backs onto an integration test. Presence-only; whether
+    /// the test's fingerprint is still intact is the anchor check's report.
+    pub verified: u32,
     /// Unix seconds of the most recent truth-bearing edit in scope.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_touched_at: Option<u64>,
@@ -68,6 +74,7 @@ impl HealthCounts {
         self.anchorable += other.anchorable;
         self.anchored += other.anchored;
         self.unmapped += other.unmapped;
+        self.verified += other.verified;
         self.touch(other.last_touched_at);
     }
 }
@@ -147,6 +154,9 @@ pub fn compute_health(
             if resp.stale == Some(true) {
                 h.stale += 1;
             }
+            if model.verify_map.get(&resp.id).is_some_and(|locs| !locs.is_empty()) {
+                h.verified += 1;
+            }
             h.touch(resp.last_touched_at);
             if anchorable_node {
                 h.anchorable += 1;
@@ -204,6 +214,9 @@ pub fn compute_health(
             }
             if resp.stale == Some(true) {
                 h.stale += 1;
+            }
+            if model.verify_map.get(&resp.id).is_some_and(|locs| !locs.is_empty()) {
+                h.verified += 1;
             }
             h.touch(resp.last_touched_at);
         }
@@ -747,6 +760,36 @@ mod tests {
         assert_eq!(c.total, 2);
         assert_eq!(c.anchored, 1, "only the anchor whose file exists counts");
         assert_eq!(c.pct, Some(50));
+    }
+
+    /// `verified` counts claims carrying a verify entry (a backing test) and
+    /// rolls up the tree like every other counter. It is NOT gated on
+    /// anchorability: a structural claim backed by an integration test counts,
+    /// where `anchored` would ignore it.
+    #[test]
+    fn verified_counts_and_rolls_up_independent_of_anchorability() {
+        let mut m = ScryModel::new();
+        let mut sys = node("sys", Kind::System, None);
+        sys.responsibilities.push(resp("r-struct")); // structural: sys has a child
+        m.nodes.push(sys);
+        let mut leaf = node("leaf", Kind::Component, Some("sys"));
+        leaf.responsibilities.push(resp("r-tested"));
+        leaf.responsibilities.push(resp("r-untested"));
+        m.nodes.push(leaf);
+        m.verify_map.insert("r-struct".into(), vec![loc("tests/integration.rs")]);
+        m.verify_map.insert("r-tested".into(), vec![loc("tests/unit.rs")]);
+        m.verify_map.insert("r-empty".into(), Vec::new()); // dangling/empty: never counts
+
+        let h = compute_health(&m, None, None);
+        assert_eq!(h.nodes["leaf"].own.verified, 1, "the tested leaf claim counts");
+        assert_eq!(
+            h.nodes["sys"].own.verified,
+            1,
+            "a structural claim's integration test counts even though it is not anchorable"
+        );
+        assert_eq!(h.nodes["sys"].subtree.verified, 2, "verified rolls up post-order");
+        assert_eq!(h.totals.verified, 2);
+        assert_eq!(h.totals.anchored, 0, "verification is a separate dimension from anchoring");
     }
 
     /// The discharge rule: a System's implemented responsibility with no anchor

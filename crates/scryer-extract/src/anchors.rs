@@ -64,6 +64,29 @@ fn is_zero(n: &u32) -> bool {
     *n == 0
 }
 
+/// The model locations behind a baseline key: `verify:`-namespaced keys read
+/// the verify_map (claim → backing test), plain keys the source_map. One
+/// baseline fingerprints both dimensions.
+fn keyed_locs<'m>(
+    model: &'m ScryModel,
+    key: &str,
+) -> Option<&'m Vec<scryer_core::SourceLocation>> {
+    match scryer_core::verify_resp_id(key) {
+        Some(id) => model.verify_map.get(id),
+        None => model.source_map.get(key),
+    }
+}
+
+fn keyed_locs_mut<'m>(
+    model: &'m mut ScryModel,
+    key: &str,
+) -> Option<&'m mut Vec<scryer_core::SourceLocation>> {
+    match scryer_core::verify_resp_id(key) {
+        Some(id) => model.verify_map.get_mut(id),
+        None => model.source_map.get_mut(key),
+    }
+}
+
 /// A sourceMap pattern with glob metacharacters claims territory, not a file.
 fn is_glob_pattern(p: &str) -> bool {
     p.contains(['*', '?', '['])
@@ -308,10 +331,17 @@ pub fn write_baseline(r: &ModelRef) -> Result<usize, String> {
     // Walked lazily — only when a glob anchor exists.
     let mut project_files: Option<std::collections::BTreeSet<String>> = None;
 
-    let mut keys: Vec<&String> = model.source_map.keys().collect();
-    keys.sort();
-    for key in keys {
-        for loc in &model.source_map[key] {
+    // Both anchor dimensions share the baseline: source anchors under their
+    // bare key, verify anchors (claim → backing test) under `verify:{id}`.
+    let mut keyed: Vec<(String, &Vec<scryer_core::SourceLocation>)> = model
+        .source_map
+        .iter()
+        .map(|(k, v)| (k.clone(), v))
+        .chain(model.verify_map.iter().map(|(k, v)| (scryer_core::verify_key(k), v)))
+        .collect();
+    keyed.sort_by(|a, b| a.0.cmp(&b.0));
+    for (key, locs) in keyed {
+        for loc in locs {
             let mut fingerprint = |file: &str, from_glob: Option<&str>| {
                 let Some((source, parse)) = cache.get(project, file) else {
                     return;
@@ -502,14 +532,16 @@ pub fn check_anchors(r: &ModelRef) -> Result<AnchorCheck, String> {
         // The anchor may have been edited/removed since the baseline — only
         // check entries the model still carries (matched by the loc's spelled
         // pattern — the glob for expanded entries — plus symbol).
-        let still_anchored = model.source_map.get(&entry.key).is_some_and(|locs| {
+        let still_anchored = keyed_locs(&model, &entry.key).is_some_and(|locs| {
             locs.iter()
                 .any(|l| l.pattern == entry.source_pattern() && l.symbol == entry.symbol)
         });
         if !still_anchored {
             continue;
         }
-        let Some((host_id, host_name)) = host_of.get(&entry.key).cloned() else {
+        // A verify anchor's host is the claim the test backs.
+        let host_key = scryer_core::verify_resp_id(&entry.key).unwrap_or(&entry.key);
+        let Some((host_id, host_name)) = host_of.get(host_key).cloned() else {
             continue; // dangling sourceMap key — validate_model's department
         };
 
@@ -547,7 +579,7 @@ pub fn check_anchors(r: &ModelRef) -> Result<AnchorCheck, String> {
             match rescued {
                 Some((new_file, start, end)) => {
                     if entry.pattern.is_none() {
-                        if let Some(locs) = model.source_map.get_mut(&entry.key) {
+                        if let Some(locs) = keyed_locs_mut(&mut model, &entry.key) {
                             for l in locs.iter_mut() {
                                 if l.pattern == entry.file && l.symbol == entry.symbol {
                                     l.pattern = new_file.clone();
@@ -626,7 +658,7 @@ pub fn check_anchors(r: &ModelRef) -> Result<AnchorCheck, String> {
                 // matching sourceMap location that recorded line numbers, and
                 // the baseline span, so the lens stays sharp without flagging
                 // anything.
-                if let Some(locs) = model.source_map.get_mut(&entry.key) {
+                if let Some(locs) = keyed_locs_mut(&mut model, &entry.key) {
                     for l in locs.iter_mut() {
                         if l.pattern == entry.file && l.symbol == entry.symbol && l.line.is_some()
                         {
@@ -694,11 +726,19 @@ pub fn untracked_anchors(r: &ModelRef) -> Result<Vec<UntrackedAnchor>, String> {
         .iter()
         .map(|e| (e.key.as_str(), e.source_pattern(), e.symbol.as_deref()))
         .collect();
-    let mut keys: Vec<&String> = model.source_map.keys().collect();
-    keys.sort();
+    // Same two-dimension universe as write_baseline: a verify anchor without a
+    // fingerprint is a silent handle — "test-backed" must not read as watched
+    // when the tripwire can't see the test.
+    let mut keyed: Vec<(String, &Vec<scryer_core::SourceLocation>)> = model
+        .source_map
+        .iter()
+        .map(|(k, v)| (k.clone(), v))
+        .chain(model.verify_map.iter().map(|(k, v)| (scryer_core::verify_key(k), v)))
+        .collect();
+    keyed.sort_by(|a, b| a.0.cmp(&b.0));
     let mut out = Vec::new();
-    for key in keys {
-        for loc in &model.source_map[key] {
+    for (key, locs) in keyed {
+        for loc in locs {
             if !covered.contains(&(key.as_str(), loc.pattern.as_str(), loc.symbol.as_deref())) {
                 out.push(UntrackedAnchor {
                     key: key.clone(),
@@ -743,6 +783,13 @@ pub fn out_of_plan_scopes(r: &ModelRef) -> Result<Vec<drift::DriftScope>, String
     let mut by_host: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
     for obs in check.observations {
         if planned.contains(obs.key.as_str()) {
+            continue;
+        }
+        // Verify anchors are not drift inputs: an edited test is a health
+        // signal (the claim's backing changed), not a regression to the
+        // mapped implementation — and its key would never match a plan
+        // element, so it could only ever add noise scopes here.
+        if scryer_core::verify_resp_id(&obs.key).is_some() {
             continue;
         }
         by_host
@@ -891,6 +938,76 @@ mod tests {
         assert_eq!(check.observations[0].state, AnchorState::Changed);
         assert_eq!(check.observations[0].key, "r1");
         assert_eq!(check.observations[0].host_id, "sym");
+    }
+
+    /// Verify anchors (claim → backing test) ride the same baseline under
+    /// `verify:{id}` keys: an edited test fires a namespaced observation that
+    /// names the claim's host, and a verify regression never mints a drift
+    /// scope — it is a health signal, not an out-of-plan code regression.
+    #[test]
+    fn verify_anchor_rides_the_baseline_and_is_not_drift() {
+        const TEST_TS: &str = "export function alphaSpec() {\n    return check(1);\n}\n";
+        let (_dir, r) = project_with("src/m.ts", TS);
+        std::fs::write(r.project_path().join("src/m.test.ts"), TEST_TS).unwrap();
+        let mut m = leaf_model("alpha", "src/m.ts", 1, 3);
+        m.verify_map.insert(
+            "r1".into(),
+            vec![SourceLocation {
+                pattern: "src/m.test.ts".into(),
+                symbol: Some("alphaSpec".into()),
+                line: None,
+                end_line: None,
+                command: None,
+            }],
+        );
+        scryer_core::write_model_at(&r, &m).unwrap();
+        reconcile(&r);
+
+        touch_gate();
+        std::fs::write(
+            r.project_path().join("src/m.test.ts"),
+            TEST_TS.replace("check(1)", "check(2)"),
+        )
+        .unwrap();
+
+        let check = check_anchors(&r).unwrap();
+        assert_eq!(check.observations.len(), 1, "{:?}", check.observations);
+        let obs = &check.observations[0];
+        assert_eq!(obs.key, "verify:r1", "the observation is verify-namespaced");
+        assert_eq!(obs.host_id, "sym", "the host is the claim's, not the test's");
+        assert_eq!(obs.state, AnchorState::Changed);
+
+        let scopes = out_of_plan_scopes(&r).unwrap();
+        assert!(scopes.is_empty(), "a verify regression is not drift: {scopes:?}");
+    }
+
+    /// A verify entry added after the last reconcile has no fingerprint yet —
+    /// the untracked sweep must surface it, or "test-backed" reads as watched
+    /// while the tripwire is blind to the test.
+    #[test]
+    fn untracked_verify_anchor_surfaces() {
+        let (_dir, r) = project_with("src/m.ts", TS);
+        scryer_core::write_model_at(&r, &leaf_model("alpha", "src/m.ts", 1, 3)).unwrap();
+        reconcile(&r);
+
+        let mut m = read_model_at(&r).unwrap();
+        m.verify_map.insert(
+            "r1".into(),
+            vec![SourceLocation {
+                pattern: "src/m.test.ts".into(),
+                symbol: None,
+                line: None,
+                end_line: None,
+                command: None,
+            }],
+        );
+        scryer_core::write_model_at(&r, &m).unwrap();
+
+        let un = untracked_anchors(&r).unwrap();
+        assert!(
+            un.iter().any(|u| u.key == "verify:r1" && u.file == "src/m.test.ts"),
+            "silent verify handle surfaces: {un:?}"
+        );
     }
 
     /// A symbol that moves without changing is re-anchored silently: the
