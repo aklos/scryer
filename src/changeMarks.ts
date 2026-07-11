@@ -31,13 +31,16 @@ export type Mark = "A" | "M" | "D" | "R" | "Q" | "X";
  *  axis, never mistaken for a planned edit. */
 export type ChangeKind = "add" | "modified" | "delete" | "relocate" | "vagrant" | "stale";
 
+// Light mode sits on the 700 tier — the 600s (amber especially) fall under
+// ~3.5:1 on the light canvas and small mono glyphs/counts become guesswork.
+// Dark mode keeps the 400s.
 export const CHANGE_COLOR: Record<ChangeKind, string> = {
-  add: "text-emerald-600 dark:text-emerald-400",
-  modified: "text-amber-600 dark:text-amber-400",
-  delete: "text-red-600 dark:text-red-400",
-  relocate: "text-amber-600 dark:text-amber-400",
-  vagrant: "text-orange-600 dark:text-orange-400",
-  stale: "text-orange-600 dark:text-orange-400",
+  add: "text-emerald-700 dark:text-emerald-400",
+  modified: "text-amber-700 dark:text-amber-400",
+  delete: "text-red-700 dark:text-red-400",
+  relocate: "text-amber-700 dark:text-amber-400",
+  vagrant: "text-orange-700 dark:text-orange-400",
+  stale: "text-orange-700 dark:text-orange-400",
 };
 
 /** Which category each element mark belongs to — the bridge between the

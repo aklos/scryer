@@ -233,7 +233,7 @@ export const SOURCE_SPANS: Record<string, Span> = {
 
 const counts = (p: Partial<HealthCounts>): HealthCounts => ({
   responsibilities: 0, properties: 0, vagrant: 0, stale: 0,
-  anchorable: 0, anchored: 0, unmapped: 0, ...p,
+  anchorable: 0, anchored: 0, unmapped: 0, verified: 0, ...p,
 });
 
 /** A derived observability report: coverage per node, anchor drift, and the
@@ -258,6 +258,14 @@ export const healthReport: ModelHealthReport = {
       },
     },
     totals: counts({ responsibilities: 7, vagrant: 1, stale: 1, anchorable: 7, anchored: 6, unmapped: 1 }),
+  },
+  // Per-node build completeness (subtree anchored/total) — the header badge.
+  completeness: {
+    aperture: { anchored: 8, total: 10, leafTotal: 7, pct: 80 },
+    auth: { anchored: 2, total: 3, leafTotal: 2, pct: 67 },
+    ledger: { anchored: 3, total: 4, leafTotal: 3, pct: 75 },
+    fraud: { anchored: 2, total: 3, leafTotal: 2, pct: 67 },
+    webhooks: { anchored: 2, total: 3, leafTotal: 2, pct: 67 },
   },
   anchors: [
     { key: "r-ledger-2", hostId: "ledger", hostName: "Ledger Service", file: "ledger/src/escrow.rs", symbol: "hold_in_escrow", state: "changed" },

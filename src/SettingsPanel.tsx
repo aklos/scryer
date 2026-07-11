@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, X } from "lucide-react";
 import { Input, Select } from "./ui";
-import { BTN, BTN_GO, SegField } from "./pagekit";
+import { BTN, BTN_GO, BTN_ICON, EYEBROW, SegField } from "./pagekit";
 import { useMcpSetup } from "./hooks/useMcpSetup";
 
 type AgentPref = "auto" | "claudeCode" | "codex";
@@ -144,7 +144,7 @@ export function SettingsPanel({
           <button
             type="button"
             onClick={onClose}
-            className="rounded p-0.5 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+            className={BTN_ICON}
             aria-label="Close"
           >
             <X className="h-4 w-4" />
@@ -251,9 +251,7 @@ export function SettingsPanel({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <span className="text-[11px] font-semibold uppercase tracking-[0.07em] text-[var(--text-tertiary)]">
-        {label}
-      </span>
+      <span className={EYEBROW}>{label}</span>
       {children}
     </div>
   );
@@ -282,7 +280,7 @@ function HooksRow({
         </span>
       ) : (
         <span className="flex items-center gap-2">
-          <span className="font-mono text-[10px] text-[var(--text-muted)]">{target}</span>
+          <span className="font-mono text-2xs text-[var(--text-muted)]">{target}</span>
           <button type="button" className={BTN} disabled={busy} onClick={onInstall}>
             {busy ? "Installing…" : "Install"}
           </button>
@@ -317,7 +315,7 @@ function AgentSettingsGroup({
 }) {
   return (
     <div className="rounded-md border border-[var(--border)] p-3">
-      <h3 className="mb-2.5 border-b border-[var(--border)] pb-[5px] text-[11px] font-semibold uppercase tracking-[0.07em] text-[var(--text-secondary)]">
+      <h3 className={`mb-2.5 border-b border-[var(--border)] pb-[5px] ${EYEBROW}`}>
         {title}
       </h3>
       <div className="flex flex-col gap-3">

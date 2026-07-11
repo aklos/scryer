@@ -21,6 +21,10 @@ import {
 export interface InlineTextProps {
   value: string;
   onCommit: (next: string) => void;
+  /** Fired whenever editing exits — commit OR cancel — so a parent that keeps
+   *  its own "which row is editing" state can always clear it. Without this, a
+   *  cancelled rename leaves the parent stuck rendering the editor. */
+  onClose?: () => void;
   placeholder?: string;
   multiline?: boolean;
   /** Auto-focus into edit mode on mount (e.g. brand-new cards). */
@@ -44,6 +48,7 @@ export interface InlineTextProps {
 export function InlineText({
   value,
   onCommit,
+  onClose,
   placeholder = "",
   multiline = false,
   autoEdit = false,
@@ -78,12 +83,14 @@ export function InlineText({
     // An auto-edit field opened empty still commits on blur even when left empty,
     // so the parent can drop a never-filled placeholder (e.g. a blank directive).
     if (draft !== value || (autoEdit && value === "")) onCommit(draft);
-  }, [draft, value, onCommit, autoEdit]);
+    onClose?.();
+  }, [draft, value, onCommit, autoEdit, onClose]);
 
   const cancel = useCallback(() => {
     setDraft(value);
     setEditing(false);
-  }, [value]);
+    onClose?.();
+  }, [value, onClose]);
 
   const handleKey = useCallback(
     (e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -141,7 +148,7 @@ export function InlineText({
       onPointerDown: blockBubble,
       onMouseDown: blockBubble,
       placeholder,
-      className: `${className} bg-transparent caret-[var(--text-secondary)] placeholder:text-[var(--text-ghost)] outline-none border-b border-dotted border-[var(--text-muted)] focus:border-solid focus:border-[var(--text-secondary)] w-full resize-none`,
+      className: `${className} bg-transparent caret-[var(--accent)] placeholder:text-[var(--text-ghost)] outline-none border-b border-dotted border-[var(--text-muted)] focus:border-solid focus:border-[var(--accent)] w-full resize-none`,
       // Inline color so native inputs (which don't inherit by default) are
       // readable even when the caller forgets to set a text color. Caller's
       // own `style` overrides via spread.

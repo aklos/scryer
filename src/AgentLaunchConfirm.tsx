@@ -10,10 +10,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Sparkles, X } from "lucide-react";
+import { X } from "lucide-react";
 import { AGENT_LABEL, type ResolvedLaunch } from "./SettingsPanel";
 import type { LaunchSettings } from "./hooks/useLaunchSettings";
-import { BTN, BTN_AGENT } from "./pagekit";
+import { AgentMark, BTN, BTN_AGENT, BTN_ICON } from "./pagekit";
 
 export interface AgentLaunchRequest {
   /** Short imperative naming the action, e.g. "Rebuild the model from your codebase". */
@@ -94,13 +94,13 @@ export function AgentLaunchConfirm({
       <div className="relative w-[420px] max-w-[90vw] rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] shadow-2xl">
         <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
           <span className="flex items-center gap-1.5 text-sm font-medium text-[var(--text)]">
-            <Sparkles className="h-3.5 w-3.5 text-violet-500 dark:text-violet-400" />
+            <AgentMark />
             Run an agent?
           </span>
           <button
             type="button"
             onClick={onCancel}
-            className="rounded p-0.5 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+            className={BTN_ICON}
             aria-label="Close"
           >
             <X className="h-4 w-4" />
@@ -111,8 +111,8 @@ export function AgentLaunchConfirm({
           <p className="text-sm text-[var(--text)]">{request.action}</p>
 
           {/* The resolved launch — mirrors the powerline so the two never disagree. */}
-          <div className="flex items-center gap-2 rounded-md border border-violet-500/30 bg-violet-500/5 px-3 py-2 text-xs">
-            <Sparkles className="h-3.5 w-3.5 shrink-0 text-violet-500 dark:text-violet-400" />
+          <div className="flex items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-inset)] px-3 py-2 text-xs">
+            <AgentMark />
             {launch.agent ? (
               <span className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
                 <span className="font-medium text-[var(--text)]">{AGENT_LABEL[launch.agent]}</span>
@@ -155,7 +155,7 @@ export function AgentLaunchConfirm({
             disabled={!launch.agent}
             className={`${BTN_AGENT} disabled:cursor-default disabled:opacity-50`}
           >
-            <Sparkles className="h-3 w-3" />
+            <AgentMark className="" />
             Run agent
           </button>
         </div>

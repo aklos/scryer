@@ -46,6 +46,12 @@ export function glyphColor(glyph: string): string {
   return kind ? CHANGE_COLOR[kind] : "text-[var(--text-muted)]";
 }
 
+/** A raw marker glyph back to its change category (the durable history log
+ *  stores the chars); undefined for anything unrecognised. */
+export function kindOfGlyph(glyph: string): ChangeKind | undefined {
+  return GLYPH_KIND[glyph];
+}
+
 /** The per-change marker — one glyph in its category hue. The shared vocabulary
  *  for "this line was added / reworded / deleted / moved". Sits in a fixed
  *  gutter; pass `className` to tune size (defaults to the node page's `text-xs`). */
@@ -63,11 +69,51 @@ export function ChangeGlyph({
   );
 }
 
-/** Whole-element tint: an added element reads green-filled, a deleted one struck
- *  red. The block-level counterpart to {@link WordDiffText}'s per-word paint;
- *  applied to a statement that's entirely new or entirely dropped. */
+/** Whole-element treatment, tuned per mode. Dark: text colour only, like a
+ *  terminal diff — bright 300s pop on a dark canvas and a page of pending work
+ *  stays readable instead of drowning in paint. Light: coloured text alone
+ *  cannot pop (emerald's dark shades read as teal-gray at 13px), so the hue
+ *  rides a quiet background wash — the GitHub-diff idiom — with deep text for
+ *  contrast. */
 export const DIFF_TINT: Record<"add" | "delete", string> = {
-  add: "rounded-[2px] bg-emerald-500/15 px-0.5 text-emerald-700 dark:text-emerald-300 decoration-clone",
+  add: "rounded-xs bg-emerald-500/10 px-0.5 decoration-clone text-emerald-800 dark:bg-transparent dark:text-emerald-300",
   delete:
-    "rounded-[2px] bg-red-500/10 px-0.5 text-red-700/90 line-through decoration-red-400/60 decoration-clone dark:text-red-300/90",
+    "rounded-xs bg-red-500/10 px-0.5 decoration-clone text-red-800 line-through decoration-red-400/60 dark:bg-transparent dark:text-red-300/90",
 };
+
+/** Content class for a whole diff row by category: added/deleted rows tint
+ *  their text, everything else stays neutral (a reworded row's word-diff
+ *  carries its own paint). One rule, every surface. */
+export function diffTextClass(kind: ChangeKind | undefined): string {
+  return kind === "add"
+    ? DIFF_TINT.add
+    : kind === "delete"
+      ? DIFF_TINT.delete
+      : "text-[var(--text-secondary)]";
+}
+
+/** The shared diff-row anatomy — a fixed glyph gutter beside the content. The
+ *  History timeline and the Changes page render their rows through this, so a
+ *  diff reads as a diff everywhere (the node page's numbered claim rows carry
+ *  extra lanes but keep the same gutter/glyph/treatment vocabulary). */
+export function DiffRow({
+  kind,
+  marker,
+  className = "",
+  children,
+}: {
+  kind?: ChangeKind;
+  /** Raw marker char (history rows) — resolved through the glyph table. */
+  marker?: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const k = kind ?? (marker ? GLYPH_KIND[marker] : undefined);
+  return (
+    <div className={`grid grid-cols-[16px_1fr] items-baseline gap-1 ${className}`}>
+      {k ? <ChangeGlyph kind={k} /> : <span />}
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
+

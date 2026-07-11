@@ -29,7 +29,7 @@ import type { ChangeItem, ChangeRevision } from "./hooks/useModelStorage";
 import type { ScryModel, Node, Responsibility, SchemaProperty, DriftScope } from "./viewmodel";
 import type { Change, ElementChange, ModelDiff } from "./planDiff";
 import { CHANGE_COLOR, type ChangeKind, collectPlanEntries, type LinkChange, MARK_META, type PlanEntry } from "./changeMarks";
-import { ChangeGlyph, DIFF_TINT } from "./diffkit";
+import { DIFF_TINT, DiffRow } from "./diffkit";
 import { entryChanges } from "./ledger";
 import type { Editor } from "./editor";
 import type { ModelHealthReport } from "./health";
@@ -37,15 +37,17 @@ import { ANCHOR_STATE_LABEL, collapseAnchors, darkBoundaries } from "./health";
 import { kindIcon } from "./kindIcon";
 import { isNodeEmpty } from "./rollup";
 import { respElementId, propElementId } from "./SourceSection";
-import { BTN, BTN_AGENT, BTN_DANGER, BTN_GO, jumpTo, PageSection, WikiLink, WordDiffText } from "./pagekit";
+import { BTN, BTN_AGENT, BTN_DANGER, BTN_GO, jumpTo, LINK, PAGE_COL, PageSection, WikiLink, WordDiffText } from "./pagekit";
 
 // --- shared shell -------------------------------------------------------------
 
 function SpecialHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
-    <header className="shrink-0 border-b border-[var(--border)] px-7 pb-3 pt-[18px]">
-      <h1 className="text-[21px] font-semibold leading-tight text-[var(--text)]">{title}</h1>
-      <div className="mt-[3px] text-xs text-[var(--text-tertiary)]">{subtitle}</div>
+    <header className="shrink-0 border-b border-[var(--border)] pb-3 pt-[18px]">
+      <div className={PAGE_COL}>
+        <h1 className="text-xl font-semibold leading-tight text-[var(--text)]">{title}</h1>
+        <div className="mt-[3px] text-xs text-[var(--text-tertiary)]">{subtitle}</div>
+      </div>
     </header>
   );
 }
@@ -53,7 +55,9 @@ function SpecialHeader({ title, subtitle }: { title: string; subtitle: string })
 function SpecialBody({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="max-w-[820px] px-7 pb-[50px] pt-[18px]">{children}</div>
+      <div className={`${PAGE_COL} pb-[50px] pt-[18px]`}>
+        <div className="max-w-[820px]">{children}</div>
+      </div>
     </div>
   );
 }
@@ -97,7 +101,7 @@ function RevisionItems({
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-baseline gap-1.5 text-sm">
-              <span className="shrink-0 text-2xs uppercase tracking-wide text-[var(--text-ghost)]">
+              <span className="shrink-0 text-2xs uppercase tracking-[0.07em] text-[var(--text-ghost)]">
                 {it.what}
               </span>
               {/* Removals read as struck-through text (never a live link — the
@@ -106,7 +110,7 @@ function RevisionItems({
                 <button
                   type="button"
                   onClick={() => onSelectNode(it.nodeId!)}
-                  className="min-w-0 truncate text-left text-blue-700 hover:underline dark:text-blue-400"
+                  className={`min-w-0 truncate text-left ${LINK}`}
                 >
                   {it.label}
                 </button>
@@ -316,7 +320,7 @@ function NodeRef({
       <button
         type="button"
         onClick={() => onSelectNode(id)}
-        className="rounded-sm text-left text-blue-700 hover:underline dark:text-blue-400"
+        className={`rounded text-left ${LINK}`}
       >
         {name}
       </button>
@@ -396,9 +400,8 @@ function ChildRow({ ec, ctx }: { ec: ElementChange; ctx: RowCtx }) {
   const secondary = rewords.filter((r) => r.field !== "statement");
   const kind: ChangeKind = added ? "add" : deleted ? "delete" : "modified";
   return (
-    <div className="flex items-start gap-1.5 text-2xs leading-relaxed">
-      <ChangeGlyph kind={kind} className="w-2 shrink-0 pt-px text-2xs" />
-      <div className="min-w-0 flex-1">
+    <DiffRow kind={kind} className="text-xs leading-relaxed">
+      <div className="min-w-0 font-mono">
         {deleted ? (
           <span className={DIFF_TINT.delete}>{ec.label}</span>
         ) : statement ? (
@@ -422,7 +425,7 @@ function ChildRow({ ec, ctx }: { ec: ElementChange; ctx: RowCtx }) {
           </div>
         ))}
       </div>
-    </div>
+    </DiffRow>
   );
 }
 
@@ -438,11 +441,10 @@ function LinkRow({ link, ctx }: { link: LinkChange; ctx: RowCtx }) {
   const method = rewords.find((r) => r.field === "method");
   const kind: ChangeKind = added ? "add" : deleted ? "delete" : "modified";
   return (
-    <div className="flex items-start gap-1.5 text-2xs leading-relaxed">
-      <ChangeGlyph kind={kind} className="w-2 shrink-0 pt-px text-2xs" />
-      <div className="min-w-0 flex-1">
+    <DiffRow kind={kind} className="text-xs leading-relaxed">
+      <div className="min-w-0 font-mono">
         <span className="inline-flex flex-wrap items-baseline gap-1">
-          <span className="text-2xs uppercase tracking-wide text-[var(--text-ghost)]">link</span>
+          <span className="text-2xs uppercase tracking-[0.07em] text-[var(--text-ghost)]">link</span>
           {deleted ? (
             <span className={DIFF_TINT.delete}>{ec.label}</span>
           ) : label ? (
@@ -467,7 +469,7 @@ function LinkRow({ link, ctx }: { link: LinkChange; ctx: RowCtx }) {
           </div>
         )}
       </div>
-    </div>
+    </DiffRow>
   );
 }
 
@@ -484,7 +486,7 @@ function EntryCard({ entry, ctx }: { entry: DiffEntry; ctx: RowCtx }) {
         >
           {entry.mark}
         </span>
-        <span className="shrink-0 text-2xs uppercase tracking-wide text-[var(--text-ghost)]">
+        <span className="shrink-0 text-2xs uppercase tracking-[0.07em] text-[var(--text-ghost)]">
           {entry.kind}
         </span>
         {/* A dropped element has no page — struck text, never a dead link
@@ -493,7 +495,7 @@ function EntryCard({ entry, ctx }: { entry: DiffEntry; ctx: RowCtx }) {
           <button
             type="button"
             onClick={() => ctx.onSelectNode(entry.id)}
-            className="min-w-0 truncate text-left text-sm text-blue-700 hover:underline dark:text-blue-400"
+            className={`min-w-0 truncate text-left text-sm ${LINK}`}
           >
             {entry.label}
           </button>
@@ -666,7 +668,7 @@ function NewChangeForm({ onOpen }: { onOpen: (rationale: string) => void }) {
         value={rationale}
         onChange={(e) => setRationale(e.target.value)}
         placeholder="Start a change — the task in one sentence"
-        className="min-w-0 flex-1 rounded border border-[var(--border)] bg-transparent px-2 py-1 text-xs text-[var(--text)] placeholder:text-[var(--text-ghost)] focus:outline-none focus:ring-1 focus:ring-[var(--border-strong)]"
+        className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--surface-field)] px-2 py-1 text-xs text-[var(--text)] placeholder:text-[var(--text-ghost)] focus:outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
       />
       <button type="submit" className={BTN} disabled={!rationale.trim()}>
         Open
@@ -696,7 +698,7 @@ function ChangeSection({
     <section>
       <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-[var(--border)] bg-[var(--surface)] px-4 py-1.5">
         {id && (
-          <span className="rounded bg-[var(--surface-hover)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)]">
+          <span className="rounded bg-[var(--surface-hover)] px-1.5 py-0.5 font-mono text-2xs text-[var(--text-secondary)]">
             {id}
           </span>
         )}
@@ -706,7 +708,7 @@ function ChangeSection({
         >
           {rationale}
         </span>
-        <span className="text-[10px] text-[var(--text-muted)]">
+        <span className="text-2xs text-[var(--text-muted)]">
           {entries.length === 0
             ? "no entries yet"
             : `${entries.length} entr${entries.length === 1 ? "y" : "ies"}`}
@@ -723,7 +725,7 @@ function ChangeSection({
             onClick={onToggleActive}
           >
             {active ? (
-              <span className="flex items-center gap-1 text-emerald-500">
+              <span className="flex items-center gap-1 text-[var(--accent)]">
                 <Check className="h-3 w-3" /> working here
               </span>
             ) : (
@@ -782,7 +784,7 @@ function ClaimRow({
           <button
             type="button"
             onClick={() => onSelectNode(claim.node.id)}
-            className="text-blue-700 hover:underline dark:text-blue-400"
+            className={LINK}
           >
             {claim.node.name || "Untitled"}
           </button>
@@ -841,7 +843,7 @@ function PropRow({
           <button
             type="button"
             onClick={() => onSelectNode(pref.node.id)}
-            className="text-blue-700 hover:underline dark:text-blue-400"
+            className={LINK}
           >
             {pref.node.name || "Untitled"}
           </button>
@@ -1247,7 +1249,7 @@ export function NeedsReviewPage({
                       <button
                         type="button"
                         onClick={() => onSelectNode(s.nodeId)}
-                        className="text-sm text-blue-700 hover:underline dark:text-blue-400"
+                        className={`text-sm ${LINK}`}
                       >
                         {s.nodeName}
                       </button>
@@ -1279,7 +1281,7 @@ export function NeedsReviewPage({
                       <button
                         type="button"
                         onClick={() => onSelectNode(a.hostId)}
-                        className="shrink-0 text-sm text-blue-700 hover:underline dark:text-blue-400"
+                        className={`shrink-0 text-sm ${LINK}`}
                       >
                         {a.hostName}
                       </button>
@@ -1294,7 +1296,7 @@ export function NeedsReviewPage({
                           test
                         </span>
                       )}
-                      <span className="shrink-0 text-2xs text-orange-600 dark:text-orange-400">
+                      <span className="shrink-0 text-2xs text-orange-700 dark:text-orange-400">
                         {ANCHOR_STATE_LABEL[a.state]}
                       </span>
                     </li>

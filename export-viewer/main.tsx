@@ -9,7 +9,6 @@
  */
 
 import ReactDOM from "react-dom/client";
-import "@fontsource-variable/space-grotesk";
 import "../src/index.css";
 import { applyTheme, DEFAULT_THEME } from "../src/theme";
 import type { ScryModel } from "../src/viewmodel";

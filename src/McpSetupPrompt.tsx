@@ -56,13 +56,13 @@ export function McpSetupPrompt({
         </button>
       )}
       <div className="pr-4 text-xs font-medium text-[var(--text)]">Enable AI tool integration</div>
-      <div className="text-[11px] leading-relaxed text-[var(--text-muted)]">
+      <div className="text-2xs leading-relaxed text-[var(--text-muted)]">
         {agents} {claude && codex ? "are" : "is"} installed. Wire scryer into this project so your
         agent can read and update the model over MCP. This creates:
       </div>
-      <ul className="flex flex-col gap-0.5 text-[11px] text-[var(--text-secondary)]">
+      <ul className="flex flex-col gap-0.5 text-2xs text-[var(--text-secondary)]">
         {writes.map((w) => (
-          <li key={w} className="font-mono text-[10.5px]">
+          <li key={w} className="font-mono text-2xs">
             {w}
           </li>
         ))}

@@ -47,19 +47,21 @@ interface SourceSpan {
   lines: Segment[][];
 }
 
-/** Coarse token class → themed colour. Empty kind inherits the line colour. */
-const TOKEN_COLOR: Record<string, string> = {
-  keyword: "var(--color-violet-400)",
-  string: "var(--color-emerald-400)",
-  comment: "var(--text-ghost)",
-  number: "var(--color-orange-400)",
-  constant: "var(--color-orange-300)",
-  function: "var(--color-blue-400)",
-  type: "var(--color-cyan-400)",
-  property: "var(--color-blue-300)",
-  tag: "var(--color-red-400)",
-  operator: "var(--text-muted)",
-  punct: "var(--text-muted)",
+/** Coarse token class → themed colour, per mode: the bright 300/400 tiers that
+ *  read on a dark canvas wash out on paper, so light mode drops to the 700s.
+ *  Empty kind inherits the line colour. */
+const TOKEN_CLASS: Record<string, string> = {
+  keyword: "text-violet-700 dark:text-violet-400",
+  string: "text-emerald-700 dark:text-emerald-400",
+  comment: "text-[var(--text-ghost)]",
+  number: "text-orange-700 dark:text-orange-400",
+  constant: "text-orange-800 dark:text-orange-300",
+  function: "text-blue-700 dark:text-blue-400",
+  type: "text-cyan-700 dark:text-cyan-400",
+  property: "text-blue-800 dark:text-blue-300",
+  tag: "text-red-700 dark:text-red-400",
+  operator: "text-[var(--text-muted)]",
+  punct: "text-[var(--text-muted)]",
 };
 
 /** A range label for a location: line(s) when explicit, else the symbol name. */
@@ -161,7 +163,11 @@ function SourceLine({
               ? "text-[var(--text-muted)] line-through decoration-red-400/50"
               : broken
                 ? "text-[var(--text-muted)] decoration-[var(--text-ghost)] decoration-dotted underline"
-                : "text-blue-600 group-hover/src:underline dark:text-blue-400"
+                : anchored
+                  ? "text-blue-600 group-hover/src:underline dark:text-blue-400"
+                  : // A whole-file mapping opens nothing — it must not dress
+                    // like the anchored links beside it.
+                    "text-[var(--text-tertiary)]"
           }
         >
           ↳ {loc.pattern}
@@ -226,23 +232,21 @@ function InlinePeek({ loc, projectPath }: { loc: SourceLocation; projectPath: st
     if (c && f) c.scrollTop = Math.max(0, f.offsetTop - 16);
   }, [span]);
 
-  const range = locRangeLabel(loc);
   return (
+    // No header bar: the source line above the peek already names file:range —
+    // repeating it here said nothing. The one affordance the peek adds (open
+    // in editor) floats over the card's top-right corner instead.
     <div
       data-cam="source-peek"
-      className="mb-1.5 ml-1 mt-1 overflow-hidden rounded-md border border-[var(--border-subtle)]"
+      className="relative mb-1.5 ml-1 mt-1 overflow-hidden rounded-md border border-[var(--border-subtle)]"
     >
-      <div className="flex items-center gap-2 border-b border-[var(--border-subtle)] bg-[var(--surface)] px-2.5 py-1 font-mono text-2xs text-[var(--text-muted)]">
-        <span className="min-w-0 truncate text-[var(--text-secondary)]">{loc.pattern}</span>
-        {range && <span className="shrink-0">{range}</span>}
-        <button
-          type="button"
-          onClick={() => void invoke("open_in_editor", { file: loc.pattern, line: loc.line ?? null, projectPath })}
-          className="ml-auto inline-flex shrink-0 items-center gap-1 text-blue-600 hover:underline dark:text-blue-400"
-        >
-          open <ExternalLink className="h-3 w-3" />
-        </button>
-      </div>
+      <button
+        type="button"
+        onClick={() => void invoke("open_in_editor", { file: loc.pattern, line: loc.line ?? null, projectPath })}
+        className="absolute right-1 top-1 z-10 inline-flex shrink-0 items-center gap-1 rounded bg-[var(--surface-overlay)] px-1.5 py-0.5 font-mono text-2xs text-blue-600 backdrop-blur-sm hover:underline dark:text-blue-400"
+      >
+        open <ExternalLink className="h-3 w-3" />
+      </button>
       {err ? (
         <div className="px-2.5 py-1.5 font-mono text-2xs text-red-500/80 dark:text-red-400/80">{err}</div>
       ) : !span ? (
@@ -250,7 +254,10 @@ function InlinePeek({ loc, projectPath }: { loc: SourceLocation; projectPath: st
       ) : (
         <div
           ref={scrollRef}
-          className="max-h-[240px] overflow-auto bg-[var(--surface-inset)] py-1 font-mono text-2xs leading-[1.6]"
+          // Raised, not inset: light-mode --surface-inset is the canvas colour
+          // at 60% alpha over the canvas — i.e. exactly the page bg, zero
+          // contrast. A raised card reads as a code block in both modes.
+          className="max-h-[240px] overflow-auto bg-[var(--surface-raised)] py-1 font-mono text-2xs leading-[1.6]"
         >
           {span.lines.map((segs, i) => {
             const lineNo = span.startLine + i;
@@ -276,7 +283,7 @@ function InlinePeek({ loc, projectPath }: { loc: SourceLocation; projectPath: st
                   {segs.length === 0
                     ? " "
                     : segs.map((s, j) => (
-                        <span key={j} style={s.kind ? { color: TOKEN_COLOR[s.kind] } : undefined}>
+                        <span key={j} className={s.kind ? TOKEN_CLASS[s.kind] : undefined}>
                           {s.text}
                         </span>
                       ))}

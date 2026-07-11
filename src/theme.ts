@@ -27,7 +27,10 @@ export const PALETTES: Record<string, PaletteValues> = {
   // The scryer house neutral — a cool blue-grey ramp (the mockup palette). In
   // dark mode it gives canvas (#0c0e12) / panels (#14171d) / borders (#20262f)
   // real separation; the light shades carry the cool cast through too.
-  graphite:{ 50: "#f5f7fa", 100: "#eef2f6", 200: "#e6edf3", 300: "#a9b2be", 400: "#717b89", 500: "#5b6573", 600: "#4d5663", 700: "#3a4453", 800: "#20262f", 900: "#14171d", 950: "#0c0e12" },
+  // The 300–700 midtones are lifted above the stock ramp so the derived dark
+  // text tiers clear readable contrast on #0c0e12 (tertiary ≥5:1, muted ≥4:1)
+  // without washing out the light-mode tiers that share the same shades.
+  graphite:{ 50: "#f5f7fa", 100: "#eef2f6", 200: "#e6edf3", 300: "#b6c1cd", 400: "#8b96a5", 500: "#6e7a8a", 600: "#566171", 700: "#3e4859", 800: "#20262f", 900: "#14171d", 950: "#0c0e12" },
   red:     { 50: "#fef2f2", 100: "#fee2e2", 200: "#fecaca", 300: "#fca5a5", 400: "#f87171", 500: "#ef4444", 600: "#dc2626", 700: "#b91c1c", 800: "#991b1b", 900: "#7f1d1d", 950: "#450a0a" },
   orange:  { 50: "#fff7ed", 100: "#ffedd5", 200: "#fed7aa", 300: "#fdba74", 400: "#fb923c", 500: "#f97316", 600: "#ea580c", 700: "#c2410c", 800: "#9a3412", 900: "#7c2d12", 950: "#431407" },
   amber:   { 50: "#fffbeb", 100: "#fef3c7", 200: "#fde68a", 300: "#fcd34d", 400: "#fbbf24", 500: "#f59e0b", 600: "#d97706", 700: "#b45309", 800: "#92400e", 900: "#78350f", 950: "#451a03" },
@@ -256,6 +259,7 @@ export function applyTheme(theme: ThemeConfig): void {
   --surface-tint: ${sh(theme.canvasLight)};
   --surface-hover: ${hexAlpha(sh(clamp(theme.canvasLight + 1)), 0.6)};
   --surface-active: ${sh(clamp(theme.canvasLight + 1))};
+  --surface-field: ${nodeLightHex};
   --text: ${sh(8)};
   --text-secondary: ${sh(6)};
   --text-tertiary: ${sh(5)};
@@ -275,6 +279,7 @@ export function applyTheme(theme: ThemeConfig): void {
   --surface-tint: ${nodeDarkHex};
   --surface-hover: ${hexAlpha(sh(clamp(theme.nodeDark - 1)), 0.6)};
   --surface-active: ${sh(clamp(theme.nodeDark - 1))};
+  --surface-field: ${canvasDarkHex};
   --text: ${sh(2)};
   --text-secondary: ${sh(3)};
   --text-tertiary: ${sh(4)};

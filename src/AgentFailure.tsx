@@ -17,7 +17,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, X } from "lucide-react";
-import { BTN } from "./pagekit";
+import { BTN, BTN_ICON } from "./pagekit";
 
 export interface AgentFailure {
   /** Headline naming the run that failed, e.g. "Drift check failed". */
@@ -77,7 +77,7 @@ function AgentFailureModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded p-0.5 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+            className={BTN_ICON}
             aria-label="Close"
           >
             <X className="h-4 w-4" />
@@ -87,15 +87,15 @@ function AgentFailureModal({
         <div className="flex flex-col gap-3 px-4 py-4">
           {/* The raw error from the agent — wraps and scrolls so a long stack or
               provider message can't blow out the modal. */}
-          <div className="max-h-[180px] overflow-auto rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2">
-            <p className="text-xs leading-relaxed break-words whitespace-pre-wrap text-[var(--text)]">
+          <div className="max-h-[180px] overflow-auto rounded-md border border-[var(--border)] bg-[var(--surface-inset)] px-3 py-2">
+            <p className="font-mono text-2xs leading-relaxed break-words whitespace-pre-wrap text-[var(--text-secondary)]">
               {failure.error}
             </p>
           </div>
 
           {/* What Scryer did about it — the recovery decision. */}
           <div className="flex flex-col gap-1">
-            <span className="text-2xs font-medium uppercase tracking-wide text-[var(--text-tertiary)]">
+            <span className="text-2xs font-medium uppercase tracking-[0.07em] text-[var(--text-tertiary)]">
               What Scryer did
             </span>
             <p className="text-xs leading-relaxed text-[var(--text-secondary)]">

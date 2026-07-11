@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import "@fontsource-variable/space-grotesk";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -11,6 +10,16 @@
   button:not(:disabled),
   [role="button"]:not(:disabled) {
     cursor: pointer;
+  }
+
+  /* Keyboard-visible focus for interactive chrome. Follows the neutral
+     interaction contract (no chromatic ring). Text fields keep their own
+     quieter focus treatments; this ring is for Tab-driven click targets. */
+  button:focus-visible,
+  a:focus-visible,
+  [role="button"]:focus-visible {
+    outline: 2px solid var(--selection-color);
+    outline-offset: 1px;
   }
 }
 
@@ -33,66 +42,79 @@
 }
 
 /* — Color contract —
-   Chromatic hues are reserved for semantics; interaction chrome (buttons,
-   selection, focus, links, [edit]) is neutral. One hue, one meaning:
+   Chromatic hues are reserved for semantics. One hue, one meaning:
 
-     blue     proposed        (planned, no code yet)
-     amber    implemented     (built, awaiting human verification)
-     emerald  verified        (checked against code)
-     orange   changed / drift (model and code disagree; empty symbols)
-     red      vagrant + destructive actions
-     violet   relocated
-     indigo   the agent       (activity, new arrivals, accept-agent-work)
+     blue     the accent — selection, focus, links, primary actions
+     emerald  added   (plan diff: in the plan, ahead of the committed model)
+     amber    modified / relocated (plan diff)
+     red      deleted (plan diff) + destructive actions
+     orange   drift   (model and code disagree; vagrant/stale, empty symbols)
+     violet   the agent (activity, new arrivals, accept-agent-work)
 
-   Neutral surface/text/border tokens below are fallbacks — applyTheme()
-   regenerates them from the configured palette at startup (see theme.ts). */
+   Buttons and hovers stay neutral; the accent marks "where you are" (selected
+   row, focused field, live edit) and "the primary way forward". Neutral
+   surface/text/border tokens below are fallbacks — applyTheme() regenerates
+   them from the configured palette at startup (see theme.ts). */
 :root {
-  --surface-canvas: #f4f4f5;
-  --surface: #fafafa;
+  --surface-canvas: #eef2f6;
+  --surface: #f5f7fa;
   --surface-raised: #ffffff;
   --surface-overlay: #ffffffcc;
-  --surface-inset: #f4f4f599;
-  --surface-tint: #f4f4f5;
-  --surface-hover: #e4e4e799;
-  --surface-active: #e4e4e7;
-  --text: #27272a;
-  --text-secondary: #52525b;
-  --text-tertiary: #71717a;
-  --text-muted: #a1a1aa;
-  --text-ghost: #d4d4d8;
-  --border: #e4e4e7;
-  --border-subtle: #e4e4e799;
-  --border-strong: #d4d4d8;
-  --border-overlay: #e4e4e7cc;
-  --selection-color: #18181b;
+  --surface-inset: #eef2f699;
+  --surface-tint: #eef2f6;
+  --surface-hover: #e6edf399;
+  --surface-active: #e6edf3;
+  --surface-field: #ffffff;
+  --text: #20262f;
+  --text-secondary: #566171;
+  --text-tertiary: #6e7a8a;
+  --text-muted: #8b96a5;
+  --text-ghost: #b6c1cd;
+  --border: #e6edf3;
+  --border-subtle: #e6edf399;
+  --border-strong: #b6c1cd;
+  --border-overlay: #e6edf3cc;
+  /* The accent rides the themed blue ramp, so palette swaps re-skin it too. */
+  --accent: var(--color-blue-600);
+  --accent-strong: var(--color-blue-700);
+  --accent-soft: color-mix(in srgb, var(--accent) 11%, transparent);
+  --on-accent: #ffffff;
+  --selection-color: var(--accent);
   /* Diagram (C4 card) chrome — aliased to surface tokens so the ported card
      styling stays theme-adaptive without main's applyTheme injection. */
   --scryer-node-bg: var(--surface-raised);
   --scryer-ext-bg: var(--surface-inset);
   --scryer-person-fill: var(--surface-active);
-  --scryer-select-stroke: var(--text);
+  --scryer-select-stroke: var(--accent);
   --scryer-outline-stroke: var(--border-strong);
 }
 
 .dark {
-  --surface-canvas: #18181b;
-  --surface: #18181b;
-  --surface-raised: #27272a;
-  --surface-overlay: #18181bcc;
-  --surface-inset: #27272a99;
-  --surface-tint: #27272a;
-  --surface-hover: #3f3f4699;
-  --surface-active: #3f3f46;
-  --text: #e4e4e7;
-  --text-secondary: #d4d4d8;
-  --text-tertiary: #a1a1aa;
-  --text-muted: #71717a;
-  --text-ghost: #52525b;
-  --border: #3f3f46;
-  --border-subtle: #3f3f4699;
-  --border-strong: #52525b;
-  --border-overlay: #3f3f46cc;
-  --selection-color: #d4d4d8;
+  --surface-canvas: #0c0e12;
+  --surface: #14171d;
+  --surface-raised: #20262f;
+  --surface-overlay: #0c0e12cc;
+  --surface-inset: #20262f99;
+  --surface-tint: #20262f;
+  --surface-hover: #3e485999;
+  --surface-active: #3e4859;
+  --surface-field: #0c0e12;
+  --text: #e6edf3;
+  --text-secondary: #b6c1cd;
+  --text-tertiary: #8b96a5;
+  --text-muted: #6e7a8a;
+  --text-ghost: #566171;
+  --border: #20262f;
+  --border-subtle: #20262f99;
+  --border-strong: #3e4859;
+  --border-overlay: #20262fcc;
+  --accent: var(--color-blue-400);
+  --accent-strong: var(--color-blue-300);
+}
+
+/* Text selection carries the accent — the one hue that means "where you are". */
+::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 @keyframes shimmer {
@@ -180,6 +202,11 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
   background: var(--surface-canvas);
+  /* Hairline seat above the bar. A box-shadow, NOT a border: the chevron
+     triangles are fixed 13px+13px border constructions filling the 26px
+     border-box height — a real border would shrink the inner box to 25px and
+     push every chevron 1px out of the window (a phantom scrollbar). */
+  box-shadow: 0 -1px 0 var(--border-subtle);
   user-select: none;
 }
 .pl .seg {

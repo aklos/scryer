@@ -33,7 +33,6 @@ import {
   Moon,
   Plus,
   Send,
-  Sparkles,
   Sun,
   Trash2,
   Undo2,
@@ -64,7 +63,7 @@ import { isNodeEmpty } from "./rollup";
 import { kindIcon, typeTag } from "./kindIcon";
 import { lookupIcon } from "./IconPicker";
 import { ConnectionsSection, ImpliedConnectionsSection } from "./ConnectionsSection";
-import { ChangeGlyph, DIFF_TINT, glyphColor } from "./diffkit";
+import { ChangeGlyph, DIFF_TINT, DiffRow, diffTextClass, kindOfGlyph } from "./diffkit";
 import type { ChangeKind } from "./changeMarks";
 import type { ChangeRevision } from "./hooks/useModelStorage";
 import { EVENT_META, type HistoryEvent, relativeTime } from "./history";
@@ -78,13 +77,18 @@ import {
   BTN_AGENT,
   BTN_DANGER,
   BTN_GO,
+  BTN_ICON,
   CTL,
   DESCRIPTION_MAX,
   Editable,
   EditLink,
   Empty,
   EmptyFlag,
+  EYEBROW,
+  AgentMark,
+  LINK,
   NAME_MAX,
+  PAGE_COL,
   PageSection,
   sanitizeIdentifier,
   SectionEditor,
@@ -104,14 +108,20 @@ const PROP_ROW = "relative grid grid-cols-[18px_22px_1fr] items-baseline";
 // gradient float as the shared CTL; `not-italic` keeps buttons upright on the
 // italic directive rows.
 const CTL_BASE =
-  "pointer-events-none invisible absolute inset-y-0 -right-1 z-10 flex items-center gap-1.5 not-italic pl-9 pr-1 [background-image:linear-gradient(90deg,transparent,color-mix(in_srgb,var(--text)_4%,var(--surface-canvas))_28px)]";
+  "pointer-events-none invisible absolute inset-y-0 -right-1 z-10 flex items-center gap-1.5 not-italic pl-9 pr-1 [background-image:linear-gradient(90deg,transparent,var(--surface-tint)_28px)]";
 const CTL_SROW = `${CTL_BASE} group-hover/srow:visible`;
 const CTL_DROW = `${CTL_BASE} group-hover/drow:visible`;
-// Full-cell field highlight: dim on line hover, brighter while focused.
+// Header gauge chip — completeness / test-backing readouts on the type line.
+// Bordered mono chips: instruments, not prose.
+const GAUGE_CHIP =
+  "flex shrink-0 items-center gap-1 rounded border border-[var(--border)] px-1.5 py-px font-mono text-2xs tabular-nums text-[var(--text-tertiary)]";
+
+// Full-cell field highlight: dim on line hover; the focused field drops onto
+// the recessed field surface (Editable adds the accent ring + full-text lift).
 const STMT_HL =
-  "group-hover/srow:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus:bg-[var(--surface-active)]";
+  "group-hover/srow:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus:bg-[var(--surface-field)]";
 const DIR_HL =
-  "group-hover/drow:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus:bg-[var(--surface-active)]";
+  "group-hover/drow:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus:bg-[var(--surface-field)]";
 
 export interface VariationState {
   nodeId: string;
@@ -262,7 +272,8 @@ function PageHeader({
   editor,
   editingName,
   onToggleName,
-  onRename,
+  onNameInput,
+  onDone,
   onCancel,
   nameMaxLength,
   nameSanitize,
@@ -278,9 +289,11 @@ function PageHeader({
   editor: Editor | undefined;
   editingName: boolean;
   onToggleName: () => void;
-  onRename: (v: string) => void;
-  /** Discard the title/type-line edits made this session and close (reverts to
-   *  the snapshot taken when edit mode opened). Omit to hide the Cancel button. */
+  /** Per-keystroke draft update. Nothing reaches the model until {@link onDone}. */
+  onNameInput: (v: string) => void;
+  /** Commit the title/type-line draft and close — the header's Done. */
+  onDone: () => void;
+  /** Discard the draft and close. Omit to hide the Cancel button. */
   onCancel?: () => void;
   /** Hard character cap on the title (omitted for symbol names, which are
    *  identifier-shaped rather than length-bound). */
@@ -289,8 +302,12 @@ function PageHeader({
   nameSanitize?: (text: string) => string;
 }) {
   return (
-    <header className="shrink-0 border-b border-[var(--border)] px-7 pt-[13px]">
-      <div className="flex min-h-[15px] items-center gap-1 font-mono text-[11px] text-[var(--text-tertiary)]">
+    // The header spans the pane (its rule and surface are chrome), but its
+    // content shares the page's bounded column (PAGE_COL) so title, gauges,
+    // article and rail all hang on the same grid at any window width.
+    <header className="shrink-0 border-b border-[var(--border)] pt-[13px]">
+      <div className={PAGE_COL}>
+      <div className="flex min-h-[15px] items-center gap-1 font-mono text-2xs text-[var(--text-tertiary)]">
         {crumbs}
         <span className="flex-1" />
         {actions}
@@ -298,10 +315,11 @@ function PageHeader({
       <div className="mt-[5px] flex items-start gap-4">
         {editingName ? (
           // The title edits in place as a contentEditable span (same metrics as
-          // the h1, no reflow), committing on blur. It's `inline-block` so it
-          // grows with the text rather than spanning the header; the buttons are
-          // pinned right by a flex spacer. Edit mode stays open across fields
-          // until Done/Cancel — so you can edit the type line too.
+          // the h1, no reflow). It edits a DRAFT — like every section, nothing
+          // reaches the model until Done; Cancel and navigation discard. It's
+          // `inline-block` so it grows with the text rather than spanning the
+          // header; the buttons are pinned right by a flex spacer. Edit mode
+          // stays open across fields — so you can edit the type line too.
           <div className="flex min-w-0 flex-1 items-baseline gap-2">
             <Editable
               initial={name}
@@ -309,8 +327,10 @@ function PageHeader({
               maxLength={nameMaxLength}
               sanitize={nameSanitize}
               placeholder="Untitled"
-              onCommit={(t) => onRename(t)}
-              className="inline-block max-w-full text-[21px] font-semibold leading-tight text-[var(--text)]"
+              onInput={onNameInput}
+              onEnter={onDone}
+              onEscape={onCancel}
+              className="inline-block max-w-full text-xl font-semibold leading-tight text-[var(--text)]"
             />
             <span className="flex-1" />
             <span className="flex shrink-0 items-center gap-2">
@@ -319,17 +339,17 @@ function PageHeader({
                   Cancel
                 </button>
               )}
-              <button type="button" onClick={onToggleName} className={BTN_GO}>
+              <button type="button" onClick={onDone} className={BTN_GO}>
                 Done
               </button>
             </span>
           </div>
         ) : (
           <div className="flex min-w-0 flex-1 items-baseline gap-3">
-            <h1 className="min-w-0 flex-1 truncate text-[21px] font-semibold leading-tight text-[var(--text)]">
+            <h1 className="min-w-0 flex-1 truncate text-xl font-semibold leading-tight text-[var(--text)]">
               {name || "Untitled"}
             </h1>
-            {editor && <EditLink editing={false} onClick={onToggleName} />}
+            {editor && <EditLink onClick={onToggleName} />}
           </div>
         )}
       </div>
@@ -337,13 +357,15 @@ function PageHeader({
         {typeLine}
       </div>
       {tabs}
+      </div>
     </header>
   );
 }
 
 /** A maintenance notice (ambox) — a full-width banner stacked at the top of the
- *  article body: a tinted strip with a left accent rule, an icon, the message,
- *  and inline actions right-aligned. The classic wiki hatnote, not a header chip. */
+ *  article body: neutral chrome on an inset surface, the icon alone carrying
+ *  the semantic hue (the toast recipe), inline actions right-aligned. The wiki
+ *  hatnote's job without the tinted-callout look. */
 function Ambox({
   tone,
   icon,
@@ -355,24 +377,25 @@ function Ambox({
   children: React.ReactNode;
   actions?: React.ReactNode;
 }) {
-  const c =
+  const iconTone =
     tone === "danger"
-      ? "border-red-500/30 border-l-red-500/70 bg-red-500/10 text-red-700 dark:text-red-300"
+      ? "text-red-600 dark:text-red-400"
       : tone === "info"
-        ? "border-violet-500/30 border-l-violet-500/70 bg-violet-500/10 text-violet-700 dark:text-violet-300"
-        : "border-orange-500/30 border-l-orange-500/70 bg-orange-500/10 text-orange-700 dark:text-orange-300";
+        ? "text-violet-600 dark:text-violet-400"
+        : "text-orange-600 dark:text-orange-400";
   return (
-    <div className={`flex items-center gap-2.5 rounded-md border border-l-[3px] px-3 py-2 text-xs ${c}`}>
-      <span className="shrink-0 opacity-80">{icon}</span>
+    <div className="flex items-center gap-2.5 rounded-md border border-[var(--border)] bg-[var(--surface-inset)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+      <span className={`shrink-0 ${iconTone}`}>{icon}</span>
       <span className="min-w-0 flex-1">{children}</span>
       {actions && <span className="flex shrink-0 items-center gap-3">{actions}</span>}
     </div>
   );
 }
 
-/** Inline text action for an {@link Ambox} — terse, underlined, no chrome. */
+/** Inline text action for an {@link Ambox} — terse, underlined, no chrome. Full
+ *  ink against the notice's secondary text; the hue stays in the icon. */
 const NOTICE_ACTION =
-  "shrink-0 font-medium underline-offset-2 hover:underline";
+  "shrink-0 font-medium text-[var(--text)] underline-offset-2 hover:underline";
 
 // --- tabs -------------------------------------------------------------------
 
@@ -387,8 +410,11 @@ function PageTabs({
   onTab: (t: "overview" | "history") => void;
   historyCount: number;
 }) {
+  // No transition: animating border-color ghosts the outgoing underline.
+  // Baseline flex keeps the label and its mono count on one line regardless of
+  // their differing type sizes.
   const tabClass = (active: boolean) =>
-    `-mb-px mr-[18px] border-b-2 py-1.5 text-xs transition-colors ${
+    `-mb-px mr-[18px] flex items-baseline gap-1.5 border-b-2 py-1.5 text-sm ${
       active
         ? "border-[var(--text)] text-[var(--text)]"
         : "border-transparent text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
@@ -401,7 +427,7 @@ function PageTabs({
       <button type="button" onClick={() => onTab("history")} className={tabClass(tab === "history")}>
         History
         {historyCount > 0 && (
-          <span className="ml-1.5 font-mono text-[10px] text-[var(--text-ghost)]">{historyCount}</span>
+          <span className="font-mono text-2xs text-[var(--text-ghost)]">{historyCount}</span>
         )}
       </button>
     </div>
@@ -453,31 +479,28 @@ function NodeHistory({
                 {relativeTime(ev.at)}
               </span>
               <span
-                className={`rounded border px-1.5 py-px font-mono text-[10px] uppercase tracking-wide ${meta.badge}`}
+                className={`rounded border px-1.5 py-px font-mono text-2xs uppercase tracking-[0.07em] ${meta.badge}`}
               >
                 {meta.label}
               </span>
               <span className="text-2xs text-[var(--text-muted)]">
-                <span className="text-violet-500 dark:text-violet-400">⌁</span> {ev.by} · {ev.driver}
+                <AgentMark /> {ev.by} · {ev.driver}
               </span>
             </div>
             <div className="flex flex-col gap-1">
+              {/* The same rows the Overview showed while these edits were
+                  pending — same glyphs, same treatment, now as the record. */}
               {ev.rows.map((row, j) => (
-                <div key={j} className="grid grid-cols-[16px_1fr] items-baseline gap-1">
+                <DiffRow key={j} marker={row.marker}>
                   <span
-                    className={`text-center font-mono text-xs font-bold ${glyphColor(row.marker)}`}
+                    className={`font-mono text-sm leading-relaxed ${diffTextClass(kindOfGlyph(row.marker))}`}
                   >
-                    {row.marker}
+                    {row.text}
                   </span>
-                  <div className="min-w-0">
-                    <span className="font-mono text-xs leading-relaxed text-[var(--text-secondary)]">
-                      {row.text}
-                    </span>
-                    {row.source && (
-                      <ClaimSource locations={[row.source]} projectPath={projectPath} />
-                    )}
-                  </div>
-                </div>
+                  {row.source && (
+                    <ClaimSource locations={[row.source]} projectPath={projectPath} />
+                  )}
+                </DiffRow>
               ))}
             </div>
           </div>
@@ -508,20 +531,29 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const openMenu = usePageMenu();
   const copyId = useCopyId();
   const [tab, setTab] = useState<"overview" | "history">("overview");
-  // The header edits (name, technology) commit live on blur, so Cancel needs a
-  // snapshot to revert to. Captured when the title editor opens, restored on
-  // Cancel. See onToggleName / onCancel below.
-  const titleSnapshot = useRef<{ name: string; technology?: string } | null>(null);
+  // The header edits (name, technology) accumulate in this draft; the model is
+  // written once, on Done — the same nothing-commits-until-Done contract as
+  // every SectionEditor. Cancel (or navigating away) simply drops the draft.
+  const titleDraft = useRef<{ name: string; technology: string } | null>(null);
   const openTitleEdit = () => {
-    if (!ed.isEditing("title")) {
-      titleSnapshot.current = { name: node.name, technology: node.technology };
-    }
+    if (ed.isEditing("title")) return;
+    titleDraft.current = { name: node.name, technology: node.technology ?? "" };
     ed.toggle("title");
   };
+  const commitTitleEdit = () => {
+    const d = titleDraft.current;
+    titleDraft.current = null;
+    ed.toggle("title");
+    if (!d || !editor) return;
+    // An emptied title keeps the old name; an emptied technology clears it.
+    const name = d.name.trim() || node.name;
+    const technology = d.technology.trim() || undefined;
+    if (name !== node.name || technology !== node.technology) {
+      editor.updateNode(node.id, { name, technology });
+    }
+  };
   const cancelTitleEdit = () => {
-    const snap = titleSnapshot.current;
-    if (snap) editor?.updateNode(node.id, { name: snap.name, technology: snap.technology });
-    titleSnapshot.current = null;
+    titleDraft.current = null;
     ed.toggle("title");
   };
   // This node's slice of the durable committed-model timeline.
@@ -662,7 +694,8 @@ function NodePageBody(props: PageProps & { node: Node }) {
             <KindIcon className="h-3.5 w-3.5" />
             <span>{dataShape ? "Data type" : tag.type}</span>
             {/* Technology — editable in place when the header is in edit mode,
-                committing on blur; otherwise shown only when set. */}
+                accumulating in the title draft (committed by Done); otherwise
+                shown only when set. */}
             {ed.isEditing("title") ? (
               <>
                 <span className="text-[var(--text-ghost)]">·</span>
@@ -670,7 +703,11 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   initial={node.technology ?? ""}
                   placeholder="technology"
                   maxLength={TECHNOLOGY_MAX}
-                  onCommit={(t) => editor?.updateNode(node.id, { technology: t.trim() || undefined })}
+                  onInput={(t) => {
+                    if (titleDraft.current) titleDraft.current.technology = t;
+                  }}
+                  onEnter={commitTitleEdit}
+                  onEscape={cancelTitleEdit}
                   className="font-mono text-[var(--text-secondary)]"
                 />
               </>
@@ -695,40 +732,37 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 </button>
               </>
             )}
+            {/* Ground-truth gauges follow the identity run as bordered mono
+                chips — instruments, not prose, but in the same reading line
+                (right-aligned they float contextless at wide widths). */}
             {(() => {
               const badge = completenessBadge(report?.completeness[node.id]);
               if (!badge) return null;
               return (
-                <>
-                  <span className="text-[var(--text-ghost)]">·</span>
-                  <span
-                    className="flex items-center gap-1 tabular-nums"
-                    title={
-                      badge.measured
-                        ? `${badge.label} of this node's claims read through to code`
-                        : "No leaf claims yet — nothing to measure"
-                    }
-                  >
-                    <Anchor className={`h-3 w-3 ${badge.grounded ? "" : "opacity-40"}`} />
-                    {badge.label}
-                  </span>
-                </>
+                <span
+                  className={GAUGE_CHIP}
+                  title={
+                    badge.measured
+                      ? `${badge.label} of this node's claims read through to code`
+                      : "No leaf claims yet — nothing to measure"
+                  }
+                >
+                  <Anchor className={`h-3 w-3 ${badge.grounded ? "" : "opacity-40"}`} />
+                  {badge.label}
+                </span>
               );
             })()}
             {(() => {
               const h = report?.health.nodes[node.id]?.subtree;
               if (!h?.verified) return null;
               return (
-                <>
-                  <span className="text-[var(--text-ghost)]">·</span>
-                  <span
-                    className="flex items-center gap-1 tabular-nums"
-                    title={`${h.verified} of ${h.responsibilities} claim${h.responsibilities === 1 ? "" : "s"} in this subtree backed by a test`}
-                  >
-                    <FlaskConical className="h-3 w-3" />
-                    {h.verified}/{h.responsibilities}
-                  </span>
-                </>
+                <span
+                  className={GAUGE_CHIP}
+                  title={`${h.verified} of ${h.responsibilities} claim${h.responsibilities === 1 ? "" : "s"} in this subtree backed by a test`}
+                >
+                  <FlaskConical className="h-3 w-3" />
+                  {h.verified}/{h.responsibilities}
+                </span>
               );
             })()}
             {isNodeEmpty(node) && <EmptyFlag />}
@@ -737,8 +771,11 @@ function NodePageBody(props: PageProps & { node: Node }) {
         editor={editor}
         editingName={ed.isEditing("title")}
         onToggleName={openTitleEdit}
+        onDone={commitTitleEdit}
         onCancel={cancelTitleEdit}
-        onRename={(v) => editor?.updateNode(node.id, { name: v })}
+        onNameInput={(v) => {
+          if (titleDraft.current) titleDraft.current.name = v;
+        }}
         // Symbol names are bound to code identifiers (shape, not length); every
         // other kind is a human-authored title with a length cap.
         nameMaxLength={node.kind === "symbol" ? undefined : NAME_MAX}
@@ -748,11 +785,13 @@ function NodePageBody(props: PageProps & { node: Node }) {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {tab === "history" ? (
-          <div className="max-w-[900px] px-7 pb-[50px] pt-[18px]">
-            <NodeHistory events={nodeEvents} projectPath={projectPath} />
+          <div className={`${PAGE_COL} pb-[50px] pt-[18px]`}>
+            <div className="max-w-[900px]">
+              <NodeHistory events={nodeEvents} projectPath={projectPath} />
+            </div>
           </div>
         ) : (
-          <div className="flex gap-8 px-7 pb-[50px] pt-[18px]">
+          <div className={`${PAGE_COL} flex gap-8 pb-[50px] pt-[18px]`}>
             <article
               className="min-w-0 max-w-[900px] flex-1"
               onContextMenu={(e) => openMenu(e, [copyIdItem(node.id, copyId)])}
@@ -862,16 +901,24 @@ function GroupPageBody(props: PageProps & { group: Group }) {
   const ed = useEditSections();
   const openMenu = usePageMenu();
   const copyId = useCopyId();
-  // Snapshot the group name on open so Cancel can revert the live-committed edit.
-  const titleSnapshot = useRef<{ name: string } | null>(null);
+  // The name edit accumulates in this draft; the model is written once, on
+  // Done. Cancel (or navigating away) drops the draft.
+  const titleDraft = useRef<{ name: string } | null>(null);
   const openTitleEdit = () => {
-    if (!ed.isEditing("title")) titleSnapshot.current = { name: group.name };
+    if (ed.isEditing("title")) return;
+    titleDraft.current = { name: group.name };
     ed.toggle("title");
   };
+  const commitTitleEdit = () => {
+    const d = titleDraft.current;
+    titleDraft.current = null;
+    ed.toggle("title");
+    if (!d || !editor) return;
+    const name = d.name.trim() || group.name;
+    if (name !== group.name) editor.updateGroup(group.id, { name });
+  };
   const cancelTitleEdit = () => {
-    const snap = titleSnapshot.current;
-    if (snap) editor?.updateGroup(group.id, { name: snap.name });
-    titleSnapshot.current = null;
+    titleDraft.current = null;
     ed.toggle("title");
   };
   const members = group.memberIds
@@ -920,16 +967,20 @@ function GroupPageBody(props: PageProps & { group: Group }) {
         editor={editor}
         editingName={ed.isEditing("title")}
         onToggleName={openTitleEdit}
+        onDone={commitTitleEdit}
         onCancel={cancelTitleEdit}
-        onRename={(v) => editor?.updateGroup(group.id, { name: v })}
+        onNameInput={(v) => {
+          if (titleDraft.current) titleDraft.current.name = v;
+        }}
         nameMaxLength={NAME_MAX}
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div
-          className="max-w-[900px] px-7 pb-[50px] pt-[18px]"
+          className={`${PAGE_COL} pb-[50px] pt-[18px]`}
           onContextMenu={(e) => openMenu(e, [copyIdItem(group.id, copyId)])}
         >
+          <div className="max-w-[900px]">
             <DescriptionSection
               value={group.description}
               prevValue={committed?.groups.find((g) => g.id === group.id)?.description}
@@ -984,6 +1035,7 @@ function GroupPageBody(props: PageProps & { group: Group }) {
                 </ol>
               )}
             </PageSection>
+          </div>
         </div>
       </div>
     </div>
@@ -1006,12 +1058,12 @@ function MemberRow({
     <li className="group/conn grid grid-cols-[18px_22px_1fr] items-baseline py-[1.5px]">
       <span className="select-none" />
       <span className="select-none" />
-      <div className="flex min-w-0 items-baseline font-mono text-[12.5px] leading-[1.65]">
+      <div className="flex min-w-0 items-baseline font-mono text-sm leading-relaxed">
         <button
           type="button"
           onClick={() => onSelectNode(member.id)}
           title={member.name}
-          className="shrink truncate text-left text-blue-700 hover:underline dark:text-blue-400"
+          className={`shrink truncate text-left ${LINK}`}
         >
           {member.name || "Untitled"}
         </button>
@@ -1073,11 +1125,9 @@ function MembersEditor({
                 key={m.id}
                 className="grid grid-cols-[18px_22px_1fr] items-baseline py-[1.5px]"
               >
-                <span className="select-none text-center font-mono text-xs font-bold text-red-600 dark:text-red-400">
-                  −
-                </span>
+                <ChangeGlyph kind="delete" />
                 <span className="select-none" />
-                <div className="flex min-w-0 items-baseline gap-2 font-mono text-[12.5px] leading-[1.65]">
+                <div className="flex min-w-0 items-baseline gap-2 font-mono text-sm leading-relaxed">
                   <span className="truncate text-[var(--text-muted)] line-through decoration-red-400/50">
                     {m.name || "Untitled"}
                   </span>
@@ -1133,7 +1183,7 @@ function DescriptionSection({
             maxLength={DESCRIPTION_MAX}
             placeholder="Describe what this is."
             onInput={setDraft}
-            className="block text-[13.5px] leading-[1.6] text-[var(--text-secondary)]"
+            className="block text-sm leading-relaxed text-[var(--text-secondary)]"
           />
         )}
       </SectionEditor>
@@ -1148,7 +1198,7 @@ function DescriptionSection({
   return (
     <div className="group/lede relative flow-root pr-16">
       <p
-        className={`text-[13.5px] leading-[1.6] ${
+        className={`text-sm leading-relaxed ${
           value || reworded ? "text-[var(--text-secondary)]" : "italic text-[var(--text-muted)]"
         }`}
       >
@@ -1162,7 +1212,6 @@ function DescriptionSection({
       </p>
       {editor && (
         <EditLink
-          editing={false}
           onClick={onToggle}
           className="invisible absolute right-0 top-0 group-hover/lede:visible"
         />
@@ -1254,7 +1303,10 @@ function NotesEditable({
           onInput(ta.value);
         }
       }}
-      className="w-full resize-none whitespace-pre-wrap bg-transparent text-[12.5px] leading-[1.6] text-[var(--text-secondary)] outline-none placeholder:text-[var(--text-muted)]"
+      // The same field treatment as every Editable: recessed field surface,
+      // accent ring and caret, full-contrast text — an invisible textarea made
+      // edit mode look like nothing had happened.
+      className="-mx-1 w-full resize-none whitespace-pre-wrap rounded bg-[var(--surface-field)] px-1 text-sm leading-relaxed text-[var(--text)] caret-[var(--accent)] outline-none ring-1 ring-[var(--accent)] placeholder:text-[var(--text-muted)]"
     />
   );
 }
@@ -1278,11 +1330,11 @@ function RailHeader({
 }) {
   return (
     <div className="mb-2 flex items-end justify-between gap-2 border-b border-[var(--border)] pb-[5px]">
-      <h2 className="text-[11px] font-semibold uppercase tracking-[0.07em] text-[var(--text-tertiary)]">
+      <h2 className={EYEBROW}>
         {title}
       </h2>
       {editable && !editing && (
-        <EditLink editing={false} onClick={onToggle} className={revealClass} />
+        <EditLink onClick={onToggle} className={revealClass} />
       )}
     </div>
   );
@@ -1298,7 +1350,7 @@ function DirectiveList({
 }) {
   return (
     <ul
-      className={`list-disc space-y-1.5 pl-4 text-[12.5px] leading-[1.6] ${
+      className={`list-disc space-y-1.5 pl-4 text-sm leading-relaxed ${
         muted ? "text-[var(--text-tertiary)]" : "text-[var(--text-secondary)]"
       }`}
     >
@@ -1317,7 +1369,7 @@ function DirectiveDiffList({ prev, next }: { prev: readonly string[]; next: read
   const nextSet = new Set(next);
   const removed = prev.filter((d) => !nextSet.has(d));
   return (
-    <ul className="list-disc space-y-1.5 pl-4 text-[12.5px] leading-[1.6] text-[var(--text-secondary)]">
+    <ul className="list-disc space-y-1.5 pl-4 text-sm leading-relaxed text-[var(--text-secondary)]">
       {next.map((d, i) => (
         <li key={`n${i}`}>{prevSet.has(d) ? d : <span className={DIFF_TINT.add}>{d}</span>}</li>
       ))}
@@ -1368,7 +1420,16 @@ function DirectivesSection({
   const changed = !!committed && prevJoined !== ownJoined;
   const nothing = !changed && own.length === 0 && inherited.length === 0;
   return (
-    <div className="group/dir">
+    // In edit mode the section wears the same shell as PageSection — inset
+    // surface + accent ring; the negative margins compensate the padding so
+    // nothing moves when it toggles.
+    <div
+      className={`group/dir ${
+        editing
+          ? "-mx-3 -my-2 rounded-md bg-[var(--surface-inset)] px-3 py-2 ring-1 ring-[color-mix(in_srgb,var(--accent)_35%,transparent)]"
+          : ""
+      }`}
+    >
       <RailHeader
         title="Node directives"
         revealClass="invisible group-hover/dir:visible"
@@ -1377,15 +1438,18 @@ function DirectivesSection({
         onToggle={onToggle}
       />
       {editing && editor ? (
-        <SectionEditor<string[]>
-          initial={own}
+        <SectionEditor<{ text: string; removed?: boolean }[]>
+          initial={own.map((text) => ({ text }))}
           onCommit={(draft) => {
-            const next = draft.map((s) => s.trim()).filter(Boolean);
+            const next = draft
+              .filter((d) => !d.removed)
+              .map((d) => d.text.trim())
+              .filter(Boolean);
             editor.updateNode(node.id, { directives: next.length ? next : undefined });
           }}
           onClose={onToggle}
           footerExtra={(setDraft) => (
-            <button type="button" onClick={() => setDraft((d) => [...d, ""])} className={BTN}>
+            <button type="button" onClick={() => setDraft((d) => [...d, { text: "" }])} className={BTN}>
               Add directive
             </button>
           )}
@@ -1395,37 +1459,57 @@ function DirectivesSection({
               <Empty>No directives — add one.</Empty>
             ) : (
               <div className="flex flex-col gap-0.5">
-                {draft.map((d, i) => (
-                  <div
-                    key={i}
-                    className="group/drow relative flex items-baseline gap-1.5 text-[12.5px] leading-[1.6] text-[var(--text-secondary)]"
-                  >
-                    <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px text-[var(--text-ghost)]" />
-                    <Editable
-                      initial={d}
-                      autoFocus={d === ""}
-                      placeholder={'must … / never …'}
-                      onInput={(t) =>
-                        setDraft((arr) => {
-                          const n = arr.slice();
-                          n[i] = t;
-                          return n;
-                        })
-                      }
-                      className={`block min-w-0 flex-1 rounded-sm !pr-16 ${DIR_HL}`}
-                    />
-                    <span className={CTL_DROW}>
+                {draft.map((d, i) =>
+                  d.removed ? (
+                    // Soft-deleted: struck with Undo, dropped only on Done.
+                    <div
+                      key={i}
+                      className="flex items-baseline gap-1.5 text-sm leading-relaxed"
+                    >
+                      <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px text-[var(--text-ghost)]" />
+                      <span className="min-w-0 truncate text-[var(--text-muted)] line-through decoration-red-400/50">
+                        {d.text.trim() || "(empty)"}
+                      </span>
                       <button
                         type="button"
-                        title="Remove directive"
-                        onClick={() => setDraft((arr) => arr.filter((_, j) => j !== i))}
-                        className={BTN_DANGER}
+                        onClick={() =>
+                          setDraft((arr) => arr.map((x, j) => (j === i ? { ...x, removed: false } : x)))
+                        }
+                        className={BTN}
                       >
-                        Delete
+                        Undo
                       </button>
-                    </span>
-                  </div>
-                ))}
+                    </div>
+                  ) : (
+                    <div
+                      key={i}
+                      className="group/drow relative flex items-baseline gap-1.5 text-sm leading-relaxed text-[var(--text-secondary)]"
+                    >
+                      <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px text-[var(--text-ghost)]" />
+                      <Editable
+                        initial={d.text}
+                        autoFocus={d.text === ""}
+                        placeholder={'must … / never …'}
+                        onInput={(t) =>
+                          setDraft((arr) => arr.map((x, j) => (j === i ? { ...x, text: t } : x)))
+                        }
+                        className={`block min-w-0 flex-1 rounded !pr-16 ${DIR_HL}`}
+                      />
+                      <span className={CTL_DROW}>
+                        <button
+                          type="button"
+                          title="Remove directive"
+                          onClick={() =>
+                            setDraft((arr) => arr.map((x, j) => (j === i ? { ...x, removed: true } : x)))
+                          }
+                          className={BTN_DANGER}
+                        >
+                          Delete
+                        </button>
+                      </span>
+                    </div>
+                  ),
+                )}
               </div>
             )
           }
@@ -1443,17 +1527,24 @@ function DirectivesSection({
                 type="button"
                 onClick={() => onSelectNode(g.nodeId)}
                 title={`Inherited from ${g.name}`}
-                className="mb-0.5 text-[10.5px] font-medium uppercase tracking-[0.06em] text-[var(--text-muted)] hover:text-blue-700 dark:hover:text-blue-400"
+                className="mb-0.5 text-2xs font-medium uppercase tracking-[0.07em] text-[var(--text-muted)] hover:text-blue-700 dark:hover:text-blue-400"
               >
                 ↑ {g.name}
               </button>
               <DirectiveList directives={g.directives} muted />
             </div>
           ))}
-          {nothing && (
-            <p className="text-[12.5px] italic leading-[1.6] text-[var(--text-muted)]">
-              No directives.
-            </p>
+          {/* Empty state: one quiet affordance instead of a placeholder that
+              says nothing — read-only emptiness renders nothing at all (the
+              rail collapses; see DetailRail). */}
+          {nothing && editor && (
+            <button
+              type="button"
+              onClick={onToggle}
+              className="self-start text-sm text-[var(--text-ghost)] hover:text-[var(--text-secondary)]"
+            >
+              + Add a directive
+            </button>
           )}
         </div>
       )}
@@ -1490,6 +1581,15 @@ function DetailRail({
   onSelectNode: (id: string) => void;
 }) {
   const notes = node.notes;
+  // With no editor and nothing to say, the rail says nothing — a column of
+  // "No directives / No notes" is dead space, not information.
+  const own = node.directives ?? [];
+  const prevOwn = committed?.nodes.find((n) => n.id === node.id)?.directives ?? [];
+  const hasDirectives =
+    own.length > 0 ||
+    inheritedDirectives(model, node.id).length > 0 ||
+    (!!committed && prevOwn.join("\n") !== own.join("\n"));
+  if (!editor && !hasDirectives && !notes) return null;
   return (
     <aside className="ml-auto hidden w-[300px] shrink-0 lg:block">
       <div className="sticky top-0 flex flex-col gap-8">
@@ -1502,7 +1602,13 @@ function DetailRail({
           onToggle={onToggleDir}
           onSelectNode={onSelectNode}
         />
-        <div className="group/notes">
+        <div
+          className={`group/notes ${
+            notesEditing
+              ? "-mx-3 -my-2 rounded-md bg-[var(--surface-inset)] px-3 py-2 ring-1 ring-[color-mix(in_srgb,var(--accent)_35%,transparent)]"
+              : ""
+          }`}
+        >
           <RailHeader
             title="Notes"
             revealClass="invisible group-hover/notes:visible"
@@ -1521,13 +1627,19 @@ function DetailRail({
               )}
             </SectionEditor>
           ) : notes ? (
-            <div className="text-[12.5px] leading-[1.6] text-[var(--text-secondary)]">
+            <div className="text-sm leading-relaxed text-[var(--text-secondary)]">
               <NotesRead text={notes} />
             </div>
           ) : (
-            <p className="text-[12.5px] italic leading-[1.6] text-[var(--text-muted)]">
-              No notes.
-            </p>
+            editor && (
+              <button
+                type="button"
+                onClick={onToggleNotes}
+                className="block text-left text-sm text-[var(--text-ghost)] hover:text-[var(--text-secondary)]"
+              >
+                + Add a note
+              </button>
+            )
           )}
         </div>
       </div>
@@ -1753,17 +1865,17 @@ function ResponsibilitiesEditor({
   onClose: () => void;
 }) {
   const seededId = seedNewRow ? mintId(initial) : null;
-  const start: Responsibility[] = seededId
+  const start: RespDraftRow[] = seededId
     ? [...initial, { id: seededId, statement: "" }]
     : initial;
 
-  const commit = (draft: Responsibility[]) => {
-    // A blank statement is invalid (the backend flags it), so drop any empty
-    // row on commit — new or existing. Clearing a statement deletes the claim;
-    // the removal loop below calls removeResponsibility for dropped existing rows.
+  const commit = (draft: RespDraftRow[]) => {
+    // Deleted rows (draft-only `removed` marker) and blank statements (invalid —
+    // the backend flags them) drop out on commit; the removal loop below calls
+    // removeResponsibility for dropped existing rows.
     const cleaned = draft
-      .filter((r) => r.statement.trim() !== "")
-      .map((r) => {
+      .filter((r) => !r.removed && r.statement.trim() !== "")
+      .map(({ removed: _removed, ...r }) => {
         const dirs = (r.directives ?? []).map((s) => s.trim()).filter(Boolean);
         return { ...r, statement: r.statement.trim(), directives: dirs.length ? dirs : undefined };
       });
@@ -1775,7 +1887,7 @@ function ResponsibilitiesEditor({
   };
 
   return (
-    <SectionEditor<Responsibility[]>
+    <SectionEditor<RespDraftRow[]>
       initial={start}
       onCommit={commit}
       onClose={onClose}
@@ -1795,29 +1907,69 @@ function ResponsibilitiesEditor({
       )}
     >
       {(draft, setDraft) => {
-        const patchRow = (id: string, patch: Partial<Responsibility>) =>
+        const patchRow = (id: string, patch: Partial<RespDraftRow>) =>
           setDraft((d) => d.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-        const removeRow = (id: string) => setDraft((d) => d.filter((r) => r.id !== id));
+        // Delete marks the row (struck, with Undo) instead of splicing it —
+        // a stray click on the hover-revealed Delete can't destroy typed work.
+        const removeRow = (id: string) => patchRow(id, { removed: true });
+        const restoreRow = (id: string) => patchRow(id, { removed: false });
         return draft.length === 0 ? (
           <Empty>No responsibilities.</Empty>
         ) : (
           <ul className="-mx-2 flex flex-col">
-            {draft.map((r, i) => (
-              <ResponsibilityEditRow
-                key={r.id}
-                resp={r}
-                index={i + 1}
-                // autoFocus fires at mount only — it lands on the seeded row
-                // and on rows appended via "Add responsibility".
-                autoFocus={r.statement === "" && r.id === draft[draft.length - 1].id}
-                onPatch={patchRow}
-                onRemove={removeRow}
-              />
-            ))}
+            {draft.map((r, i) =>
+              r.removed ? (
+                <RemovedRespRow key={r.id} resp={r} index={i + 1} onUndo={() => restoreRow(r.id)} />
+              ) : (
+                <ResponsibilityEditRow
+                  key={r.id}
+                  resp={r}
+                  index={i + 1}
+                  // autoFocus fires at mount only — it lands on the seeded row
+                  // and on rows appended via "Add responsibility".
+                  autoFocus={r.statement === "" && r.id === draft[draft.length - 1].id}
+                  onPatch={patchRow}
+                  onRemove={removeRow}
+                />
+              ),
+            )}
           </ul>
         );
       }}
     </SectionEditor>
+  );
+}
+
+/** A responsibility in the edit draft: `removed` is the soft-delete marker —
+ *  the row stays visible (struck, with Undo) and drops out only on Done. */
+type RespDraftRow = Responsibility & { removed?: boolean };
+
+/** A soft-deleted claim row in the editor — struck through with an inline Undo,
+ *  the same recipe as {@link MembersEditor}'s dropped rows. */
+function RemovedRespRow({
+  resp,
+  index,
+  onUndo,
+}: {
+  resp: RespDraftRow;
+  index: number;
+  onUndo: () => void;
+}) {
+  return (
+    <li className={`${RESP_ROW} py-[1.5px] [&:not(:first-child)]:mt-2.5`}>
+      <ChangeGlyph kind="delete" />
+      <span className="select-none pr-2.5 text-right font-mono text-2xs tabular-nums text-[var(--text-ghost)]">
+        {index}
+      </span>
+      <div className="flex min-w-0 items-baseline gap-2 font-mono text-sm leading-relaxed">
+        <span className="min-w-0 truncate text-[var(--text-muted)] line-through decoration-red-400/50">
+          {resp.statement.trim() || "(empty)"}
+        </span>
+        <button type="button" onClick={onUndo} className={BTN}>
+          Undo
+        </button>
+      </div>
+    </li>
   );
 }
 
@@ -1888,13 +2040,13 @@ function RespDiffRow({
     <li
       id={respElementId(resp.id)}
       onContextMenu={(e) => openMenu(e, [copyIdItem(resp.id, copyId)])}
-      className={`${RESP_ROW} rounded-sm py-[1.5px] [&:not(:first-child)]:mt-2.5`}
+      className={`${RESP_ROW} rounded py-[1.5px] [&:not(:first-child)]:mt-2.5`}
     >
       {kind === "unchanged" ? <span /> : <ChangeGlyph kind={CHANGE_OF[kind]} />}
-      <span className="select-none pr-2.5 text-right font-mono text-[11px] tabular-nums text-[var(--text-ghost)]">
+      <span className="select-none pr-2.5 text-right font-mono text-2xs tabular-nums text-[var(--text-ghost)]">
         {index}
       </span>
-      <div className="min-w-0 pr-[180px] font-mono text-[12.5px] leading-[1.65]">
+      <div className="min-w-0 pr-[180px] font-mono text-sm leading-relaxed">
         <span className={contentColor}>
           {resp.statement ? (
             kind === "reworded" && prev ? (
@@ -1984,7 +2136,7 @@ function RespDiffRow({
         {/* Verdict actions, inline where the row needs one — controls in their
             own lane, off the mono content. */}
         {resp.stale && editor && (
-          <div className="mt-1.5 flex flex-col gap-1.5 text-[11px]">
+          <div className="mt-1.5 flex flex-col gap-1.5 text-2xs">
             {/* Reword: drift judged the behaviour DIVERGED, not vanished, and
                 proposed wording that matches the code now. The recommended path —
                 accept it (or edit first) to fold the new wording in with no
@@ -1993,7 +2145,7 @@ function RespDiffRow({
               (rewordDraft === null ? (
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[var(--text-tertiary)]">Drift proposes:</span>
-                  <span className="min-w-0 font-mono text-[12.5px]">
+                  <span className="min-w-0 font-mono text-sm">
                     <WordDiffText from={resp.statement} to={resp.staleProposal} />
                   </span>
                   <button
@@ -2020,6 +2172,10 @@ function RespDiffRow({
                     autoFocus
                     placeholder="Verb-led statement of accountability"
                     onInput={setRewordDraft}
+                    onEnter={() => {
+                      if (rewordDraft.trim()) editor.rewordResponsibility(resp.id, rewordDraft);
+                    }}
+                    onEscape={() => setRewordDraft(null)}
                     className={`min-w-[12rem] flex-1 ${STMT_HL}`}
                   />
                   <button
@@ -2061,7 +2217,7 @@ function RespDiffRow({
           </div>
         )}
         {reviewable && (
-          <div className="mt-1.5 -mr-[180px] flex flex-wrap items-center gap-2 text-[11px]">
+          <div className="mt-1.5 -mr-[180px] flex flex-wrap items-center gap-2 text-2xs">
             <span className="text-[var(--text-tertiary)]">In the code, not in the model —</span>
             <button
               type="button"
@@ -2083,7 +2239,7 @@ function RespDiffRow({
           </div>
         )}
         {deleted && editor && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-2xs">
             <span className="text-[var(--text-tertiary)]">Removed from the plan —</span>
             <button type="button" onClick={onRestore} className={BTN_GO} title="Put this committed claim back into the plan">
               Restore
@@ -2094,7 +2250,7 @@ function RespDiffRow({
             there under the same id, so there's nothing to restore — a Restore
             here would re-add the id and duplicate it across two hosts. */}
         {relocated && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-[var(--text-tertiary)]">
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-2xs text-[var(--text-tertiary)]">
             <span>Moved to {row.movedTo} in the plan.</span>
           </div>
         )}
@@ -2109,11 +2265,7 @@ function RespDiffRow({
           <li key={`d${i}`} className={`${RESP_ROW} py-[0.5px]`}>
             {added ? <ChangeGlyph kind="add" /> : <span className="select-none" />}
             <span className="select-none" />
-            <div
-              className={`flex min-w-0 items-baseline gap-1.5 pr-[180px] font-mono text-[12.5px] leading-[1.65] ${
-                added ? "text-emerald-600 dark:text-emerald-400" : "text-[var(--text-tertiary)]"
-              }`}
-            >
+            <div className="flex min-w-0 items-baseline gap-1.5 pr-[180px] font-mono text-sm leading-relaxed text-[var(--text-tertiary)]">
               <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px not-italic text-[var(--text-ghost)]" />
               <span className={`min-w-0 ${added ? DIFF_TINT.add : ""}`}>{d}</span>
             </div>
@@ -2124,7 +2276,7 @@ function RespDiffRow({
         <li key={`rd${i}`} className={`${RESP_ROW} py-[0.5px]`}>
           <ChangeGlyph kind="delete" />
           <span className="select-none" />
-          <div className="flex min-w-0 items-baseline gap-1.5 pr-[180px] font-mono text-[12.5px] leading-[1.65] text-[var(--text-tertiary)]">
+          <div className="flex min-w-0 items-baseline gap-1.5 pr-[180px] font-mono text-sm leading-relaxed text-[var(--text-tertiary)]">
             <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px not-italic text-[var(--text-ghost)]" />
             <span className={`min-w-0 ${DIFF_TINT.delete}`}>{d}</span>
           </div>
@@ -2160,10 +2312,10 @@ function ResponsibilityEditRow({
   return (
     <li data-erow={resp.id} className={`group/erow ${RESP_ROW} py-[1.5px] [&:not(:first-child)]:mt-2.5`}>
       <span className="select-none text-center font-mono text-xs" />
-      <span className="select-none pr-2.5 text-right font-mono text-[11px] tabular-nums text-[var(--text-ghost)]">
+      <span className="select-none pr-2.5 text-right font-mono text-2xs tabular-nums text-[var(--text-ghost)]">
         {index}
       </span>
-      <div className="min-w-0 font-mono text-[12.5px] leading-[1.65]">
+      <div className="min-w-0 font-mono text-sm leading-relaxed">
         <div className="group/srow relative">
           <Editable
             initial={resp.statement}
@@ -2293,18 +2445,22 @@ function PropDiffRow({
   // A vagrant field is code-first ("adopt?"); a stale one is a regressed field
   // ("re-implement / drop") — the property-level mirror of the claim verdicts.
   const reviewable = kind === "vagrant" && !!editor;
+  // Same whole-row treatment as the claim rows: added green, dropped struck
+  // red, unchanged quiet — one diff language across the sections.
   const contentColor = deleted
-    ? "text-[var(--text-muted)]"
-    : kind === "unchanged"
-      ? "text-[var(--text-secondary)]"
-      : "text-[var(--text)]";
+    ? DIFF_TINT.delete
+    : kind === "added"
+      ? DIFF_TINT.add
+      : kind === "unchanged"
+        ? "text-[var(--text-secondary)]"
+        : "text-[var(--text)]";
   return (
-    <li id={propElementId(nodeId, prop.label)} className={`${PROP_ROW} rounded-sm py-[1.5px]`}>
+    <li id={propElementId(nodeId, prop.label)} className={`${PROP_ROW} rounded py-[1.5px]`}>
       {kind === "unchanged" ? <span /> : <ChangeGlyph kind={CHANGE_OF[kind]} />}
-      <span className="select-none pr-2.5 text-right font-mono text-[11px] tabular-nums text-[var(--text-ghost)]">
+      <span className="select-none pr-2.5 text-right font-mono text-2xs tabular-nums text-[var(--text-ghost)]">
         {index}
       </span>
-      <div className="min-w-0 font-mono text-[12.5px] leading-[1.65]">
+      <div className="min-w-0 font-mono text-sm leading-relaxed">
         <span className={`font-medium ${contentColor}`}>{prop.label || "field"}</span>
         {(desc || (kind === "reworded" && prev?.description)) && (
           <span className="text-[var(--text-tertiary)]">
@@ -2327,7 +2483,7 @@ function PropDiffRow({
           </span>
         )}
         {prop.stale && editor && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-2xs">
             <span className="text-[var(--text-tertiary)]">Drift says this field is gone —</span>
             <button
               type="button"
@@ -2348,7 +2504,7 @@ function PropDiffRow({
           </div>
         )}
         {reviewable && (
-          <div className="mt-1.5 -mr-[180px] flex flex-wrap items-center gap-2 text-[11px]">
+          <div className="mt-1.5 -mr-[180px] flex flex-wrap items-center gap-2 text-2xs">
             <span className="text-[var(--text-tertiary)]">In the code, not in the model —</span>
             <button
               type="button"
@@ -2391,17 +2547,17 @@ function PropertyEditRow({
   onRemove: () => void;
 }) {
   const FIELD_HL =
-    "group-hover/erow:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus:bg-[var(--surface-active)]";
+    "group-hover/erow:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus:bg-[var(--surface-field)]";
   // Mirrors PropDiffRow's content cell — `label — description` inline in the
   // mono lane — with the two fields as contentEditable spans and the delete in
   // the row's reserved trailing control column (CTL).
   return (
     <li className={`group/erow ${PROP_ROW} py-[1.5px]`}>
       <span className="select-none text-center font-mono text-xs" />
-      <span className="select-none pr-2.5 text-right font-mono text-[11px] tabular-nums text-[var(--text-ghost)]">
+      <span className="select-none pr-2.5 text-right font-mono text-2xs tabular-nums text-[var(--text-ghost)]">
         {index}
       </span>
-      <div className="min-w-0 font-mono text-[12.5px] leading-[1.65]">
+      <div className="min-w-0 font-mono text-sm leading-relaxed">
         <Editable
           initial={prop.label}
           autoFocus={autoFocus}
@@ -2452,12 +2608,13 @@ function PropertiesSection({
       onToggleEdit={onToggle}
     >
       {editing && editor ? (
-        <SectionEditor<SchemaProperty[]>
+        <SectionEditor<(SchemaProperty & { removed?: boolean })[]>
           initial={properties}
           onCommit={(draft) => {
             const cleaned = draft
+              .filter((p) => !p.removed)
               .filter((p) => p.label.trim() !== "" || (p.description ?? "").trim() !== "")
-              .map((p) => ({ ...p, label: p.label.trim() }));
+              .map(({ removed: _removed, ...p }) => ({ ...p, label: p.label.trim() }));
             editor.updateNode(node.id, { properties: cleaned });
           }}
           onClose={onToggle}
@@ -2474,22 +2631,42 @@ function PropertiesSection({
           )}
         >
           {(draft, setDraft) => {
-            const patchRow = (i: number, patch: Partial<SchemaProperty>) =>
+            const patchRow = (i: number, patch: Partial<SchemaProperty & { removed?: boolean }>) =>
               setDraft((d) => d.map((p, j) => (j === i ? { ...p, ...patch } : p)));
             return draft.length === 0 ? (
               <Empty>No properties.</Empty>
             ) : (
               <ul className="-mx-2 flex flex-col">
-                {draft.map((p, i) => (
-                  <PropertyEditRow
-                    key={i}
-                    prop={p}
-                    index={i + 1}
-                    autoFocus={p.label === "" && i === draft.length - 1}
-                    onPatch={(patch) => patchRow(i, patch)}
-                    onRemove={() => setDraft((d) => d.filter((_, j) => j !== i))}
-                  />
-                ))}
+                {draft.map((p, i) =>
+                  p.removed ? (
+                    // Soft-deleted: struck with Undo — same recipe as claims.
+                    <li key={i} className={`${RESP_ROW} py-[1.5px]`}>
+                      <ChangeGlyph kind="delete" />
+                      <span className="select-none" />
+                      <div className="flex min-w-0 items-baseline gap-2 font-mono text-sm leading-relaxed">
+                        <span className="min-w-0 truncate text-[var(--text-muted)] line-through decoration-red-400/50">
+                          {p.label.trim() || "(empty)"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => patchRow(i, { removed: false })}
+                          className={BTN}
+                        >
+                          Undo
+                        </button>
+                      </div>
+                    </li>
+                  ) : (
+                    <PropertyEditRow
+                      key={i}
+                      prop={p}
+                      index={i + 1}
+                      autoFocus={p.label === "" && i === draft.length - 1}
+                      onPatch={(patch) => patchRow(i, patch)}
+                      onRemove={() => patchRow(i, { removed: true })}
+                    />
+                  ),
+                )}
               </ul>
             );
           }}
@@ -2621,7 +2798,7 @@ function PreviewSection({
             type="button"
             onClick={() => setComponentDark((d) => !d)}
             title={`Preview the component in ${componentDark ? "light" : "dark"} mode`}
-            className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)]"
+            className={BTN_ICON}
           >
             {componentDark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
           </button>
@@ -2669,7 +2846,7 @@ function PreviewSection({
                 onClick={() => onFixture(node.id, report!.status, report!.error)}
                 className={BTN_AGENT}
               >
-                <Sparkles className="h-3 w-3" /> Generate preview data
+                <AgentMark className="" /> Generate preview data
               </button>
             </div>
           )}
@@ -2771,7 +2948,7 @@ function VariationModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded p-0.5 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+            className={BTN_ICON}
             aria-label="Close"
           >
             <X className="h-4 w-4" />
@@ -2782,7 +2959,7 @@ function VariationModal({
         <div className="flex-1 overflow-y-auto">
           {/* Original preview — always visible */}
           <div className="border-b border-[var(--border-subtle)] px-5 py-4">
-            <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-[var(--text-tertiary)]">Current</p>
+            <p className={`mb-2 ${EYEBROW}`}>Current</p>
             <div className="overflow-hidden rounded-md border border-[var(--border-subtle)]">
               <iframe
                 src={currentSrc}

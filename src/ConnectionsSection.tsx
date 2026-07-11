@@ -17,9 +17,10 @@ import type { Editor } from "./editor";
 import type { ModelHealthReport, ImpliedConn, LinkPath } from "./health";
 import { linkEvidence, impliedFor, impliedPaths, pathsForLink } from "./health";
 import { kindIcon } from "./kindIcon";
-import { BTN, BTN_DANGER, BTN_GO, CTL, Editable, PageSection, SectionEditor } from "./pagekit";
+import { BTN, BTN_DANGER, BTN_GO, CTL, Editable, EYEBROW_BASE, PageSection, SectionEditor, WordDiffText } from "./pagekit";
+import { CHANGE_COLOR } from "./changeMarks";
+import { DIFF_TINT } from "./diffkit";
 import { usePageMenu, useCopyId, copyIdItem } from "./pageMenu";
-import { wordDiff } from "./wordDiff";
 
 // Row grid: marker | index | content. The hover control (CTL) floats over the
 // right edge as an absolute overlay (hence `relative`), taking no layout space.
@@ -30,32 +31,13 @@ const CONN_ROW = "relative grid grid-cols-[18px_22px_1fr] items-baseline";
  *  dropped), or `unchanged`. */
 type LinkDiffKind = "added" | "reworded" | "deleted" | "unchanged";
 
+// Link diff marks resolve through the one shared palette (changeMarks), so a
+// "+" here is the same hue as a "+" on a claim row or the History timeline.
 const LINK_MARK: Record<Exclude<LinkDiffKind, "unchanged">, { glyph: string; color: string }> = {
-  added: { glyph: "+", color: "text-emerald-600 dark:text-emerald-400" },
-  reworded: { glyph: "~", color: "text-amber-600 dark:text-amber-400" },
-  deleted: { glyph: "−", color: "text-red-600 dark:text-red-400" },
+  added: { glyph: "+", color: CHANGE_COLOR.add },
+  reworded: { glyph: "~", color: CHANGE_COLOR.modified },
+  deleted: { glyph: "−", color: CHANGE_COLOR.delete },
 };
-
-/** Word-level add/remove highlight for a relabeled link. */
-function WordDiffText({ from, to }: { from: string; to: string }) {
-  return (
-    <>
-      {wordDiff(from, to).map((s, i) =>
-        s.kind === "equal" ? (
-          <span key={i}>{s.text}</span>
-        ) : s.kind === "added" ? (
-          <span key={i} className="rounded-[2px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
-            {s.text}
-          </span>
-        ) : (
-          <del key={i} className="text-[var(--text-muted)] decoration-red-400/60">
-            {s.text}
-          </del>
-        ),
-      )}
-    </>
-  );
-}
 
 /** Import evidence only exists between code-bearing nodes: a link to a person
  *  or an external system is asserted by nature, not suspicious. */
@@ -143,11 +125,12 @@ function ConnRow({
   const struck = kind === "deleted" || removed;
   const mark = removed ? LINK_MARK.deleted : kind === "unchanged" ? null : LINK_MARK[kind];
   // A brand-new link reads green (the connection itself is new), a dropped one
-  // red + struck — the same git-style added/removed signal the claim rows carry.
+  // red + struck — the same whole-element treatment the claim rows carry
+  // (light: quiet wash; dark: coloured text).
   const peerColor = struck
-    ? "text-red-700 line-through decoration-red-500/60 dark:text-red-400"
+    ? DIFF_TINT.delete
     : kind === "added" && !removed
-      ? "text-emerald-700 hover:text-emerald-800 dark:text-emerald-300 dark:hover:text-emerald-200"
+      ? `${DIFF_TINT.add} hover:underline`
       : "text-blue-700 dark:text-blue-400";
   // Inline editing only on live rows; a row staged for deletion keeps its
   // struck, read-only rendering so the removal still reads at a glance.
@@ -174,7 +157,7 @@ function ConnRow({
       ) : (
         <span className="select-none" />
       )}
-      <div className="flex min-w-0 items-baseline font-mono text-[12.5px] leading-[1.65]">
+      <div className="flex min-w-0 items-baseline font-mono text-sm leading-relaxed">
         <button
           type="button"
           onClick={() => onSelectNode(peer.id)}
@@ -453,7 +436,7 @@ function PathLadder({
     <li className={`${CONN_ROW} pb-1.5`}>
       <span className="select-none" />
       <span className="select-none" />
-      <ul className="flex flex-col gap-2 pl-1 font-mono text-[11.5px] leading-[1.55]">
+      <ul className="flex flex-col gap-2 pl-1 font-mono text-xs leading-relaxed">
         {groups.map((g, i) => (
           <li key={i} className="flex min-w-0 flex-col">
             <EndpointRef
@@ -566,7 +549,7 @@ function SuggestedRow({
   return (
     <li className={`group/erow ${CONN_ROW} py-[1.5px]`}>
       <span
-        className={`relative top-px flex select-none justify-center ${declared ? "text-emerald-600 dark:text-emerald-400" : "text-[var(--text-ghost)]"}`}
+        className={`relative top-px flex select-none justify-center ${declared ? "text-emerald-700 dark:text-emerald-400" : "text-[var(--text-ghost)]"}`}
       >
         {declared ? (
           <Plus className="h-3.5 w-3.5" />
@@ -577,7 +560,7 @@ function SuggestedRow({
         )}
       </span>
       <span className="select-none" />
-      <div className="flex min-w-0 items-baseline font-mono text-[12.5px] leading-[1.65]">
+      <div className="flex min-w-0 items-baseline font-mono text-sm leading-relaxed">
         <button
           type="button"
           onClick={() => onSelectNode(peer.id)}
@@ -650,7 +633,7 @@ function ImpliedRow({
         ) : (
           <span className="select-none" />
         )}
-        <div className="flex min-w-0 items-center font-mono text-[12.5px] leading-[1.65]">
+        <div className="flex min-w-0 items-center font-mono text-sm leading-relaxed">
           {context.map((a) => (
             <span key={a.id} className="flex min-w-0 shrink items-center">
               <NodeRef node={a} onSelectNode={onSelectNode} muted />
@@ -700,7 +683,7 @@ function peerContext(model: ScryModel, peerId: string): Node[] {
 function ConnGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="mt-3 first:mt-1">
-      <h3 className="mb-0.5 pl-[40px] text-2xs font-semibold uppercase tracking-[0.12em] text-[var(--text-ghost)]">
+      <h3 className={`mb-0.5 pl-[40px] ${EYEBROW_BASE} text-[var(--text-ghost)]`}>
         {title}
       </h3>
       <ul className="flex flex-col">{children}</ul>

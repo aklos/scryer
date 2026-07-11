@@ -30,7 +30,7 @@ import {
 import { kindIcon } from "./kindIcon";
 import { KIND_ICON } from "./kindIcons";
 import { lookupIcon } from "./IconPicker";
-import { NAME_MAX, sanitizeIdentifier } from "./pagekit";
+import { BTN, EYEBROW, NAME_MAX, sanitizeIdentifier } from "./pagekit";
 import { InlineText } from "./InlineText";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { ConfirmPopover } from "./ConfirmPopover";
@@ -52,7 +52,7 @@ function ChangeGutter({ mark, dim }: { mark: Mark | null; dim?: boolean }) {
     <span
       aria-hidden={!mark}
       title={mark ? (dim ? `${MARK_META[mark].label} — inside this branch` : MARK_META[mark].label) : undefined}
-      className={`pointer-events-none absolute inset-y-0 left-0 flex items-center justify-center font-mono text-[11px] font-bold ${
+      className={`pointer-events-none absolute inset-y-0 left-0 flex items-center justify-center font-mono text-2xs font-bold ${
         mark ? MARK_META[mark].color : ""
       } ${dim ? "opacity-50" : ""}`}
       style={{ width: GUTTER }}
@@ -627,6 +627,13 @@ export function ModelTree({
         }
         break;
       }
+      case "F2": {
+        // Rename the selected row — the editor-standard key, alongside the
+        // context menu's Rename.
+        e.preventDefault();
+        if (cur && editor) setRenaming(cur.id);
+        break;
+      }
     }
   };
 
@@ -635,8 +642,8 @@ export function ModelTree({
   // children the diagram is showing. Every row at that level gets a faint band
   // so the tree mirrors the map. It tracks the level you're VIEWING, not what
   // you've selected within it, and is undefined outside map view (no tint).
-  // The band is suppressed on the selected row (it owns the stronger
-  // --surface-active band) and yields to hover.
+  // The band is suppressed on the selected row (it owns the accent band) and
+  // yields to hover.
   const levelTint = (atLevel: boolean, isSel: boolean) =>
     atLevel && activeLevel !== undefined && !isSel ? "bg-[var(--surface-tint)]" : "";
 
@@ -674,7 +681,7 @@ export function ModelTree({
         {...dropProps(row)}
         className={`${ROW} ${
           isSel
-            ? "bg-[var(--surface-active)] text-[var(--text)]"
+            ? "bg-[var(--accent-soft)] text-[var(--text)]"
             : `text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] ${levelTint(
                 (node.parentId ?? null) === activeLevel,
                 isSel,
@@ -704,13 +711,22 @@ export function ModelTree({
               // kinds are human titles with a length cap. Mirrors the page header.
               maxLength={node.kind === "symbol" ? undefined : NAME_MAX}
               sanitize={node.kind === "symbol" ? sanitizeIdentifier : undefined}
-              onCommit={(v) => {
-                editor.updateNode(node.id, { name: v });
-                setRenaming(null);
-              }}
+              onCommit={(v) => editor.updateNode(node.id, { name: v })}
+              onClose={() => setRenaming(null)}
             />
           ) : (
-            <span>
+            // Double-click on the name renames (F2 and the context menu too);
+            // double-click elsewhere on the row keeps toggling expand.
+            <span
+              onDoubleClick={
+                editor
+                  ? (e) => {
+                      e.stopPropagation();
+                      setRenaming(node.id);
+                    }
+                  : undefined
+              }
+            >
               {node.name || <span className="italic text-[var(--text-ghost)]">Untitled</span>}
             </span>
           )}
@@ -730,7 +746,7 @@ export function ModelTree({
         )}
         {hiddenSyms > 0 && (
           <span
-            className="shrink-0 text-2xs tabular-nums text-[var(--text-ghost)]"
+            className="shrink-0 font-mono text-2xs tabular-nums text-[var(--text-ghost)]"
             title={`${hiddenSyms} symbol${hiddenSyms === 1 ? "" : "s"} hidden at this altitude`}
           >
             {hiddenSyms}
@@ -761,7 +777,7 @@ export function ModelTree({
           if (!h?.verified) return null;
           return (
             <span
-              className="flex shrink-0 items-center gap-px text-2xs tabular-nums text-[var(--text-ghost)]"
+              className="flex shrink-0 items-center gap-px font-mono text-2xs tabular-nums text-[var(--text-ghost)]"
               title={`${h.verified} of ${h.responsibilities} claim${h.responsibilities === 1 ? "" : "s"} in this subtree backed by a test`}
             >
               <FlaskConical className="h-2.5 w-2.5" />
@@ -810,7 +826,7 @@ export function ModelTree({
         {...dropProps(row)}
         className={`${ROW} ${
           isSel
-            ? "bg-[var(--surface-active)] text-[var(--text)]"
+            ? "bg-[var(--accent-soft)] text-[var(--text)]"
             : `text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] ${levelTint(
                 groupLevel === activeLevel,
                 isSel,
@@ -831,25 +847,34 @@ export function ModelTree({
             spacer the width of a node icon keeps group labels in the same
             column as node names so groups read as headers, not a foreign kind. */}
         <span className="ml-1.5 h-3.5 w-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-2xs font-medium uppercase tracking-[0.08em] text-[var(--text-tertiary)]">
+        <span className="min-w-0 flex-1 truncate text-2xs font-medium uppercase tracking-[0.07em] text-[var(--text-tertiary)]">
           {renaming === group.id && editor ? (
             <InlineText
               value={group.name}
               autoEdit
               placeholder="group name"
               maxLength={NAME_MAX}
-              onCommit={(v) => {
-                editor.updateGroup(group.id, { name: v });
-                setRenaming(null);
-              }}
+              onCommit={(v) => editor.updateGroup(group.id, { name: v })}
+              onClose={() => setRenaming(null)}
             />
           ) : (
-            group.name || <span className="text-[var(--text-ghost)]">Group</span>
+            <span
+              onDoubleClick={
+                editor
+                  ? (e) => {
+                      e.stopPropagation();
+                      setRenaming(group.id);
+                    }
+                  : undefined
+              }
+            >
+              {group.name || <span className="text-[var(--text-ghost)]">Group</span>}
+            </span>
           )}
         </span>
         {memberCount > 0 && (
           <span
-            className="shrink-0 font-mono text-[10px] tabular-nums text-[var(--text-ghost)]"
+            className="shrink-0 font-mono text-2xs tabular-nums text-[var(--text-ghost)]"
             title={`${memberCount} member${memberCount === 1 ? "" : "s"}`}
           >
             {memberCount}
@@ -868,8 +893,13 @@ export function ModelTree({
       className="relative flex h-full shrink-0 flex-col border-r border-[var(--border)] bg-[var(--surface)] outline-none"
     >
       <div className="flex items-center justify-between px-3 py-2">
-        <span className="text-2xs font-semibold uppercase tracking-[0.14em] text-[var(--text-tertiary)]">
+        <span className={`${EYEBROW} flex items-baseline gap-1.5`}>
           Model
+          {model.nodes.length > 0 && (
+            <span className="font-mono text-2xs font-normal normal-case tracking-normal text-[var(--text-ghost)]">
+              {model.nodes.length}
+            </span>
+          )}
         </span>
         <div className="flex items-center gap-0.5">
           <button
@@ -904,16 +934,19 @@ export function ModelTree({
             }
           }}
           placeholder="Filter"
-          className="min-w-0 flex-1 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] px-2 py-1 text-xs text-[var(--text)] outline-none transition-colors placeholder:text-[var(--text-ghost)] focus:border-[var(--border-strong)]"
+          className="min-w-0 flex-1 rounded-md border border-[var(--border)] bg-[var(--surface-field)] px-2 py-1 text-xs text-[var(--text)] outline-none transition-colors placeholder:text-[var(--text-ghost)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
         />
-        <div className="flex">
+        {/* Same joined-segment idiom as the top bar's Wiki/Map toggle — one
+            control language across the chrome: single border, hairline
+            dividers, the active cell filled. */}
+        <div className="flex items-stretch overflow-hidden rounded-md border border-[var(--border)] divide-x divide-[var(--border)]">
           {(
             [
               { id: "all", label: "All", count: null, countColor: "" },
               { id: "changes", label: "Changes", count: changeCount, countColor: MARK_META.M.color },
               { id: "drift", label: "Drift", count: driftCount, countColor: MARK_META.Q.color },
             ] as const
-          ).map((opt, i) => (
+          ).map((opt) => (
             <button
               key={opt.id}
               type="button"
@@ -925,17 +958,15 @@ export function ModelTree({
                     : "Show the whole model"
               }
               onClick={() => setLens(opt.id)}
-              className={`flex flex-1 items-center justify-center gap-1.5 border border-[var(--border)] py-1 text-xs ${
-                i > 0 ? "border-l-0" : ""
-              } ${i === 0 ? "rounded-l-md" : ""} ${i === 2 ? "rounded-r-md" : ""} ${
+              className={`flex flex-1 items-center justify-center gap-1.5 py-1 text-xs transition-colors ${
                 lens === opt.id
-                  ? "bg-[var(--surface-active)] text-[var(--text)] border-[var(--border-strong)]"
-                  : "text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)]"
+                  ? "bg-[var(--surface-active)] text-[var(--text)]"
+                  : "text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
               }`}
             >
               {opt.label}
               {opt.count != null && opt.count > 0 && (
-                <span className={`font-mono text-[10px] tabular-nums ${opt.countColor}`}>{opt.count}</span>
+                <span className={`font-mono text-2xs tabular-nums ${opt.countColor}`}>{opt.count}</span>
               )}
             </button>
           ))}
@@ -954,14 +985,14 @@ export function ModelTree({
                 <button
                   type="button"
                   onClick={() => addRoot("system", false)}
-                  className="inline-flex items-center gap-1 rounded border border-[var(--border)] px-2 py-1 text-2xs font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+                  className={BTN}
                 >
                   <Plus className="h-3 w-3" /> System
                 </button>
                 <button
                   type="button"
                   onClick={() => addRoot("person", false)}
-                  className="inline-flex items-center gap-1 rounded border border-[var(--border)] px-2 py-1 text-2xs font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+                  className={BTN}
                 >
                   <Plus className="h-3 w-3" /> Person
                 </button>

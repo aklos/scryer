@@ -13,6 +13,10 @@ import { applyColorMode, loadTheme, saveTheme, type ColorMode } from "./theme";
 
 export type WorkspaceView = "wiki" | "diagram";
 
+// The search shortcut chip, honest about the platform (⌘ exists only on mac).
+const IS_MAC = /Mac|iP/.test(navigator.userAgent);
+const SEARCH_KEY = IS_MAC ? "⌘K" : "Ctrl K";
+
 export function TopBar({
   projectPath,
   view,
@@ -48,72 +52,83 @@ export function TopBar({
   ];
 
   return (
-    <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-[var(--border)] bg-[var(--surface)] px-2 select-none">
-      <button
-        type="button"
-        onClick={(e) => {
-          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-          setMenu({ x: r.left, y: r.bottom + 2 });
-        }}
-        title={projectPath ?? undefined}
-        className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface-hover)]"
-      >
-        <img src="/logo.png" alt="scryer" className="h-3.5 w-3.5 shrink-0 rounded" />
-        <span className="truncate">{projectName}</span>
-        <ChevronDown className="h-3 w-3 shrink-0 text-[var(--text-ghost)]" />
-      </button>
-
-      {projectPath && (
-        <span
-          title={projectPath}
-          className="ml-2 hidden max-w-[340px] truncate font-mono text-[11px] text-[var(--text-ghost)] sm:inline-block"
+    // Three zones — identity | search | view — with the search dead-center
+    // (the command-center idiom): equal flex wings on either side keep it
+    // centered regardless of how long the project path runs.
+    <div className="flex h-9 shrink-0 items-center border-b border-[var(--border)] bg-[var(--surface)] px-2 select-none">
+      {/* Box-centered, with a 1px optical nudge on the path below. NOT
+          items-baseline: the button's exported baseline is its first child's —
+          the logo image, i.e. its bottom edge — which drags the path ~3px low. */}
+      <div className="flex min-w-0 flex-1 items-center">
+        <button
+          type="button"
+          onClick={(e) => {
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            setMenu({ x: r.left, y: r.bottom + 2 });
+          }}
+          title={projectPath ?? undefined}
+          className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-xs font-semibold text-[var(--text)] hover:bg-[var(--surface-hover)]"
         >
-          {projectPath}
-        </span>
-      )}
+          <img src="/logo.png" alt="scryer" className="h-3.5 w-3.5 shrink-0 rounded" />
+          <span className="truncate">{projectName}</span>
+          <ChevronDown className="h-3 w-3 shrink-0 text-[var(--text-ghost)]" />
+        </button>
 
-      <div className="flex-1" />
+        {projectPath && (
+          <span
+            title={projectPath}
+            // translate-y-px: 11px mono centered next to 12px sans sits ~1px
+            // high by box math; the nudge lands the two baselines together.
+            className="ml-2 hidden min-w-0 max-w-[340px] translate-y-px truncate font-mono text-2xs text-[var(--text-ghost)] sm:block"
+          >
+            {projectPath}
+          </span>
+        )}
+      </div>
 
       <button
         type="button"
         onClick={onOpenSearch}
         title="Search the model (Ctrl+K)"
-        className="flex h-7 w-[240px] items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-canvas)] px-3 text-xs text-[var(--text-secondary)] hover:border-[var(--border-strong)] cursor-text"
+        className="flex h-7 w-[280px] max-w-[38vw] shrink-0 items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-canvas)] px-3 text-xs text-[var(--text-tertiary)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-secondary)] cursor-text"
       >
-        <Search className="h-4 w-4 shrink-0" />
+        <Search className="h-3.5 w-3.5 shrink-0" />
         <span className="truncate">Search the model</span>
         <span className="ml-auto shrink-0 rounded border border-[var(--border-strong)] px-1 font-mono text-2xs text-[var(--text-tertiary)]">
-          ⌘K
+          {SEARCH_KEY}
         </span>
       </button>
 
-      {/* Wiki / Map view toggle — a primary nav surface onto the same model and
-          selection, so it reads big and high-contrast. Ctrl+Space flips it. */}
-      <div className="ml-2 flex items-center gap-0.5 rounded-md border border-[var(--border)] bg-[var(--surface-canvas)] p-0.5">
-        {([
-          { id: "wiki", label: "Wiki", Icon: FileText },
-          { id: "diagram", label: "Map", Icon: Network },
-        ] as const).map(({ id, label, Icon }) => (
-          <button
-            key={id}
-            type="button"
-            data-cam={`view-${id}`}
-            title={`${label} view (Ctrl+Space to switch)`}
-            aria-pressed={view === id}
-            onClick={() => onSetView(id)}
-            className={`flex items-center gap-1.5 rounded px-3 py-1 text-xs font-medium transition-colors ${
-              view === id
-                ? "bg-[var(--surface-raised)] text-[var(--text)] shadow-sm"
-                : "text-[var(--text-tertiary)] hover:text-[var(--text)]"
-            }`}
-          >
-            <Icon className="h-4 w-4" />
-            {label}
-          </button>
-        ))}
-      </div>
+      <div className="flex min-w-0 flex-1 items-center justify-end">
+        {/* Wiki / Map view toggle — a primary nav surface onto the same model
+            and selection. Ctrl+Space flips it. One joined control: single
+            border, hairline dividers, the active cell filled. */}
+        <div className="ml-2 flex items-stretch overflow-hidden rounded-md border border-[var(--border)] divide-x divide-[var(--border)]">
+          {([
+            { id: "wiki", label: "Wiki", Icon: FileText },
+            { id: "diagram", label: "Map", Icon: Network },
+          ] as const).map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              type="button"
+              data-cam={`view-${id}`}
+              title={`${label} view (Ctrl+Space to switch)`}
+              aria-pressed={view === id}
+              onClick={() => onSetView(id)}
+              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium transition-colors ${
+                view === id
+                  ? "bg-[var(--surface-active)] text-[var(--text)]"
+                  : "text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+              }`}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+            </button>
+          ))}
+        </div>
 
-      <ThemeToggle />
+        <ThemeToggle />
+      </div>
 
       {menu && (
         <ContextMenu

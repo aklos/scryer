@@ -32,23 +32,26 @@ export interface HistoryEvent {
   rows: EventRow[];
 }
 
-/** Per-kind timeline presentation: the event's prose label and the colour of its
- *  rail dot + driver badge. Mirrors the mockup's `.ev` palette (ok / R / ghost). */
+/** Per-kind timeline presentation: the event's prose label and the colour of
+ *  its rail dot + driver badge. Hues follow the app-wide contract — the diff
+ *  glyphs inside each event carry the add/delete colour, so the event chrome
+ *  only classifies the KIND: done work is quiet (neutral), drift wears its
+ *  orange review hue, a move wears the amber structural hue. */
 export const EVENT_META: Record<EventKind, { label: string; dot: string; badge: string }> = {
   impl: {
     label: "implemented",
-    dot: "var(--color-emerald-500)",
-    badge: "text-emerald-600 dark:text-emerald-400 border-emerald-500/30",
+    dot: "var(--text-muted)",
+    badge: "text-[var(--text-secondary)] border-[var(--border-strong)]",
   },
   drift: {
     label: "drift reconciled",
-    dot: "var(--color-blue-500)",
-    badge: "text-blue-600 dark:text-blue-400 border-blue-500/30",
+    dot: "var(--color-orange-500)",
+    badge: "text-orange-700 dark:text-orange-400 border-orange-500/30",
   },
   move: {
     label: "moved",
-    dot: "var(--color-blue-500)",
-    badge: "text-blue-600 dark:text-blue-400 border-blue-500/30",
+    dot: "var(--color-amber-500)",
+    badge: "text-amber-700 dark:text-amber-400 border-amber-500/30",
   },
   born: {
     label: "created from code",

@@ -14,7 +14,8 @@
  */
 
 import type { CSSProperties } from "react";
-import { Flag, History, Loader2, Sparkles, X } from "lucide-react";
+import { Flag, History, Loader2, X } from "lucide-react";
+import { AgentMark } from "./pagekit";
 import type { AgentSession } from "./hooks/useAgentSession";
 import type { ModelBuild } from "./hooks/useModelBuild";
 import { darkBoundaries, type ModelHealthReport } from "./health";
@@ -79,7 +80,7 @@ export function Powerline({
         style={sb("color-mix(in srgb, var(--text) 9%, var(--surface-canvas))")}
         title="Subagent launch setup — which agent fills the model, and its model + reasoning effort. Click to change."
       >
-        <Sparkles className="h-3 w-3 shrink-0 text-violet-500 dark:text-violet-400" />
+        <AgentMark />
         {launch.agent ? (
           <>
             <span className="font-medium text-[var(--text-secondary)]">

@@ -9,7 +9,6 @@
 
 import { useSyncExternalStore } from "react";
 import ReactDOM from "react-dom/client";
-import "@fontsource-variable/space-grotesk";
 import "../src/index.css";
 import { applyTheme, loadTheme } from "../src/theme";
 import { sceneById } from "./scenes";

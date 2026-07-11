@@ -93,7 +93,7 @@ function Highlighted({ text, q }: { text: string; q: string }) {
     out.push(
       <mark
         key={key++}
-        className="rounded-sm bg-blue-500/30 text-[var(--text)]"
+        className="rounded bg-blue-500/30 text-[var(--text)]"
       >
         {text.slice(idx, idx + q.length)}
       </mark>,
@@ -294,7 +294,7 @@ export function SearchPalette({
                 onPointerEnter={() => setActive(i)}
                 onClick={() => pick(hit)}
                 className={`flex w-full flex-col gap-0.5 px-3 py-1.5 text-left ${
-                  i === active ? "bg-[var(--surface-hover)]" : ""
+                  i === active ? "bg-[var(--accent-soft)]" : ""
                 }`}
               >
                 <span className="flex items-center gap-2 text-[var(--text-secondary)]">
@@ -310,7 +310,7 @@ export function SearchPalette({
                     name match needs no snippet — it's already highlighted above. */}
                 {hit.field && (
                   <span className="flex gap-1.5 truncate pl-[22px] text-2xs text-[var(--text-muted)]">
-                    <span className="shrink-0 font-medium uppercase tracking-wide text-[var(--text-tertiary)]">
+                    <span className="shrink-0 font-medium uppercase tracking-[0.07em] text-[var(--text-tertiary)]">
                       {hit.field}
                     </span>
                     <span className="truncate text-[var(--text-secondary)]">
