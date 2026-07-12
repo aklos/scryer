@@ -18,8 +18,7 @@ import type { ModelHealthReport, ImpliedConn, LinkPath } from "./health";
 import { linkEvidence, impliedFor, impliedPaths, pathsForLink } from "./health";
 import { kindIcon } from "./kindIcon";
 import { BTN, BTN_DANGER, BTN_GO, CTL, Editable, EYEBROW_BASE, PageSection, SectionEditor, WordDiffText } from "./pagekit";
-import { CHANGE_COLOR } from "./changeMarks";
-import { DIFF_TINT } from "./diffkit";
+import { buildElementDiff, CHANGE_OF, ChangeGlyph, DIFF_TINT, type ElementDiffKind } from "./diffkit";
 import { usePageMenu, useCopyId, copyIdItem } from "./pageMenu";
 
 // Row grid: marker | index | content. The hover control (CTL) floats over the
@@ -28,16 +27,9 @@ const CONN_ROW = "relative grid grid-cols-[18px_22px_1fr] items-baseline";
 
 /** How a declared link diverges from the committed model: `added` (new in the
  *  plan), `reworded` (label/method/endpoint changed), `deleted` (committed but
- *  dropped), or `unchanged`. */
-type LinkDiffKind = "added" | "reworded" | "deleted" | "unchanged";
-
-// Link diff marks resolve through the one shared palette (changeMarks), so a
-// "+" here is the same hue as a "+" on a claim row or the History timeline.
-const LINK_MARK: Record<Exclude<LinkDiffKind, "unchanged">, { glyph: string; color: string }> = {
-  added: { glyph: "+", color: CHANGE_COLOR.add },
-  reworded: { glyph: "~", color: CHANGE_COLOR.modified },
-  deleted: { glyph: "−", color: CHANGE_COLOR.delete },
-};
+ *  dropped), or `unchanged` — classified by the shared diff kit, so a "+" here
+ *  is the same glyph and hue as a "+" on a claim row or the History timeline. */
+type LinkDiffKind = ElementDiffKind;
 
 /** Import evidence only exists between code-bearing nodes: a link to a person
  *  or an external system is asserted by nature, not suspicious. */
@@ -123,7 +115,7 @@ function ConnRow({
   // the editor reads red + struck — deletion is the only thing link colour now
   // encodes. Everything else is a plain blue wikilink to a real page.
   const struck = kind === "deleted" || removed;
-  const mark = removed ? LINK_MARK.deleted : kind === "unchanged" ? null : LINK_MARK[kind];
+  const mark = removed ? CHANGE_OF.deleted : kind === "unchanged" ? null : CHANGE_OF[kind];
   // A brand-new link reads green (the connection itself is new), a dropped one
   // red + struck — the same whole-element treatment the claim rows carry
   // (light: quiet wash; dark: coloured text).
@@ -140,11 +132,7 @@ function ConnRow({
       className={`group/erow ${CONN_ROW} py-[1.5px]`}
       onContextMenu={(e) => openMenu(e, [copyIdItem(link.id, copyId)])}
     >
-      <span
-        className={`select-none text-center font-mono text-xs font-bold ${mark?.color ?? "text-[var(--text-ghost)]"}`}
-      >
-        {mark?.glyph}
-      </span>
+      {mark ? <ChangeGlyph kind={mark} /> : <span />}
       {expand ? (
         <button
           type="button"
@@ -718,31 +706,22 @@ export function ConnectionsSection({
   const model = { ...rawModel, sourceMap: effectiveSourceMap(committed, rawModel) };
   const byId = (id: string) => model.nodes.find((n) => n.id === id);
   const committedLinks = committed?.links ?? [];
-  const committedById = new Map(committedLinks.map((l) => [l.id, l]));
-  const plannedIds = new Set(model.links.map((l) => l.id));
 
-  /** Tag a planned link against its committed copy. */
-  const classify = (l: Link): { kind: LinkDiffKind; prev?: Link } => {
-    const prev = committedById.get(l.id);
-    if (!prev) return { kind: "added" };
-    if (prev.label !== l.label || prev.method !== l.method || prev.src !== l.src || prev.dst !== l.dst)
-      return { kind: "reworded", prev };
-    return { kind: "unchanged", prev };
-  };
-
-  // Planned links in each direction, tagged; then committed links the plan
-  // dropped, as `deleted` rows so the removal still reads on the page.
+  // Planned links in each direction, tagged against their committed copies by
+  // the shared classifier; then committed links the plan dropped, as `deleted`
+  // rows so the removal still reads on the page.
   const buildDir = (dir: "out" | "in"): ConnDiffRow[] => {
     const isMember = (l: Link) => (dir === "out" ? l.src === node.id : l.dst === node.id);
     const peerOf = (l: Link) => byId(dir === "out" ? l.dst : l.src);
     const rows: ConnDiffRow[] = [];
-    for (const l of model.links.filter(isMember)) {
-      const peer = peerOf(l);
-      if (peer) rows.push({ link: l, peer, ...classify(l) });
-    }
-    for (const l of committedLinks.filter((l) => isMember(l) && !plannedIds.has(l.id))) {
-      const peer = peerOf(l);
-      if (peer) rows.push({ link: l, peer, kind: "deleted", prev: l });
+    for (const r of buildElementDiff(model.links.filter(isMember), committedLinks.filter(isMember), {
+      key: (l) => l.id,
+      changed: (prev, l) =>
+        prev.label !== l.label || prev.method !== l.method || prev.src !== l.src || prev.dst !== l.dst,
+    })) {
+      const peer = peerOf(r.item);
+      if (peer)
+        rows.push({ link: r.item, peer, kind: r.kind, prev: r.kind === "deleted" ? r.item : r.prev });
     }
     return rows;
   };

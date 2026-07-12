@@ -5,8 +5,14 @@ import type { ScryModel, Responsibility, SourceLocation } from "../viewmodel";
 import type { Editor } from "../editor";
 import type { AnchorState } from "../health";
 import { FLAG_COLORS, VERIFY_PILLS } from "../statusColors";
-import { ChangeGlyph, DIFF_TINT } from "../diffkit";
-import type { ChangeKind } from "../changeMarks";
+import {
+  buildElementDiff,
+  CHANGE_OF,
+  ChangeGlyph,
+  DIFF_TINT,
+  type ElementDiff,
+  VerdictBar,
+} from "../diffkit";
 import { ClaimSource, respElementId } from "../SourceSection";
 import { usePageMenu, useCopyId, copyIdItem } from "../pageMenu";
 import {
@@ -29,28 +35,9 @@ import { CTL_DROW, CTL_SROW, DIR_HL, RESP_ROW, STMT_HL } from "./kit";
  *  it can be restored), `relocated` (committed here but moved to another host in
  *  the plan — shown for context, NOT restorable), `vagrant` (code does it, the
  *  model never claimed it — adopt or reject), or `unchanged`. */
-type RespDiffKind = "added" | "reworded" | "deleted" | "relocated" | "vagrant" | "unchanged";
-
-interface RespDiffRow {
+interface RespDiffRow extends Omit<ElementDiff<Responsibility>, "item"> {
   resp: Responsibility;
-  kind: RespDiffKind;
-  /** The committed version, for word-diffing a reworded statement/directives. */
-  prev?: Responsibility;
-  /** Display number — null for deleted rows (they're no longer in the list). */
-  index: number | null;
-  /** For `relocated`: the display name of the host that now holds this claim. */
-  movedTo?: string;
 }
-
-// Claim/property diff kinds map onto the shared change categories so the marker
-// glyph, its hue, and the whole-element tint all come from the one diff kit.
-export const CHANGE_OF: Record<Exclude<RespDiffKind, "unchanged">, ChangeKind> = {
-  added: "add",
-  reworded: "modified",
-  deleted: "delete",
-  relocated: "relocate",
-  vagrant: "vagrant",
-};
 
 /** Map every planned responsibility id to the display name of the node/group
  *  that holds it. Lets {@link buildRespDiff} tell a claim that *moved* to
@@ -77,37 +64,14 @@ function buildRespDiff(
   committed: Responsibility[],
   plannedHosts?: Map<string, string>,
 ): RespDiffRow[] {
-  const prevById = new Map(committed.map((r) => [r.id, r]));
-  const liveIds = new Set(planned.map((r) => r.id));
-  const rows: RespDiffRow[] = [];
-  let n = 0;
-  for (const r of planned) {
-    const prev = prevById.get(r.id);
-    let kind: RespDiffKind;
-    if (r.vagrant) kind = "vagrant";
-    else if (!prev) kind = "added";
-    else if (
+  return buildElementDiff(planned, committed, {
+    key: (r) => r.id,
+    changed: (prev, r) =>
       prev.statement !== r.statement ||
-      (prev.directives ?? []).join("\n") !== (r.directives ?? []).join("\n")
-    )
-      kind = "reworded";
-    else kind = "unchanged";
-    // Vagrant claims aren't part of the numbered contract yet (they await a
-    // verdict); everything else takes the next sequence number.
-    rows.push({ resp: r, kind, prev, index: kind === "vagrant" ? null : ++n });
-  }
-  for (const r of committed)
-    if (!liveIds.has(r.id)) {
-      // Present on some other host in the plan → relocated (context only, never
-      // restorable); present nowhere → genuinely deleted (restorable).
-      const movedTo = plannedHosts?.get(r.id);
-      rows.push(
-        movedTo
-          ? { resp: r, kind: "relocated", index: null, movedTo }
-          : { resp: r, kind: "deleted", index: null },
-      );
-    }
-  return rows;
+      (prev.directives ?? []).join("\n") !== (r.directives ?? []).join("\n"),
+    vagrant: (r) => !!r.vagrant,
+    relocatedTo: (r) => plannedHosts?.get(r.id),
+  }).map(({ item, ...row }) => ({ ...row, resp: item }));
 }
 
 /** Render text with word-level add/remove highlighting (a reworded claim). When
@@ -590,8 +554,7 @@ function RespDiffRow({
           </div>
         )}
         {reviewable && (
-          <div className="mt-1.5 -mr-[180px] flex flex-wrap items-center gap-2 text-2xs">
-            <span className="text-[var(--text-tertiary)]">In the code, not in the model —</span>
+          <VerdictBar hint="In the code, not in the model" className="-mr-[180px]">
             <button
               type="button"
               onClick={() => editor!.adoptResponsibility(resp.id)}
@@ -609,15 +572,14 @@ function RespDiffRow({
             >
               Reject
             </button>
-          </div>
+          </VerdictBar>
         )}
         {deleted && editor && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-2xs">
-            <span className="text-[var(--text-tertiary)]">Removed from the plan —</span>
+          <VerdictBar hint="Removed from the plan">
             <button type="button" onClick={onRestore} className={BTN_GO} title="Put this committed claim back into the plan">
               Restore
             </button>
-          </div>
+          </VerdictBar>
         )}
         {/* Relocated: the claim moved to another host in the plan. It still lives
             there under the same id, so there's nothing to restore — a Restore

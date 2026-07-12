@@ -92,6 +92,107 @@ export function diffTextClass(kind: ChangeKind | undefined): string {
       : "text-[var(--text-secondary)]";
 }
 
+/** How one element diverges from its committed copy — the shared vocabulary
+ *  behind the claim, property, and link diff views. `relocated` and `vagrant`
+ *  only occur where the caller opts in (claims). */
+export type ElementDiffKind =
+  | "added"
+  | "reworded"
+  | "deleted"
+  | "relocated"
+  | "vagrant"
+  | "unchanged";
+
+/** Element diff kinds map onto the shared change categories so the marker
+ *  glyph, its hue, and the whole-element tint all come from the one diff kit. */
+export const CHANGE_OF: Record<Exclude<ElementDiffKind, "unchanged">, ChangeKind> = {
+  added: "add",
+  reworded: "modified",
+  deleted: "delete",
+  relocated: "relocate",
+  vagrant: "vagrant",
+};
+
+export interface ElementDiff<T> {
+  item: T;
+  kind: ElementDiffKind;
+  /** The committed copy, for word-diffing a reworded element. */
+  prev?: T;
+  /** Display number — null for vagrant/deleted rows (outside the numbered list). */
+  index: number | null;
+  /** For `relocated`: the display name of the host that now holds this element. */
+  movedTo?: string;
+}
+
+/** The one classifier behind every element diff view: planned elements in
+ *  order (each tagged added / reworded / vagrant / unchanged against the
+ *  committed copy by `key`), then any committed elements the plan dropped —
+ *  `deleted`, or `relocated` when `relocatedTo` finds the key living on
+ *  another host in the plan. Claims key by id, properties by exact label,
+ *  links by id — same keying as planDiff.ts and diff.rs, so no surface ever
+ *  reads "clean" while the tree and get_pending say modified. */
+export function buildElementDiff<T>(
+  planned: readonly T[],
+  committed: readonly T[],
+  opts: {
+    key: (t: T) => string;
+    /** Whether a surviving element was reworded relative to its committed copy. */
+    changed: (prev: T, next: T) => boolean;
+    /** Code-discovered elements (the "?" drift kind) — never numbered. */
+    vagrant?: (t: T) => boolean;
+    /** For dropped elements: the plan host now holding this key, if any. */
+    relocatedTo?: (t: T) => string | undefined;
+  },
+): ElementDiff<T>[] {
+  const prevByKey = new Map(committed.map((t) => [opts.key(t), t]));
+  const liveKeys = new Set(planned.map((t) => opts.key(t)));
+  const rows: ElementDiff<T>[] = [];
+  let n = 0;
+  for (const t of planned) {
+    const prev = prevByKey.get(opts.key(t));
+    let kind: ElementDiffKind;
+    if (opts.vagrant?.(t)) kind = "vagrant";
+    else if (!prev) kind = "added";
+    else if (opts.changed(prev, t)) kind = "reworded";
+    else kind = "unchanged";
+    // Vagrant elements aren't part of the numbered contract yet (they await a
+    // verdict); everything else takes the next sequence number.
+    rows.push({ item: t, kind, prev, index: kind === "vagrant" ? null : ++n });
+  }
+  for (const t of committed) {
+    if (liveKeys.has(opts.key(t))) continue;
+    // Present on some other host in the plan → relocated (context only, never
+    // restorable); present nowhere → genuinely deleted (restorable).
+    const movedTo = opts.relocatedTo?.(t);
+    rows.push(
+      movedTo
+        ? { item: t, kind: "relocated", index: null, movedTo }
+        : { item: t, kind: "deleted", index: null },
+    );
+  }
+  return rows;
+}
+
+/** The verdict strip under a flagged element — a muted hint ending in an
+ *  em-dash, then the action buttons. One idiom for every adopt/reject,
+ *  re-implement/drop, and restore prompt. */
+export function VerdictBar({
+  hint,
+  className = "",
+  children,
+}: {
+  hint: React.ReactNode;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={`mt-1.5 flex flex-wrap items-center gap-2 text-2xs ${className}`}>
+      <span className="text-[var(--text-tertiary)]">{hint} —</span>
+      {children}
+    </div>
+  );
+}
+
 /** The shared diff-row anatomy — a fixed glyph gutter beside the content. The
  *  History timeline and the Changes page render their rows through this, so a
  *  diff reads as a diff everywhere (the node page's numbered claim rows carry

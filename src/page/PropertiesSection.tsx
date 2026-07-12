@@ -2,7 +2,14 @@ import { Plus, Trash2 } from "lucide-react";
 import type { Node, SchemaProperty } from "../viewmodel";
 import type { Editor } from "../editor";
 import { FLAG_COLORS } from "../statusColors";
-import { ChangeGlyph, DIFF_TINT } from "../diffkit";
+import {
+  buildElementDiff,
+  CHANGE_OF,
+  ChangeGlyph,
+  DIFF_TINT,
+  type ElementDiff,
+  VerdictBar,
+} from "../diffkit";
 import { propElementId } from "../SourceSection";
 import {
   BTN,
@@ -16,46 +23,25 @@ import {
   WordDiffText,
 } from "../pagekit";
 import { PROP_ROW, RESP_ROW } from "./kit";
-import { CHANGE_OF } from "./ResponsibilitiesSection";
 
 // --- properties (data shapes) -----------------------------------------------
 
-/** A property's divergence from the committed model, matched by label (props
- *  carry no stable id): `added`, `reworded` (description changed), `deleted`
- *  (committed but dropped), or `unchanged`. */
-type PropDiffKind = "added" | "reworded" | "deleted" | "vagrant" | "unchanged";
-
-interface PropDiffRow {
+/** A property's divergence from the committed model, matched by EXACT label
+ *  (props carry no stable id) — the same keying as planDiff.ts and diff.rs —
+ *  so a case-only relabel reads as delete-plus-add on every surface, never
+ *  "clean" here while the tree, Changes page, and get_pending say modified. */
+interface PropDiffRow extends Omit<ElementDiff<SchemaProperty>, "item"> {
   prop: SchemaProperty;
-  kind: PropDiffKind;
-  prev?: SchemaProperty;
-  index: number | null;
 }
 
-// Property identity is the EXACT label — the same keying as planDiff.ts and
-// diff.rs — so a case-only relabel reads as delete-plus-add on every surface,
-// never "clean" here while the tree, Changes page, and get_pending say modified.
-const propKey = (label: string) => label;
-
 function buildPropDiff(planned: SchemaProperty[], committed: SchemaProperty[]): PropDiffRow[] {
-  const prevByKey = new Map(committed.map((p) => [propKey(p.label), p]));
-  const liveKeys = new Set(planned.map((p) => propKey(p.label)));
-  const rows: PropDiffRow[] = [];
-  let n = 0;
-  for (const p of planned) {
-    const prev = prevByKey.get(propKey(p.label));
-    let kind: PropDiffKind;
+  return buildElementDiff(planned, committed, {
+    key: (p) => p.label,
+    changed: (prev, p) => prev.description !== p.description,
     // A vagrant field is code-discovered (the "?" drift kind), never numbered —
     // mirrors how a vagrant responsibility classifies.
-    if (p.vagrant) kind = "vagrant";
-    else if (!prev) kind = "added";
-    else if (prev.description !== p.description) kind = "reworded";
-    else kind = "unchanged";
-    rows.push({ prop: p, kind, prev, index: kind === "vagrant" ? null : ++n });
-  }
-  for (const p of committed)
-    if (!liveKeys.has(propKey(p.label))) rows.push({ prop: p, kind: "deleted", index: null });
-  return rows;
+    vagrant: (p) => !!p.vagrant,
+  }).map(({ item, ...row }) => ({ ...row, prop: item }));
 }
 
 /** One property as a mono diff row — the field name, then its description after
@@ -114,8 +100,7 @@ function PropDiffRow({
           </span>
         )}
         {prop.stale && editor && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-2xs">
-            <span className="text-[var(--text-tertiary)]">Drift says this field is gone —</span>
+          <VerdictBar hint="Drift says this field is gone">
             <button
               type="button"
               onClick={() => editor.reimplementProperty(nodeId, prop.label)}
@@ -132,11 +117,10 @@ function PropDiffRow({
             >
               Drop
             </button>
-          </div>
+          </VerdictBar>
         )}
         {reviewable && (
-          <div className="mt-1.5 -mr-[180px] flex flex-wrap items-center gap-2 text-2xs">
-            <span className="text-[var(--text-tertiary)]">In the code, not in the model —</span>
+          <VerdictBar hint="In the code, not in the model" className="-mr-[180px]">
             <button
               type="button"
               onClick={() => editor!.adoptProperty(nodeId, prop.label)}
@@ -153,7 +137,7 @@ function PropDiffRow({
             >
               Reject
             </button>
-          </div>
+          </VerdictBar>
         )}
       </div>
     </li>
