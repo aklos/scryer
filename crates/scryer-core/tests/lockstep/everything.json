@@ -1,0 +1,407 @@
+{
+  "diff": {
+    "changes": [
+      {
+        "changes": [
+          {
+            "from": "node-1",
+            "to": "node-5",
+            "type": "moved"
+          },
+          {
+            "field": "name",
+            "from": "API",
+            "to": "Public API",
+            "type": "reworded"
+          },
+          {
+            "field": "technology",
+            "from": "Rust",
+            "to": "Rust 2024",
+            "type": "reworded"
+          },
+          {
+            "field": "description",
+            "from": "The service",
+            "to": "The edge service",
+            "type": "reworded"
+          },
+          {
+            "field": "directives",
+            "from": "never block",
+            "to": "never block\nlog rejects",
+            "type": "reworded"
+          },
+          {
+            "field": "kind",
+            "from": "container",
+            "to": "component",
+            "type": "reworded"
+          },
+          {
+            "field": "external",
+            "from": "false",
+            "to": "true",
+            "type": "reworded"
+          }
+        ],
+        "id": "node-2",
+        "kind": "node",
+        "label": "Public API"
+      },
+      {
+        "changes": [
+          {
+            "type": "added"
+          }
+        ],
+        "id": "node-5",
+        "kind": "node",
+        "label": "Gateway"
+      },
+      {
+        "changes": [
+          {
+            "type": "deleted"
+          }
+        ],
+        "id": "node-3",
+        "kind": "node",
+        "label": "Worker"
+      },
+      {
+        "changes": [
+          {
+            "dstFrom": "node-3",
+            "dstTo": "node-5",
+            "srcFrom": "node-2",
+            "srcTo": "node-2",
+            "type": "repointed"
+          },
+          {
+            "field": "label",
+            "from": "enqueues",
+            "to": "routes via",
+            "type": "reworded"
+          },
+          {
+            "field": "method",
+            "from": "queue",
+            "to": "http",
+            "type": "reworded"
+          }
+        ],
+        "id": "link-1",
+        "kind": "link",
+        "label": "routes via"
+      },
+      {
+        "changes": [
+          {
+            "type": "added"
+          }
+        ],
+        "id": "link-2",
+        "kind": "link",
+        "label": "forwards to"
+      },
+      {
+        "changes": [
+          {
+            "field": "statement",
+            "from": "authenticates users",
+            "to": "authenticates and authorizes users",
+            "type": "reworded"
+          },
+          {
+            "field": "directives",
+            "from": "",
+            "to": "use the session store",
+            "type": "reworded"
+          }
+        ],
+        "id": "resp-1",
+        "kind": "responsibility",
+        "label": "authenticates and authorizes users",
+        "ownerId": "node-2"
+      },
+      {
+        "changes": [
+          {
+            "from": "node-2",
+            "to": "group-1",
+            "type": "moved"
+          }
+        ],
+        "id": "resp-2",
+        "kind": "responsibility",
+        "label": "serves the catalog",
+        "ownerId": "group-1"
+      },
+      {
+        "changes": [
+          {
+            "from": "node-3",
+            "to": "node-2",
+            "type": "moved"
+          }
+        ],
+        "id": "resp-3",
+        "kind": "responsibility",
+        "label": "sends receipts",
+        "ownerId": "node-2"
+      },
+      {
+        "changes": [
+          {
+            "type": "added"
+          }
+        ],
+        "id": "resp-5",
+        "kind": "responsibility",
+        "label": "rate-limits clients",
+        "ownerId": "node-2"
+      },
+      {
+        "changes": [
+          {
+            "type": "added"
+          }
+        ],
+        "id": "currency",
+        "kind": "property",
+        "label": "currency",
+        "ownerId": "node-4"
+      },
+      {
+        "changes": [
+          {
+            "field": "description",
+            "from": "grand total",
+            "to": "grand total, in cents",
+            "type": "reworded"
+          }
+        ],
+        "id": "total",
+        "kind": "property",
+        "label": "total",
+        "ownerId": "node-4"
+      },
+      {
+        "changes": [
+          {
+            "field": "name",
+            "from": "Backend",
+            "to": "Edge",
+            "type": "reworded"
+          },
+          {
+            "added": [
+              "node-5"
+            ],
+            "removed": [
+              "node-3"
+            ],
+            "type": "membersChanged"
+          }
+        ],
+        "id": "group-1",
+        "kind": "group",
+        "label": "Edge"
+      }
+    ]
+  },
+  "from": {
+    "groups": [
+      {
+        "id": "group-1",
+        "memberIds": [
+          "node-2",
+          "node-3"
+        ],
+        "name": "Backend",
+        "parentNodeId": "node-1",
+        "responsibilities": [
+          {
+            "id": "resp-4",
+            "statement": "deploys atomically"
+          }
+        ]
+      }
+    ],
+    "links": [
+      {
+        "dst": "node-3",
+        "id": "link-1",
+        "label": "enqueues",
+        "method": "queue",
+        "src": "node-2"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "node-1",
+        "kind": "system",
+        "name": "Shop"
+      },
+      {
+        "description": "The service",
+        "directives": [
+          "never block"
+        ],
+        "id": "node-2",
+        "kind": "container",
+        "name": "API",
+        "parentId": "node-1",
+        "responsibilities": [
+          {
+            "id": "resp-1",
+            "statement": "authenticates users"
+          },
+          {
+            "directives": [
+              "cache reads"
+            ],
+            "id": "resp-2",
+            "statement": "serves the catalog"
+          }
+        ],
+        "technology": "Rust"
+      },
+      {
+        "id": "node-3",
+        "kind": "container",
+        "name": "Worker",
+        "parentId": "node-1",
+        "responsibilities": [
+          {
+            "id": "resp-3",
+            "statement": "sends receipts"
+          }
+        ]
+      },
+      {
+        "id": "node-4",
+        "kind": "symbol",
+        "name": "Order",
+        "parentId": "node-2",
+        "properties": [
+          {
+            "description": "order id",
+            "label": "id"
+          },
+          {
+            "description": "grand total",
+            "label": "total"
+          }
+        ]
+      }
+    ],
+    "version": "0.3"
+  },
+  "to": {
+    "groups": [
+      {
+        "id": "group-1",
+        "memberIds": [
+          "node-2",
+          "node-5"
+        ],
+        "name": "Edge",
+        "parentNodeId": "node-1",
+        "responsibilities": [
+          {
+            "id": "resp-4",
+            "statement": "deploys atomically"
+          },
+          {
+            "directives": [
+              "cache reads"
+            ],
+            "id": "resp-2",
+            "statement": "serves the catalog"
+          }
+        ]
+      }
+    ],
+    "links": [
+      {
+        "dst": "node-5",
+        "id": "link-1",
+        "label": "routes via",
+        "method": "http",
+        "src": "node-2"
+      },
+      {
+        "dst": "node-2",
+        "id": "link-2",
+        "label": "forwards to",
+        "src": "node-5"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "node-1",
+        "kind": "system",
+        "name": "Shop"
+      },
+      {
+        "description": "The edge service",
+        "directives": [
+          "never block",
+          "log rejects"
+        ],
+        "external": true,
+        "id": "node-2",
+        "kind": "component",
+        "name": "Public API",
+        "parentId": "node-5",
+        "responsibilities": [
+          {
+            "directives": [
+              "use the session store"
+            ],
+            "id": "resp-1",
+            "statement": "authenticates and authorizes users"
+          },
+          {
+            "id": "resp-3",
+            "statement": "sends receipts"
+          },
+          {
+            "id": "resp-5",
+            "statement": "rate-limits clients"
+          }
+        ],
+        "technology": "Rust 2024"
+      },
+      {
+        "id": "node-5",
+        "kind": "container",
+        "name": "Gateway",
+        "parentId": "node-1"
+      },
+      {
+        "id": "node-4",
+        "kind": "symbol",
+        "name": "Order",
+        "parentId": "node-2",
+        "properties": [
+          {
+            "description": "order id",
+            "label": "id"
+          },
+          {
+            "description": "grand total, in cents",
+            "label": "total"
+          },
+          {
+            "description": "ISO 4217",
+            "label": "currency"
+          }
+        ]
+      }
+    ],
+    "version": "0.3"
+  }
+}

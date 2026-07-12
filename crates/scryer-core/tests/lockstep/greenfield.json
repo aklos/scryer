@@ -1,0 +1,226 @@
+{
+  "diff": {
+    "changes": [
+      {
+        "changes": [
+          {
+            "type": "added"
+          }
+        ],
+        "id": "node-1",
+        "kind": "node",
+        "label": "Shop"
+      },
+      {
+        "changes": [
+          {
+            "type": "added"
+          }
+        ],
+        "id": "node-2",
+        "kind": "node",
+        "label": "API"
+      },
+      {
+        "changes": [
+          {
+            "type": "added"
+          }
+        ],
+        "id": "node-3",
+        "kind": "node",
+        "label": "Worker"
+      },
+      {
+        "changes": [
+          {
+            "type": "added"
+          }
+        ],
+        "id": "node-4",
+        "kind": "node",
+        "label": "Order"
+      },
+      {
+        "changes": [
+          {
+            "type": "added"
+          }
+        ],
+        "id": "link-1",
+        "kind": "link",
+        "label": "enqueues"
+      },
+      {
+        "changes": [
+          {
+            "type": "added"
+          }
+        ],
+        "id": "resp-1",
+        "kind": "responsibility",
+        "label": "authenticates users",
+        "ownerId": "node-2"
+      },
+      {
+        "changes": [
+          {
+            "type": "added"
+          }
+        ],
+        "id": "resp-2",
+        "kind": "responsibility",
+        "label": "serves the catalog",
+        "ownerId": "node-2"
+      },
+      {
+        "changes": [
+          {
+            "type": "added"
+          }
+        ],
+        "id": "resp-3",
+        "kind": "responsibility",
+        "label": "sends receipts",
+        "ownerId": "node-3"
+      },
+      {
+        "changes": [
+          {
+            "type": "added"
+          }
+        ],
+        "id": "resp-4",
+        "kind": "responsibility",
+        "label": "deploys atomically",
+        "ownerId": "group-1"
+      },
+      {
+        "changes": [
+          {
+            "type": "added"
+          }
+        ],
+        "id": "id",
+        "kind": "property",
+        "label": "id",
+        "ownerId": "node-4"
+      },
+      {
+        "changes": [
+          {
+            "type": "added"
+          }
+        ],
+        "id": "total",
+        "kind": "property",
+        "label": "total",
+        "ownerId": "node-4"
+      },
+      {
+        "changes": [
+          {
+            "type": "added"
+          }
+        ],
+        "id": "group-1",
+        "kind": "group",
+        "label": "Backend"
+      }
+    ]
+  },
+  "from": {
+    "groups": [],
+    "links": [],
+    "nodes": [],
+    "version": "0.3"
+  },
+  "to": {
+    "groups": [
+      {
+        "id": "group-1",
+        "memberIds": [
+          "node-2",
+          "node-3"
+        ],
+        "name": "Backend",
+        "parentNodeId": "node-1",
+        "responsibilities": [
+          {
+            "id": "resp-4",
+            "statement": "deploys atomically"
+          }
+        ]
+      }
+    ],
+    "links": [
+      {
+        "dst": "node-3",
+        "id": "link-1",
+        "label": "enqueues",
+        "method": "queue",
+        "src": "node-2"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "node-1",
+        "kind": "system",
+        "name": "Shop"
+      },
+      {
+        "description": "The service",
+        "directives": [
+          "never block"
+        ],
+        "id": "node-2",
+        "kind": "container",
+        "name": "API",
+        "parentId": "node-1",
+        "responsibilities": [
+          {
+            "id": "resp-1",
+            "statement": "authenticates users"
+          },
+          {
+            "directives": [
+              "cache reads"
+            ],
+            "id": "resp-2",
+            "statement": "serves the catalog"
+          }
+        ],
+        "technology": "Rust"
+      },
+      {
+        "id": "node-3",
+        "kind": "container",
+        "name": "Worker",
+        "parentId": "node-1",
+        "responsibilities": [
+          {
+            "id": "resp-3",
+            "statement": "sends receipts"
+          }
+        ]
+      },
+      {
+        "id": "node-4",
+        "kind": "symbol",
+        "name": "Order",
+        "parentId": "node-2",
+        "properties": [
+          {
+            "description": "order id",
+            "label": "id"
+          },
+          {
+            "description": "grand total",
+            "label": "total"
+          }
+        ]
+      }
+    ],
+    "version": "0.3"
+  }
+}

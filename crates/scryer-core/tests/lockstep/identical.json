@@ -1,0 +1,181 @@
+{
+  "diff": {
+    "changes": []
+  },
+  "from": {
+    "groups": [
+      {
+        "id": "group-1",
+        "memberIds": [
+          "node-2",
+          "node-3"
+        ],
+        "name": "Backend",
+        "parentNodeId": "node-1",
+        "responsibilities": [
+          {
+            "id": "resp-4",
+            "statement": "deploys atomically"
+          }
+        ]
+      }
+    ],
+    "links": [
+      {
+        "dst": "node-3",
+        "id": "link-1",
+        "label": "enqueues",
+        "method": "queue",
+        "src": "node-2"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "node-1",
+        "kind": "system",
+        "name": "Shop"
+      },
+      {
+        "description": "The service",
+        "directives": [
+          "never block"
+        ],
+        "id": "node-2",
+        "kind": "container",
+        "name": "API",
+        "parentId": "node-1",
+        "responsibilities": [
+          {
+            "id": "resp-1",
+            "statement": "authenticates users"
+          },
+          {
+            "directives": [
+              "cache reads"
+            ],
+            "id": "resp-2",
+            "statement": "serves the catalog"
+          }
+        ],
+        "technology": "Rust"
+      },
+      {
+        "id": "node-3",
+        "kind": "container",
+        "name": "Worker",
+        "parentId": "node-1",
+        "responsibilities": [
+          {
+            "id": "resp-3",
+            "statement": "sends receipts"
+          }
+        ]
+      },
+      {
+        "id": "node-4",
+        "kind": "symbol",
+        "name": "Order",
+        "parentId": "node-2",
+        "properties": [
+          {
+            "description": "order id",
+            "label": "id"
+          },
+          {
+            "description": "grand total",
+            "label": "total"
+          }
+        ]
+      }
+    ],
+    "version": "0.3"
+  },
+  "to": {
+    "groups": [
+      {
+        "id": "group-1",
+        "memberIds": [
+          "node-2",
+          "node-3"
+        ],
+        "name": "Backend",
+        "parentNodeId": "node-1",
+        "responsibilities": [
+          {
+            "id": "resp-4",
+            "statement": "deploys atomically"
+          }
+        ]
+      }
+    ],
+    "links": [
+      {
+        "dst": "node-3",
+        "id": "link-1",
+        "label": "enqueues",
+        "method": "queue",
+        "src": "node-2"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "node-1",
+        "kind": "system",
+        "name": "Shop"
+      },
+      {
+        "description": "The service",
+        "directives": [
+          "never block"
+        ],
+        "id": "node-2",
+        "kind": "container",
+        "name": "API",
+        "parentId": "node-1",
+        "responsibilities": [
+          {
+            "id": "resp-1",
+            "statement": "authenticates users"
+          },
+          {
+            "directives": [
+              "cache reads"
+            ],
+            "id": "resp-2",
+            "statement": "serves the catalog"
+          }
+        ],
+        "technology": "Rust"
+      },
+      {
+        "id": "node-3",
+        "kind": "container",
+        "name": "Worker",
+        "parentId": "node-1",
+        "responsibilities": [
+          {
+            "id": "resp-3",
+            "statement": "sends receipts"
+          }
+        ]
+      },
+      {
+        "id": "node-4",
+        "kind": "symbol",
+        "name": "Order",
+        "parentId": "node-2",
+        "properties": [
+          {
+            "description": "order id",
+            "label": "id"
+          },
+          {
+            "description": "grand total",
+            "label": "total"
+          }
+        ]
+      }
+    ],
+    "version": "0.3"
+  }
+}

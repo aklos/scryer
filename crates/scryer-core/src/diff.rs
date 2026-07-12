@@ -53,7 +53,7 @@ pub enum ElementKind {
 /// A single divergence of `to` from `from` for one element. Several can stack on
 /// one element (e.g. a responsibility both `Moved` and `Reworded`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Change {
     /// Present in `to`, absent in `from`.
     Added,
