@@ -15,10 +15,10 @@ import path from "node:path";
 import { scryerPreviewPlugin } from "./plugin.mjs";
 
 /**
- * @param {{ projectRoot: string, port?: number, useWrapper?: boolean, onReport?: (results: any[]) => void }} opts
+ * @param {{ projectRoot: string, port?: number, useWrapper?: boolean }} opts
  * @returns {Promise<{ server: import("vite").ViteDevServer, url: string }>}
  */
-export async function startPreviewServer({ projectRoot, port = 4848, useWrapper = true, onReport }) {
+export async function startPreviewServer({ projectRoot, port = 4848, useWrapper = true }) {
   projectRoot = path.resolve(projectRoot);
   const require = createRequire(path.join(projectRoot, "package.json"));
   const vite = await import(pathToFileURL(require.resolve("vite")).href);
@@ -32,7 +32,7 @@ export async function startPreviewServer({ projectRoot, port = 4848, useWrapper 
     root: projectRoot,
     clearScreen: false,
     server: { port, strictPort: false, host: "127.0.0.1", open: false },
-    plugins: [scryerPreviewPlugin({ projectRoot, useWrapper, onReport })],
+    plugins: [scryerPreviewPlugin({ projectRoot, useWrapper })],
   });
   await server.listen();
 
@@ -55,7 +55,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   console.log(`SCRYER_PREVIEW_URL=${url}`);
   console.log(`  components: ${url}/__components.json`);
   console.log(`  preview:    ${url}/__preview?file=src/Foo.tsx&export=Foo`);
-  console.log(`  harness:    ${url}/__harness`);
 
   // Tie our lifetime to the host process: when it exits (or is killed), the
   // stdin pipe closes and we shut down instead of orphaning.

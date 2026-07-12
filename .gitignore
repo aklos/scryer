@@ -48,3 +48,8 @@ target
 
 # Local audit notes — kept on disk, never committed
 AUDIT.md
+
+# Generated build output that must never be committed
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts

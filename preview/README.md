@@ -8,9 +8,8 @@ project's own toolchain and plugins (the project's `vite.config` is reused).
 | file | role |
 | --- | --- |
 | `props.mjs` | B2 — discovers exported React components in `.tsx` files via the TS compiler API and synthesizes placeholder props from their prop types (literals for scalars, first member of literal unions, no-op callbacks, empty collections, recursive object shapes; optionals omitted except `children`). |
-| `plugin.mjs` | B3 — Vite plugin serving `GET /__preview?file=src/Foo.tsx&export=Foo` as a virtual entry: import component, apply synthesized props, auto-import the app's global CSS, render into `#root`. Plus the spike harness endpoints (`/__components.json`, `/__harness`, `/__report`). |
+| `plugin.mjs` | B3 — Vite plugin serving `GET /__preview?file=src/Foo.tsx&export=Foo` as a virtual entry: import component, apply synthesized props, auto-import the app's global CSS, render into `#root`. Plus `/__components.json` — discovered components + synthesized props. |
 | `server.mjs` | boots the shared dev server: `node preview/server.mjs [projectRoot] [--port N] [--no-wrapper]` |
-| `harness.mjs` | measurement: renders every discovered component in headless Firefox and prints per-component status + timing: `node preview/harness.mjs [projectRoot] [--no-wrapper]` |
 
 If `{project}/.scryer/preview/Wrapper.tsx` exists (B4 — the one agent-written
 provider fix per project), every entry wraps the component in it. For scryer

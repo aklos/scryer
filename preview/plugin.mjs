@@ -10,10 +10,7 @@
  * CSS, render into #root. Nothing is built per component — entries are
  * virtual modules on the always-running dev server.
  *
- * Also serves the spike harness:
- *   /__components.json  — discovered components + synthesized props
- *   /__harness          — page that renders every component in an iframe and
- *                         posts per-component results to /__report
+ * Also serves /__components.json — discovered components + synthesized props.
  */
 
 import fs from "node:fs";
@@ -23,9 +20,9 @@ import { analyzeProject } from "./props.mjs";
 const ENTRY_PREFIX = "/@scryer-preview/entry.js";
 
 /**
- * @param {{ projectRoot: string, useWrapper?: boolean, onReport?: (results: any[]) => void }} opts
+ * @param {{ projectRoot: string, useWrapper?: boolean }} opts
  */
-export function scryerPreviewPlugin({ projectRoot, useWrapper = true, onReport }) {
+export function scryerPreviewPlugin({ projectRoot, useWrapper = true }) {
   let analysis = null;
   const getAnalysis = () => (analysis ??= analyzeProject(projectRoot));
 
@@ -189,21 +186,6 @@ if (!Component) {
           return;
         }
 
-        if (url.pathname === "/__harness") {
-          res.setHeader("Content-Type", "text/html");
-          res.end(harnessHtml());
-          return;
-        }
-
-        if (url.pathname === "/__report" && req.method === "POST") {
-          const chunks = [];
-          for await (const chunk of req) chunks.push(chunk);
-          const results = JSON.parse(Buffer.concat(chunks).toString());
-          res.end("ok");
-          onReport?.(results);
-          return;
-        }
-
         next();
       });
     },
@@ -347,63 +329,6 @@ function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
         });
         window.addEventListener("mouseup", function () { dragging = false; canvas.classList.remove("grabbing"); });
       })();
-    </script>
-  </body>
-</html>`;
-}
-
-function harnessHtml() {
-  return `<!doctype html>
-<html>
-  <head><meta charset="utf-8"><title>scryer preview harness</title></head>
-  <body>
-    <pre id="log"></pre>
-    <div id="stage" style="width:900px;height:600px"></div>
-    <script>
-      // The first component pays the server's cold start (dep optimization,
-      // Tailwind, the bulk of the module graph) — give it a bigger budget.
-      const COLD_TIMEOUT_MS = 40000, TIMEOUT_MS = 8000;
-      const log = (line) => { document.getElementById("log").textContent += line + "\\n"; };
-
-      async function run() {
-        const { components } = await (await fetch("/__components.json")).json();
-        const results = [];
-        for (const [i, comp] of components.entries()) {
-          const result = await renderOne(comp, i === 0 ? COLD_TIMEOUT_MS : TIMEOUT_MS);
-          results.push(result);
-          log(result.status.padEnd(8) + comp.file + ":" + comp.exportName + (result.error ? "  " + result.error.split("\\n")[0] : ""));
-        }
-        await fetch("/__report", { method: "POST", body: JSON.stringify(results) });
-        log("DONE");
-        document.title = "scryer-harness-done";
-      }
-
-      function renderOne(comp, timeoutMs) {
-        return new Promise((resolve) => {
-          const iframe = document.createElement("iframe");
-          iframe.style.cssText = "width:100%;height:100%;border:0";
-          let settled = false;
-          const t0 = performance.now();
-          const finish = (status, error) => {
-            if (settled) return; // first report wins
-            settled = true;
-            cleanup();
-            resolve({ file: comp.file, exportName: comp.exportName, warnings: comp.warnings, status, error: error ?? null, ms: Math.round(performance.now() - t0) });
-          };
-          const onMessage = (e) => {
-            const d = e.data;
-            if (!d || d.type !== "scryer-render" || d.file !== comp.file || d.exportName !== comp.exportName) return;
-            finish(d.status, d.error);
-          };
-          const timer = setTimeout(() => finish("timeout", null), timeoutMs);
-          const cleanup = () => { clearTimeout(timer); window.removeEventListener("message", onMessage); setTimeout(() => iframe.remove(), 0); };
-          window.addEventListener("message", onMessage);
-          iframe.src = "/__preview?" + new URLSearchParams({ file: comp.file, export: comp.exportName });
-          document.getElementById("stage").appendChild(iframe);
-        });
-      }
-
-      run().catch((err) => { log("HARNESS ERROR: " + err); document.title = "scryer-harness-done"; });
     </script>
   </body>
 </html>`;
