@@ -1468,15 +1468,7 @@ fn derive_container_dir(
 
 /// Adapt extracted container facts to the model crate's seeding input.
 fn seed_units(ctx: &scryer_extract::ProjectContext) -> Vec<scryer_core::seed::SeedUnit> {
-    ctx.containers
-        .iter()
-        .map(|c| scryer_core::seed::SeedUnit {
-            dir: c.dir.clone(),
-            name: c.name.clone(),
-            technology: c.technology.clone(),
-            dep_dirs: c.dep_dirs.clone(),
-        })
-        .collect()
+    ctx.containers.iter().map(Into::into).collect()
 }
 
 /// Render token usage for a one-line debug log. Leads with the "fresh" tokens

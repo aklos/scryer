@@ -71,6 +71,20 @@ pub struct ContainerFacts {
     pub dep_dirs: Vec<String>,
 }
 
+/// `SeedUnit` is scryer-core's own plain projection of these facts (the model
+/// crate stays independent of the extractor); this impl is the one place the
+/// field mapping lives, so the two shapes can't drift apart silently.
+impl From<&ContainerFacts> for scryer_core::seed::SeedUnit {
+    fn from(c: &ContainerFacts) -> Self {
+        Self {
+            dir: c.dir.clone(),
+            name: c.name.clone(),
+            technology: c.technology.clone(),
+            dep_dirs: c.dep_dirs.clone(),
+        }
+    }
+}
+
 /// One source file's symbols.
 #[derive(Debug, Clone, Serialize)]
 pub struct FileContext {

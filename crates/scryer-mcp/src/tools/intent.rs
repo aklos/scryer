@@ -23,7 +23,8 @@ use rmcp::{
 };
 use scryer_core::history::{EventKind, EventRow, HistoryEvent};
 use scryer_core::{
-    Group, Kind, ModelRef, Node, Responsibility, SchemaProperty, ScryModel, Source, SourceLocation,
+    next_group_id_union, next_node_id_union, Group, Kind, ModelRef, Node, Responsibility,
+    SchemaProperty, ScryModel, Source, SourceLocation,
 };
 use std::collections::HashMap;
 
@@ -133,32 +134,6 @@ fn read_planned(model_ref: &ModelRef) -> Result<ScryModel, CallToolResult> {
 /// model (design-first, before any fold) is simply empty.
 fn read_committed(model_ref: &ModelRef) -> ScryModel {
     scryer_core::read_model_at(model_ref).unwrap_or_default()
-}
-
-/// Highest numeric suffix among ids carrying `prefix` (e.g. `node-`); 0 if none.
-fn max_id_suffix<'a>(ids: impl Iterator<Item = &'a str>, prefix: &str) -> u64 {
-    ids.filter_map(|id| id.strip_prefix(prefix).and_then(|s| s.parse::<u64>().ok()))
-        .max()
-        .unwrap_or(0)
-}
-
-/// Next `node-N` id past BOTH the planned draft and the committed model, so a
-/// node the plan deleted (still live in committed) can't have its id re-issued.
-fn next_node_id_union(planned: &ScryModel, committed: &ScryModel) -> String {
-    let max = max_id_suffix(
-        planned.nodes.iter().chain(committed.nodes.iter()).map(|n| n.id.as_str()),
-        "node-",
-    );
-    format!("node-{}", max + 1)
-}
-
-/// Next `group-N` id past both layers — same union guard as {@link next_node_id_union}.
-fn next_group_id_union(planned: &ScryModel, committed: &ScryModel) -> String {
-    let max = max_id_suffix(
-        planned.groups.iter().chain(committed.groups.iter()).map(|g| g.id.as_str()),
-        "group-",
-    );
-    format!("group-{}", max + 1)
 }
 
 /// Verify a parent node exists and is the expected kind. Returns the error
