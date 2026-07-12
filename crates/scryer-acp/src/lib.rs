@@ -75,12 +75,6 @@ fn codex_launch() -> Option<AgentLaunch> {
     })
 }
 
-/// Detect an available agent from PATH without requiring a prior MCP connection.
-/// Prefers Claude Code, then Codex.
-pub fn detect_available_agent() -> Option<AgentLaunch> {
-    detect_available_agent_pref("auto")
-}
-
 /// Detect an available agent honoring a user preference. The preferred agent is
 /// tried first; if it isn't on PATH we fall back to the other so a fill still
 /// runs. `pref` is "auto" | "claudeCode" | "codex".

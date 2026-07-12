@@ -28,7 +28,6 @@ import {
   rollupMarks,
 } from "./changeMarks";
 import { kindIcon } from "./kindIcon";
-import { KIND_ICON } from "./kindIcons";
 import { lookupIcon } from "./IconPicker";
 import { BTN, EYEBROW, NAME_MAX, sanitizeIdentifier } from "./pagekit";
 import { InlineText } from "./InlineText";
@@ -349,7 +348,7 @@ export function ModelTree({
       const childKind = childKindFor(node.kind);
       items.push({
         id: "add",
-        label: `Add ${KIND_ICON[childKind].label.toLowerCase()}`,
+        label: `Add ${childKind}`,
         onSelect: () => addChild(node),
       });
     }
@@ -734,7 +733,7 @@ export function ModelTree({
         {editor && node.kind !== "symbol" && node.kind !== "person" && renaming !== node.id && (
           <button
             type="button"
-            title={`Add ${KIND_ICON[childKindFor(node.kind)].label.toLowerCase()}`}
+            title={`Add ${childKindFor(node.kind)}`}
             onClick={(e) => {
               e.stopPropagation();
               addChild(node);

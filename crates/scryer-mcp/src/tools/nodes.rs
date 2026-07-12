@@ -1840,10 +1840,6 @@ impl ScryerServer {
     }
 }
 
-// Helper kept here because `Kind` is used in subtree handling below.
-#[allow(dead_code)]
-fn _kind_check(_k: Kind) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

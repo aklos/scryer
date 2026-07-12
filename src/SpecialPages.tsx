@@ -27,6 +27,7 @@ import { Check, GitCompare } from "lucide-react";
 import { ConfirmPopover } from "./ConfirmPopover";
 import type { ChangeItem, ChangeRevision } from "./hooks/useModelStorage";
 import type { ScryModel, Node, Responsibility, SchemaProperty, DriftScope } from "./viewmodel";
+import { isNodeEmpty } from "./viewmodel";
 import type { Change, ElementChange, ModelDiff } from "./planDiff";
 import { CHANGE_COLOR, type ChangeKind, collectPlanEntries, type LinkChange, MARK_META, type PlanEntry } from "./changeMarks";
 import { DIFF_TINT, DiffRow } from "./diffkit";
@@ -35,7 +36,6 @@ import type { Editor } from "./editor";
 import type { ModelHealthReport } from "./health";
 import { ANCHOR_STATE_LABEL, collapseAnchors, darkBoundaries } from "./health";
 import { kindIcon } from "./kindIcon";
-import { isNodeEmpty } from "./rollup";
 import { respElementId, propElementId } from "./SourceSection";
 import { BTN, BTN_AGENT, BTN_DANGER, BTN_GO, jumpTo, LINK, PAGE_COL, PageSection, WikiLink, WordDiffText } from "./pagekit";
 

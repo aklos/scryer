@@ -213,6 +213,25 @@ export function isDataShape(node: {
   );
 }
 
+/**
+ * A SYMBOL that carries no semantic content of its own: no responsibilities,
+ * no properties, no rendered appearance, and not external. `empty` means the
+ * node justifies nothing yet and must either gain a business responsibility
+ * (or data shape / appearance) or be removed. Derived, never stored.
+ *
+ * Scoped to symbols — components/containers/systems are structural and carry
+ * their meaning through their children, so an own-responsibility-less parent is
+ * not "empty" in this sense.
+ */
+export function isNodeEmpty(node: Node): boolean {
+  if (node.kind !== "symbol" || node.external) return false;
+  const hasContent =
+    (node.responsibilities?.length ?? 0) > 0 ||
+    (node.properties?.length ?? 0) > 0 ||
+    !!node.appearance?.status;
+  return !hasContent;
+}
+
 /** The anchors visible in the working view. Code-side mapping has a single
  *  home: the committed model owns every committed element's anchor; the plan
  *  overlays anchors only for the elements it *adds* (not yet committed, so they

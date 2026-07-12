@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use notify::{recommended_watcher, EventKind, RecursiveMode, Watcher};
-use tauri::{Emitter, Manager, path::BaseDirectory};
+use tauri::{Emitter, Manager};
 
 /// macOS GUI apps launched via Spotlight, Dock, or Finder inherit a minimal
 /// PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) that excludes user-installed tools.
@@ -70,12 +70,6 @@ struct PreviewServer {
     cwd: String,
     url: String,
     child: tokio::process::Child,
-}
-
-/// True if the given path contains a recognizable codebase (has a manifest/etc).
-#[tauri::command]
-fn is_codebase(path: String) -> bool {
-    scryer_core::scan::is_codebase(std::path::Path::new(&path))
 }
 
 /// True if the given project has a `.scryer/model.scry` whose version is not
@@ -173,21 +167,6 @@ fn read_model(ref_str: String) -> Result<String, String> {
     scryer_core::read_model_raw_at(&model_ref)
 }
 
-#[tauri::command]
-fn write_model(ref_str: String, data: String) -> Result<(), String> {
-    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
-    // Serialize against agent (MCP) writes so a canvas save and a concurrent
-    // model edit can't clobber each other mid read-modify-write.
-    let _lock = scryer_core::lock_model(&model_ref)?;
-    scryer_core::write_model_raw_at(&model_ref, &data)
-}
-
-#[tauri::command]
-fn delete_model(ref_str: String) -> Result<(), String> {
-    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
-    scryer_core::delete_model_at(&model_ref)
-}
-
 /// Read the planned (draft) layer — the working model the canvas edits. Returns
 /// the committed model's SEEDED bytes when no plan has diverged yet (planned ==
 /// model, anchors cleared), so a fresh project opens with an empty plan.
@@ -221,32 +200,6 @@ fn read_history(ref_str: String) -> Result<String, String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
     let events = scryer_core::history::read_history(&model_ref);
     serde_json::to_string(&events).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn list_templates(app: tauri::AppHandle) -> Result<Vec<String>, String> {
-    let dir = app.path().resolve("templates", BaseDirectory::Resource)
-        .map_err(|e| e.to_string())?;
-    if !dir.exists() {
-        return Ok(vec![]);
-    }
-    let mut names: Vec<String> = std::fs::read_dir(&dir)
-        .map_err(|e| e.to_string())?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let name = entry.file_name().to_string_lossy().to_string();
-            name.strip_suffix(".scry").map(|n| n.to_string())
-        })
-        .collect();
-    names.sort();
-    Ok(names)
-}
-
-#[tauri::command]
-fn load_template(app: tauri::AppHandle, name: String) -> Result<String, String> {
-    let path = app.path().resolve(format!("templates/{}.scry", name), BaseDirectory::Resource)
-        .map_err(|e| e.to_string())?;
-    std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -592,7 +545,6 @@ fn verify_anchor(
     }
 }
 
-#[tauri::command]
 /// Check if a project has .mcp.json with a scryer entry.
 fn check_mcp_json(project_path: &str) -> bool {
     let path = PathBuf::from(project_path).join(".mcp.json");
@@ -1053,25 +1005,6 @@ mod hook_install_tests {
     }
 }
 
-#[tauri::command]
-fn get_active_agent() -> Result<serde_json::Value, String> {
-    let launch = scryer_acp::detect_available_agent()
-        .ok_or("No AI agent found. Install Claude Code or Codex.")?;
-    let name = match &launch {
-        scryer_acp::AgentLaunch::Cli { kind, .. } => match kind {
-            scryer_acp::AgentKind::ClaudeCode => "claude-code",
-            scryer_acp::AgentKind::Codex => "codex",
-            scryer_acp::AgentKind::Other => "other",
-        },
-        scryer_acp::AgentLaunch::Acp { .. } => "acp",
-    };
-    Ok(serde_json::json!({
-        "name": name,
-        "available": true,
-        "launch": launch,
-    }))
-}
-
 /// Create a blank project-local model at `{project_path}/.scryer/model.scry`.
 /// Returns the ModelRef string.
 #[tauri::command]
@@ -1088,25 +1021,6 @@ fn create_blank_model(project_path: String) -> Result<String, String> {
     let model = scryer_core::ScryModel::new();
     scryer_core::write_model_at(&model_ref, &model)?;
     Ok(model_ref.to_ref_string())
-}
-
-/// Run the deterministic, parser-only extractor over the codebase and return
-/// its CONTEXT map (containers + per-file symbol index + dependency graph). No
-/// AI agent is involved and NOTHING is persisted — this is the map the modeling
-/// orchestrator slices per scope and hands to each subagent, never a model on
-/// disk. The first write to `model.scry` is the agent's first enriched node.
-#[tauri::command]
-fn get_codebase_context(
-    project_path: String,
-) -> Result<scryer_extract::ProjectContext, String> {
-    let project = std::path::Path::new(&project_path);
-    if !project.is_dir() {
-        return Err(format!(
-            "Project path does not exist or is not a directory: {}",
-            project_path
-        ));
-    }
-    scryer_extract::extract_context(project)
 }
 
 #[tauri::command]
@@ -1136,123 +1050,6 @@ fn config_for_launch(
         } => (s.codex.model.clone(), s.codex.effort.clone()),
         _ => (String::new(), "medium".to_string()),
     }
-}
-
-#[tauri::command]
-async fn start_initial_model_session(
-    cwd: String,
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AcpState>,
-) -> Result<String, String> {
-    let mcp_binary = find_scryer_mcp()
-        .ok_or("scryer-mcp binary not found")?;
-
-    // Detect an available agent from PATH (no MCP connection needed),
-    // honoring the saved agent preference.
-    let settings = scryer_core::read_subagent_settings();
-    let launch = scryer_acp::detect_available_agent_pref(&settings.agent)
-        .ok_or("No AI agent found. Install Claude Code or Codex first.")?;
-
-    let prompt = scryer_acp::prompt::initial_model_prompt(&cwd);
-    let (model_name, effort) = config_for_launch(&settings, &launch);
-
-    let runtime = {
-        let mut rt = state.0.lock().unwrap();
-        if rt.is_none() {
-            *rt = Some(scryer_acp::AcpRuntime::new());
-        }
-        rt.clone().unwrap()
-    };
-
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
-
-    let handle = app.clone();
-    tokio::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            let _ = handle.emit("agent-event", &event);
-        }
-    });
-
-    let (agent_binary, mode) = match launch {
-        scryer_acp::AgentLaunch::Cli { binary, kind } => {
-            (binary, scryer_acp::runtime::LaunchMode::Cli { kind })
-        }
-        scryer_acp::AgentLaunch::Acp { binary } => {
-            (binary, scryer_acp::runtime::LaunchMode::Acp)
-        }
-    };
-
-    runtime
-        .start_session(agent_binary, mode, cwd, model_name, effort, mcp_binary, prompt, vec!["mcp__scryer__*".into()], event_tx)
-        .await
-}
-
-/// Fast semantic pass: enrich an already-structured subtree (the deterministic
-/// extractor built the structure; this adds the meaning), using the enrich-only
-/// prompt.
-#[tauri::command]
-async fn start_enrich_session(
-    cwd: String,
-    model_ref: String,
-    node_id: String,
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AcpState>,
-) -> Result<String, String> {
-    let mcp_binary = find_scryer_mcp()
-        .ok_or("scryer-mcp binary not found")?;
-
-    let settings = scryer_core::read_subagent_settings();
-    let launch = scryer_acp::detect_available_agent_pref(&settings.agent)
-        .ok_or("No AI agent found. Install Claude Code or Codex first.")?;
-
-    let parsed_ref = scryer_core::ModelRef::parse(&model_ref)?;
-    let model = scryer_core::read_model_at(&parsed_ref)?;
-    let node = model
-        .nodes
-        .iter()
-        .find(|n| n.id == node_id)
-        .ok_or_else(|| format!("Node '{}' not found in model", node_id))?;
-    let node_name = node.name.clone();
-    let node_kind = serde_json::to_value(node.kind)
-        .ok()
-        .and_then(|v| v.as_str().map(String::from))
-        .unwrap_or_default();
-
-    let model_json = scryer_acp::prompt::serialize_model_for_prompt(&model);
-    let prompt = scryer_acp::prompt::enrich_subtree_prompt(
-        &cwd, &node_id, &node_name, &node_kind, &model_json,
-    );
-    let (model_name, effort) = config_for_launch(&settings, &launch);
-
-    let runtime = {
-        let mut rt = state.0.lock().unwrap();
-        if rt.is_none() {
-            *rt = Some(scryer_acp::AcpRuntime::new());
-        }
-        rt.clone().unwrap()
-    };
-
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
-
-    let handle = app.clone();
-    tokio::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            let _ = handle.emit("agent-event", &event);
-        }
-    });
-
-    let (agent_binary, mode) = match launch {
-        scryer_acp::AgentLaunch::Cli { binary, kind } => {
-            (binary, scryer_acp::runtime::LaunchMode::Cli { kind })
-        }
-        scryer_acp::AgentLaunch::Acp { binary } => {
-            (binary, scryer_acp::runtime::LaunchMode::Acp)
-        }
-    };
-
-    runtime
-        .start_session(agent_binary, mode, cwd, model_name, effort, mcp_binary, prompt, vec!["mcp__scryer__*".into()], event_tx)
-        .await
 }
 
 // --- deterministic preview server (Track B) ----------------------------------
@@ -3567,28 +3364,19 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             watch_project,
-            is_codebase,
             is_legacy_model,
             read_model,
-            write_model,
             read_planned,
             write_planned,
             read_history,
-            delete_model,
-            list_templates,
-            load_template,
             open_in_editor,
             read_source_span,
             verify_anchor,
             detect_ai_tools,
             setup_mcp_integration,
-            get_active_agent,
             create_blank_model,
-            get_codebase_context,
             get_subagent_settings,
             set_subagent_settings,
-            start_initial_model_session,
-            start_enrich_session,
             ensure_preview_server,
             start_preview_fixture_session,
             start_visual_variation_session,

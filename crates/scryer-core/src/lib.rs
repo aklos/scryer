@@ -263,7 +263,7 @@ pub struct Node {
 
 /// The `empty` flag — a SYMBOL that carries no semantic content of its own: no
 /// responsibilities, no properties, no rendered appearance, and not external.
-/// Derived, never stored. Mirrors `isNodeEmpty` in the frontend (`src/rollup.ts`)
+/// Derived, never stored. Mirrors `isNodeEmpty` in the frontend (`src/viewmodel.ts`)
 /// — keep the two in lockstep. Scoped to symbols: structural nodes
 /// (system/container/component) carry their meaning through their children, so a
 /// parent without its own responsibilities is not "empty" in this sense.

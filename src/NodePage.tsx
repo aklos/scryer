@@ -53,13 +53,13 @@ import {
   effectiveVerifyMap,
   inheritedDirectives,
   isDataShape,
+  isNodeEmpty,
   nextResponsibilityId,
 } from "./viewmodel";
 import type { Editor } from "./editor";
 import type { AnchorState, ModelHealthReport } from "./health";
 import { completenessBadge, verifyStatesOf } from "./health";
 import { FLAG_COLORS, VERIFY_PILLS } from "./statusColors";
-import { isNodeEmpty } from "./rollup";
 import { kindIcon, typeTag } from "./kindIcon";
 import { lookupIcon } from "./IconPicker";
 import { ConnectionsSection, ImpliedConnectionsSection } from "./ConnectionsSection";

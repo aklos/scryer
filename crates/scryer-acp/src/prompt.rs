@@ -1,14 +1,6 @@
 use scryer_core::{Node, ScryModel};
 use std::collections::HashSet;
 
-/// Serialize a ScryModel as compact JSON for embedding in an agent prompt.
-/// Strips empty arrays / null fields so the agent context isn't bloated.
-pub fn serialize_model_for_prompt(model: &ScryModel) -> String {
-    let mut val = serde_json::to_value(model).unwrap_or(serde_json::Value::Null);
-    strip_compact(&mut val);
-    serde_json::to_string_pretty(&val).unwrap_or_else(|_| "{}".to_string())
-}
-
 /// Serialize just one node's subtree (the node + all descendants, their
 /// responsibilities/properties, and the source-map entries for them) as compact
 /// JSON. Used to feed a drift check ONLY the claims for the scope it's checking,
@@ -64,94 +56,6 @@ fn strip_compact(val: &mut serde_json::Value) {
         }
         _ => {}
     }
-}
-
-/// Prompt for initial model creation from a codebase. Builds the system + container levels.
-pub fn initial_model_prompt(project_path: &str) -> String {
-    format!(
-        r#"You have access to the scryer MCP server (schema v0.3). Build the architecture model for the project at {project_path}.
-
-## Core principles
-
-- **The codebase is evidence, not the source of truth.** You read code to elicit responsibilities the system already holds — not to transcribe the file tree into nodes.
-- **Responsibilities are pure business statements.** A responsibility says what a node is accountable for in business terms, never how. "restricts access to private content" — yes. "restricts access via JWT" — no, the "via JWT" is mechanism; keep it out of the statement. (`directives` beside a responsibility hold prescriptive "must"/"never" constraints, but those are user-authored — never write them.)
-- **Write terse, scannable statements — not prose.** One verb-led clause per responsibility: lead with the distinguishing verb + object, then stop. No trailing "by/through/where/so that …" tails, and don't repeat the obvious domain ("the architecture model") on every line. "Renders the node/link/group canvas" — yes. "Renders the visual architecture editor where users arrange nodes, links, and groups on a canvas" — no. A node's `description` is its identity in a few words (what it IS), never a re-listing of its responsibilities — if it's a comma-list of them, omit it.
-- **Name another node? Declare the link.** When a description or responsibility statement mentions another node, declare the structural link the mention implies — the prose mention and the structural link are distinct; declare both.
-- **Every node justifies its existence through responsibilities, stated at its own altitude.** A child node exists to discharge a subset of its parent's responsibilities — so a parent's responsibilities are fewer and broader than the union of its children's, never a per-child enumeration of what each child does. A node with no responsibility — or whose responsibilities serve no ancestor commitment — is structurally vagrant.
-
-## Procedure
-
-1. Call `get_rules` to load the modeling rules.
-2. Call `read_codebase` with path "{project_path}" to get the annotated directory tree. Read the manifests it surfaces (package.json, Cargo.toml, fly.toml, Dockerfile, .env.example, etc.) to identify deployable units, data stores, external services, and frameworks.3. **Build the system level.** Call `set_model` with the persons (real users / actors), the system itself, and external systems (third-party services the system depends on — Stripe, S3, Resend, etc.; mark these `external: true`). Add system-level links: persons and external systems connect to the SYSTEM itself, not to its internal containers — those are container-level relationships added when you drill in. Every person/external must link to the system, or it appears disconnected on the system-context diagram. For each node, write 1–4 responsibilities. Set responsibility status to `implemented` on responsibilities derived from existing code, `proposed` on anything speculative.
-4. **Add containers.** Call `set_node` on the system id with a payload containing the containers (web apps, APIs, workers, databases, message queues, file stores). For each container:
-   - Set `kind: "container"`, `name` describes the role ("Website", "Worker", "CMS"), `technology` names what it IS as software, as a short badge ("Next.js 14", "PostgreSQL 16", "S3 Bucket") — a few words, never a sentence; explanatory prose goes in `description`.
-   - Write 2–6 responsibilities — pure business statements about what the container is accountable for. No technology words in the statement.
-   - Include container-level links (Person→Container, Container→Container, Container→External).
-5. **Group containers.** Call `set_groups` to create deployment-unit groups for containers that ship together (e.g. multiple containers running inside one Next.js app, multiple AWS resources provisioned by one Terraform module). A group can carry its own deployment-shaped responsibilities ("deploys atomically", "must fit in 256 MB").
-6. **Stop here.** Do not add components or code-level nodes. The user requests component detail explicitly.
-7. Call `update_source_map` with `boundaries` to attach a directory glob to each container that has code (a boundary entry per node, e.g. pattern "apps/web/**/*").
-8. Call `validate_model` and fix every warning — especially "appears disconnected", which means a node has no relationship at its own C4 level (e.g. a person/external linked to a container but not to the system). Re-link and re-validate until clean.
-9. Call `read_model` (no node) to confirm the architecture overview you built, then summarize it for the user.
-
-## Don'ts
-
-- Don't add responsibilities the codebase doesn't already evidence. If the codebase doesn't handle a concern, the model shouldn't claim it does.
-- Don't put technology vocabulary inside responsibility statements. The `technology` field names the stack — a short badge, not relocated prose; explanation belongs in `description`. (`directives` are user-authored constraints — never set them.)
-- Don't model framework internals (e.g. ORM layers, admin panels that come with a CMS) as separate containers unless they have a distinct user-facing surface that warrants its own tour.
-- Don't draw a separate edge for each interaction between two nodes — one link per relationship.
-"#
-    )
-}
-
-/// Prompt for the FAST semantic pass: the structure already exists (built
-/// deterministically from the code); the agent only adds the semantic layer
-/// (responsibilities, descriptions, statuses, and — at the top — persons /
-/// externals / link meaning) to the existing subtree under `node_id`. It does
-/// NOT rebuild structure, hunt for files, or loop on validation — that's what
-/// makes it fast. `node_kind` is one of "system", "container", "component".
-pub fn enrich_subtree_prompt(
-    project_path: &str,
-    node_id: &str,
-    node_name: &str,
-    node_kind: &str,
-    model_json: &str,
-) -> String {
-    // What the agent should focus on, per level.
-    let focus = match node_kind {
-        "system" => "the system and its containers (the high-level shape). If real persons (actors) or external third-party systems are evident from manifests/config, ADD them and link them — these are the only nodes you may add, because structure extraction can't infer them.",
-        "container" => "this container and its components — what each module is accountable for.",
-        "component" => "this component and its symbols — what each definition is accountable for. A pure data type (a node that already carries `properties` and no behavior) needs only a one-line description, not responsibilities.",
-        _ => "this node and its children.",
-    };
-
-    format!(
-        r#"You have access to the scryer MCP server (schema v0.3). The architecture model for the project at {project_path} is ALREADY built structurally — every container, component, and symbol below was extracted directly from the code. Your ONLY job is to add the SEMANTIC layer to the subtree under "{node_name}" (id {node_id}): what each node is accountable for. Do NOT add, remove, rename, or re-parent the existing nodes, and do NOT rebuild structure.
-
-## Core principles
-
-- **Responsibilities are pure business statements.** What a node is accountable for in business terms, never how. "restricts access to private content" — yes. "restricts access via JWT" — no (mechanism). No technology names, no protocols. (`directives` are user-authored — never set them.)
-- **Terse, scannable, verb-led.** One clause per responsibility: distinguishing verb + object, then stop. No "by/through/so that …" tails. A `description` is the node's identity in a few words (what it IS), never a re-list of its responsibilities.
-- **Name another node? Declare the link.** When a statement or description mentions another node, declare the structural link the mention implies.
-- **Ladder up — stay at each node's altitude.** Each child's responsibilities discharge a subset of its parent's, but a node states what IT is accountable for, not what a child does: a parent's responsibilities are fewer and broader than the union of its children's, never a per-child enumeration. If a line reads as describing a single child, it's one altitude too low. Since the structure came from real code, set responsibility status to `implemented` (use `proposed` only for something genuinely speculative you add).
-
-## Current model — structure is authoritative
-
-The full model is below so you don't call `read_model`. Each component's `boundaries` entry is its source FILE; that's where its code (and its symbols') lives.
-
-```json
-{model_json}
-```
-
-## Procedure (optimized for speed — minimize round-trips)
-
-1. Focus on {focus}
-2. **Read the located source directly.** For the components in scope, read their boundary files (you already have the exact paths — read them in parallel). Do NOT call `read_codebase` and do NOT search for files; the model already tells you where everything is.
-3. **Batch the writes.** Call `update_nodes` with an ARRAY patching many nodes at once — `responsibilities` (+ `status`) and `description` for each existing node id in scope. One or a few calls, not one per node. Do not touch `kind`, `name`, `parentId`, or `properties` of existing nodes.
-4. Add relationship meaning: set `label` on existing links via `update_links` where the relationship is clear from the code. At the system level only, add any missing persons/externals and their links.
-5. Do NOT loop on `validate_model` — the structure is already valid and you aren't changing it. Run it at most once at the end if you added persons/externals.
-
-Stay within the "{node_name}" subtree. The goal is a complete, accurate semantic pass over existing nodes in as few tool calls as possible."#
-    )
 }
 
 /// The system-level SEMANTIC session of the auto-context build. The structural
