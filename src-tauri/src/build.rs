@@ -81,18 +81,28 @@ struct Wave2Job {
     payload_bytes: usize,
 }
 
-/// Derive agent concurrency from the actual evidence payload rather than a
+/// One parallel drift-check session: the scope's fully rendered prompt plus its
+/// size, which drives pool sizing and permit weighting exactly like a Wave 2 job.
+struct DriftJob {
+    node_id: String,
+    node_name: String,
+    prompt: String,
+    payload_bytes: usize,
+}
+
+/// Derive agent concurrency from the actual per-session payloads rather than a
 /// fixed pool. Small scopes are cheap enough to fan out; large prompts get fewer
-/// concurrent sessions to avoid memory/subscription pressure.
+/// concurrent sessions to avoid memory/subscription pressure. Shared by the
+/// Wave 2 build fan-out and the parallel drift check.
 ///
 /// Byte thresholds are calibrated for evidence-embedded payloads (each symbol
 /// carries its source excerpt, ~10x the bare index): a typical scope lands at
 /// 50–250 KB, and only a genuinely huge scope should sacrifice concurrency.
-fn wave2_pool_size(jobs: &[Wave2Job]) -> usize {
-    if jobs.is_empty() {
+fn session_pool_size(payload_bytes: &[usize]) -> usize {
+    if payload_bytes.is_empty() {
         return 1;
     }
-    let average_bytes = jobs.iter().map(|job| job.payload_bytes).sum::<usize>() / jobs.len();
+    let average_bytes = payload_bytes.iter().sum::<usize>() / payload_bytes.len();
     let cpu_cap = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(2)
@@ -102,11 +112,11 @@ fn wave2_pool_size(jobs: &[Wave2Job]) -> usize {
         150_001..=450_000 => 3,
         _ => 2,
     };
-    jobs.len().min(cpu_cap).min(payload_cap).max(1)
+    payload_bytes.len().min(cpu_cap).min(payload_cap).max(1)
 }
 
-fn wave2_job_permits(job: &Wave2Job, pool: usize) -> u32 {
-    let desired = match (job.payload_bytes, job.work_units) {
+fn session_permits(payload_bytes: usize, work_units: usize, pool: usize) -> u32 {
+    let desired = match (payload_bytes, work_units) {
         (450_001.., _) | (_, 8_001..) => pool,
         (150_001.., _) | (_, 3_001..) => 2,
         _ => 1,
@@ -116,31 +126,23 @@ fn wave2_job_permits(job: &Wave2Job, pool: usize) -> u32 {
 
 #[cfg(test)]
 mod build_scheduling_tests {
-    use super::{wave2_job_permits, wave2_pool_size, Wave2Job};
+    use super::{session_permits, session_pool_size};
 
-    fn jobs(count: usize, bytes: usize) -> Vec<Wave2Job> {
-        (0..count)
-            .map(|idx| Wave2Job {
-                id: format!("node-{idx}"),
-                name: format!("job-{idx}"),
-                evidence_json: String::new(),
-                work_units: idx,
-                payload_bytes: bytes,
-            })
-            .collect()
+    fn payloads(count: usize, bytes: usize) -> Vec<usize> {
+        vec![bytes; count]
     }
 
     #[test]
     fn large_prompts_never_get_more_concurrency_than_small_prompts() {
-        let small = jobs(8, 60_000);
-        let medium = jobs(8, 250_000);
-        let large = jobs(8, 900_000);
-        assert!(wave2_pool_size(&large) <= wave2_pool_size(&small));
-        assert_eq!(wave2_pool_size(&jobs(0, 0)), 1);
-        assert_eq!(wave2_pool_size(&jobs(1, 60_000)), 1);
-        assert_eq!(wave2_job_permits(&small[0], 4), 1);
-        assert_eq!(wave2_job_permits(&medium[0], 4), 2);
-        assert_eq!(wave2_job_permits(&large[0], 4), 4);
+        let small = payloads(8, 60_000);
+        let medium = payloads(8, 250_000);
+        let large = payloads(8, 900_000);
+        assert!(session_pool_size(&large) <= session_pool_size(&small));
+        assert_eq!(session_pool_size(&[]), 1);
+        assert_eq!(session_pool_size(&payloads(1, 60_000)), 1);
+        assert_eq!(session_permits(small[0], 0, 4), 1);
+        assert_eq!(session_permits(medium[0], 0, 4), 2);
+        assert_eq!(session_permits(large[0], 0, 4), 4);
     }
 }
 
@@ -373,7 +375,8 @@ pub(crate) async fn start_model_build(
         // Longest-processing-time-first reduces the tail when containers vary
         // substantially in size.
         jobs.sort_by(|a, b| b.work_units.cmp(&a.work_units));
-        let wave2_pool = wave2_pool_size(&jobs);
+        let wave2_pool =
+            session_pool_size(&jobs.iter().map(|job| job.payload_bytes).collect::<Vec<_>>());
         eprintln!(
             "[build] Wave 2: {} job(s), adaptive pool {}, {} evidence bytes",
             jobs.len(),
@@ -480,7 +483,7 @@ pub(crate) async fn start_model_build(
             }));
         }
         for job in jobs {
-            let permit_count = wave2_job_permits(&job, wave2_pool);
+            let permit_count = session_permits(job.payload_bytes, job.work_units, wave2_pool);
             let Wave2Job {
                 id,
                 name,
@@ -865,14 +868,16 @@ pub(crate) async fn start_drift_check(
             "▶ Checking {} changed scope(s) for drift…",
             scopes.len()
         ));
+
+        // Render every scope's prompt up front (in-memory, instant), then run
+        // the checks through the same bounded-parallel pool the build fan-out
+        // uses. Scopes are independent, and `flag_drift` does its
+        // read-modify-write under the cross-process model file lock — the same
+        // serialization parallel `fill_container` commits already rely on — so
+        // sessions can overlap freely.
+        let drift_start = std::time::Instant::now();
+        let mut jobs: Vec<DriftJob> = Vec::new();
         for scope in &scopes {
-            // Honor a stop pressed between scopes (the gap where no session is
-            // live, so the runtime cancel is a no-op).
-            if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
-                let _ = app.emit("build-active-node", Vec::<String>::new());
-                let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Cancelled);
-                return;
-            }
             let dir = model
                 .nodes
                 .iter()
@@ -880,13 +885,17 @@ pub(crate) async fn start_drift_check(
                 .and_then(|n| derive_container_dir(n, &model, &ctx))
                 .unwrap_or_default();
             let slice = scryer_extract::slice_container(&ctx, &dir);
-            let scope_json = serde_json::to_string(&slice).unwrap_or_default();
+            // Compact index for the whole container, with source evidence
+            // embedded ONLY for the changed files — the agent judges those
+            // inline instead of spending round-trips re-reading them.
+            let changed_set: std::collections::BTreeSet<String> =
+                scope.changed_files.iter().cloned().collect();
+            let evidence = scryer_extract::compact_scope_with_evidence(&slice, &changed_set);
+            let scope_json = serde_json::to_string(&evidence).unwrap_or_default();
             let changed_json = serde_json::to_string(&scope.changed_files).unwrap_or_default();
             // Feed only this node's subtree (its claims), not the whole model.
             let subtree_json =
                 scryer_acp::prompt::serialize_subtree_for_prompt(&model, &scope.node_id);
-            let _ = app.emit("build-active-node", vec![scope.node_id.clone()]);
-            emit_msg(format!("▶ Drift check: {}…", scope.node_name));
             let prompt = scryer_acp::prompt::drift_check_prompt(
                 &cwd,
                 &scope.node_name,
@@ -895,35 +904,147 @@ pub(crate) async fn start_drift_check(
                 &scope_json,
                 &changed_json,
             );
-            match run_wave(
-                &runtime, &agent_binary, &mode, &cwd, &model_name, &effort, &mcp_binary, prompt,
-                &app,
-            )
-            .await
-            {
-                Ok((WaveOutcome::Completed, _)) => {}
-                Ok((WaveOutcome::Cancelled, _)) => {
-                    let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Cancelled);
-                    return;
-                }
-                // A failed agent run means this scope's drift was never examined.
-                // Surface it as a failure and bail WITHOUT advancing the anchor, so
-                // the model's drift state is left untouched and a re-run re-checks
-                // every changed scope. Bailing on the first failure (rather than
-                // per-scope logging) avoids spamming an identical error when the
-                // cause is a global one like an auth (401) or network failure.
-                Err(e) => {
-                    let _ = app.emit("build-active-node", Vec::<String>::new());
-                    let _ = app.emit(
-                        "agent-event",
-                        &scryer_acp::AgentEvent::Failed {
-                            error: format!("Drift check for '{}' failed: {e}", scope.node_name),
-                        },
-                    );
-                    return;
-                }
-            }
+            jobs.push(DriftJob {
+                node_id: scope.node_id.clone(),
+                node_name: scope.node_name.clone(),
+                payload_bytes: prompt.len(),
+                prompt,
+            });
         }
+        // Longest-processing-time-first reduces the tail when scopes vary in size.
+        jobs.sort_by(|a, b| b.payload_bytes.cmp(&a.payload_bytes));
+        let pool =
+            session_pool_size(&jobs.iter().map(|job| job.payload_bytes).collect::<Vec<_>>());
+        eprintln!(
+            "[drift] {} scope(s), adaptive pool {}, {} payload bytes",
+            jobs.len(),
+            pool,
+            jobs.iter().map(|job| job.payload_bytes).sum::<usize>(),
+        );
+
+        let active: std::sync::Arc<tokio::sync::Mutex<std::collections::BTreeSet<String>>> =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::BTreeSet::new()));
+        let failures: std::sync::Arc<tokio::sync::Mutex<Vec<String>>> =
+            std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        // The first failure stops LAUNCHING further sessions — the cause is
+        // usually global (auth, network), so more sessions would just repeat the
+        // same error — while sessions already in flight run to completion and
+        // keep the findings they flag.
+        let failed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(pool));
+
+        let mut handles = Vec::with_capacity(jobs.len());
+        for job in jobs {
+            let permit_count = session_permits(job.payload_bytes, 0, pool);
+            let DriftJob {
+                node_id,
+                node_name,
+                prompt,
+                ..
+            } = job;
+            let sem = sem.clone();
+            let active = active.clone();
+            let cancelled = cancel_flag.clone();
+            let failures = failures.clone();
+            let failed = failed.clone();
+            let runtime = runtime.clone();
+            let agent_binary = agent_binary.clone();
+            let mode = mode.clone();
+            let cwd = cwd.clone();
+            let model_name = model_name.clone();
+            let effort = effort.clone();
+            let mcp_binary = mcp_binary.clone();
+            let app = app.clone();
+            handles.push(tokio::spawn(async move {
+                let _permit = match sem.acquire_many(permit_count).await {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                // Honor a stop (or an earlier failure) that landed while this
+                // scope was queued — the gap where no session of ours is live,
+                // so the runtime cancel alone can't reach it.
+                if cancelled.load(std::sync::atomic::Ordering::SeqCst)
+                    || failed.load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    return;
+                }
+                {
+                    let mut a = active.lock().await;
+                    a.insert(node_id.clone());
+                    let _ = app.emit(
+                        "build-active-node",
+                        a.iter().cloned().collect::<Vec<String>>(),
+                    );
+                }
+                let _ = app.emit(
+                    "agent-event",
+                    &scryer_acp::AgentEvent::Message {
+                        text: format!("▶ Drift check: {node_name}…"),
+                    },
+                );
+                let d_start = std::time::Instant::now();
+                let outcome = run_wave(
+                    &runtime, &agent_binary, &mode, &cwd, &model_name, &effort, &mcp_binary,
+                    prompt, &app,
+                )
+                .await;
+                {
+                    let mut a = active.lock().await;
+                    a.remove(&node_id);
+                    let _ = app.emit(
+                        "build-active-node",
+                        a.iter().cloned().collect::<Vec<String>>(),
+                    );
+                }
+                match outcome {
+                    Ok((WaveOutcome::Completed, usage)) => {
+                        eprintln!(
+                            "[drift] scope '{node_name}': {:.1}s, {}",
+                            d_start.elapsed().as_secs_f64(),
+                            fmt_usage(&usage),
+                        );
+                    }
+                    Ok((WaveOutcome::Cancelled, _)) => {
+                        cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    Err(e) => {
+                        failed.store(true, std::sync::atomic::Ordering::SeqCst);
+                        failures
+                            .lock()
+                            .await
+                            .push(format!("Drift check for '{node_name}' failed: {e}"));
+                    }
+                }
+            }));
+        }
+        for h in handles {
+            let _ = h.await;
+        }
+
+        if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            let _ = app.emit("build-active-node", Vec::<String>::new());
+            let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Cancelled);
+            return;
+        }
+        // A failed session means its scope's drift was never examined. Surface
+        // the failure(s) and bail WITHOUT advancing the anchor, so the model's
+        // drift state is left untouched and a re-run re-checks every changed
+        // scope (findings already flagged by the scopes that completed persist).
+        let failed_scopes = failures.lock().await.clone();
+        if !failed_scopes.is_empty() {
+            let _ = app.emit("build-active-node", Vec::<String>::new());
+            let _ = app.emit(
+                "agent-event",
+                &scryer_acp::AgentEvent::Failed {
+                    error: failed_scopes.join(" | "),
+                },
+            );
+            return;
+        }
+        eprintln!(
+            "[drift] complete: {:.1}s total",
+            drift_start.elapsed().as_secs_f64(),
+        );
 
         write_anchor();
         let _ = app.emit("build-active-node", Vec::<String>::new());

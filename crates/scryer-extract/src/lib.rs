@@ -18,8 +18,9 @@ pub mod manifest;
 pub mod tsconfig;
 
 pub use context::{
-    build_context, compact_scope, slice_container, slice_scope, ContainerFacts, Edge, FileContext,
-    ProjectContext, PromptScopeContext, ScopeContext, SymbolContext,
+    build_context, compact_scope, compact_scope_with_evidence, slice_container, slice_scope,
+    ContainerFacts, Edge, FileContext, ProjectContext, PromptScopeContext, ScopeContext,
+    SymbolContext,
 };
 pub use tsconfig::TsAliases;
 

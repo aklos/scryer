@@ -110,9 +110,10 @@ pub struct SymbolContext {
     pub is_data_shape: bool,
     /// Source excerpt: contiguous doc/attribute lines above the definition plus
     /// the definition itself, capped at extraction time (no truncation marker —
-    /// `excerpt_total_lines` says how long the real thing is). Carried for the
-    /// compact Wave 2 payload only; skipped here so the full ScopeContext wire
-    /// (drift checks) is unchanged.
+    /// `excerpt_total_lines` says how long the real thing is). Carried only in
+    /// the compact prompt payloads ([`compact_scope`] embeds it everywhere,
+    /// [`compact_scope_with_evidence`] for the changed files); skipped on the
+    /// raw ScopeContext wire.
     #[serde(skip)]
     pub excerpt: String,
     /// Full line count of doc block + definition, before any cap.
@@ -1086,10 +1087,10 @@ pub struct ScopeContext {
     pub inbound_file_edges: Vec<Edge>,
 }
 
-/// Token-efficient wire format for one modeling agent. Paths and symbols are
-/// interned once; graph edges use integer ids rather than repeating long
-/// `path#symbol@line` strings. The full [`ScopeContext`] remains available for
-/// inspection and drift workflows.
+/// Token-efficient wire format for one agent session (Wave 2 modeling and the
+/// drift check). Paths and symbols are interned once; graph edges use integer
+/// ids rather than repeating long `path#symbol@line` strings. The full
+/// [`ScopeContext`] remains available for inspection.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptScopeContext {
@@ -1149,8 +1150,29 @@ impl PromptScopeContext {
     }
 }
 
-/// Convert a scope into the compact agent wire format.
+/// Convert a scope into the compact agent wire format, with source evidence
+/// embedded for every symbol.
 pub fn compact_scope(scope: &ScopeContext) -> PromptScopeContext {
+    compact_scope_impl(scope, None)
+}
+
+/// Like [`compact_scope`], but embed source evidence ONLY for symbols in the
+/// given files (project-relative paths); every other symbol keeps its index
+/// entry (name, lines, fields) without `code`. This is the drift-check payload:
+/// the whole container stays addressable, while the evidence cost scales with
+/// the change set rather than the container.
+pub fn compact_scope_with_evidence(
+    scope: &ScopeContext,
+    evidence_files: &BTreeSet<String>,
+) -> PromptScopeContext {
+    compact_scope_impl(scope, Some(evidence_files))
+}
+
+fn compact_scope_impl(
+    scope: &ScopeContext,
+    evidence_files: Option<&BTreeSet<String>>,
+) -> PromptScopeContext {
+    let carries_evidence = |rel_path: &str| evidence_files.is_none_or(|f| f.contains(rel_path));
     let mut all_paths: BTreeSet<&str> = scope.files.iter().map(|f| f.rel_path.as_str()).collect();
     for edge in scope
         .internal_file_edges
@@ -1171,6 +1193,7 @@ pub fn compact_scope(scope: &ScopeContext) -> PromptScopeContext {
     // Payload-size guard: pick the largest per-symbol line cap whose total
     // evidence fits the scope budget. Most scopes fit at the full cap; a huge
     // one degrades toward signature+doc-only rather than blowing the prompt.
+    // Only evidence-carrying files count toward the budget.
     let line_cap = EVIDENCE_LINE_LADDER
         .iter()
         .copied()
@@ -1178,6 +1201,7 @@ pub fn compact_scope(scope: &ScopeContext) -> PromptScopeContext {
             let total: usize = scope
                 .files
                 .iter()
+                .filter(|f| carries_evidence(&f.rel_path))
                 .flat_map(|f| &f.symbols)
                 .filter_map(|s| render_code(&s.excerpt, s.excerpt_total_lines, *cap))
                 .map(|code| code.len())
@@ -1205,7 +1229,11 @@ pub fn compact_scope(scope: &ScopeContext) -> PromptScopeContext {
                         lines: [symbol.start_line, symbol.end_line],
                         fields: symbol.fields.clone(),
                         data: symbol.is_data_shape,
-                        code: render_code(&symbol.excerpt, symbol.excerpt_total_lines, line_cap),
+                        code: if carries_evidence(&file.rel_path) {
+                            render_code(&symbol.excerpt, symbol.excerpt_total_lines, line_cap)
+                        } else {
+                            None
+                        },
                     }
                 })
                 .collect();
@@ -1760,6 +1788,51 @@ fn add_one(x: u32) -> u32 {
             total < 450_000,
             "payload stays near the evidence budget (got {total})"
         );
+    }
+
+    #[test]
+    fn evidence_filter_embeds_code_only_for_changed_files() {
+        let src = |name: &str| format!("/// Does {name}.\nfn {name}() {{\n    work();\n}}\n");
+        let files = vec![
+            ParsedFile {
+                rel_path: "src/changed.rs".into(),
+                source: src("changed"),
+                parse: FileParse {
+                    defs: vec![def("changed", 2, 4)],
+                    idents: vec![],
+                    paths: vec![],
+                    imports: vec![],
+                },
+            },
+            ParsedFile {
+                rel_path: "src/untouched.rs".into(),
+                source: src("untouched"),
+                parse: FileParse {
+                    defs: vec![def("untouched", 2, 4)],
+                    idents: vec![],
+                    paths: vec![],
+                    imports: vec![],
+                },
+            },
+        ];
+        let containers = vec![container("", "p")];
+        let ctx = build_context("p", &containers, &files, &[]);
+        let scope = slice_container(&ctx, "");
+        let changed: BTreeSet<String> = ["src/changed.rs".to_string()].into();
+        let compact = compact_scope_with_evidence(&scope, &changed);
+
+        // Both files stay in the index (the map), but only the changed file's
+        // symbol carries source evidence.
+        assert_eq!(compact.files.len(), 2);
+        for file in &compact.files {
+            let path = compact.paths[file.path as usize].as_str();
+            let code = file.symbols[0].code.as_deref();
+            if path == "src/changed.rs" {
+                assert!(code.unwrap().contains("/// Does changed."), "{code:?}");
+            } else {
+                assert_eq!(code, None, "unchanged file must carry no code");
+            }
+        }
     }
 
     #[test]

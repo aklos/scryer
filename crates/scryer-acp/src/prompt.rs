@@ -193,7 +193,9 @@ Do not broaden the model, add speculative responsibilities, or reorganize unrela
 /// responsibilities) and stale claims (→ the `stale` flag). It must NOT report mere
 /// code changes that still satisfy a responsibility. `subtree_json` is just this
 /// node's subtree (its claims), not the whole model; `scope_json` is the
-/// container's code index; `changed_files_json` is the changed-file list.
+/// container's compact code index with source evidence embedded for the changed
+/// files only (so the agent judges inline instead of re-reading them);
+/// `changed_files_json` is the changed-file list.
 pub fn drift_check_prompt(
     project_path: &str,
     node_name: &str,
@@ -223,7 +225,7 @@ pub fn drift_check_prompt(
 ```json
 {changed_files_json}
 ```
-Read them, and read enough surrounding code to judge behaviour. Compare against the claims below.
+Their current source is already embedded in the code index below — every symbol in a changed file carries its `code`. Judge behaviour from that evidence directly. Open a file ONLY when a truncated excerpt (`… +N lines`) leaves the behaviour genuinely unclear, or when a changed file has no entry in the index (deleted, or not parseable source — a deleted file's absence is itself the evidence for `staleNodes`). Compare against the claims below.
 
 ## The model's current claims for "{node_name}" and everything under it
 ```json
@@ -231,6 +233,14 @@ Read them, and read enough surrounding code to judge behaviour. Compare against 
 ```
 
 ## Code index for this container (where everything is)
+The payload is compact and indexed:
+- `paths[n]` is a project-relative source path.
+- each file has `path` = index into `paths`.
+- each symbol has a scope-global integer `id`, `name`, inclusive `lines`, optional `fields`, and `data: true` for data shapes.
+- symbols in the CHANGED files carry `code` — doc comment + signature + body; a trailing `… +N lines` marker means the definition continues in the file. Unchanged files carry no `code`: they are the map of what exists, not the evidence.
+- `symbolEdges` entries are `[sourceSymbolId, destinationSymbolId]`.
+- `fileEdges` entries are `[sourcePathIndex, destinationPathIndex]`, partitioned into `internal`, `outbound`, and `inbound`.
+
 ```json
 {scope_json}
 ```
