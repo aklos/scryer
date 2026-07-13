@@ -404,7 +404,14 @@ function RespDiffRow({
           )}
         </span>
 
-        <ClaimSource locations={locations} projectPath={projectPath} deleted={deleted} />
+        {/* Bleed spec: undo the row's 18+22px gutter columns and the 180px
+            control lane, so the open peek spans the article column. */}
+        <ClaimSource
+          locations={locations}
+          projectPath={projectPath}
+          deleted={deleted}
+          bleed="-ml-10 -mr-[180px]"
+        />
 
         {hasMeta && (
           <span className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-2xs">

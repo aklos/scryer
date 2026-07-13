@@ -65,6 +65,11 @@
   --surface-hover: #e6edf399;
   --surface-active: #e6edf3;
   --surface-field: #ffffff;
+  /* The layer BEHIND the page (source-peek wells). Derived from the canvas so
+     applyTheme() palette swaps carry through; the shadow is what the page
+     edges cast down onto it. */
+  --surface-recess: var(--surface-canvas);
+  --shadow-recess: rgba(0, 0, 0, 0.25);
   --text: #20262f;
   --text-secondary: #566171;
   --text-tertiary: #6e7a8a;
@@ -99,6 +104,11 @@
   --surface-hover: #3e485999;
   --surface-active: #3e4859;
   --surface-field: #0c0e12;
+  /* Dark canvas sits only a step below the page — too subtle for the recess
+     read — so the separation comes from the bg dropping a touch further toward
+     black, not from a heavier shadow. */
+  --surface-recess: color-mix(in srgb, var(--surface-canvas) 75%, black);
+  --shadow-recess: rgba(0, 0, 0, 0.5);
   --text: #e6edf3;
   --text-secondary: #b6c1cd;
   --text-tertiary: #8b96a5;

@@ -83,16 +83,21 @@ export function ClaimSource({
   locations,
   projectPath,
   deleted,
+  bleed,
 }: {
   locations: SourceLocation[];
   projectPath: string | null;
   deleted?: boolean;
+  /** Negative-margin classes that undo the host row's gutters/padding, so the
+   *  peek panel spans the article column edge-to-edge. Host-specific because
+   *  each row anatomy indents differently; omit to keep the peek in place. */
+  bleed?: string;
 }) {
   if (locations.length === 0) return null;
   return (
     <div className="mt-1 flex flex-col gap-0.5">
       {locations.map((loc, i) => (
-        <SourceLine key={i} loc={loc} projectPath={projectPath} deleted={deleted} />
+        <SourceLine key={i} loc={loc} projectPath={projectPath} deleted={deleted} bleed={bleed} />
       ))}
     </div>
   );
@@ -102,10 +107,12 @@ function SourceLine({
   loc,
   projectPath,
   deleted,
+  bleed,
 }: {
   loc: SourceLocation;
   projectPath: string | null;
   deleted?: boolean;
+  bleed?: string;
 }) {
   const anchored = Boolean(loc.symbol) || loc.line != null;
   const [open, setOpen] = useState(false);
@@ -175,7 +182,7 @@ function SourceLine({
         </span>
         {anchored && !deleted && status && <AnchorMark status={status} />}
       </button>
-      {open && anchored && <InlinePeek loc={loc} projectPath={projectPath} />}
+      {open && anchored && <InlinePeek loc={loc} projectPath={projectPath} bleed={bleed} />}
     </div>
   );
 }
@@ -196,13 +203,37 @@ function AnchorMark({ status }: { status: AnchorStatus }) {
   );
 }
 
-/** The code peek for one anchored location — fetched on first open, the mapped
- *  range inked amber, with an "open in editor" affordance. */
-function InlinePeek({ loc, projectPath }: { loc: SourceLocation; projectPath: string | null }) {
+/** The recess panel's side treatment: bg, borders and cast shadow all dissolve
+ *  over the last ~28px instead of stopping at a hard edge. */
+const SIDE_FADE =
+  "linear-gradient(90deg, transparent, #000 28px, #000 calc(100% - 28px), transparent)";
+
+/** The code peek for one anchored location — not a nested card but a recessed
+ *  panel the page splits open to reveal: it bleeds out of the row indent to the
+ *  article column's edges (the host-supplied `bleed` margins), sits on the
+ *  canvas layer a step BEHIND the page, and the page edges above and below cast
+ *  inset shadows onto it. Fetched on first open, the mapped range inked amber,
+ *  with an "open in editor" affordance. */
+function InlinePeek({
+  loc,
+  projectPath,
+  bleed = "",
+}: {
+  loc: SourceLocation;
+  projectPath: string | null;
+  bleed?: string;
+}) {
   const [span, setSpan] = useState<SourceSpan | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const focusRef = useRef<HTMLDivElement>(null);
+  // Mounted-at-0fr, then flipped to 1fr on the next frame — the split-open
+  // slide is a grid-rows transition, so the page visibly parts.
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setShown(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
 
   useEffect(() => {
     if (!projectPath) {
@@ -233,66 +264,86 @@ function InlinePeek({ loc, projectPath }: { loc: SourceLocation; projectPath: st
   }, [span]);
 
   return (
-    // No header bar: the source line above the peek already names file:range —
-    // repeating it here said nothing. The one affordance the peek adds (open
-    // in editor) floats over the card's top-right corner instead.
+    // The 0fr→1fr grid is the reveal: its child clips (overflow-hidden also
+    // zeroes the grid item's automatic minimum), so the panel slides open.
     <div
       data-cam="source-peek"
-      className="relative mb-1.5 ml-1 mt-1 overflow-hidden rounded-md border border-[var(--border-subtle)]"
+      className={`grid transition-[grid-template-rows] duration-200 ease-out ${bleed}`}
+      style={{ gridTemplateRows: shown ? "1fr" : "0fr" }}
     >
-      <button
-        type="button"
-        onClick={() => void invoke("open_in_editor", { file: loc.pattern, line: loc.line ?? null, projectPath })}
-        className="absolute right-1 top-1 z-10 inline-flex shrink-0 items-center gap-1 rounded bg-[var(--surface-overlay)] px-1.5 py-0.5 font-mono text-2xs text-blue-600 backdrop-blur-sm hover:underline dark:text-blue-400"
-      >
-        open <ExternalLink className="h-3 w-3" />
-      </button>
-      {err ? (
-        <div className="px-2.5 py-1.5 font-mono text-2xs text-red-500/80 dark:text-red-400/80">{err}</div>
-      ) : !span ? (
-        <div className="px-2.5 py-1.5 font-mono text-2xs text-[var(--text-muted)]">loading…</div>
-      ) : (
-        <div
-          ref={scrollRef}
-          // Raised, not inset: light-mode --surface-inset is the canvas colour
-          // at 60% alpha over the canvas — i.e. exactly the page bg, zero
-          // contrast. A raised card reads as a code block in both modes.
-          className="max-h-[240px] overflow-auto bg-[var(--surface-raised)] py-1 font-mono text-2xs leading-[1.6]"
-        >
-          {span.lines.map((segs, i) => {
-            const lineNo = span.startLine + i;
-            const focus = loc.line != null && lineNo >= span.focusStart && lineNo <= span.focusEnd;
-            return (
-              <div
-                key={i}
-                ref={lineNo === span.focusStart ? focusRef : undefined}
-                className="flex"
-                style={
-                  focus
-                    ? {
-                        backgroundColor: "color-mix(in srgb, var(--color-amber-400) 12%, transparent)",
-                        boxShadow: "inset 2px 0 0 0 color-mix(in srgb, var(--color-amber-500) 70%, transparent)",
-                      }
-                    : undefined
-                }
-              >
-                <span className="w-10 shrink-0 select-none pr-2.5 text-right tabular-nums text-[var(--text-ghost)]">
-                  {lineNo}
-                </span>
-                <span className="whitespace-pre pr-3 text-[var(--text)]">
-                  {segs.length === 0
-                    ? " "
-                    : segs.map((s, j) => (
-                        <span key={j} className={s.kind ? TOKEN_CLASS[s.kind] : undefined}>
-                          {s.text}
-                        </span>
-                      ))}
-                </span>
-              </div>
-            );
-          })}
+      <div className="overflow-hidden">
+        {/* No header bar: the source line above the peek already names
+            file:range — repeating it here said nothing. The one affordance the
+            peek adds (open in editor) floats over the top-right corner instead
+            — OUTSIDE the masked panel, so the side fade doesn't wash it out.
+            Edge-to-edge across the article column: the page parts and the code
+            sits on the recess layer behind it — shadow cast from the page
+            edges above and below, and the sides dissolving via a mask rather
+            than terminating in a border (a hard edge mid-surface reads as
+            clipped, not revealed). */}
+        <div className="relative my-1.5">
+          <button
+            type="button"
+            onClick={() => void invoke("open_in_editor", { file: loc.pattern, line: loc.line ?? null, projectPath })}
+            className="absolute right-2 top-1.5 z-10 inline-flex shrink-0 items-center gap-1 rounded bg-[var(--surface-overlay)] px-1.5 py-0.5 font-mono text-2xs text-blue-600 backdrop-blur-sm hover:underline dark:text-blue-400"
+          >
+            open <ExternalLink className="h-3 w-3" />
+          </button>
+          <div
+            className="border-y border-[var(--border-subtle)] bg-[var(--surface-recess)]"
+            style={{
+              boxShadow:
+                "inset 0 12px 14px -12px var(--shadow-recess), inset 0 -12px 14px -12px var(--shadow-recess)",
+              WebkitMaskImage: SIDE_FADE,
+              maskImage: SIDE_FADE,
+            }}
+          >
+          {err ? (
+            <div className="px-4 py-2.5 font-mono text-xs text-red-500/80 dark:text-red-400/80">{err}</div>
+          ) : !span ? (
+            <div className="px-4 py-2.5 font-mono text-xs text-[var(--text-muted)]">loading…</div>
+          ) : (
+            <div
+              ref={scrollRef}
+              className="max-h-[420px] overflow-auto py-2 font-mono text-xs leading-[1.6]"
+            >
+              {span.lines.map((segs, i) => {
+                const lineNo = span.startLine + i;
+                const focus = loc.line != null && lineNo >= span.focusStart && lineNo <= span.focusEnd;
+                return (
+                  <div
+                    key={i}
+                    ref={lineNo === span.focusStart ? focusRef : undefined}
+                    className="flex"
+                    style={
+                      focus
+                        ? {
+                            backgroundColor: "color-mix(in srgb, var(--color-amber-400) 12%, transparent)",
+                            boxShadow: "inset 2px 0 0 0 color-mix(in srgb, var(--color-amber-500) 70%, transparent)",
+                          }
+                        : undefined
+                    }
+                  >
+                    <span className="w-14 shrink-0 select-none pr-3 text-right tabular-nums text-[var(--text-ghost)]">
+                      {lineNo}
+                    </span>
+                    <span className="whitespace-pre pr-4 text-[var(--text)]">
+                      {segs.length === 0
+                        ? " "
+                        : segs.map((s, j) => (
+                            <span key={j} className={s.kind ? TOKEN_CLASS[s.kind] : undefined}>
+                              {s.text}
+                            </span>
+                          ))}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

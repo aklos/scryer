@@ -290,7 +290,14 @@ export function NodeHistory({
                     {row.text}
                   </span>
                   {row.source && (
-                    <ClaimSource locations={[row.source]} projectPath={projectPath} />
+                    // Bleed spec: undo DiffRow's 16px gutter + 4px gap; the
+                    // peek then spans from the timeline's content edge to the
+                    // column edge (never crossing the timeline rule itself).
+                    <ClaimSource
+                      locations={[row.source]}
+                      projectPath={projectPath}
+                      bleed="-ml-5"
+                    />
                   )}
                 </DiffRow>
               ))}
