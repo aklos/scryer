@@ -452,7 +452,7 @@ function RespDiffRow({
   // The verification pill shows on live claims only — a deleted/relocated
   // row's test link is context, not a badge.
   const tested = !deleted && !relocated && verifyLocations.length > 0;
-  const hasMeta = unmapped || tested;
+  const hasMeta = tested;
 
   const contentColor = deleted || relocated
     ? "text-[var(--text-muted)]"
@@ -499,6 +499,16 @@ function RespDiffRow({
             stale
           </span>
         )}
+        {/* Sits inline beside the statement, exactly like the stale chip — an
+            unmapped claim has no verdict block below to defer to. */}
+        {unmapped && (
+          <span
+            className={`${FLAG_COLORS.stale.pill} ml-2 align-middle`}
+            title="No source lines anchor this responsibility — the claim can't be read through to code."
+          >
+            unmapped
+          </span>
+        )}
 
         {/* Bleed spec: undo the row's 18+22px gutter columns and the 180px
             control lane, so the open peek spans the article column. */}
@@ -511,14 +521,6 @@ function RespDiffRow({
 
         {hasMeta && (
           <span className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-2xs">
-            {unmapped && (
-              <span
-                className={FLAG_COLORS.stale.pill}
-                title="No source lines anchor this responsibility — the claim can't be read through to code."
-              >
-                unmapped
-              </span>
-            )}
             {tested && (() => {
               const t = verifyLocations[0];
               const where = `${t.pattern}${t.symbol ? ` \`${t.symbol}\`` : ""}`;
