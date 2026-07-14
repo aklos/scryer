@@ -225,6 +225,23 @@ export function SettingsPanel({
               )}
             </Field>
           )}
+
+          {projectPath && mcpSetup.tools.claude && (
+            <Field label="Status line (this project)">
+              <p className="text-2xs leading-relaxed text-[var(--text-muted)]">
+                Show the model's status — pending, drift, anchor health — in Claude Code's status
+                line. Unlike the session hooks, it keeps reporting while Scryer is closed: the
+                command reads the model straight off disk.
+              </p>
+              <StatuslineRow
+                target=".claude/settings.local.json"
+                installed={mcpSetup.tools.claudeStatuslineEnabled}
+                foreign={mcpSetup.tools.claudeStatuslineForeign}
+                busy={mcpSetup.busy}
+                onInstall={() => void mcpSetup.enableStatusline()}
+              />
+            </Field>
+          )}
         </div>
 
         <div className="flex justify-end gap-2 border-t border-[var(--border)] px-4 py-3">
@@ -277,6 +294,45 @@ function HooksRow({
       {installed ? (
         <span className="flex items-center gap-1 text-xs text-emerald-500">
           <Check className="h-3 w-3" /> Installed
+        </span>
+      ) : (
+        <span className="flex items-center gap-2">
+          <span className="font-mono text-2xs text-[var(--text-muted)]">{target}</span>
+          <button type="button" className={BTN} disabled={busy} onClick={onInstall}>
+            {busy ? "Installing…" : "Install"}
+          </button>
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** The statusLine install state. Like a HooksRow, but statusLine is a single
+ *  slot (whole-line replacement), so a foreign line is never clobbered — that
+ *  case shows a note in place of the Install button. */
+function StatuslineRow({
+  target,
+  installed,
+  foreign,
+  busy,
+  onInstall,
+}: {
+  target: string;
+  installed: boolean;
+  foreign: boolean;
+  busy: boolean;
+  onInstall: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-xs text-[var(--text)]">Claude Code</span>
+      {installed ? (
+        <span className="flex items-center gap-1 text-xs text-emerald-500">
+          <Check className="h-3 w-3" /> Installed
+        </span>
+      ) : foreign ? (
+        <span className="text-2xs text-[var(--text-muted)]">
+          A status line is already configured — left untouched.
         </span>
       ) : (
         <span className="flex items-center gap-2">

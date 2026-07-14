@@ -88,6 +88,36 @@ fn check_claude_hooks(project_path: &str) -> bool {
     false
 }
 
+/// Is this `statusLine` entry ours? Same marker as the CLI's `install_statusline`
+/// (mirrored here, like `is_scryer_hook_entry`): the command invokes the
+/// scryer-mcp binary's `statusline` subcommand.
+fn is_scryer_statusline(entry: &serde_json::Value) -> bool {
+    entry["command"]
+        .as_str()
+        .is_some_and(|c| c.contains("scryer-mcp") && c.trim_end().ends_with(" statusline"))
+}
+
+/// The project's Claude Code `statusLine` state as `(ours, foreign)`. Unlike
+/// hooks (a merging list), `statusLine` is a SINGLE slot — a whole-line
+/// replacement — so a foreign entry is never clobbered: `foreign` lets the UI
+/// surface it instead of offering an install that would overwrite it.
+fn check_claude_statusline(project_path: &str) -> (bool, bool) {
+    for filename in &["settings.local.json", "settings.json"] {
+        let path = PathBuf::from(project_path).join(".claude").join(filename);
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
+                match root.get("statusLine") {
+                    Some(entry) if entry.is_null() => continue,
+                    Some(entry) if is_scryer_statusline(entry) => return (true, false),
+                    Some(_) => return (false, true),
+                    None => continue,
+                }
+            }
+        }
+    }
+    (false, false)
+}
+
 /// Check if Codex has scryer's session hooks installed for the project.
 fn check_codex_hooks(project_path: &str) -> bool {
     let path = PathBuf::from(project_path).join(".codex").join("hooks.json");
@@ -126,6 +156,8 @@ pub(crate) fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value
     let claude_approved = project_path.as_deref().map(check_claude_approved).unwrap_or(false);
     let claude_hooks = project_path.as_deref().map(check_claude_hooks).unwrap_or(false);
     let codex_hooks = project_path.as_deref().map(check_codex_hooks).unwrap_or(false);
+    let (claude_statusline, claude_statusline_foreign) =
+        project_path.as_deref().map(check_claude_statusline).unwrap_or((false, false));
 
     serde_json::json!({
         "claude": has_claude,
@@ -135,6 +167,8 @@ pub(crate) fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value
         "claudeApproved": claude_approved,
         "claudeHooksEnabled": claude_hooks,
         "codexHooksEnabled": codex_hooks,
+        "claudeStatuslineEnabled": claude_statusline,
+        "claudeStatuslineForeign": claude_statusline_foreign,
     })
 }
 
@@ -255,6 +289,10 @@ pub(crate) fn setup_mcp_integration(
             let binary_path = find_scryer_mcp().ok_or("scryer-mcp binary not found")?;
             return write_codex_hooks(&project_path, &binary_path);
         }
+        "claude_statusline" => {
+            let binary_path = find_scryer_mcp().ok_or("scryer-mcp binary not found")?;
+            return write_claude_statusline(&project_path, &binary_path);
+        }
         _ => Err(format!("Unknown action: {}", action)),
     }
 }
@@ -271,6 +309,55 @@ fn write_claude_hooks(project_path: &str, binary_path: &str) -> Result<String, S
         SCRYER_HOOK_EVENTS,
         binary_path,
     )
+}
+
+/// Register scryer's status one-liner as this project's Claude Code statusLine,
+/// in the personal settings file (same conventions as the hook install: absolute
+/// binary path, refuse to overwrite invalid JSON). A separate opt-in from the
+/// session hooks because it's the only surface that survives Scryer being closed
+/// — `scryer-mcp statusline` reads the model straight off disk. Mirrors
+/// `install_statusline` in the scryer-mcp crate. `statusLine` is a SINGLE slot,
+/// so a foreign entry is never clobbered: the write errors and the caller (which
+/// detected the foreign line via `check_claude_statusline`) surfaces it instead.
+fn write_claude_statusline(project_path: &str, binary_path: &str) -> Result<String, String> {
+    let claude_dir = PathBuf::from(project_path).join(".claude");
+    let settings_path = claude_dir.join("settings.local.json");
+
+    let mut root: serde_json::Value = if settings_path.exists() {
+        let contents = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&contents).map_err(|e| {
+            format!(
+                "{} is not valid JSON ({e}); refusing to overwrite it — fix the file and retry.",
+                settings_path.display()
+            )
+        })?
+    } else {
+        serde_json::json!({})
+    };
+
+    if root
+        .get("statusLine")
+        .is_some_and(|e| !e.is_null() && !is_scryer_statusline(e))
+    {
+        return Err(format!(
+            "A status line is already configured in {} — left untouched.",
+            settings_path.display()
+        ));
+    }
+
+    root["statusLine"] = serde_json::json!({
+        "type": "command",
+        "command": format!("\"{binary_path}\" statusline"),
+    });
+
+    std::fs::create_dir_all(&claude_dir).map_err(|e| e.to_string())?;
+    std::fs::write(
+        &settings_path,
+        serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(settings_path.to_string_lossy().to_string())
 }
 
 /// The same opt-in for Codex: write the registrations into the project's
@@ -411,6 +498,74 @@ mod hook_install_tests {
         let err = write_claude_hooks(&project, "/opt/scryer/scryer-mcp").unwrap_err();
         assert!(err.contains("not valid JSON"), "{err}");
         // The user's file is left exactly as it was.
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), original);
+    }
+
+    /// The statusline install writes our single-slot `statusLine` entry, is
+    /// idempotent (a re-install is our own entry refreshed, not a duplicate),
+    /// and detection reports it as ours — not foreign.
+    #[test]
+    fn statusline_install_is_idempotent_and_detected_as_ours() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude_dir = dir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("settings.local.json"),
+            serde_json::json!({ "permissions": { "allow": ["mcp__scryer"] } }).to_string(),
+        )
+        .unwrap();
+
+        let project = dir.path().to_string_lossy().to_string();
+        assert_eq!(check_claude_statusline(&project), (false, false));
+        write_claude_statusline(&project, "/opt/scryer/scryer-mcp").unwrap();
+        write_claude_statusline(&project, "/opt/scryer/scryer-mcp").unwrap();
+        assert_eq!(check_claude_statusline(&project), (true, false));
+
+        let root: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(claude_dir.join("settings.local.json")).unwrap(),
+        )
+        .unwrap();
+        // Untouched sections survive; the entry carries the ` statusline` marker.
+        assert_eq!(root["permissions"]["allow"][0], "mcp__scryer");
+        assert!(is_scryer_statusline(&root["statusLine"]));
+        assert_eq!(root["statusLine"]["type"], "command");
+    }
+
+    /// A FOREIGN statusLine holds the single slot: detection flags it foreign,
+    /// and the install refuses to clobber it (the user's own line is preserved).
+    #[test]
+    fn statusline_install_refuses_to_clobber_a_foreign_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude_dir = dir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let settings = claude_dir.join("settings.local.json");
+        let original =
+            serde_json::json!({ "statusLine": { "type": "command", "command": "my-powerline" } })
+                .to_string();
+        std::fs::write(&settings, &original).unwrap();
+
+        let project = dir.path().to_string_lossy().to_string();
+        assert_eq!(check_claude_statusline(&project), (false, true));
+        let err = write_claude_statusline(&project, "/opt/scryer/scryer-mcp").unwrap_err();
+        assert!(err.contains("already configured"), "{err}");
+        // The user's line is left exactly as it was.
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), original);
+    }
+
+    /// A malformed settings file must ERROR the install, not get silently
+    /// replaced — same guarantee as the hook install.
+    #[test]
+    fn statusline_install_refuses_to_overwrite_malformed_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude_dir = dir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let settings = claude_dir.join("settings.local.json");
+        let original = r#"{ "permissions": { "allow": ["mcp__scryer",] } }"#; // trailing comma
+        std::fs::write(&settings, original).unwrap();
+
+        let project = dir.path().to_string_lossy().to_string();
+        let err = write_claude_statusline(&project, "/opt/scryer/scryer-mcp").unwrap_err();
+        assert!(err.contains("not valid JSON"), "{err}");
         assert_eq!(std::fs::read_to_string(&settings).unwrap(), original);
     }
 

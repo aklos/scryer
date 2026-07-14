@@ -15,6 +15,12 @@ export interface AiToolsState {
   claudeHooksEnabled: boolean;
   /** Scryer's session hooks are registered in this project's `.codex/hooks.json`. */
   codexHooksEnabled: boolean;
+  /** Scryer's status one-liner is registered as this project's Claude Code
+   *  statusLine — the persistent segment that also works while Scryer is closed. */
+  claudeStatuslineEnabled: boolean;
+  /** A FOREIGN statusLine holds Claude Code's single slot here. It's never
+   *  clobbered, so the UI surfaces it instead of offering an install. */
+  claudeStatuslineForeign: boolean;
 }
 
 const EMPTY: AiToolsState = {
@@ -25,6 +31,8 @@ const EMPTY: AiToolsState = {
   claudeApproved: false,
   claudeHooksEnabled: false,
   codexHooksEnabled: false,
+  claudeStatuslineEnabled: false,
+  claudeStatuslineForeign: false,
 };
 
 export interface McpSetup {
@@ -46,6 +54,11 @@ export interface McpSetup {
    *  (while the app is open), so they are only written when the user asks for
    *  exactly that. */
   enableHooks: (tool: "claude" | "codex") => Promise<void>;
+  /** Its own opt-in, separate from the session hooks: register scryer's status
+   *  one-liner as Claude Code's persistent statusLine. The only integration that
+   *  keeps reporting while Scryer is closed (it reads the model off disk), so it
+   *  is worth an install of its own rather than riding the app-gated hooks. */
+  enableStatusline: () => Promise<void>;
   dismiss: () => void;
   /** Re-read detection from disk (e.g. after a config is written externally). */
   reload: () => void;
@@ -106,6 +119,17 @@ export function useMcpSetup(projectPath: string | null): McpSetup {
     [projectPath, reload],
   );
 
+  const enableStatusline = useCallback(async () => {
+    if (!projectPath) return;
+    setBusy(true);
+    try {
+      await invoke("setup_mcp_integration", { action: "claude_statusline", projectPath });
+      reload();
+    } finally {
+      setBusy(false);
+    }
+  }, [projectPath, reload]);
+
   const dismiss = useCallback(() => {
     if (!projectPath) return;
     setDismissedPaths((prev) => new Set(prev).add(projectPath));
@@ -115,5 +139,5 @@ export function useMcpSetup(projectPath: string | null): McpSetup {
     (tools.claude && !tools.claudeMcpEnabled) || (tools.codex && !tools.codexMcpEnabled);
   const dismissed = projectPath ? dismissedPaths.has(projectPath) : false;
 
-  return { tools, needsSetup, dismissed, busy, enable, enableHooks, dismiss, reload };
+  return { tools, needsSetup, dismissed, busy, enable, enableHooks, enableStatusline, dismiss, reload };
 }
