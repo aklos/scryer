@@ -286,9 +286,15 @@ export function applyTheme(theme: ThemeConfig): void {
   --surface-hover: ${hexAlpha(sh(clamp(theme.nodeDark - 1)), 0.6)};
   --surface-active: ${sh(clamp(theme.nodeDark - 1))};
   --surface-field: ${canvasDarkHex};
-  --text: ${sh(2)};
-  --text-secondary: ${sh(3)};
-  --text-tertiary: ${sh(4)};
+  /* Light-on-black halates: near-white text (sh(2), ~16:1 on the canvas) glares
+     and fatigues tired eyes even though the raw ratio is high. So the dark ramp
+     runs a notch dimmer than a mirror of light mode — primary lands ~9:1, body
+     ~6:1 (light mode's comfort) — while muted/ghost stay put to hold the lower
+     contract (tertiary ≥5, muted ≥4). The two half-step mixes fill the gap the
+     down-shift opens, since the neutral ramp is coarse across 200–400. */
+  --text: color-mix(in srgb, ${sh(3)} 80%, ${sh(4)});
+  --text-secondary: color-mix(in srgb, ${sh(3)} 40%, ${sh(4)});
+  --text-tertiary: color-mix(in srgb, ${sh(4)} 60%, ${sh(5)});
   --text-muted: ${sh(5)};
   --text-ghost: ${sh(6)};
   --border: ${sh(clamp(theme.canvasDark - 2))};

@@ -109,9 +109,12 @@
      black, not from a heavier shadow. */
   --surface-recess: color-mix(in srgb, var(--surface-canvas) 75%, black);
   --shadow-recess: rgba(0, 0, 0, 0.5);
-  --text: #e6edf3;
-  --text-secondary: #b6c1cd;
-  --text-tertiary: #8b96a5;
+  /* Dimmed a notch below a light-mode mirror so light-on-black stops glaring —
+     see theme.ts's .dark block, the runtime source of truth; these track it as
+     the pre-JS fallback. */
+  --text: #adb8c5;
+  --text-secondary: #9ca7b5;
+  --text-tertiary: #7f8d9a;
   --text-muted: #6e7a8a;
   --text-ghost: #566171;
   --border: #20262f;
