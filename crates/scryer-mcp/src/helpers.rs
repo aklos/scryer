@@ -331,7 +331,14 @@ pub(crate) fn pending_changes(
 /// The loop-state counts behind every ambient status line — shared by the MCP
 /// response headers and the `status`/`statusline` CLI subcommands.
 pub(crate) struct StatusCounts {
+    /// The agent's implement queue: one per diverging element (a reworded
+    /// claim, an added property…), vagrants excluded — the same list
+    /// `get_pending` returns. What the agent-facing header reports.
     pub pending: usize,
+    /// Plan-change carriers: element diffs folded under the owning node/group,
+    /// the number the Changes page and tree lens show. What the human-facing
+    /// status line reports, so it agrees with the canvas.
+    pub carriers: usize,
     /// Open changes in the plan's ledger — named workstreams in flight.
     pub open_changes: usize,
     /// None until a reconcile baseline exists — drift and anchor states have
@@ -353,9 +360,10 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
     let committed = scryer_core::read_model_at(model_ref).ok()?;
     let planned = scryer_core::read_planned_at(model_ref).ok()?;
     let pending = pending_change_count(&committed, &planned);
+    let carriers = scryer_core::diff::plan_carrier_count(&committed, &planned);
     let open_changes = planned.changes.len();
     if !model_ref.sync_path().exists() {
-        return Some(StatusCounts { pending, open_changes, baseline: None });
+        return Some(StatusCounts { pending, carriers, open_changes, baseline: None });
     }
     let sync = scryer_core::read_sync_state(model_ref);
     let scopes =
@@ -369,6 +377,7 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
     let changed = check.observations.len() - broken;
     Some(StatusCounts {
         pending,
+        carriers,
         open_changes,
         baseline: Some(BaselineCounts {
             drift_scopes: scopes,

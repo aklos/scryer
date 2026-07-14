@@ -387,18 +387,23 @@ pub(crate) fn status_line(c: &StatusCounts) -> String {
         1 => " · 1 change in flight".to_string(),
         n => format!(" · {n} changes in flight"),
     };
+    // "pending" here is the carrier count — the node/group cards the canvas
+    // shows — so the terminal line agrees with what the user reads in-app,
+    // not the finer element queue the agent's header and get_pending report.
     match &c.baseline {
-        None => format!("scryer: {} pending · no reconcile anchor yet{changes}", c.pending),
+        None => format!("scryer: {} pending · no reconcile anchor yet{changes}", c.carriers),
         Some(b) => format!(
             "scryer: {} pending · {} drift scope(s) · anchors: {} broken, {} changed{changes}",
-            c.pending, b.drift_scopes, b.anchors_broken, b.anchors_changed
+            c.carriers, b.drift_scopes, b.anchors_broken, b.anchors_changed
         ),
     }
 }
 
 fn status_json(c: &StatusCounts) -> String {
+    // Report the carrier count as "pending" so the `status` subcommand agrees
+    // with the terminal status line and the canvas.
     let v = serde_json::json!({
-        "pending": c.pending,
+        "pending": c.carriers,
         "openChanges": c.open_changes,
         "driftScopes": c.baseline.as_ref().map(|b| b.drift_scopes),
         "anchorsBroken": c.baseline.as_ref().map(|b| b.anchors_broken),

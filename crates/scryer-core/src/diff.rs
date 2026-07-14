@@ -136,6 +136,140 @@ pub fn diff(from: &ScryModel, to: &ScryModel) -> ModelDiff {
     out
 }
 
+/// Count the plan-change CARRIERS — the node/group cards the Changes page lists
+/// and the tree's Changes lens counts, i.e. the number a user reads in-app.
+///
+/// This differs from `diff(committed, planned).changes.len()`: element diffs
+/// (a reworded claim, an added property, a repointed link) fold under the ONE
+/// node or group that owns them, so a node that grew six claims is one carrier,
+/// not six changes; and drift (vagrant) content is stripped, since that is the
+/// reconcile axis, never a planned edit. A carrier left with no real change
+/// after that stripping is not counted.
+///
+/// Kept in lockstep with the frontend's `collectPlanEntries`
+/// (src/changeMarks.ts) — the single definition every in-app surface counts —
+/// so the ambient status line agrees with what the canvas shows.
+pub fn plan_carrier_count(committed: &ScryModel, planned: &ScryModel) -> usize {
+    use std::collections::{HashMap, HashSet};
+    let plan = diff(committed, planned);
+
+    // Group ids across both layers — a deleted group lives only in committed.
+    let is_group: HashSet<&str> = planned
+        .groups
+        .iter()
+        .chain(committed.groups.iter())
+        .map(|g| g.id.as_str())
+        .collect();
+    let node_by_id: HashMap<&str, &crate::Node> =
+        planned.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    // Links by id across both layers — a dropped link lives only in committed.
+    let link_by_id: HashMap<&str, &crate::Link> = committed
+        .links
+        .iter()
+        .chain(planned.links.iter())
+        .map(|l| (l.id.as_str(), l))
+        .collect();
+
+    // A changed link is carried by its source node — the side that performs the
+    // relationship. Collect each source node's outgoing link changes.
+    let mut links_by_src: HashMap<&str, Vec<&[Change]>> = HashMap::new();
+    // Each node/group's own field/structural changes, and the resp/property
+    // changes grouped under their owning id.
+    let mut node_own: HashMap<&str, &[Change]> = HashMap::new();
+    let mut group_own: HashMap<&str, &[Change]> = HashMap::new();
+    let mut by_owner: HashMap<&str, Vec<&ElementChange>> = HashMap::new();
+    for ec in &plan.changes {
+        match ec.kind {
+            ElementKind::Node => {
+                node_own.insert(ec.id.as_str(), ec.changes.as_slice());
+            }
+            ElementKind::Group => {
+                group_own.insert(ec.id.as_str(), ec.changes.as_slice());
+            }
+            ElementKind::Responsibility | ElementKind::Property => {
+                if let Some(owner) = ec.owner_id.as_deref() {
+                    by_owner.entry(owner).or_default().push(ec);
+                }
+            }
+            ElementKind::Link => {
+                if let Some(link) = link_by_id.get(ec.id.as_str()) {
+                    links_by_src
+                        .entry(link.src.as_str())
+                        .or_default()
+                        .push(ec.changes.as_slice());
+                }
+            }
+        }
+    }
+
+    // Every node/group that carries a change: its own, content it owns, or a
+    // link it performs (links attach to their source node only).
+    let mut node_ids: HashSet<&str> = node_own.keys().copied().collect();
+    let mut group_ids: HashSet<&str> = group_own.keys().copied().collect();
+    for owner in by_owner.keys() {
+        if is_group.contains(owner) {
+            group_ids.insert(owner);
+        } else {
+            node_ids.insert(owner);
+        }
+    }
+    for host in links_by_src.keys() {
+        if !is_group.contains(host) {
+            node_ids.insert(host);
+        }
+    }
+
+    // A carrier counts when it still holds a real (non-drift) plan change once
+    // vagrant content is stripped — the `classifyPlan` null case dropped here.
+    let carries = |is_node: bool, id: &str| -> bool {
+        let node = if is_node { node_by_id.get(id).copied() } else { None };
+        // A vagrant node's own change is code-first review, not a plan edit.
+        let node_vagrant = node.is_some_and(|n| n.vagrant == Some(true));
+        let own: Option<&[Change]> = if node_vagrant {
+            None
+        } else if is_node {
+            node_own.get(id).copied()
+        } else {
+            group_own.get(id).copied()
+        };
+        // diff never emits an empty change set, so a present `own` is a real edit.
+        if own.is_some_and(|o| !o.is_empty()) {
+            return true;
+        }
+        // Owned resp/property changes, with vagrant (drift) ones filtered out.
+        let vagrant_resps: HashSet<&str> = node
+            .map(|n| {
+                n.responsibilities
+                    .iter()
+                    .filter(|r| r.vagrant == Some(true))
+                    .map(|r| r.id.as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let vagrant_props: HashSet<&str> = node
+            .map(|n| {
+                n.properties
+                    .iter()
+                    .filter(|p| p.vagrant == Some(true))
+                    .map(|p| p.label.as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let has_child = by_owner.get(id).is_some_and(|ecs| {
+            ecs.iter().any(|ec| match ec.kind {
+                ElementKind::Responsibility => !vagrant_resps.contains(ec.id.as_str()),
+                ElementKind::Property => !vagrant_props.contains(ec.id.as_str()),
+                _ => true,
+            })
+        });
+        let has_link = is_node && links_by_src.contains_key(id);
+        has_child || has_link
+    };
+
+    node_ids.iter().filter(|id| carries(true, id)).count()
+        + group_ids.iter().filter(|id| carries(false, id)).count()
+}
+
 fn diff_nodes(from: &ScryModel, to: &ScryModel, out: &mut ModelDiff) {
     let from_by: BTreeMap<&str, _> = from.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
     let to_by: BTreeMap<&str, _> = to.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
@@ -835,5 +969,37 @@ mod tests {
                 removed: vec!["b".to_string()],
             }]
         );
+    }
+
+    #[test]
+    fn carrier_count_folds_elements_and_drops_vagrants() {
+        // Committed: A owns one claim, B is empty.
+        let mut committed = ScryModel::new();
+        let mut a = node("a", "A", None);
+        a.responsibilities.push(resp("r1", "does one thing"));
+        committed.nodes.push(a);
+        committed.nodes.push(node("b", "B", None));
+
+        // Plan: A grows two more claims (folds under A), B gains a VAGRANT claim
+        // (drift, not a planned edit), a new node C appears with a link C→A.
+        let mut planned = ScryModel::new();
+        let mut a2 = node("a", "A", None);
+        a2.responsibilities.push(resp("r1", "does one thing"));
+        a2.responsibilities.push(resp("r2", "does a second thing"));
+        a2.responsibilities.push(resp("r3", "does a third thing"));
+        planned.nodes.push(a2);
+        let mut b2 = node("b", "B", None);
+        let mut rv = resp("rv", "code already does this");
+        rv.vagrant = Some(true);
+        b2.responsibilities.push(rv);
+        planned.nodes.push(b2);
+        planned.nodes.push(node("c", "C", None));
+        planned.links.push(link("l1", "c", "a"));
+
+        // Five raw element diffs (r2, r3, rv, node C, link l1)…
+        assert_eq!(diff(&committed, &planned).changes.len(), 5);
+        // …but two carriers: A (its two real claims) and C (new node + its
+        // link). B carries only a vagrant claim, so it is not counted.
+        assert_eq!(plan_carrier_count(&committed, &planned), 2);
     }
 }

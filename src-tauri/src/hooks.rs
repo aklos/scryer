@@ -393,8 +393,11 @@ fn respond(stream: &mut std::net::TcpStream, status: u16, body: &serde_json::Val
 fn status_payload(project: &Path) -> Result<serde_json::Value, String> {
     let r = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
     let model = scryer_core::read_model_at(&r)?;
+    let planned = scryer_core::read_planned_at(&r)?;
 
-    let pending = scryer_core::plan_diff_at(&r)?.changes.len();
+    // Carrier count — the node/group cards the canvas shows — so this ambient
+    // status agrees with what the user reads in-app, not the raw element count.
+    let pending = scryer_core::diff::plan_carrier_count(&model, &planned);
 
     // A model never reconciled has no anchor to measure against — reporting
     // "everything drifted" would be the false alarm this endpoint exists to
