@@ -110,6 +110,36 @@ pub struct ModelHealth {
     pub nodes: BTreeMap<String, NodeHealth>,
     /// Whole-model rollup (every node and group, wherever parented).
     pub totals: HealthCounts,
+    /// Architecture nodes wired to nothing — no relationship link names them as
+    /// source or target — so they float edgeless in every diagram and are easy
+    /// to miss. Sorted node ids. Symbols are exempt (the code-level graph is
+    /// legitimately sparse; a symbol earns its place through its claims).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disconnected: Vec<String>,
+}
+
+/// Architecture nodes (everything but symbols) that no link references as
+/// source or target — the edgeless nodes that read as disconnected on the
+/// canvas. Empty when the model has at most one such node (nothing to connect
+/// to). Sorted for a stable report.
+pub fn disconnected_nodes(model: &ScryModel) -> Vec<String> {
+    let non_symbol = model.nodes.iter().filter(|n| n.kind != Kind::Symbol).count();
+    if non_symbol <= 1 {
+        return Vec::new();
+    }
+    let mut linked: HashSet<&str> = HashSet::new();
+    for l in &model.links {
+        linked.insert(l.src.as_str());
+        linked.insert(l.dst.as_str());
+    }
+    let mut out: Vec<String> = model
+        .nodes
+        .iter()
+        .filter(|n| n.kind != Kind::Symbol && !linked.contains(n.id.as_str()))
+        .map(|n| n.id.clone())
+        .collect();
+    out.sort();
+    out
 }
 
 /// Compute the model's health. `files` is the project's modelable source-file
@@ -311,7 +341,7 @@ pub fn compute_health(
         );
     }
 
-    ModelHealth { nodes, totals }
+    ModelHealth { nodes, totals, disconnected: disconnected_nodes(model) }
 }
 
 /// Does this status claim that code exists? Those are the claims that must
@@ -1104,5 +1134,33 @@ mod tests {
         let comp = compute_completeness(&m, &AnchorFacts { real_boxes: &rb, live_anchors: &la });
         assert_eq!(comp["user"].total, 0);
         assert_eq!(comp["user"].pct, None);
+    }
+
+    #[test]
+    fn disconnected_flags_edgeless_arch_nodes_but_never_symbols() {
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, None));
+        m.nodes.push(node("api", Kind::Container, Some("sys")));
+        m.nodes.push(node("worker", Kind::Container, Some("sys"))); // wired to nothing
+        m.nodes.push(node("fn", Kind::Symbol, Some("api"))); // symbol: exempt
+        m.links.push(crate::Link {
+            id: "l1".into(),
+            src: "sys".into(),
+            dst: "api".into(),
+            label: String::new(),
+            method: None,
+        });
+
+        // sys and api are wired by l1; the symbol is exempt; only the worker
+        // container floats edgeless.
+        assert_eq!(disconnected_nodes(&m), vec!["worker".to_string()]);
+        assert_eq!(compute_health(&m, None, None).disconnected, vec!["worker".to_string()]);
+    }
+
+    #[test]
+    fn disconnected_is_empty_when_nothing_to_connect_to() {
+        let mut m = ScryModel::new();
+        m.nodes.push(node("solo", Kind::System, None));
+        assert!(disconnected_nodes(&m).is_empty());
     }
 }

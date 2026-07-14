@@ -130,6 +130,9 @@ export interface ReviewIndex {
   emptySymbols: Node[];
   unseenNodes: Node[];
   unseenClaims: ClaimRef[];
+  /** Architecture nodes wired to no relationship link — edgeless on the canvas
+   *  (from the health report; symbols exempt). */
+  disconnected: Node[];
   total: number;
 }
 
@@ -166,6 +169,12 @@ export function buildReviewIndex(
   }
   const emptySymbols = model.nodes.filter(isNodeEmpty);
   const unseenNodes = model.nodes.filter((n) => newNodeIds.has(n.id));
+  // Edgeless architecture nodes, from the health report. A node whose code is
+  // gone (stale) is already surfaced under "Code removed" — don't list it twice.
+  const disconnectedIds = new Set(report?.health.disconnected ?? []);
+  const disconnected = model.nodes.filter(
+    (n) => disconnectedIds.has(n.id) && !staleNodeIds.has(n.id),
+  );
   const total =
     vagrant.length +
     vagrantProps.length +
@@ -175,9 +184,10 @@ export function buildReviewIndex(
     emptySymbols.length +
     unseenNodes.length +
     unseenClaims.length +
+    disconnected.length +
     driftScopes.length +
     collapseAnchors(report?.anchors ?? []).length;
-  return { vagrant, vagrantProps, stale, staleProps, staleNodes, emptySymbols, unseenNodes, unseenClaims, total };
+  return { vagrant, vagrantProps, stale, staleProps, staleNodes, emptySymbols, unseenNodes, unseenClaims, disconnected, total };
 }
 
 export function NeedsReviewPage({
@@ -587,6 +597,26 @@ export function NeedsReviewPage({
                 </p>
                 <ul className="flex flex-col">
                   {idx.emptySymbols.map((n) => (
+                    <li key={n.id} className="border-b border-[var(--border-subtle)] py-1 last:border-b-0">
+                      <WikiLink
+                        name={n.name}
+                        Icon={kindIcon(n)}
+                        onClick={() => onSelectNode(n.id)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </PageSection>
+            )}
+
+            {idx.disconnected.length > 0 && (
+              <PageSection title="Disconnected nodes" count={idx.disconnected.length}>
+                <p className="mb-2 text-2xs text-[var(--text-muted)]">
+                  No relationship links these to anything, so they float edgeless on the canvas.
+                  Wire each into the relationship it performs, or confirm it belongs on its own.
+                </p>
+                <ul className="flex flex-col">
+                  {idx.disconnected.map((n) => (
                     <li key={n.id} className="border-b border-[var(--border-subtle)] py-1 last:border-b-0">
                       <WikiLink
                         name={n.name}

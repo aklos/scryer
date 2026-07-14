@@ -1767,6 +1767,11 @@ impl ScryerServer {
                     "assertedOnlyLinks": asserted_only,
                     "unmodeled": derived.as_ref().map(|g| &g.unmodeled),
                     "broadBoundaries": broad_boundaries(None),
+                    "disconnected": health.disconnected.iter().map(|id| {
+                        let name = model.nodes.iter().find(|n| &n.id == id).map(|n| n.name.clone()).unwrap_or_default();
+                        serde_json::json!({ "nodeId": id, "name": name, "path": breadcrumb(&model, id) })
+                    }).collect::<Vec<_>>(),
+                    "disconnectedNote": "architecture nodes no relationship link names as source or target — they read as edgeless/disconnected on every diagram and are easy to miss. Wire each into the relationship it actually performs, or confirm it belongs. Symbols are exempt.",
                     "edgeGraph": if derived.is_some() { "from last build's dependency cache" } else { "absent — run a model build (or the app's health refresh) to derive the link audit" },
                     "coverage": {
                         "linkAudit": link_audit_coverage,

@@ -46,6 +46,10 @@ export interface NodeHealth {
 export interface ModelHealth {
   nodes: Record<string, NodeHealth>;
   totals: HealthCounts;
+  /** Architecture nodes (symbols exempt) that no relationship link names as
+   *  source or target — edgeless on every diagram, easy to miss. Node ids,
+   *  sorted. Absent/empty when there is nothing to flag. */
+  disconnected?: string[];
 }
 
 /** Fingerprint observation: one source anchor whose code no longer matches
