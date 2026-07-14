@@ -37,6 +37,21 @@ export function wordDiff(from: string, to: string): WordSeg[] {
   if (from === to) return to ? [{ kind: "equal", text: to }] : [];
   const a = tokenize(from);
   const b = tokenize(to);
+  // Similarity floor: when the shared words cover less than half of either
+  // side, this isn't an edit — it's a rewrite, and an interleaved word diff
+  // reads as shredded text. Emit the whole old statement struck and the whole
+  // new one added instead. Whitespace/punctuation tokens are excluded from the
+  // measure (they match everywhere and would inflate it).
+  const isWord = (t: string) => /[\p{L}\p{N}_]/u.test(t);
+  const aWords = a.filter(isWord);
+  const bWords = b.filter(isWord);
+  const shared = lcsTable(aWords, bWords)[0][0];
+  if (from && to && shared < Math.max(aWords.length, bWords.length) / 2) {
+    return [
+      { kind: "removed", text: from },
+      { kind: "added", text: to },
+    ];
+  }
   const dp = lcsTable(a, b);
   const out: WordSeg[] = [];
   const push = (kind: WordSeg["kind"], text: string) => {

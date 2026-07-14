@@ -20,8 +20,15 @@ export const DESCRIPTION_MAX = 200;
 export const TECHNOLOGY_MAX = 80;
 export const NAME_MAX = 40;
 
+const DIFF_ADDED = "rounded-xs bg-emerald-500/15 px-px text-emerald-700 dark:text-emerald-300";
+
 /** Inline word-level diff: unchanged text plain, added words highlighted, removed
- *  words struck through. Used for reworded claims, descriptions, and link labels. */
+ *  words struck through. Used for reworded claims, descriptions, and link labels.
+ *  On a total rewrite the differ falls back to two whole-string runs (see
+ *  wordDiff's similarity floor) — both still render, struck old then added new,
+ *  so a replacement never masquerades as an addition. Unchanged text inherits
+ *  its ink: every caller's wrapper must set an explicit text color (the app has
+ *  no global body ink to fall back on). */
 export function WordDiffText({ from, to }: { from: string; to: string }) {
   const segs = wordDiff(from, to);
   return (
@@ -38,9 +45,7 @@ export function WordDiffText({ from, to }: { from: string; to: string }) {
             {s.kind === "equal" ? (
               <span>{s.text}</span>
             ) : s.kind === "added" ? (
-              <span className="rounded-xs bg-emerald-500/15 px-px text-emerald-700 dark:text-emerald-300">
-                {s.text}
-              </span>
+              <span className={DIFF_ADDED}>{s.text}</span>
             ) : (
               <del className="text-red-700 decoration-red-400/60 dark:text-red-400/90">
                 {s.text}
