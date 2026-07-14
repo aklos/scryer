@@ -113,15 +113,15 @@ function ConcernGlyph({ slug, concerns }: { slug?: string; concerns: ConcernDef[
   );
 }
 
-/** Presentation-only anatomy for the read view: concern groups A→Z (auth on
- *  top, always), then untagged core flow trailing in authored order. Stored
- *  order is never touched — this is how the list READS, the same arrangement
- *  on every page. */
-function groupByConcern(rows: RespDiffRow[]): RespDiffRow[] {
-  const byConcern = new Map<string, RespDiffRow[]>();
-  const flow: RespDiffRow[] = [];
+/** Presentation-only anatomy, shared by read and edit: concern groups A→Z
+ *  (auth on top, always), then untagged core flow trailing in authored order.
+ *  Stored order is never touched — this is how the list READS, the same
+ *  arrangement on every page and in the editor. */
+function orderByConcern<T>(rows: T[], concernOf: (row: T) => string | undefined): T[] {
+  const byConcern = new Map<string, T[]>();
+  const flow: T[] = [];
   for (const row of rows) {
-    const c = row.resp.concern;
+    const c = concernOf(row);
     if (c) {
       const arr = byConcern.get(c) ?? [];
       arr.push(row);
@@ -130,6 +130,10 @@ function groupByConcern(rows: RespDiffRow[]): RespDiffRow[] {
   }
   const slugs = [...byConcern.keys()].sort((a, b) => a.localeCompare(b));
   return [...slugs.flatMap((s) => byConcern.get(s)!), ...flow];
+}
+
+function groupByConcern(rows: RespDiffRow[]): RespDiffRow[] {
+  return orderByConcern(rows, (r) => r.resp.concern);
 }
 
 /** Render text with word-level add/remove highlighting (a reworded claim). When
@@ -341,7 +345,7 @@ function ResponsibilitiesEditor({
                 <option key={s} value={s} />
               ))}
             </datalist>
-            {draft.map((r, i) =>
+            {orderByConcern(draft, (r) => r.concern).map((r, i) =>
               r.removed ? (
                 <RemovedRespRow key={r.id} resp={r} index={i + 1} onUndo={() => restoreRow(r.id)} />
               ) : (
