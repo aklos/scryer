@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { CornerDownRight, FlaskConical } from "lucide-react";
-import type { ScryModel, Responsibility, SourceLocation } from "../viewmodel";
+import { CornerDownRight, FlaskConical, Tag, X } from "lucide-react";
+import type { ConcernDef, ScryModel, Responsibility, SourceLocation } from "../viewmodel";
+import { STANDARD_CONCERNS } from "../viewmodel";
+import { lookupIcon } from "../IconPicker";
 import type { Editor } from "../editor";
 import type { AnchorState } from "../health";
 import { FLAG_COLORS, VERIFY_PILLS } from "../statusColors";
@@ -12,6 +14,8 @@ import {
   DIFF_TINT,
   type ElementDiff,
   VerdictBar,
+  DRIFT_RULE,
+  DRIFT_HINT,
 } from "../diffkit";
 import { ClaimSource, respElementId } from "../SourceSection";
 import { usePageMenu, useCopyId, copyIdItem } from "../pageMenu";
@@ -74,6 +78,60 @@ function buildRespDiff(
   }).map(({ item, ...row }) => ({ ...row, resp: item }));
 }
 
+/** The typed-slot prefix of a responsibility row — the element that tells you
+ *  what a line is BEFORE you read it. A tagged claim leads with its concern's
+ *  glyph (registry icon → standard vocabulary → Tag); untagged core flow leads
+ *  with a muted dot. Replaces the old ordinal, which renumbered on every
+ *  regroup and meant nothing. */
+function ConcernGlyph({ slug, concerns }: { slug?: string; concerns: ConcernDef[] }) {
+  if (!slug) {
+    // Untagged core flow: a small dot drawn as a 14px SVG with the SAME classes
+    // a concern icon carries, so it shares the icons' exact baseline and box —
+    // the marker lane stays aligned whether a row is tagged or not. (A nested
+    // flex/text glyph shifts the baseline and floats out of the lane.)
+    return (
+      <span
+        className="inline-flex select-none justify-end pr-2 text-[var(--text-secondary)]"
+        title="core domain flow — no concern tag"
+      >
+        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 translate-y-[3px]" aria-hidden="true">
+          <circle cx="12" cy="12" r="3" fill="currentColor" />
+        </svg>
+      </span>
+    );
+  }
+  const entry = concerns.find((c) => c.slug === slug);
+  const description = entry?.description ?? STANDARD_CONCERNS.get(slug)?.description;
+  const Icon = lookupIcon(entry?.icon ?? STANDARD_CONCERNS.get(slug)?.icon ?? "Tag") ?? Tag;
+  return (
+    <span
+      className="inline-flex select-none justify-end pr-2 text-[var(--text-secondary)]"
+      title={`concern: ${slug}${description ? ` — ${description}` : ""}`}
+    >
+      <Icon className="h-3.5 w-3.5 translate-y-[2px]" />
+    </span>
+  );
+}
+
+/** Presentation-only anatomy for the read view: concern groups A→Z (auth on
+ *  top, always), then untagged core flow trailing in authored order. Stored
+ *  order is never touched — this is how the list READS, the same arrangement
+ *  on every page. */
+function groupByConcern(rows: RespDiffRow[]): RespDiffRow[] {
+  const byConcern = new Map<string, RespDiffRow[]>();
+  const flow: RespDiffRow[] = [];
+  for (const row of rows) {
+    const c = row.resp.concern;
+    if (c) {
+      const arr = byConcern.get(c) ?? [];
+      arr.push(row);
+      byConcern.set(c, arr);
+    } else flow.push(row);
+  }
+  const slugs = [...byConcern.keys()].sort((a, b) => a.localeCompare(b));
+  return [...slugs.flatMap((s) => byConcern.get(s)!), ...flow];
+}
+
 /** Render text with word-level add/remove highlighting (a reworded claim). When
  *  `from`/`to` are equal it's just the plain text. */
 export function ResponsibilitiesSection({
@@ -82,6 +140,7 @@ export function ResponsibilitiesSection({
   resps,
   prevResps,
   plannedHosts,
+  concerns,
   sourceMap,
   verifyMap,
   verifyStates,
@@ -100,6 +159,9 @@ export function ResponsibilitiesSection({
   /** respId → owning host name across the whole plan; distinguishes a relocated
    *  claim from a deleted one so we never offer a duplicating Restore. */
   plannedHosts: Map<string, string>;
+  /** The model's concern registry — resolves each claim's `concern` slug to its
+   *  glyph/description, and feeds the editor's slug suggestions. */
+  concerns: ConcernDef[];
   /** respId → source locations, for the inline `↳ file:range` peeks per claim. */
   sourceMap: Record<string, SourceLocation[]>;
   /** respId → backing-test locations (the verify dimension). */
@@ -146,6 +208,7 @@ export function ResponsibilitiesSection({
           host={host}
           hostId={hostId}
           initial={resps}
+          concerns={concerns}
           seedNewRow={seedNewRow}
           mintId={mintId}
           editor={editor}
@@ -158,11 +221,12 @@ export function ResponsibilitiesSection({
         <Empty>No responsibilities.</Empty>
       ) : (
         <ol className="-mx-2 flex flex-col">
-          {diffRows.map((row) => (
+          {groupByConcern(diffRows).map((row) => (
             <RespDiffRow
               key={row.resp.id}
               row={row}
               host={host}
+              concerns={concerns}
               locations={sourceMap[row.resp.id] ?? []}
               verifyLocations={verifyMap[row.resp.id] ?? []}
               verifyState={verifyStates[row.resp.id] ?? null}
@@ -188,6 +252,7 @@ function ResponsibilitiesEditor({
   host,
   hostId,
   initial,
+  concerns,
   seedNewRow,
   mintId,
   editor,
@@ -196,6 +261,8 @@ function ResponsibilitiesEditor({
   host: "node" | "group";
   hostId: string;
   initial: Responsibility[];
+  /** The registry — feeds the concern input's slug suggestions. */
+  concerns: ConcernDef[];
   seedNewRow: boolean;
   mintId: (draft: Responsibility[]) => string;
   editor: Editor;
@@ -206,15 +273,30 @@ function ResponsibilitiesEditor({
     ? [...initial, { id: seededId, statement: "" }]
     : initial;
 
+  // Slug suggestions: the model's registry plus the standard vocabulary —
+  // reuse-before-mint, offered as a datalist under every concern input.
+  const slugOptions = [
+    ...new Set([...concerns.map((c) => c.slug), ...STANDARD_CONCERNS.keys()]),
+  ].sort((a, b) => a.localeCompare(b));
+  const datalistId = `concern-slugs-${hostId}`;
+
   const commit = (draft: RespDraftRow[]) => {
     // Deleted rows (draft-only `removed` marker) and blank statements (invalid —
     // the backend flags them) drop out on commit; the removal loop below calls
-    // removeResponsibility for dropped existing rows.
+    // removeResponsibility for dropped existing rows. A blank concern (the
+    // input was opened but left empty) drops to untagged; slug normalization
+    // and registry minting happen at the write chokepoint (`registerConcerns`).
     const cleaned = draft
       .filter((r) => !r.removed && r.statement.trim() !== "")
       .map(({ removed: _removed, ...r }) => {
         const dirs = (r.directives ?? []).map((s) => s.trim()).filter(Boolean);
-        return { ...r, statement: r.statement.trim(), directives: dirs.length ? dirs : undefined };
+        const concern = (r.concern ?? "").trim();
+        return {
+          ...r,
+          statement: r.statement.trim(),
+          directives: dirs.length ? dirs : undefined,
+          concern: concern || undefined,
+        };
       });
     const keep = new Set(cleaned.map((r) => r.id));
     for (const r of initial)
@@ -254,6 +336,11 @@ function ResponsibilitiesEditor({
           <Empty>No responsibilities.</Empty>
         ) : (
           <ul className="-mx-2 flex flex-col">
+            <datalist id={datalistId}>
+              {slugOptions.map((s) => (
+                <option key={s} value={s} />
+              ))}
+            </datalist>
             {draft.map((r, i) =>
               r.removed ? (
                 <RemovedRespRow key={r.id} resp={r} index={i + 1} onUndo={() => restoreRow(r.id)} />
@@ -262,6 +349,7 @@ function ResponsibilitiesEditor({
                   key={r.id}
                   resp={r}
                   index={i + 1}
+                  datalistId={datalistId}
                   // autoFocus fires at mount only — it lands on the seeded row
                   // and on rows appended via "Add responsibility".
                   autoFocus={r.statement === "" && r.id === draft[draft.length - 1].id}
@@ -321,6 +409,7 @@ function RemovedRespRow({
 function RespDiffRow({
   row,
   host,
+  concerns,
   locations,
   verifyLocations,
   verifyState,
@@ -331,6 +420,8 @@ function RespDiffRow({
 }: {
   row: RespDiffRow;
   host: "node" | "group";
+  /** The model's concern registry — resolves the row's glyph. */
+  concerns: ConcernDef[];
   /** This claim's source locations — rendered inline with expandable peeks. */
   locations: SourceLocation[];
   /** The claim's backing tests (verify dimension). */
@@ -342,7 +433,7 @@ function RespDiffRow({
   onRestore: () => void;
   editor: Editor | undefined;
 }) {
-  const { resp, kind, prev, index } = row;
+  const { resp, kind, prev } = row;
   const openMenu = usePageMenu();
   const copyId = useCopyId();
   const deleted = kind === "deleted";
@@ -361,10 +452,7 @@ function RespDiffRow({
   // The verification pill shows on live claims only — a deleted/relocated
   // row's test link is context, not a badge.
   const tested = !deleted && !relocated && verifyLocations.length > 0;
-  const hasMeta = resp.stale === true || unmapped || tested;
-  // Drift's reword proposal: `null` = showing the accept/edit affordance, a
-  // string = editing the wording before accepting.
-  const [rewordDraft, setRewordDraft] = useState<string | null>(null);
+  const hasMeta = unmapped || tested;
 
   const contentColor = deleted || relocated
     ? "text-[var(--text-muted)]"
@@ -380,9 +468,7 @@ function RespDiffRow({
       className={`${RESP_ROW} rounded py-[1.5px] [&:not(:first-child)]:mt-2.5`}
     >
       {kind === "unchanged" ? <span /> : <ChangeGlyph kind={CHANGE_OF[kind]} />}
-      <span className="select-none pr-2.5 text-right font-mono text-2xs tabular-nums text-[var(--text-ghost)]">
-        {index}
-      </span>
+      <ConcernGlyph slug={resp.concern} concerns={concerns} />
       <div className="min-w-0 pr-[180px] font-mono text-sm leading-relaxed">
         <span className={contentColor}>
           {resp.statement ? (
@@ -403,6 +489,16 @@ function RespDiffRow({
             <span className="italic text-[var(--text-ghost)]">Untitled responsibility</span>
           )}
         </span>
+        {/* The chip only earns its place when the verdict block below can't
+            render (read-only) — beside it, it would announce the same fact twice. */}
+        {resp.stale && !editor && (
+          <span
+            className={`${FLAG_COLORS.stale.pill} ml-2 align-middle`}
+            title="Drift check: the code no longer discharges this claim as written."
+          >
+            stale
+          </span>
+        )}
 
         {/* Bleed spec: undo the row's 18+22px gutter columns and the 180px
             control lane, so the open peek spans the article column. */}
@@ -415,14 +511,6 @@ function RespDiffRow({
 
         {hasMeta && (
           <span className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-2xs">
-            {resp.stale && (
-              <span
-                className={FLAG_COLORS.stale.pill}
-                title="Drift check: the code no longer discharges this claim. Re-implement, reword, or drop it."
-              >
-                stale
-              </span>
-            )}
             {unmapped && (
               <span
                 className={FLAG_COLORS.stale.pill}
@@ -478,86 +566,61 @@ function RespDiffRow({
         )}
 
         {/* Verdict actions, inline where the row needs one — controls in their
-            own lane, off the mono content. */}
+            own lane, off the mono content. A stale claim is a two-way verdict:
+            the model adheres to the code, or the code adheres to the model.
+            Which pair shows depends on whether the behaviour diverged (drift
+            wrote a reword proposal) or vanished (no proposal). Green is
+            reserved for the no-cost accept; rebuilding is neutral (it files
+            work); drop is red (it deletes from the model). */}
         {resp.stale && editor && (
-          <div className="mt-1.5 flex flex-col gap-1.5 text-2xs">
-            {/* Reword: drift judged the behaviour DIVERGED, not vanished, and
-                proposed wording that matches the code now. The recommended path —
-                accept it (or edit first) to fold the new wording in with no
-                rebuild, since the code already does it. */}
-            {resp.staleProposal &&
-              (rewordDraft === null ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[var(--text-tertiary)]">Drift proposes:</span>
-                  <span className="min-w-0 font-mono text-sm">
-                    <WordDiffText from={resp.statement} to={resp.staleProposal} />
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => editor.rewordResponsibility(resp.id, resp.staleProposal!)}
-                    className={BTN_GO}
-                    title="The code changed what it does — accept this wording into the model. No rebuild: the code already does this."
-                  >
-                    Accept reword
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setRewordDraft(resp.staleProposal ?? "")}
-                    className={BTN}
-                    title="Adjust the wording before accepting"
-                  >
-                    Edit
-                  </button>
-                </div>
-              ) : (
-                <div className="flex flex-wrap items-center gap-2">
-                  <Editable
-                    initial={rewordDraft}
-                    autoFocus
-                    placeholder="Verb-led statement of accountability"
-                    onInput={setRewordDraft}
-                    onEnter={() => {
-                      if (rewordDraft.trim()) editor.rewordResponsibility(resp.id, rewordDraft);
-                    }}
-                    onEscape={() => setRewordDraft(null)}
-                    className={`min-w-[12rem] flex-1 ${STMT_HL}`}
-                  />
-                  <button
-                    type="button"
-                    disabled={!rewordDraft.trim()}
-                    onClick={() => editor.rewordResponsibility(resp.id, rewordDraft)}
-                    className={`${BTN_GO} disabled:opacity-40`}
-                  >
-                    Save
-                  </button>
-                  <button type="button" onClick={() => setRewordDraft(null)} className={BTN}>
-                    Cancel
-                  </button>
-                </div>
-              ))}
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[var(--text-tertiary)]">
-                {resp.staleProposal
-                  ? "Or —"
-                  : "Drift says the code no longer does this —"}
-              </span>
-              <button
-                type="button"
-                onClick={() => editor.reimplementResponsibility(resp.id)}
-                className={BTN_GO}
-                title="The model is right — rebuild the code. Becomes a to-do the agent implements (folds back when done)."
-              >
-                Re-implement
-              </button>
-              <button
-                type="button"
-                onClick={() => editor.dropResponsibility(resp.id)}
-                className={BTN_DANGER}
-                title="The behaviour was removed on purpose — drop the claim from the model."
-              >
-                Drop
-              </button>
-            </div>
+          <div className={`mt-1.5 flex flex-wrap items-center gap-2 text-2xs ${DRIFT_RULE}`}>
+            {resp.staleProposal ? (
+              <>
+                <span className={DRIFT_HINT}>Drift proposes:</span>
+                <span className="min-w-0 font-mono text-sm text-[var(--text-secondary)]">
+                  <WordDiffText from={resp.statement} to={resp.staleProposal} />
+                </span>
+                <button
+                  type="button"
+                  onClick={() => editor.rewordResponsibility(resp.id, resp.staleProposal!)}
+                  className={BTN_GO}
+                  title="The code changed what it does — accept this wording into the model. No rebuild: the code already does this."
+                >
+                  Accept reword
+                </button>
+                <span className="text-[var(--text-tertiary)]">Or the model is right —</span>
+                <button
+                  type="button"
+                  onClick={() => editor.reimplementResponsibility(resp.id)}
+                  className={BTN}
+                  title="Keep this claim as written and rebuild the behaviour in code — files a to-do the agent implements (folds back when done)."
+                >
+                  Rebuild code
+                </button>
+              </>
+            ) : (
+              <>
+                <span className={DRIFT_HINT}>
+                  Drift says the code no longer does this —
+                </span>
+                <button
+                  type="button"
+                  onClick={() => editor.dropResponsibility(resp.id)}
+                  className={BTN_DANGER}
+                  title="The behaviour was removed on purpose — drop the claim from the model."
+                >
+                  Drop claim
+                </button>
+                <button
+                  type="button"
+                  onClick={() => editor.reimplementResponsibility(resp.id)}
+                  className={BTN}
+                  title="Keep this claim and rebuild the behaviour in code — files a to-do the agent implements (folds back when done)."
+                >
+                  Rebuild code
+                </button>
+              </>
+            )}
           </div>
         )}
         {reviewable && (
@@ -633,18 +696,24 @@ function RespDiffRow({
 function ResponsibilityEditRow({
   resp,
   index,
+  datalistId,
   autoFocus,
   onPatch,
   onRemove,
 }: {
   resp: Responsibility;
   index: number;
+  /** Shared datalist of registry + standard concern slugs. */
+  datalistId: string;
   autoFocus: boolean;
   onPatch: (id: string, patch: Partial<Responsibility>) => void;
   onRemove: (id: string) => void;
 }) {
   const directives = resp.directives ?? [];
   const setDirectives = (next: string[]) => onPatch(resp.id, { directives: next });
+  // The concern line shows while the draft carries a concern KEY (even blank —
+  // the just-clicked-"Concern" state); a blank drops to untagged on Done.
+  const hasConcernLine = resp.concern !== undefined;
 
   // In-place edit row: each line is a contentEditable span flowing in the same
   // content cell as the read diff row, with the SAME font/size/line-height, so
@@ -667,6 +736,17 @@ function ResponsibilityEditRow({
             className={`block !pr-[180px] text-[var(--text)] ${STMT_HL}`}
           />
           <span className={CTL_SROW}>
+            {!hasConcernLine && (
+              <button
+                type="button"
+                data-act="add-concern"
+                title='Tag the cross-cutting concern this claim serves (e.g. "auth")'
+                onClick={() => onPatch(resp.id, { concern: "" })}
+                className={BTN}
+              >
+                Concern
+              </button>
+            )}
             <button
               type="button"
               data-act="add-directive"
@@ -685,6 +765,28 @@ function ResponsibilityEditRow({
             </button>
           </span>
         </div>
+
+        {hasConcernLine && (
+          <div className="mt-0.5 flex items-center gap-1.5">
+            <Tag className="h-3 w-3 shrink-0 text-[var(--text-ghost)]" />
+            <input
+              list={datalistId}
+              value={resp.concern ?? ""}
+              autoFocus={resp.concern === ""}
+              placeholder="concern slug — auth, idempotency, …"
+              onChange={(e) => onPatch(resp.id, { concern: e.target.value })}
+              className="w-52 rounded border border-[var(--border)] bg-[var(--surface-field)] px-1.5 py-0.5 font-mono text-xs text-[var(--text)] outline-none placeholder:text-[var(--text-ghost)] focus:border-[var(--accent)]"
+            />
+            <button
+              type="button"
+              title="Untag — back to core domain flow"
+              onClick={() => onPatch(resp.id, { concern: undefined })}
+              className="rounded p-0.5 text-[var(--text-ghost)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        )}
 
         {directives.length > 0 && (
           <div className="mt-0.5 flex flex-col gap-0.5">

@@ -682,6 +682,7 @@ mod tests {
 
     fn resp(id: &str) -> Responsibility {
         Responsibility {
+            concern: None,
             id: id.into(),
             statement: format!("does {id}"),
             vagrant: None,

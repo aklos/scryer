@@ -527,6 +527,7 @@ mod tests {
         m.nodes.push(node("sys", Kind::System, None));
         let mut sa = node("syma", Kind::Symbol, Some("sys"));
         sa.responsibilities.push(Responsibility {
+            concern: None,
             id: "r1".into(),
             statement: "does".into(),
             vagrant: None,

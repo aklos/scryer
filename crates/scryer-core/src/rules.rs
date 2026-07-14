@@ -140,6 +140,15 @@ NEVER describe a data shape in a responsibility statement. "Defines the lead rec
         ],
         body: r#"An anchor — a responsibility's or symbol's `source_map` file:line, a container/component's boundary glob — records that REAL code discharges the claim. So NEVER anchor a claim you have not implemented yet. Authoring the plan is anchorless; anchoring is the BUILD checkpoint, the act of recording "this exists, here". That discipline makes anchoring the completeness signal: a node's completeness is its ANCHORED primitives over its AUTHORED ones (committed + planned), rolled up over the subtree. The countable primitives are each node's own anchor (a container/component's boundary glob — "the box"; a symbol's definition), each LEAF responsibility, and each data-shape property set. A structural node's OWN responsibilities are NOT counted — they discharge through the subtree (rule 3). So a container you have scaffolded — boundary glob set over the real directory, but its responsibilities and children not yet anchored — reads as a LOW, non-zero completeness: instantly legible as "scaffolded, not built out". As you implement and anchor each leaf, the number climbs; a node with no anchorable leaf primitives beneath it yet is unmeasured (—), not complete. On a greenfield model nothing is anchored and the denominator is the authored plan, so everything reads 0% — correct: fully specced, nothing built. Because you never anchor vapor, "anchored" is a trustworthy proxy for "implemented" — but it certifies the code EXISTS, not that it fully satisfies the claim: a claim whose code only half-discharges it is still one altitude too coarse (rule 18), so split it."#,
     },
+    Rule {
+        id: 20,
+        title: "Concerns tag cross-cutting accountability — at most one per responsibility",
+        tags: &[
+            "concern", "concerns", "tag", "cross-cutting", "auth", "facet", "lens",
+            "idempotency", "observability",
+        ],
+        body: r#"A responsibility may carry ONE `concern` — a kebab-case slug naming the cross-cutting concern it serves. The standard vocabulary: `auth`, `persistence`, `failure-handling`, `idempotency`, `validation`, `observability`, `performance`, `compliance`. Tag every responsibility that discharges a cross-cutting concern as you author or edit it; leave a node's core domain flow UNTAGGED — no tag means "this is the main behavior", and that absence is signal, not an omission. Reuse before minting: check the model's concern registry and the standard slugs first, and use the SAME slug for the same concern everywhere (rule 17's consistent-vocabulary test) — mint a new slug only for a genuinely distinct concern, and keep it short and domain-generic ("rate-limiting", not "api-rate-limits"). Exactly one concern per responsibility: a statement that seems to need two bundles two accountabilities — split it (rules 3, 15). The concern is metadata BESIDE the statement, never wording inside it: with the tag carrying the category, purpose clauses like "…so duplicates aren't reprocessed" are redundant — cut them (rule 15). Registry entries (slug, description, icon) mint automatically on first use; the user curates them — never edit or delete a registry entry's description or icon yourself."#,
+    },
 ];
 
 /// The full ruleset as one numbered block — for AI-review prompts and any
@@ -166,30 +175,74 @@ pub fn rules_index() -> String {
     s
 }
 
-/// Look up rules by free-text topic. Space-separated terms match (case-insensitive
-/// substring) against each rule's title and tags first — the curated, high-signal
-/// surface — and fall back to the body only when nothing matches there, so a
-/// common word doesn't drag in every rule. Returns the matches in rule order.
+/// Filler words stripped from a lookup topic. `orient` feeds whole task
+/// sentences ("tag the concerns for the model") through here, so these must
+/// never count as hits — before ranking existed, "the" alone dragged in
+/// every rule whose title contained it.
+const STOPWORDS: &[&str] = &[
+    "the", "a", "an", "and", "or", "for", "of", "to", "in", "on", "at", "with", "is", "are",
+    "be", "it", "its", "this", "that", "these", "those", "how", "what", "when", "where", "why",
+    "do", "does", "did", "can", "should", "must", "my", "our", "your", "their", "all", "any",
+    "per", "as", "by", "we", "you", "not", "no", "up", "out", "into", "from", "about",
+];
+
+/// Look up rules by free-text topic, ranked by relevance — a whole task
+/// sentence is a valid input (`orient` passes the task verbatim). The topic is
+/// tokenized (hyphenated words like "cross-cutting" stay whole), stopwords and
+/// sub-3-char fragments drop, and each surviving term is matched WORD-level
+/// against titles and tags: exact, or a one-way prefix of ≥4 chars so plurals
+/// and stems land ("concerns" → "concern", "links" → "link") without "the"
+/// hitting "then". Title/tag hits are the curated surface and outrank body
+/// substring hits, which only surface at all when NO rule matched on
+/// title/tag — so a common body word can't drag in every rule. Ties keep rule
+/// order; zero-score rules are omitted.
 pub fn lookup(topic: &str) -> Vec<&'static Rule> {
-    let terms: Vec<String> = topic.split_whitespace().map(|t| t.to_lowercase()).collect();
+    let terms: Vec<String> = topic
+        .split(|c: char| !c.is_alphanumeric() && c != '-')
+        .map(|t| t.trim_matches('-').to_lowercase())
+        .filter(|t| t.len() >= 3 && !STOPWORDS.contains(&t.as_str()))
+        .collect();
     if terms.is_empty() {
         return Vec::new();
     }
-    let matches = |hay: &str| {
-        let h = hay.to_lowercase();
-        terms.iter().any(|t| h.contains(t.as_str()))
+
+    let word_hit = |term: &str, word: &str| {
+        term == word
+            || (term.len() >= 4 && word.starts_with(term))
+            || (word.len() >= 4 && term.starts_with(word))
     };
 
-    // Primary pass: title + tags.
-    let titled: Vec<&Rule> = RULES
-        .iter()
-        .filter(|r| matches(r.title) || r.tags.iter().any(|t| matches(t)))
-        .collect();
-    if !titled.is_empty() {
-        return titled;
+    let mut scored: Vec<(usize, usize, &'static Rule)> = Vec::new();
+    for r in RULES.iter() {
+        let title = r.title.to_lowercase();
+        let title_words: Vec<&str> = title
+            .split(|c: char| !c.is_alphanumeric() && c != '-')
+            .filter(|w| !w.is_empty())
+            .collect();
+        let body = r.body.to_lowercase();
+        let mut curated = 0;
+        let mut in_body = 0;
+        for t in &terms {
+            if title_words.iter().any(|w| word_hit(t, w))
+                || r.tags.iter().any(|tag| word_hit(t, tag))
+            {
+                curated += 1;
+            } else if body.contains(t.as_str()) {
+                in_body += 1;
+            }
+        }
+        if curated + in_body > 0 {
+            scored.push((curated, in_body, r));
+        }
     }
-    // Fallback: full body text.
-    RULES.iter().filter(|r| matches(r.body)).collect()
+
+    let any_curated = scored.iter().any(|(c, _, _)| *c > 0);
+    if any_curated {
+        scored.retain(|(c, _, _)| *c > 0);
+    }
+    // Stable sort: equal scores keep rule order.
+    scored.sort_by(|a, b| (b.0 * 2 + b.1).cmp(&(a.0 * 2 + a.1)));
+    scored.into_iter().map(|(_, _, r)| r).collect()
 }
 
 /// Render a set of pulled rules as full text for a tool response.
@@ -221,12 +274,29 @@ mod tests {
         assert!(lookup("altitude").iter().any(|r| r.id == 3));
         assert!(lookup("vagrant stale").iter().any(|r| r.id == 14));
         assert!(lookup("naming").iter().any(|r| r.id == 17));
+        assert!(lookup("concern").iter().any(|r| r.id == 20));
+        assert!(lookup("cross-cutting").iter().any(|r| r.id == 20));
     }
 
     #[test]
     fn lookup_misses_return_empty_not_everything() {
         // A word in no title/tag and no body must not drag in the whole set.
         assert!(lookup("kubernetes helm istio").is_empty());
+        // Pure stopwords/fragments match nothing rather than everything.
+        assert!(lookup("the for and a of").is_empty());
+    }
+
+    #[test]
+    fn lookup_ranks_a_task_sentence_by_relevance() {
+        // orient passes the user's task VERBATIM and keeps the top 3 — so the
+        // rule the sentence is about must rank first despite the stopwords
+        // and despite rule 20 being dead last in rule order.
+        let hits = lookup("tag the concerns for the model");
+        assert_eq!(hits.first().map(|r| r.id), Some(20), "rule 20 outranks stopword noise");
+
+        // Plural/stem forms reach the singular vocabulary.
+        assert!(lookup("links").iter().any(|r| r.id == 5), "links → link (rule 5)");
+        assert!(lookup("groups").iter().any(|r| r.id == 4), "groups → group (rule 4)");
     }
 
     #[test]

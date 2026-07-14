@@ -178,20 +178,37 @@ export function buildElementDiff<T>(
  *  re-implement/drop, and restore prompt. */
 export function VerdictBar({
   hint,
+  tone,
   className = "",
   children,
 }: {
   hint: React.ReactNode;
+  /** "drift" dresses the bar as a drift annotation (orange rule + hint ink). */
+  tone?: "drift";
   className?: string;
   children: React.ReactNode;
 }) {
   return (
-    <div className={`mt-1.5 flex flex-wrap items-center gap-2 text-2xs ${className}`}>
-      <span className="text-[var(--text-tertiary)]">{hint} —</span>
+    <div
+      className={`mt-1.5 flex flex-wrap items-center gap-2 text-2xs ${
+        tone === "drift" ? DRIFT_RULE : ""
+      } ${className}`}
+    >
+      <span className={tone === "drift" ? DRIFT_HINT : "text-[var(--text-tertiary)]"}>
+        {hint} —
+      </span>
       {children}
     </div>
   );
 }
+
+/** Drift-annotation dress — the orange left rule and hint ink that mark a block
+ *  as drift's note about the content above it (orange = drift, per the color
+ *  contract), keeping the annotation visually subordinate to the claim it
+ *  hangs off. Shared by {@link VerdictBar}'s drift tone and the stale-claim
+ *  proposal blocks. */
+export const DRIFT_RULE = "border-l-2 border-orange-500/30 pl-3 dark:border-orange-400/30";
+export const DRIFT_HINT = "text-orange-700/80 dark:text-orange-400/80";
 
 /** The shared diff-row anatomy — a fixed glyph gutter beside the content. The
  *  History timeline and the Changes page render their rows through this, so a

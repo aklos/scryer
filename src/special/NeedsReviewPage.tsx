@@ -9,6 +9,7 @@ import { ANCHOR_STATE_LABEL, collapseAnchors } from "../health";
 import { kindIcon } from "../kindIcon";
 import { respElementId, propElementId } from "../SourceSection";
 import { BTN, BTN_AGENT, BTN_DANGER, BTN_GO, jumpTo, LINK, PageSection, WikiLink, WordDiffText } from "../pagekit";
+import { DRIFT_HINT, DRIFT_RULE } from "../diffkit";
 import { SpecialBody, SpecialHeader } from "./shell";
 
 // --- needs review ---------------------------------------------------------------
@@ -40,7 +41,7 @@ export function ClaimRow({
         <button
           type="button"
           onClick={goToClaim}
-          className="block w-full truncate text-left text-sm text-[var(--text-secondary)] hover:text-[var(--text)] hover:underline"
+          className="block w-full truncate text-left font-mono text-sm text-[var(--text-secondary)] hover:text-[var(--text)] hover:underline"
           title="Open on its page"
         >
           {claim.resp.statement || "Untitled responsibility"}
@@ -56,9 +57,9 @@ export function ClaimRow({
           </button>
         </span>
         {claim.resp.staleProposal && (
-          <div className="mt-0.5 text-2xs text-[var(--text-muted)]">
-            drift proposes:{" "}
-            <span className="text-[var(--text-secondary)]">
+          <div className={`mt-0.5 text-2xs ${DRIFT_RULE}`}>
+            <span className={DRIFT_HINT}>drift proposes:</span>{" "}
+            <span className="font-mono text-sm text-[var(--text-secondary)]">
               <WordDiffText from={claim.resp.statement} to={claim.resp.staleProposal} />
             </span>
           </div>
@@ -343,8 +344,9 @@ export function NeedsReviewPage({
               >
                 <p className="mb-2 text-2xs text-[var(--text-muted)]">
                   The model asserts these but the code no longer matches. Where drift proposes a
-                  reword, accept it to bring the claim in line with the code (no rebuild). Otherwise
-                  re-implement to rebuild the code, or drop the claim if the behaviour was removed.
+                  reword, accept it to bring the claim in line with the code (no rebuild) — or keep
+                  the claim and rebuild the code. Where the behaviour vanished outright, drop the
+                  claim or rebuild the code.
                 </p>
                 <ul className="flex flex-col">
                   {idx.stale.map((ref) => (
@@ -370,23 +372,27 @@ export function NeedsReviewPage({
                             <button
                               type="button"
                               onClick={() => editor.reimplementResponsibility(ref.resp.id)}
-                              className={ref.resp.staleProposal ? BTN : BTN_GO}
+                              className={BTN}
+                              title="Keep this claim as written and rebuild the behaviour in code — files a to-do the agent implements (folds back when done)."
                             >
-                              Re-implement
+                              Rebuild code
                             </button>
-                            <button
-                              type="button"
-                              onClick={(e) =>
-                                setConfirmDrop({
-                                  rect: e.currentTarget.getBoundingClientRect(),
-                                  label: "Drop this claim?",
-                                  run: () => editor.dropResponsibility(ref.resp.id),
-                                })
-                              }
-                              className={BTN_DANGER}
-                            >
-                              Drop
-                            </button>
+                            {!ref.resp.staleProposal && (
+                              <button
+                                type="button"
+                                onClick={(e) =>
+                                  setConfirmDrop({
+                                    rect: e.currentTarget.getBoundingClientRect(),
+                                    label: "Drop this claim?",
+                                    run: () => editor.dropResponsibility(ref.resp.id),
+                                  })
+                                }
+                                className={BTN_DANGER}
+                                title="The behaviour was removed on purpose — drop the claim from the model."
+                              >
+                                Drop
+                              </button>
+                            )}
                           </span>
                         )
                       }
@@ -403,9 +409,10 @@ export function NeedsReviewPage({
                             <button
                               type="button"
                               onClick={() => editor.reimplementProperty(ref.node.id, ref.prop.label)}
-                              className={BTN_GO}
+                              className={BTN}
+                              title="Keep this field and rebuild its backing code — files a to-do the agent implements."
                             >
-                              Re-implement
+                              Rebuild code
                             </button>
                             <button
                               type="button"
@@ -433,7 +440,7 @@ export function NeedsReviewPage({
               <PageSection title="Code removed" count={idx.staleNodes.length}>
                 <p className="mb-2 text-2xs text-[var(--text-muted)]">
                   These nodes lost their backing code entirely (a deleted file or folder).
-                  Re-implement to rebuild the whole subtree, or drop it from the model.
+                  Rebuild the whole subtree in code, or drop it from the model.
                 </p>
                 <ul className="flex flex-col">
                   {idx.staleNodes.map((n) => (
@@ -449,9 +456,10 @@ export function NeedsReviewPage({
                           <button
                             type="button"
                             onClick={() => editor.reimplementNode(n.id)}
-                            className={BTN_GO}
+                            className={BTN}
+                            title="Keep this node and rebuild its whole subtree in code — files a to-do the agent implements."
                           >
-                            Re-implement
+                            Rebuild code
                           </button>
                           <button
                             type="button"

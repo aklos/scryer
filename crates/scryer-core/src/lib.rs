@@ -1,5 +1,6 @@
 pub mod build_edges;
 pub mod changes;
+pub mod concerns;
 pub mod diff;
 pub mod drift;
 pub mod health;

@@ -20,9 +20,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Node, Responsibility, ScryModel } from "../viewmodel";
-import { respTruthChanged, stampTouches } from "../viewmodel";
+import { registerConcerns, respTruthChanged, stampTouches } from "../viewmodel";
 import { EMPTY_DIFF, planDiff as computePlanDiff, type ModelDiff } from "../planDiff";
-import { openChange, tagEdit } from "../ledger";
+import { tagEdit } from "../ledger";
 import type { HistoryEvent } from "../history";
 
 const RECENT_KEY = "scryer:recent-projects";
@@ -267,8 +267,6 @@ export interface ModelStorage {
    *  by design — the registry/tags persist in the plan, the pointer doesn't. */
   activeChange: string | null;
   setActiveChange: (id: string | null) => void;
-  /** Mint + register a new change in the plan and make it active. */
-  openNewChange: (rationale: string) => void;
 
   /** Open a project. If it has no model, status becomes `needs-model`. */
   openProject: (path: string) => Promise<void>;
@@ -720,7 +718,10 @@ export function useModelStorage(): ModelStorage {
         // mirror of the agent's Rust-side write stamping; doing it at this single
         // chokepoint covers every edit path (granular, EditModal bulk-commit)
         // and a layout-only edit re-dates nothing.
-        const dated = stampTouches(cur, edited);
+        // Normalize concern tags + mint registry entries, then date what
+        // changed — the canvas mirrors of the Rust write path's
+        // `register_concerns` + `stamp_touches`, at the same single chokepoint.
+        const dated = stampTouches(cur, registerConcerns(edited));
         // Ledger: stamp the active change onto what THIS edit touched — the
         // canvas mirror of the MCP server tagging each tool write. A no-op
         // when detached (unfiled) or when the edit changed nothing
@@ -755,19 +756,6 @@ export function useModelStorage(): ModelStorage {
   // Open a new ledger change (mint + register in the plan, exactly like the
   // agent's set_change) and make it the active one — subsequent canvas edits
   // stamp themselves into it.
-  const openNewChange = useCallback(
-    (rationale: string) => {
-      const trimmed = rationale.trim();
-      if (!trimmed) return;
-      updateModel((m) => {
-        const { model: next, id } = openChange(m, trimmed);
-        setActiveChange(id);
-        return next;
-      });
-    },
-    [updateModel],
-  );
-
   // If the active change closes under us — its last entry folded by the agent,
   // or it was abandoned — detach rather than stamping edits into a change the
   // registry no longer knows (tagEdit would drop the tags silently anyway;
@@ -830,7 +818,6 @@ export function useModelStorage(): ModelStorage {
     history,
     activeChange,
     setActiveChange,
-    openNewChange,
     openProject,
     createBlankModel,
     closeProject,

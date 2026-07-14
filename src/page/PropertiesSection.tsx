@@ -89,26 +89,18 @@ function PropDiffRow({
             )}
           </span>
         )}
-        {prop.stale && (
-          <span className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-2xs">
-            <span
-              className={FLAG_COLORS.stale.pill}
-              title="Drift check: the field backing this property is gone or changed. Re-implement or drop it."
-            >
-              stale
-            </span>
+        {/* Chip only in read-only mode — the verdict bar below announces the
+            same fact when it can render. */}
+        {prop.stale && !editor && (
+          <span
+            className={`${FLAG_COLORS.stale.pill} ml-2 align-middle`}
+            title="Drift check: the field backing this property is gone or changed."
+          >
+            stale
           </span>
         )}
         {prop.stale && editor && (
-          <VerdictBar hint="Drift says this field is gone">
-            <button
-              type="button"
-              onClick={() => editor.reimplementProperty(nodeId, prop.label)}
-              className={BTN_GO}
-              title="The model is right — rebuild the field. Becomes a to-do the agent implements (folds back when done)."
-            >
-              Re-implement
-            </button>
+          <VerdictBar hint="Drift says this field is gone" tone="drift">
             <button
               type="button"
               onClick={() => editor.dropProperty(nodeId, prop.label)}
@@ -116,6 +108,14 @@ function PropDiffRow({
               title="The field was removed on purpose — drop the property from the model."
             >
               Drop
+            </button>
+            <button
+              type="button"
+              onClick={() => editor.reimplementProperty(nodeId, prop.label)}
+              className={BTN}
+              title="Keep this property and rebuild the field in code — files a to-do the agent implements (folds back when done)."
+            >
+              Rebuild code
             </button>
           </VerdictBar>
         )}

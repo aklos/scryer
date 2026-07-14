@@ -33,6 +33,15 @@ pub struct Responsibility {
     pub id: String,
     /// Verb-led business statement of accountability. No mechanism words.
     pub statement: String,
+    /// The cross-cutting concern this responsibility serves — at most ONE
+    /// kebab-case slug (e.g. "auth", "idempotency"), referencing an entry in
+    /// the model's concern registry ([`ScryModel::concerns`]; entries are
+    /// minted automatically on first use). Untagged means core domain flow —
+    /// that absence is signal, not an omission. Metadata beside the statement,
+    /// not part of it: no conformance role, and a tag change never re-dates
+    /// `last_touched_at`. See rule 20.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concern: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vagrant: Option<bool>,
     /// Drift observation: the semantic check judged that the code no longer
@@ -360,6 +369,12 @@ pub struct ScryModel {
     /// within its parent's. Agent-produced and regenerable; never hand-authored.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub boundaries: HashMap<String, Vec<Source>>,
+    /// The concern registry — one entry per concern slug used by any
+    /// responsibility (see [`Responsibility::concern`]). Minted automatically
+    /// on write ([`crate::concerns::register_concerns`]), curated by the user
+    /// (description, icon, renames), never pruned automatically.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub concerns: Vec<crate::concerns::ConcernDef>,
     /// The open-change registry — named partitions of the plan, each carrying
     /// the dev's rationale. PLAN-LAYER ONLY: the committed model never carries
     /// change state ([`write_model_at`] strips it). See [`crate::changes`].
@@ -383,6 +398,7 @@ impl ScryModel {
             source_map: HashMap::new(),
             verify_map: HashMap::new(),
             boundaries: HashMap::new(),
+            concerns: Vec::new(),
             changes: Vec::new(),
             change_map: HashMap::new(),
         }

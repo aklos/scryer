@@ -93,6 +93,9 @@ fn overview_payload(model: &ScryModel) -> serde_json::Value {
         "nodeCount": model.nodes.len(),
         "linkCount": model.links.len(),
         "groupCount": model.groups.len(),
+        // The concern registry — the model's cross-cutting vocabulary. Reuse
+        // these slugs when tagging responsibilities (rule 20).
+        "concerns": model.concerns,
         "overview": outline_tree(model, false),
     })
 }
@@ -217,9 +220,20 @@ fn subtree_payload(model: &ScryModel, node_id: &str) -> Result<serde_json::Value
         })
         .collect();
 
+    // Registry entries for the concerns tagged within this subtree, so a
+    // reader can resolve each responsibility's `concern` slug in place.
+    let used_concerns: HashSet<&str> = subtree_nodes
+        .iter()
+        .flat_map(|n| n.responsibilities.iter())
+        .filter_map(|r| r.concern.as_deref())
+        .collect();
+    let concerns: Vec<_> =
+        model.concerns.iter().filter(|c| used_concerns.contains(c.slug.as_str())).collect();
+
     Ok(serde_json::json!({
         "node": subtree_nodes.iter().find(|n| n.id == node_id),
         "descendants": subtree_nodes.iter().filter(|n| n.id != node_id).collect::<Vec<_>>(),
+        "concerns": concerns,
         "internalLinks": internal_links,
         "externalLinks": external_links,
         "contextNodes": context_nodes,
@@ -1800,6 +1814,7 @@ mod tests {
 
     fn resp(id: &str, statement: &str) -> Responsibility {
         Responsibility {
+            concern: None,
             id: id.into(),
             statement: statement.into(),
             vagrant: None,
@@ -2463,6 +2478,7 @@ mod tests {
         let mut m = ScryModel::new();
         let mut sys = node("sys", Kind::System, "Sys", None);
         sys.responsibilities.push(Responsibility {
+            concern: None,
             id: "r-sys".into(),
             statement: "orchestrates everything".into(),
             vagrant: None,
@@ -2474,6 +2490,7 @@ mod tests {
         m.nodes.push(sys);
         let mut leaf = node("leaf", Kind::Symbol, "leafFn", Some("sys"));
         leaf.responsibilities.push(Responsibility {
+            concern: None,
             id: "r-leaf".into(),
             statement: "does the thing".into(),
             vagrant: None,

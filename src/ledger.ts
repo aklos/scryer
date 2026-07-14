@@ -46,30 +46,6 @@ export function keyFor(ec: ElementChange): string {
   return elementKey(ec.kind, ec.ownerId, ec.id);
 }
 
-/** Mint the next `chg-N` id past every id the plan has seen (registry or
- *  map) and register the change. Returns the new model and the id. */
-export function openChange(
-  model: ScryModel,
-  rationale: string,
-): { model: ScryModel; id: string } {
-  let max = 0;
-  const seen = [
-    ...(model.changes ?? []).map((c) => c.id),
-    ...Object.values(model.changeMap ?? {}),
-  ];
-  for (const cid of seen) {
-    const n = cid.startsWith("chg-") ? Number(cid.slice(4)) : NaN;
-    if (Number.isInteger(n) && n > max) max = n;
-  }
-  const id = `chg-${max + 1}`;
-  const meta: ChangeMeta = {
-    id,
-    rationale: rationale.trim(),
-    createdAt: Math.floor(Date.now() / 1000),
-  };
-  return { model: { ...model, changes: [...(model.changes ?? []), meta] }, id };
-}
-
 /** Tag what an edit changed to the active change: the keys of
  *  `diff(prev, next)` — exactly what THIS edit touched, deletions included,
  *  the same computation the MCP write path uses. Last writer wins a re-tag

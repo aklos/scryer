@@ -24,6 +24,7 @@ export function Select({
   placeholder,
   variant = "inline",
   searchable = false,
+  active = false,
 }: {
   options: SelectOption[];
   value: string;
@@ -31,6 +32,8 @@ export function Select({
   placeholder?: string;
   variant?: SelectVariant;
   searchable?: boolean;
+  /** Non-default state (e.g. a lens/filter is applied): accent border + full text color. */
+  active?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -87,7 +90,7 @@ export function Select({
     <div ref={ref} className="relative flex-1 min-w-0">
       <button
         type="button"
-        className={triggerClasses[variant]}
+        className={`${triggerClasses[variant]} ${active ? "!border-[var(--accent)] !text-[var(--text)]" : ""}`}
         onClick={() => setOpen((o) => !o)}
       >
         <span className="truncate">{selected?.label ?? placeholder ?? "Select..."}</span>

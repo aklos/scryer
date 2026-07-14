@@ -127,6 +127,7 @@ export function GroupPageBody(props: PageProps & { group: Group }) {
               resps={resps}
               prevResps={committedResps}
               plannedHosts={plannedRespHosts(model)}
+              concerns={model.concerns ?? []}
               sourceMap={sourceMap}
               verifyMap={verifyMap}
               verifyStates={verifyStates}

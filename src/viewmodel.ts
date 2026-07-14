@@ -34,17 +34,25 @@ export interface Responsibility {
   id: string;
   /** Verb-led business statement of accountability. No mechanism words. */
   statement: string;
+  /** The cross-cutting concern this responsibility serves — at most ONE
+   *  kebab-case slug (e.g. "auth"), referencing an entry in the model's
+   *  concern registry ({@link ScryModel.concerns}). Untagged means core domain
+   *  flow. Metadata beside the statement: no conformance role, and a tag
+   *  change never re-dates `lastTouchedAt`. Mirrors Rust
+   *  `Responsibility.concern`. */
+  concern?: string;
   /** Discovered in code with no upstream commitment (drift). The user adopts
    *  it (clear the flag) or rejects it (delete it). */
   vagrant?: boolean;
   /** Drift observation: the semantic check judged the code no longer
-   *  discharges this claim. A flag awaiting a verdict (re-implement, reword,
-   *  or drop) — the status is the prescription and stays untouched. */
+   *  discharges this claim. A flag awaiting a two-way verdict — the model
+   *  adheres to the code (accept the reword, or drop a vanished claim) or the
+   *  code adheres to the model (rebuild it) — and stays untouched until then. */
   stale?: boolean;
   /** Drift's proposed correction for a stale claim: the statement that would
    *  match what the code now does, set when the behaviour diverged rather than
-   *  vanished. Surfaced as an accept-or-edit reword next to re-implement/drop;
-   *  a localized hint that never enters the plan diff. Cleared with `stale`. */
+   *  vanished. Surfaced as accept-reword vs rebuild-the-code; a localized hint
+   *  that never enters the plan diff. Cleared with `stale`. */
   staleProposal?: string;
   /** Optional prescriptive HOW-constraints ("must"/"never" rules) — not part of conformance. */
   directives?: string[];
@@ -161,11 +169,30 @@ export interface Group {
   icon?: string;
 }
 
+/** One entry in the model's concern registry: the single place a concern is
+ *  named and decorated. Responsibilities reference it by `slug`; renaming a
+ *  concern rewrites the slug here AND on every tagged responsibility. Mirrors
+ *  Rust `ConcernDef`. */
+export interface ConcernDef {
+  /** Kebab-case identifier, e.g. "auth", "failure-handling". Displayed as-is. */
+  slug: string;
+  /** One line on what accountability the concern covers. */
+  description?: string;
+  /** Lucide icon name (PascalCase, e.g. "Shield") — the glyph that prefixes
+   *  every responsibility tagged with this concern. Falls back to Tag. */
+  icon?: string;
+}
+
 export interface ScryModel {
   version: typeof SCRY_VERSION;
   nodes: Node[];
   links: Link[];
   groups: Group[];
+  /** The concern registry — one entry per concern slug used by any
+   *  responsibility. Minted automatically on write (`registerConcerns`, the
+   *  mirror of Rust `register_concerns`), curated by the user, never pruned
+   *  automatically. */
+  concerns?: ConcernDef[];
   /** Keyed by **responsibility id** → line-precise locations (conformance
    *  numerator). Agent-produced and regenerable; never hand-authored. */
   sourceMap?: Record<string, SourceLocation[]>;
@@ -287,7 +314,10 @@ function sameDirectives(a?: string[], b?: string[]): boolean {
 }
 
 /** Whether a responsibility's truth-bearing content differs — used both for
- *  lastTouchedAt stamping and for highlighting external (agent) edits. */
+ *  lastTouchedAt stamping and for highlighting external (agent) edits.
+ *  `concern` is deliberately excluded: a tag is presentation metadata, so
+ *  retagging never resets the fossilization patina (mirrors Rust
+ *  `resp_truth_changed`). */
 export function respTruthChanged(a: Responsibility, b: Responsibility): boolean {
   return (
     a.statement !== b.statement ||
@@ -355,6 +385,152 @@ export function stampTouches(prev: ScryModel, next: ScryModel): ScryModel {
       const hr = priorGroupResp.get(g.id);
       return { ...g, responsibilities: g.responsibilities?.map((r) => dateResp(r, hr)) };
     }),
+  };
+}
+
+// --- Concerns (the cross-cutting lens) ----------------------------------------
+
+/** The seeded standard concern vocabulary: slug → {description, icon}. Mirrors
+ *  Rust `STANDARD_CONCERNS` — keep the two in lockstep. */
+export const STANDARD_CONCERNS: ReadonlyMap<string, { description: string; icon: string }> =
+  new Map([
+    ["auth", { description: "Identity, authentication, and access control", icon: "Shield" }],
+    ["persistence", { description: "Durable storage and retrieval of data", icon: "Database" }],
+    [
+      "failure-handling",
+      { description: "Detecting, capturing, and recovering from failures", icon: "AlertTriangle" },
+    ],
+    ["idempotency", { description: "Making retries and duplicate deliveries safe", icon: "Repeat" }],
+    [
+      "validation",
+      { description: "Checking inputs against expected shape and rules", icon: "CheckCircle" },
+    ],
+    [
+      "observability",
+      { description: "Logging, metrics, and tracing for runtime insight", icon: "Activity" },
+    ],
+    ["performance", { description: "Speed, capacity, and resource efficiency", icon: "Gauge" }],
+    [
+      "compliance",
+      { description: "Satisfying external policy, legal, or platform rules", icon: "Scale" },
+    ],
+  ]);
+
+/** Normalize a raw concern value to a kebab-case slug (lowercase, runs of
+ *  non-alphanumerics collapse to one hyphen, edges trimmed). Empty result
+ *  means "no concern". Mirrors Rust `normalize_slug`. */
+export function normalizeConcernSlug(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/** Normalize every responsibility's concern slug and make sure each used slug
+ *  has a registry entry — the canvas mirror of Rust `register_concerns`, run at
+ *  the same write chokepoint as {@link stampTouches} so tags and registry stay
+ *  coherent whichever side edits. New entries seed description/icon from
+ *  {@link STANDARD_CONCERNS}; existing entries are never touched, unused ones
+ *  never pruned, and the registry stays sorted by slug. Returns the input
+ *  model unchanged (same reference) when there is nothing to do. */
+export function registerConcerns(model: ScryModel): ScryModel {
+  let changed = false;
+  const used: string[] = [];
+  const visit = (r: Responsibility): Responsibility => {
+    if (r.concern === undefined) return r;
+    const slug = normalizeConcernSlug(r.concern);
+    if (slug !== "" && !used.includes(slug)) used.push(slug);
+    if (slug === r.concern) return r;
+    changed = true;
+    if (slug === "") {
+      const { concern: _drop, ...rest } = r;
+      return rest;
+    }
+    return { ...r, concern: slug };
+  };
+  const nodes = model.nodes.map((n) =>
+    n.responsibilities ? { ...n, responsibilities: n.responsibilities.map(visit) } : n,
+  );
+  const groups = model.groups.map((g) =>
+    g.responsibilities ? { ...g, responsibilities: g.responsibilities.map(visit) } : g,
+  );
+
+  const registry = [...(model.concerns ?? [])];
+  for (const slug of used) {
+    if (registry.some((c) => c.slug === slug)) continue;
+    changed = true;
+    const std = STANDARD_CONCERNS.get(slug);
+    registry.push({ slug, description: std?.description, icon: std?.icon });
+  }
+  if (!changed) return model;
+  registry.sort((a, b) => a.slug.localeCompare(b.slug));
+  return { ...model, nodes, groups, concerns: registry };
+}
+
+/** Per-node subtree tally for one concern: node id → how many responsibilities
+ *  tagged `slug` live on the node or anywhere beneath it. A group's
+ *  responsibilities count toward the node whose children it groups. Nodes with
+ *  zero matches are absent — `counts.has(id)` IS the lens predicate ("does this
+ *  concern live here?"). */
+export function concernCounts(model: ScryModel, slug: string): Map<string, number> {
+  const own = new Map<string, number>();
+  const tally = (hostNodeId: string | undefined | null, resps?: Responsibility[]) => {
+    if (!hostNodeId) return;
+    const n = (resps ?? []).filter((r) => r.concern === slug).length;
+    if (n > 0) own.set(hostNodeId, (own.get(hostNodeId) ?? 0) + n);
+  };
+  for (const n of model.nodes) tally(n.id, n.responsibilities);
+  for (const g of model.groups) tally(g.parentNodeId, g.responsibilities);
+
+  // Roll each node's own count up its ancestor chain.
+  const byId = new Map(model.nodes.map((n) => [n.id, n]));
+  const out = new Map<string, number>();
+  for (const [id, count] of own) {
+    let cur: Node | undefined = byId.get(id);
+    const seen = new Set<string>();
+    while (cur && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      out.set(cur.id, (out.get(cur.id) ?? 0) + count);
+      cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+    }
+  }
+  return out;
+}
+
+/** Resolve the icon name for a concern slug: registry entry → standard
+ *  vocabulary → the generic Tag glyph. */
+export function concernIconName(model: ScryModel, slug: string): string {
+  const entry = model.concerns?.find((c) => c.slug === slug);
+  return entry?.icon ?? STANDARD_CONCERNS.get(slug)?.icon ?? "Tag";
+}
+
+/** Rename a concern EVERYWHERE: the registry entry and every responsibility
+ *  tagged with it, in one step — the registry entry is the concept, so a
+ *  rename is never per-responsibility text surgery. Renaming onto an existing
+ *  slug merges into it (the established entry keeps its description/icon);
+ *  otherwise the old entry carries its decoration to the new slug. A blank or
+ *  identical target is a no-op. */
+export function renameConcern(model: ScryModel, from: string, to: string): ScryModel {
+  const slug = normalizeConcernSlug(to);
+  if (!slug || slug === from) return model;
+  const retag = (rs?: Responsibility[]) =>
+    rs?.map((r) => (r.concern === from ? { ...r, concern: slug } : r));
+  const prior = model.concerns ?? [];
+  let concerns = prior.filter((c) => c.slug !== from);
+  if (!concerns.some((c) => c.slug === slug)) {
+    const old = prior.find((c) => c.slug === from);
+    concerns = [...concerns, { ...old, slug }];
+  }
+  concerns.sort((a, b) => a.slug.localeCompare(b.slug));
+  return {
+    ...model,
+    nodes: model.nodes.map((n) =>
+      n.responsibilities ? { ...n, responsibilities: retag(n.responsibilities) } : n,
+    ),
+    groups: model.groups.map((g) =>
+      g.responsibilities ? { ...g, responsibilities: retag(g.responsibilities) } : g,
+    ),
+    concerns,
   };
 }
 

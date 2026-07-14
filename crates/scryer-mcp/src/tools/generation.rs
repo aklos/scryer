@@ -103,10 +103,11 @@ impl IdMinter {
         id
     }
 
-    fn resp(&mut self, statement: &str) -> Responsibility {
+    fn resp(&mut self, statement: &str, concern: Option<&str>) -> Responsibility {
         let id = format!("resp-{}", self.next_resp);
         self.next_resp += 1;
         Responsibility {
+            concern: concern.map(Into::into),
             id,
             statement: statement.trim().to_string(),
             vagrant: None,
@@ -117,11 +118,11 @@ impl IdMinter {
         }
     }
 
-    fn responsibilities(&mut self, statements: &[String]) -> Vec<Responsibility> {
+    fn responsibilities(&mut self, statements: &[StatementInput]) -> Vec<Responsibility> {
         statements
             .iter()
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| self.resp(s))
+            .filter(|s| !s.statement().trim().is_empty())
+            .map(|s| self.resp(s.statement(), s.concern()))
             .collect()
     }
 
@@ -389,7 +390,7 @@ impl ScryerServer {
                     if input.statement().trim().is_empty() {
                         continue;
                     }
-                    let responsibility = minter.resp(input.statement());
+                    let responsibility = minter.resp(input.statement(), input.concern());
                     new_sm_keys.push(responsibility.id.clone());
                     model.source_map.insert(
                         responsibility.id.clone(),

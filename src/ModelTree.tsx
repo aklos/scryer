@@ -9,11 +9,11 @@
  */
 
 import { useRef, useState } from "react";
-import { Braces, ChevronRight, FlaskConical, Loader2, Plus } from "lucide-react";
+import { Braces, ChevronRight, FlaskConical, Loader2, Pencil, Plus } from "lucide-react";
 import type { Completeness, NodeHealth } from "./health";
 import { CompletenessPie } from "./CompletenessPie";
 import type { ScryModel, Node, Group, Kind } from "./viewmodel";
-import { childKindFor } from "./viewmodel";
+import { childKindFor, concernCounts, normalizeConcernSlug } from "./viewmodel";
 import type { Editor } from "./editor";
 import type { ModelDiff } from "./planDiff";
 import {
@@ -33,6 +33,7 @@ import { BTN, EYEBROW, NAME_MAX, sanitizeIdentifier } from "./pagekit";
 import { InlineText } from "./InlineText";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { ConfirmPopover } from "./ConfirmPopover";
+import { Select } from "./ui/Select";
 import type { Selected } from "./NodePage";
 
 const INDENT = 14;
@@ -120,6 +121,8 @@ export function ModelTree({
   activeLevel,
   completeness,
   health,
+  concernLens,
+  onSetConcernLens,
 }: {
   model: ScryModel;
   /** Live `diff(committed, planned)` — drives the change-letter gutter. */
@@ -143,6 +146,11 @@ export function ModelTree({
   completeness?: Record<string, Completeness>;
   /** Per-node health counts, keyed by node id — drives the test-backed rollup. */
   health?: Record<string, NodeHealth>;
+  /** The active concern lens (a registry slug, or null). Rows whose subtree
+   *  holds no responsibility tagged with it DIM — they never hide, because "the
+   *  concern lives nowhere here" is exactly what the lens exists to show. */
+  concernLens?: string | null;
+  onSetConcernLens?: (slug: string | null) => void;
 }) {
   const [width, setWidth] = useState(() => {
     const saved = Number(localStorage.getItem("scryer:treeWidth"));
@@ -200,6 +208,8 @@ export function ModelTree({
 
   const [filter, setFilter] = useState("");
   const [lens, setLens] = useState<"all" | "changes" | "drift">("all");
+  // Inline rename of the ACTIVE concern (the pencil next to the lens picker).
+  const [renamingConcern, setRenamingConcern] = useState(false);
 
   const childIndex = new Map<string | null, Node[]>();
   for (const n of model.nodes) {
@@ -232,6 +242,25 @@ export function ModelTree({
     if (hasDrift(n.id)) driftCount++;
   }
 
+  // Concern lens: subtree tallies for the active slug. A node id absent from
+  // the map means "this concern lives nowhere below here" — its row dims (it
+  // never hides: the dark rows ARE the finding). Registry totals label the
+  // picker options.
+  const concernTally = concernLens ? concernCounts(model, concernLens) : null;
+  const concernTotals = new Map<string, number>();
+  {
+    const tally = (rs?: { concern?: string }[]) => {
+      for (const r of rs ?? [])
+        if (r.concern) concernTotals.set(r.concern, (concernTotals.get(r.concern) ?? 0) + 1);
+    };
+    for (const n of model.nodes) tally(n.responsibilities);
+    for (const g of model.groups) tally(g.responsibilities);
+  }
+  const groupLit = (g: Group) =>
+    !concernTally ||
+    g.memberIds.some((m) => concernTally.has(m)) ||
+    (g.responsibilities ?? []).some((r) => r.concern === concernLens);
+
   const q = filter.trim().toLowerCase();
   const filterActive = q !== "" || lens !== "all";
   let visibleIds: ReadonlySet<string> | null = null;
@@ -259,9 +288,14 @@ export function ModelTree({
   // --- level derivation -----------------------------------------------------
 
   // A filter/lens overrides the symbol-altitude toggle — search reaches
-  // everything, and a match is a match.
+  // everything, and a match is a match. The concern lens surfaces LIT symbols
+  // the same way: a tagged claim on a symbol must not hide behind the toggle.
   const visible = (n: Node) =>
-    visibleIds ? visibleIds.has(n.id) : showSymbols || n.kind !== "symbol";
+    visibleIds
+      ? visibleIds.has(n.id)
+      : showSymbols ||
+        n.kind !== "symbol" ||
+        (concernTally !== null && concernTally.has(n.id));
 
   const childNodes = (parentId: string | null) =>
     model.nodes
@@ -433,8 +467,12 @@ export function ModelTree({
     ) => {
       const hasChildren =
         childNodes(node.id).length > 0 || groupsAtLevel(node.id).length > 0;
-      // While filtering, every surviving branch is open — the match is the point.
-      const isOpen = filterActive ? hasChildren : expanded.has(node.id);
+      // While filtering, every surviving branch is open — the match is the
+      // point. The concern lens opens every LIT branch the same way: "where
+      // does auth live" must answer itself, not wait for a manual drill-down.
+      const isOpen = filterActive
+        ? hasChildren
+        : expanded.has(node.id) || (concernTally !== null && concernTally.has(node.id));
       const parent = ancestors[ancestors.length - 1] ?? null;
       rows.push({ kind: "node", id: node.id, depth, hasChildren, isOpen, parent, ancestors, node });
       if (isOpen && hasChildren)
@@ -458,7 +496,8 @@ export function ModelTree({
           .map((id) => model.nodes.find((n) => n.id === id))
           .filter((n): n is Node => n != null && (n.parentId ?? null) === parentId && visible(n))
           .sort(byName);
-        const isOpen = filterActive ? true : expanded.has(g.id);
+        const isOpen =
+          filterActive || (concernTally !== null && groupLit(g)) || expanded.has(g.id);
         const parent = ancestors[ancestors.length - 1] ?? null;
         rows.push({
           kind: "group", id: g.id, depth,
@@ -685,7 +724,11 @@ export function ModelTree({
                 (node.parentId ?? null) === activeLevel,
                 isSel,
               )}`
-        } ${isDrop ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""}`}
+        } ${isDrop ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""} ${
+          concernTally && !concernTally.has(node.id) && !isSel
+            ? "opacity-40 transition-opacity"
+            : ""
+        }`}
       >
         <ChangeGutter mark={ownMark ?? rolledMark} dim={!ownMark && !!rolledMark} />
         {/* Rails are suppressed on the selected row so the ancestor lines pass
@@ -784,6 +827,14 @@ export function ModelTree({
             </span>
           );
         })()}
+        {concernTally && concernTally.has(node.id) && (
+          <span
+            className="shrink-0 rounded bg-[var(--accent-soft)] px-1 font-mono text-2xs tabular-nums text-[var(--accent)]"
+            title={`${concernTally.get(node.id)} responsibilit${concernTally.get(node.id) === 1 ? "y" : "ies"} tagged "${concernLens}" in this subtree`}
+          >
+            {concernTally.get(node.id)}
+          </span>
+        )}
         {active && (
           <Loader2 className="h-3 w-3 shrink-0 animate-spin text-indigo-500 dark:text-indigo-400" />
         )}
@@ -830,7 +881,9 @@ export function ModelTree({
                 groupLevel === activeLevel,
                 isSel,
               )}`
-        } ${dropKey === `group:${group.id}` ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""}`}
+        } ${dropKey === `group:${group.id}` ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""} ${
+          !groupLit(group) && !isSel ? "opacity-40 transition-opacity" : ""
+        }`}
       >
         <ChangeGutter mark={gMark ?? gRolled} dim={!gMark && !!gRolled} />
         {!isSel && renderRails(row)}
@@ -970,6 +1023,61 @@ export function ModelTree({
             </button>
           ))}
         </div>
+        {/* Concern lens — the cross-cutting axis. Picking a concern dims every
+            row whose subtree doesn't serve it (tree and map together); rows
+            never hide, because "nothing lit" is the answer the lens exists to
+            give. Options come from the model's concern registry; the pencil
+            renames the ACTIVE concern everywhere (registry + every tagged
+            responsibility) — the registry entry is the concept. */}
+        {onSetConcernLens && (model.concerns ?? []).length > 0 && (
+          <div className="flex items-center gap-1">
+            {renamingConcern && concernLens && editor ? (
+              <span className="min-w-0 flex-1 rounded-md border border-[var(--accent)] bg-[var(--surface-field)] px-2 py-1 font-mono text-xs text-[var(--text)]">
+                <InlineText
+                  value={concernLens}
+                  autoEdit
+                  placeholder="concern slug"
+                  onCommit={(v) => {
+                    const slug = normalizeConcernSlug(v);
+                    if (slug && slug !== concernLens) {
+                      editor.renameConcern(concernLens, slug);
+                      onSetConcernLens(slug);
+                    }
+                  }}
+                  onClose={() => setRenamingConcern(false)}
+                />
+              </span>
+            ) : (
+              <div
+                className="flex min-w-0 flex-1"
+                title="Concern lens — light up where a cross-cutting concern (auth, idempotency, …) lives; everything else dims"
+              >
+                <Select
+                  value={concernLens ?? ""}
+                  onChange={(v) => onSetConcernLens(v || null)}
+                  active={!!concernLens}
+                  options={[
+                    { value: "", label: "Concern lens" },
+                    ...(model.concerns ?? []).map((c) => ({
+                      value: c.slug,
+                      label: `${c.slug} · ${concernTotals.get(c.slug) ?? 0}`,
+                    })),
+                  ]}
+                />
+              </div>
+            )}
+            {concernLens && editor && !renamingConcern && (
+              <button
+                type="button"
+                title={`Rename "${concernLens}" everywhere — the registry entry and every tagged responsibility`}
+                onClick={() => setRenamingConcern(true)}
+                className="shrink-0 rounded p-1 text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        )}
       </div>
       <div
         className="flex-1 overflow-y-auto pb-4"

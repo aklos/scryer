@@ -79,7 +79,9 @@ import {
   Plug,
   Puzzle,
   Receipt,
+  Repeat,
   Save,
+  Scale,
   Search,
   Send,
   Server,
@@ -117,8 +119,8 @@ export const ICONS: Record<string, ComponentType<LucideProps>> = {
   Gauge, GitBranch, Globe, HardDrive, Hash, Headphones, Heart, Image, Inbox,
   Key, Layers, Layout, Link: LinkIcon, ListTree, Lock, Mail, Map, MapPin,
   MessageSquare, Mic, Monitor, Network, Package, Phone, PieChart, Plug,
-  Puzzle, Receipt, Save, Search, Send, Server, Settings, Shield, ShoppingCart,
-  Sliders, Smartphone, Sparkles, Star, Store, Tag, Table, Terminal, Timer,
+  Puzzle, Receipt, Repeat, Save, Scale, Search, Send, Server, Settings, Shield,
+  ShoppingCart, Sliders, Smartphone, Sparkles, Star, Store, Tag, Table, Terminal, Timer,
   TrendingUp, Truck, User, Users, Video, Wifi, Workflow, Wrench, Zap,
 };
 

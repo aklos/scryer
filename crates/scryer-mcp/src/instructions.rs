@@ -95,6 +95,14 @@ don't transcribe the file tree into nodes. A good responsibility survives a rewr
 language (\"authenticate requests\"); a bad one (\"uses jsonwebtoken@9\") will not.\n\
 - When a description or responsibility names another node, declare the structural link the mention \
 implies — the prose mention and the structural link are distinct; declare both.\n\
+- Write to be scanned, and name for a newcomer. A node name is plain domain vocabulary — no \
+codenames, abbreviations, or cleverness. A responsibility is ONE terse verb-led clause: no mechanism \
+words, no trailing \"so that…\" purpose clause (rules 15, 17).\n\
+- CONCERNS are the model's third axis: each responsibility may carry at most one `concern` slug \
+naming the cross-cutting accountability it serves (`auth`, `persistence`, `idempotency`, …), and \
+the model registers every slug in use — the lens the user scans by. Tag as you author \
+(`{statement, concern}` wherever statements go), reuse registry slugs before minting, and leave \
+core domain flow untagged. Rule 20 governs.\n\
 \n\
 Each tool's own description carries how to call it and when to prefer it over a sibling — pull it \
 when you reach for the tool. Schema version is `0.3`.\n\

@@ -421,6 +421,7 @@ mod tests {
             responsibilities: resp
                 .map(|rid| {
                     vec![Responsibility {
+                        concern: None,
                         id: rid.into(),
                         statement: "does a thing".into(),
                         vagrant: None,

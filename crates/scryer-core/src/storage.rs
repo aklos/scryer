@@ -97,6 +97,7 @@ pub fn write_model_at(r: &ModelRef, model: &ScryModel) -> Result<(), String> {
     let prior = read_model_at(r).ok();
     let mut stamped = model.clone();
     stamp_touches(&mut stamped, prior.as_ref(), drift::now_secs());
+    crate::concerns::register_concerns(&mut stamped);
     // Change state lives and dies with the DRAFT (see `crate::changes`); the
     // committed layer never carries it. Strip here rather than trust every
     // caller — a plan-derived model (fold, set_model) rides through this path.
@@ -108,7 +109,9 @@ pub fn write_model_at(r: &ModelRef, model: &ScryModel) -> Result<(), String> {
 
 /// Whether two responsibilities differ in any *truth-bearing* field — the spec
 /// statement, drift flags, or directives. Excludes `last_touched_at`
-/// itself (that's the output) so an unchanged responsibility keeps its date.
+/// itself (that's the output) so an unchanged responsibility keeps its date,
+/// and `concern` — a tag is presentation metadata, so retagging never resets
+/// the fossilization patina.
 fn resp_truth_changed(a: &Responsibility, b: &Responsibility) -> bool {
     a.statement != b.statement
         || a.vagrant != b.vagrant
@@ -259,7 +262,20 @@ pub fn write_planned_raw_at(r: &ModelRef, data: &str) -> Result<(), String> {
     ensure_project_gitignore(&dir)?;
     let tmp = dir.join(".tmp.planned.scry");
     fs::write(&tmp, data).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &r.planned_path()).map_err(|e| e.to_string())
+    fs::rename(&tmp, &r.planned_path()).map_err(|e| e.to_string())?;
+    // Concern-metadata write-through (plan → committed): a retag on an
+    // already-built claim never folds (`diff` ignores `concern`), so it syncs
+    // here — the choke point every plan write passes (canvas raw saves and
+    // `write_planned_at` alike). Callers hold the model lock. Best-effort: a
+    // fresh project has no committed model to sync into.
+    if let Ok(planned) = serde_json::from_str::<ScryModel>(data) {
+        if let Ok(mut committed) = read_model_at(r) {
+            if crate::concerns::sync_concern_metadata(&mut committed, &planned) {
+                write_model_at(r, &committed)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The seeded (clean) plan serialization: the committed model with its
@@ -309,6 +325,7 @@ pub fn write_planned_at(r: &ModelRef, model: &ScryModel) -> Result<(), String> {
     let prior = read_planned_at(r).ok();
     let mut stamped = model.clone();
     stamp_touches(&mut stamped, prior.as_ref(), drift::now_secs());
+    crate::concerns::register_concerns(&mut stamped);
     // Ledger GC on the authoring path: an edit can revert a tagged element
     // back to its committed form, killing the pending entry its tag named. A
     // change emptied that way closes as "abandoned" — the fold paths close
@@ -507,6 +524,7 @@ mod tests {
             technology: None,
             description: None,
             responsibilities: vec![Responsibility {
+                concern: None,
                 id: "r1".into(),
                 statement: statement.into(),
                 vagrant: None,
@@ -592,6 +610,35 @@ mod tests {
         assert!(!r.sync_path().exists(), "reconcile anchor removed");
         assert!(r.lock_path().exists(), "infra lock file is kept");
         drop(guard);
+    }
+
+    /// A tag-only change never folds (`diff` ignores `concern`), so writing the
+    /// plan must write the tag through to the committed copy of the claim —
+    /// otherwise discarding the draft would silently lose authored metadata.
+    #[test]
+    fn plan_write_syncs_concern_metadata_to_committed() {
+        let (_dir, r) = temp_ref();
+        let mut committed = ScryModel::new();
+        let mut node = mk_node("n1", "N", None);
+        node.responsibilities.push(mk_resp("resp-1", "authenticates requests"));
+        committed.nodes.push(node);
+        write_model_at(&r, &committed).unwrap();
+
+        // The canvas retags the committed claim in the plan draft.
+        let mut planned = committed.clone();
+        planned.nodes[0].responsibilities[0].concern = Some("auth".into());
+        write_planned_at(&r, &planned).unwrap();
+
+        let synced = read_model_at(&r).unwrap();
+        assert_eq!(
+            synced.nodes[0].responsibilities[0].concern.as_deref(),
+            Some("auth"),
+            "the retag wrote through to the committed layer"
+        );
+        assert!(
+            synced.concerns.iter().any(|c| c.slug == "auth"),
+            "the registry entry came along"
+        );
     }
 
     /// The working view overlays committed's single-home anchors ONLY for
@@ -878,6 +925,7 @@ mod tests {
 
     fn mk_resp(id: &str, statement: &str) -> Responsibility {
         Responsibility {
+            concern: None,
             id: id.into(),
             statement: statement.into(),
             vagrant: None,

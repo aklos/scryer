@@ -536,6 +536,7 @@ mod tests {
 
     fn resp(id: &str, statement: &str) -> Responsibility {
         Responsibility {
+            concern: None,
             id: id.to_string(),
             statement: statement.to_string(),
             vagrant: None,

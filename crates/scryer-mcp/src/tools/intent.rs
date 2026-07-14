@@ -63,17 +63,18 @@ impl RespMinter {
         self.next = self.next.max(max + 1);
     }
 
-    /// Build `implemented` responsibilities from plain statements, skipping blanks.
-    fn build(&mut self, statements: &[String]) -> Vec<Responsibility> {
+    /// Build `implemented` responsibilities from statement inputs, skipping blanks.
+    fn build(&mut self, statements: &[StatementInput]) -> Vec<Responsibility> {
         statements
             .iter()
-            .filter(|s| !s.trim().is_empty())
+            .filter(|s| !s.statement().trim().is_empty())
             .map(|s| {
                 let id = format!("resp-{}", self.next);
                 self.next += 1;
                 Responsibility {
+                    concern: s.concern().map(Into::into),
                     id,
-                    statement: s.trim().to_string(),
+                    statement: s.statement().trim().to_string(),
                     vagrant: None,
                     stale: None,
                     stale_proposal: None,
@@ -97,6 +98,7 @@ impl RespMinter {
                 let id = format!("resp-{}", self.next);
                 self.next += 1;
                 let resp = Responsibility {
+                    concern: i.concern().map(Into::into),
                     id,
                     statement: i.statement().trim().to_string(),
                     vagrant: None,
@@ -381,7 +383,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Add one or more containers under a system. `name` is the role; `technology` is what it IS as software. Pass `boundaryDir` (the container's directory from the codebase context) to set its boundary glob automatically. Responsibilities go at the container's own altitude — what it is accountable for, not what its components do. Plain responsibility statements; ids and status set for you. On altitude and runtime boundaries: get_rules{topic:'container altitude'}."
+        description = "Add one or more containers under a system. `name` is the role; `technology` is what it IS as software. Pass `boundaryDir` (the container's directory from the codebase context) to set its boundary glob automatically. Responsibilities go at the container's own altitude — what it is accountable for, not what its components do. Statements accept a plain string or `{statement, concern?}` — tag cross-cutting concerns (rule 20); ids and status set for you. On altitude and runtime boundaries: get_rules{topic:'container altitude'}."
     )]
     fn add_container(
         &self,
@@ -454,7 +456,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Add one or more components under a container. Give responsibilities at the component's own altitude — one accountability each, not what an individual symbol does. Plain responsibility statements; ids and status set for you. How to cluster components (cohesion + dependency graph, not one-per-file) and pitch altitude: get_rules{topic:'component'}."
+        description = "Add one or more components under a container. Give responsibilities at the component's own altitude — one accountability each, not what an individual symbol does. Statements accept a plain string or `{statement, concern?}` — tag cross-cutting concerns (rule 20); ids and status set for you. How to cluster components (cohesion + dependency graph, not one-per-file) and pitch altitude: get_rules{topic:'component'}."
     )]
     pub(crate) fn add_component(
         &self,
@@ -825,7 +827,8 @@ impl ScryerServer {
             .collect();
         let mut minter = RespMinter::new(&planned);
         minter.absorb(&committed);
-        let statements: Vec<String> = items.iter().map(|u| u.statement.clone()).collect();
+        let statements: Vec<StatementInput> =
+            items.iter().map(|u| u.statement.clone().into()).collect();
         let mut resps = minter.build(&statements);
         for r in resps.iter_mut() {
             r.vagrant = Some(true);
@@ -1235,6 +1238,7 @@ mod tests {
 
     fn resp(id: &str, statement: &str) -> Responsibility {
         Responsibility {
+            concern: None,
             id: id.into(),
             statement: statement.into(),
             vagrant: None,
@@ -1493,6 +1497,7 @@ mod tests {
                     end_line: Some(20),
                     responsibilities: vec![ResponsibilityInput::Rich {
                         statement: "holds the logged-in session".into(),
+                        concern: None,
                         line: Some(12),
                         end_line: Some(15),
                     }],

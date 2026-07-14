@@ -49,6 +49,7 @@ import {
   removeNode as removeNodeHelper,
   removeProperty,
   removeResponsibility,
+  renameConcern,
   setNodeGroup as setNodeGroupHelper,
   updateGroup as updateGroupHelper,
   updateLink as updateLinkHelper,
@@ -118,7 +119,6 @@ function AppBody() {
       closeProject={storage.closeProject}
       activeChange={storage.activeChange}
       setActiveChange={storage.setActiveChange}
-      openNewChange={storage.openNewChange}
     />
   );
 }
@@ -144,7 +144,6 @@ function Workspace({
   closeProject,
   activeChange,
   setActiveChange,
-  openNewChange,
 }: {
   model: ScryModel;
   committed: ScryModel | null;
@@ -166,7 +165,6 @@ function Workspace({
   closeProject: () => void;
   activeChange: string | null;
   setActiveChange: (id: string | null) => void;
-  openNewChange: (rationale: string) => void;
 }) {
   const agent = useAgentSession();
   const { report: reportFailure } = useAgentFailure();
@@ -263,6 +261,18 @@ function Workspace({
     });
   }, []);
   const [diagramFocus, setDiagramFocus] = useState<string | null>(null);
+
+  // The concern lens — the cross-cutting third axis ("where does auth live?").
+  // One selected slug dims every tree row and diagram card whose subtree holds
+  // no responsibility tagged with it. Shared by the tree (picker + dimming) and
+  // the map (dimming), so both surfaces answer the question together. Guarded
+  // against the registry: a slug that left the model (project switch, agent
+  // rename) silently deactivates instead of dimming everything.
+  const [concernLensRaw, setConcernLens] = useState<string | null>(null);
+  const concernLens =
+    concernLensRaw && (model.concerns ?? []).some((c) => c.slug === concernLensRaw)
+      ? concernLensRaw
+      : null;
 
   // Global shortcuts: Ctrl/Cmd+K jumps to any node by name; Ctrl+Space flips
   // wiki↔diagram (skipped while typing in a field, so it can't yank you out of
@@ -557,6 +567,7 @@ function Workspace({
         updateModel((m) => updateResponsibility(m, host, hostId, respId, patch)),
       removeResponsibility: (host, hostId, respId) =>
         updateModel((m) => removeResponsibility(m, host, hostId, respId)),
+      renameConcern: (from, to) => updateModel((m) => renameConcern(m, from, to)),
       adoptResponsibility: (respId) => {
         if (!projectPath) return;
         // Backend folds the claim into the committed model (the code already
@@ -743,6 +754,8 @@ function Workspace({
           activeLevel={view === "diagram" ? diagramFocus : undefined}
           completeness={healthReport?.completeness}
           health={healthReport?.health.nodes}
+          concernLens={concernLens}
+          onSetConcernLens={setConcernLens}
         />
         {view === "diagram" ? (
           <DiagramView
@@ -754,6 +767,7 @@ function Workspace({
             selectedId={selected?.kind === "node" ? selected.id : null}
             onFocus={drillDiagram}
             onSelectNode={selectFromDiagram}
+            concernLens={concernLens}
           />
         ) : selected?.kind === "special" ? (
           selected.id === "changes" ? (
@@ -765,7 +779,6 @@ function Workspace({
               onSelectNode={selectNode}
               activeChange={activeChange}
               onSetActiveChange={writing ? undefined : setActiveChange}
-              onOpenChange={writing ? undefined : openNewChange}
             />
           ) : selected.id === "dark" ? (
             <DarkCodePage model={model} report={healthReport} onSelectNode={selectNode} />

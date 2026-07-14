@@ -31,6 +31,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { ChevronRight, CornerLeftUp } from "lucide-react";
 import type { ScryModel } from "./viewmodel";
+import { concernCounts } from "./viewmodel";
 import type { ModelDiff } from "./planDiff";
 import { collectPlanEntries, MARK_META, type Mark, nodeDrift, resolveMark, rollupMarks } from "./changeMarks";
 import { assignAllHandles } from "./edgeRouting";
@@ -123,6 +124,7 @@ export function DiagramView({
   onFocus,
   onSelectNode,
   pendingIds,
+  concernLens,
 }: {
   model: ScryModel;
   /** Live plan diff — colors each node/dot by its change mark. */
@@ -140,6 +142,9 @@ export function DiagramView({
   /** Nodes whose semantics aren't generated yet — drawn as pulsing placeholders.
    *  Used by the trailer's build sequence; unset (empty) in the product. */
   pendingIds?: ReadonlySet<string>;
+  /** The active concern lens (a registry slug, or null): cards whose subtree
+   *  holds no responsibility tagged with it dim, mirroring the tree. */
+  concernLens?: string | null;
 }) {
   return (
     <ReactFlowProvider>
@@ -153,6 +158,7 @@ export function DiagramView({
         onFocus={onFocus}
         onSelectNode={onSelectNode}
         pendingIds={pendingIds}
+        concernLens={concernLens}
       />
     </ReactFlowProvider>
   );
@@ -168,6 +174,7 @@ function DiagramInner({
   onFocus,
   onSelectNode,
   pendingIds,
+  concernLens,
 }: {
   model: ScryModel;
   planDiff: ModelDiff;
@@ -178,6 +185,7 @@ function DiagramInner({
   onFocus: (id: string | null) => void;
   onSelectNode: (id: string | null) => void;
   pendingIds?: ReadonlySet<string>;
+  concernLens?: string | null;
 }) {
   const [scene, setScene] = useState<DiagramScene | null>(null);
   const { fitView } = useReactFlow();
@@ -236,6 +244,14 @@ function DiagramInner({
     return { active: true, neighbors };
   }, [scene, selectedId]);
 
+  // Concern lens: a card is lit when its subtree holds a responsibility tagged
+  // with the active slug; everything else dims. Composes with the subgraph
+  // highlight — either reason to dim, dims.
+  const concernLit = useMemo(() => {
+    if (!concernLens) return null;
+    return concernCounts(model, concernLens);
+  }, [model, concernLens]);
+
   const rfNodes = useMemo<Array<RFCard | RFDot>>(() => {
     if (!scene) return [];
     const type = scene.mode === "code" ? "dot" : "card";
@@ -247,12 +263,14 @@ function DiagramInner({
         node: n,
         selected: n.id === selectedId,
         mark: markFor(n.id),
-        dimmed: highlight.active && !highlight.neighbors.has(n.id),
+        dimmed:
+          (highlight.active && !highlight.neighbors.has(n.id)) ||
+          (concernLit !== null && !concernLit.has(n.id)),
         pending: pendingIds?.has(n.id),
         completeness: report?.completeness[n.id],
       },
     })) as Array<RFCard | RFDot>;
-  }, [scene, selectedId, markFor, highlight, pendingIds, report]);
+  }, [scene, selectedId, markFor, highlight, pendingIds, report, concernLit]);
 
   const rfEdges = useMemo<RFEdge<EdgeData>[]>(() => {
     if (!scene) return [];
@@ -309,12 +327,14 @@ function DiagramInner({
           sourceR: radius?.get(e.source),
           targetR: radius?.get(e.target),
           highlighted: connected,
-          dimmed: highlight.active && !connected,
+          dimmed:
+            (highlight.active && !connected) ||
+            (concernLit !== null && (!concernLit.has(e.source) || !concernLit.has(e.target))),
           parallel: (pairCount.get(pairKey) ?? 0) > 1,
         },
       };
     });
-  }, [scene, selectedId, highlight]);
+  }, [scene, selectedId, highlight, concernLit]);
 
   // Refit when the level changes (a fresh scene of a different size/shape).
   const fitKey = `${focusId ?? "root"}:${rfNodes.length}`;

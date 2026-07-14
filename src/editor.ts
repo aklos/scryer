@@ -78,6 +78,9 @@ export interface Editor {
     hostId: string,
     respId: string,
   ) => void;
+  /** Rename a concern everywhere — the registry entry and every responsibility
+   *  tagged with it, in one step (the registry entry IS the concept). */
+  renameConcern: (from: string, to: string) => void;
   /** Adopt a code-discovered (vagrant) responsibility: clear its flag AND fold it
    *  straight into the committed model. Unlike other edits this commits, because
    *  the claim is anchored to code that already exists — there is nothing to

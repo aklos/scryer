@@ -198,10 +198,10 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 <button
                   type="button"
                   onClick={() => editor.reimplementNode(node.id)}
-                  title="The model is right — rebuild this whole subtree. Becomes a to-do the agent implements."
+                  title="Keep this node and rebuild its whole subtree in code — files a to-do the agent implements."
                   className={NOTICE_ACTION}
                 >
-                  Re-implement
+                  Rebuild code
                 </button>
                 <button
                   type="button"
@@ -422,6 +422,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   resps={resps}
                   prevResps={committedResps}
                   plannedHosts={plannedRespHosts(model)}
+                  concerns={model.concerns ?? []}
                   sourceMap={sourceMap}
                   verifyMap={verifyMap}
                   verifyStates={verifyStates}

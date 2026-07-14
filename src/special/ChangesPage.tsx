@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Check, GitCompare } from "lucide-react";
 import type { ChangeRevision } from "../hooks/useModelStorage";
 import type { ScryModel, Node } from "../viewmodel";
@@ -358,7 +358,6 @@ export function ChangesPage({
   onSelectNode,
   activeChange,
   onSetActiveChange,
-  onOpenChange,
 }: {
   planDiff: ModelDiff;
   /** The planned model — element names, kinds, and tree order. */
@@ -372,8 +371,6 @@ export function ChangesPage({
   activeChange?: string | null;
   /** Select/detach the active change. Absent = read-only (agent writing). */
   onSetActiveChange?: (id: string | null) => void;
-  /** Open a new named change and make it active. Absent = read-only. */
-  onOpenChange?: (rationale: string) => void;
 }) {
   const ctx = useMemo<RowCtx>(
     () => ({
@@ -417,7 +414,6 @@ export function ChangesPage({
         subtitle="Everything the plan changes against the committed model — most recently edited first"
       />
       <SpecialBody>
-        {onOpenChange && <NewChangeForm onOpen={onOpenChange} />}
         {entries.length === 0 && registry.length === 0 ? (
           <div className="flex flex-col items-center gap-3 px-6 py-16">
             <GitCompare className="h-6 w-6 text-[var(--text-ghost)]" />
@@ -461,33 +457,6 @@ export function ChangesPage({
         )}
       </SpecialBody>
     </div>
-  );
-}
-
-/** Inline opener for a new ledger change: the rationale in one sentence, as
- *  the dev would say it — it becomes the change's durable identity. */
-function NewChangeForm({ onOpen }: { onOpen: (rationale: string) => void }) {
-  const [rationale, setRationale] = useState("");
-  return (
-    <form
-      className="flex items-center gap-2 border-b border-[var(--border)] px-4 py-2"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (!rationale.trim()) return;
-        onOpen(rationale);
-        setRationale("");
-      }}
-    >
-      <input
-        value={rationale}
-        onChange={(e) => setRationale(e.target.value)}
-        placeholder="Start a change — the task in one sentence"
-        className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--surface-field)] px-2 py-1 text-xs text-[var(--text)] placeholder:text-[var(--text-ghost)] focus:outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
-      />
-      <button type="submit" className={BTN} disabled={!rationale.trim()}>
-        Open
-      </button>
-    </form>
   );
 }
 

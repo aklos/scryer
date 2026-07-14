@@ -1231,6 +1231,7 @@ mod tests {
 
     fn mk_resp(id: &str, statement: &str) -> Responsibility {
         Responsibility {
+            concern: None,
             id: id.into(),
             statement: statement.into(),
             vagrant: None,

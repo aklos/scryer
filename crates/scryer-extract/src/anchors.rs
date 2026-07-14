@@ -858,6 +858,7 @@ mod tests {
             technology: None,
             description: None,
             responsibilities: vec![Responsibility {
+                concern: None,
                 id: "r1".into(),
                 statement: "does the thing".into(),
                 vagrant: None,
@@ -1250,6 +1251,7 @@ mod tests {
         // A second claim anchored to a file that does not exist: write_baseline
         // skips it (nothing to remember) — exactly the silent case.
         m.nodes[0].responsibilities.push(Responsibility {
+            concern: None,
             id: "r2".into(),
             statement: "claims ghost code".into(),
             vagrant: None,
@@ -1288,6 +1290,7 @@ mod tests {
         let mut m = leaf_model("alpha", "src/m.ts", 1, 3);
         // leaf_model gives node "sym" + r1→alpha; add r2→beta on the same node.
         m.nodes[0].responsibilities.push(Responsibility {
+            concern: None,
             id: "r2".into(),
             statement: "does beta".into(),
             vagrant: None,

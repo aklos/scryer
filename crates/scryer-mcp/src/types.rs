@@ -474,13 +474,13 @@ pub(crate) struct DeleteGroupRequest {
 /// Person/actor to add at the top level.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct PersonItem {
-    /// Display name of the person/actor.
+    /// Display name of the person/actor — plain domain vocabulary a newcomer reads instantly; no codenames or abbreviations (rule 17).
     pub name: String,
     /// Their identity in a few words (what they ARE), not a re-list of responsibilities. Optional.
     pub description: Option<String>,
-    /// Pure business-responsibility statements — one terse verb-led clause each, no mechanism vocabulary.
+    /// Pure business-responsibility statements — each a plain string or `{statement, concern?}`.
     #[serde(default)]
-    pub responsibilities: Vec<String>,
+    pub responsibilities: Vec<StatementInput>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -494,6 +494,7 @@ pub(crate) struct AddPersonRequest {
 /// external third-party system it depends on.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SystemItem {
+    /// Plain domain vocabulary a newcomer reads instantly — what the system IS in the domain's own terms; no codenames, abbreviations, or cleverness (rule 17).
     pub name: String,
     /// Identity in a few words (what it IS). Optional.
     pub description: Option<String>,
@@ -502,9 +503,9 @@ pub(crate) struct SystemItem {
     /// true for a third-party system your system depends on; omit for the system being modeled.
     #[serde(default)]
     pub external: bool,
-    /// Pure business-responsibility statements. On an external, these read as expectations OF that external.
+    /// Pure business-responsibility statements — each a plain string or `{statement, concern?}`. On an external, these read as expectations OF that external.
     #[serde(default)]
-    pub responsibilities: Vec<String>,
+    pub responsibilities: Vec<StatementInput>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -519,6 +520,7 @@ pub(crate) struct AddSystemRequest {
 pub(crate) struct ContainerItem {
     /// ID of the parent system (must be a system node).
     pub parent_id: String,
+    /// Plain domain vocabulary a newcomer reads instantly — no codenames, abbreviations, or cleverness (rule 17).
     pub name: String,
     /// What it IS as software, as a short badge (e.g. "Next.js 14", "PostgreSQL 16", "S3 Bucket") — a few words, not a sentence. Keep mechanism vocabulary out of responsibilities; NAME the stack here and put any explanatory prose in `description`.
     pub technology: Option<String>,
@@ -526,9 +528,9 @@ pub(crate) struct ContainerItem {
     /// true for an external/third-party container.
     #[serde(default)]
     pub external: bool,
-    /// Pure business-responsibility statements.
+    /// Pure business-responsibility statements — each a plain string or `{statement, concern?}`.
     #[serde(default)]
-    pub responsibilities: Vec<String>,
+    pub responsibilities: Vec<StatementInput>,
     /// Project-relative directory this container owns (from the codebase context). Sets a boundary glob "{dir}/**/*" automatically — no separate update_source_map call needed.
     pub boundary_dir: Option<String>,
 }
@@ -546,11 +548,12 @@ pub(crate) struct AddContainerRequest {
 pub(crate) struct ComponentItem {
     /// ID of the parent container (must be a container node).
     pub parent_id: String,
+    /// Plain domain vocabulary a newcomer reads instantly — no codenames, abbreviations, or cleverness (rule 17).
     pub name: String,
     pub description: Option<String>,
-    /// Pure business-responsibility statements.
+    /// Pure business-responsibility statements — each a plain string or `{statement, concern?}`.
     #[serde(default)]
-    pub responsibilities: Vec<String>,
+    pub responsibilities: Vec<StatementInput>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -574,9 +577,9 @@ pub(crate) struct GroupItem {
     /// Node ids to enclose — all must be children of `parent_id`, same level. 2+ members.
     #[serde(default)]
     pub member_ids: Vec<String>,
-    /// Optional unit-level responsibility statements (e.g. "deploys atomically").
+    /// Optional unit-level responsibility statements (e.g. "deploys atomically") — each a plain string or `{statement, concern?}`.
     #[serde(default)]
-    pub responsibilities: Vec<String>,
+    pub responsibilities: Vec<StatementInput>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -596,22 +599,27 @@ pub(crate) struct PropertyInput {
     pub description: String,
 }
 
-/// A responsibility with optional line-range anchor. Accepts either a plain
-/// string `"statement"` or an object `{statement, line?, endLine?}`.
+/// A responsibility with optional concern tag and line-range anchor. Accepts
+/// either a plain string `"statement"` or an object
+/// `{statement, concern?, line?, endLine?}`. The statement is ONE terse
+/// verb-led clause in the plainest words that are still precise — no mechanism
+/// vocabulary, no trailing "so that…" purpose clause (rules 15, 17).
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub(crate) enum ResponsibilityInput {
-    /// `{statement, line?, endLine?}` — responsibility with specific line range within the symbol.
+    /// `{statement, concern?, line?, endLine?}` — responsibility with a concern tag and/or a specific line range within the symbol.
     Rich {
         /// The business-responsibility statement.
         statement: String,
+        /// Cross-cutting concern this responsibility serves — ONE kebab-case slug (e.g. "auth", "idempotency"). Reuse the model's registry / standard slugs before minting; omit for core domain flow (rule 20).
+        concern: Option<String>,
         /// 1-based start line of the code that discharges this responsibility.
         line: Option<u32>,
         /// 1-based end line.
         #[serde(alias = "endLine")]
         end_line: Option<u32>,
     },
-    /// Plain string — responsibility with no sub-range (whole symbol).
+    /// Plain string — untagged responsibility with no sub-range (whole symbol).
     Plain(String),
 }
 
@@ -620,6 +628,12 @@ impl ResponsibilityInput {
         match self {
             Self::Rich { statement, .. } => statement,
             Self::Plain(s) => s,
+        }
+    }
+    pub fn concern(&self) -> Option<&str> {
+        match self {
+            Self::Rich { concern, .. } => concern.as_deref(),
+            Self::Plain(_) => None,
         }
     }
     pub fn line(&self) -> Option<u32> {
@@ -633,6 +647,52 @@ impl ResponsibilityInput {
             Self::Rich { end_line, .. } => *end_line,
             Self::Plain(_) => None,
         }
+    }
+}
+
+/// A responsibility statement for a structural node (person/system/container/
+/// component/group), optionally tagged with a concern. Accepts a plain string
+/// `"statement"` or an object `{statement, concern?}`. The statement is ONE
+/// terse verb-led clause in the plainest words that are still precise — no
+/// mechanism vocabulary, no trailing "so that…" purpose clause (rules 15, 17).
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub(crate) enum StatementInput {
+    /// `{statement, concern?}` — responsibility tagged with the cross-cutting concern it serves.
+    Rich {
+        /// The business-responsibility statement.
+        statement: String,
+        /// Cross-cutting concern this responsibility serves — ONE kebab-case slug (e.g. "auth", "idempotency"). Reuse the model's registry / standard slugs before minting; omit for core domain flow (rule 20).
+        concern: Option<String>,
+    },
+    /// Plain string — untagged responsibility (core domain flow).
+    Plain(String),
+}
+
+impl StatementInput {
+    pub fn statement(&self) -> &str {
+        match self {
+            Self::Rich { statement, .. } => statement,
+            Self::Plain(s) => s,
+        }
+    }
+    pub fn concern(&self) -> Option<&str> {
+        match self {
+            Self::Rich { concern, .. } => concern.as_deref(),
+            Self::Plain(_) => None,
+        }
+    }
+}
+
+impl From<&str> for StatementInput {
+    fn from(s: &str) -> Self {
+        Self::Plain(s.to_string())
+    }
+}
+
+impl From<String> for StatementInput {
+    fn from(s: String) -> Self {
+        Self::Plain(s)
     }
 }
 
@@ -676,11 +736,12 @@ pub(crate) struct AddSymbolRequest {
 pub(crate) struct ProposedComponent {
     /// Unique request-local key, e.g. "authentication".
     pub key: String,
+    /// Plain domain vocabulary a newcomer reads instantly — no codenames, abbreviations, or cleverness (rule 17).
     pub name: String,
     pub description: Option<String>,
-    /// Responsibilities at the component's C4 altitude.
+    /// Responsibilities at the component's C4 altitude — each a plain string or `{statement, concern?}`.
     #[serde(default)]
-    pub responsibilities: Vec<String>,
+    pub responsibilities: Vec<StatementInput>,
     /// Architecturally meaningful code definitions owned by this component.
     /// Code-bearing components must include at least one symbol.
     pub symbols: Vec<ProposedSymbol>,
@@ -727,8 +788,9 @@ pub(crate) struct ProposedGroup {
     pub description: Option<String>,
     /// Request-local component keys.
     pub member_keys: Vec<String>,
+    /// Unit-level responsibility statements — each a plain string or `{statement, concern?}`.
     #[serde(default)]
-    pub responsibilities: Vec<String>,
+    pub responsibilities: Vec<StatementInput>,
 }
 
 /// Commit the complete component + symbol subtree for one container in one
