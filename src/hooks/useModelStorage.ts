@@ -263,6 +263,10 @@ export interface ModelStorage {
    *  the data behind each node's History tab. Reloaded whenever the model
    *  changes. */
   history: readonly HistoryEvent[];
+  /** Bumped each time an external write (an agent over MCP) is applied to the
+   *  in-memory layers — the signal for consumers whose state is NOT derived
+   *  from the model (health/drift reports) to re-fetch. */
+  externalGeneration: number;
   /** The ledger change canvas edits stamp into (null = unfiled). Session-local
    *  by design — the registry/tags persist in the plan, the pointer doesn't. */
   activeChange: string | null;
@@ -362,6 +366,7 @@ export function useModelStorage(): ModelStorage {
   const [model, setModel] = useState<ScryModel | null>(null);
   const [committed, setCommitted] = useState<ScryModel | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [externalGeneration, setExternalGeneration] = useState(0);
   const [recentProjects, setRecentProjects] = useState<string[]>(() => readRecent());
   // Ids the agent has introduced (and not yet reviewed). Frontend-only — diffed
   // from each external/agent write, cleared when the user selects the item.
@@ -543,10 +548,14 @@ export function useModelStorage(): ModelStorage {
         // committed-only write, or our own echo) the save was still legitimate —
         // restore it, unless a fresher edit already replaced it mid-await.
         const pending = cancelPendingSave();
+        // Echo-suppressed events (our own save landing) must NOT count as an
+        // external write, so track whether either layer actually applied.
+        let applied = false;
         try {
           const planned = await invoke<string>("read_planned", { refStr: modelRef });
           if (active && planned !== lastWrittenRaw.current) {
             applyLoadedRaw(planned);
+            applied = true;
           } else if (active && pending && pendingSave.current === null) {
             scheduleSave(pending);
           }
@@ -555,10 +564,14 @@ export function useModelStorage(): ModelStorage {
         }
         try {
           const committedRaw = await invoke<string>("read_model", { refStr: modelRef });
-          if (active && committedRaw !== lastCommittedRaw.current) applyCommittedRaw(committedRaw);
+          if (active && committedRaw !== lastCommittedRaw.current) {
+            applyCommittedRaw(committedRaw);
+            applied = true;
+          }
         } catch {
           /* transient — ignore */
         }
+        if (active && applied) setExternalGeneration((g) => g + 1);
         if (active) await loadHistory(modelRef);
       });
       if (active) unlisten = off;
@@ -816,6 +829,7 @@ export function useModelStorage(): ModelStorage {
     newRespIds,
     changeLog,
     history,
+    externalGeneration,
     activeChange,
     setActiveChange,
     openProject,

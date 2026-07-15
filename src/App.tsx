@@ -114,6 +114,7 @@ function AppBody() {
       clearNewResp={storage.clearNewResp}
       changeLog={storage.changeLog}
       history={storage.history}
+      externalGeneration={storage.externalGeneration}
       clearAllNew={storage.clearAllNew}
       openProject={storage.openProject}
       closeProject={storage.closeProject}
@@ -139,6 +140,7 @@ function Workspace({
   clearNewResp,
   changeLog,
   history,
+  externalGeneration,
   clearAllNew,
   openProject,
   closeProject,
@@ -160,6 +162,7 @@ function Workspace({
   clearNewResp: (id: string) => void;
   changeLog: ReturnType<typeof useModelStorage>["changeLog"];
   history: ReturnType<typeof useModelStorage>["history"];
+  externalGeneration: number;
   clearAllNew: () => void;
   openProject: (path: string) => Promise<void>;
   closeProject: () => void;
@@ -219,6 +222,22 @@ function Workspace({
     refreshHealth();
     refreshDrift();
   }, [refreshHealth, refreshDrift]);
+
+  // External writers (an agent over MCP) reload the model layers live through
+  // the file watcher, but health/drift come from these extractor commands —
+  // without this they'd refresh only on open and on the in-app writing edge,
+  // leaving every report-fed indicator stale until a manual reload. Trailing
+  // debounce so a burst of agent writes costs one recompute; in-app runs are
+  // excluded (their busy→idle edge already refreshes).
+  const observedGeneration = useRef(externalGeneration);
+  useEffect(() => {
+    if (writing || externalGeneration === observedGeneration.current) return;
+    const t = setTimeout(() => {
+      observedGeneration.current = externalGeneration;
+      refreshObservability();
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [externalGeneration, writing, refreshObservability]);
 
   const [selected, setSelected] = useState<Selected | null>(null);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
