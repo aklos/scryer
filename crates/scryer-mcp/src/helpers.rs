@@ -244,6 +244,110 @@ pub(crate) fn read_fail(layer: &str, model_ref: &ModelRef, e: &str) -> String {
     }
 }
 
+/// True when `id` is a server-minted responsibility id (`resp-N`).
+fn is_minted_resp_id(id: &str) -> bool {
+    id.strip_prefix("resp-").is_some_and(|s| s.parse::<u64>().is_ok())
+}
+
+/// Re-mints caller-supplied responsibility ids in raw-write payloads.
+///
+/// The raw-write tools (`update_nodes`, `update_group`, `set_node`,
+/// `set_groups`, `set_model`) accept full `Responsibility` structs, so a
+/// caller that doesn't know the next free id invents one ("new", "", "temp")
+/// — and every lookup in the system (`find_responsibility`, source_map, fold)
+/// keys on that id being globally unique. An id is re-minted only when it is
+/// UNKNOWN to both layers AND not minted-format: echoing an existing claim
+/// keeps its identity whatever its id looks like (legacy models carry ids the
+/// minters never issued, and renaming one would orphan its source anchors),
+/// and a hand-written `resp-N` is unique and well-formed, so it stands. Seed
+/// with BOTH layers (plan and committed), for the same union guard the intent
+/// tools use: a plan-deleted claim's id must not be re-issued while committed
+/// still holds it — and `enforce_readonly_directives` would staple the dead
+/// claim's user directives onto the unrelated new one.
+pub(crate) struct RespIdReminter {
+    next: u64,
+    /// Every responsibility id the floor layers already hold — an incoming id
+    /// found here is an existing claim being echoed, never an invention.
+    known: std::collections::HashSet<String>,
+    /// One `host: 'old' → new` line per re-mint, for the tool response — the
+    /// caller has to learn the real ids it should use from now on.
+    minted: Vec<String>,
+}
+
+impl RespIdReminter {
+    pub(crate) fn new(floors: &[&ScryModel]) -> Self {
+        let mut me = Self {
+            next: 1,
+            known: std::collections::HashSet::new(),
+            minted: Vec::new(),
+        };
+        for m in floors {
+            me.absorb(
+                m.nodes
+                    .iter()
+                    .flat_map(|n| n.responsibilities.iter())
+                    .chain(m.groups.iter().flat_map(|g| g.responsibilities.iter())),
+            );
+            for r in m
+                .nodes
+                .iter()
+                .flat_map(|n| n.responsibilities.iter())
+                .chain(m.groups.iter().flat_map(|g| g.responsibilities.iter()))
+            {
+                me.known.insert(r.id.clone());
+            }
+        }
+        me
+    }
+
+    /// Raise the counter past every minted-format id in `resps`. Run this over
+    /// the WHOLE payload before the first `remint` call: a payload may carry a
+    /// hand-written `resp-N` above the model's own maximum, and minting below
+    /// it would collide inside the very write that's being repaired.
+    pub(crate) fn absorb<'a>(&mut self, resps: impl Iterator<Item = &'a Responsibility>) {
+        let max = resps
+            .filter_map(|r| r.id.strip_prefix("resp-").and_then(|s| s.parse::<u64>().ok()))
+            .max()
+            .unwrap_or(0);
+        self.next = self.next.max(max + 1);
+    }
+
+    /// Replace every invented id in `resps` (unknown to the floors, not
+    /// minted-format) with a fresh `resp-N`, recording a report line under
+    /// `host` (the node or group id) per replacement.
+    pub(crate) fn remint<'a>(
+        &mut self,
+        host: &str,
+        resps: impl Iterator<Item = &'a mut Responsibility>,
+    ) {
+        for r in resps {
+            if is_minted_resp_id(&r.id) || self.known.contains(&r.id) {
+                continue;
+            }
+            let fresh = format!("resp-{}", self.next);
+            self.next += 1;
+            self.minted.push(format!("{host}: '{}' → {fresh}", r.id));
+            r.id = fresh;
+        }
+    }
+
+    /// Append the re-mint report to a tool response. Silent when nothing was
+    /// re-minted — the common case must not grow a no-op section.
+    pub(crate) fn report_into(&self, msg: &mut String) {
+        if self.minted.is_empty() {
+            return;
+        }
+        msg.push_str(&format!(
+            "\n{} caller-supplied responsibility id(s) re-minted (ids are server-assigned; \
+             use the new ids from here on):",
+            self.minted.len()
+        ));
+        for line in &self.minted {
+            msg.push_str(&format!("\n- {line}"));
+        }
+    }
+}
+
 /// Write the plan, first tagging what THIS write changed to the session's
 /// current change (see `ScryerServer::session_change`) — computed as the diff
 /// between the plan on disk and the model being written, so every authoring

@@ -218,7 +218,7 @@ impl ScryerServer {
         };
 
         let prior = model.clone();
-        let groups: Vec<Group> = match serde_json::from_str::<Vec<Group>>(&req.data) {
+        let mut groups: Vec<Group> = match serde_json::from_str::<Vec<Group>>(&req.data) {
             Ok(arr) => arr,
             Err(_) => match serde_json::from_str::<Group>(&req.data) {
                 Ok(g) => vec![g],
@@ -262,6 +262,17 @@ impl ScryerServer {
             }
         }
 
+        // Caller-invented responsibility ids never enter the model — re-mint
+        // them against both layers (see RespIdReminter).
+        let committed_floor = scryer_core::read_model_at(&model_ref).unwrap_or_default();
+        let mut reminter = RespIdReminter::new(&[&model, &committed_floor]);
+        for g in &groups {
+            reminter.absorb(g.responsibilities.iter());
+        }
+        for g in &mut groups {
+            reminter.remint(&g.id, g.responsibilities.iter_mut());
+        }
+
         let count = groups.len();
         for g in groups {
             if let Some(existing) = model.groups.iter_mut().find(|x| x.id == g.id) {
@@ -281,6 +292,7 @@ impl ScryerServer {
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
         };
         let mut msg = format!("Wrote {} group(s)", count);
+        reminter.report_into(&mut msg);
         for w in &tag_warnings {
             msg.push_str(&format!("\n{w}"));
         }
@@ -292,7 +304,7 @@ impl ScryerServer {
     )]
     fn update_group(
         &self,
-        Parameters(req): Parameters<UpdateGroupRequest>,
+        Parameters(mut req): Parameters<UpdateGroupRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
         let _lock = match lock_or_err(&model_ref) {
@@ -307,6 +319,22 @@ impl ScryerServer {
         };
 
         let prior = model.clone();
+
+        // Caller-invented responsibility ids never enter the model — re-mint
+        // them against both layers (see RespIdReminter).
+        let committed_floor = scryer_core::read_model_at(&model_ref).unwrap_or_default();
+        let mut reminter = RespIdReminter::new(&[&model, &committed_floor]);
+        for item in &req.items {
+            if let Some(v) = &item.responsibilities {
+                reminter.absorb(v.iter());
+            }
+        }
+        for item in &mut req.items {
+            if let Some(v) = &mut item.responsibilities {
+                reminter.remint(&item.group_id, v.iter_mut());
+            }
+        }
+
         let mut updated = 0usize;
         for item in &req.items {
             // Validate a replacement membership against the group's own level
@@ -378,6 +406,7 @@ impl ScryerServer {
         };
         drop(_lock);
         let mut msg = format!("Updated {} group(s)", updated);
+        reminter.report_into(&mut msg);
         for w in &tag_warnings {
             msg.push_str(&format!("\n{w}"));
         }
@@ -565,6 +594,11 @@ mod tests {
     use super::*;
     use rmcp::handler::server::wrapper::Parameters;
     use scryer_core::{Group, Kind, ModelRef, Node, ScryModel};
+
+    fn resp(id: &str) -> scryer_core::Responsibility {
+        serde_json::from_value(serde_json::json!({ "id": id, "statement": format!("does {id}") }))
+            .unwrap()
+    }
 
     fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
         Node {
@@ -758,5 +792,96 @@ mod tests {
             }))
             .unwrap();
         assert!(res.is_error.unwrap_or(false), "unknown group id rejected");
+    }
+
+    /// A caller-invented responsibility id in an update_group replacement is
+    /// re-minted past both layers, and the response reports the new id.
+    #[test]
+    fn update_group_remints_caller_invented_responsibility_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut m = ScryModel::new();
+        let mut comp = node("node-1", Kind::Component, "A", None);
+        comp.responsibilities = vec![resp("resp-3")];
+        m.nodes.push(comp);
+        m.nodes.push(node("node-2", Kind::Component, "B", None));
+        m.groups.push(Group {
+            id: "group-1".into(),
+            name: "Pair".into(),
+            description: None,
+            member_ids: vec!["node-1".into(), "node-2".into()],
+            parent_group_id: None,
+            parent_node_id: None,
+            responsibilities: Vec::new(),
+            icon: None,
+        });
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+
+        let server = ScryerServer::new();
+        let res = server
+            .update_group(Parameters(UpdateGroupRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                items: vec![UpdateGroupItem {
+                    group_id: "group-1".into(),
+                    name: None,
+                    description: None,
+                    member_ids: None,
+                    responsibilities: Some(vec![resp("new")]),
+                }],
+            }))
+            .unwrap();
+
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(
+            planned.groups[0].responsibilities[0].id, "resp-4",
+            "minted past the node-owned resp-3"
+        );
+        let text = res
+            .content
+            .iter()
+            .find_map(|c| c.as_text().map(|t| t.text.clone()))
+            .unwrap();
+        assert!(text.contains("group-1: 'new' → resp-4"), "reports the re-mint: {text}");
+    }
+
+    /// set_groups (raw Group JSON) gets the same guard: invented ids are
+    /// re-minted before the groups land in the plan.
+    #[test]
+    fn set_groups_remints_caller_invented_responsibility_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut m = ScryModel::new();
+        let mut comp = node("node-1", Kind::Component, "A", None);
+        comp.responsibilities = vec![resp("resp-1")];
+        m.nodes.push(comp);
+        m.nodes.push(node("node-2", Kind::Component, "B", None));
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+
+        let data = serde_json::json!([{
+            "id": "group-1",
+            "name": "Pair",
+            "memberIds": ["node-1", "node-2"],
+            "responsibilities": [{ "id": "new", "statement": "coordinates the pair" }]
+        }]);
+        let server = ScryerServer::new();
+        let res = server
+            .set_groups(Parameters(SetGroupsRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                data: data.to_string(),
+            }))
+            .unwrap();
+
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(planned.groups[0].responsibilities[0].id, "resp-2");
+        let text = res
+            .content
+            .iter()
+            .find_map(|c| c.as_text().map(|t| t.text.clone()))
+            .unwrap();
+        assert!(text.contains("group-1: 'new' → resp-2"), "reports the re-mint: {text}");
     }
 }

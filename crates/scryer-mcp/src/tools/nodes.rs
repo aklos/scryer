@@ -478,11 +478,26 @@ impl ScryerServer {
                 ))]));
             }
         };
-        if let Ok(prior) = scryer_core::read_model_at(&model_ref) {
-            enforce_readonly_directives(&mut model, &prior);
-        } else {
-            enforce_readonly_directives(&mut model, &ScryModel::default());
+        // Caller-invented responsibility ids are re-minted BEFORE directive
+        // enforcement, with the outgoing layers as floors: re-issuing an id the
+        // payload dropped would staple the dead claim's user directives onto an
+        // unrelated new one (see RespIdReminter).
+        let prior_committed = scryer_core::read_model_at(&model_ref).unwrap_or_default();
+        let prior_planned = scryer_core::read_planned_at(&model_ref).unwrap_or_default();
+        let mut reminter = RespIdReminter::new(&[&prior_committed, &prior_planned]);
+        for n in &model.nodes {
+            reminter.absorb(n.responsibilities.iter());
         }
+        for g in &model.groups {
+            reminter.absorb(g.responsibilities.iter());
+        }
+        for n in &mut model.nodes {
+            reminter.remint(&n.id, n.responsibilities.iter_mut());
+        }
+        for g in &mut model.groups {
+            reminter.remint(&g.id, g.responsibilities.iter_mut());
+        }
+        enforce_readonly_directives(&mut model, &prior_committed);
         if model.version != scryer_core::SCRY_VERSION {
             return Ok(CallToolResult::error(vec![Content::text(format!(
                 "Model version '{}' does not match expected '{}'",
@@ -509,6 +524,7 @@ impl ScryerServer {
             model.links.len(),
             model.groups.len()
         );
+        reminter.report_into(&mut msg);
         if !warnings.is_empty() {
             msg.push_str(&format!("\n\n{} warning(s):", warnings.len()));
             for w in warnings {
@@ -523,7 +539,7 @@ impl ScryerServer {
     )]
     fn update_nodes(
         &self,
-        Parameters(req): Parameters<UpdateNodeRequest>,
+        Parameters(mut req): Parameters<UpdateNodeRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
         let _lock = match lock_or_err(&model_ref) {
@@ -538,6 +554,23 @@ impl ScryerServer {
         };
 
         let prior = model.clone();
+
+        // Caller-invented responsibility ids ("new", "") never enter the model:
+        // re-mint them up front, before the vagrant-preservation check below
+        // compares payload ids against the model's (see RespIdReminter).
+        let committed_floor = scryer_core::read_model_at(&model_ref).unwrap_or_default();
+        let mut reminter = RespIdReminter::new(&[&model, &committed_floor]);
+        for u in &req.nodes {
+            if let Some(v) = &u.responsibilities {
+                reminter.absorb(v.iter());
+            }
+        }
+        for u in &mut req.nodes {
+            if let Some(v) = &mut u.responsibilities {
+                reminter.remint(&u.node_id, v.iter_mut());
+            }
+        }
+
         let mut updated = 0usize;
         let mut preserved_vagrants = 0usize;
         for u in &req.nodes {
@@ -707,6 +740,7 @@ impl ScryerServer {
         // call): field-shape problems on the nodes just touched ride back on
         // the response.
         let mut msg = format!("Updated {} node(s)", updated);
+        reminter.report_into(&mut msg);
         for w in &tag_warnings {
             msg.push_str(&format!("\n{w}"));
         }
@@ -1536,7 +1570,7 @@ impl ScryerServer {
             #[serde(default)]
             links: Vec<Link>,
         }
-        let payload: SubtreePayload = match serde_json::from_str(&req.data) {
+        let mut payload: SubtreePayload = match serde_json::from_str(&req.data) {
             Ok(p) => p,
             Err(e) => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -1545,6 +1579,18 @@ impl ScryerServer {
                 ))]));
             }
         };
+
+        // Caller-invented responsibility ids are re-minted ONCE, before the
+        // subtree is applied — both layers then receive identical ids (see
+        // RespIdReminter).
+        let committed_floor = scryer_core::read_model_at(&model_ref).unwrap_or_default();
+        let mut reminter = RespIdReminter::new(&[&model, &committed_floor]);
+        for n in &payload.nodes {
+            reminter.absorb(n.responsibilities.iter());
+        }
+        for n in &mut payload.nodes {
+            reminter.remint(&n.id, n.responsibilities.iter_mut());
+        }
 
         // Apply the subtree replacement to the plan. The dropped-link report
         // comes from the plan layer — always applied (node existence checked
@@ -1582,6 +1628,7 @@ impl ScryerServer {
 
         let warnings = validate::validate(&model);
         let mut msg = format!("Replaced subtree under {}", req.node_id);
+        reminter.report_into(&mut msg);
         if !dropped_links.is_empty() {
             msg.push_str(&format!(
                 "\n\nDropped {} link(s) with endpoints absent from the subtree:",
@@ -3238,6 +3285,145 @@ mod tests {
             planned.change_map.get("node:node-3").map(String::as_str),
             Some("chg-2"),
             "last writer wins the tag"
+        );
+    }
+
+    /// A caller-invented responsibility id ("new") never enters the model:
+    /// update_nodes re-mints it past BOTH layers (a plan-deleted claim's id in
+    /// committed must not be re-issued) and past any hand-written `resp-N` in
+    /// the same payload, keeps minted-format ids untouched, and reports the
+    /// re-mints so the caller learns the real ids.
+    #[test]
+    fn update_nodes_remints_caller_invented_responsibility_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        // Committed holds resp-2 (deleted from the plan) — the union floor.
+        let mut committed = ScryModel::new();
+        let mut c = node("node-1", Kind::Component, "Comp", None);
+        c.responsibilities = vec![resp("resp-1"), resp("resp-2")];
+        committed.nodes.push(c);
+        scryer_core::write_model_at(&model_ref, &committed).unwrap();
+        let mut planned = committed.clone();
+        planned.nodes[0].responsibilities.retain(|r| r.id != "resp-2");
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        let r = server
+            .update_nodes(Parameters(UpdateNodeRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                nodes: vec![UpdateNodeItem {
+                    node_id: "node-1".into(),
+                    kind: None,
+                    name: None,
+                    description: None,
+                    technology: None,
+                    external: None,
+                    responsibilities: Some(vec![
+                        resp("resp-1"),
+                        resp("new"),
+                        resp("resp-9"),
+                        resp("new"),
+                    ]),
+                    properties: None,
+                    visual: None,
+                    parent_id: None,
+                }],
+            }))
+            .unwrap();
+
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        let ids: Vec<&str> = planned.nodes[0]
+            .responsibilities
+            .iter()
+            .map(|r| r.id.as_str())
+            .collect();
+        // resp-1 and the hand-written resp-9 keep their identity; both 'new's
+        // mint PAST resp-9 (payload floor) — not past resp-2 alone.
+        assert_eq!(ids, vec!["resp-1", "resp-10", "resp-9", "resp-11"], "{ids:?}");
+        let text = tool_text(&r);
+        assert!(text.contains("node-1: 'new' → resp-10"), "reports the re-mint: {text}");
+    }
+
+    /// set_node writes the same subtree into BOTH layers, so a re-minted id
+    /// must land identically in each — otherwise the plan diff reports a
+    /// phantom reword.
+    #[test]
+    fn set_node_remints_ids_identically_in_both_layers() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::System, "Acme", None));
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+
+        let payload = serde_json::json!({
+            "nodes": [
+                { "id": "node-2", "kind": "container", "name": "API", "parentId": "node-1",
+                  "responsibilities": [{ "id": "new", "statement": "serves requests" }] }
+            ],
+            "links": []
+        });
+        let server = ScryerServer::new();
+        let r = server
+            .set_node(Parameters(SetNodeRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                node_id: "node-1".into(),
+                data: payload.to_string(),
+            }))
+            .unwrap();
+
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        for layer in [&committed, &planned] {
+            let api = layer.nodes.iter().find(|n| n.id == "node-2").unwrap();
+            assert_eq!(api.responsibilities[0].id, "resp-1", "minted, and the same in both layers");
+        }
+        assert!(
+            scryer_core::diff::diff(&committed, &planned).is_empty(),
+            "no phantom reword between layers"
+        );
+        assert!(tool_text(&r).contains("node-2: 'new' → resp-1"));
+    }
+
+    /// set_model replaces the whole model, but its re-mint floor still includes
+    /// the OUTGOING layers: re-issuing an id the payload dropped would let
+    /// enforce_readonly_directives staple the dead claim's user directives onto
+    /// an unrelated new one.
+    #[test]
+    fn set_model_remints_past_the_outgoing_layers() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut prior = ScryModel::new();
+        let mut c = node("node-1", Kind::System, "Acme", None);
+        c.responsibilities = vec![resp("resp-5")];
+        prior.nodes.push(c);
+        scryer_core::write_model_at(&model_ref, &prior).unwrap();
+        scryer_core::write_planned_at(&model_ref, &prior).unwrap();
+
+        // The payload drops resp-5 and carries one caller-invented id.
+        let payload = serde_json::json!({
+            "version": scryer_core::SCRY_VERSION,
+            "nodes": [
+                { "id": "node-1", "kind": "system", "name": "Acme",
+                  "responsibilities": [{ "id": "new", "statement": "does things" }] }
+            ],
+            "links": []
+        });
+        let server = ScryerServer::new();
+        server
+            .set_model(Parameters(SetModelRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                data: payload.to_string(),
+            }))
+            .unwrap();
+
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        assert_eq!(
+            committed.nodes[0].responsibilities[0].id, "resp-6",
+            "minted past the dropped resp-5, not from the payload's own floor"
         );
     }
 }
