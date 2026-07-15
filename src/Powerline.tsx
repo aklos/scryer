@@ -202,7 +202,10 @@ export function Powerline({
             <span>
               changes
               {(model.changes?.length ?? 0) > 0 && (
-                <span className="text-[var(--text-muted)]">
+                <span
+                  className="text-[var(--text-muted)]"
+                  title="Open changes in the ledger — planned work not yet folded into the committed model. A change closes when all its work is marked implemented (or reverted)."
+                >
                   {" "}
                   · {model.changes!.length} in flight
                 </span>
