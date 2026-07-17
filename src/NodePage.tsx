@@ -63,6 +63,7 @@ import { DetailRail } from "./page/DetailRail";
 import { plannedRespHosts, ResponsibilitiesSection } from "./page/ResponsibilitiesSection";
 import { PropertiesSection } from "./page/PropertiesSection";
 import { PreviewSection } from "./page/PreviewSection";
+import { AppearanceWorkspace } from "./page/AppearanceWorkspace";
 
 export type { VariationState, SpecialPage, Selected } from "./page/types";
 
@@ -117,6 +118,9 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const openMenu = usePageMenu();
   const copyId = useCopyId();
   const [tab, setTab] = useState<"overview" | "history">("overview");
+  // Appearance takeover: the overview content row swaps for the visual-edit
+  // workspace. Leaving the tab leaves the mode.
+  const [editingAppearance, setEditingAppearance] = useState(false);
   // The header edits (name, technology) accumulate in this draft; the model is
   // written once, on Done — the same nothing-commits-until-Done contract as
   // every SectionEditor. Cancel (or navigating away) simply drops the draft.
@@ -160,6 +164,10 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const committedResps =
     committed?.nodes.find((n) => n.id === node.id)?.responsibilities ?? [];
   const definition = sourceMap[node.id] ?? [];
+  // The node's anchored source file, for matching its preview component.
+  const previewSourceFile =
+    sourceMap[node.id]?.[0]?.pattern ??
+    node.responsibilities?.map((r) => sourceMap[r.id]?.[0]?.pattern).find(Boolean);
 
   // Leaf claims must read through to code; structural nodes discharge through
   // their subtree, so their claims are never "unmapped". Leafness spans the
@@ -366,16 +374,43 @@ function NodePageBody(props: PageProps & { node: Node }) {
         // other kind is a human-authored title with a length cap.
         nameMaxLength={node.kind === "symbol" ? undefined : NAME_MAX}
         nameSanitize={node.kind === "symbol" ? sanitizeIdentifier : undefined}
-        tabs={<PageTabs tab={tab} onTab={setTab} historyCount={nodeEvents.length} />}
+        tabs={
+          <PageTabs
+            tab={tab}
+            onTab={(t) => {
+              setEditingAppearance(false);
+              setTab(t);
+            }}
+            historyCount={nodeEvents.length}
+          />
+        }
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div
+        className={`min-h-0 flex-1 ${
+          editingAppearance && tab === "overview" ? "overflow-hidden" : "overflow-y-auto"
+        }`}
+      >
         {tab === "history" ? (
           <div className={`${PAGE_COL} pb-[50px] pt-[18px]`}>
             <div className="max-w-[900px]">
               <NodeHistory events={nodeEvents} projectPath={projectPath} />
             </div>
           </div>
+        ) : editingAppearance && node.visual ? (
+          <AppearanceWorkspace
+            node={node}
+            projectPath={projectPath}
+            sourceFile={previewSourceFile}
+            variationState={
+              props.variationState?.nodeId === node.id ? props.variationState : null
+            }
+            onStartVariation={props.onStartVariation}
+            onAcceptVariation={props.onAcceptVariation}
+            onDiscardVariations={props.onDiscardVariations}
+            onSelectVariation={props.onSelectVariation}
+            onClose={() => setEditingAppearance(false)}
+          />
         ) : (
           <div className={`${PAGE_COL} flex gap-8 pb-[50px] pt-[18px]`}>
             <article
@@ -398,20 +433,15 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 <PreviewSection
                   node={node}
                   projectPath={projectPath}
-                  sourceFile={
-                    sourceMap[node.id]?.[0]?.pattern ??
-                    node.responsibilities
-                      ?.map((r) => sourceMap[r.id]?.[0]?.pattern)
-                      .find(Boolean)
-                  }
+                  sourceFile={previewSourceFile}
                   onFixture={onFixture}
-                  variationState={
-                    props.variationState?.nodeId === node.id ? props.variationState : null
+                  variationsReady={
+                    props.variationState?.nodeId === node.id &&
+                    props.variationState.status === "ready"
                   }
-                  onStartVariation={props.onStartVariation}
-                  onAcceptVariation={props.onAcceptVariation}
-                  onDiscardVariations={props.onDiscardVariations}
-                  onSelectVariation={props.onSelectVariation}
+                  onEditAppearance={
+                    props.onStartVariation ? () => setEditingAppearance(true) : undefined
+                  }
                 />
               )}
 
