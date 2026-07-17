@@ -188,6 +188,32 @@ pub fn gc(committed: &ScryModel, planned: &mut ScryModel) -> Gc {
     Gc { pruned: before - planned.change_map.len(), closed }
 }
 
+/// Close an EMPTY open change by hand — the escape hatch for a stranded
+/// ledger (opened, but its work ended up tagged or folded elsewhere), which
+/// [`gc`] deliberately never touches because "no keys yet" is also what a
+/// freshly opened change looks like. Refuses a change that still has tagged
+/// entries: those close by folding or reverting the entries themselves, never
+/// by discarding the grouping. The close is recorded as "abandoned" so the
+/// rationale survives. The caller must hold the model lock.
+pub fn close_change(r: &ModelRef, change_id: &str) -> Result<ChangeMeta, String> {
+    let mut plan = crate::read_planned_at(r)?;
+    let Some(pos) = plan.changes.iter().position(|c| c.id == change_id) else {
+        return Err(format!("no open change '{change_id}'"));
+    };
+    let entries = plan.change_map.values().filter(|v| *v == change_id).count();
+    if entries > 0 {
+        return Err(format!(
+            "{change_id} still has {entries} tagged entr{} — fold or revert them; \
+             the change closes itself when its last entry goes",
+            if entries == 1 { "y" } else { "ies" }
+        ));
+    }
+    let meta = plan.changes.remove(pos);
+    crate::write_planned_at(r, &plan)?;
+    record_closed(r, &meta, "abandoned");
+    Ok(meta)
+}
+
 /// Append a closed change's durable record to the history log — the rationale
 /// finally survives the fold ("which change introduced this claim?" has an
 /// answer). `driver` says how it closed: "folded" (its entries reached
@@ -374,6 +400,38 @@ mod tests {
             read_history(&r).into_iter().filter(|e| e.kind == EventKind::Change).collect();
         assert_eq!(closes.len(), 1);
         assert_eq!(closes[0].change_id.as_deref(), Some(id.as_str()));
+    }
+
+    /// The hand-close escape hatch: an empty (stranded) change closes and is
+    /// recorded "abandoned"; a change with tagged entries refuses (it closes
+    /// through its entries); an unknown id is an error.
+    #[test]
+    fn close_change_discards_only_empty_ledgers() {
+        let tmp = tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(tmp.path().to_path_buf());
+        write_model_at(&r, &model_with_resps(&[("r1", "exists")])).unwrap();
+
+        let mut plan = model_with_resps(&[("r1", "exists"), ("r2", "new A")]);
+        let tagged = open_change(&mut plan, "real work", 100);
+        tag(&mut plan, &[element_key(ElementKind::Responsibility, None, "r2")], &tagged);
+        let stranded = open_change(&mut plan, "opened then orphaned", 200);
+        write_planned_at(&r, &plan).unwrap();
+
+        assert!(close_change(&r, &tagged).unwrap_err().contains("1 tagged entry"));
+        assert!(close_change(&r, "chg-99").unwrap_err().contains("no open change"));
+
+        let meta = close_change(&r, &stranded).unwrap();
+        assert_eq!(meta.rationale, "opened then orphaned");
+        let planned = read_planned_at(&r).unwrap();
+        assert_eq!(planned.changes.len(), 1, "only the tagged change remains open");
+        assert_eq!(planned.changes[0].id, tagged);
+
+        let closes: Vec<_> =
+            read_history(&r).into_iter().filter(|e| e.kind == EventKind::Change).collect();
+        assert_eq!(closes.len(), 1);
+        assert_eq!(closes[0].change_id.as_deref(), Some(stranded.as_str()));
+        assert_eq!(closes[0].driver, "abandoned");
+        assert_eq!(closes[0].rows[0].text, "opened then orphaned");
     }
 
     #[test]

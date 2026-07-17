@@ -125,6 +125,16 @@ pub(crate) fn write_planned(ref_str: String, data: String) -> Result<(), String>
     scryer_core::write_planned_raw_at(&model_ref, &data)
 }
 
+/// Close an EMPTY open change (a stranded ledger) from the canvas. Goes through
+/// core rather than the raw plan echo so the "abandoned" history record lands;
+/// the plan write fires the watcher, which refreshes every surface.
+#[tauri::command]
+pub(crate) fn close_change(ref_str: String, change_id: String) -> Result<(), String> {
+    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
+    let _lock = scryer_core::lock_model(&model_ref)?;
+    scryer_core::changes::close_change(&model_ref, &change_id).map(|_| ())
+}
+
 /// Read the durable committed-model history log (`.scryer/history.jsonl`),
 /// returned as a JSON array of events, oldest first. Empty when the project has
 /// no history yet. The frontend re-reads this whenever the model changes (every

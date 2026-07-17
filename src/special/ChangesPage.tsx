@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Check, GitCompare } from "lucide-react";
+import { Check, GitCompare, X } from "lucide-react";
 import type { ChangeRevision } from "../hooks/useModelStorage";
 import type { ScryModel, Node } from "../viewmodel";
 import type { Change, ElementChange, ModelDiff } from "../planDiff";
@@ -7,7 +7,7 @@ import { CHANGE_COLOR, type ChangeKind, collectPlanEntries, type LinkChange, MAR
 import { DIFF_ANCHOR, DIFF_TINT, DiffRow } from "../diffkit";
 import { ANCHOR_CALM, StatementText } from "../markup";
 import { entryChanges } from "../ledger";
-import { BTN, LINK, WordDiffText } from "../pagekit";
+import { BTN, BTN_ICON, LINK, WordDiffText } from "../pagekit";
 import { SpecialBody, SpecialHeader, timeLabel } from "./shell";
 
 // --- changes (the whole plan diff) -------------------------------------------
@@ -381,6 +381,7 @@ export function ChangesPage({
   onSelectNode,
   activeChange,
   onSetActiveChange,
+  onCloseChange,
 }: {
   planDiff: ModelDiff;
   /** The planned model — element names, kinds, and tree order. */
@@ -394,6 +395,8 @@ export function ChangesPage({
   activeChange?: string | null;
   /** Select/detach the active change. Absent = read-only (agent writing). */
   onSetActiveChange?: (id: string | null) => void;
+  /** Close an EMPTY (stranded) change. Absent = read-only (agent writing). */
+  onCloseChange?: (id: string) => void;
 }) {
   const ctx = useMemo<RowCtx>(
     () => ({
@@ -465,6 +468,7 @@ export function ChangesPage({
                   onSetActiveChange &&
                   (() => onSetActiveChange(activeChange === c.id ? null : c.id))
                 }
+                onClose={onCloseChange && (() => onCloseChange(c.id))}
               />
             ))}
             {sections.unfiled.length > 0 && (
@@ -485,7 +489,11 @@ export function ChangesPage({
 }
 
 /** One change's partition of the pending queue: header (id chip, rationale,
- *  count, work-here toggle) + its entry cards. `id` null = the unfiled bucket. */
+ *  count, work-here toggle) + its entry cards. `id` null = the unfiled bucket.
+ *  An EMPTY change also offers a ✕ — the hand-close for a stranded ledger
+ *  (opened, but its work ended up filed elsewhere), which otherwise nothing
+ *  ever closes. The backend refuses once entries exist, so the ✕ only shows
+ *  while there is nothing to lose; the rationale survives in history. */
 function ChangeSection({
   id,
   rationale,
@@ -493,6 +501,7 @@ function ChangeSection({
   ctx,
   active,
   onToggleActive,
+  onClose,
 }: {
   id: string | null;
   rationale: string;
@@ -500,6 +509,7 @@ function ChangeSection({
   ctx: RowCtx;
   active: boolean;
   onToggleActive?: () => void;
+  onClose?: () => void;
 }) {
   return (
     <section>
@@ -538,6 +548,16 @@ function ChangeSection({
             ) : (
               "work here"
             )}
+          </button>
+        )}
+        {onClose && entries.length === 0 && (
+          <button
+            type="button"
+            className={BTN_ICON}
+            title="Close this empty change — nothing was filed into it; the rationale is kept in the history log"
+            onClick={onClose}
+          >
+            <X className="h-3 w-3" />
           </button>
         )}
       </div>

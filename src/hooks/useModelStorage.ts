@@ -272,6 +272,9 @@ export interface ModelStorage {
    *  by design — the registry/tags persist in the plan, the pointer doesn't. */
   activeChange: string | null;
   setActiveChange: (id: string | null) => void;
+  /** Close an EMPTY (stranded) ledger change — one whose work ended up filed
+   *  elsewhere. Backend-refused while it has entries; recorded "abandoned". */
+  closeChange: (id: string) => Promise<void>;
 
   /** Open a project. If it has no model, status becomes `needs-model`. */
   openProject: (path: string) => Promise<void>;
@@ -781,6 +784,22 @@ export function useModelStorage(): ModelStorage {
     }
   }, [model, activeChange]);
 
+  // Close an EMPTY (stranded) ledger change by hand — the canvas twin of the
+  // agent's `set_change {close}`. Goes through the backend rather than editing
+  // the in-memory registry so the "abandoned" history record lands; the plan
+  // write comes back through the watcher, which refreshes the registry (and
+  // the powerline's in-flight count) everywhere.
+  const closeChange = useCallback(async (id: string) => {
+    const ref = modelRefRef.current;
+    if (!ref) return;
+    try {
+      await invoke("close_change", { refStr: ref, changeId: id });
+    } catch {
+      /* refused (entries landed meanwhile, or already closed) — the reload
+         keeps the row honest either way */
+    }
+  }, []);
+
   const setAgentRunning = useCallback((running: boolean) => {
     agentRunningRef.current = running;
   }, []);
@@ -833,6 +852,7 @@ export function useModelStorage(): ModelStorage {
     externalGeneration,
     activeChange,
     setActiveChange,
+    closeChange,
     openProject,
     createBlankModel,
     closeProject,

@@ -3220,6 +3220,7 @@ mod tests {
                 rationale: Some("give the API rate limiting".into()),
                 change_id: None,
                 clear: None,
+                close: None,
             }))
             .unwrap();
         assert!(tool_text(&r).contains("Opened chg-1"), "{}", tool_text(&r));
@@ -3269,6 +3270,7 @@ mod tests {
                 rationale: None,
                 change_id: Some("chg-1".into()),
                 clear: None,
+                close: None,
             }))
             .unwrap();
         assert!(tool_text(&r).contains("Resumed chg-1"), "{}", tool_text(&r));
@@ -3312,6 +3314,88 @@ mod tests {
         assert_eq!(impl_ev.change_id.as_deref(), Some("chg-1"));
     }
 
+    /// `set_change {close}` is the escape hatch for a stranded empty ledger:
+    /// it refuses while the change has tagged entries, closes it once empty,
+    /// and detaches a session selection pointing at the closed id.
+    #[test]
+    fn set_change_close_discards_a_stranded_empty_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let project = dir.path().to_string_lossy().to_string();
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::System, "Acme", None));
+        m.nodes.push(node("node-2", Kind::Container, "API", Some("node-1")));
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+
+        // chg-1 gets real work; chg-2 is opened and never written to.
+        let server = ScryerServer::new();
+        server
+            .set_change(Parameters(SetChangeRequest {
+                project: Some(project.clone()),
+                rationale: Some("rate limiting".into()),
+                change_id: None,
+                clear: None,
+                close: None,
+            }))
+            .unwrap();
+        server
+            .add_component(Parameters(AddComponentRequest {
+                project: Some(project.clone()),
+                items: vec![ComponentItem {
+                    parent_id: "node-2".into(),
+                    name: "RateLimiter".into(),
+                    description: None,
+                    responsibilities: vec![],
+                }],
+            }))
+            .unwrap();
+        server
+            .set_change(Parameters(SetChangeRequest {
+                project: Some(project.clone()),
+                rationale: Some("opened then orphaned".into()),
+                change_id: None,
+                clear: None,
+                close: None,
+            }))
+            .unwrap();
+        let close = |id: &str| {
+            server.set_change(Parameters(SetChangeRequest {
+                project: Some(project.clone()),
+                rationale: None,
+                change_id: None,
+                clear: None,
+                close: Some(id.into()),
+            }))
+        };
+
+        // A change with tagged entries refuses to close by hand.
+        let r = close("chg-1").unwrap();
+        assert_eq!(r.is_error, Some(true));
+        assert!(tool_text(&r).contains("still has 1 tagged entry"), "{}", tool_text(&r));
+
+        // The stranded one closes, and the session (which selected it on
+        // open) detaches.
+        let r = close("chg-2").unwrap();
+        assert!(tool_text(&r).contains("Closed chg-2"), "{}", tool_text(&r));
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(planned.changes.len(), 1);
+        assert_eq!(planned.changes[0].id, "chg-1");
+        assert!(server.session_change(&model_ref).is_none(), "selection detached");
+
+        let history = scryer_core::history::read_history(&model_ref);
+        let ev = history
+            .iter()
+            .find(|e| e.kind == scryer_core::history::EventKind::Change)
+            .expect("a change-closed event");
+        assert_eq!(ev.change_id.as_deref(), Some("chg-2"));
+        assert_eq!(ev.driver, "abandoned");
+        assert_eq!(ev.rows[0].text, "opened then orphaned");
+
+        let r = close("chg-9").unwrap();
+        assert_eq!(r.is_error, Some(true));
+        assert!(tool_text(&r).contains("no open change 'chg-9'"), "{}", tool_text(&r));
+    }
+
     /// Two changes touching the same element is the collision the ledger
     /// exists to catch: the second session's write wins the tag, but the
     /// response says so out loud.
@@ -3332,6 +3416,7 @@ mod tests {
                 rationale: Some("rate limiting".into()),
                 change_id: None,
                 clear: None,
+                close: None,
             }))
             .unwrap();
         session1
@@ -3353,6 +3438,7 @@ mod tests {
                 rationale: Some("rename things".into()),
                 change_id: None,
                 clear: None,
+                close: None,
             }))
             .unwrap();
         let r = session2

@@ -133,6 +133,11 @@ pub(crate) struct SetChangeRequest {
     /// Detach from the current change: subsequent writes this session go
     /// unfiled (the serial workflow).
     pub clear: Option<bool>,
+    /// Close an EMPTY open change by id — the escape hatch for a stranded
+    /// ledger whose work ended up tagged or folded elsewhere. Refused while
+    /// the change still has tagged entries (those close by folding or
+    /// reverting). Recorded in history as "abandoned".
+    pub close: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

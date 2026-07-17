@@ -468,7 +468,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Select which CHANGE this session's plan writes belong to — a named partition of the plan carrying the dev's rationale, so parallel workstreams stay separable and review/fold can work per task. Pass `rationale` (the task in one sentence, as the dev put it) to OPEN a new change, or `change_id` to RESUME an open one from a prior session (list them via get_pending's openChanges). After this, every plan write in this session is tagged to the change automatically; `mark_implemented {change}` folds exactly its entries, and the change closes when its last entry folds — the rationale survives in the history log. Pass `clear: true` to detach (writes go unfiled, today's serial behavior). With no arguments, reports the current selection and the open changes. Use this at the start of a task when other work may share the plan; skip it for quick serial edits."
+        description = "Select which CHANGE this session's plan writes belong to — a named partition of the plan carrying the dev's rationale, so parallel workstreams stay separable and review/fold can work per task. Pass `rationale` (the task in one sentence, as the dev put it) to OPEN a new change, or `change_id` to RESUME an open one from a prior session (list them via get_pending's openChanges). After this, every plan write in this session is tagged to the change automatically; `mark_implemented {change}` folds exactly its entries, and the change closes when its last entry folds — the rationale survives in the history log. Pass `clear: true` to detach (writes go unfiled, today's serial behavior). Pass `close` (a change id) to close an EMPTY stranded change — one whose work ended up tagged elsewhere; refused while it has tagged entries, since a change normally closes itself when its last entry folds or reverts. With no arguments, reports the current selection and the open changes. Use this at the start of a task when other work may share the plan; skip it for quick serial edits."
     )]
     pub(crate) fn set_change(
         &self,
@@ -499,6 +499,39 @@ impl ScryerServer {
             return Ok(CallToolResult::success(vec![Content::text(
                 "Detached — writes in this session now go unfiled.".to_string(),
             )]));
+        }
+
+        // Close: drop an empty (stranded) change from the registry. Its
+        // "abandoned" record lands in history; a selection pointing at it
+        // detaches so subsequent writes don't resurrect the dead id.
+        if let Some(cid) = req.close.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            if req.rationale.is_some() || req.change_id.is_some() {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "Pass close alone — not combined with rationale or change_id.".to_string(),
+                )]));
+            }
+            let _lock = match lock_or_err(&model_ref) {
+                Ok(l) => l,
+                Err(e) => return Ok(e),
+            };
+            let meta = match scryer_core::changes::close_change(&model_ref, cid) {
+                Ok(m) => m,
+                Err(e) => {
+                    let plan = scryer_core::read_planned_at(&model_ref).unwrap_or_default();
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "{e}\n{}",
+                        open_changes_line(&plan)
+                    ))]));
+                }
+            };
+            if self.session_change(&model_ref).as_deref() == Some(cid) {
+                self.set_session_change(None);
+            }
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "Closed {cid} — \"{}\" (abandoned, no entries). The rationale is kept in \
+                 the history log.",
+                meta.rationale
+            ))]));
         }
 
         match (

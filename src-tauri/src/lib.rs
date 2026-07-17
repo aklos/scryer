@@ -75,6 +75,7 @@ pub fn run() {
             project::read_model,
             project::read_planned,
             project::write_planned,
+            project::close_change,
             project::read_history,
             source_view::open_in_editor,
             source_view::read_source_span,
