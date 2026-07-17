@@ -160,6 +160,15 @@ fn scenario_property_relabel() -> (ScryModel, ScryModel) {
     (from, model(v))
 }
 
+/// A canvas placement is pure cosmetics: a position-only change must diff
+/// empty in BOTH engines, or dragging a card would enqueue phantom plan work.
+fn scenario_position_only() -> (ScryModel, ScryModel) {
+    let from = base();
+    let mut v = serde_json::to_value(base()).unwrap();
+    v["nodes"][1]["position"] = json!({ "x": 240.0, "y": -60.0 });
+    (from, model(v))
+}
+
 #[test]
 fn lockstep_fixtures_are_current() {
     let scenarios: Vec<(&str, (ScryModel, ScryModel))> = vec![
@@ -167,6 +176,7 @@ fn lockstep_fixtures_are_current() {
         ("identical", scenario_identical()),
         ("greenfield", scenario_greenfield()),
         ("property-relabel", scenario_property_relabel()),
+        ("position-only", scenario_position_only()),
     ];
 
     let dir = fixture_dir();

@@ -171,6 +171,7 @@ fn blank_node(id: String, kind: Kind, name: String, parent_id: Option<String>) -
         visual: None,
         appearance: None,
         notes: None,
+        position: None,
         directives: Vec::new(),
     }
 }

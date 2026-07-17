@@ -150,6 +150,13 @@ export interface Node {
    *  read-only to the agent. Plain text — not part of conformance. Mirrors Rust
    *  `Node.directives`. */
   directives?: string[];
+  /** Where the user dragged this node on its parent's map surface (the node's
+   *  center, in that surface's coordinate space). Unset means auto-layout owns
+   *  the placement; set means the canvas pins it there. Pure cosmetics: the
+   *  plan diff never compares it and a drag re-dates nothing. Cleared on
+   *  reparent — coordinates don't survive a surface change. Mirrors Rust
+   *  `Node.position`. */
+  position?: { x: number; y: number };
 }
 
 export interface Link {
@@ -617,12 +624,42 @@ export function moveNode(
   return {
     ...model,
     nodes: model.nodes.map((n) =>
-      n.id === nodeId ? { ...n, parentId: newParentId ?? undefined } : n,
+      n.id === nodeId
+        ? // Canvas placements are per-surface coordinates — a real reparent
+          // lands on a different surface, so the old spot is meaningless there
+          // (mirrors MCP `move_nodes`). Auto-layout re-homes the node.
+          {
+            ...n,
+            parentId: newParentId ?? undefined,
+            position:
+              (n.parentId ?? null) === newParentId ? n.position : undefined,
+          }
+        : n,
     ),
     groups: model.groups.map((g) =>
       g.memberIds.includes(nodeId)
         ? { ...g, memberIds: g.memberIds.filter((m) => m !== nodeId) }
         : g,
+    ),
+  };
+}
+
+/**
+ * Pin (or, with null, release) a node's manual placement on its parent's map
+ * surface. Pure cosmetics: the plan diff ignores `position`, so a drag never
+ * becomes pending work, re-dates nothing, and tags no change.
+ */
+export function setNodePosition(
+  model: ScryModel,
+  nodeId: string,
+  position: { x: number; y: number } | null,
+): ScryModel {
+  const node = model.nodes.find((n) => n.id === nodeId);
+  if (!node) return model;
+  return {
+    ...model,
+    nodes: model.nodes.map((n) =>
+      n.id === nodeId ? { ...n, position: position ?? undefined } : n,
     ),
   };
 }

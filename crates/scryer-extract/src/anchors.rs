@@ -872,6 +872,7 @@ mod tests {
             visual: None,
             appearance: None,
             notes: None,
+            position: None,
             directives: Vec::new(),
         });
         m.source_map.insert(

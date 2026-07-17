@@ -538,6 +538,7 @@ mod tests {
             visual: None,
             appearance: None,
             notes: None,
+            position: None,
             directives: Vec::new(),
         });
         m
@@ -829,6 +830,7 @@ mod tests {
                         visual: None,
                         appearance: None,
                         notes: None,
+                        position: None,
                         directives: Vec::new(),
                     };
                     m.nodes.push(node);
@@ -866,6 +868,7 @@ mod tests {
             visual: None,
             appearance: None,
             notes: None,
+            position: None,
             directives: Vec::new(),
         });
         write_model_at(&r, &m).unwrap();
@@ -892,6 +895,7 @@ mod tests {
             visual: None,
             appearance: None,
             notes: None,
+            position: None,
             directives: Vec::new(),
         });
         write_planned_at(&r, &planned).unwrap();
@@ -919,6 +923,7 @@ mod tests {
             visual: None,
             appearance: None,
             notes: None,
+            position: None,
             directives: Vec::new(),
         }
     }

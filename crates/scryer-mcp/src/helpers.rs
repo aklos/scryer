@@ -200,6 +200,26 @@ pub(crate) fn enforce_readonly_directives(model: &mut ScryModel, prior: &ScryMod
     }
 }
 
+/// Canvas placements (`Node::position`) are user-authored and read-only to the
+/// AI, exactly like directives — the typed patch tools can't reach them
+/// (`schemars(skip)`), but the whole-node generation primitives
+/// `set_model`/`set_node` rebuild nodes from JSON and would otherwise drop
+/// them. Force each node's position back to whatever the FIRST prior model
+/// containing that node held; nodes new to every prior get none (the AI never
+/// places nodes — auto-layout does). Priors are ordered most-authoritative
+/// first: the plan layer is where the canvas writes, so it precedes committed.
+pub(crate) fn restore_node_positions(model: &mut ScryModel, priors: &[&ScryModel]) {
+    let prior_pos: HashMap<&str, Option<scryer_core::Position>> = priors
+        .iter()
+        .rev()
+        .flat_map(|m| m.nodes.iter())
+        .map(|n| (n.id.as_str(), n.position))
+        .collect();
+    for n in &mut model.nodes {
+        n.position = prior_pos.get(n.id.as_str()).copied().flatten();
+    }
+}
+
 
 /// Project root from request param, active model, or cwd.
 /// Build a committed-model event diff row for a responsibility — its statement,

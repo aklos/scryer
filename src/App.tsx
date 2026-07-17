@@ -51,6 +51,7 @@ import {
   removeResponsibility,
   renameConcern,
   setNodeGroup as setNodeGroupHelper,
+  setNodePosition,
   updateGroup as updateGroupHelper,
   updateLink as updateLinkHelper,
   updateNode as updateNodeHelper,
@@ -681,6 +682,16 @@ function Workspace({
 
   const pageEditor = writing ? undefined : editor;
 
+  // Persist a manual card placement from the map (null releases it back to
+  // auto-layout — the re-layout control). Pure cosmetics — the plan diff
+  // ignores `position` — but still a plan write, so it's gated off while an
+  // agent owns the file, like every other canvas edit.
+  const moveDiagramNode = useCallback(
+    (id: string, position: { x: number; y: number } | null) =>
+      updateModel((m) => setNodePosition(m, id, position)),
+    [updateModel],
+  );
+
   const onDismissDrift = useCallback(
     (nodeId: string) => {
       if (!projectPath) return;
@@ -786,6 +797,7 @@ function Workspace({
             selectedId={selected?.kind === "node" ? selected.id : null}
             onFocus={drillDiagram}
             onSelectNode={selectFromDiagram}
+            onMoveNode={writing ? undefined : moveDiagramNode}
             concernLens={concernLens}
           />
         ) : selected?.kind === "special" ? (

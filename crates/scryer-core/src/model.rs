@@ -177,6 +177,16 @@ pub struct Appearance {
 
 // --- Nodes, links, groups ---
 
+/// A manual canvas placement — the node's center on its parent's map surface,
+/// in that surface's coordinate space. Pure cosmetics with no conformance role:
+/// `diff` never compares it, so a drag is not a plan change and never re-dates
+/// anything.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Position {
+    pub x: f64,
+    pub y: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Node {
@@ -244,6 +254,15 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub notes: Option<String>,
+    /// Where the user dragged this node on its parent's map surface. Unset means
+    /// auto-layout owns the placement; set means the canvas pins the node there
+    /// and layout only routes around it. User-authored via the canvas: hidden
+    /// from the agent's write-tool schemas (`schemars(skip)`) and restored from
+    /// the prior model across raw whole-node writes, like `directives`. Cleared
+    /// on reparent — coordinates are per-surface and don't survive the move.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub position: Option<Position>,
     /// Node-level prescriptive HOW-constraints — verb-led "must"/"never" rules
     /// the implementation must satisfy, the node-altitude twin of a
     /// responsibility's `directives`. These CARRY DOWN: a node is bound by its
@@ -491,6 +510,7 @@ mod tests {
             visual: None,
             appearance: None,
             notes: None,
+            position: None,
             directives: Vec::new(),
         }
     }

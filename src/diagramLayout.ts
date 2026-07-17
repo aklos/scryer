@@ -32,6 +32,9 @@ export interface DiagramNode {
   kind: Kind;
   name: string;
   external: boolean;
+  /** Manually placed: the position below is the user's stored placement, not
+   *  auto-layout's. Pinned nodes stay put; layout only places the rest. */
+  pinned: boolean;
   technology?: string;
   description?: string;
   /** Has its own children — so the renderer can mark it drillable. */
@@ -74,6 +77,12 @@ export interface DiagramScene {
 const CELL_W = 300;
 const CELL_H = 180;
 
+// Card footprint on the arch tiers — used for handle routing before React Flow
+// has measured the cards (DiagramView) and for keeping auto-laid cards off
+// pinned ones (the locked relax pass below).
+export const CARD_W = 180;
+export const CARD_H = 160;
+
 // ForceAtlas2 tuning for the code tier lives with the layout (`fa2Settings`).
 
 // Relative dot sizing: the most depended-upon symbol fills MAX_DOT, a leaf sits
@@ -102,6 +111,16 @@ const estLabelWidth = (name: string) =>
 
 const pairKey = (a: string, b: string) =>
   a < b ? `${a}\0${b}` : `${b}\0${a}`;
+
+/** Collision radius (px) of a code-tier dot row — the disc plus its centered
+ *  label block, approximated as a circle. Shared with the live simulation's
+ *  collide force (`useDotSim`) so physics and pixels agree on how much room a
+ *  dot claims. */
+export function dotCollideRadius(name: string, dotSize: number): number {
+  const w = Math.max(dotSize, estLabelWidth(name));
+  const h = dotSize + DISC_LABEL_GAP + LABEL_BLOCK_H;
+  return Math.max(w, h) / 2;
+}
 
 /**
  * Build the scene for a level. Async because the planar layout is.
@@ -225,7 +244,7 @@ export async function buildDiagramScene(
     degree.set(e.target, (degree.get(e.target) ?? 0) + 1);
   }
 
-  const base = (id: string, reference: boolean): Omit<DiagramNode, "x" | "y" | "dotSize"> => {
+  const base = (id: string, reference: boolean): Omit<DiagramNode, "x" | "y" | "dotSize" | "pinned"> => {
     const n = byId.get(id)!;
     return {
       id: n.id,
@@ -263,17 +282,34 @@ export async function buildDiagramScene(
     layoutIds.map((id) => [id, dotSizeFor(degree.get(id) ?? 0, maxIn)] as const),
   );
 
+  // Manual placements pin their nodes: auto-layout only places the rest. Arch
+  // tiers only, and never ghosts — a ghost's stored position belongs to the
+  // surface where the node really lives, not to this one.
+  const pinnedPos = new Map<string, { x: number; y: number }>(
+    mode === "arch"
+      ? children
+          .filter((c) => c.position)
+          .map((c) => [c.id, { x: c.position!.x, y: c.position!.y }] as const)
+      : [],
+  );
+
   const positions =
     mode === "code"
       ? dotLayout(
           layoutIds.map((id) => ({ id, name: byId.get(id)!.name, size: sizeById.get(id)! })),
           edges,
         )
-      : await archLayout(layoutIds, edges);
+      : await archLayout(layoutIds, edges, pinnedPos);
 
   const nodes: DiagramNode[] = layoutIds.map((id) => {
     const p = positions.get(id) ?? { x: 0, y: 0 };
-    return { ...base(id, ghostIds.has(id)), dotSize: sizeById.get(id) ?? MIN_DOT, x: p.x, y: p.y };
+    return {
+      ...base(id, ghostIds.has(id)),
+      pinned: pinnedPos.has(id),
+      dotSize: sizeById.get(id) ?? MIN_DOT,
+      x: p.x,
+      y: p.y,
+    };
   });
 
   return { mode, focusId, nodes, edges };
@@ -286,10 +322,16 @@ export async function buildDiagramScene(
  * nodes go through the planar embedder; isolated nodes are grid-packed below
  * so a lone container never gets stranded in the planar strip. Mutates the
  * passed `edges` to flag the non-planar ones for loose routing.
+ *
+ * `pinned` holds the user's manual placements: those nodes land exactly where
+ * they were dragged, and only the rest take the computed spots — which are
+ * deterministic for a given graph, so dragging one card never moves the
+ * others. A locked relax pass then pushes any auto-laid card off a pinned one.
  */
 async function archLayout(
   nodeIds: string[],
   edges: DiagramEdge[],
+  pinned: Map<string, { x: number; y: number }>,
 ): Promise<Map<string, { x: number; y: number }>> {
   const idSet = new Set(nodeIds);
   const pairs: EdgePair[] = edges
@@ -342,6 +384,22 @@ async function archLayout(
     const p = grid.get(id) ?? { col: 0, row: 0 };
     px.set(id, { x: p.col * CELL_W, y: p.row * CELL_H });
   }
+  if (pinned.size === 0) return px;
+
+  // Pinned nodes sit exactly where the user put them; every other node keeps
+  // its computed spot. NO global adjustment happens here: the planar layout is
+  // deterministic for a given graph, so an unpinned node's position is stable
+  // across drags of OTHER nodes — dragging one card must never shift the rest
+  // (an earlier centroid-translation version did exactly that, and a single
+  // drop read as the whole graph panning while the card "snapped back").
+  for (const [id, at] of pinned) {
+    px.set(id, { x: at.x, y: at.y });
+  }
+
+  // Auto-laid cards must not land under a pinned one: resolve card-footprint
+  // overlaps, moving only the unpinned (the user's placements are law).
+  const boxes = new Map<string, Box>(nodeIds.map((id) => [id, { w: CARD_W, h: CARD_H }]));
+  relaxLabelBoxes(px, boxes, LABEL_PAD, 500, new Set(pinned.keys()));
   return px;
 }
 
@@ -395,18 +453,25 @@ interface Box {
  * circle, so they keep the *discs* apart but let a label — which extends to the
  * right of its disc — overlap a neighbour. Resolving the real rows is what gives
  * the dots and labels room to breathe.
+ *
+ * `locked` boxes never move (the arch tiers' pinned cards): an overlap with one
+ * pushes the other box the whole way, and two locked boxes are left where the
+ * user put them, overlapping or not.
  */
 function relaxLabelBoxes(
   pos: Map<string, { x: number; y: number }>,
   boxes: Map<string, Box>,
   pad: number,
   iterations: number,
+  locked: ReadonlySet<string> = new Set(),
 ): void {
   const ids = [...pos.keys()];
   for (let it = 0; it < iterations; it++) {
     let moved = false;
     for (let i = 0; i < ids.length; i++) {
       for (let j = i + 1; j < ids.length; j++) {
+        const la = locked.has(ids[i]), lb = locked.has(ids[j]);
+        if (la && lb) continue;
         const pa = pos.get(ids[i])!, pb = pos.get(ids[j])!;
         const ba = boxes.get(ids[i])!, bb = boxes.get(ids[j])!;
         const dx = pb.x + bb.w / 2 - (pa.x + ba.w / 2);
@@ -414,12 +479,16 @@ function relaxLabelBoxes(
         const ox = (ba.w + bb.w) / 2 + pad - Math.abs(dx);
         const oy = (ba.h + bb.h) / 2 + pad - Math.abs(dy);
         if (ox > 0 && oy > 0) {
+          // Each side takes half the push; a locked side's half goes to the
+          // other, so the pair still separates by the full overlap.
+          const wa = la ? 0 : lb ? 1 : 0.5;
+          const wb = lb ? 0 : la ? 1 : 0.5;
           if (ox < oy) {
-            const s = ((dx < 0 ? -1 : 1) * ox) / 2;
-            pa.x -= s; pb.x += s;
+            const s = (dx < 0 ? -1 : 1) * ox;
+            pa.x -= s * wa; pb.x += s * wb;
           } else {
-            const s = ((dy < 0 ? -1 : 1) * oy) / 2;
-            pa.y -= s; pb.y += s;
+            const s = (dy < 0 ? -1 : 1) * oy;
+            pa.y -= s * wa; pb.y += s * wb;
           }
           moved = true;
         }

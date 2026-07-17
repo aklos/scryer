@@ -664,6 +664,7 @@ mod tests {
             visual: None,
             appearance: None,
             notes: None,
+            position: None,
             directives: Vec::new(),
         }
     }
@@ -833,6 +834,19 @@ mod tests {
         same.external = Some(false);
         to.nodes.push(same);
         assert!(diff(&from, &to).is_empty(), "None and Some(false) must not differ");
+    }
+
+    /// A canvas placement is pure cosmetics: dragging a node on the map must
+    /// never surface as a plan change (a drag is not pending work).
+    #[test]
+    fn position_only_change_is_not_a_plan_change() {
+        let mut from = ScryModel::new();
+        from.nodes.push(node("a", "A", None)); // position: None
+        let mut to = ScryModel::new();
+        let mut placed = node("a", "A", None);
+        placed.position = Some(crate::Position { x: 42.0, y: -7.0 });
+        to.nodes.push(placed);
+        assert!(diff(&from, &to).is_empty(), "a drag must not enter the plan queue");
     }
 
     #[test]

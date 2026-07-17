@@ -1,35 +1,42 @@
 /**
- * The secondary Diagram view — a read-only, navigational projection of the
- * model. It renders one level at a time (the children of a focus node) and
- * shares the workspace selection with the tree and the wiki page:
+ * The secondary Diagram view — a navigational projection of the model. It
+ * renders one level at a time (the children of a focus node) and shares the
+ * workspace selection with the tree and the wiki page:
  *
  *   - single-click a node      → select it (drives the shared selection)
  *   - double-click a container → drill into it (descend a level)
  *   - the ↗ button on a card   → drill into it (same)
  *   - breadcrumb               → ascend to any ancestor level
+ *   - drag a card (arch tiers) → place it manually; the spot persists on the
+ *     node (`position`) and auto-layout only places the unpinned rest
+ *   - drag a dot (code tier)   → tug the live constellation apart (a resident
+ *     d3-force sim, `useDotSim`) to trace connectivity; nothing persists
  *
  * Two render modes, chosen by `buildDiagramScene`: the architecture tiers draw
  * as the ported C4 cards-and-edges (planar layout + handle routing); the symbol
- * tier draws as a force-directed dot graph. All editing stays in the tree and
- * the page — this surface only navigates.
+ * tier draws as a force-directed dot graph. All semantic editing stays in the
+ * tree and the page — this surface navigates, places, and untangles.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   ReactFlowProvider,
+  applyNodeChanges,
   Background,
   BackgroundVariant,
   ConnectionMode,
+  ControlButton,
   Controls,
   useReactFlow,
   useUpdateNodeInternals,
   type Node as RFNode,
   type Edge as RFEdge,
+  type NodeChange,
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ChevronRight, CornerLeftUp } from "lucide-react";
+import { ChevronRight, CornerLeftUp, LayoutGrid } from "lucide-react";
 import type { ScryModel } from "./viewmodel";
 import { concernCounts } from "./viewmodel";
 import type { ModelDiff } from "./planDiff";
@@ -38,7 +45,8 @@ import { assignAllHandles } from "./edgeRouting";
 import { DiagramCard, type CardData, type RFCard } from "./nodes/DiagramCard";
 import { CenterHandle } from "./nodes/NodeHandles";
 import { RelationshipEdge, type EdgeData } from "./edges/RelationshipEdge";
-import { buildDiagramScene, type DiagramScene, type DiagramNode } from "./diagramLayout";
+import { buildDiagramScene, CARD_W, CARD_H, type DiagramScene, type DiagramNode } from "./diagramLayout";
+import { useDotSim } from "./hooks/useDotSim";
 import type { ModelHealthReport } from "./health";
 
 type DotData = CardData;
@@ -107,12 +115,13 @@ function DotNode({ data }: NodeProps<RFDot>) {
 const nodeTypes = { card: DiagramCard, dot: DotNode };
 const edgeTypes = { rel: RelationshipEdge };
 
-// Card footprint, for handle routing before React Flow has measured the nodes.
-const CARD_W = 180;
-const CARD_H = 160;
-
 // Stable empty edge set, shown until a fresh level's cards are measured.
 const NO_EDGES: RFEdge<EdgeData>[] = [];
+
+// Drag snap pitch — one background dot (the Background gap below), so manual
+// placements land on the visible grid. Arch tiers only: snapping the code
+// tier's dots would fight the physics.
+const SNAP_GRID: [number, number] = [24, 24];
 
 export function DiagramView({
   model,
@@ -123,6 +132,7 @@ export function DiagramView({
   selectedId,
   onFocus,
   onSelectNode,
+  onMoveNode,
   pendingIds,
   concernLens,
 }: {
@@ -139,6 +149,10 @@ export function DiagramView({
   selectedId: string | null;
   onFocus: (id: string | null) => void;
   onSelectNode: (id: string | null) => void;
+  /** Persist a manual placement (a card was dragged), or release it with null
+   *  (the re-layout control) so auto-layout owns the node again. Unset — e.g.
+   *  while an agent owns the file — leaves the whole surface undraggable. */
+  onMoveNode?: (id: string, position: { x: number; y: number } | null) => void;
   /** Nodes whose semantics aren't generated yet — drawn as pulsing placeholders.
    *  Used by the trailer's build sequence; unset (empty) in the product. */
   pendingIds?: ReadonlySet<string>;
@@ -157,6 +171,7 @@ export function DiagramView({
         selectedId={selectedId}
         onFocus={onFocus}
         onSelectNode={onSelectNode}
+        onMoveNode={onMoveNode}
         pendingIds={pendingIds}
         concernLens={concernLens}
       />
@@ -173,6 +188,7 @@ function DiagramInner({
   selectedId,
   onFocus,
   onSelectNode,
+  onMoveNode,
   pendingIds,
   concernLens,
 }: {
@@ -184,6 +200,7 @@ function DiagramInner({
   selectedId: string | null;
   onFocus: (id: string | null) => void;
   onSelectNode: (id: string | null) => void;
+  onMoveNode?: (id: string, position: { x: number; y: number } | null) => void;
   pendingIds?: ReadonlySet<string>;
   concernLens?: string | null;
 }) {
@@ -191,17 +208,65 @@ function DiagramInner({
   const { fitView } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
 
+  // The rendered React Flow nodes. Real state, not a memo projection: RF's
+  // controlled mode hands EVERYTHING back through onNodesChange — drag
+  // positions, selection, and crucially the measured dimensions — and expects
+  // them applied onto these very objects. Deriving nodes fresh each render
+  // (the previous design) dropped `measured`, and a node whose object identity
+  // changes without it is treated as un-measured: RF hides it and aborts the
+  // drag (the "card vanishes and the pane pans" bug).
+  const [rfNodes, setRfNodes] = useState<Array<RFCard | RFDot>>([]);
+
+  // Set when the re-layout control releases this level's placements: the next
+  // scene is a fresh auto-layout, likely nowhere near the old viewport (its
+  // coordinates reset to the layout origin) — refit to it when it lands.
+  const refitOnScene = useRef(false);
+
   // Build the scene whenever the level or the model changes. The planar layout
   // is async; guard against a stale build landing after a newer one.
   useEffect(() => {
     let live = true;
     void buildDiagramScene(model, focusId, report).then((s) => {
-      if (live) setScene(s);
+      if (live) {
+        setScene(s);
+        if (refitOnScene.current) {
+          refitOnScene.current = false;
+          setTimeout(() => void fitView({ padding: 0.2, duration: 300 }), 0);
+        }
+      }
     });
     return () => {
       live = false;
     };
-  }, [model, focusId, report]);
+  }, [model, focusId, report, fitView]);
+
+  // The canonical controlled-flow contract: every change RF emits is applied
+  // back onto the node state. Position changes move the dragged card,
+  // dimension changes persist `measured` onto our objects (so later identity
+  // breaks keep the node initialized), select changes keep RF's bookkeeping
+  // coherent with its internal drag/selection machinery.
+  const onNodesChange = useCallback((changes: NodeChange<RFCard | RFDot>[]) => {
+    setRfNodes((nds) => applyNodeChanges(changes, nds));
+  }, []);
+
+  // The live physics for the code tier: dots drag through a resident d3-force
+  // sim (view-only — nothing persists), while arch cards drag through the
+  // onNodesChange + onMoveNode persistence path. Each sim tick streams its
+  // positions straight into the node state; `measured` and friends ride along
+  // on the spread.
+  const applySimPositions = useCallback(
+    (positions: ReadonlyMap<string, { x: number; y: number }>) => {
+      setRfNodes((nds) =>
+        nds.map((n) => {
+          const at = positions.get(n.id);
+          return at ? { ...n, position: at } : n;
+        }),
+      );
+    },
+    [],
+  );
+  const dotSim = useDotSim(scene, applySimPositions);
+  const mode = scene?.mode ?? null;
 
   // A card's ↗ button drills in via a window event (mirrors main's decoupling).
   useEffect(() => {
@@ -252,38 +317,77 @@ function DiagramInner({
     return concernCounts(model, concernLens);
   }, [model, concernLens]);
 
-  const rfNodes = useMemo<Array<RFCard | RFDot>>(() => {
-    if (!scene) return [];
+  // Arch cards drag and persist via onMoveNode — except ghosts, whose stored
+  // placement belongs to the surface where the node really lives. Code-tier
+  // dots drag whenever the live sim is on: pure physics, nothing written, so
+  // ghosts (and agent-run sessions) join in freely.
+  const archDraggable = scene?.mode === "arch" && !!onMoveNode;
+
+  // (Re)build the node state from the scene and its presentation inputs. Two
+  // regimes, told apart by whether the SCENE object changed since last run:
+  //   - new scene → positions reset to its layout (auto + pinned placements);
+  //   - data-only refresh (selection, marks, lens…) → each node keeps its
+  //     current position, so a warmed sim or an in-flight drag isn't snapped
+  //     back to the static layout by a mere click.
+  // RF bookkeeping (`measured`, `selected`, `dragging`) is carried over by id
+  // in both regimes — losing `measured` un-initializes (hides) a node.
+  const lastBuiltScene = useRef<DiagramScene | null>(null);
+  useEffect(() => {
+    const sceneChanged = lastBuiltScene.current !== scene;
+    lastBuiltScene.current = scene;
+    if (!scene) {
+      setRfNodes([]);
+      return;
+    }
     const type = scene.mode === "code" ? "dot" : "card";
-    return scene.nodes.map((n) => ({
-      id: n.id,
-      type,
-      position: { x: n.x, y: n.y },
-      data: {
-        node: n,
-        selected: n.id === selectedId,
-        mark: markFor(n.id),
-        dimmed:
-          (highlight.active && !highlight.neighbors.has(n.id)) ||
-          (concernLit !== null && !concernLit.has(n.id)),
-        pending: pendingIds?.has(n.id),
-        completeness: report?.completeness[n.id],
-      },
-    })) as Array<RFCard | RFDot>;
-  }, [scene, selectedId, markFor, highlight, pendingIds, report, concernLit]);
+    setRfNodes((prev) => {
+      const prevById = new Map(prev.map((p) => [p.id, p]));
+      return scene.nodes.map((n) => {
+        const old = prevById.get(n.id);
+        return {
+          id: n.id,
+          type,
+          position: sceneChanged ? { x: n.x, y: n.y } : old?.position ?? { x: n.x, y: n.y },
+          draggable: scene.mode === "code" ? dotSim.live : archDraggable && !n.reference,
+          measured: old?.measured,
+          selected: old?.selected,
+          dragging: old?.dragging,
+          data: {
+            node: n,
+            selected: n.id === selectedId,
+            mark: markFor(n.id),
+            dimmed:
+              (highlight.active && !highlight.neighbors.has(n.id)) ||
+              (concernLit !== null && !concernLit.has(n.id)),
+            pending: pendingIds?.has(n.id),
+            completeness: report?.completeness[n.id],
+          },
+        };
+      }) as Array<RFCard | RFDot>;
+    });
+  }, [scene, selectedId, markFor, highlight, pendingIds, report, concernLit, archDraggable, dotSim.live]);
 
   const rfEdges = useMemo<RFEdge<EdgeData>[]>(() => {
     if (!scene) return [];
-    // Arch tier: assign the best handle pair per edge (main's routing). Dot
-    // tier: connect center-to-center through the single "c" handle.
+    // Arch tier: assign the best handle pair per edge (main's routing) — from
+    // the LIVE node positions (rfNodes), not the scene's, so a dragged card's
+    // edges re-pick their attachment sides mid-drag instead of staying glued
+    // to a face that now points away until the drop rebuilds the scene.
+    const liveNode = new Map(rfNodes.map((n) => [n.id, n] as const));
     const handles =
       scene.mode === "arch"
         ? assignAllHandles(
-            scene.nodes.map((n) => ({
-              id: n.id,
-              position: { x: n.x, y: n.y },
-              measured: { width: CARD_W, height: CARD_H },
-            })),
+            scene.nodes.map((n) => {
+              const live = liveNode.get(n.id);
+              return {
+                id: n.id,
+                position: live?.position ?? { x: n.x, y: n.y },
+                measured: {
+                  width: live?.measured?.width ?? CARD_W,
+                  height: live?.measured?.height ?? CARD_H,
+                },
+              };
+            }),
             scene.edges,
           )
         : null;
@@ -334,7 +438,7 @@ function DiagramInner({
         },
       };
     });
-  }, [scene, selectedId, highlight, concernLit]);
+  }, [scene, rfNodes, selectedId, highlight, concernLit]);
 
   // Refit when the level changes (a fresh scene of a different size/shape).
   const fitKey = `${focusId ?? "root"}:${rfNodes.length}`;
@@ -356,20 +460,40 @@ function DiagramInner({
   const [edgesReady, setEdgesReady] = useState(false);
   const updateInternalsRef = useRef(updateNodeInternals);
   updateInternalsRef.current = updateNodeInternals;
+  // Key of the card SET on screen — a scene rebuild that only moved cards (a
+  // drag committing its placement) keeps the same key, and must not blank the
+  // edges for the measure beat: the cards are already measured.
+  const cardsKey = scene
+    ? `${scene.focusId ?? "root"}:${scene.nodes.map((n) => n.id).sort().join("|")}`
+    : "";
+  const lastCardsKey = useRef<string | null>(null);
   useEffect(() => {
+    if (!scene || scene.nodes.length === 0) {
+      lastCardsKey.current = null;
+      setEdgesReady(false);
+      return;
+    }
+    if (lastCardsKey.current === cardsKey) {
+      // Same cards, new positions — refresh the handle anchors in place.
+      scene.nodes.forEach((n) => updateInternalsRef.current(n.id));
+      return;
+    }
+    lastCardsKey.current = cardsKey;
     setEdgesReady(false);
-    if (!scene || scene.nodes.length === 0) return;
     const t = setTimeout(() => {
       scene.nodes.forEach((n) => updateInternalsRef.current(n.id));
       setEdgesReady(true);
     }, 250);
     return () => clearTimeout(t);
-  }, [scene]);
+  }, [scene, cardsKey]);
 
   const crumbs = useMemo(() => breadcrumb(model, focusId), [model, focusId]);
 
   return (
-    <div className="relative flex h-full min-w-0 flex-1 flex-col bg-[var(--surface-canvas)]">
+    // select-none: the map is a diagram, not copyable prose — without it, a
+    // text selection swept in from the surrounding chrome paints the
+    // full-canvas SVG layers (background, edges) as giant highlight slabs.
+    <div className="relative flex h-full min-w-0 flex-1 select-none flex-col bg-[var(--surface-canvas)]">
       {/* Breadcrumb / level bar */}
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-[var(--border)] bg-[var(--surface)] px-3 text-xs">
         {focusId !== null && (
@@ -421,13 +545,31 @@ function DiagramInner({
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             connectionMode={ConnectionMode.Loose}
-            nodesDraggable={false}
+            snapToGrid={mode === "arch"}
+            snapGrid={SNAP_GRID}
+            nodesDraggable={archDraggable || dotSim.live}
             nodesConnectable={false}
             elementsSelectable
             edgesFocusable={false}
             proOptions={{ hideAttribution: true }}
             minZoom={0.2}
             maxZoom={2}
+            onNodesChange={onNodesChange}
+            // Code tier: the drag pins the dot to the pointer and heats the
+            // sim, so its neighbours chase it (pure exploration, no writes).
+            onNodeDragStart={(_, n) => {
+              if (mode === "code") dotSim.onDragStart(n.id, n.position);
+            }}
+            onNodeDrag={(_, n) => {
+              if (mode === "code") dotSim.onDrag(n.id, n.position);
+            }}
+            // Arch tiers: dropping a card pins it — the spot persists on the
+            // node and auto-layout stops placing it (until re-layout releases
+            // it). Code tier: release the dot and let the physics cool.
+            onNodeDragStop={(_, n) => {
+              if (mode === "code") dotSim.onDragStop(n.id);
+              else onMoveNode?.(n.id, { x: Math.round(n.position.x), y: Math.round(n.position.y) });
+            }}
             onNodeClick={(_, n) => onSelectNode(n.id)}
             // Clicking the empty canvas selects the parent of this level (the
             // focus node), which practically deselects every node on screen. At
@@ -454,7 +596,24 @@ function DiagramInner({
               color="var(--border-subtle)"
               className="!bg-[var(--surface-canvas)]"
             />
-            <Controls showInteractive={false} className="!shadow-none" />
+            <Controls showInteractive={false} className="!shadow-none">
+              {archDraggable && (
+                <ControlButton
+                  title="Re-run auto-layout (releases this level's manual placements)"
+                  disabled={!scene?.nodes.some((n) => n.pinned)}
+                  className="disabled:!cursor-default disabled:opacity-35"
+                  onClick={() => {
+                    if (!scene) return;
+                    refitOnScene.current = true;
+                    for (const n of scene.nodes) {
+                      if (n.pinned) onMoveNode?.(n.id, null);
+                    }
+                  }}
+                >
+                  <LayoutGrid />
+                </ControlButton>
+              )}
+            </Controls>
           </ReactFlow>
         )}
       </div>

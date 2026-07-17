@@ -498,6 +498,7 @@ impl ScryerServer {
             reminter.remint(&g.id, g.responsibilities.iter_mut());
         }
         enforce_readonly_directives(&mut model, &prior_committed);
+        restore_node_positions(&mut model, &[&prior_planned, &prior_committed]);
         if model.version != scryer_core::SCRY_VERSION {
             return Ok(CallToolResult::error(vec![Content::text(format!(
                 "Model version '{}' does not match expected '{}'",
@@ -711,6 +712,12 @@ impl ScryerServer {
                 n.visual = if v { Some(true) } else { None };
             }
             if let Some(v) = &u.parent_id {
+                if old_parent.as_deref() != Some(v.as_str()) {
+                    // Canvas placements are per-surface coordinates — a
+                    // reparent lands on a different surface, so the old spot
+                    // is meaningless there. Auto-layout re-homes the node.
+                    n.position = None;
+                }
                 n.parent_id = Some(v.clone());
             }
 
@@ -1478,6 +1485,11 @@ impl ScryerServer {
             }
 
             let node = model.nodes.iter_mut().find(|n| n.id == mv.node_id).unwrap();
+            if node.parent_id != mv.new_parent_id {
+                // Placements are per-surface — the old coordinates mean
+                // nothing on the new parent's map. Auto-layout re-homes it.
+                node.position = None;
+            }
             node.parent_id = mv.new_parent_id.clone();
             // Groups organize siblings at one level — leaving the level leaves
             // the group.
@@ -1597,6 +1609,7 @@ impl ScryerServer {
         // above) and the authoritative surface the caller edits.
         let (_, dropped_links) = replace_subtree(&mut model, &req.node_id, &payload.nodes, &payload.links);
         enforce_readonly_directives(&mut model, &prior);
+        restore_node_positions(&mut model, &[&prior]);
 
         // Generation reverse-engineers code that ALREADY EXISTS, so the same
         // subtree must land in the committed model too (mirroring set_model /
@@ -1610,6 +1623,10 @@ impl ScryerServer {
             let (applied, _) = replace_subtree(&mut c, &req.node_id, &payload.nodes, &payload.links);
             applied.then(|| {
                 enforce_readonly_directives(&mut c, &cprior);
+                // Plan-first prior order: the plan layer is where the canvas
+                // writes placements, so the committed copy inherits the same
+                // positions the plan write above just restored.
+                restore_node_positions(&mut c, &[&prior, &cprior]);
                 c
             })
         });
@@ -1909,6 +1926,7 @@ mod tests {
             visual: None,
             appearance: None,
             notes: None,
+            position: None,
             directives: Vec::new(),
         }
     }
@@ -2025,6 +2043,85 @@ mod tests {
             scryer_core::working_view(&committed, &planned).source_map.contains_key("r-main"),
             "the working view still lights the file"
         );
+    }
+
+    /// Canvas placements are user-authored, like directives: a whole-model
+    /// regeneration must carry each surviving node's position over from the
+    /// prior model (plan layer first — that's where the canvas writes), and an
+    /// agent-authored position on a NEW node never enters the model (auto-layout
+    /// places new nodes).
+    #[test]
+    fn set_model_restores_user_positions_and_strips_agent_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut m = ScryModel::new();
+        let mut placed = node("sys", Kind::System, "S", None);
+        placed.position = Some(scryer_core::Position { x: 120.0, y: -40.0 });
+        m.nodes.push(placed);
+        scryer_core::write_model_at(&model_ref, &ScryModel::new()).unwrap();
+        scryer_core::write_planned_at(&model_ref, &m).unwrap(); // placement lives in the plan only
+
+        let server = ScryerServer::new();
+        let data = r#"{"version":"0.3","nodes":[
+            {"id":"sys","kind":"system","name":"S"},
+            {"id":"sys2","kind":"system","name":"S2","position":{"x":1.0,"y":2.0}}
+        ],"links":[]}"#;
+        server
+            .set_model(Parameters(SetModelRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                data: data.into(),
+            }))
+            .unwrap();
+
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        let sys = planned.nodes.iter().find(|n| n.id == "sys").unwrap();
+        assert_eq!(
+            sys.position,
+            Some(scryer_core::Position { x: 120.0, y: -40.0 }),
+            "the user's plan-layer placement survives the regeneration"
+        );
+        let sys2 = planned.nodes.iter().find(|n| n.id == "sys2").unwrap();
+        assert_eq!(sys2.position, None, "an agent-invented position never lands");
+    }
+
+    /// A reparent drops the node's canvas placement: coordinates are relative to
+    /// the parent's surface, so the old spot is meaningless on the new one —
+    /// auto-layout re-homes the node. A same-parent "move" keeps it.
+    #[test]
+    fn move_nodes_clears_position_only_on_a_real_reparent() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys-a", Kind::System, "A", None));
+        m.nodes.push(node("sys-b", Kind::System, "B", None));
+        let mut placed = node("con", Kind::Container, "C", Some("sys-a"));
+        placed.position = Some(scryer_core::Position { x: 300.0, y: 180.0 });
+        let mut kept = node("con2", Kind::Container, "C2", Some("sys-a"));
+        kept.position = Some(scryer_core::Position { x: 0.0, y: 0.0 });
+        m.nodes.push(placed);
+        m.nodes.push(kept);
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+
+        let server = ScryerServer::new();
+        server
+            .move_nodes(Parameters(MoveNodesRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                moves: vec![
+                    NodeMove { node_id: "con".into(), new_parent_id: Some("sys-b".into()) },
+                    NodeMove { node_id: "con2".into(), new_parent_id: Some("sys-a".into()) },
+                ],
+            }))
+            .unwrap();
+
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        let moved = planned.nodes.iter().find(|n| n.id == "con").unwrap();
+        assert_eq!(moved.parent_id.as_deref(), Some("sys-b"));
+        assert_eq!(moved.position, None, "reparent lands on a new surface — placement cleared");
+        let stayed = planned.nodes.iter().find(|n| n.id == "con2").unwrap();
+        assert!(stayed.position.is_some(), "same-parent move keeps the placement");
     }
 
     /// set_node is a generation primitive describing code that ALREADY exists, so
