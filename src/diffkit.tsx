@@ -81,6 +81,14 @@ export const DIFF_TINT: Record<"add" | "delete", string> = {
     "rounded-xs bg-red-500/10 px-0.5 decoration-clone text-red-800 line-through decoration-red-400/60 dark:bg-transparent dark:text-red-300/90",
 };
 
+/** Statement-markup anchor tone inside each tint: one step brighter (dark) /
+ *  deeper (light) within the row's own hue — the tinted twin of the calm
+ *  rows' secondary→text lift (`ANCHOR_CALM` in markup.tsx). */
+export const DIFF_ANCHOR: Record<"add" | "delete", string> = {
+  add: "text-emerald-950 dark:text-emerald-100",
+  delete: "text-red-950 dark:text-red-100",
+};
+
 /** Content class for a whole diff row by category: added/deleted rows tint
  *  their text, everything else stays neutral (a reworded row's word-diff
  *  carries its own paint). One rule, every surface. */

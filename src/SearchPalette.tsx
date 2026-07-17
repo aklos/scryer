@@ -12,6 +12,7 @@ import { createPortal } from "react-dom";
 import { FolderOpen, Link2, Search, type LucideProps } from "lucide-react";
 import type { ScryModel, Node, Group } from "./viewmodel";
 import { kindIcon, typeTag } from "./kindIcon";
+import { stripMarkup } from "./markup";
 import { lookupIcon } from "./IconPicker";
 
 const MAX_RESULTS = 50;
@@ -47,7 +48,7 @@ function nodeFields(n: Node): Field[] {
   if (n.technology) f.push({ label: "Technology", rank: 1, text: n.technology });
   if (n.description) f.push({ label: "Description", rank: 2, text: n.description });
   for (const r of n.responsibilities ?? []) {
-    if (r.statement) f.push({ label: "Responsibility", rank: 3, text: r.statement });
+    if (r.statement) f.push({ label: "Responsibility", rank: 3, text: stripMarkup(r.statement) });
     for (const d of r.directives ?? [])
       if (d) f.push({ label: "Directive", rank: 4, text: d });
   }
@@ -63,7 +64,7 @@ function groupFields(g: Group): Field[] {
   const f: Field[] = [{ label: null, rank: 0, text: g.name || "Group" }];
   if (g.description) f.push({ label: "Description", rank: 2, text: g.description });
   for (const r of g.responsibilities ?? []) {
-    if (r.statement) f.push({ label: "Responsibility", rank: 3, text: r.statement });
+    if (r.statement) f.push({ label: "Responsibility", rank: 3, text: stripMarkup(r.statement) });
     for (const d of r.directives ?? [])
       if (d) f.push({ label: "Directive", rank: 4, text: d });
   }

@@ -10,6 +10,7 @@ import { kindIcon } from "../kindIcon";
 import { respElementId, propElementId } from "../SourceSection";
 import { BTN, BTN_AGENT, BTN_DANGER, BTN_GO, jumpTo, LINK, PageSection, WikiLink, WordDiffText } from "../pagekit";
 import { DRIFT_HINT, DRIFT_RULE } from "../diffkit";
+import { ANCHOR_CALM, StatementText, stripMarkup } from "../markup";
 import { SpecialBody, SpecialHeader } from "./shell";
 
 // --- needs review ---------------------------------------------------------------
@@ -44,7 +45,11 @@ export function ClaimRow({
           className="block w-full truncate text-left font-mono text-sm text-[var(--text-secondary)] hover:text-[var(--text)] hover:underline"
           title="Open on its page"
         >
-          {claim.resp.statement || "Untitled responsibility"}
+          {claim.resp.statement ? (
+            <StatementText text={claim.resp.statement} anchor={ANCHOR_CALM} />
+          ) : (
+            "Untitled responsibility"
+          )}
         </button>
         <span className="text-2xs text-[var(--text-muted)]">
           on{" "}
@@ -60,7 +65,7 @@ export function ClaimRow({
           <div className={`mt-0.5 text-2xs ${DRIFT_RULE}`}>
             <span className={DRIFT_HINT}>drift proposes:</span>{" "}
             <span className="font-mono text-sm text-[var(--text-secondary)]">
-              <WordDiffText from={claim.resp.statement} to={claim.resp.staleProposal} />
+              <WordDiffText from={stripMarkup(claim.resp.statement)} to={stripMarkup(claim.resp.staleProposal)} />
             </span>
           </div>
         )}

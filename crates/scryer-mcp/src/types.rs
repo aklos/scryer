@@ -603,7 +603,9 @@ pub(crate) struct PropertyInput {
 /// either a plain string `"statement"` or an object
 /// `{statement, concern?, line?, endLine?}`. The statement is ONE terse
 /// verb-led clause in the plainest words that are still precise — no mechanism
-/// vocabulary, no trailing "so that…" purpose clause (rules 15, 17).
+/// vocabulary, no trailing "so that…" purpose clause — in EARS form: condition
+/// first, response last, with `**bold**` on the keyword and response verb
+/// ("**When** a callback arrives, **append** …"; rules 15, 17, 21).
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub(crate) enum ResponsibilityInput {
@@ -654,7 +656,9 @@ impl ResponsibilityInput {
 /// component/group), optionally tagged with a concern. Accepts a plain string
 /// `"statement"` or an object `{statement, concern?}`. The statement is ONE
 /// terse verb-led clause in the plainest words that are still precise — no
-/// mechanism vocabulary, no trailing "so that…" purpose clause (rules 15, 17).
+/// mechanism vocabulary, no trailing "so that…" purpose clause — in EARS form:
+/// condition first, response last, with `**bold**` on the keyword and
+/// response verb (rules 15, 17, 21).
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub(crate) enum StatementInput {

@@ -4,7 +4,8 @@ import type { ChangeRevision } from "../hooks/useModelStorage";
 import type { ScryModel, Node } from "../viewmodel";
 import type { Change, ElementChange, ModelDiff } from "../planDiff";
 import { CHANGE_COLOR, type ChangeKind, collectPlanEntries, type LinkChange, MARK_META, type PlanEntry } from "../changeMarks";
-import { DIFF_TINT, DiffRow } from "../diffkit";
+import { DIFF_ANCHOR, DIFF_TINT, DiffRow } from "../diffkit";
+import { ANCHOR_CALM, StatementText } from "../markup";
 import { entryChanges } from "../ledger";
 import { BTN, LINK, WordDiffText } from "../pagekit";
 import { SpecialBody, SpecialHeader, timeLabel } from "./shell";
@@ -154,7 +155,22 @@ function NodeRef({
 interface RowCtx {
   names: Map<string, string>;
   live: ReadonlySet<string>;
+  /** Raw (marked) statements by responsibility id — the planDiff label is
+   *  stripped for prose surfaces, so claim rows resolve their display markup
+   *  through here instead. */
+  statements: Map<string, string>;
   onSelectNode: (id: string) => void;
+}
+
+/** Every responsibility's raw statement, planned model first and committed
+ *  filling in what the plan drops (a deleted claim's markup still renders). */
+function buildStatementMap(model: ScryModel, committed: ScryModel | null): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const m of [model, ...(committed ? [committed] : [])])
+    for (const holder of [...m.nodes, ...m.groups])
+      for (const r of holder.responsibilities ?? [])
+        if (!map.has(r.id)) map.set(r.id, r.statement);
+  return map;
 }
 
 /** One of the element's own changes — a field reword, a move, a membership
@@ -213,17 +229,24 @@ function ChildRow({ ec, ctx }: { ec: ElementChange; ctx: RowCtx }) {
   const statement = rewords.find((r) => r.field === "statement");
   const secondary = rewords.filter((r) => r.field !== "statement");
   const kind: ChangeKind = added ? "add" : deleted ? "delete" : "modified";
+  const text = (ec.kind === "responsibility" && ctx.statements.get(ec.id)) || ec.label;
   return (
     <DiffRow kind={kind} className="text-xs leading-relaxed">
       <div className="min-w-0 font-mono">
         {deleted ? (
-          <span className={DIFF_TINT.delete}>{ec.label}</span>
+          <span className={DIFF_TINT.delete}>
+            <StatementText text={text} anchor={DIFF_ANCHOR.delete} />
+          </span>
         ) : statement ? (
           <WordDiffText from={statement.from} to={statement.to} />
         ) : added ? (
-          <span className={DIFF_TINT.add}>{ec.label}</span>
+          <span className={DIFF_TINT.add}>
+            <StatementText text={text} anchor={DIFF_ANCHOR.add} />
+          </span>
         ) : (
-          <span className="text-[var(--text-secondary)]">{ec.label}</span>
+          <span className="text-[var(--text-secondary)]">
+            <StatementText text={text} anchor={ANCHOR_CALM} />
+          </span>
         )}
         {moved && (
           <span className="ml-1.5 inline-flex flex-wrap items-baseline gap-1 text-[var(--text-muted)]">
@@ -377,6 +400,7 @@ export function ChangesPage({
       names: buildNameMap(model, committed),
       // Only elements still in the plan are selectable; dropped ones link to nothing.
       live: new Set<string>([...model.nodes.map((n) => n.id), ...model.groups.map((g) => g.id)]),
+      statements: buildStatementMap(model, committed),
       onSelectNode,
     }),
     [model, committed, onSelectNode],

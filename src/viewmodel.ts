@@ -32,7 +32,10 @@ export type Kind =
 
 export interface Responsibility {
   id: string;
-  /** Verb-led business statement of accountability. No mechanism words. */
+  /** Verb-led business statement of accountability. No mechanism words.
+   *  EARS-shaped (condition first, response last) and may carry display
+   *  markup — `**bold**` on the keyword and response verb — which the UI
+   *  renders and strips for comparison (rule 21; see `markup.tsx`). */
   statement: string;
   /** The cross-cutting concern this responsibility serves — at most ONE
    *  kebab-case slug (e.g. "auth"), referencing an entry in the model's

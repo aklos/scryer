@@ -12,6 +12,7 @@ import {
   buildElementDiff,
   CHANGE_OF,
   ChangeGlyph,
+  DIFF_ANCHOR,
   DIFF_TINT,
   type ElementDiff,
   VerdictBar,
@@ -19,6 +20,7 @@ import {
   DRIFT_HINT,
 } from "../diffkit";
 import { ClaimSource, respElementId } from "../SourceSection";
+import { ANCHOR_CALM, hasMarkup, MarkupMirror, serializeEars, StatementText, stripMarkup } from "../markup";
 import { usePageMenu, useCopyId, copyIdItem } from "../pageMenu";
 import {
   BTN,
@@ -30,7 +32,7 @@ import {
   SectionEditor,
   WordDiffText,
 } from "../pagekit";
-import { CTL_DROW, CTL_SROW, DIR_HL, RESP_ROW, STMT_HL } from "./kit";
+import { CTL_DROW, CTL_SROW, DIR_HL, RESP_ROW, STMT_HL_HOVER } from "./kit";
 
 // --- responsibilities (the diff view) ---------------------------------------
 
@@ -71,8 +73,10 @@ function buildRespDiff(
 ): RespDiffRow[] {
   return buildElementDiff(planned, committed, {
     key: (r) => r.id,
+    // Statements compare stripped of display markup: a markup-only touch is
+    // presentation, not a reword.
     changed: (prev, r) =>
-      prev.statement !== r.statement ||
+      stripMarkup(prev.statement) !== stripMarkup(r.statement) ||
       (prev.directives ?? []).join("\n") !== (r.directives ?? []).join("\n"),
     vagrant: (r) => !!r.vagrant,
     relocatedTo: (r) => plannedHosts?.get(r.id),
@@ -284,14 +288,22 @@ function ResponsibilitiesEditor({
     // removeResponsibility for dropped existing rows. A blank concern drops to
     // untagged; slug normalization and registry minting happen at the write
     // chokepoint (`registerConcerns`).
+    const initialStmt = new Map(initial.map((r) => [r.id, r.statement]));
     const cleaned = draft
       .filter((r) => !r.removed && r.statement.trim() !== "")
       .map(({ removed: _removed, ...r }) => {
+        // A statement the user actually touched and left marker-free gets its
+        // display markup minted from the positional EARS pass — exactly what
+        // the field's mirror previewed. Untouched rows pass through byte-
+        // identical (mass-minting would re-date every claim's patina).
+        let statement = r.statement.trim();
+        if (statement !== (initialStmt.get(r.id) ?? "").trim() && !hasMarkup(statement))
+          statement = serializeEars(statement);
         const dirs = (r.directives ?? []).map((s) => s.trim()).filter(Boolean);
         const concern = (r.concern ?? "").trim();
         return {
           ...r,
-          statement: r.statement.trim(),
+          statement,
           directives: dirs.length ? dirs : undefined,
           concern: concern || undefined,
         };
@@ -381,7 +393,7 @@ function RemovedRespRow({
       <ChangeGlyph kind="delete" />
       <div className="flex min-w-0 items-baseline gap-2 font-mono text-sm leading-relaxed">
         <span className="min-w-0 truncate text-[var(--text-muted)] line-through decoration-red-400/50">
-          {resp.statement.trim() || "(empty)"}
+          {stripMarkup(resp.statement).trim() || "(empty)"}
         </span>
         <button type="button" onClick={onUndo} className={BTN}>
           Undo
@@ -466,17 +478,20 @@ function RespDiffRow({
         <span className={contentColor}>
           {resp.statement ? (
             kind === "reworded" && prev ? (
-              <WordDiffText from={prev.statement} to={resp.statement} />
+              <WordDiffText from={stripMarkup(prev.statement)} to={stripMarkup(resp.statement)} />
             ) : kind === "added" ? (
               <span className={DIFF_TINT.add}>
-                {resp.statement}
+                <StatementText text={resp.statement} anchor={DIFF_ANCHOR.add} />
               </span>
             ) : deleted ? (
               <span className={DIFF_TINT.delete}>
-                {resp.statement}
+                <StatementText text={resp.statement} anchor={DIFF_ANCHOR.delete} />
               </span>
             ) : (
-              resp.statement
+              <StatementText
+                text={resp.statement}
+                anchor={kind === "unchanged" ? ANCHOR_CALM : undefined}
+              />
             )
           ) : (
             <span className="italic text-[var(--text-ghost)]">Untitled responsibility</span>
@@ -573,7 +588,7 @@ function RespDiffRow({
               <>
                 <span className={DRIFT_HINT}>Drift proposes:</span>
                 <span className="min-w-0 font-mono text-sm text-[var(--text-secondary)]">
-                  <WordDiffText from={resp.statement} to={resp.staleProposal} />
+                  <WordDiffText from={stripMarkup(resp.statement)} to={stripMarkup(resp.staleProposal)} />
                 </span>
                 <button
                   type="button"
@@ -930,12 +945,18 @@ function ResponsibilityEditRow({
       />
       <div className="min-w-0 font-mono text-sm leading-relaxed">
         <div className="group/srow relative">
+          {/* Markered source with the styling visible in place: the mirror
+              previews authored markup (markers ghosted) or, on marker-free
+              text, the positional EARS pass that commit will mint — WYSIWYG
+              either way. Cmd/Ctrl+B / I wrap the selection in markers. */}
           <Editable
             initial={resp.statement}
             autoFocus={autoFocus}
             placeholder="Verb-led statement of accountability"
             onInput={(t) => onPatch(resp.id, { statement: t })}
-            className={`block !pr-[180px] text-[var(--text)] ${STMT_HL}`}
+            mirror={(t) => <MarkupMirror text={t} />}
+            containerClassName={STMT_HL_HOVER}
+            className="block !pr-[180px]"
           />
           <span className={CTL_SROW}>
             <button

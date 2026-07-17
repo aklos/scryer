@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { BTN } from "./tokens";
 
 /**
@@ -21,6 +21,41 @@ function caretToEnd(el: HTMLElement) {
   sel?.addRange(r);
 }
 
+/** The current selection as character offsets within `el`, or null when the
+ *  selection lives elsewhere. */
+function selectionOffsets(el: HTMLElement): [number, number] | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const range = sel.getRangeAt(0);
+  if (!el.contains(range.startContainer) || !el.contains(range.endContainer)) return null;
+  const pre = document.createRange();
+  pre.selectNodeContents(el);
+  pre.setEnd(range.startContainer, range.startOffset);
+  const start = pre.toString().length;
+  return [start, start + range.toString().length];
+}
+
+/** Place the caret at character offset `at` (the field is plain text, so the
+ *  offset walks the text nodes directly). */
+function caretToOffset(el: HTMLElement, at: number) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let remaining = at;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const len = node.textContent?.length ?? 0;
+    if (remaining <= len) {
+      const r = document.createRange();
+      r.setStart(node, remaining);
+      r.collapse(true);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(r);
+      return;
+    }
+    remaining -= len;
+  }
+  caretToEnd(el);
+}
+
 export function Editable({
   initial,
   placeholder,
@@ -31,6 +66,8 @@ export function Editable({
   onCommit,
   onEnter,
   onEscape,
+  mirror,
+  containerClassName = "",
   className = "",
 }: {
   initial: string;
@@ -54,14 +91,26 @@ export function Editable({
    *  (A changed field's first Escape reverts it to `initial` instead; with no
    *  handler, an unchanged field's Escape bubbles to the section editor.) */
   onEscape?: () => void;
+  /** Live styled preview of the field's raw text, rendered CHAR-EXACT on an
+   *  overlay while the text itself goes transparent — the field edits markered
+   *  source with the styling visible in place. Only safe in a monospace
+   *  context (the overlay must not change metrics). Enables Cmd/Ctrl+B to
+   *  wrap the selection in `**` markers. */
+  mirror?: (text: string) => ReactNode;
+  /** Mirror mode only: classes for the positioning wrapper (the hover/focus
+   *  surface), while `className` carries the text-box classes shared by both
+   *  layers. */
+  containerClassName?: string;
   className?: string;
 }) {
   const ref = useRef<HTMLSpanElement>(null);
-  // Live length + focus, only to drive the near-cap counter. The field itself
-  // stays uncontrolled — re-renders never touch its textContent.
+  // Live length + focus for the near-cap counter, plus the raw text when a
+  // mirror needs re-rendering per keystroke. The field itself stays
+  // uncontrolled — re-renders never touch its textContent.
   const [live, setLive] = useState(() => ({
     len: [...initial].length,
     focused: false,
+    text: initial,
   }));
   // Coerce the live text to the allowed shape/length, rewriting the DOM (and
   // restoring the caret) only when it actually changed so typing never janks.
@@ -91,15 +140,33 @@ export function Editable({
   // Field text changed (by typing or by the Escape revert): sync the counter
   // and report to the parent's draft.
   const report = (text: string) => {
-    setLive((s) => ({ ...s, len: [...text].length }));
+    setLive((s) => ({ ...s, len: [...text].length, text }));
     onInput?.(text);
+  };
+  // Mirror mode's manual override: wrap the selected text in markers. The
+  // rewrite goes through textContent (the field is plain text), so the mirror,
+  // the draft, and the caret all resync in one place.
+  const wrapSelection = (el: HTMLElement, marker: string) => {
+    const sel = selectionOffsets(el);
+    if (!sel || sel[0] === sel[1]) return;
+    const [start, end] = sel;
+    const text = el.textContent ?? "";
+    const next =
+      text.slice(0, start) + marker + text.slice(start, end) + marker + text.slice(end);
+    el.textContent = next;
+    caretToOffset(el, end + marker.length * 2);
+    report(next);
   };
   // The counter only appears while focused and within 20 chars of the cap, so
   // it never adds noise to reading or to comfortable typing.
   const nearCap =
     maxLength != null && live.focused && live.len >= maxLength - 20;
-  return (
-    <>
+  // Mirror mode splits the field into layers: the contentEditable keeps the
+  // caret, selection, and focus surface but its text goes transparent; the
+  // overlay renders the same characters styled. Both share `className` (the
+  // text-box classes), so their metrics — and therefore wrap points and caret
+  // positions — coincide.
+  const field = (
       <span
         ref={ref}
         role="textbox"
@@ -118,7 +185,12 @@ export function Editable({
           // injecting <div>/<br> markup. Escape is layered: a changed field
           // reverts to `initial` (and stays focused); an unchanged one exits via
           // onEscape, or bubbles so an enclosing SectionEditor can close.
-          if (e.key === "Enter") {
+          if (mirror && (e.metaKey || e.ctrlKey) && e.key === "b") {
+            // Marker formatting — intercepted so the browser's rich-text
+            // bold never injects <b> into the plain-text field.
+            e.preventDefault();
+            wrapSelection(e.currentTarget, "**");
+          } else if (e.key === "Enter") {
             e.preventDefault();
             if (onEnter) onEnter();
             else e.currentTarget.blur();
@@ -135,8 +207,30 @@ export function Editable({
             }
           }
         }}
-        className={`-mx-1 cursor-text whitespace-pre-wrap break-words rounded px-1 caret-[var(--accent)] outline-none transition-colors focus:bg-[var(--surface-field)] focus:text-[var(--text)] focus:ring-1 focus:ring-[var(--accent)] empty:before:text-[var(--text-muted)] empty:before:content-[attr(data-placeholder)] ${className}`}
+        className={
+          mirror
+            ? `block cursor-text whitespace-pre-wrap break-words px-1 caret-[var(--accent)] outline-none !text-transparent empty:before:text-[var(--text-muted)] empty:before:content-[attr(data-placeholder)] ${className}`
+            : `-mx-1 cursor-text whitespace-pre-wrap break-words rounded px-1 caret-[var(--accent)] outline-none transition-colors focus:bg-[var(--surface-field)] focus:text-[var(--text)] focus:ring-1 focus:ring-[var(--accent)] empty:before:text-[var(--text-muted)] empty:before:content-[attr(data-placeholder)] ${className}`
+        }
       />
+  );
+  return (
+    <>
+      {mirror ? (
+        <span
+          className={`relative -mx-1 block rounded transition-colors focus-within:bg-[var(--surface-field)] focus-within:ring-1 focus-within:ring-[var(--accent)] ${containerClassName}`}
+        >
+          {field}
+          <span
+            aria-hidden
+            className={`pointer-events-none absolute inset-0 block select-none whitespace-pre-wrap break-words px-1 text-[var(--text)] ${className}`}
+          >
+            {mirror(live.text)}
+          </span>
+        </span>
+      ) : (
+        field
+      )}
       {nearCap && (
         <span
           aria-hidden

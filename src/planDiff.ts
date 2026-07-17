@@ -17,6 +17,7 @@
  */
 
 import type { Group, Responsibility, ScryModel } from "./viewmodel";
+import { stripMarkup } from "./markup";
 
 export type ElementKind = "node" | "link" | "responsibility" | "property" | "group";
 
@@ -44,7 +45,11 @@ export interface ElementChange {
   /** Owning node/group id for a responsibility or property; absent for nodes,
    *  links, and groups. */
   ownerId?: string;
-  /** Human-facing label (the element's name / statement). */
+  /** Human-facing label (the element's name / statement), stripped of display
+   *  markup — safe for prose, toasts, and word-diffs. Surfaces that render
+   *  claims styled look the raw statement up from the model by `id` instead
+   *  (this shape stays in lockstep with Rust `diff.rs`, which knows nothing
+   *  of display markup). */
   label: string;
   changes: Change[];
 }
@@ -175,7 +180,7 @@ function diffResponsibilities(from: ScryModel, to: ScryModel, out: ModelDiff) {
         kind: "responsibility",
         id,
         ownerId: owned.ownerId,
-        label: owned.resp.statement,
+        label: stripMarkup(owned.resp.statement),
         changes: [{ type: "added" }],
       });
       continue;
@@ -183,10 +188,12 @@ function diffResponsibilities(from: ScryModel, to: ScryModel, out: ModelDiff) {
     const changes: Change[] = [];
     if (prev.ownerId !== owned.ownerId)
       changes.push({ type: "moved", from: prev.ownerId, to: owned.ownerId });
-    reword(changes, "statement", prev.resp.statement, owned.resp.statement);
+    // Statements diff stripped of display markup — a markup-only touch is
+    // presentation, not a reword, and never enters the plan.
+    reword(changes, "statement", stripMarkup(prev.resp.statement), stripMarkup(owned.resp.statement));
     reword(changes, "directives", (prev.resp.directives ?? []).join("\n"), (owned.resp.directives ?? []).join("\n"));
     if (changes.length)
-      out.changes.push({ kind: "responsibility", id, ownerId: owned.ownerId, label: owned.resp.statement, changes });
+      out.changes.push({ kind: "responsibility", id, ownerId: owned.ownerId, label: stripMarkup(owned.resp.statement), changes });
   }
   for (const [id, owned] of fromBy)
     if (!toBy.has(id))
@@ -194,7 +201,7 @@ function diffResponsibilities(from: ScryModel, to: ScryModel, out: ModelDiff) {
         kind: "responsibility",
         id,
         ownerId: owned.ownerId,
-        label: owned.resp.statement,
+        label: stripMarkup(owned.resp.statement),
         changes: [{ type: "deleted" }],
       });
 }

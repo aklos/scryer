@@ -21,8 +21,11 @@ export const GAUGE_CHIP =
 
 // Full-cell field highlight: dim on line hover; the focused field drops onto
 // the recessed field surface (Editable adds the accent ring + full-text lift).
-export const STMT_HL =
-  "group-hover/srow:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus:bg-[var(--surface-field)]";
+// The hover half stands alone for mirror-mode statement fields, where the
+// focus surface lives on Editable's own wrapper (focus-within) instead.
+export const STMT_HL_HOVER =
+  "group-hover/srow:bg-[color-mix(in_srgb,var(--text)_6%,transparent)]";
+export const STMT_HL = `${STMT_HL_HOVER} focus:bg-[var(--surface-field)]`;
 export const DIR_HL =
   "group-hover/drow:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus:bg-[var(--surface-field)]";
 

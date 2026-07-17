@@ -105,7 +105,7 @@ NEVER describe a data shape in a responsibility statement. "Defines the lead rec
         id: 15,
         title: "Write for scanning, not prose",
         tags: &["responsibility", "wording", "scanning", "description", "concise"],
-        body: r#"A responsibility is ONE verb-led clause: lead with the specific verb + object that distinguishes it, then stop. Cut words that merely restate the node's own domain — in an architecture tool every line is about "the architecture model", so naming it adds nothing — and cut trailing "by/through/where/so that …" clauses (mechanism belongs out per rule 1; the obvious belongs cut). "Renders the node/link/group canvas" — yes. "Renders the visual architecture editor where users arrange nodes, links, and groups on a canvas" — no. A `description` is the node's IDENTITY in a few words (what it IS as software), never a summary of the responsibilities listed beneath it; if it reads as a comma-list of those responsibilities, drop it."#,
+        body: r#"A responsibility is ONE verb-led clause: lead with the specific verb + object that distinguishes it, then stop. Cut words that merely restate the node's own domain — in an architecture tool every line is about "the architecture model", so naming it adds nothing — and cut trailing "by/through/where/so that …" clauses (mechanism belongs out per rule 1; the obvious belongs cut). A genuine trigger or state condition is NOT such a tail — it moves to the FRONT in its EARS keyword form (rule 21). "Renders the node/link/group canvas" — yes. "Renders the visual architecture editor where users arrange nodes, links, and groups on a canvas" — no. A `description` is the node's IDENTITY in a few words (what it IS as software), never a summary of the responsibilities listed beneath it; if it reads as a comma-list of those responsibilities, drop it."#,
     },
     Rule {
         id: 16,
@@ -148,6 +148,22 @@ NEVER describe a data shape in a responsibility statement. "Defines the lead rec
             "idempotency", "observability",
         ],
         body: r#"A responsibility may carry ONE `concern` — a kebab-case slug naming the cross-cutting concern it serves. The standard vocabulary: `auth`, `persistence`, `failure-handling`, `idempotency`, `validation`, `observability`, `performance`, `compliance`. Tag every responsibility that discharges a cross-cutting concern as you author or edit it; leave a node's core domain flow UNTAGGED — no tag means "this is the main behavior", and that absence is signal, not an omission. Reuse before minting: check the model's concern registry and the standard slugs first, and use the SAME slug for the same concern everywhere (rule 17's consistent-vocabulary test) — mint a new slug only for a genuinely distinct concern, and keep it short and domain-generic ("rate-limiting", not "api-rate-limits"). Exactly one concern per responsibility: a statement that seems to need two bundles two accountabilities — split it (rules 3, 15). The concern is metadata BESIDE the statement, never wording inside it: with the tag carrying the category, purpose clauses like "…so duplicates aren't reprocessed" are redundant — cut them (rule 15). Registry entries (slug, description, icon) mint automatically on first use; the user curates them — never edit or delete a registry entry's description or icon yourself."#,
+    },
+    Rule {
+        id: 21,
+        title: "Statements speak EARS — condition first, response last, markup on the anchors",
+        tags: &[
+            "ears", "grammar", "statement", "condition", "trigger", "event", "state",
+            "failure", "keyword", "markup", "bold", "wording", "split", "compound",
+        ],
+        body: r#"A responsibility statement follows EARS (Easy Approach to Requirements Syntax) with the subject dropped: the owning node IS the subject, so never name it and never write "shall". Clause order is FIXED — optional condition first, verb-led response last:
+- Ubiquitous (always active): no keyword, just the verb-led response — exactly rule 15's form. "Authenticate every inbound POST."
+- Event-driven: "When <trigger>, <response>."
+- State-driven: "While <state>, <response>."
+- Unwanted behaviour (failure/rejection handling): "If <condition>, then <response>."
+- Optional feature: "Where <feature is present>, <response>" — legal EARS, rarely earned here; prefer modeling the feature as structure.
+Clauses stack in that order when a claim genuinely needs both: "While <state>, when <trigger>, <response>". The ubiquitous form is EARNED, never the default: before leaving a claim plain, check whether it actually holds only on a trigger, state, or failure — if so, it MUST take the keyword form; a condition written as a tail ("…after acking the webhook") moves to the front in its keyword form. One pattern per claim: a statement that bundles a happy path with its rejection ("echo the challenge when the token matches, else reject with 403") is TWO claims — the When and the If — split it (rules 3, 15). Compound responses split the same way: two verbs acting on two different objects ("persist the results and sync labels to HubSpot") is TWO claims — bolding both verbs is NOT a substitute for splitting; only a genuinely atomic verb pair on one object stays together. A rationale tail ("…so sales receives only qualified ones") is not part of the response — cut it or move it to the description (rule 15).
+Statements also carry a markdown-lite display markup the UI renders — and strips for comparison, search, and word-diffing, so it is presentation, never meaning. Wrap the scan anchors — the grammar keywords (including "then") and the response verb — in **bold**, and NOTHING else: "**When** a send-failure status callback arrives, **append** a failed-send event". A ubiquitous claim bolds its leading verb: "**Authenticate** every inbound POST". Never wrap the condition clause or any other run of text in markers — the keyword and its comma already delimit the clause. Markup belongs in responsibility statements ONLY — never in directives, descriptions, names, or properties."#,
     },
 ];
 
@@ -276,6 +292,12 @@ mod tests {
         assert!(lookup("naming").iter().any(|r| r.id == 17));
         assert!(lookup("concern").iter().any(|r| r.id == 20));
         assert!(lookup("cross-cutting").iter().any(|r| r.id == 20));
+
+        // The statement grammar: "when"/"while"/"if" are stopwords, so the
+        // durable routes in are the notation's name and its display markup.
+        assert!(lookup("ears").iter().any(|r| r.id == 21));
+        assert!(lookup("markup").iter().any(|r| r.id == 21));
+        assert!(lookup("trigger condition").first().map(|r| r.id) == Some(21));
     }
 
     #[test]

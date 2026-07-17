@@ -21,6 +21,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Node, Responsibility, ScryModel } from "../viewmodel";
 import { registerConcerns, respTruthChanged, stampTouches } from "../viewmodel";
+import { stripMarkup } from "../markup";
 import { EMPTY_DIFF, planDiff as computePlanDiff, type ModelDiff } from "../planDiff";
 import { tagEdit } from "../ledger";
 import type { HistoryEvent } from "../history";
@@ -128,7 +129,7 @@ function nodeFieldDiffs(prev: ScryModel, a: Node, b: Node): FieldDiff[] {
 
 function respFieldDiffs(a: Responsibility, b: Responsibility): FieldDiff[] {
   return fieldDiffs([
-    ["statement", a.statement, b.statement],
+    ["statement", stripMarkup(a.statement), stripMarkup(b.statement)],
     ["directives", a.directives, b.directives],
     ["stale", !!a.stale, !!b.stale],
     ["vagrant", !!a.vagrant, !!b.vagrant],
@@ -181,7 +182,7 @@ function diffRevision(prev: ScryModel, loaded: ScryModel): ChangeItem[] {
     for (const r of n.responsibilities ?? []) {
       loadedRespIds.add(r.id);
       const old = prevResps.get(r.id);
-      const label = r.statement || "Untitled responsibility";
+      const label = stripMarkup(r.statement) || "Untitled responsibility";
       if (!old) {
         items.push({ op: "added", what: "claim", label, context: n.name, nodeId: n.id });
       } else if (respTruthChanged(old.resp, r)) {
@@ -200,7 +201,7 @@ function diffRevision(prev: ScryModel, loaded: ScryModel): ChangeItem[] {
       items.push({
         op: "removed",
         what: "claim",
-        label: resp.statement || "Untitled responsibility",
+        label: stripMarkup(resp.statement) || "Untitled responsibility",
         context: nodeName(nodeId),
         // The host may survive the claim's removal — keep the jump if it did.
         nodeId: loadedNodeById.has(nodeId) ? nodeId : undefined,

@@ -97,7 +97,9 @@ language (\"authenticate requests\"); a bad one (\"uses jsonwebtoken@9\") will n
 implies — the prose mention and the structural link are distinct; declare both.\n\
 - Write to be scanned, and name for a newcomer. A node name is plain domain vocabulary — no \
 codenames, abbreviations, or cleverness. A responsibility is ONE terse verb-led clause: no mechanism \
-words, no trailing \"so that…\" purpose clause (rules 15, 17).\n\
+words, no trailing \"so that…\" purpose clause. Statements speak EARS with the node as implicit \
+subject — condition first (\"When <trigger>, …\" / \"If <condition>, then …\"), response last — \
+with **bold** on the keywords and the response verb, and nothing else (rules 15, 17, 21).\n\
 - CONCERNS are the model's third axis: each responsibility may carry at most one `concern` slug \
 naming the cross-cutting accountability it serves (`auth`, `persistence`, `idempotency`, …), and \
 the model registers every slug in use — the lens the user scans by. Tag as you author \

@@ -32,6 +32,9 @@ pub enum Kind {
 pub struct Responsibility {
     pub id: String,
     /// Verb-led business statement of accountability. No mechanism words.
+    /// EARS-shaped (condition first, response last) and may carry display
+    /// markup — `**bold**` on the keyword and response verb — which the UI
+    /// renders and strips for comparison (rule 21).
     pub statement: String,
     /// The cross-cutting concern this responsibility serves — at most ONE
     /// kebab-case slug (e.g. "auth", "idempotency"), referencing an entry in
