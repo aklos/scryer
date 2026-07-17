@@ -80,9 +80,25 @@ pub(crate) async fn ensure_preview_server(
         .current_dir(&cwd)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("failed to launch preview server (is node installed?): {e}"))?;
+
+    // Collect a stderr tail in the background so a startup failure can say
+    // WHY the sidecar died, not just that it did. Keeps draining for the
+    // server's lifetime so the pipe never fills.
+    let stderr = child.stderr.take().ok_or("preview server has no stderr")?;
+    let stderr_tail = tokio::spawn(async move {
+        let mut lines = tokio::io::BufReader::new(stderr).lines();
+        let mut tail = std::collections::VecDeque::with_capacity(20);
+        while let Ok(Some(line)) = lines.next_line().await {
+            if tail.len() >= 20 {
+                tail.pop_front();
+            }
+            tail.push_back(line);
+        }
+        tail.into_iter().collect::<Vec<_>>().join("\n")
+    });
 
     let stdout = child.stdout.take().ok_or("preview server has no stdout")?;
     let mut lines = tokio::io::BufReader::new(stdout).lines();
@@ -95,12 +111,17 @@ pub(crate) async fn ensure_preview_server(
         Err("preview server exited before reporting its URL".to_string())
     })
     .await
-    .map_err(|_| "preview server startup timed out".to_string())?;
+    .unwrap_or_else(|_| Err("preview server startup timed out".to_string()));
     let url = match url {
         Ok(url) => url,
         Err(e) => {
             let _ = child.kill().await;
-            return Err(e);
+            let tail = tokio::time::timeout(std::time::Duration::from_secs(2), stderr_tail)
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .unwrap_or_default();
+            return Err(if tail.is_empty() { e } else { format!("{e}\n{tail}") });
         }
     };
 

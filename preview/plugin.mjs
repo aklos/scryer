@@ -20,17 +20,36 @@ import { analyzeProject } from "./props.mjs";
 const ENTRY_PREFIX = "/@scryer-preview/entry.js";
 
 /**
- * @param {{ projectRoot: string, useWrapper?: boolean }} opts
+ * @param {{ projectRoot: string, packageRoot?: string, useWrapper?: boolean }} opts
+ *
+ * `packageRoot` is the vite server's root — the project root itself in the
+ * common case, or the sub-package that owns this server in a monorepo. All
+ * `file`/`fixture` params and reported component paths stay PROJECT-relative
+ * either way; only import URLs care about the package root: files inside it
+ * import root-relative, files outside (the project-level .scryer/preview
+ * fixtures, wrapper, variations) import via /@fs/.
  */
-export function scryerPreviewPlugin({ projectRoot, useWrapper = true }) {
+export function scryerPreviewPlugin({ projectRoot, packageRoot = projectRoot, useWrapper = true }) {
   let analysis = null;
-  const getAnalysis = () => (analysis ??= analyzeProject(projectRoot));
+  const getAnalysis = () => (analysis ??= analyzeProject(projectRoot, packageRoot));
+
+  /** Import URL for an absolute path, as seen from this vite server. */
+  const toUrl = (abs) => {
+    const rel = path.relative(packageRoot, abs);
+    if (!rel.startsWith("..") && !path.isAbsolute(rel)) {
+      return "/" + rel.split(path.sep).join("/");
+    }
+    const posix = abs.split(path.sep).join("/");
+    return posix.startsWith("/") ? "/@fs" + posix : "/@fs/" + posix;
+  };
+  /** Import URL for a project-relative path. */
+  const projUrl = (rel) => toUrl(path.join(projectRoot, rel));
 
   const wrapperFile = path.join(projectRoot, ".scryer", "preview", "Wrapper.tsx");
   const hasWrapper = () => useWrapper && fs.existsSync(wrapperFile);
 
   /** Global CSS the app entry imports — auto-applied to every preview. */
-  const globalCss = detectGlobalCss(projectRoot);
+  const globalCss = detectGlobalCss(packageRoot);
 
   return {
     name: "scryer-preview",
@@ -47,11 +66,11 @@ export function scryerPreviewPlugin({ projectRoot, useWrapper = true }) {
       if (!file || file.includes("..")) return `throw new Error("bad preview entry");`;
 
       // Agent-written fixture (B5): realistic props that spread over the
-      // synthesized defaults, when present.
+      // synthesized defaults, when present. Project-relative, like `file`.
       const fixtureRel = params.get("fixture");
       const fixture =
         fixtureRel && !fixtureRel.includes("..") && fs.existsSync(path.join(projectRoot, fixtureRel))
-          ? "/" + fixtureRel.split(path.sep).join("/")
+          ? projUrl(fixtureRel)
           : null;
 
       const comp = getAnalysis().components.find(
@@ -61,19 +80,19 @@ export function scryerPreviewPlugin({ projectRoot, useWrapper = true }) {
       // Shared, type-keyed fixtures (B6) referenced by the synthesized props —
       // imported under the tokens props.mjs baked into propsCode.
       const refImports = (comp?.fixtureRefs ?? [])
-        .map((r) => `import { ${r.export} as ${r.token} } from ${JSON.stringify("/.scryer/preview/fixtures/" + r.module)};`)
+        .map((r) => `import { ${r.export} as ${r.token} } from ${JSON.stringify(projUrl(".scryer/preview/fixtures/" + r.module))};`)
         .join("\n");
       const cssImports = globalCss.map((c) => `import ${JSON.stringify(c)};`).join("\n");
       const wrapper = hasWrapper();
 
       return `
-${wrapper ? `import Wrapper from "/.scryer/preview/Wrapper.tsx";` : ""}
+${wrapper ? `import Wrapper from ${JSON.stringify(toUrl(wrapperFile))};` : ""}
 ${fixture ? `import __fixture from ${JSON.stringify(fixture)};` : ""}
 ${refImports}
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 ${cssImports}
-import * as Mod from ${JSON.stringify("/" + file)};
+import * as Mod from ${JSON.stringify(projUrl(file))};
 
 const meta = { file: ${JSON.stringify(file)}, exportName: ${JSON.stringify(exportName)} };
 // Whether this render has real data behind it: an agent-written per-node
@@ -137,6 +156,11 @@ if (!Component) {
       // wrapper, or variant files), regenerate the entries and reload open
       // previews.
       const previewDir = path.join(projectRoot, ".scryer", "preview") + path.sep;
+      // A sub-package vite server only watches its own root by default — the
+      // project-level .scryer/preview dir must be added explicitly.
+      if (packageRoot !== projectRoot) {
+        server.watcher.add(path.join(projectRoot, ".scryer", "preview"));
+      }
       server.watcher.on("all", (_event, file) => {
         if (!file.startsWith(previewDir)) return;
         // A changed manifest (or shared fixture) changes which props.mjs
@@ -192,14 +216,17 @@ if (!Component) {
   };
 }
 
-/** CSS files imported by the app entry (main.tsx etc.), as root-relative paths. */
+/** CSS files imported by the app entry (main.tsx etc.), as root-relative paths.
+ *  Also catches bound/query imports like `import styles from "./x.css?inline"`
+ *  (a shadow-root widget pattern) — the query is dropped so the preview gets a
+ *  plain document-level stylesheet. */
 function detectGlobalCss(projectRoot) {
   for (const entry of ["src/main.tsx", "src/main.jsx", "src/index.tsx", "src/main.ts"]) {
     const full = path.join(projectRoot, entry);
     if (!fs.existsSync(full)) continue;
     const source = fs.readFileSync(full, "utf8");
     const css = [];
-    for (const m of source.matchAll(/import\s+["']([^"']+\.css)["']/g)) {
+    for (const m of source.matchAll(/import\s+(?:[\w$]+\s+from\s+)?["']([^"']+\.css)(?:\?[^"']*)?["']/g)) {
       const resolved = m[1].startsWith(".")
         ? "/" + path.posix.join(path.posix.dirname(entry), m[1])
         : m[1]; // bare package import — leave for Vite to resolve
@@ -221,10 +248,14 @@ function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
   // in a transform layer (#stage) inside a clipped viewport (#canvas). The
   // viewport paints a low-contrast transparency checkerboard so the component
   // reads as clearly separate from it. A small harness centers the component at
-  // 100%; when (and only when) it is larger than the pane you can zoom OUT
-  // (never above 100%, anchored to the centre so it stays centred) and pan.
+  // 100%; when it is larger than the pane you can zoom (cursor-anchored,
+  // between fit and 100%) and pan (clamped so content keeps covering the pane —
+  // no free-floating). Viewport-pinned components (position:fixed widgets) get
+  // viewport mode: #stage becomes a virtual 1280×800 screen dressed as a faux
+  // host page (browser bar + greeked content) that the component anchors to,
+  // starting focused on the component itself with the page a zoom-out away.
   // Variation thumbnails set pointer-events:none on the iframe element, so they
-  // get the static centred view only.
+  // get the static initial view only.
   // Two near-equal greys per theme — subtle texture, not a loud checker.
   const checkA = canvasDark ? "#202020" : "#dcdcdc";
   const checkB = canvasDark ? "#181818" : "#f1f1f1";
@@ -246,11 +277,43 @@ function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
       #canvas.pannable { cursor: grab; }
       #canvas.grabbing { cursor: grabbing; }
       #stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; will-change: transform; }
+      /* Viewport mode: the stage becomes a virtual screen the pinned component
+         anchors to — dressed as a faux host page (browser bar + greeked
+         content) so the backdrop reads as context, never as the component. */
+      #stage.viewport {
+        background: ${componentDark ? "#101216" : "#ffffff"};
+        outline: 1px solid ${canvasDark ? "rgba(255,255,255,0.14)" : "rgba(17,17,17,0.18)"};
+      }
+      #page { position: absolute; inset: 0; display: none; pointer-events: none; }
+      #stage.viewport #page { display: flex; flex-direction: column; }
+      #page .bar {
+        height: 44px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 16px;
+        background: ${componentDark ? "#161a20" : "#f3f4f6"};
+        border-bottom: 1px solid ${componentDark ? "#242a33" : "#e5e7eb"};
+      }
+      #page .dot { width: 10px; height: 10px; border-radius: 50%; background: ${componentDark ? "#2e3540" : "#d6d9df"}; }
+      #page .url {
+        width: 320px; height: 20px; margin-left: 12px; border-radius: 10px;
+        background: ${componentDark ? "#20252d" : "#e9ebef"};
+      }
+      #page .body { flex: 1; padding: 48px 64px; }
+      #page .blk { border-radius: 8px; background: ${componentDark ? "#181d24" : "#eef0f3"}; margin-bottom: 20px; }
       #root { display: inline-block; }
     </style>
   </head>
   <body>
-    <div id="canvas"><div id="stage"><div id="root"></div></div></div>
+    <div id="canvas"><div id="stage"><div id="page" aria-hidden="true">
+      <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url"></span></div>
+      <div class="body">
+        <div class="blk" style="height:36px;width:42%"></div>
+        <div class="blk" style="height:14px;width:92%"></div>
+        <div class="blk" style="height:14px;width:78%"></div>
+        <div class="blk" style="height:14px;width:85%"></div>
+        <div class="blk" style="height:220px;width:60%;margin-top:32px"></div>
+        <div class="blk" style="height:14px;width:88%;margin-top:32px"></div>
+        <div class="blk" style="height:14px;width:70%"></div>
+      </div>
+    </div><div id="root"></div></div></div>
     <script type="module" src="${entrySrc}"></script>
     <script>
       (function () {
@@ -260,9 +323,47 @@ function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
         var FIT_PAD = 24;
         var scale = 1, tx = 0, ty = 0, touched = false;
 
+        // Viewport mode — for components pinned to the viewport (position:
+        // fixed widgets, overlays). Their #root measures 0×0, and the
+        // transformed #stage is their containing block, so they'd anchor to a
+        // zero-sized box. Instead the containing-block quirk becomes the
+        // feature: #stage gets an explicit virtual screen, the component pins
+        // to ITS corners, and the usual fit/zoom/pan math runs against that
+        // rectangle — scaled to fit initially.
+        var VW = 1280, VH = 800;
+        var viewportMode = false;
+
         function dims() {
+          if (viewportMode) return { cw: canvas.clientWidth, ch: canvas.clientHeight, rw: VW, rh: VH };
           return { cw: canvas.clientWidth, ch: canvas.clientHeight, rw: root.scrollWidth, rh: root.scrollHeight };
         }
+
+        function detectViewportMode() {
+          if (viewportMode) return;
+          var kids = root.children, pinned = false, i;
+          for (i = 0; i < kids.length && !pinned; i++) {
+            if (getComputedStyle(kids[i]).position === "fixed") pinned = true;
+          }
+          // Fixed content deeper down: a zero-size root that still paints.
+          if (!pinned && (root.scrollWidth < 8 || root.scrollHeight < 8)) {
+            for (i = 0; i < kids.length && !pinned; i++) {
+              var b = kids[i].getBoundingClientRect();
+              if (b.width > 8 && b.height > 8) pinned = true;
+            }
+          }
+          if (!pinned) return;
+          viewportMode = true;
+          stage.classList.add("viewport");
+          stage.style.width = VW + "px";
+          stage.style.height = VH + "px";
+          if (!touched) reset();
+        }
+        var detectQueued = false;
+        new MutationObserver(function () {
+          if (detectQueued || viewportMode) return;
+          detectQueued = true;
+          requestAnimationFrame(function () { detectQueued = false; detectViewportMode(); });
+        }).observe(root, { childList: true, subtree: true });
         // The component is larger than the pane at its natural size — the sole
         // case where zooming out (and panning) is meaningful.
         function overflowsNatural() {
@@ -290,29 +391,77 @@ function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
           canvas.classList.toggle("pannable", overflows());
         }
 
-        // Initial / on content resize (until the user takes over): 100%,
-        // centered. A larger-than-pane component thus starts cropped-but-centred
-        // and can be zoomed out to reveal the whole of it.
-        function reset() { scale = 1; center(); apply(); }
+        // Anti-float: panning may never open a gap between content and pane —
+        // a larger-than-pane axis clamps so content keeps covering the pane, a
+        // smaller one stays centred. At exact fit the range is zero, so the
+        // fitted view feels anchored rather than switched off.
+        function clampPan() {
+          var d = dims(), w = d.rw * scale, h = d.rh * scale;
+          tx = w >= d.cw ? Math.min(0, Math.max(d.cw - w, tx)) : (d.cw - w) / 2;
+          ty = h >= d.ch ? Math.min(0, Math.max(d.ch - h, ty)) : (d.ch - h) / 2;
+        }
+
+        // Stage-space union of the rendered content — in viewport mode that is
+        // the pinned widget itself (fixed children don't grow #root, so the
+        // children are measured individually).
+        function contentBBox() {
+          var sr = stage.getBoundingClientRect();
+          var kids = root.children, x0 = 1 / 0, y0 = 1 / 0, x1 = -1 / 0, y1 = -1 / 0, found = false;
+          for (var i = 0; i < kids.length; i++) {
+            var b = kids[i].getBoundingClientRect();
+            if (b.width < 2 || b.height < 2) continue;
+            found = true;
+            x0 = Math.min(x0, (b.left - sr.left) / scale);
+            y0 = Math.min(y0, (b.top - sr.top) / scale);
+            x1 = Math.max(x1, (b.right - sr.left) / scale);
+            y1 = Math.max(y1, (b.bottom - sr.top) / scale);
+          }
+          return found ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
+        }
+
+        // Initial / on content resize (until the user takes over). Normal
+        // components: 100%, centred — larger-than-pane ones start
+        // cropped-but-centred and zoom out to reveal the rest. Viewport mode:
+        // focus the widget itself — whole widget visible, as close to 100% as
+        // that allows — with the host page around it one zoom-out away.
+        function reset() {
+          if (viewportMode) {
+            var d = dims(), bb = contentBBox();
+            if (bb && bb.w > 4 && bb.h > 4) {
+              scale = Math.max(fitScale(), Math.min(1, (d.cw - FIT_PAD * 2) / bb.w, (d.ch - FIT_PAD * 2) / bb.h));
+              tx = d.cw / 2 - (bb.x + bb.w / 2) * scale;
+              ty = d.ch / 2 - (bb.y + bb.h / 2) * scale;
+              clampPan();
+            } else {
+              scale = fitScale();
+              center();
+            }
+          } else {
+            scale = 1;
+            center();
+          }
+          apply();
+        }
         var ro = new ResizeObserver(function () { if (!touched) reset(); });
         ro.observe(root);
         window.addEventListener("resize", function () { if (!touched) reset(); });
 
-        // Wheel: zoom OUT only — never above 100%, only when the component is
-        // larger than the pane, and anchored to the pane centre so it stays
-        // centred (not toward the cursor).
+        // Wheel: cursor-anchored zoom between fit and 100% — the view
+        // converges on what you point at, so refocusing after a zoom-out is
+        // point-and-wheel, no panning needed. Clamped so zooming never opens a
+        // gap at the edges.
         canvas.addEventListener("wheel", function (e) {
-          if (!overflowsNatural()) return; // fits — let the page scroll
+          if (!overflowsNatural()) return; // fits at 100% — let the page scroll
           e.preventDefault();
           var min = fitScale();
           var factor = Math.exp(-e.deltaY * 0.0015);
           var next = Math.min(1, Math.max(min, scale * factor));
           if (next === scale) return;
           touched = true;
-          var d = dims(), ax = d.cw / 2, ay = d.ch / 2;
-          tx = ax - (ax - tx) * (next / scale);
-          ty = ay - (ay - ty) * (next / scale);
+          tx = e.clientX - (e.clientX - tx) * (next / scale);
+          ty = e.clientY - (e.clientY - ty) * (next / scale);
           scale = next;
+          clampPan();
           apply();
         }, { passive: false });
 
@@ -325,7 +474,7 @@ function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
         });
         window.addEventListener("mousemove", function (e) {
           if (!dragging) return;
-          tx = e.clientX - sx; ty = e.clientY - sy; apply();
+          tx = e.clientX - sx; ty = e.clientY - sy; clampPan(); apply();
         });
         window.addEventListener("mouseup", function () { dragging = false; canvas.classList.remove("grabbing"); });
       })();
