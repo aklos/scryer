@@ -20,7 +20,7 @@ import {
   DRIFT_HINT,
 } from "../diffkit";
 import { ClaimSource, respElementId } from "../SourceSection";
-import { ANCHOR_CALM, hasMarkup, MarkupMirror, serializeEars, StatementText, stripMarkup } from "../markup";
+import { ANCHOR_CALM, earsTestable, hasMarkup, lintEars, MarkupMirror, serializeEars, StatementText, stripMarkup } from "../markup";
 import { usePageMenu, useCopyId, copyIdItem } from "../pageMenu";
 import {
   BTN,
@@ -155,6 +155,7 @@ export function ResponsibilitiesSection({
   verifyStates,
   projectPath,
   leafHost,
+  codeBackedHost,
   mintId,
   editor,
   editing,
@@ -181,6 +182,10 @@ export function ResponsibilitiesSection({
   /** Whether claims here must anchor to source (leaf node). Structural hosts
    *  discharge through their subtree and never flag "unmapped". */
   leafHost: boolean;
+  /** Whether this host's claims are backed by code at all (not a person, not
+   *  an external). Unlike `leafHost`, structural hosts count — a structural
+   *  When-claim backs onto an integration test (rule 22). Gates "untested". */
+  codeBackedHost: boolean;
   /** Mint a fresh claim id clear of every host in BOTH layers (plus the
    *  editor's own draft rows) — claim ids are globally unique, and a per-host
    *  mint can duplicate one across hosts, silently corrupting the diff. */
@@ -241,6 +246,7 @@ export function ResponsibilitiesSection({
               verifyState={verifyStates[row.resp.id] ?? null}
               projectPath={projectPath}
               leafHost={leafHost}
+              codeBackedHost={codeBackedHost}
               onRestore={() => restore(row.resp)}
               editor={editor}
             />
@@ -321,18 +327,27 @@ function ResponsibilitiesEditor({
       onCommit={commit}
       onClose={onClose}
       footerExtra={(setDraft) => (
-        <button
-          type="button"
-          onClick={() =>
-            setDraft((d) => [
-              ...d,
-              { id: mintId(d), statement: "" },
-            ])
-          }
-          className={BTN}
-        >
-          Add responsibility
-        </button>
+        <>
+          <button
+            type="button"
+            onClick={() =>
+              setDraft((d) => [
+                ...d,
+                { id: mintId(d), statement: "" },
+              ])
+            }
+            className={BTN}
+          >
+            Add responsibility
+          </button>
+          {/* The EARS forms (rule 21), one glance's worth: condition first,
+              response last; no keyword means always-active, verb first. */}
+          <span className="ml-auto select-none font-mono text-2xs text-[var(--text-ghost)]">
+            <b className="font-semibold">When</b> trigger, … · <b className="font-semibold">While</b>{" "}
+            state, … · <b className="font-semibold">If</b> failure,{" "}
+            <b className="font-semibold">then</b> … · or verb-first
+          </span>
+        </>
       )}
     >
       {(draft, setDraft) => {
@@ -420,6 +435,7 @@ function RespDiffRow({
   verifyState,
   projectPath,
   leafHost,
+  codeBackedHost,
   onRestore,
   editor,
 }: {
@@ -435,6 +451,8 @@ function RespDiffRow({
   verifyState: AnchorState | null;
   projectPath: string | null;
   leafHost: boolean;
+  /** See {@link ResponsibilitiesSection}: gates "untested", structural hosts included. */
+  codeBackedHost: boolean;
   onRestore: () => void;
   editor: Editor | undefined;
 }) {
@@ -457,6 +475,16 @@ function RespDiffRow({
   // The verification pill shows on live claims only — a deleted/relocated
   // row's test link is context, not a badge.
   const tested = !deleted && !relocated && verifyLocations.length > 0;
+  // A committed When/While/If claim with no backing test — demonstrable, but
+  // nothing demonstrates it (rule 22). Plan-added and vagrant claims don't
+  // nag: the test comes at the build checkpoint, and code-first claims await
+  // a verdict. Not gated on leafHost — structural claims back onto
+  // integration tests.
+  const untested =
+    codeBackedHost &&
+    verifyLocations.length === 0 &&
+    (kind === "unchanged" || kind === "reworded") &&
+    earsTestable(resp.statement);
   const hasMeta = tested;
 
   const contentColor = deleted || relocated
@@ -515,6 +543,14 @@ function RespDiffRow({
             title="No source lines anchor this responsibility — the claim can't be read through to code."
           >
             unmapped
+          </span>
+        )}
+        {untested && (
+          <span
+            className={`${VERIFY_PILLS.untested} ml-2 align-middle`}
+            title="This claim names a trigger, state, or failure a test could demonstrate — but no backing test is linked (rule 22)."
+          >
+            untested
           </span>
         )}
 
@@ -926,6 +962,7 @@ function ResponsibilityEditRow({
 }) {
   const directives = resp.directives ?? [];
   const setDirectives = (next: string[]) => onPatch(resp.id, { directives: next });
+  const lints = lintEars(stripMarkup(resp.statement));
 
   // In-place edit row: each line is a contentEditable span flowing in the same
   // content cell as the read diff row, with the SAME font/size/line-height, so
@@ -977,6 +1014,16 @@ function ResponsibilityEditRow({
             </button>
           </span>
         </div>
+
+        {lints.length > 0 && (
+          <div className="mt-0.5 flex flex-col gap-px text-2xs leading-snug text-[var(--text-tertiary)]">
+            {lints.map((l) => (
+              <div key={l.code}>
+                <span className="text-[var(--text-ghost)]">“{l.excerpt}”</span> {l.message}
+              </div>
+            ))}
+          </div>
+        )}
 
         {directives.length > 0 && (
           <div className="mt-0.5 flex flex-col gap-0.5">

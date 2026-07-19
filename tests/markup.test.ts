@@ -7,7 +7,7 @@
  * underscores never read as markers.
  */
 import { describe, expect, it } from "vitest";
-import { earsTokenize, hasMarkup, parseMarkup, serializeEars, stripMarkup } from "../src/markup";
+import { earsTestable, earsTokenize, hasMarkup, lintEars, parseMarkup, serializeEars, stripMarkup } from "../src/markup";
 
 describe("parseMarkup", () => {
   it("splits a marked statement into anchor / plain segments (legacy clause markers go plain)", () => {
@@ -125,6 +125,92 @@ describe("earsTokenize (the positional pass)", () => {
       { text: "When", bold: true },
       { text: " a message arr" },
     ]);
+  });
+});
+
+describe("earsTestable (rule 22's deterministic slice)", () => {
+  it("counts the When/While/If forms, reading through markup", () => {
+    expect(earsTestable("**When** a callback arrives, **append** an event")).toBe(true);
+    expect(earsTestable("While a reconcile runs, queue edits")).toBe(true);
+    expect(earsTestable("If the signature is invalid, then reject")).toBe(true);
+  });
+
+  it("leaves ubiquitous, Where, and lookalike leads to judgment", () => {
+    expect(earsTestable("**Authenticate** every inbound POST")).toBe(false);
+    expect(earsTestable("Where previews are enabled, render live")).toBe(false);
+    expect(earsTestable("Whenever possible, batch the writes")).toBe(false);
+  });
+});
+
+describe("lintEars (rule-21 advisories)", () => {
+  const codes = (s: string) => lintEars(s).map((l) => l.code);
+
+  it("flags a rationale tail (so + article/pronoun, so that, in order to)", () => {
+    expect(
+      codes("Deduplicate webhook retries via a claimed-message ledger so a redelivered id isn't reprocessed"),
+    ).toEqual(["rationale-tail"]);
+    expect(codes("If a tick is still running past the timeout, then abandon it so a hang can't wedge the loop")).toEqual([
+      "rationale-tail",
+    ]);
+    expect(codes("Batch the writes in order to reduce load")).toEqual(["rationale-tail"]);
+  });
+
+  it("never reads 'do so' or 'or so' as a rationale", () => {
+    expect(codes("Ack the webhook and do so before processing")).toEqual([]);
+    expect(codes("Keep an hour or so of history")).toEqual([]);
+  });
+
+  it("flags a compound response chained by 'then' or a semicolon", () => {
+    expect(codes("Read the visitor id and page context, stage them for the widget, then inject the bundle")).toEqual([
+      "compound-response",
+    ]);
+    expect(codes("Hold the append-only log; CNTRC browsing is excluded")).toEqual(["compound-response"]);
+  });
+
+  it("keeps the grammar's own 'then' of an If claim out of the compound check", () => {
+    expect(codes("If the signature is invalid, then reject the request")).toEqual([]);
+  });
+
+  it("flags a condition written as a tail, comma or not", () => {
+    expect(codes("Queue the edit, when a reconcile is running")).toEqual(["condition-tail"]);
+    expect(codes("Queue the edit when a reconcile is running")).toEqual(["condition-tail"]);
+  });
+
+  it("keeps infinitive objects and concessions out of the condition-tail check", () => {
+    expect(codes("Decide when to escalate")).toEqual([]);
+    expect(codes("Retry the send even if the network flaps")).toEqual([]);
+    expect(codes("Serve the directory where builds land")).toEqual([]);
+  });
+
+  it("flags a gerund lead but not imperative -ing verbs", () => {
+    expect(codes("Farting machine")).toEqual(["gerund-lead"]);
+    expect(codes("When a claim folds, updating the committed layer")).toEqual(["gerund-lead"]);
+    expect(codes("Bring the model up to date")).toEqual([]);
+    expect(codes("String together the clause walk")).toEqual([]);
+  });
+
+  it("flags a bundled happy path + rejection", () => {
+    expect(codes("Echo the challenge when the token matches, else reject with 403")).toEqual([
+      "condition-tail",
+      "bundled-rejection",
+    ]);
+  });
+
+  it("flags an illegal clause stack, allowing While + when/if", () => {
+    expect(codes("When a claim is edited, if it is unchanged, skip the write")).toEqual(["illegal-stack"]);
+    expect(codes("While a reconcile runs, when a claim is edited, queue the edit")).toEqual([]);
+  });
+
+  it("ignores qualifiers inside parentheticals", () => {
+    expect(
+      codes("Create or update the HubSpot Deal for a lead (Emily works the cold pipeline only; ION promotes SQLs)"),
+    ).toEqual([]);
+  });
+
+  it("stays silent on an unfinished clause and on clean claims", () => {
+    expect(codes("When a message arr")).toEqual([]);
+    expect(codes("When an inbound WhatsApp message arrives via webhook, resolve its project and lead")).toEqual([]);
+    expect(codes("Authenticate every inbound POST")).toEqual([]);
   });
 });
 

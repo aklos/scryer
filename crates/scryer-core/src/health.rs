@@ -54,6 +54,16 @@ pub struct HealthCounts {
     /// legitimately backs onto an integration test. Presence-only; whether
     /// the test's fingerprint is still intact is the anchor check's report.
     pub verified: u32,
+    /// Responsibilities in a When/While/If form (rule 21) on code-backed hosts
+    /// — the claims whose statement names a concrete trigger, state, or
+    /// failure, so a test can demonstrate them mechanically. Classified
+    /// deterministically from the leading keyword ([`crate::ears`]); person
+    /// and external claims never count. Like `verified`, not gated on
+    /// leafness: a structural When-claim backs onto an integration test.
+    pub testable: u32,
+    /// Of the testable claims, how many carry NO verify entry — the demonstrable
+    /// claims nothing demonstrates.
+    pub untested: u32,
     /// Unix seconds of the most recent truth-bearing edit in scope.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_touched_at: Option<u64>,
@@ -75,6 +85,8 @@ impl HealthCounts {
         self.anchored += other.anchored;
         self.unmapped += other.unmapped;
         self.verified += other.verified;
+        self.testable += other.testable;
+        self.untested += other.untested;
         self.touch(other.last_touched_at);
     }
 }
@@ -173,7 +185,8 @@ pub fn compute_health(
         // Persons are actors and externals are out-of-system; neither is backed
         // by code in this model, so their claims are never anchorable (and so
         // never "unmapped").
-        let anchorable_node = is_leaf && !external && node.kind != Kind::Person;
+        let code_backed = !external && node.kind != Kind::Person;
+        let anchorable_node = is_leaf && code_backed;
         let mut h = HealthCounts::default();
 
         for resp in &node.responsibilities {
@@ -184,8 +197,15 @@ pub fn compute_health(
             if resp.stale == Some(true) {
                 h.stale += 1;
             }
-            if model.verify_map.get(&resp.id).is_some_and(|locs| !locs.is_empty()) {
+            let has_verify = model.verify_map.get(&resp.id).is_some_and(|locs| !locs.is_empty());
+            if has_verify {
                 h.verified += 1;
+            }
+            if code_backed && crate::ears::classify(&resp.statement).testable() {
+                h.testable += 1;
+                if !has_verify {
+                    h.untested += 1;
+                }
             }
             h.touch(resp.last_touched_at);
             if anchorable_node {
@@ -245,8 +265,17 @@ pub fn compute_health(
             if resp.stale == Some(true) {
                 h.stale += 1;
             }
-            if model.verify_map.get(&resp.id).is_some_and(|locs| !locs.is_empty()) {
+            let has_verify = model.verify_map.get(&resp.id).is_some_and(|locs| !locs.is_empty());
+            if has_verify {
                 h.verified += 1;
+            }
+            // A group organizes code-backed members, so its claims classify
+            // like a node's: a When/While/If claim can back onto a test.
+            if crate::ears::classify(&resp.statement).testable() {
+                h.testable += 1;
+                if !has_verify {
+                    h.untested += 1;
+                }
             }
             h.touch(resp.last_touched_at);
         }
@@ -822,6 +851,38 @@ mod tests {
         assert_eq!(h.nodes["sys"].subtree.verified, 2, "verified rolls up post-order");
         assert_eq!(h.totals.verified, 2);
         assert_eq!(h.totals.anchored, 0, "verification is a separate dimension from anchoring");
+    }
+
+    /// `testable` counts When/While/If claims on code-backed hosts (the EARS
+    /// forms a test can demonstrate); `untested` is the testable claims with
+    /// no verify entry. Ubiquitous claims and person/external hosts never
+    /// count, and a backing test moves a claim out of `untested` only.
+    #[test]
+    fn testable_claims_without_backing_tests_read_as_untested() {
+        let mut m = ScryModel::new();
+        let mut api = node("api", Kind::Component, None);
+        let mut tested = resp("r-tested");
+        tested.statement = "**When** a callback arrives, **append** an event".into();
+        let mut untested = resp("r-untested");
+        untested.statement = "If the signature is invalid, then reject the request".into();
+        let mut plain = resp("r-plain");
+        plain.statement = "Authenticate every inbound POST".into();
+        api.responsibilities.extend([tested, untested, plain]);
+        m.nodes.push(api);
+        let mut visitor = node("visitor", Kind::Person, None);
+        let mut actor_claim = resp("r-actor");
+        actor_claim.statement = "When curious, opens the chat".into();
+        visitor.responsibilities.push(actor_claim);
+        m.nodes.push(visitor);
+        m.verify_map.insert("r-tested".into(), vec![loc("tests/webhook.rs")]);
+
+        let h = compute_health(&m, None, None);
+        let own = &h.nodes["api"].own;
+        assert_eq!(own.testable, 2, "the When and If claims; the ubiquitous one needs judgment");
+        assert_eq!(own.untested, 1, "only the If claim lacks a backing test");
+        assert_eq!(h.nodes["visitor"].own.testable, 0, "a person's claims are never code-backed");
+        assert_eq!(h.totals.testable, 2);
+        assert_eq!(h.totals.untested, 1);
     }
 
     /// The discharge rule: a System's implemented responsibility with no anchor

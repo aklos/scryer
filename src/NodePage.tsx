@@ -458,6 +458,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   verifyStates={verifyStates}
                   projectPath={projectPath}
                   leafHost={leafHost}
+                  codeBackedHost={!node.external && node.kind !== "person"}
                   mintId={(draft) => nextResponsibilityId(draft, model, committed)}
                   editor={editor}
                   editing={ed.isEditing("responsibilities")}

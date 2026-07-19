@@ -129,6 +129,128 @@ export function serializeEars(plain: string): string {
     .join("");
 }
 
+/** Whether the statement's EARS form names a concrete trigger, state, or
+ *  failure (When/While/If) — the forms a test can demonstrate mechanically:
+ *  arrange the condition, assert the response (rule 22). Where-claims and
+ *  ubiquitous claims need judgment and never count. Mirrors
+ *  `scryer_core::ears`. */
+export function earsTestable(statement: string): boolean {
+  const m = stripMarkup(statement).trimStart().match(CLAUSE_KW);
+  return m !== null && m[1].toLowerCase() !== "where";
+}
+
+/** One finding from {@link lintEars} — advisory, never a hard error. */
+export interface EarsLint {
+  code:
+    | "condition-tail"
+    | "rationale-tail"
+    | "compound-response"
+    | "bundled-rejection"
+    | "illegal-stack"
+    | "gerund-lead";
+  /** The fragment that triggered the finding. */
+  excerpt: string;
+  message: string;
+}
+
+/**
+ * The EARS lint pass: rule-21 violations detectable from the grammar's fixed
+ * shape alone, on a marker-stripped statement. Precision over recall — every
+ * check keys on a closed marker set (keywords, "so + article", "and then",
+ * else/otherwise), so a clean statement never warns; a compound response
+ * joined by a bare "and" is knowingly out of reach. Parentheticals are
+ * qualifiers, not response structure, and are masked before matching. An
+ * unfinished clause (keyword, no comma yet) has no response to lint.
+ */
+export function lintEars(plain: string): EarsLint[] {
+  const lints: EarsLint[] = [];
+  // The clause walk from earsTokenize: find where the response begins.
+  let pos = 0;
+  let sawIf = false;
+  let firstKw = "";
+  for (let clause = 0; clause < 2; clause++) {
+    const m = plain.slice(pos).match(CLAUSE_KW);
+    if (!m) break;
+    const kw = m[1].toLowerCase();
+    if (clause === 1 && !(firstKw === "while" && (kw === "when" || kw === "if"))) {
+      lints.push({
+        code: "illegal-stack",
+        excerpt: `${firstKw[0].toUpperCase()}${firstKw.slice(1)} + ${kw}`,
+        message: "Clauses stack only as While + when/if — split or reorder.",
+      });
+      break;
+    }
+    if (kw === "if") sawIf = true;
+    const comma = plain.indexOf(",", pos);
+    if (comma === -1) return lints;
+    pos = comma + 1;
+    while (plain[pos] === " ") pos++;
+    firstKw = kw;
+  }
+  const resp = plain.slice(pos).replace(/\([^)]*\)/g, "()");
+
+  // A bare mid-response when/while/if reads as a trailing condition, comma or
+  // not. Guarded against the two legitimate shapes: an infinitive object
+  // ("decide when to escalate") and a concession ("retry even if it flaps").
+  // "where" only counts after a comma — relative clauses ("the directory
+  // where builds land") are everyday response text.
+  const tail =
+    resp.slice(1).match(/(?<!\beven\s)\b(when|while|if)\s(?!to\b)/i) ??
+    resp.match(/,\s+(where|whenever)\s/i);
+  if (tail) {
+    lints.push({
+      code: "condition-tail",
+      excerpt: tail[0].trim(),
+      message: "A condition reads as a tail — move it to the front in its keyword form.",
+    });
+  }
+  const why = resp.match(
+    /\bso that\b|\bso (?:a|an|the|it|they|we|you|no|nothing|each|every)\b|\bin order to\b/i,
+  );
+  if (why) {
+    lints.push({
+      code: "rationale-tail",
+      excerpt: why[0],
+      message: "A rationale tail is not part of the response — cut it or move it to the description.",
+    });
+  }
+  const chain = resp.match(/\band then\b|;\s/) ?? (sawIf ? null : resp.match(/,\s*then\s/i));
+  if (chain) {
+    lints.push({
+      code: "compound-response",
+      excerpt: chain[0].trim(),
+      message: "Two actions in one claim — split it into two responsibilities.",
+    });
+  }
+  const bundle = resp.match(/\b(else|otherwise)\b/i);
+  if (bundle) {
+    lints.push({
+      code: "bundled-rejection",
+      excerpt: bundle[0],
+      message: "A happy path bundled with its rejection is two claims — split the When and the If.",
+    });
+  }
+  // A gerund lead ("Rendering…") is not the imperative verb-first form (rule
+  // 15). The handful of imperative verbs that happen to end in -ing pass.
+  const lead = resp.replace(/^then\s+/i, "").match(/^[A-Za-z][A-Za-z-]*/);
+  if (
+    lead &&
+    lead[0].length >= 5 &&
+    /ing$/i.test(lead[0]) &&
+    !IMPERATIVE_ING.has(lead[0].toLowerCase())
+  ) {
+    lints.push({
+      code: "gerund-lead",
+      excerpt: lead[0],
+      message: "Lead with the imperative verb — “Render …”, not “Rendering …”.",
+    });
+  }
+  return lints;
+}
+
+/** Imperative verbs that end in -ing, exempt from the gerund-lead check. */
+const IMPERATIVE_ING = new Set(["bring", "swing", "spring", "sting", "fling", "cling", "wring", "string"]);
+
 /**
  * The editor's live preview layer: the raw field text rendered CHAR-EXACT
  * (every marker glyph kept, ghosted) so it can sit on top of the transparent

@@ -3,6 +3,7 @@ pub mod changes;
 pub mod concerns;
 pub mod diff;
 pub mod drift;
+pub mod ears;
 pub mod health;
 pub mod history;
 pub mod locate;

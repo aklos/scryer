@@ -25,6 +25,13 @@ export interface HealthCounts {
    *  from `anchored` — implemented vs. demonstrated — and not gated on
    *  leafness (a structural claim backed by an integration test counts). */
   verified: number;
+  /** Claims in a When/While/If form on code-backed hosts — a concrete trigger,
+   *  state, or failure a test can demonstrate mechanically. Classified
+   *  deterministically from the leading keyword (rule 21). */
+  testable: number;
+  /** Of the testable claims, how many carry no verify entry — demonstrable
+   *  claims nothing demonstrates. */
+  untested: number;
   /** Unix seconds of the most recent truth-bearing edit in scope. */
   lastTouchedAt?: number;
 }

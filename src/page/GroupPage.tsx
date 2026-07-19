@@ -133,6 +133,7 @@ export function GroupPageBody(props: PageProps & { group: Group }) {
               verifyStates={verifyStates}
               projectPath={projectPath}
               leafHost={false} // group claims discharge through members
+              codeBackedHost // groups organize code-backed members
               mintId={(draft) => nextResponsibilityId(draft, model, committed)}
               editor={editor}
               editing={ed.isEditing("responsibilities")}
