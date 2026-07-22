@@ -377,15 +377,15 @@ pub struct ScryModel {
     /// regenerable; never hand-authored.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub source_map: HashMap<String, Vec<SourceLocation>>,
-    /// Maps **responsibility id** → the locations of the tests that back that
-    /// claim (the verification handle: where a test demonstrates the claim
-    /// holds). A separate dimension from `source_map` — where a claim is
-    /// implemented vs. where it is verified — and a claim may carry either,
-    /// both, or neither. Follows `source_map`'s single-home layer rule:
-    /// committed owns committed claims' entries, the draft holds only
-    /// plan-added ones. Agent-produced; never executed by scryer.
+    /// Maps **responsibility id** → the locations of the tests attached to
+    /// that claim. A separate dimension from `source_map` — where a claim is
+    /// implemented vs. which tests are attached to it — and a claim may carry
+    /// either, both, or neither. Attachment is the only fact recorded: scryer
+    /// never runs the tests and never judges what they prove. Follows
+    /// `source_map`'s single-home layer rule: committed owns committed claims'
+    /// entries, the draft holds only plan-added ones. Agent-produced.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub verify_map: HashMap<String, Vec<SourceLocation>>,
+    pub test_map: HashMap<String, Vec<SourceLocation>>,
     /// Maps **node id** → boundary globs: the region of code a node owns (the
     /// coverage denominator + extraction scope). A child's boundary should sit
     /// within its parent's. Agent-produced and regenerable; never hand-authored.
@@ -418,7 +418,7 @@ impl ScryModel {
             links: Vec::new(),
             groups: Vec::new(),
             source_map: HashMap::new(),
-            verify_map: HashMap::new(),
+            test_map: HashMap::new(),
             boundaries: HashMap::new(),
             concerns: Vec::new(),
             changes: Vec::new(),
@@ -433,24 +433,24 @@ impl Default for ScryModel {
     }
 }
 
-// --- Verify-anchor key namespace ---
+// --- Test-anchor key namespace ---
 
-/// Prefix distinguishing a `verify_map` anchor from a `source_map` anchor in
+/// Prefix distinguishing a `test_map` anchor from a `source_map` anchor in
 /// shared key spaces (the anchor-fingerprint baseline, anchor observations).
-/// Model maps themselves never carry it — `verify_map` keys are bare
+/// Model maps themselves never carry it — `test_map` keys are bare
 /// responsibility ids; the prefix exists so one baseline can fingerprint both
 /// dimensions without a second file.
-pub const VERIFY_KEY_PREFIX: &str = "verify:";
+pub const TEST_KEY_PREFIX: &str = "test:";
 
-/// The baseline/observation key for a responsibility's verify anchor.
-pub fn verify_key(resp_id: &str) -> String {
-    format!("{VERIFY_KEY_PREFIX}{resp_id}")
+/// The baseline/observation key for a responsibility's attached-test anchor.
+pub fn test_key(resp_id: &str) -> String {
+    format!("{TEST_KEY_PREFIX}{resp_id}")
 }
 
-/// The responsibility id behind a verify-namespaced key, or `None` for a
+/// The responsibility id behind a test-namespaced key, or `None` for a
 /// plain source-map key.
-pub fn verify_resp_id(key: &str) -> Option<&str> {
-    key.strip_prefix(VERIFY_KEY_PREFIX)
+pub fn test_resp_id(key: &str) -> Option<&str> {
+    key.strip_prefix(TEST_KEY_PREFIX)
 }
 
 #[cfg(test)]

@@ -1495,6 +1495,7 @@ mod tests {
             rel_path: rel_path.to_string(),
             source: String::new(),
             parse: FileParse {
+                test_blocks: vec![],
                 defs,
                 idents,
                 paths: vec![],
@@ -1537,6 +1538,7 @@ mod tests {
                 rel_path: "src/helper.rs".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("helper", 1, 3)],
                     idents: vec![ident("helper", 1)],
                     paths: vec![],
@@ -1547,6 +1549,7 @@ mod tests {
                 rel_path: "src/main.rs".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("run", 1, 10), def("compute", 12, 14)],
                     idents: vec![ident("run", 1), ident("compute", 5), ident("helper", 6)],
                     paths: vec![],
@@ -1602,6 +1605,7 @@ mod tests {
                 rel_path: "src/model.rs".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("new", 1, 3)],
                     idents: vec![],
                     paths: vec![],
@@ -1612,6 +1616,7 @@ mod tests {
                 rel_path: "src/caller.rs".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("run", 1, 10)],
                     idents: vec![ident("new", 5)],
                     paths: vec![],
@@ -1638,6 +1643,7 @@ mod tests {
             rel_path: "a.rs".into(),
             source: String::new(),
             parse: FileParse {
+                test_blocks: vec![],
                 defs: vec![def("x", 1, 2)],
                 idents: vec![],
                 paths: vec![],
@@ -1660,6 +1666,7 @@ mod tests {
                 rel_path: "api/server.ts".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("serve", 1, 5)],
                     idents: vec![ident("util", 3)],
                     paths: vec![],
@@ -1670,6 +1677,7 @@ mod tests {
                 rel_path: "shared/util.ts".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("util", 1, 2)],
                     idents: vec![],
                     paths: vec![],
@@ -1705,6 +1713,7 @@ fn add_one(x: u32) -> u32 {
             rel_path: "src/math.rs".into(),
             source: source.into(),
             parse: FileParse {
+                test_blocks: vec![],
                 defs: vec![def("add_one", 3, 5)],
                 idents: vec![],
                 paths: vec![],
@@ -1734,6 +1743,7 @@ fn add_one(x: u32) -> u32 {
             rel_path: "src/big.rs".into(),
             source: format!("fn big() {{\n{big_source}}}\n"),
             parse: FileParse {
+                test_blocks: vec![],
                 defs: vec![def("big", 1, 202)],
                 idents: vec![],
                 paths: vec![],
@@ -1762,6 +1772,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: format!("src/f{n:03}.rs"),
                 source: format!("fn f{n}() {{\n{big_source}}}\n"),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def(&format!("f{n}"), 1, 202)],
                     idents: vec![],
                     paths: vec![],
@@ -1798,6 +1809,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: "src/changed.rs".into(),
                 source: src("changed"),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("changed", 2, 4)],
                     idents: vec![],
                     paths: vec![],
@@ -1808,6 +1820,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: "src/untouched.rs".into(),
                 source: src("untouched"),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("untouched", 2, 4)],
                     idents: vec![],
                     paths: vec![],
@@ -1842,6 +1855,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: "api/server.ts".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("serve", 1, 20), def("route", 22, 30)],
                     idents: vec![ident("route", 5), ident("util", 8)],
                     paths: vec![],
@@ -1852,6 +1866,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: "api/util.ts".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("util", 1, 4)],
                     idents: vec![],
                     paths: vec![],
@@ -1901,6 +1916,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: "crates/scryer-extract/src/anchors.rs".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("write_baseline", 1, 5)],
                     idents: vec![],
                     paths: vec![],
@@ -1911,6 +1927,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: "crates/scryer-mcp/src/tools/intent.rs".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("run", 1, 10)],
                     idents: vec![],
                     paths: vec![pathref(&["scryer_extract", "anchors", "write_baseline"], 6)],
@@ -1950,6 +1967,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: "crates/scryer-extract/src/lib.rs".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("Anchor", 1, 3)],
                     idents: vec![],
                     paths: vec![],
@@ -1960,6 +1978,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: "crates/scryer-mcp/src/m.rs".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("run", 1, 4)],
                     idents: vec![],
                     paths: vec![pathref(&["scryer_extract", "Anchor"], 2)],
@@ -1987,6 +2006,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: "crates/dep/src/a.rs".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("Thing", 1, 3)],
                     idents: vec![],
                     paths: vec![],
@@ -1997,6 +2017,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: "crates/dep/src/b.rs".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("Thing", 1, 3)],
                     idents: vec![],
                     paths: vec![],
@@ -2007,6 +2028,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: "crates/app/src/m.rs".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("run", 1, 4)],
                     idents: vec![],
                     paths: vec![pathref(&["dep", "Thing"], 2)],
@@ -2036,6 +2058,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: "crates/dep/src/helpers.rs".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("assist", 1, 3)],
                     idents: vec![],
                     paths: vec![],
@@ -2046,6 +2069,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: "crates/app/src/m.rs".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("run", 1, 4)],
                     idents: vec![],
                     // `use dep::helpers;` — leaf is the module, not a symbol.
@@ -2075,6 +2099,7 @@ fn add_one(x: u32) -> u32 {
             rel_path: "crates/app/src/m.rs".into(),
             source: String::new(),
             parse: FileParse {
+                test_blocks: vec![],
                 defs: vec![def("run", 1, 4), def("Helper", 6, 8)],
                 idents: vec![],
                 paths: vec![
@@ -2398,6 +2423,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: "internal/db/store.go".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("Connect", 1, 5)],
                     idents: vec![],
                     paths: vec![],
@@ -2408,6 +2434,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: "cmd/api/main.go".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("main", 3, 9)],
                     idents: vec![ident("db", 5)],
                     paths: vec![pathref(&["db", "Connect"], 5)],
@@ -2435,6 +2462,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: "services/auth/token.go".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("Verify", 1, 4)],
                     idents: vec![],
                     paths: vec![],
@@ -2445,6 +2473,7 @@ fn add_one(x: u32) -> u32 {
                 rel_path: "services/billing/charge.go".into(),
                 source: String::new(),
                 parse: FileParse {
+                    test_blocks: vec![],
                     defs: vec![def("Charge", 4, 12), def("Process", 14, 16)],
                     idents: vec![ident("authsvc", 6), ident("pq", 7), ident("svc", 8)],
                     paths: vec![

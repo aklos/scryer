@@ -21,16 +21,16 @@ export interface HealthCounts {
   anchored: number;
   /** anchorable − anchored — the lens's blind spots. */
   unmapped: number;
-  /** Claims carrying a backing test (a verify entry). A separate dimension
-   *  from `anchored` — implemented vs. demonstrated — and not gated on
-   *  leafness (a structural claim backed by an integration test counts). */
-  verified: number;
+  /** Claims with at least one test attached (a `testMap` entry). A separate dimension
+   *  from `anchored` — implemented vs. test-attached — and not gated on
+   *  leafness (a structural claim carrying an integration test counts). */
+  tested: number;
   /** Claims in a When/While/If form on code-backed hosts — a concrete trigger,
-   *  state, or failure a test can demonstrate mechanically. Classified
+   *  state, or failure a test can exercise mechanically. Classified
    *  deterministically from the leading keyword (rule 21). */
   testable: number;
-  /** Of the testable claims, how many carry no verify entry — demonstrable
-   *  claims nothing demonstrates. */
+  /** Of the testable claims, how many have no test attached — testable
+   *  claims with no test attached. */
   untested: number;
   /** Unix seconds of the most recent truth-bearing edit in scope. */
   lastTouchedAt?: number;
@@ -163,16 +163,16 @@ export const ANCHOR_STATE_LABEL: Record<AnchorState, string> = {
   fileMissing: "file gone",
 };
 
-/** Per-claim state of the BACKING TEST's fingerprint, from the verify-namespaced
- *  anchor observations (`verify:{respId}`). A claim absent here has an intact
+/** Per-claim state of the ATTACHED TEST's fingerprint, from the test-namespaced
+ *  anchor observations (`test:{respId}`). A claim absent here has an intact
  *  (or not-yet-fingerprinted) test link. broken/fileMissing outrank changed. */
-export function verifyStatesOf(
+export function testStatesOf(
   report: ModelHealthReport | null,
 ): Record<string, AnchorState> {
   const out: Record<string, AnchorState> = {};
   for (const o of report?.anchors ?? []) {
-    if (!o.key.startsWith("verify:")) continue;
-    const id = o.key.slice("verify:".length);
+    if (!o.key.startsWith("test:")) continue;
+    const id = o.key.slice("test:".length);
     if (out[id] === undefined || o.state !== "changed") out[id] = o.state;
   }
   return out;

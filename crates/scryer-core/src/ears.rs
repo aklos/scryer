@@ -22,9 +22,9 @@ pub enum EarsPattern {
 
 impl EarsPattern {
     /// Whether the pattern names a concrete trigger, state, or failure — the
-    /// forms a test can demonstrate mechanically (arrange the condition,
-    /// assert the response). Ubiquitous claims may still deserve tests; that
-    /// call needs judgment and stays with the agent.
+    /// forms a test can exercise mechanically (arrange the condition, assert
+    /// the response). Ubiquitous claims may still deserve tests; that call
+    /// needs judgment and stays with the agent.
     pub fn testable(self) -> bool {
         matches!(self, Self::Event | Self::State | Self::Unwanted)
     }

@@ -9,8 +9,8 @@
  */
 
 import { useRef, useState } from "react";
-import { Braces, ChevronRight, FlaskConical, Loader2, Pencil, Plus } from "lucide-react";
-import type { Completeness, NodeHealth } from "./health";
+import { Braces, ChevronRight, Loader2, Pencil, Plus } from "lucide-react";
+import type { Completeness } from "./health";
 import { CompletenessPie } from "./CompletenessPie";
 import type { ScryModel, Node, Group, Kind } from "./viewmodel";
 import { childKindFor, concernCounts, normalizeConcernSlug } from "./viewmodel";
@@ -120,7 +120,6 @@ export function ModelTree({
   activeNodeIds,
   activeLevel,
   completeness,
-  health,
   concernLens,
   onSetConcernLens,
 }: {
@@ -144,8 +143,6 @@ export function ModelTree({
   /** Per-node build completeness, keyed by node id — drives the row's % +
    *  anchorage badge. Absent until the health report loads. */
   completeness?: Record<string, Completeness>;
-  /** Per-node health counts, keyed by node id — drives the test-backed rollup. */
-  health?: Record<string, NodeHealth>;
   /** The active concern lens (a registry slug, or null). Rows whose subtree
    *  holds no responsibility tagged with it DIM — they never hide, because "the
    *  concern lives nowhere here" is exactly what the lens exists to show. */
@@ -807,23 +804,6 @@ export function ModelTree({
               title={`${c.pct}% of this subtree's claims read through to code`}
             >
               <CompletenessPie c={c} size={12} />
-            </span>
-          );
-        })()}
-        {(() => {
-          // Test-backed rollup: shown on arch tiers when any claim in the
-          // subtree carries a backing test. Quietly additive — ghost-toned,
-          // count only; the title carries the fraction.
-          if (node.kind === "symbol" || node.kind === "person") return null;
-          const h = health?.[node.id]?.subtree;
-          if (!h?.verified) return null;
-          return (
-            <span
-              className="flex shrink-0 items-center gap-px font-mono text-2xs tabular-nums text-[var(--text-ghost)]"
-              title={`${h.verified} of ${h.responsibilities} claim${h.responsibilities === 1 ? "" : "s"} in this subtree backed by a test`}
-            >
-              <FlaskConical className="h-2.5 w-2.5" />
-              {h.verified}
             </span>
           );
         })()}

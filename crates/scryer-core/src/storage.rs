@@ -279,13 +279,13 @@ pub fn write_planned_raw_at(r: &ModelRef, data: &str) -> Result<(), String> {
 }
 
 /// The seeded (clean) plan serialization: the committed model with its
-/// single-home `source_map`/`verify_map`/`boundaries` cleared. A fresh plan
+/// single-home `source_map`/`test_map`/`boundaries` cleared. A fresh plan
 /// adds nothing, so it starts with no anchors of its own — the working view
 /// reads committed's directly.
 fn seeded_plan_json(r: &ModelRef) -> Result<String, String> {
     let mut model = read_model_at(r)?;
     model.source_map.clear();
-    model.verify_map.clear();
+    model.test_map.clear();
     model.boundaries.clear();
     serde_json::to_string_pretty(&model).map_err(|e| e.to_string())
 }
@@ -365,11 +365,11 @@ pub fn ensure_planned_at(r: &ModelRef) -> Result<(), String> {
 /// picked. Returns whether anything was stripped.
 fn strip_shadow_entries(committed: &ScryModel, planned: &mut ScryModel) -> bool {
     let before =
-        planned.source_map.len() + planned.verify_map.len() + planned.boundaries.len();
+        planned.source_map.len() + planned.test_map.len() + planned.boundaries.len();
     planned.source_map.retain(|k, v| committed.source_map.get(k) != Some(v));
-    planned.verify_map.retain(|k, v| committed.verify_map.get(k) != Some(v));
+    planned.test_map.retain(|k, v| committed.test_map.get(k) != Some(v));
     planned.boundaries.retain(|k, v| committed.boundaries.get(k) != Some(v));
-    before != planned.source_map.len() + planned.verify_map.len() + planned.boundaries.len()
+    before != planned.source_map.len() + planned.test_map.len() + planned.boundaries.len()
 }
 
 /// One-time migration for drafts minted before plan seeding: strip the shadow
@@ -468,11 +468,11 @@ pub fn working_view(committed: &ScryModel, planned: &ScryModel) -> ScryModel {
             view.source_map.entry(id.clone()).or_insert_with(|| locs.clone());
         }
     }
-    // verify_map is keyed by responsibility id only (a test backs a claim,
+    // test_map is keyed by responsibility id only (a test backs a claim,
     // never a declaration site).
-    for (id, locs) in &committed.verify_map {
+    for (id, locs) in &committed.test_map {
         if resp_ids.contains(id.as_str()) {
-            view.verify_map.entry(id.clone()).or_insert_with(|| locs.clone());
+            view.test_map.entry(id.clone()).or_insert_with(|| locs.clone());
         }
     }
     view
@@ -671,11 +671,11 @@ mod tests {
             "resp-2".into(),
             vec![serde_json::from_value(serde_json::json!({ "pattern": "gone.rs" })).unwrap()],
         );
-        committed.verify_map.insert(
+        committed.test_map.insert(
             "resp-1".into(),
             vec![serde_json::from_value(serde_json::json!({ "pattern": "keep_test.rs" })).unwrap()],
         );
-        committed.verify_map.insert(
+        committed.test_map.insert(
             "resp-2".into(),
             vec![serde_json::from_value(serde_json::json!({ "pattern": "gone_test.rs" })).unwrap()],
         );
@@ -684,16 +684,16 @@ mod tests {
         let mut planned = committed.clone();
         planned.nodes.retain(|n| n.id != "gone");
         planned.source_map.clear();
-        planned.verify_map.clear();
+        planned.test_map.clear();
         planned.boundaries.clear();
 
         let view = working_view(&committed, &planned);
         assert!(view.boundaries.contains_key("keep"), "live node's boundary overlays");
         assert!(view.source_map.contains_key("resp-1"), "live claim's anchor overlays");
-        assert!(view.verify_map.contains_key("resp-1"), "live claim's verify entry overlays");
+        assert!(view.test_map.contains_key("resp-1"), "live claim's test entry overlays");
         assert!(!view.boundaries.contains_key("gone"), "plan-deleted node's boundary does not");
         assert!(!view.source_map.contains_key("resp-2"), "plan-deleted claim's anchor does not");
-        assert!(!view.verify_map.contains_key("resp-2"), "plan-deleted claim's verify entry does not");
+        assert!(!view.test_map.contains_key("resp-2"), "plan-deleted claim's test entry does not");
         let warnings = validate::validate(&view);
         assert!(
             warnings.iter().all(|w| !w.contains("unknown")),
@@ -717,7 +717,7 @@ mod tests {
             "resp-1".into(),
             vec![serde_json::from_value(serde_json::json!({ "pattern": "a.rs" })).unwrap()],
         );
-        m.verify_map.insert(
+        m.test_map.insert(
             "resp-1".into(),
             vec![serde_json::from_value(serde_json::json!({ "pattern": "a_test.rs" })).unwrap()],
         );
@@ -728,7 +728,7 @@ mod tests {
         assert_eq!(seeded.nodes.len(), 1, "structure carries over");
         assert!(
             seeded.source_map.is_empty()
-                && seeded.verify_map.is_empty()
+                && seeded.test_map.is_empty()
                 && seeded.boundaries.is_empty(),
             "no shadow anchors in the fallback"
         );
@@ -748,7 +748,7 @@ mod tests {
         m.boundaries.insert("a".into(), vec![Source { pattern: "a/**".into(), comment: None }]);
         m.source_map.insert("resp-1".into(), loc("same.rs"));
         m.source_map.insert("resp-2".into(), loc("committed.rs"));
-        m.verify_map.insert("resp-1".into(), loc("same_test.rs"));
+        m.test_map.insert("resp-1".into(), loc("same_test.rs"));
         write_model_at(&r, &m).unwrap();
 
         // A pre-seeding draft: full shadow of committed, plus one diverged entry
@@ -762,7 +762,7 @@ mod tests {
         assert!(heal_shadow_draft(&r).unwrap(), "a dirty draft reports healed");
         let healed = read_planned_at(&r).unwrap();
         assert!(!healed.source_map.contains_key("resp-1"), "value-equal shadow stripped");
-        assert!(!healed.verify_map.contains_key("resp-1"), "value-equal verify shadow stripped");
+        assert!(!healed.test_map.contains_key("resp-1"), "value-equal test-entry shadow stripped");
         assert!(!healed.boundaries.contains_key("a"), "value-equal boundary stripped");
         assert_eq!(
             healed.source_map.get("resp-2"),

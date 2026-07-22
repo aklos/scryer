@@ -1,10 +1,17 @@
 pub(crate) const INSTRUCTIONS: &str = "\
 This project has a scryer architecture model alongside its code: a tree of what each part is \
-RESPONSIBLE for, mapped to the source that implements it. It is the user's authored spec — what the \
-system must do and why. It is NOT optional background. While a model exists, you work through it: \
-plan a change in the model FIRST, then write code to match. Do not start editing code for a \
-behaviour change without consulting the model — and update it first when the change alters what it \
+RESPONSIBLE for, mapped to the source that implements it, and to the TESTS attached to each claim. \
+It is the user's authored spec — what the system must do and why. It is NOT optional background. \
+While a model exists, you work through it: plan a change in the model FIRST, get the user's \
+sign-off, then write code — and its tests — to match. Do not start editing code for a behaviour \
+change without consulting the model, and update the model first when the change alters what it \
 claims (the Proportionality section below draws that line).\n\
+\n\
+A claim either HAS tests attached or it DOESN'T, and that binary is the model's PRIMARY signal: an \
+attached test is the one artifact that attempts to hold the code to the claim's words, so \
+attaching tests as you implement is not a follow-up chore — it is part of implementing. Scryer \
+records attachment only (it never runs tests, never certifies what they prove); the `untested` \
+count in every status line is your standing work signal.\n\
 \n\
 ## Every task that changes behaviour\n\
 1. ORIENT — figure out which phase you're in first. `get_health` reports how well the COMMITTED \
@@ -29,16 +36,25 @@ the plan (parallel sessions, a dev on the canvas), first name YOUR task: `set_ch
 opens a named change and your plan writes tag to it automatically, keeping workstreams separable — \
 resume a prior session's change with `set_change {change_id}` (listed in `get_pending`'s \
 `openChanges`). Quick serial edits can skip this and go unfiled.\n\
-3. BUILD — implement the code to that plan.\n\
-4. CLOSE — `mark_implemented` what you built (folds it from the plan into the committed model), \
+3. SIGN-OFF — the plan is a proposal on the user's canvas; before building it, tell the user \
+what you planned and get their go-ahead. The user owns the spec — skip this only when they already \
+approved the change in this conversation or explicitly told you to run ahead.\n\
+4. BUILD — implement the code to that plan, responsibility by responsibility, WITH ITS TESTS: for \
+each testable (When/While/If) claim you implement, the statement already names the trigger, state, \
+or failure to arrange and the response to assert — write that test in the project's own suite as \
+part of the same work. On symbol-level claims the test is MANDATORY (rule 22); at higher altitudes \
+attach the kind of test that fits (component → integration, container → API/service, system → \
+end-to-end).\n\
+5. CLOSE — `mark_implemented` what you built (folds it from the plan into the committed model), \
 passing `anchors` so fold + anchor is one atomic call, and `flag_drift` anything the code does that \
-the plan didn't capture. Link each claim's backing test with `verifiedBy` in the same call \
-(`pattern` = test file, `symbol` = the test function) — the claim then reads as test-backed in \
+the plan didn't capture. ATTACH each claim's test with `tests` in the same call \
+(`pattern` = test file, `symbol` = the test function) — the claim then reads as tested in \
 health, and the test's fingerprint is watched like any anchor. For a claim in a When/While/If form \
-the test is EXPECTED (rule 22): the statement already names the trigger/state/failure to arrange \
-and the response to assert, so construct that test as part of the build and attach it here — \
-health counts such claims without one as `untested`. Ubiquitous claims stay a judgment call; never \
-attach a test that doesn't genuinely demonstrate its claim just to clear the counter. The fold response ends with a scoped post-flight (what's still pending on \
+the test is EXPECTED — mandatory on symbol hosts (rule 22): the statement already names the \
+trigger/state/failure to arrange and the response to assert, so write that test as part of the \
+build and attach it here — health counts such claims without one as `untested`. Ubiquitous claims \
+stay a judgment call; never \
+attach a test that doesn't genuinely exercise its claim just to clear the counter. The fold response ends with a scoped post-flight (what's still pending on \
 the node, unanchored claims, new warnings) — act on it; a separate `validate_model` run is for \
 structural sessions that touched many nodes, not for every fold. You need not finish a whole node \
 before committing: when you build \
@@ -50,7 +66,9 @@ completeness in `get_health` — anchored primitives over authored ones — the 
 layered build, never a reason to withhold the skeleton (rules 18-19). Never anchor a claim you have \
 not implemented: anchoring is the build checkpoint, which is what makes the completeness figure \
 trustworthy. If you opened a change, `mark_implemented {change}` folds exactly its entries; when \
-the last one folds the change closes and its rationale is recorded in the history log.\n\
+the last one folds the change closes and its rationale is recorded in the history log. Then \
+reconcile and continue: `reconcile_drift` advances the anchor once the scope is clean, and the \
+next responsibility starts the loop again at BUILD.\n\
 \n\
 If no model exists yet, build one first: `read_codebase` to see the codebase, then build top-down \
 (`fill_container` commits an existing container's subtree at once). Then work the loop above.\n\

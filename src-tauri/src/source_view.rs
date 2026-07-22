@@ -3,7 +3,12 @@ use std::path::PathBuf;
 use crate::{highlight, symbols};
 
 #[tauri::command]
-pub(crate) fn open_in_editor(file: String, line: Option<u32>, project_path: Option<String>) -> Result<(), String> {
+pub(crate) fn open_in_editor(
+    file: String,
+    line: Option<u32>,
+    symbol: Option<String>,
+    project_path: Option<String>,
+) -> Result<(), String> {
     // Resolve absolute path
     let path = {
         let p = PathBuf::from(&file);
@@ -21,6 +26,14 @@ pub(crate) fn open_in_editor(file: String, line: Option<u32>, project_path: Opti
     if !path.exists() {
         return Err(format!("File not found: {}", path.display()));
     }
+
+    // A symbol-only anchor (code identifier or a test's name string) still
+    // deserves a landing line: resolve it the way the peek does.
+    let line = line.or_else(|| {
+        let sym = symbol.as_deref().filter(|s| !s.is_empty())?;
+        let source = std::fs::read_to_string(&path).ok()?;
+        crate::symbols::resolve(&path, &source, sym, None).map(|(start, _)| start)
+    });
 
     let path_str = path.to_string_lossy();
 

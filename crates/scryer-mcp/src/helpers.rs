@@ -465,6 +465,10 @@ pub(crate) struct StatusCounts {
     pub carriers: usize,
     /// Open changes in the plan's ledger — named workstreams in flight.
     pub open_changes: usize,
+    /// Testable claims with no test attached, whole-model (health's
+    /// `untested` total) — the primary work signal, kept ambient in the
+    /// header so the agent sees it move without re-polling get_health.
+    pub untested: u32,
     /// None until a reconcile baseline exists — drift and anchor states have
     /// nothing to measure against, and reporting zeros would fake certainty.
     pub baseline: Option<BaselineCounts>,
@@ -486,8 +490,10 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
     let pending = pending_change_count(&committed, &planned);
     let carriers = scryer_core::diff::plan_carrier_count(&committed, &planned);
     let open_changes = planned.changes.len();
+    let untested =
+        scryer_core::health::compute_health(&committed, Some(&planned), None).totals.untested;
     if !model_ref.sync_path().exists() {
-        return Some(StatusCounts { pending, carriers, open_changes, baseline: None });
+        return Some(StatusCounts { pending, carriers, open_changes, untested, baseline: None });
     }
     let sync = scryer_core::read_sync_state(model_ref);
     let scopes =
@@ -503,6 +509,7 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
         pending,
         carriers,
         open_changes,
+        untested,
         baseline: Some(BaselineCounts {
             drift_scopes: scopes,
             anchors_changed: changed,
@@ -511,10 +518,12 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
     })
 }
 
-/// One-line loop-state header for write responses — `plan: N pending · drift:
-/// N scope(s) · anchors: N changed, N broken` — so the model's state stays
-/// ambient across a coding session without the agent re-polling the
-/// orientation tools. Same locking contract as [`status_counts`].
+/// One-line loop-state header for write responses — `plan: N pending ·
+/// untested: N · drift: N scope(s) · anchors: N changed, N broken` — so the
+/// model's state stays ambient across a coding session without the agent
+/// re-polling the orientation tools. `untested` (testable claims with no test
+/// attached) rides directly after the plan count because it is the primary
+/// work signal. Same locking contract as [`status_counts`].
 pub(crate) fn status_header(model_ref: &ModelRef) -> Option<String> {
     let c = status_counts(model_ref)?;
     // Open changes ride the header only when the ledger is in use — the
@@ -527,22 +536,22 @@ pub(crate) fn status_header(model_ref: &ModelRef) -> Option<String> {
     Some(match c.baseline {
         // Never reconciled: drift/anchors have no baseline to report against.
         None => format!(
-            "plan: {} pending · drift: no reconcile anchor yet{changes}",
-            c.pending
+            "plan: {} pending · untested: {} · drift: no reconcile anchor yet{changes}",
+            c.pending, c.untested
         ),
         Some(b) => format!(
-            "plan: {} pending · drift: {} scope(s) · anchors: {} changed, {} broken{changes}",
-            c.pending, b.drift_scopes, b.anchors_changed, b.anchors_broken
+            "plan: {} pending · untested: {} · drift: {} scope(s) · anchors: {} changed, {} broken{changes}",
+            c.pending, c.untested, b.drift_scopes, b.anchors_changed, b.anchors_broken
         ),
     })
 }
 
 /// Which claim-keyed anchor map a batch of entries writes: implementation
-/// anchors (`source_map`) or backing tests (`verify_map`).
+/// anchors (`source_map`) or attached tests (`test_map`).
 #[derive(Clone, Copy)]
 pub(crate) enum RespAnchorDim {
     Source,
-    Verify,
+    Test,
 }
 
 impl RespAnchorDim {
@@ -552,7 +561,7 @@ impl RespAnchorDim {
     ) -> &'m mut std::collections::HashMap<String, Vec<scryer_core::SourceLocation>> {
         match self {
             RespAnchorDim::Source => &mut m.source_map,
-            RespAnchorDim::Verify => &mut m.verify_map,
+            RespAnchorDim::Test => &mut m.test_map,
         }
     }
 }
@@ -560,14 +569,14 @@ impl RespAnchorDim {
 /// Apply responsibility anchor entries (the `entries` shape of
 /// `update_source_map`) to their SINGLE home: the committed model owns every
 /// committed claim's anchor; the planned draft holds anchors only for claims it
-/// ADDS. `dim` picks the dimension — implementation anchors or backing tests —
+/// ADDS. `dim` picks the dimension — implementation anchors or attached tests —
 /// which share the routing and normalization verbatim. Whole-symbol line ranges
 /// are normalized to symbol-only anchors (the honest encoding for "this whole
-/// definition" — for a verify entry, "this whole test"), reported in the
+/// definition" — for a test entry, "this whole test"), reported in the
 /// returned notes. Mutates the models in place; the CALLER validates ids
 /// beforehand and persists both layers afterwards (writing `committed` only
 /// when the returned flag is true). Shared by `update_source_map` and
-/// `mark_implemented`'s fold-time `anchors`/`verified_by`.
+/// `mark_implemented`'s fold-time `anchors`/`tests`.
 pub(crate) fn apply_resp_anchor_entries(
     project: &std::path::Path,
     planned: &mut ScryModel,

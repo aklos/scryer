@@ -229,14 +229,14 @@ pub(crate) fn check_report(
 
     // 3) Baseline-free existence sweep: an exact-path anchor whose file is
     //    gone fails even before any reconcile baseline exists. Globs are
-    //    completeness's domain (get_health), not a gate. Verify anchors sweep
-    //    too, under their namespaced key — a claim's backing test that no
+    //    completeness's domain (get_health), not a gate. Test anchors sweep
+    //    too, under their namespaced key — a claim's attached test that no
     //    longer exists is exactly what a CI gate is for.
     let mut keyed: Vec<(String, &Vec<scryer_core::SourceLocation>)> = working
         .source_map
         .iter()
         .map(|(k, v)| (k.clone(), v))
-        .chain(working.verify_map.iter().map(|(k, v)| (scryer_core::verify_key(k), v)))
+        .chain(working.test_map.iter().map(|(k, v)| (scryer_core::test_key(k), v)))
         .collect();
     keyed.sort_by(|a, b| a.0.cmp(&b.0));
     for (key, locs) in keyed {
@@ -516,11 +516,11 @@ mod tests {
         );
     }
 
-    /// A claim's backing test that no longer exists gates like any exact-path
-    /// anchor, under its `verify:` key — a "test-backed" claim whose test is
+    /// A claim's attached test that no longer exists gates like any exact-path
+    /// anchor, under its `test:` key — a "test-backed" claim whose test is
     /// gone is exactly what a CI gate exists to catch.
     #[test]
-    fn check_fails_on_missing_verify_test_file() {
+    fn check_fails_on_missing_attached_test_file() {
         let dir = tempfile::tempdir().unwrap();
         let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
@@ -537,7 +537,7 @@ mod tests {
             "r-1".into(),
             vec![serde_json::from_value(serde_json::json!({ "pattern": "src/auth.rs" })).unwrap()],
         );
-        m.verify_map.insert(
+        m.test_map.insert(
             "r-1".into(),
             vec![serde_json::from_value(serde_json::json!({ "pattern": "tests/gone.rs" }))
                 .unwrap()],
@@ -548,8 +548,8 @@ mod tests {
         assert!(
             rep.failures
                 .iter()
-                .any(|f| f.contains("verify:r-1") && f.contains("tests/gone.rs")),
-            "missing backing test gates: {:?}",
+                .any(|f| f.contains("test:r-1") && f.contains("tests/gone.rs")),
+            "missing attached test gates: {:?}",
             rep.failures
         );
     }

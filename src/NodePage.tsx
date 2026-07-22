@@ -28,12 +28,12 @@ import {
 import type { Node } from "./viewmodel";
 import {
   effectiveSourceMap,
-  effectiveVerifyMap,
+  effectiveTestMap,
   isDataShape,
   isNodeEmpty,
   nextResponsibilityId,
 } from "./viewmodel";
-import { completenessBadge, verifyStatesOf } from "./health";
+import { completenessBadge, testStatesOf } from "./health";
 import { kindIcon, typeTag } from "./kindIcon";
 import { lookupIcon } from "./IconPicker";
 import { ConnectionsSection, ImpliedConnectionsSection } from "./ConnectionsSection";
@@ -155,9 +155,9 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const KindIcon = lookupIcon(node.icon) ?? kindIcon(node);
 
   const sourceMap = effectiveSourceMap(committed, model);
-  const verifyMap = effectiveVerifyMap(committed, model);
-  // Per-claim fingerprint state of the backing test (verify: observations).
-  const verifyStates = useMemo(() => verifyStatesOf(report), [report]);
+  const testMap = effectiveTestMap(committed, model);
+  // Per-claim fingerprint state of the attached test (test: observations).
+  const testStates = useMemo(() => testStatesOf(report), [report]);
   const dataShape = isDataShape(node);
   const resps = node.responsibilities ?? [];
   // The committed copy of this node's claims — the diff base for the Overview.
@@ -225,41 +225,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
             Backing code removed — this node and its subtree have no code
           </Ambox>
         )}
-        {drift && (
-          <div data-drift-banner>
-          <Ambox
-            tone="warning"
-            icon={<GitCompare className="h-3 w-3" />}
-            actions={
-              <>
-                {onCheckDrift && (
-                  <button
-                    type="button"
-                    onClick={onCheckDrift}
-                    title="Run a semantic drift check across the whole project"
-                    className={NOTICE_ACTION}
-                  >
-                    Check
-                  </button>
-                )}
-                {onDismissDrift && (
-                  <button
-                    type="button"
-                    onClick={() => onDismissDrift(node.id)}
-                    title="Mark this node and its children reconciled, without a semantic check"
-                    className={NOTICE_ACTION}
-                  >
-                    Dismiss
-                  </button>
-                )}
-              </>
-            }
-          >
-            Code changed ({drift.changedFiles.length} file
-            {drift.changedFiles.length === 1 ? "" : "s"}) — claims may not hold
-          </Ambox>
-          </div>
-        )}
         {staleCount > 0 && (
           <Ambox tone="warning" icon={<Flag className="h-3 w-3" />}>
             {staleCount} stale claim{staleCount === 1 ? "" : "s"} to review below
@@ -274,6 +239,38 @@ function NodePageBody(props: PageProps & { node: Node }) {
           <Ambox tone="warning" icon={<CircleDashed className="h-3 w-3" />}>
             Empty symbol — no responsibilities or properties
           </Ambox>
+        )}
+        {drift && (
+          <div
+            data-drift-banner
+            className="flex items-center gap-2 px-1 text-2xs text-[var(--text-muted)]"
+          >
+            <GitCompare className="h-3 w-3 shrink-0" />
+            <span className="min-w-0 flex-1">
+              Code changed since the last reconcile ({drift.changedFiles.length}{" "}
+              file{drift.changedFiles.length === 1 ? "" : "s"})
+            </span>
+            {onCheckDrift && (
+              <button
+                type="button"
+                onClick={onCheckDrift}
+                title="Run a semantic drift check across the whole project"
+                className={NOTICE_ACTION}
+              >
+                Check
+              </button>
+            )}
+            {onDismissDrift && (
+              <button
+                type="button"
+                onClick={() => onDismissDrift(node.id)}
+                title="Mark this node and its children reconciled, without a semantic check"
+                className={NOTICE_ACTION}
+              >
+                Dismiss
+              </button>
+            )}
+          </div>
         )}
       </>
     ) : null;
@@ -318,7 +315,14 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 <span className="text-[var(--text-ghost)]">·</span>
                 <button
                   type="button"
-                  onClick={() => void invoke("open_in_editor", { file: defFile, line: definition[0]?.line ?? null, projectPath })}
+                  onClick={() =>
+                    void invoke("open_in_editor", {
+                      file: defFile,
+                      line: definition[0]?.line ?? null,
+                      symbol: definition[0]?.symbol ?? null,
+                      projectPath,
+                    })
+                  }
                   title="Open in editor"
                   className="font-mono text-[var(--text-tertiary)] hover:text-blue-600 hover:underline dark:hover:text-blue-400"
                 >
@@ -328,7 +332,46 @@ function NodePageBody(props: PageProps & { node: Node }) {
             )}
             {/* Ground-truth gauges follow the identity run as bordered mono
                 chips — instruments, not prose, but in the same reading line
-                (right-aligned they float contextless at wide widths). */}
+                (right-aligned they float contextless at wide widths). Tests
+                lead: attachment is the primary signal, completeness the stage
+                gauge beside it. */}
+            {/* Tests attached. The fraction is testable claims WITH a test
+                over testable claims (When/While/If on code-backed hosts);
+                tests on ubiquitous claims count in the tooltip, not the
+                fraction. Shown whenever the subtree has anything to say — a
+                0/5 is exactly the state that must not hide. */}
+            {(() => {
+              const h = report?.health.nodes[node.id]?.subtree;
+              if (!h || (h.testable === 0 && h.tested === 0)) return null;
+              const covered = h.testable - h.untested;
+              const extra = h.tested - covered;
+              const bonus =
+                extra > 0
+                  ? `; ${extra} more test${extra === 1 ? "" : "s"} on always-active claims`
+                  : "";
+              if (h.testable === 0) {
+                return (
+                  <span
+                    className={GAUGE_CHIP}
+                    title={`${h.tested} claim${h.tested === 1 ? "" : "s"} in this subtree ${h.tested === 1 ? "has a test" : "have tests"} attached`}
+                  >
+                    <FlaskConical className="h-3 w-3" />
+                    {h.tested}
+                  </span>
+                );
+              }
+              return (
+                <span
+                  className={GAUGE_CHIP}
+                  title={`${covered} of ${h.testable} testable claim${h.testable === 1 ? "" : "s"} in this subtree ${covered === 1 && h.testable === 1 ? "has a test" : "have tests"} attached${bonus}`}
+                >
+                  <FlaskConical
+                    className={`h-3 w-3 ${h.untested > 0 ? "opacity-40" : ""}`}
+                  />
+                  {covered}/{h.testable}
+                </span>
+              );
+            })()}
             {(() => {
               const badge = completenessBadge(report?.completeness[node.id]);
               if (!badge) return null;
@@ -343,19 +386,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 >
                   <Anchor className={`h-3 w-3 ${badge.grounded ? "" : "opacity-40"}`} />
                   {badge.label}
-                </span>
-              );
-            })()}
-            {(() => {
-              const h = report?.health.nodes[node.id]?.subtree;
-              if (!h?.verified) return null;
-              return (
-                <span
-                  className={GAUGE_CHIP}
-                  title={`${h.verified} of ${h.responsibilities} claim${h.responsibilities === 1 ? "" : "s"} in this subtree backed by a test`}
-                >
-                  <FlaskConical className="h-3 w-3" />
-                  {h.verified}/{h.responsibilities}
                 </span>
               );
             })()}
@@ -454,8 +484,8 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   plannedHosts={plannedRespHosts(model)}
                   concerns={model.concerns ?? []}
                   sourceMap={sourceMap}
-                  verifyMap={verifyMap}
-                  verifyStates={verifyStates}
+                  testMap={testMap}
+                  testStates={testStates}
                   projectPath={projectPath}
                   leafHost={leafHost}
                   codeBackedHost={!node.external && node.kind !== "person"}

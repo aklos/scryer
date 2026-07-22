@@ -9,8 +9,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Anchor, ChevronRight, ExternalLink, Slash } from "lucide-react";
+import { Anchor, ChevronRight, ExternalLink, FlaskConical, Slash } from "lucide-react";
 import type { SourceLocation } from "./viewmodel";
+import type { AnchorState } from "./health";
 
 /** Whether a source anchor currently lands in real code — mirrors the backend
  *  `verify_anchor` command. Anything but `resolved` reads as a broken anchor. */
@@ -146,7 +147,7 @@ function SourceLine({
     };
   }, [anchored, deleted, projectPath, loc.pattern, loc.symbol, loc.line]);
   return (
-    <div className="font-mono text-2xs leading-relaxed text-[var(--text-tertiary)]">
+    <div className="font-mono text-2xs leading-relaxed text-[var(--text-muted)]">
       <button
         type="button"
         data-cam="resp-source"
@@ -157,13 +158,21 @@ function SourceLine({
         }`}
         title={anchored ? "Peek at the source" : "Whole-file mapping — no line anchor"}
       >
-        {anchored && (
+        {/* The chevron is the line's only lead glyph (peek affordance); a
+            second corner-arrow said nothing it doesn't. Unanchored lines keep
+            a spacer so all paths align. */}
+        {anchored ? (
           <ChevronRight
             className={`relative top-px h-3 w-3 shrink-0 text-[var(--text-ghost)] transition-transform ${
               open ? "rotate-90" : ""
             }`}
           />
+        ) : (
+          <span className="h-3 w-3 shrink-0" />
         )}
+        {/* The anchor LEADS the line, mirroring the test lines' leading flask —
+            the dimension marker is the first thing read on either line kind. */}
+        <AnchorMark status={deleted ? null : status} />
         <span
           className={
             deleted
@@ -171,31 +180,250 @@ function SourceLine({
               : broken
                 ? "text-[var(--text-muted)] decoration-[var(--text-ghost)] decoration-dotted underline"
                 : anchored
-                  ? "text-blue-600 group-hover/src:underline dark:text-blue-400"
-                  : // A whole-file mapping opens nothing — it must not dress
-                    // like the anchored links beside it.
-                    "text-[var(--text-tertiary)]"
+                  ? // Quiet at rest — the claim above is the headline, the path a
+                    // footnote. The link look (blue + underline) surfaces on hover.
+                    "text-[var(--text-muted)] group-hover/src:text-blue-600 group-hover/src:underline dark:group-hover/src:text-blue-400"
+                  : // A whole-file mapping opens nothing — no hover link look.
+                    "text-[var(--text-muted)]"
           }
         >
-          ↳ {loc.pattern}
+          {loc.pattern}
           {range ? `:${range}` : ""}
         </span>
-        {anchored && !deleted && status && <AnchorMark status={status} />}
       </button>
       {open && anchored && <InlinePeek loc={loc} projectPath={projectPath} bleed={bleed} />}
     </div>
   );
 }
 
-/** The anchor indicator beside a source ref. A plain anchor means the ref lands
- *  in real code; a struck-through anchor means the symbol or file it points at
- *  isn't there. The slash carries the meaning — both states stay monochrome. */
-function AnchorMark({ status }: { status: AnchorStatus }) {
-  const broken = status !== "resolved";
+// --- inline per-claim attached tests ------------------------------------------
+
+/**
+ * A claim's attached tests, with the same first-class anatomy as its source
+ * anchors: one `↳ file · "test name"` line per attached test, each expanding
+ * to a code peek in place and verified live against the codebase. The flask
+ * mark carries the test dimension; regression states tint the line (orange =
+ * the test's content changed since the last reconcile, red = the test no
+ * longer resolves).
+ */
+export function ClaimTests({
+  locations,
+  state,
+  projectPath,
+  deleted,
+  bleed,
+}: {
+  locations: SourceLocation[];
+  /** Fingerprint verdict from the last hook pass (`test:` observations). */
+  state: AnchorState | null;
+  projectPath: string | null;
+  deleted?: boolean;
+  bleed?: string;
+}) {
+  if (locations.length === 0) return null;
+  // One line per test FILE: several tests of one claim usually live in the
+  // same spec file, and identical repeated tokens differentiate nothing. A
+  // merged line carries a ×N count and its peek opens every test stacked.
+  const byFile = new Map<string, SourceLocation[]>();
+  for (const loc of locations) {
+    const group = byFile.get(loc.pattern) ?? [];
+    group.push(loc);
+    byFile.set(loc.pattern, group);
+  }
+  return (
+    // Same level as the source anchors: a test exercises the CLAIM, not any
+    // one of its implementation sites, so the two dimensions are siblings —
+    // the leading flask (vs the anchors' trailing ⚓) tells them apart.
+    <div className="mt-0.5 flex flex-col gap-0.5">
+      {[...byFile.values()].map((locs, i) => (
+        <TestLine key={i} locs={locs} state={state} projectPath={projectPath} deleted={deleted} bleed={bleed} />
+      ))}
+    </div>
+  );
+}
+
+function TestLine({
+  locs,
+  state,
+  projectPath,
+  deleted,
+  bleed,
+}: {
+  /** The claim's attached tests in ONE file (grouped by the caller). */
+  locs: SourceLocation[];
+  state: AnchorState | null;
+  projectPath: string | null;
+  deleted?: boolean;
+  bleed?: string;
+}) {
+  const anchoredLocs = locs.filter((l) => Boolean(l.symbol) || l.line != null);
+  const anchored = anchoredLocs.length > 0;
+  const file = locs[0].pattern;
+  const [open, setOpen] = useState(false);
+  // Which of a merged line's tests the peek shows — the tab strip's selection.
+  const [tab, setTab] = useState(0);
+  const [status, setStatus] = useState<AnchorStatus | null>(null);
+
+  // Live check, same as a source anchor: the backend resolves a test's name
+  // string through the same lookup as a code identifier. A merged line is as
+  // healthy as its weakest member — one unresolvable test marks the group.
+  const anchorKey = JSON.stringify(anchoredLocs.map((l) => [l.symbol, l.line]));
+  useEffect(() => {
+    if (!anchored || deleted) return;
+    if (!projectPath) {
+      setStatus("resolved");
+      return;
+    }
+    let cancelled = false;
+    Promise.all(
+      anchoredLocs.map((l) =>
+        invoke<AnchorStatus>("verify_anchor", {
+          projectPath,
+          file: l.pattern,
+          symbol: l.symbol ?? null,
+          line: l.line ?? null,
+        }),
+      ),
+    )
+      .then(
+        (all) => !cancelled && setStatus(all.find((s) => s !== "resolved") ?? "resolved"),
+      )
+      .catch(() => !cancelled && setStatus(null));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- anchorKey covers anchoredLocs
+  }, [anchored, deleted, projectPath, file, anchorKey]);
+
+  // Two inputs, one verdict: the live resolve (does it land right now) and
+  // the fingerprint observation (did it change since the reconcile). Gone
+  // outranks changed — an unresolvable test can't be "just edited".
+  const gone =
+    (status != null && status !== "resolved") || state === "broken" || state === "fileMissing";
+  const changed = !gone && state === "changed";
+  // The visible token is MINIMAL — one line per file, no test names. The
+  // claim above already says what the tests exercise; names and run command
+  // live in the tooltip, and the peek shows the tests themselves.
+  const detail = [
+    ...locs.map((l) => (l.symbol ? `“${l.symbol}”` : null)),
+    file,
+    locs[0].command ? `run: ${locs[0].command}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const noun = locs.length > 1 ? `${locs.length} attached tests` : "Attached test";
+  const title = deleted
+    ? `${noun} of a claim removed in the plan\n${detail}`
+    : gone
+      ? `An attached test is GONE — it no longer resolves. Attach a live test, or clear the entry.\n${detail}`
+      : changed
+        ? `An attached test CHANGED since the last reconcile — check it still exercises this claim.\n${detail}`
+        : `${noun} — click to peek\n${detail}`;
+
+  return (
+    <div className="font-mono text-2xs leading-relaxed text-[var(--text-muted)]">
+      <button
+        type="button"
+        data-cam="resp-test"
+        disabled={!anchored}
+        onClick={() => anchored && setOpen((o) => !o)}
+        className={`group/src inline-flex max-w-full items-baseline gap-1 text-left ${
+          anchored ? "" : "cursor-default"
+        }`}
+        title={title}
+      >
+        {anchored ? (
+          <ChevronRight
+            className={`relative top-px h-3 w-3 shrink-0 text-[var(--text-ghost)] transition-transform ${
+              open ? "rotate-90" : ""
+            }`}
+          />
+        ) : (
+          <span className="h-3 w-3 shrink-0" />
+        )}
+        {/* The flask LEADS the line — the dimension is the first thing read,
+            so test lines separate from anchor lines at a glance while sitting
+            at the same level (both belong to the claim). No test-name suffix:
+            names restate the claim the line sits under, so the claim IS the
+            identifier (names live in the tooltip). */}
+        <span
+          className={`relative top-px inline-block h-3 w-3 shrink-0 ${
+            deleted
+              ? "text-[var(--text-muted)]"
+              : gone
+                ? "text-red-600 dark:text-red-400"
+                : changed
+                  ? "text-orange-600 dark:text-orange-400"
+                  : "text-[var(--text-muted)]"
+          }`}
+        >
+          <FlaskConical className="h-3 w-3" />
+          {gone && !deleted && <Slash className="absolute inset-0 h-3 w-3" />}
+        </span>
+        <span
+          className={
+            deleted
+              ? "text-[var(--text-muted)] line-through decoration-red-400/50"
+              : gone
+                ? "text-red-700 decoration-red-400/50 decoration-dotted underline dark:text-red-400"
+                : changed
+                  ? "text-orange-700 group-hover/src:underline dark:text-orange-400"
+                  : anchored
+                    ? // Same rest/hover treatment as the source anchors: grey
+                      // footnote at rest, link look on hover.
+                      "text-[var(--text-muted)] group-hover/src:text-blue-600 group-hover/src:underline dark:group-hover/src:text-blue-400"
+                    : "text-[var(--text-muted)]"
+          }
+        >
+          {file}
+        </span>
+        {locs.length > 1 && <span className="text-[var(--text-muted)]">×{locs.length}</span>}
+      </button>
+      {/* The tab strip: a merged line's tests, one peek at a time. The names —
+          tooltip-only on the closed line — surface here, where they're doing a
+          job (picking a test) instead of restating the claim. A lone test
+          needs no strip: the peek just opens, as before. */}
+      {open && anchoredLocs.length > 1 && (
+        <div className="mt-0.5 flex flex-wrap items-center gap-1">
+          {anchoredLocs.map((l, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => setTab(i)}
+              className={`max-w-[280px] truncate rounded px-1.5 py-0.5 text-left font-mono text-2xs ${
+                i === Math.min(tab, anchoredLocs.length - 1)
+                  ? "bg-[var(--surface-active)] text-[var(--text)]"
+                  : "text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+              }`}
+              title={l.symbol ?? `${file}:${l.line}`}
+            >
+              {l.symbol ?? `line ${l.line}`}
+            </button>
+          ))}
+        </div>
+      )}
+      {open && anchoredLocs.length > 0 && (
+        <InlinePeek
+          loc={anchoredLocs[Math.min(tab, anchoredLocs.length - 1)]}
+          projectPath={projectPath}
+          bleed={bleed}
+        />
+      )}
+    </div>
+  );
+}
+
+/** The anchor mark leading a source ref — the dimension marker (code anchor,
+ *  vs the test lines' flask). A plain anchor means the ref lands in real code;
+ *  a struck-through anchor means the symbol or file it points at isn't there.
+ *  The slash carries the meaning — both states stay monochrome. `null` (still
+ *  verifying, or a deleted claim's ref) reads as the plain anchor. */
+function AnchorMark({ status }: { status: AnchorStatus | null }) {
+  const broken = status != null && status !== "resolved";
   return (
     <span
       className="relative top-px inline-block h-3 w-3 shrink-0 text-[var(--text-muted)]"
-      title={ANCHOR_TITLE[status]}
+      title={status ? ANCHOR_TITLE[status] : undefined}
     >
       <Anchor className="h-3 w-3" />
       {broken && <Slash className="absolute inset-0 h-3 w-3" />}
@@ -284,7 +512,14 @@ function InlinePeek({
         <div className="relative my-1.5">
           <button
             type="button"
-            onClick={() => void invoke("open_in_editor", { file: loc.pattern, line: loc.line ?? null, projectPath })}
+            onClick={() =>
+              void invoke("open_in_editor", {
+                file: loc.pattern,
+                line: loc.line ?? null,
+                symbol: loc.symbol ?? null,
+                projectPath,
+              })
+            }
             className="absolute right-2 top-1.5 z-10 inline-flex shrink-0 items-center gap-1 rounded bg-[var(--surface-overlay)] px-1.5 py-0.5 font-mono text-2xs text-blue-600 backdrop-blur-sm hover:underline dark:text-blue-400"
           >
             open <ExternalLink className="h-3 w-3" />

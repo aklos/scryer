@@ -577,7 +577,7 @@ export function NeedsReviewPage({
                       <span className="min-w-0 flex-1 truncate font-mono text-2xs text-[var(--text-muted)]">
                         {a.symbol ?? a.file}
                       </span>
-                      {a.key.startsWith("verify:") && (
+                      {a.key.startsWith("test:") && (
                         <span
                           className="shrink-0 text-2xs text-[var(--text-muted)]"
                           title="This is a claim's BACKING TEST, not its implementation — the test changed or vanished."

@@ -1,13 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { invoke } from "@tauri-apps/api/core";
-import { CornerDownRight, FlaskConical, Tag } from "lucide-react";
+import { CircleDashed, CornerDownRight, FlaskConical, Tag } from "lucide-react";
 import type { ConcernDef, ScryModel, Responsibility, SourceLocation } from "../viewmodel";
 import { STANDARD_CONCERNS } from "../viewmodel";
 import { lookupIcon } from "../IconPicker";
 import type { Editor } from "../editor";
 import type { AnchorState } from "../health";
-import { FLAG_COLORS, VERIFY_PILLS } from "../statusColors";
+import { FLAG_COLORS } from "../statusColors";
 import {
   buildElementDiff,
   CHANGE_OF,
@@ -19,7 +18,7 @@ import {
   DRIFT_RULE,
   DRIFT_HINT,
 } from "../diffkit";
-import { ClaimSource, respElementId } from "../SourceSection";
+import { ClaimSource, ClaimTests, respElementId } from "../SourceSection";
 import { ANCHOR_CALM, earsTestable, hasMarkup, lintEars, MarkupMirror, serializeEars, StatementText, stripMarkup } from "../markup";
 import { usePageMenu, useCopyId, copyIdItem } from "../pageMenu";
 import {
@@ -89,31 +88,25 @@ function buildRespDiff(
  *  with a muted dot. Replaces the old ordinal, which renumbered on every
  *  regroup and meant nothing. */
 function ConcernGlyph({ slug, concerns }: { slug?: string; concerns: ConcernDef[] }) {
-  if (!slug) {
-    // Untagged core flow: a small dot drawn as a 14px SVG with the SAME classes
-    // a concern icon carries, so it shares the icons' exact baseline and box —
-    // the marker lane stays aligned whether a row is tagged or not. (A nested
-    // flex/text glyph shifts the baseline and floats out of the lane.)
-    return (
-      <span
-        className="inline-flex select-none justify-end pr-2 text-[var(--text-secondary)]"
-        title="core domain flow — no concern tag"
-      >
-        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 translate-y-[3px]" aria-hidden="true">
-          <circle cx="12" cy="12" r="3" fill="currentColor" />
-        </svg>
-      </span>
-    );
-  }
-  const entry = concerns.find((c) => c.slug === slug);
-  const description = entry?.description ?? STANDARD_CONCERNS.get(slug)?.description;
-  const Icon = lookupIcon(entry?.icon ?? STANDARD_CONCERNS.get(slug)?.icon ?? "Tag") ?? Tag;
+  const entry = slug ? concerns.find((c) => c.slug === slug) : undefined;
+  const description = slug
+    ? (entry?.description ?? STANDARD_CONCERNS.get(slug)?.description)
+    : undefined;
+  // Untagged core flow keeps a dashed-circle placeholder — an "empty slot"
+  // where a concern glyph would sit — in the SAME size and classes a concern
+  // icon carries, so the marker lane reads one visual system either way.
+  const Icon = slug
+    ? (lookupIcon(entry?.icon ?? STANDARD_CONCERNS.get(slug)?.icon ?? "Tag") ?? Tag)
+    : CircleDashed;
+  const title = slug
+    ? `concern: ${slug}${description ? ` — ${description}` : ""}`
+    : "core domain flow — no concern tag";
   return (
-    <span
-      className="inline-flex select-none justify-end pr-2 text-[var(--text-secondary)]"
-      title={`concern: ${slug}${description ? ` — ${description}` : ""}`}
-    >
-      <Icon className="h-3.5 w-3.5 translate-y-[2px]" />
+    <span className="inline-flex select-none justify-end pr-1.5 text-[var(--text)]" title={title}>
+      {/* absoluteStrokeWidth: at 16px lucide would scale its 2px stroke down
+          to a faint 1.33px — absolute keeps a full, pixel-aligned 2px so the
+          glyph reads bold and crisp in the lane. */}
+      <Icon absoluteStrokeWidth className="h-4 w-4 translate-y-[3px]" aria-hidden={!slug || undefined} />
     </span>
   );
 }
@@ -151,8 +144,8 @@ export function ResponsibilitiesSection({
   plannedHosts,
   concerns,
   sourceMap,
-  verifyMap,
-  verifyStates,
+  testMap,
+  testStates,
   projectPath,
   leafHost,
   codeBackedHost,
@@ -174,10 +167,10 @@ export function ResponsibilitiesSection({
   concerns: ConcernDef[];
   /** respId → source locations, for the inline `↳ file:range` peeks per claim. */
   sourceMap: Record<string, SourceLocation[]>;
-  /** respId → backing-test locations (the verify dimension). */
-  verifyMap: Record<string, SourceLocation[]>;
-  /** respId → fingerprint state of the backing test, when it regressed. */
-  verifyStates: Record<string, AnchorState>;
+  /** respId → attached-test locations (the test dimension). */
+  testMap: Record<string, SourceLocation[]>;
+  /** respId → fingerprint state of the attached test, when it regressed. */
+  testStates: Record<string, AnchorState>;
   projectPath: string | null;
   /** Whether claims here must anchor to source (leaf node). Structural hosts
    *  discharge through their subtree and never flag "unmapped". */
@@ -242,8 +235,8 @@ export function ResponsibilitiesSection({
               host={host}
               concerns={concerns}
               locations={sourceMap[row.resp.id] ?? []}
-              verifyLocations={verifyMap[row.resp.id] ?? []}
-              verifyState={verifyStates[row.resp.id] ?? null}
+              testLocations={testMap[row.resp.id] ?? []}
+              testState={testStates[row.resp.id] ?? null}
               projectPath={projectPath}
               leafHost={leafHost}
               codeBackedHost={codeBackedHost}
@@ -431,8 +424,8 @@ function RespDiffRow({
   host,
   concerns,
   locations,
-  verifyLocations,
-  verifyState,
+  testLocations,
+  testState,
   projectPath,
   leafHost,
   codeBackedHost,
@@ -445,10 +438,10 @@ function RespDiffRow({
   concerns: ConcernDef[];
   /** This claim's source locations — rendered inline with expandable peeks. */
   locations: SourceLocation[];
-  /** The claim's backing tests (verify dimension). */
-  verifyLocations: SourceLocation[];
-  /** Fingerprint state of the backing test, when it regressed since reconcile. */
-  verifyState: AnchorState | null;
+  /** The claim's attached tests (test dimension). */
+  testLocations: SourceLocation[];
+  /** Fingerprint state of the attached test, when it regressed since reconcile. */
+  testState: AnchorState | null;
   projectPath: string | null;
   leafHost: boolean;
   /** See {@link ResponsibilitiesSection}: gates "untested", structural hosts included. */
@@ -472,21 +465,21 @@ function RespDiffRow({
   // but anchors to no source is a blind spot. Added/vagrant claims are plan-only
   // or code-first, so they're never "unmapped".
   const unmapped = leafHost && locations.length === 0 && (kind === "unchanged" || kind === "reworded");
-  // The verification pill shows on live claims only — a deleted/relocated
-  // row's test link is context, not a badge.
-  const tested = !deleted && !relocated && verifyLocations.length > 0;
-  // A committed When/While/If claim with no backing test — demonstrable, but
-  // nothing demonstrates it (rule 22). Plan-added and vagrant claims don't
+  // A committed When/While/If claim with no attached test — demonstrable, but
+  // no test is attached (rule 22). Plan-added and vagrant claims don't
   // nag: the test comes at the build checkpoint, and code-first claims await
   // a verdict. Not gated on leafHost — structural claims back onto
   // integration tests.
   const untested =
     codeBackedHost &&
-    verifyLocations.length === 0 &&
+    testLocations.length === 0 &&
     (kind === "unchanged" || kind === "reworded") &&
     earsTestable(resp.statement);
-  const hasMeta = tested;
-
+  // The glyph's tested backing: a live claim with a test attached. Added claims
+  // never render their test dimension (see the bleed-spec comment below), and a
+  // deleted/relocated claim is leaving — backing its glyph would dress the
+  // departure as coverage.
+  const tested = kind !== "added" && !deleted && !relocated && testLocations.length > 0;
   const contentColor = deleted || relocated
     ? "text-[var(--text-muted)]"
     : kind === "unchanged"
@@ -545,70 +538,35 @@ function RespDiffRow({
             unmapped
           </span>
         )}
-        {untested && (
-          <span
-            className={`${VERIFY_PILLS.untested} ml-2 align-middle`}
-            title="This claim names a trigger, state, or failure a test could demonstrate — but no backing test is linked (rule 22)."
-          >
-            untested
-          </span>
-        )}
-
         {/* Bleed spec: undo the row's 18+22px gutter columns and the 180px
-            control lane, so the open peek spans the article column. */}
-        <ClaimSource
-          locations={locations}
-          projectPath={projectPath}
-          deleted={deleted}
-          bleed="-ml-10 -mr-[180px]"
-        />
-
-        {hasMeta && (
-          <span className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-2xs">
-            {tested && (() => {
-              const t = verifyLocations[0];
-              const where = `${t.pattern}${t.symbol ? ` \`${t.symbol}\`` : ""}`;
-              if (verifyState === "broken" || verifyState === "fileMissing") {
-                return (
-                  <span
-                    className={VERIFY_PILLS.gone}
-                    title={`The backing test is gone: ${where} no longer resolves. Re-link the claim to a live test, or clear the entry.`}
-                  >
-                    test gone
-                  </span>
-                );
-              }
-              const open = () =>
-                void invoke("open_in_editor", {
-                  file: t.pattern,
-                  line: t.line ?? null,
-                  projectPath,
-                });
-              if (verifyState === "changed") {
-                return (
-                  <button
-                    type="button"
-                    onClick={open}
-                    className={FLAG_COLORS.stale.pill}
-                    title={`The backing test changed since the last reconcile: ${where}. Check it still demonstrates this claim.`}
-                  >
-                    test changed
-                  </button>
-                );
-              }
-              return (
-                <button
-                  type="button"
-                  onClick={open}
-                  className={VERIFY_PILLS.tested}
-                  title={`Backed by ${where} — click to open`}
-                >
-                  <FlaskConical className="h-2.5 w-2.5" />
-                  tested
-                </button>
-              );
-            })()}
-          </span>
+            control lane, so the open peek spans the article column.
+            A plan-ADDED claim shows neither dimension: anchoring is the build
+            checkpoint (rule 25), so until the claim folds, any recorded anchor
+            or test entry is a promise, not a fact — rendering it would dress
+            unbuilt work as built. The entries surface when the fold commits. */}
+        {kind !== "added" && (
+          // The anchor/test footnotes hang in their OWN register — indented a
+          // clear step right of the claim's text edge, so the statement reads
+          // alone and the refs scan as annotation under it, not more sentence.
+          // The bleed grows by the same 20px so an open peek still spans the
+          // article column.
+          <div className="pl-5">
+            <ClaimSource
+              locations={locations}
+              projectPath={projectPath}
+              deleted={deleted}
+              bleed="-ml-[60px] -mr-[180px]"
+            />
+            {/* Attached tests, first-class beside the source anchors: same
+                line anatomy, flask-marked, peek and open included. */}
+            <ClaimTests
+              locations={testLocations}
+              state={testState}
+              projectPath={projectPath}
+              deleted={deleted || relocated}
+              bleed="-ml-[60px] -mr-[180px]"
+            />
+          </div>
         )}
 
         {/* Verdict actions, inline where the row needs one — controls in their
@@ -706,6 +664,39 @@ function RespDiffRow({
           </div>
         )}
       </div>
+
+      {/* The test lane — the 180px control gutter is empty in read mode, so
+          its right edge is an aligned flask column, scannable down the page:
+          a flask at reading weight = a test is attached (backed, no verdict
+          implied); a ghost flask = testable but nothing attached (rule 22);
+          nothing = the test dimension doesn't apply. Edit mode swaps the whole
+          section for the editor, so the lane never collides with the hover
+          controls. */}
+      {tested && (
+        <span
+          className="absolute right-1 top-[3px] flex items-center text-[var(--text-secondary)]"
+          title={`${testLocations.length > 1 ? `${testLocations.length} tests` : "A test"} attached — this claim is backed. The test lines under the claim peek and open.`}
+        >
+          {/* A flask WITH LIQUID IN IT: the outline glyph, plus a second copy
+              fill-closed into a silhouette and clipped to below the glyph's
+              own fill line (y=15 of the 24-unit viewBox → inset 62.5%). Backed
+              reads as "the flask has contents" vs the untested empty outline. */}
+          <FlaskConical className="h-3 w-3" aria-label="Test attached" />
+          <FlaskConical
+            className="absolute inset-0 h-3 w-3 fill-current"
+            style={{ clipPath: "inset(62.5% 0 0 0)" }}
+            aria-hidden="true"
+          />
+        </span>
+      )}
+      {untested && (
+        <span
+          className="absolute right-1 top-[3px] flex items-center text-[var(--text-ghost)]"
+          title="This claim names a trigger, state, or failure a test could exercise — but no test is attached (rule 22)."
+        >
+          <FlaskConical className="h-3 w-3" aria-label="No test attached" />
+        </span>
+      )}
     </li>
 
       {/* Directives — each its own grid row so the +/− marker aligns in the
@@ -850,9 +841,7 @@ function ConcernPicker({
           className={`${CONCERN_OPTION} ${!current ? "bg-[var(--surface-hover)]" : ""}`}
           title="core domain flow — no concern tag"
         >
-          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" aria-hidden="true">
-            <circle cx="12" cy="12" r="3" fill="currentColor" />
-          </svg>
+          <CircleDashed absoluteStrokeWidth className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" aria-hidden="true" />
           <span className="text-[var(--text)]">Core flow</span>
           <span className="truncate text-[var(--text-ghost)]">no concern tag</span>
         </button>
@@ -867,7 +856,7 @@ function ConcernPicker({
               className={`${CONCERN_OPTION} ${active ? "bg-[var(--surface-hover)]" : ""}`}
               title={description ?? slug}
             >
-              <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+              <Icon absoluteStrokeWidth className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
               <span className="shrink-0 font-mono text-[var(--text)]">{slug}</span>
               {description && <span className="truncate text-[var(--text-ghost)]">{description}</span>}
             </button>
@@ -880,7 +869,7 @@ function ConcernPicker({
             className={CONCERN_OPTION}
             title="tag a new concern"
           >
-            <Tag className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
+            <Tag absoluteStrokeWidth className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
             <span className="font-mono text-[var(--text)]">Use “{query.trim()}”</span>
             <span className="truncate text-[var(--text-ghost)]">new concern</span>
           </button>
@@ -915,18 +904,16 @@ function EditConcernGlyph({
         type="button"
         title={title}
         onClick={(e) => setRect(e.currentTarget.getBoundingClientRect())}
-        className="group/concern inline-flex select-none justify-end pr-2 text-[var(--text-secondary)] hover:text-[var(--text)]"
+        className="group/concern inline-flex select-none justify-end pr-1.5 text-[var(--text)] hover:text-[var(--text)]"
       >
         {look ? (
-          <look.Icon className="h-3.5 w-3.5 translate-y-[2px]" />
+          <look.Icon absoluteStrokeWidth className="h-4 w-4 translate-y-[3px]" />
         ) : (
-          <svg
-            viewBox="0 0 24 24"
-            className="h-3.5 w-3.5 translate-y-[3px] opacity-50 group-hover/concern:opacity-100"
+          <CircleDashed
+            absoluteStrokeWidth
+            className="h-4 w-4 translate-y-[3px] opacity-50 group-hover/concern:opacity-100"
             aria-hidden="true"
-          >
-            <circle cx="12" cy="12" r="3" fill="currentColor" />
-          </svg>
+          />
         )}
       </button>
       {rect && (

@@ -29,16 +29,3 @@ export const FLAG_COLORS = {
     label: "Stale",
   },
 } as const;
-
-/** Verification pills — the claim's backing test. An intact link is an
- *  OK-state and stays QUIET (neutral pill; done work doesn't shout, and green
- *  is the diff-add hue, not a checkmark). Red = the linked test's anchor broke
- *  (symbol or file gone). A CHANGED test reuses the drift-orange stale pill:
- *  same "re-check this" axis. */
-export const VERIFY_PILLS = {
-  tested: `${PILL_BASE} text-[var(--text-tertiary)] ring-[var(--border-strong)]`,
-  gone: `${PILL_BASE} bg-red-500/10 text-red-700 ring-red-500/25 dark:bg-red-400/10 dark:text-red-300 dark:ring-red-400/25`,
-  /** A demonstrable claim (When/While/If) with no backing test — the quietest
-   *  tier: a nag for the next build pass, not a fault. */
-  untested: `${PILL_BASE} text-[var(--text-ghost)] ring-[var(--border-subtle)]`,
-} as const;

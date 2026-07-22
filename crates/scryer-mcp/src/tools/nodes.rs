@@ -778,7 +778,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities, and/or `propertyLabels` to fold only those data fields (properties are identified by label). A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. In a DESIGN-FIRST model (never committed), folding a built leaf is refused while its ancestors are plan-only — pass `commit_ancestors: true` to fold the ancestor chain structure-only first: the ancestors' identity and boundaries land in committed while their unbuilt claims stay pending in the plan, so partial implementation reads honestly. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. Pass `anchors` (same shape as update_source_map `entries`) to anchor the folded claims to code IN THE SAME CALL — 'here's what I built and where it lives' as one atomic statement; an unanchored claim reads as scaffolding and carries no drift tripwire. Pass `verifiedBy` (same shape) to record each claim's BACKING TEST alongside — 'and this test demonstrates it' (`pattern` = test file, `symbol` = the test function; optional `command` records how to run it, never executed). For a claim in a When/While/If form this is EXPECTED, not opportunistic (rule 22): the claim names a concrete trigger/state/failure, so construct the test that arranges it and asserts the response, and attach it here in the same call — health counts such claims without one as `untested`. Ubiquitous claims stay a judgment call; absence is simply visible in health. Every node fold's response ends with a scoped POST-FLIGHT: what's still pending on that node, which of its committed claims lack anchors, and any validation warnings this fold introduced — act on those lines; you do not need a separate validate_model run after every fold. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. Pass `change` (standalone — a change id from `set_change`/`get_pending`) to fold an ENTIRE change: every plan entry tagged to it, in dependency order; when its last entry folds, the change closes and its rationale is recorded in the history log. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
+        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. This is THE build checkpoint, and it is one atomic statement with three parts: the fold ('I built this'), `anchors` ('here is where it lives'), and `tests` ('here is the test I attached to it') — pass all three in the SAME call rather than folding now and anchoring/attaching later. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities, and/or `propertyLabels` to fold only those data fields (properties are identified by label). A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. In a DESIGN-FIRST model (never committed), folding a built leaf is refused while its ancestors are plan-only — pass `commit_ancestors: true` to fold the ancestor chain structure-only first: the ancestors' identity and boundaries land in committed while their unbuilt claims stay pending in the plan, so partial implementation reads honestly. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. Pass `anchors` (same shape as update_source_map `entries`) to anchor the folded claims to code IN THE SAME CALL — 'here's what I built and where it lives' as one atomic statement; an unanchored claim reads as scaffolding and carries no drift tripwire. Pass `tests` (same shape) to ATTACH each claim's test alongside — 'and this test exercises it' (`pattern` = test file, `symbol` = the test function; optional `command` records how to run it, never executed). For a claim in a When/While/If form the test is EXPECTED, not opportunistic — and on a symbol host it is MANDATORY (rule 22): the claim names a concrete trigger/state/failure, so write the test that arranges it and asserts the response, and attach it here in the same call. A fold that leaves a testable claim with no test attached succeeds, but the response calls out each such claim and how to fix it; health counts them as `untested`. Ubiquitous claims stay a judgment call; absence is simply visible in health. Every node fold's response ends with a scoped POST-FLIGHT: what's still pending on that node, which of its committed claims lack anchors, and any validation warnings this fold introduced — act on those lines; you do not need a separate validate_model run after every fold. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. Pass `change` (standalone — a change id from `set_change`/`get_pending`) to fold an ENTIRE change: every plan entry tagged to it, in dependency order; when its last entry folds, the change closes and its rationale is recorded in the history log. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
     )]
     fn mark_implemented(
         &self,
@@ -864,10 +864,10 @@ impl ScryerServer {
             .collect()
         };
 
-        // Fold-time anchors and backing tests are validated BEFORE any fold
+        // Fold-time anchors and attached tests are validated BEFORE any fold
         // runs, so a bad id fails the whole call instead of leaving a fold
         // half-anchored.
-        if req.anchors.is_some() || req.verified_by.is_some() {
+        if req.anchors.is_some() || req.tests.is_some() {
             let known: std::collections::HashSet<&str> = planned
                 .nodes
                 .iter()
@@ -876,13 +876,16 @@ impl ScryerServer {
                 .map(|r| r.id.as_str())
                 .chain(before_stmts.keys().map(|k| k.as_str()))
                 .collect();
-            for (field, entries) in [("anchors", &req.anchors), ("verifiedBy", &req.verified_by)]
+            for (field, entries) in [("anchors", &req.anchors), ("tests", &req.tests)]
             {
                 for e in entries.iter().flatten() {
                     if !known.contains(e.responsibility_id.as_str()) {
                         return Ok(CallToolResult::error(vec![Content::text(format!(
                             "{}: responsibility '{}' not found in the plan or the \
-                             committed model — nothing was folded",
+                             committed model — nothing was folded. Anchor and test \
+                             entries are keyed by responsibility id (not node id, not \
+                             statement text); `read_model` on the host node lists its \
+                             claims with their ids — retry with the right id",
                             field, e.responsibility_id
                         ))]));
                     }
@@ -1121,14 +1124,14 @@ impl ScryerServer {
             }
         }
 
-        // Fold-time anchors and backing tests, applied AFTER the folds so each
+        // Fold-time anchors and attached tests, applied AFTER the folds so each
         // claim's entry lands in its single home (a just-committed claim's
         // anchor belongs to the committed layer, not a shadow copy in the
         // draft). One read-modify-write covers both dimensions.
         let mut anchor_notes: Vec<String> = Vec::new();
         let anchors = req.anchors.take().filter(|v| !v.is_empty());
-        let verified_by = req.verified_by.take().filter(|v| !v.is_empty());
-        if anchors.is_some() || verified_by.is_some() {
+        let tests = req.tests.take().filter(|v| !v.is_empty());
+        if anchors.is_some() || tests.is_some() {
             let mut planned_now = match scryer_core::read_planned_seeded_at(&model_ref) {
                 Ok(p) => p,
                 Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
@@ -1148,17 +1151,17 @@ impl ScryerServer {
                 summaries.push(format!("Anchored {} claim(s).", n));
                 anchor_notes = normalized;
             }
-            if let Some(entries) = verified_by {
+            if let Some(entries) = tests {
                 let n = entries.len();
                 let (normalized, dirty) = apply_resp_anchor_entries(
                     model_ref.project_path(),
                     &mut planned_now,
                     &mut committed_now,
                     entries,
-                    RespAnchorDim::Verify,
+                    RespAnchorDim::Test,
                 );
                 committed_dirty |= dirty;
-                summaries.push(format!("Recorded backing test(s) for {} claim(s).", n));
+                summaries.push(format!("Recorded attached test(s) for {} claim(s).", n));
                 anchor_notes.extend(normalized);
             }
             if let Err(e) = scryer_core::write_planned_at(&model_ref, &planned_now) {
@@ -1252,6 +1255,47 @@ impl ScryerServer {
             let planned_after =
                 scryer_core::read_planned_at(&model_ref).unwrap_or_default();
             let mut lines: Vec<String> = Vec::new();
+
+            // Tests-attached callout — the FIRST post-flight line, because it is
+            // the primary concern (rule 22): testable committed claims on this
+            // node with no test attached. Same gate as health's `testable`
+            // counter: person/external hosts never expect tests. Guidance, not a
+            // gate — the fold has already succeeded.
+            if let Some(node) = committed.nodes.iter().find(|n| n.id == node_id) {
+                if node.external != Some(true) && node.kind != scryer_core::Kind::Person {
+                    let has_test = |key: &str| {
+                        committed.test_map.get(key).is_some_and(|l| !l.is_empty())
+                            || planned_after.test_map.get(key).is_some_and(|l| !l.is_empty())
+                    };
+                    let untested: Vec<&str> = node
+                        .responsibilities
+                        .iter()
+                        .filter(|r| {
+                            scryer_core::ears::classify(&r.statement).testable()
+                                && !has_test(&r.id)
+                        })
+                        .map(|r| r.id.as_str())
+                        .collect();
+                    if !untested.is_empty() {
+                        let strength = if node.kind == scryer_core::Kind::Symbol {
+                            "MANDATORY on a symbol host (rule 22)"
+                        } else {
+                            "expected (rule 22)"
+                        };
+                        lines.push(format!(
+                            "NO TEST ATTACHED to {} testable claim(s) on it ({}) — a test is {}. \
+                             Each statement already names the trigger/state/failure to arrange \
+                             and the response to assert: write that test in the project's suite, \
+                             then attach it via update_source_map `test_entries` (or `tests` on \
+                             your next mark_implemented) with `pattern` = test file, `symbol` = \
+                             the test function",
+                            untested.len(),
+                            untested.join(", "),
+                            strength
+                        ));
+                    }
+                }
+            }
 
             // Still pending on this node (vagrants excluded — they are drift
             // review, not the implement queue; matches get_pending).
@@ -2240,7 +2284,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: None,
                 anchors: None,
-                verified_by: None,
+                tests: None,
                 change: None,
             }))
             .unwrap();
@@ -2289,7 +2333,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: None,
                 anchors: None,
-                verified_by: None,
+                tests: None,
                 change: None,
             }))
             .unwrap();
@@ -2343,7 +2387,7 @@ mod tests {
                     link_ids: None,
                     group_ids: None,
                     anchors: None,
-                    verified_by: None,
+                    tests: None,
                     change: None,
                 }))
                 .unwrap()
@@ -2399,7 +2443,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: Some(true),
                 anchors: None,
-                verified_by: None,
+                tests: None,
                 change: None,
                 link_ids: None,
                 group_ids: None,
@@ -2461,7 +2505,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: None,
                 anchors: None,
-                verified_by: None,
+                tests: None,
                 change: None,
             }))
             .unwrap();
@@ -2515,7 +2559,7 @@ mod tests {
                     property_labels: None,
                     commit_ancestors: None,
                 anchors: None,
-                verified_by: None,
+                tests: None,
                 change: None,
                 }))
                 .unwrap();
@@ -2589,7 +2633,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: None,
                 anchors: None,
-                verified_by: None,
+                tests: None,
                 change: None,
             }))
             .unwrap();
@@ -2640,7 +2684,7 @@ mod tests {
                 property_labels: None,
                 commit_ancestors: None,
                 anchors: None,
-                verified_by: None,
+                tests: None,
                 change: None,
             }))
             .unwrap();
@@ -2856,7 +2900,7 @@ mod tests {
                 group_ids: None,
                 commit_ancestors: None,
                 anchors: None,
-                verified_by: None,
+                tests: None,
                 change: None,
             }))
             .unwrap();
@@ -2993,7 +3037,7 @@ mod tests {
                 group_ids: None,
                 commit_ancestors: None,
                 anchors: Some(vec![anchor("resp-ghost")]),
-                verified_by: None,
+                tests: None,
                 change: None,
             }))
             .unwrap();
@@ -3015,7 +3059,7 @@ mod tests {
                 group_ids: None,
                 commit_ancestors: None,
                 anchors: Some(vec![anchor("resp-1")]),
-                verified_by: None,
+                tests: None,
                 change: None,
             }))
             .unwrap();
@@ -3042,12 +3086,12 @@ mod tests {
         );
     }
 
-    /// `verifiedBy` records a claim's backing test in the same fold call: the
-    /// entry lands in the committed verify_map (single home, like fold-time
+    /// `tests` records a claim's attached test in the same fold call: the
+    /// entry lands in the committed test_map (single home, like fold-time
     /// anchors), an unknown id is rejected up front, and the response says
     /// what was recorded.
     #[test]
-    fn mark_implemented_records_backing_tests() {
+    fn mark_implemented_records_attached_tests() {
         let dir = tempfile::tempdir().unwrap();
         let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
         let mut committed = ScryModel::new();
@@ -3058,7 +3102,7 @@ mod tests {
         planned.nodes[0].responsibilities.push(resp("resp-1"));
         scryer_core::write_planned_at(&model_ref, &planned).unwrap();
 
-        let verify = |rid: &str| SourceMapEntry {
+        let test_entry = |rid: &str| SourceMapEntry {
             responsibility_id: rid.into(),
             locations: vec![serde_json::from_value(
                 serde_json::json!({ "pattern": "tests/auth.rs", "symbol": "forged_rejected",
@@ -3080,11 +3124,11 @@ mod tests {
                 group_ids: None,
                 commit_ancestors: None,
                 anchors: None,
-                verified_by: Some(vec![verify("resp-ghost")]),
+                tests: Some(vec![test_entry("resp-ghost")]),
                 change: None,
             }))
             .unwrap();
-        assert!(r.is_error.unwrap_or(false), "unknown verifiedBy id rejected");
+        assert!(r.is_error.unwrap_or(false), "unknown tests id rejected");
 
         let r = server
             .mark_implemented(Parameters(MarkImplementedRequest {
@@ -3096,7 +3140,7 @@ mod tests {
                 group_ids: None,
                 commit_ancestors: None,
                 anchors: None,
-                verified_by: Some(vec![verify("resp-1")]),
+                tests: Some(vec![test_entry("resp-1")]),
                 change: None,
             }))
             .unwrap();
@@ -3105,14 +3149,77 @@ mod tests {
             .iter()
             .find_map(|c| c.as_text().map(|t| t.text.clone()))
             .unwrap();
-        assert!(text.contains("Recorded backing test(s) for 1 claim(s)"), "{text}");
+        assert!(text.contains("Recorded attached test(s) for 1 claim(s)"), "{text}");
 
         let committed = scryer_core::read_model_at(&model_ref).unwrap();
-        let loc = &committed.verify_map["resp-1"][0];
-        assert_eq!(loc.pattern, "tests/auth.rs", "backing test lives in the committed layer");
+        let loc = &committed.test_map["resp-1"][0];
+        assert_eq!(loc.pattern, "tests/auth.rs", "attached test lives in the committed layer");
         assert_eq!(loc.command.as_deref(), Some("cargo test forged_rejected"));
         let planned = scryer_core::read_planned_at(&model_ref).unwrap();
-        assert!(!planned.verify_map.contains_key("resp-1"), "no shadow copy in the draft");
+        assert!(!planned.test_map.contains_key("resp-1"), "no shadow copy in the draft");
+    }
+
+    /// Folding a testable (When/While/If) claim with no test attached
+    /// succeeds — the nudge is guidance, not a gate — but the post-flight
+    /// LEADS with a NO TEST ATTACHED callout naming the claim and the exact
+    /// fix, worded MANDATORY on a symbol host. Attaching the test in the same
+    /// call keeps the response quiet.
+    #[test]
+    fn fold_without_test_on_testable_claim_nudges_loudly() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        scryer_core::write_model_at(&model_ref, &ScryModel::new()).unwrap();
+        scryer_core::ensure_planned_at(&model_ref).unwrap();
+        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        let mut sym = node("vt", Kind::Symbol, "verify_token", None);
+        let mut r1 = resp("resp-1");
+        r1.statement = "**If** the token is forged, **then** reject the request".into();
+        sym.responsibilities.push(r1);
+        planned.nodes.push(sym);
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        let project = dir.path().to_string_lossy().to_string();
+        let fold = |tests: Option<Vec<SourceMapEntry>>| {
+            let r = server
+                .mark_implemented(Parameters(MarkImplementedRequest {
+                    project: Some(project.clone()),
+                    node_id: Some("vt".into()),
+                    responsibility_ids: None,
+                    property_labels: None,
+                    link_ids: None,
+                    group_ids: None,
+                    commit_ancestors: None,
+                    anchors: None,
+                    tests,
+                    change: None,
+                }))
+                .unwrap();
+            assert!(!r.is_error.unwrap_or(false), "the nudge never blocks the fold");
+            r.content
+                .iter()
+                .find_map(|c| c.as_text().map(|t| t.text.clone()))
+                .unwrap()
+        };
+
+        let text = fold(None);
+        assert!(text.contains("NO TEST ATTACHED"), "{text}");
+        assert!(text.contains("resp-1"), "the callout names the claim: {text}");
+        assert!(text.contains("MANDATORY on a symbol host"), "{text}");
+        assert!(
+            text.contains("update_source_map"),
+            "the callout names the fix: {text}"
+        );
+
+        // Attach the test (re-fold is a no-op fold plus the attachment).
+        let text = fold(Some(vec![SourceMapEntry {
+            responsibility_id: "resp-1".into(),
+            locations: vec![serde_json::from_value(
+                serde_json::json!({ "pattern": "tests/auth.rs", "symbol": "forged_rejected" }),
+            )
+            .unwrap()],
+        }]));
+        assert!(!text.contains("NO TEST ATTACHED"), "attached test quiets the nudge: {text}");
     }
 
     /// The fold response carries a scoped post-flight: what's still pending on
@@ -3169,7 +3276,7 @@ mod tests {
                 group_ids: None,
                 commit_ancestors: None,
                 anchors: None,
-                verified_by: None,
+                tests: None,
                 change: None,
             }))
             .unwrap();
@@ -3286,7 +3393,7 @@ mod tests {
                 group_ids: None,
                 commit_ancestors: None,
                 anchors: None,
-                verified_by: None,
+                tests: None,
                 change: Some("chg-1".into()),
             }))
             .unwrap();

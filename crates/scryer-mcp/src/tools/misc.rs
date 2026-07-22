@@ -12,7 +12,7 @@ use std::collections::HashSet;
 #[tool_router(router = tool_router_misc, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "Write the code-side mapping (agent-produced, regenerable). `entries` set source locations keyed by responsibility id — the conformance numerator (where reality discharges a responsibility). Each location is the SPECIFIC line range that does the work: `pattern` = file, `line`/`endLine` = the range, `symbol` = the enclosing definition (anchor + context). A line range must be a PROPER subset of its symbol — when one responsibility is the whole definition's work, omit `line`/`endLine` (a symbol-only anchor means the whole definition). Ranges that cover the whole symbol are normalized to symbol-only anchors and reported back. `verify_entries` record each claim's BACKING TESTS — keyed by responsibility id like `entries`, but pointing at the test that demonstrates the claim (`pattern` = test file, `symbol` = the test function; symbol-only means the whole test; optional `command` records how to run it, never executed). A separate dimension: where a claim is implemented vs. where it is verified. `schemas` set the declaration location of a schema-kind node (which has properties, not responsibilities) — keyed by node id, normally one location: `pattern` = file, `symbol` = the type name, `line`/`endLine` = the declaration range. `boundaries` set directory globs keyed by node id — the coverage denominator (the code region a node owns); use for containers/components, keeping a child's boundary within its parent's. Pass an empty `locations`/`sources` array to clear an entry."
+        description = "Write the code-side mapping (agent-produced, regenerable): implementation anchors, ATTACHED TESTS, schema declarations, and boundaries. `entries` set source locations keyed by responsibility id — the conformance numerator (where reality discharges a responsibility). Each location is the SPECIFIC line range that does the work: `pattern` = file, `line`/`endLine` = the range, `symbol` = the enclosing definition (anchor + context). A line range must be a PROPER subset of its symbol — when one responsibility is the whole definition's work, omit `line`/`endLine` (a symbol-only anchor means the whole definition). Ranges that cover the whole symbol are normalized to symbol-only anchors and reported back. `test_entries` ATTACH TESTS to claims — keyed by responsibility id like `entries`, but pointing at the test that exercises the claim (`pattern` = test file, `symbol` = the test function; symbol-only means the whole test; optional `command` records how to run it, never executed). A separate dimension: where a claim is implemented vs. which tests are attached to it. This is also the tool to attach a test AFTER a fold — the fix for an 'untested' callout. `schemas` set the declaration location of a schema-kind node (which has properties, not responsibilities) — keyed by node id, normally one location: `pattern` = file, `symbol` = the type name, `line`/`endLine` = the declaration range. `boundaries` set directory globs keyed by node id — the coverage denominator (the code region a node owns); use for containers/components, keeping a child's boundary within its parent's. Pass an empty `locations`/`sources` array to clear an entry."
     )]
     fn update_source_map(
         &self,
@@ -37,7 +37,7 @@ impl ScryerServer {
             .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
             .map(|r| r.id.as_str())
             .collect();
-        for entry in req.entries.iter().chain(req.verify_entries.iter()) {
+        for entry in req.entries.iter().chain(req.test_entries.iter()) {
             if !resp_ids.contains(entry.responsibility_id.as_str()) {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Responsibility '{}' not found",
@@ -99,8 +99,34 @@ impl ScryerServer {
             None => HashSet::new(),
         };
 
+        // Rule 25 makes anchoring the BUILD checkpoint, so an entry keyed to a
+        // plan-added claim (not yet committed) is usually premature — the code
+        // it points at may not exist. Warn, never reject: code-first flows
+        // (adopting behaviour the codebase already has) legitimately anchor
+        // early, and the author knows which case this is.
+        let committed_resp_ids: HashSet<String> = committed
+            .as_ref()
+            .map(|c| {
+                c.nodes
+                    .iter()
+                    .flat_map(|n| n.responsibilities.iter())
+                    .chain(c.groups.iter().flat_map(|g| g.responsibilities.iter()))
+                    .map(|r| r.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut premature: Vec<String> = req
+            .entries
+            .iter()
+            .chain(req.test_entries.iter())
+            .filter(|e| !e.locations.is_empty() && !committed_resp_ids.contains(&e.responsibility_id))
+            .map(|e| e.responsibility_id.clone())
+            .collect();
+        premature.sort();
+        premature.dedup();
+
         let count = req.entries.len()
-            + req.verify_entries.len()
+            + req.test_entries.len()
             + req.schemas.len()
             + req.boundaries.len();
         let (mut normalized, mut committed_dirty) = apply_resp_anchor_entries(
@@ -110,16 +136,16 @@ impl ScryerServer {
             std::mem::take(&mut req.entries),
             RespAnchorDim::Source,
         );
-        // Backing tests: same routing, the verify dimension.
-        let (normalized_verify, verify_dirty) = apply_resp_anchor_entries(
+        // Attached tests: same routing, the test dimension.
+        let (normalized_tests, tests_dirty) = apply_resp_anchor_entries(
             model_ref.project_path(),
             &mut model,
             &mut committed,
-            std::mem::take(&mut req.verify_entries),
-            RespAnchorDim::Verify,
+            std::mem::take(&mut req.test_entries),
+            RespAnchorDim::Test,
         );
-        normalized.extend(normalized_verify);
-        committed_dirty |= verify_dirty;
+        normalized.extend(normalized_tests);
+        committed_dirty |= tests_dirty;
         for s in req.schemas {
             let key = s.node_id;
             if s.locations.is_empty() {
@@ -172,6 +198,17 @@ impl ScryerServer {
             }
         }
         let mut msg = format!("Updated code-side mapping ({} entr(ies))", count);
+        if !premature.is_empty() {
+            msg.push_str(&format!(
+                "\n\nWARNING — anchoring PLAN-ADDED claim(s) not yet committed: {}. An anchor \
+                 records BUILT code and a test entry an EXISTING test (rules 25, 22); the build \
+                 checkpoint is `mark_implemented` (fold + `anchors` + `tests` in one call), and \
+                 planned claims render WITHOUT their anchors until folded. If the code truly \
+                 exists already (adopting behaviour the codebase has), keep the entry and fold \
+                 soon; otherwise clear it (same entry, empty `locations`) and anchor at the fold.",
+                premature.join(", ")
+            ));
+        }
         if !broad_boundaries.is_empty() {
             msg.push_str(&format!(
                 "\n\nWARNING — {} boundary glob(s) with no directory prefix: {}. Such a glob \
@@ -655,12 +692,12 @@ mod tests {
         }
     }
 
-    /// `verify_entries` (claim → backing test) follow the same single-home
+    /// `test_entries` (claim → attached test) follow the same single-home
     /// routing as `entries`: a committed claim's entry lands in the committed
-    /// verify_map with no draft shadow; a plan-added claim's stays in the
+    /// test_map with no draft shadow; a plan-added claim's stays in the
     /// draft until its claim folds.
     #[test]
-    fn verify_entries_route_to_the_single_home() {
+    fn test_entries_route_to_the_single_home() {
         let dir = tempfile::tempdir().unwrap();
         let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
         let resp = |id: &str| -> scryer_core::Responsibility {
@@ -693,7 +730,7 @@ mod tests {
             .update_source_map(Parameters(UpdateSourceMapRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
                 entries: vec![],
-                verify_entries: vec![
+                test_entries: vec![
                     entry("r-c", "tests/c.rs"),
                     entry("r-p", "tests/p.rs"),
                 ],
@@ -705,16 +742,78 @@ mod tests {
 
         let committed = scryer_core::read_model_at(&model_ref).unwrap();
         assert_eq!(
-            committed.verify_map["r-c"][0].pattern, "tests/c.rs",
-            "committed claim's backing test lives in committed"
+            committed.test_map["r-c"][0].pattern, "tests/c.rs",
+            "committed claim's attached test lives in committed"
         );
-        assert!(!committed.verify_map.contains_key("r-p"));
+        assert!(!committed.test_map.contains_key("r-p"));
         let draft = scryer_core::read_planned_at(&model_ref).unwrap();
         assert_eq!(
-            draft.verify_map["r-p"][0].pattern, "tests/p.rs",
-            "plan-added claim's backing test stays in the draft"
+            draft.test_map["r-p"][0].pattern, "tests/p.rs",
+            "plan-added claim's attached test stays in the draft"
         );
-        assert!(!draft.verify_map.contains_key("r-c"), "no shadow copy in the draft");
+        assert!(!draft.test_map.contains_key("r-c"), "no shadow copy in the draft");
+    }
+
+    /// An anchor keyed to a plan-added (uncommitted) claim is written — code-
+    /// first flows legitimately anchor early — but the response warns loudly:
+    /// anchoring is the build checkpoint (rule 25), and the UI hides a planned
+    /// claim's anchors until the fold. A committed claim's anchor stays quiet.
+    #[test]
+    fn anchoring_a_plan_added_claim_warns_but_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let resp = |id: &str| -> scryer_core::Responsibility {
+            serde_json::from_value(serde_json::json!({ "id": id, "statement": "does" })).unwrap()
+        };
+        let mut committed = ScryModel::new();
+        let mut comp = node("comp", Kind::Component, "Comp", None);
+        comp.responsibilities.push(resp("r-c"));
+        committed.nodes.push(comp);
+        scryer_core::write_model_at(&model_ref, &committed).unwrap();
+        scryer_core::ensure_planned_at(&model_ref).unwrap();
+        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        planned
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == "comp")
+            .unwrap()
+            .responsibilities
+            .push(resp("r-p"));
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let entry = |rid: &str, file: &str| SourceMapEntry {
+            responsibility_id: rid.into(),
+            locations: vec![
+                serde_json::from_value(serde_json::json!({ "pattern": file })).unwrap(),
+            ],
+        };
+        let server = ScryerServer::new();
+        let res = server
+            .update_source_map(Parameters(UpdateSourceMapRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                entries: vec![entry("r-p", "src/f.ts")],
+                test_entries: vec![],
+                schemas: vec![],
+                boundaries: vec![],
+            }))
+            .unwrap();
+        assert!(!res.is_error.unwrap_or(false), "warn, never reject");
+        let out = serde_json::to_string(&res.content).unwrap();
+        assert!(out.contains("PLAN-ADDED") && out.contains("r-p"), "warns: {out}");
+        let draft = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(draft.source_map["r-p"][0].pattern, "src/f.ts", "the write still lands");
+
+        let res = server
+            .update_source_map(Parameters(UpdateSourceMapRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                entries: vec![entry("r-c", "src/f.ts")],
+                test_entries: vec![],
+                schemas: vec![],
+                boundaries: vec![],
+            }))
+            .unwrap();
+        let out = serde_json::to_string(&res.content).unwrap();
+        assert!(!out.contains("PLAN-ADDED"), "committed claim's anchor is quiet: {out}");
     }
 
     /// A boundary glob with no directory prefix is written (the user may mean
@@ -738,7 +837,7 @@ mod tests {
             .update_source_map(Parameters(UpdateSourceMapRequest {
                 project: Some(project.clone()),
                 entries: vec![],
-                verify_entries: vec![],
+                test_entries: vec![],
                 schemas: vec![],
                 boundaries: vec![BoundaryEntry {
                     node_id: "node-2".into(),
@@ -756,7 +855,7 @@ mod tests {
             .update_source_map(Parameters(UpdateSourceMapRequest {
                 project: Some(project),
                 entries: vec![],
-                verify_entries: vec![],
+                test_entries: vec![],
                 schemas: vec![],
                 boundaries: vec![BoundaryEntry {
                     node_id: "node-2".into(),

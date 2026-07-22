@@ -214,15 +214,18 @@ pub(crate) struct MarkImplementedRequest {
     /// the work (`pattern` file, `symbol` enclosing definition, `line`/`endLine` a
     /// PROPER subset of it — omit them to mean the whole definition).
     pub anchors: Option<Vec<SourceMapEntry>>,
-    /// Optional: record the BACKING TESTS for claims in the same call — "and this
-    /// test demonstrates it" alongside the fold and anchors. Same shape as
-    /// `anchors`: locations keyed by responsibility id, `pattern` = test file,
-    /// `symbol` = the test function (symbol-only means the whole test); set
-    /// `command` to record how to run it (never executed). Optional and
-    /// proportional: not every claim needs a test, and its absence is simply
-    /// visible in health — but when you just wrote the test, one field here is
-    /// the cheapest moment to link it.
-    pub verified_by: Option<Vec<SourceMapEntry>>,
+    /// ATTACH TESTS to the claims you fold, in the same call — "and this test
+    /// exercises it" alongside the fold and anchors. Same shape as `anchors`:
+    /// locations keyed by responsibility id, `pattern` = test file, `symbol` =
+    /// the test's NAME — the `it("…")`/`test("…")` description string or the
+    /// test function's identifier; both resolve and fingerprint (symbol-only
+    /// means the whole test); set `command` to record how to run it (never
+    /// executed). For a When/While/If claim the
+    /// test is EXPECTED — mandatory on symbol hosts (rule 22); a fold that
+    /// leaves a testable claim with no test attached succeeds but is called
+    /// out in the response. When you just wrote the test, this field is the
+    /// cheapest moment to attach it.
+    pub tests: Option<Vec<SourceMapEntry>>,
     /// Fold an ENTIRE change by id: every plan entry tagged to it, in dependency
     /// order (nodes root-ward, then claims/properties, then groups and links,
     /// then deletions). Standalone — do not combine with node_id / link_ids /
@@ -434,15 +437,16 @@ pub(crate) struct UpdateSourceMapRequest {
     /// Line-precise locations keyed by responsibility id.
     #[serde(default)]
     pub entries: Vec<SourceMapEntry>,
-    /// BACKING TESTS keyed by responsibility id — the verification handle:
-    /// where a test demonstrates the claim holds. Same shape as `entries`
-    /// (`pattern` = test file, `symbol` = the test function; a symbol-only
-    /// anchor means the whole test). Optionally set `command` on a location to
-    /// record how to run it (e.g. `cargo test parse::roundtrip`) — recorded,
-    /// never executed. A separate dimension from `entries`: where a claim is
-    /// implemented vs. where it is verified. Empty `locations` clears.
+    /// ATTACHED TESTS keyed by responsibility id — which tests are attached
+    /// to which claims. Same shape as `entries` (`pattern` = test file,
+    /// `symbol` = the test's NAME — the `it("…")`/`test("…")` description
+    /// string or the test function's identifier; both resolve and fingerprint;
+    /// a symbol-only anchor means the whole test). Optionally set `command` on a location to record how to run it
+    /// (e.g. `cargo test parse::roundtrip`) — recorded, never executed. A
+    /// separate dimension from `entries`: where a claim is implemented vs.
+    /// which tests are attached to it. Empty `locations` clears.
     #[serde(default)]
-    pub verify_entries: Vec<SourceMapEntry>,
+    pub test_entries: Vec<SourceMapEntry>,
     /// Declaration locations keyed by schema node id.
     #[serde(default)]
     pub schemas: Vec<SchemaSourceEntry>,

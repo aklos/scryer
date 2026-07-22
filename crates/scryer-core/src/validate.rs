@@ -320,10 +320,15 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
             ));
         }
     }
-    // verify_map is keyed by responsibility id only: a test backs a claim.
-    for id in model.verify_map.keys() {
+    // test_map is keyed by responsibility id only: tests attach to claims.
+    for id in model.test_map.keys() {
         if !resp_ids.contains(id.as_str()) {
-            warnings.push(format!("Verify map references unknown responsibility '{}'", id));
+            warnings.push(format!(
+                "Test map references unknown responsibility '{}' — tests attach to live \
+                 claims; fix the id or clear the entry (update_source_map test_entries \
+                 with empty locations)",
+                id
+            ));
         }
     }
     for id in model.boundaries.keys() {
@@ -991,28 +996,28 @@ mod disconnect_tests {
         m
     }
 
-    /// verify_map keys must name a live responsibility — a test can only back
-    /// a claim that exists. (Node ids are not legal keys, unlike source_map's
+    /// test_map keys must name a live responsibility — a test can only be
+    /// attached to a claim that exists. (Node ids are not legal keys, unlike source_map's
     /// declaration anchors.)
     #[test]
-    fn verify_map_unknown_key_warns() {
+    fn test_map_unknown_key_warns() {
         let mut m = model_with_symbols(1);
-        m.verify_map.insert(
+        m.test_map.insert(
             "r-0".into(),
             vec![serde_json::from_value(serde_json::json!({ "pattern": "tests/a.rs" })).unwrap()],
         );
-        m.verify_map.insert(
+        m.test_map.insert(
             "r-ghost".into(),
             vec![serde_json::from_value(serde_json::json!({ "pattern": "tests/b.rs" })).unwrap()],
         );
         let warnings = validate(&m);
         assert!(
-            warnings.iter().any(|w| w.contains("Verify map") && w.contains("r-ghost")),
-            "unknown verify key flagged: {warnings:?}"
+            warnings.iter().any(|w| w.contains("Test map") && w.contains("r-ghost")),
+            "unknown test key flagged: {warnings:?}"
         );
         assert!(
-            !warnings.iter().any(|w| w.contains("Verify map") && w.contains("'r-0'")),
-            "a live claim's verify entry is quiet: {warnings:?}"
+            !warnings.iter().any(|w| w.contains("Test map") && w.contains("'r-0'")),
+            "a live claim's test entry is quiet: {warnings:?}"
         );
     }
 

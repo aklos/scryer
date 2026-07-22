@@ -157,6 +157,12 @@ impl ImportedSym {
 #[derive(Debug, Clone, Default)]
 pub struct FileParse {
     pub defs: Vec<Def>,
+    /// String-named call blocks — `it("…")` / `test("…")` / `t.Run("…")` and
+    /// kin: any call whose first argument is a literal string, spanning the
+    /// whole call (callback body included). This is how attached tests anchor
+    /// by their NAME rather than a code identifier; consulted only when a
+    /// recorded symbol matches no `defs` entry, never fed to link resolution.
+    pub test_blocks: Vec<Def>,
     pub idents: Vec<Ident>,
     /// Qualified path references for cross-container resolution. See [`PathRef`].
     pub paths: Vec<PathRef>,
@@ -215,8 +221,12 @@ pub fn parse_file_with(path: &Path, source: &str, parser: &mut Parser) -> Option
         _ => {}
     }
 
+    let mut test_blocks: Vec<Def> = Vec::new();
+    collect_string_named_calls(root, bytes, &mut test_blocks);
+
     Some(FileParse {
         defs,
+        test_blocks,
         idents,
         paths,
         imports,
@@ -1079,6 +1089,54 @@ fn ts_import_clause_names(clause: Node, bytes: &[u8], names: &mut Vec<ImportedSy
     }
 }
 
+/// Grammar-agnostic sweep for string-named call blocks (see
+/// [`FileParse::test_blocks`]): every node whose kind names a call, whose
+/// first argument is a literal string. Runner-agnostic on purpose — `it`,
+/// `test`, `describe`, `t.Run`, `context` all reduce to the same shape, and
+/// matching the shape means a new runner never needs a name added here.
+fn collect_string_named_calls(root: Node, bytes: &[u8], out: &mut Vec<Def>) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind().contains("call") {
+            if let Some(name) = first_string_arg(node, bytes) {
+                let (start_line, end_line) = line_span(node);
+                out.push(Def {
+                    name,
+                    start_line,
+                    end_line,
+                    fields: Vec::new(),
+                    is_data_shape: false,
+                });
+            }
+        }
+        for child in named_children(node) {
+            stack.push(child);
+        }
+    }
+}
+
+/// The literal content of a call's first argument when it is a plain string,
+/// across grammars: the argument list is the `arguments` field (or the named
+/// child whose kind says "argument"), and a string-kinded first argument has
+/// its quotes trimmed. Computed strings (templates with interpolation,
+/// concatenations) don't reduce to a stable name and yield `None`.
+fn first_string_arg(call: Node, bytes: &[u8]) -> Option<String> {
+    let args = call
+        .child_by_field_name("arguments")
+        .or_else(|| named_children(call).into_iter().find(|n| n.kind().contains("argument")))?;
+    let first = named_children(args).into_iter().next()?;
+    if !first.kind().contains("string") {
+        return None;
+    }
+    let raw = first.utf8_text(bytes).ok()?;
+    // Trim one matching quote pair; reject anything still holding structure
+    // (an interpolated template keeps `${` after trimming).
+    let inner = raw
+        .strip_prefix(['"', '\'', '`'])
+        .and_then(|s| s.strip_suffix(['"', '\'', '`']))?;
+    (!inner.is_empty() && !inner.contains("${")).then(|| inner.to_string())
+}
+
 /// The literal text of a `string` node, or `None` for anything computed
 /// (template strings, identifiers, concatenations).
 fn string_literal(node: Option<Node>, bytes: &[u8]) -> Option<String> {
@@ -1157,6 +1215,28 @@ mod tests {
 
     fn names(parse: &FileParse) -> Vec<&str> {
         parse.defs.iter().map(|d| d.name.as_str()).collect()
+    }
+
+    #[test]
+    fn ts_test_blocks_by_name_string() {
+        let src = "describe(\"webhook verify\", () => {\n  it(\"rejects an unsigned webhook\", async () => {\n    expect(res.status).toBe(403);\n  });\n  test.skip(\"echoes hub.challenge\", () => {});\n});\n";
+        let p = parse_file(Path::new("f.spec.ts"), src).unwrap();
+        let block = |name: &str| p.test_blocks.iter().find(|d| d.name == name);
+        assert_eq!(
+            block("rejects an unsigned webhook").map(|d| (d.start_line, d.end_line)),
+            Some((2, 4)),
+        );
+        assert_eq!(block("webhook verify").map(|d| (d.start_line, d.end_line)), Some((1, 6)));
+        assert!(block("echoes hub.challenge").is_some(), "member-call runners count too");
+        // String-named blocks stay out of `defs` — link resolution never sees them.
+        assert!(!names(&p).contains(&"rejects an unsigned webhook"));
+    }
+
+    #[test]
+    fn go_subtest_blocks_by_name_string() {
+        let src = "package p\n\nfunc TestVerify(t *testing.T) {\n\tt.Run(\"rejects bad token\", func(t *testing.T) {\n\t})\n}\n";
+        let p = parse_file(Path::new("f_test.go"), src).unwrap();
+        assert!(p.test_blocks.iter().any(|d| d.name == "rejects bad token"));
     }
 
     #[test]

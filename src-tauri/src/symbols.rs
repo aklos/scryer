@@ -61,31 +61,39 @@ pub fn resolve(
     let mut best: Option<(u32, u32, bool)> = None;
     let mut stack = vec![tree.root_node()];
     while let Some(node) = stack.pop() {
-        if let Some(name_node) = node.child_by_field_name("name") {
-            if name_node.utf8_text(bytes).ok() == Some(symbol) {
-                let start = node.start_position().row as u32 + 1;
-                let end = node.end_position().row as u32 + 1;
-                let is_def = is_definition_kind(node.kind());
-                let better = match best {
-                    None => true,
-                    Some((bs, _, bdef)) => {
-                        if is_def != bdef {
-                            is_def // a definition beats a non-definition
-                        } else {
-                            match line_hint {
-                                Some(h) => {
-                                    (start as i64 - h as i64).abs()
-                                        < (bs as i64 - h as i64).abs()
-                                }
-                                None => false,
+        let mut consider = |node: tree_sitter::Node, is_def: bool| {
+            let start = node.start_position().row as u32 + 1;
+            let end = node.end_position().row as u32 + 1;
+            let better = match best {
+                None => true,
+                Some((bs, _, bdef)) => {
+                    if is_def != bdef {
+                        is_def // a definition beats a non-definition
+                    } else {
+                        match line_hint {
+                            Some(h) => {
+                                (start as i64 - h as i64).abs() < (bs as i64 - h as i64).abs()
                             }
+                            None => false,
                         }
                     }
-                };
-                if better {
-                    best = Some((start, end, is_def));
                 }
+            };
+            if better {
+                best = Some((start, end, is_def));
             }
+        };
+        if let Some(name_node) = node.child_by_field_name("name") {
+            if name_node.utf8_text(bytes).ok() == Some(symbol) {
+                consider(node, is_definition_kind(node.kind()));
+            }
+        }
+        // A test anchored by its NAME: `it("…")` / `test("…")` / `t.Run("…")` —
+        // a call whose first argument is the string the anchor recorded. The
+        // whole call (callback body included) is the definition-shaped span.
+        // Identifier defs outrank it, so a name that is both stays a symbol.
+        if node.kind().contains("call") && first_string_arg(node, bytes).as_deref() == Some(symbol) {
+            consider(node, false);
         }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -94,6 +102,28 @@ pub fn resolve(
     }
 
     best.map(|(s, e, _)| (s, e))
+}
+
+/// The literal content of a call's first argument when it is a plain string:
+/// argument list via the `arguments` field (or the named child whose kind says
+/// "argument"), quotes trimmed. Interpolated templates yield `None` — a
+/// computed name can't be matched.
+fn first_string_arg(call: tree_sitter::Node, bytes: &[u8]) -> Option<String> {
+    let args = call.child_by_field_name("arguments").or_else(|| {
+        let mut cur = call.walk();
+        let found = call.named_children(&mut cur).find(|n| n.kind().contains("argument"));
+        found
+    })?;
+    let mut cur = args.walk();
+    let first = args.named_children(&mut cur).next()?;
+    if !first.kind().contains("string") {
+        return None;
+    }
+    let raw = first.utf8_text(bytes).ok()?;
+    let inner = raw
+        .strip_prefix(['"', '\'', '`'])
+        .and_then(|s| s.strip_suffix(['"', '\'', '`']))?;
+    (!inner.is_empty() && !inner.contains("${")).then(|| inner.to_string())
 }
 
 #[cfg(test)]
@@ -128,5 +158,25 @@ mod tests {
     #[test]
     fn unsupported_ext_is_none() {
         assert_eq!(resolve(Path::new("f.zzz"), "x", "x", None), None);
+    }
+
+    #[test]
+    fn ts_test_block_by_name_string() {
+        let src = "describe(\"webhook verify\", () => {\n  it(\"rejects an unsigned webhook\", async () => {\n    expect(res.status).toBe(403);\n  });\n});\n";
+        assert_eq!(
+            resolve(Path::new("f.spec.ts"), src, "rejects an unsigned webhook", None),
+            Some((2, 4)),
+        );
+        // The enclosing describe resolves by ITS name, spanning the suite.
+        assert_eq!(
+            resolve(Path::new("f.spec.ts"), src, "webhook verify", None),
+            Some((1, 5)),
+        );
+    }
+
+    #[test]
+    fn identifier_def_outranks_same_named_string_call() {
+        let src = "function login() {\n  return 1;\n}\nit(\"login\", () => login());\n";
+        assert_eq!(resolve(Path::new("f.ts"), src, "login", None), Some((1, 3)));
     }
 }

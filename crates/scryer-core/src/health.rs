@@ -33,6 +33,24 @@ pub struct HealthCounts {
     pub responsibilities: u32,
     /// Data-shape properties in scope.
     pub properties: u32,
+    /// Responsibilities with at least one test attached (a `test_map` entry) —
+    /// the model's PRIMARY signal, listed first. A separate dimension from
+    /// `anchored` — where a claim is implemented vs. whether a test is
+    /// attached — and NOT gated on `anchorable`: a structural claim
+    /// legitimately carries an integration test. Attachment is the only fact
+    /// counted — the test is never run; whether its fingerprint is still
+    /// intact is the anchor check's report.
+    pub tested: u32,
+    /// Responsibilities in a When/While/If form (rule 21) on code-backed hosts
+    /// — the claims whose statement names a concrete trigger, state, or
+    /// failure, so a test can arrange the condition and assert the response.
+    /// Classified deterministically from the leading keyword
+    /// ([`crate::ears`]); person and external claims never count. Like
+    /// `tested`, not gated on leafness: a structural When-claim carries an
+    /// integration test.
+    pub testable: u32,
+    /// Of the testable claims, how many have NO test attached.
+    pub untested: u32,
     /// Responsibilities or properties carrying the vagrant flag (undescribed behaviour
     /// awaiting adopt/reject).
     pub vagrant: u32,
@@ -48,22 +66,6 @@ pub struct HealthCounts {
     /// `anchorable - anchored` — blind spots: the lens claims code it cannot
     /// show.
     pub unmapped: u32,
-    /// Responsibilities carrying a verify entry (a backing test). A separate
-    /// dimension from `anchored` — where a claim is implemented vs. where it
-    /// is demonstrated — and NOT gated on `anchorable`: a structural claim
-    /// legitimately backs onto an integration test. Presence-only; whether
-    /// the test's fingerprint is still intact is the anchor check's report.
-    pub verified: u32,
-    /// Responsibilities in a When/While/If form (rule 21) on code-backed hosts
-    /// — the claims whose statement names a concrete trigger, state, or
-    /// failure, so a test can demonstrate them mechanically. Classified
-    /// deterministically from the leading keyword ([`crate::ears`]); person
-    /// and external claims never count. Like `verified`, not gated on
-    /// leafness: a structural When-claim backs onto an integration test.
-    pub testable: u32,
-    /// Of the testable claims, how many carry NO verify entry — the demonstrable
-    /// claims nothing demonstrates.
-    pub untested: u32,
     /// Unix seconds of the most recent truth-bearing edit in scope.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_touched_at: Option<u64>,
@@ -84,7 +86,7 @@ impl HealthCounts {
         self.anchorable += other.anchorable;
         self.anchored += other.anchored;
         self.unmapped += other.unmapped;
-        self.verified += other.verified;
+        self.tested += other.tested;
         self.testable += other.testable;
         self.untested += other.untested;
         self.touch(other.last_touched_at);
@@ -197,13 +199,13 @@ pub fn compute_health(
             if resp.stale == Some(true) {
                 h.stale += 1;
             }
-            let has_verify = model.verify_map.get(&resp.id).is_some_and(|locs| !locs.is_empty());
-            if has_verify {
-                h.verified += 1;
+            let has_test = model.test_map.get(&resp.id).is_some_and(|locs| !locs.is_empty());
+            if has_test {
+                h.tested += 1;
             }
             if code_backed && crate::ears::classify(&resp.statement).testable() {
                 h.testable += 1;
-                if !has_verify {
+                if !has_test {
                     h.untested += 1;
                 }
             }
@@ -265,15 +267,15 @@ pub fn compute_health(
             if resp.stale == Some(true) {
                 h.stale += 1;
             }
-            let has_verify = model.verify_map.get(&resp.id).is_some_and(|locs| !locs.is_empty());
-            if has_verify {
-                h.verified += 1;
+            let has_test = model.test_map.get(&resp.id).is_some_and(|locs| !locs.is_empty());
+            if has_test {
+                h.tested += 1;
             }
             // A group organizes code-backed members, so its claims classify
             // like a node's: a When/While/If claim can back onto a test.
             if crate::ears::classify(&resp.statement).testable() {
                 h.testable += 1;
-                if !has_verify {
+                if !has_test {
                     h.untested += 1;
                 }
             }
@@ -823,12 +825,12 @@ mod tests {
         assert_eq!(c.pct, Some(50));
     }
 
-    /// `verified` counts claims carrying a verify entry (a backing test) and
+    /// `tested` counts claims with a test attached (a `test_map` entry) and
     /// rolls up the tree like every other counter. It is NOT gated on
-    /// anchorability: a structural claim backed by an integration test counts,
+    /// anchorability: a structural claim carrying an integration test counts,
     /// where `anchored` would ignore it.
     #[test]
-    fn verified_counts_and_rolls_up_independent_of_anchorability() {
+    fn tested_counts_and_rolls_up_independent_of_anchorability() {
         let mut m = ScryModel::new();
         let mut sys = node("sys", Kind::System, None);
         sys.responsibilities.push(resp("r-struct")); // structural: sys has a child
@@ -837,28 +839,28 @@ mod tests {
         leaf.responsibilities.push(resp("r-tested"));
         leaf.responsibilities.push(resp("r-untested"));
         m.nodes.push(leaf);
-        m.verify_map.insert("r-struct".into(), vec![loc("tests/integration.rs")]);
-        m.verify_map.insert("r-tested".into(), vec![loc("tests/unit.rs")]);
-        m.verify_map.insert("r-empty".into(), Vec::new()); // dangling/empty: never counts
+        m.test_map.insert("r-struct".into(), vec![loc("tests/integration.rs")]);
+        m.test_map.insert("r-tested".into(), vec![loc("tests/unit.rs")]);
+        m.test_map.insert("r-empty".into(), Vec::new()); // dangling/empty: never counts
 
         let h = compute_health(&m, None, None);
-        assert_eq!(h.nodes["leaf"].own.verified, 1, "the tested leaf claim counts");
+        assert_eq!(h.nodes["leaf"].own.tested, 1, "the tested leaf claim counts");
         assert_eq!(
-            h.nodes["sys"].own.verified,
+            h.nodes["sys"].own.tested,
             1,
             "a structural claim's integration test counts even though it is not anchorable"
         );
-        assert_eq!(h.nodes["sys"].subtree.verified, 2, "verified rolls up post-order");
-        assert_eq!(h.totals.verified, 2);
-        assert_eq!(h.totals.anchored, 0, "verification is a separate dimension from anchoring");
+        assert_eq!(h.nodes["sys"].subtree.tested, 2, "tested rolls up post-order");
+        assert_eq!(h.totals.tested, 2);
+        assert_eq!(h.totals.anchored, 0, "test attachment is a separate dimension from anchoring");
     }
 
     /// `testable` counts When/While/If claims on code-backed hosts (the EARS
-    /// forms a test can demonstrate); `untested` is the testable claims with
-    /// no verify entry. Ubiquitous claims and person/external hosts never
-    /// count, and a backing test moves a claim out of `untested` only.
+    /// forms a test can arrange and assert); `untested` is the testable claims
+    /// with no test attached. Ubiquitous claims and person/external hosts never
+    /// count, and an attached test moves a claim out of `untested` only.
     #[test]
-    fn testable_claims_without_backing_tests_read_as_untested() {
+    fn testable_claims_without_attached_tests_read_as_untested() {
         let mut m = ScryModel::new();
         let mut api = node("api", Kind::Component, None);
         let mut tested = resp("r-tested");
@@ -874,12 +876,12 @@ mod tests {
         actor_claim.statement = "When curious, opens the chat".into();
         visitor.responsibilities.push(actor_claim);
         m.nodes.push(visitor);
-        m.verify_map.insert("r-tested".into(), vec![loc("tests/webhook.rs")]);
+        m.test_map.insert("r-tested".into(), vec![loc("tests/webhook.rs")]);
 
         let h = compute_health(&m, None, None);
         let own = &h.nodes["api"].own;
         assert_eq!(own.testable, 2, "the When and If claims; the ubiquitous one needs judgment");
-        assert_eq!(own.untested, 1, "only the If claim lacks a backing test");
+        assert_eq!(own.untested, 1, "only the If claim lacks a attached test");
         assert_eq!(h.nodes["visitor"].own.testable, 0, "a person's claims are never code-backed");
         assert_eq!(h.totals.testable, 2);
         assert_eq!(h.totals.untested, 1);

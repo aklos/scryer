@@ -130,7 +130,7 @@ export function serializeEars(plain: string): string {
 }
 
 /** Whether the statement's EARS form names a concrete trigger, state, or
- *  failure (When/While/If) — the forms a test can demonstrate mechanically:
+ *  failure (When/While/If) — the forms a test can exercise mechanically:
  *  arrange the condition, assert the response (rule 22). Where-claims and
  *  ubiquitous claims need judgment and never count. Mirrors
  *  `scryer_core::ears`. */

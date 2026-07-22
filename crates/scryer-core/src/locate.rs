@@ -40,10 +40,14 @@ pub struct LocatedClaim {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub directives: Vec<String>,
     pub anchor: SourceLocation,
-    /// The claim's backing tests (its `verify_map` entry), when it has any.
+    /// The claim's attached tests (its `test_map` entry), when it has any.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub verified_by: Vec<SourceLocation>,
-    /// True when this claim surfaced because its BACKING TEST covers the
+    pub tests: Vec<SourceLocation>,
+    /// True when the claim is in a testable (When/While/If) form and has NO
+    /// test attached — the gap rule 22 expects the implementer to close.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub untested: bool,
+    /// True when this claim surfaced because its ATTACHED TEST covers the
     /// located file — `anchor` is then the test's location, and the claim's
     /// implementation lives elsewhere. Locating a test file answers "what
     /// does this test back?".
@@ -83,7 +87,7 @@ fn pattern_covers(pattern: &str, file: &str) -> bool {
 /// are returned with `symbol_matched: false`.
 pub fn locate(model: &ScryModel, file: &str, symbol: Option<&str>) -> LocateResult {
     // Every (key, anchor) pair whose anchor covers the file — implementation
-    // anchors first, then verify anchors (so locating a test file surfaces
+    // anchors first, then test anchors (so locating a test file surfaces
     // the claims it backs; the bool marks the dimension).
     let mut hits: Vec<(&str, &SourceLocation, bool)> = model
         .source_map
@@ -91,7 +95,7 @@ pub fn locate(model: &ScryModel, file: &str, symbol: Option<&str>) -> LocateResu
         .flat_map(|(key, locs)| locs.iter().map(move |l| (key.as_str(), l, false)))
         .chain(
             model
-                .verify_map
+                .test_map
                 .iter()
                 .flat_map(|(key, locs)| locs.iter().map(move |l| (key.as_str(), l, true))),
         )
@@ -248,9 +252,13 @@ fn resolve_claim(
     loc: &SourceLocation,
     via_test: bool,
 ) -> Option<LocatedClaim> {
-    let verified_by = || model.verify_map.get(key).cloned().unwrap_or_default();
+    let tests = || model.test_map.get(key).cloned().unwrap_or_default();
+    let untested = |statement: &str, tests: &[SourceLocation]| {
+        crate::ears::classify(statement).testable() && tests.is_empty()
+    };
     for n in &model.nodes {
         if let Some(r) = n.responsibilities.iter().find(|r| r.id == key) {
+            let tests = tests();
             return Some(LocatedClaim {
                 id: r.id.clone(),
                 statement: Some(r.statement.clone()),
@@ -260,7 +268,8 @@ fn resolve_claim(
                 vagrant: r.vagrant,
                 directives: r.directives.clone(),
                 anchor: loc.clone(),
-                verified_by: verified_by(),
+                untested: untested(&r.statement, &tests),
+                tests,
                 via_test,
             });
         }
@@ -275,13 +284,15 @@ fn resolve_claim(
                 vagrant: n.vagrant,
                 directives: n.directives.clone(),
                 anchor: loc.clone(),
-                verified_by: Vec::new(),
+                untested: false,
+                tests: Vec::new(),
                 via_test,
             });
         }
     }
     for g in &model.groups {
         if let Some(r) = g.responsibilities.iter().find(|r| r.id == key) {
+            let tests = tests();
             return Some(LocatedClaim {
                 id: r.id.clone(),
                 statement: Some(r.statement.clone()),
@@ -291,7 +302,8 @@ fn resolve_claim(
                 vagrant: r.vagrant,
                 directives: r.directives.clone(),
                 anchor: loc.clone(),
-                verified_by: verified_by(),
+                untested: untested(&r.statement, &tests),
+                tests,
                 via_test,
             });
         }
@@ -397,27 +409,53 @@ mod tests {
         assert_eq!(res.claims[0].id, "r-vt");
     }
 
-    /// Locating an implementation file reports each claim's backing tests in
-    /// `verified_by`; locating the TEST file surfaces the claims it backs,
+    /// Locating an implementation file reports each claim's attached tests in
+    /// `tests`; locating the TEST file surfaces the claims it backs,
     /// marked `via_test` with the test's location as the anchor.
     #[test]
-    fn verify_entries_ride_claims_and_reverse_from_the_test_file() {
+    fn test_entries_ride_claims_and_reverse_from_the_test_file() {
         let mut m = model();
-        m.verify_map
+        m.test_map
             .insert("r-vt".into(), vec![loc("tests/auth.rs", Some("forged_token_rejected"))]);
 
         let res = locate(&m, "src/auth.rs", None);
         let vt = res.claims.iter().find(|c| c.id == "r-vt").unwrap();
-        assert_eq!(vt.verified_by.len(), 1, "backing test rides the claim");
+        assert_eq!(vt.tests.len(), 1, "attached test rides the claim");
         assert!(!vt.via_test, "matched via its implementation anchor");
         let hp = res.claims.iter().find(|c| c.id == "r-hp").unwrap();
-        assert!(hp.verified_by.is_empty());
+        assert!(hp.tests.is_empty());
 
         let res = locate(&m, "tests/auth.rs", None);
         assert_eq!(res.claims.len(), 1, "the test file locates the claim it backs");
         assert_eq!(res.claims[0].id, "r-vt");
         assert!(res.claims[0].via_test);
         assert_eq!(res.claims[0].anchor.pattern, "tests/auth.rs");
+    }
+
+    /// A testable (When/While/If) claim with no test attached is flagged
+    /// `untested` right where the agent meets it; attaching a test clears the
+    /// flag, and ubiquitous claims never carry it (their test call is
+    /// judgment, not grammar — rule 22).
+    #[test]
+    fn testable_claim_without_a_test_is_flagged_untested() {
+        let mut m = model();
+        m.nodes
+            .iter_mut()
+            .find(|n| n.id == "vt")
+            .unwrap()
+            .responsibilities[0]
+            .statement = "**If** the token is forged, **then** reject the request".into();
+
+        let res = locate(&m, "src/auth.rs", None);
+        let vt = res.claims.iter().find(|c| c.id == "r-vt").unwrap();
+        assert!(vt.untested, "testable form + no test attached = untested");
+        let hp = res.claims.iter().find(|c| c.id == "r-hp").unwrap();
+        assert!(!hp.untested, "a ubiquitous claim is never flagged");
+
+        m.test_map.insert("r-vt".into(), vec![loc("tests/auth.rs", Some("forged_rejected"))]);
+        let res = locate(&m, "src/auth.rs", None);
+        let vt = res.claims.iter().find(|c| c.id == "r-vt").unwrap();
+        assert!(!vt.untested, "attaching the test clears the flag");
     }
 
     #[test]

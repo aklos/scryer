@@ -64,15 +64,15 @@ fn is_zero(n: &u32) -> bool {
     *n == 0
 }
 
-/// The model locations behind a baseline key: `verify:`-namespaced keys read
-/// the verify_map (claim → backing test), plain keys the source_map. One
+/// The model locations behind a baseline key: `test:`-namespaced keys read
+/// the test_map (claim → attached test), plain keys the source_map. One
 /// baseline fingerprints both dimensions.
 fn keyed_locs<'m>(
     model: &'m ScryModel,
     key: &str,
 ) -> Option<&'m Vec<scryer_core::SourceLocation>> {
-    match scryer_core::verify_resp_id(key) {
-        Some(id) => model.verify_map.get(id),
+    match scryer_core::test_resp_id(key) {
+        Some(id) => model.test_map.get(id),
         None => model.source_map.get(key),
     }
 }
@@ -81,8 +81,8 @@ fn keyed_locs_mut<'m>(
     model: &'m mut ScryModel,
     key: &str,
 ) -> Option<&'m mut Vec<scryer_core::SourceLocation>> {
-    match scryer_core::verify_resp_id(key) {
-        Some(id) => model.verify_map.get_mut(id),
+    match scryer_core::test_resp_id(key) {
+        Some(id) => model.test_map.get_mut(id),
         None => model.source_map.get_mut(key),
     }
 }
@@ -207,6 +207,17 @@ impl FileCache {
     }
 }
 
+/// Every definition matching `name` — identifier defs first, then string-named
+/// test blocks (`it("…")`), so a test anchored by its name resolves through the
+/// same lookup as a code symbol while identifier defs keep priority on ties.
+fn named_defs<'p>(parse: &'p lang::FileParse, name: &'p str) -> impl Iterator<Item = &'p lang::Def> {
+    parse
+        .defs
+        .iter()
+        .chain(parse.test_blocks.iter())
+        .filter(move |d| d.name == name)
+}
+
 /// Resolve one anchor against current file content: the span to fingerprint.
 /// Symbol anchors resolve through the parse (nearest same-named def to `near`);
 /// `None` means the symbol is gone. Anchors without a symbol use the recorded
@@ -222,7 +233,9 @@ fn resolve_span(
     let line_count = source.lines().count().max(1) as u32;
     if let (Some(name), Some(parse)) = (symbol, parse) {
         let mut best: Option<&lang::Def> = None;
-        for def in parse.defs.iter().filter(|d| d.name == name) {
+        // Identifier defs first, then string-named test blocks (`it("…")`) —
+        // an attached test anchored by its name resolves like any symbol.
+        for def in named_defs(parse, name) {
             best = match best {
                 None => Some(def),
                 Some(cur) => {
@@ -332,12 +345,12 @@ pub fn write_baseline(r: &ModelRef) -> Result<usize, String> {
     let mut project_files: Option<std::collections::BTreeSet<String>> = None;
 
     // Both anchor dimensions share the baseline: source anchors under their
-    // bare key, verify anchors (claim → backing test) under `verify:{id}`.
+    // bare key, test anchors (claim → attached test) under `test:{id}`.
     let mut keyed: Vec<(String, &Vec<scryer_core::SourceLocation>)> = model
         .source_map
         .iter()
         .map(|(k, v)| (k.clone(), v))
-        .chain(model.verify_map.iter().map(|(k, v)| (scryer_core::verify_key(k), v)))
+        .chain(model.test_map.iter().map(|(k, v)| (scryer_core::test_key(k), v)))
         .collect();
     keyed.sort_by(|a, b| a.0.cmp(&b.0));
     for (key, locs) in keyed {
@@ -365,9 +378,7 @@ pub fn write_baseline(r: &ModelRef) -> Result<usize, String> {
                     return; // symbol unresolvable right now — nothing to remember
                 };
                 let peers = match (&loc.symbol, parse) {
-                    (Some(name), Some(p)) => {
-                        p.defs.iter().filter(|d| &d.name == name).count() as u32
-                    }
+                    (Some(name), Some(p)) => named_defs(p, name).count() as u32,
                     _ => 0,
                 };
                 anchors.push(AnchorEntry {
@@ -442,10 +453,7 @@ fn rescue_missing(
         };
         let lines: Vec<&str> = source.lines().collect();
         let spans: Vec<(u32, u32)> = match (&entry.symbol, parse) {
-            (Some(name), Some(p)) => p
-                .defs
-                .iter()
-                .filter(|d| &d.name == name)
+            (Some(name), Some(p)) => named_defs(p, name)
                 .map(|d| (d.start_line, d.end_line.max(d.start_line)))
                 .filter(|&(s, e)| span_hash(&lines, s, e) == entry.hash)
                 .collect(),
@@ -539,8 +547,8 @@ pub fn check_anchors(r: &ModelRef) -> Result<AnchorCheck, String> {
         if !still_anchored {
             continue;
         }
-        // A verify anchor's host is the claim the test backs.
-        let host_key = scryer_core::verify_resp_id(&entry.key).unwrap_or(&entry.key);
+        // A test anchor's host is the claim the test backs.
+        let host_key = scryer_core::test_resp_id(&entry.key).unwrap_or(&entry.key);
         let Some((host_id, host_name)) = host_of.get(host_key).cloned() else {
             continue; // dangling sourceMap key — validate_model's department
         };
@@ -609,7 +617,7 @@ pub fn check_anchors(r: &ModelRef) -> Result<AnchorCheck, String> {
         let lines: Vec<&str> = source.lines().collect();
 
         let fate = if let (Some(name), Some(parse)) = (entry.symbol.as_deref(), parse.as_ref()) {
-            let defs: Vec<&lang::Def> = parse.defs.iter().filter(|d| d.name == name).collect();
+            let defs: Vec<&lang::Def> = named_defs(parse, name).collect();
             if defs.is_empty() {
                 Fate::Broken
             } else {
@@ -726,14 +734,14 @@ pub fn untracked_anchors(r: &ModelRef) -> Result<Vec<UntrackedAnchor>, String> {
         .iter()
         .map(|e| (e.key.as_str(), e.source_pattern(), e.symbol.as_deref()))
         .collect();
-    // Same two-dimension universe as write_baseline: a verify anchor without a
+    // Same two-dimension universe as write_baseline: a test anchor without a
     // fingerprint is a silent handle — "test-backed" must not read as watched
     // when the tripwire can't see the test.
     let mut keyed: Vec<(String, &Vec<scryer_core::SourceLocation>)> = model
         .source_map
         .iter()
         .map(|(k, v)| (k.clone(), v))
-        .chain(model.verify_map.iter().map(|(k, v)| (scryer_core::verify_key(k), v)))
+        .chain(model.test_map.iter().map(|(k, v)| (scryer_core::test_key(k), v)))
         .collect();
     keyed.sort_by(|a, b| a.0.cmp(&b.0));
     let mut out = Vec::new();
@@ -785,11 +793,11 @@ pub fn out_of_plan_scopes(r: &ModelRef) -> Result<Vec<drift::DriftScope>, String
         if planned.contains(obs.key.as_str()) {
             continue;
         }
-        // Verify anchors are not drift inputs: an edited test is a health
+        // Test anchors are not drift inputs: an edited test is a health
         // signal (the claim's backing changed), not a regression to the
         // mapped implementation — and its key would never match a plan
         // element, so it could only ever add noise scopes here.
-        if scryer_core::verify_resp_id(&obs.key).is_some() {
+        if scryer_core::test_resp_id(&obs.key).is_some() {
             continue;
         }
         by_host
@@ -942,9 +950,9 @@ mod tests {
         assert_eq!(check.observations[0].host_id, "sym");
     }
 
-    /// Verify anchors (claim → backing test) ride the same baseline under
-    /// `verify:{id}` keys: an edited test fires a namespaced observation that
-    /// names the claim's host, and a verify regression never mints a drift
+    /// Test anchors (claim → attached test) ride the same baseline under
+    /// `test:{id}` keys: an edited test fires a namespaced observation that
+    /// names the claim's host, and a test-anchor regression never mints a drift
     /// scope — it is a health signal, not an out-of-plan code regression.
     #[test]
     fn verify_anchor_rides_the_baseline_and_is_not_drift() {
@@ -952,7 +960,7 @@ mod tests {
         let (_dir, r) = project_with("src/m.ts", TS);
         std::fs::write(r.project_path().join("src/m.test.ts"), TEST_TS).unwrap();
         let mut m = leaf_model("alpha", "src/m.ts", 1, 3);
-        m.verify_map.insert(
+        m.test_map.insert(
             "r1".into(),
             vec![SourceLocation {
                 pattern: "src/m.test.ts".into(),
@@ -975,15 +983,57 @@ mod tests {
         let check = check_anchors(&r).unwrap();
         assert_eq!(check.observations.len(), 1, "{:?}", check.observations);
         let obs = &check.observations[0];
-        assert_eq!(obs.key, "verify:r1", "the observation is verify-namespaced");
+        assert_eq!(obs.key, "test:r1", "the observation is test-namespaced");
         assert_eq!(obs.host_id, "sym", "the host is the claim's, not the test's");
         assert_eq!(obs.state, AnchorState::Changed);
 
         let scopes = out_of_plan_scopes(&r).unwrap();
-        assert!(scopes.is_empty(), "a verify regression is not drift: {scopes:?}");
+        assert!(scopes.is_empty(), "a test-anchor regression is not drift: {scopes:?}");
     }
 
-    /// A verify entry added after the last reconcile has no fingerprint yet —
+    /// A test anchored by its NAME — `symbol` holding the `it("…")` string,
+    /// not a code identifier — fingerprints and trips like any symbol anchor.
+    /// (This is how agents record tests in practice; before test_blocks the
+    /// baseline silently skipped these, so "test changed" could never fire.)
+    #[test]
+    fn name_string_test_anchor_is_fingerprinted_and_trips() {
+        const SPEC_TS: &str = "describe(\"verify\", () => {\n  it(\"rejects an unsigned webhook\", async () => {\n    expect(check(1)).toBe(403);\n  });\n});\n";
+        let (_dir, r) = project_with("src/m.ts", TS);
+        std::fs::write(r.project_path().join("src/m.spec.ts"), SPEC_TS).unwrap();
+        let mut m = leaf_model("alpha", "src/m.ts", 1, 3);
+        m.test_map.insert(
+            "r1".into(),
+            vec![SourceLocation {
+                pattern: "src/m.spec.ts".into(),
+                symbol: Some("rejects an unsigned webhook".into()),
+                line: None,
+                end_line: None,
+                command: None,
+            }],
+        );
+        scryer_core::write_model_at(&r, &m).unwrap();
+        reconcile(&r);
+
+        let un = untracked_anchors(&r).unwrap();
+        assert!(
+            !un.iter().any(|u| u.key == "test:r1"),
+            "a name-anchored test is fingerprinted, not a silent handle: {un:?}"
+        );
+
+        touch_gate();
+        std::fs::write(
+            r.project_path().join("src/m.spec.ts"),
+            SPEC_TS.replace("check(1)", "check(2)"),
+        )
+        .unwrap();
+
+        let check = check_anchors(&r).unwrap();
+        assert_eq!(check.observations.len(), 1, "{:?}", check.observations);
+        assert_eq!(check.observations[0].key, "test:r1");
+        assert_eq!(check.observations[0].state, AnchorState::Changed);
+    }
+
+    /// A test entry added after the last reconcile has no fingerprint yet —
     /// the untracked sweep must surface it, or "test-backed" reads as watched
     /// while the tripwire is blind to the test.
     #[test]
@@ -993,7 +1043,7 @@ mod tests {
         reconcile(&r);
 
         let mut m = read_model_at(&r).unwrap();
-        m.verify_map.insert(
+        m.test_map.insert(
             "r1".into(),
             vec![SourceLocation {
                 pattern: "src/m.test.ts".into(),
@@ -1007,8 +1057,8 @@ mod tests {
 
         let un = untracked_anchors(&r).unwrap();
         assert!(
-            un.iter().any(|u| u.key == "verify:r1" && u.file == "src/m.test.ts"),
-            "silent verify handle surfaces: {un:?}"
+            un.iter().any(|u| u.key == "test:r1" && u.file == "src/m.test.ts"),
+            "silent test handle surfaces: {un:?}"
         );
     }
 

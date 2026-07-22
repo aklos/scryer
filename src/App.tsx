@@ -786,7 +786,6 @@ function Workspace({
           // map view; undefined elsewhere disables the tint.
           activeLevel={view === "diagram" ? diagramFocus : undefined}
           completeness={healthReport?.completeness}
-          health={healthReport?.health.nodes}
           concernLens={concernLens}
           onSetConcernLens={setConcernLens}
         />

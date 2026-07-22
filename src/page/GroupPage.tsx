@@ -3,11 +3,11 @@ import { X } from "lucide-react";
 import type { Node, Group } from "../viewmodel";
 import {
   effectiveSourceMap,
-  effectiveVerifyMap,
+  effectiveTestMap,
   nextResponsibilityId,
 } from "../viewmodel";
 import type { Editor } from "../editor";
-import { verifyStatesOf } from "../health";
+import { testStatesOf } from "../health";
 import { ChangeGlyph } from "../diffkit";
 import { usePageMenu, useCopyId, copyIdItem } from "../pageMenu";
 import {
@@ -57,8 +57,8 @@ export function GroupPageBody(props: PageProps & { group: Group }) {
     .filter((n): n is Node => Boolean(n));
 
   const sourceMap = effectiveSourceMap(committed, model);
-  const verifyMap = effectiveVerifyMap(committed, model);
-  const verifyStates = useMemo(() => verifyStatesOf(props.report), [props.report]);
+  const testMap = effectiveTestMap(committed, model);
+  const testStates = useMemo(() => testStatesOf(props.report), [props.report]);
   const resps = group.responsibilities ?? [];
   const committedResps =
     committed?.groups.find((g) => g.id === group.id)?.responsibilities ?? [];
@@ -129,8 +129,8 @@ export function GroupPageBody(props: PageProps & { group: Group }) {
               plannedHosts={plannedRespHosts(model)}
               concerns={model.concerns ?? []}
               sourceMap={sourceMap}
-              verifyMap={verifyMap}
-              verifyStates={verifyStates}
+              testMap={testMap}
+              testStates={testStates}
               projectPath={projectPath}
               leafHost={false} // group claims discharge through members
               codeBackedHost // groups organize code-backed members

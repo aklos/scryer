@@ -179,9 +179,9 @@ fn subtree_payload(model: &ScryModel, node_id: &str) -> Result<serde_json::Value
         .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap_or(serde_json::Value::Null)))
         .collect();
 
-    // Backing tests (claim → verify locations), scoped like the source map.
-    let verify_map: serde_json::Map<String, serde_json::Value> = model
-        .verify_map
+    // Attached tests (claim → test locations), scoped like the source map.
+    let test_map: serde_json::Map<String, serde_json::Value> = model
+        .test_map
         .iter()
         .filter(|(k, _)| subtree_resp_ids.contains(k.as_str()))
         .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap_or(serde_json::Value::Null)))
@@ -244,7 +244,7 @@ fn subtree_payload(model: &ScryModel, node_id: &str) -> Result<serde_json::Value
         // additionally inherits this node's own directives (visible above).
         "inheritedDirectives": scryer_core::inherited_directives(model, node_id),
         "sourceMap": source_map,
-        "verifyMap": verify_map,
+        "testMap": test_map,
         "boundaries": boundaries,
     }))
 }
@@ -541,7 +541,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Reverse lookup from code into the model — the tool to reach for when a task starts from a FILE ('fix the save race in useModelStorage.ts') rather than from the model. Given a project-relative `file` (and optional `symbol` to narrow to one definition), returns the intent governing that location in ONE call: every claim anchored there (with stale/vagrant flags, and `verifiedBy` listing its backing tests when linked; locating a TEST file returns the claims that test backs, marked `viaTest`), the owning node chain finest-first with its breadcrumb, the boundary owner of the code region, the BINDING directives (the claim's own, the finest node's, and everything inherited from its ancestors), any pending plan entries touching the located elements, and `scopeHealth` — the owning node's own + subtree coverage counts and completeness, so you see how well-modeled the surrounding scope is, not just what it intends. Reads the working view, so claims you just authored are visible. A file with no anchored claims still reports its boundary owner — the node whose intent governs the region. When you already know the file you're working in, one `locate` call replaces the search_model → read_model orientation dance."
+        description = "Reverse lookup from code into the model — the tool to reach for when a task starts from a FILE ('fix the save race in useModelStorage.ts') rather than from the model. Given a project-relative `file` (and optional `symbol` to narrow to one definition), returns the intent governing that location in ONE call: every claim anchored there (with stale/vagrant flags; `tests` lists its attached tests, and `untested` marks a testable When/While/If claim with NO test attached — the gap rule 22 expects you to close while you are in this file; locating a TEST file returns the claims that test is attached to, marked `viaTest`), the owning node chain finest-first with its breadcrumb, the boundary owner of the code region, the BINDING directives (the claim's own, the finest node's, and everything inherited from its ancestors), any pending plan entries touching the located elements, and `scopeHealth` — the owning node's own + subtree coverage counts and completeness, so you see how well-modeled the surrounding scope is, not just what it intends. Reads the working view, so claims you just authored are visible. A file with no anchored claims still reports its boundary owner — the node whose intent governs the region. When you already know the file you're working in, one `locate` call replaces the search_model → read_model orientation dance."
     )]
     fn locate(
         &self,
@@ -641,7 +641,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "One-call task-scoped orientation — start here when you have a TASK ('fix the save race in useModelStorage') instead of a model question; it replaces the get_health / get_rules / search_model / read_model dance. Pass the task in a few words and/or the project-relative files it touches. Returns, scoped to what you're about to do: per file the governing node chain, anchored claims, and BINDING directives (own + inherited, same as `locate`); per task the best-matching model nodes with their responsibilities and inherited directives; the pending plan entries touching that scope (the work queue you may be executing); the drift scopes inside it (code changed since the last reconcile); up to 3 matching modeling rules IN FULL; a `phase` verdict — plan-execution (pending intent exists: implement it), reconcile (code changed outside the plan: compare and flag_drift), or free — and the whole-loop `state` line. The whole-model tools (get_health, read_model, get_pending) remain for model-building sessions; orient is the front door for coding sessions."
+        description = "One-call task-scoped orientation — start here when you have a TASK ('fix the save race in useModelStorage') instead of a model question; it replaces the get_health / get_rules / search_model / read_model dance. Pass the task in a few words and/or the project-relative files it touches. Returns, scoped to what you're about to do: per file the governing node chain, anchored claims (each flagged `untested` when it is in a testable When/While/If form with NO test attached — the gap you are expected to close as you work here, rule 22), and BINDING directives (own + inherited, same as `locate`); per task the best-matching model nodes with their responsibilities, an `untestedClaims` count when any of them lack tests, and inherited directives; the pending plan entries touching that scope (the work queue you may be executing); the drift scopes inside it (code changed since the last reconcile); up to 3 matching modeling rules IN FULL; a `phase` verdict — plan-execution (pending intent exists: implement it, tests included), reconcile (code changed outside the plan: compare and flag_drift), or free — and the whole-loop `state` line (its `untested` figure is the whole-model test gap). The whole-model tools (get_health, read_model, get_pending) remain for model-building sessions; orient is the front door for coding sessions."
     )]
     fn orient(
         &self,
@@ -759,6 +759,25 @@ impl ScryerServer {
                 finest.insert(n.id.clone());
                 let resps: Vec<&str> =
                     n.responsibilities.iter().map(|r| r.statement.as_str()).collect();
+                // Testable claims on this node with no test attached — same
+                // gate as health's `untested` (person/external never expect
+                // tests), surfaced per match so the test gap is in view from
+                // the first orientation call.
+                let untested = if n.external == Some(true) || n.kind == scryer_core::Kind::Person
+                {
+                    0
+                } else {
+                    n.responsibilities
+                        .iter()
+                        .filter(|r| {
+                            scryer_core::ears::classify(&r.statement).testable()
+                                && !working
+                                    .test_map
+                                    .get(&r.id)
+                                    .is_some_and(|l| !l.is_empty())
+                        })
+                        .count()
+                };
                 let mut v = serde_json::json!({
                     "id": n.id,
                     "kind": kind_str(&n.kind),
@@ -766,6 +785,7 @@ impl ScryerServer {
                     "path": breadcrumb(&working, &n.id),
                     "score": (score * 100.0).round() / 100.0,
                     "responsibilities": resps,
+                    "untestedClaims": if untested > 0 { Some(untested) } else { None },
                     "inheritedDirectives": scryer_core::inherited_directives(&working, &n.id),
                 });
                 strip_fields_compact(&mut v);
@@ -881,9 +901,9 @@ impl ScryerServer {
 
         let phase = match (pending_total > 0, drift_total > 0) {
             (true, true) => "plan-execution + reconcile: this scope has pending intent to implement AND code that changed outside the plan — get_drift the scope before building on it",
-            (true, false) => "plan-execution: pending intent exists in this scope — implement it, then mark_implemented (anchors param folds + anchors in one call)",
+            (true, false) => "plan-execution: pending intent exists in this scope — implement it with its tests, then mark_implemented (`anchors` + `tests` fold, anchor, and attach tests in one call)",
             (false, true) => "reconcile: code in this scope changed since the last reconcile — compare against the claims, flag_drift findings, reconcile_drift when done",
-            (false, false) => "free: model and code agree in this scope — plan model deltas first if your change alters what the model claims (see Proportionality)",
+            (false, false) => "free: model and code agree in this scope — plan model deltas first if your change alters what the model claims (see Proportionality); claims marked `untested` are standing work",
         };
 
         let mut payload = serde_json::json!({
@@ -1369,7 +1389,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "The model's observability report — deterministic, no semantic judgment. Per node: own + subtree rollups of responsibility/property counts, vagrant/stale flags, and anchor coverage (anchorable = any committed claim on LEAF nodes; claims on structural nodes are discharged through their subtree and are never 'unmapped'). `verified` counts claims carrying a BACKING TEST (a verify entry) — a separate dimension from anchoring, not gated on leafness (a structural claim backed by an integration test counts); anchor observations keyed `verify:{id}` are that claim's test changing/breaking, not its implementation. `testable` counts claims in a When/While/If form on code-backed hosts — a concrete trigger/state/failure a test can demonstrate, classified deterministically from the leading keyword — and `untested` is the testable claims with no verify entry: the demonstrable claims nothing demonstrates (rule 22's work queue). Plus anchor state from the git-free fingerprint check — `changed` (the anchored span's content differs from what the model last saw), `broken` (the symbol is gone), `fileMissing` — with moved-but-unchanged symbols silently re-anchored. The whole-model summary AGGREGATES anchors per container scope (`anchorSummary.byScope`: 'API: 31 changed, 5 broken'); the flat per-anchor list appears only on the node-scoped call. Also a declared-link audit against the extracted import graph (edge_count 0 = asserted-only; 'unmodeled' = sibling pairs the code connects but no link declares). Also per node: `completeness` — how much of the node's AUTHORED subtree (committed + planned) reads through to real code, so it is defined from greenfield onward. `pct` (0–100) is anchored primitives over authored ones, where a primitive is a node's boundary box (counted only when its glob owns a real file), a leaf responsibility, or a data shape (counted when its anchor resolves and is not broken/missing); a scaffolded container reads low but non-zero, greenfield reads 0. `pct` is ABSENT ('—', unmeasured) when the subtree has no leaf primitives (a bare box), so an undecomposed shell never reads 100%. Only anchor what you have implemented — that discipline is what makes the figure trustworthy. Pass node_id to scope to one subtree with per-child summaries; omit it for the whole-model summary. Use this to decide WHERE work is needed (unmapped claims, vagrant flags, dark links) before reading full subtrees. `broadBoundaries` flags node boundary globs with no directory prefix (e.g. `**/*`), which silently own every otherwise-unowned file. The whole-model summary also carries `coverage` — calibration of the deterministic layer itself: which languages' imports the link audit resolves FULLY vs by name-heuristic (a declared link between name-heuristic files can read asserted-only even when real), and `silentAnchors`, sourceMap anchors holding no fingerprint tripwire — drift can never fire for those, so treat their green as silence, not health."
+        description = "The model's observability report — deterministic, no semantic judgment. THE HEADLINE NUMBERS ARE THE TEST COUNTS: `tested` (claims with a test ATTACHED), `testable` (claims in a When/While/If form on code-backed hosts — a concrete trigger/state/failure a test can arrange and assert, classified deterministically from the leading keyword), and `untested` (testable claims with NO test attached — rule 22's work queue; drive it to zero on the scopes you build). An attached test is the highest-trust signal the model carries, so read these first and treat everything below as supporting detail. `tested` is a separate dimension from anchoring, not gated on leafness (a structural claim carrying an integration test counts); anchor observations keyed `test:{id}` are that claim's attached test changing/breaking, not its implementation. Also per node: own + subtree rollups of responsibility/property counts, vagrant/stale flags, and anchor coverage (anchorable = any committed claim on LEAF nodes; claims on structural nodes are discharged through their subtree and are never 'unmapped'). Plus anchor state from the git-free fingerprint check — `changed` (the anchored span's content differs from what the model last saw), `broken` (the symbol is gone), `fileMissing` — with moved-but-unchanged symbols silently re-anchored. The whole-model summary AGGREGATES anchors per container scope (`anchorSummary.byScope`: 'API: 31 changed, 5 broken'); the flat per-anchor list appears only on the node-scoped call. Also a declared-link audit against the extracted import graph (edge_count 0 = asserted-only; 'unmodeled' = sibling pairs the code connects but no link declares). Also per node: `completeness` — how much of the node's AUTHORED subtree (committed + planned) reads through to real code, so it is defined from greenfield onward. `pct` (0–100) is anchored primitives over authored ones, where a primitive is a node's boundary box (counted only when its glob owns a real file), a leaf responsibility, or a data shape (counted when its anchor resolves and is not broken/missing); a scaffolded container reads low but non-zero, greenfield reads 0. `pct` is ABSENT ('—', unmeasured) when the subtree has no leaf primitives (a bare box), so an undecomposed shell never reads 100%. Only anchor what you have implemented — that discipline is what makes the figure trustworthy. Pass node_id to scope to one subtree with per-child summaries; omit it for the whole-model summary. Use this to decide WHERE work is needed (unmapped claims, vagrant flags, dark links) before reading full subtrees. `broadBoundaries` flags node boundary globs with no directory prefix (e.g. `**/*`), which silently own every otherwise-unowned file. The whole-model summary also carries `coverage` — calibration of the deterministic layer itself: which languages' imports the link audit resolves FULLY vs by name-heuristic (a declared link between name-heuristic files can read asserted-only even when real), and `silentAnchors`, sourceMap anchors holding no fingerprint tripwire — drift can never fire for those, so treat their green as silence, not health."
     )]
     fn get_health(
         &self,

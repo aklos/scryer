@@ -207,10 +207,10 @@ export interface ScryModel {
    *  numerator). Agent-produced and regenerable; never hand-authored. */
   sourceMap?: Record<string, SourceLocation[]>;
   /** Keyed by **responsibility id** → locations of the tests that back the
-   *  claim (verification handle). A separate dimension from `sourceMap` —
-   *  where a claim is implemented vs. where it is verified. Same single-home
+   *  claim (which tests are attached). A separate dimension from `sourceMap` —
+   *  where a claim is implemented vs. which tests are attached. Same single-home
    *  layer rule. Agent-produced; never executed. */
-  verifyMap?: Record<string, SourceLocation[]>;
+  testMap?: Record<string, SourceLocation[]>;
   /** Keyed by **node id** → boundary globs (coverage denominator + extraction
    *  scope). Agent-produced and regenerable; never hand-authored. */
   boundaries?: Record<string, Source[]>;
@@ -282,13 +282,13 @@ export function effectiveSourceMap(
   return { ...(committed?.sourceMap ?? {}), ...(working.sourceMap ?? {}) };
 }
 
-/** The backing tests visible in the working view — same single-home merge as
- *  {@link effectiveSourceMap}, for the verify dimension. Display-only. */
-export function effectiveVerifyMap(
+/** The attached tests visible in the working view — same single-home merge as
+ *  {@link effectiveSourceMap}, for the attached-test dimension. Display-only. */
+export function effectiveTestMap(
   committed: ScryModel | null,
   working: ScryModel,
 ): Record<string, SourceLocation[]> {
-  return { ...(committed?.verifyMap ?? {}), ...(working.verifyMap ?? {}) };
+  return { ...(committed?.testMap ?? {}), ...(working.testMap ?? {}) };
 }
 
 /** Child kind for a parent kind (used when adding a new node). */
@@ -807,9 +807,9 @@ export function removeNode(model: ScryModel, nodeId: string): ScryModel {
   const sourceMap = { ...(model.sourceMap ?? {}) };
   for (const id of removedRespIds) delete sourceMap[id];
   for (const id of remove) delete sourceMap[id];
-  // verifyMap is keyed by responsibility id only (a test backs a claim).
-  const verifyMap = { ...(model.verifyMap ?? {}) };
-  for (const id of removedRespIds) delete verifyMap[id];
+  // testMap is keyed by responsibility id only (a test backs a claim).
+  const testMap = { ...(model.testMap ?? {}) };
+  for (const id of removedRespIds) delete testMap[id];
   const boundaries = { ...(model.boundaries ?? {}) };
   for (const id of remove) delete boundaries[id];
   return {
@@ -823,7 +823,7 @@ export function removeNode(model: ScryModel, nodeId: string): ScryModel {
       memberIds: g.memberIds.filter((m) => !remove.has(m)),
     })),
     sourceMap,
-    verifyMap,
+    testMap,
     boundaries,
   };
 }
