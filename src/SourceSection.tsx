@@ -260,8 +260,9 @@ function TestLine({
   const anchored = anchoredLocs.length > 0;
   const file = locs[0].pattern;
   const [open, setOpen] = useState(false);
-  // Which of a merged line's tests the peek shows — the tab strip's selection.
-  const [tab, setTab] = useState(0);
+  // The one disclosed test whose peek is open — accordion, not stack: the
+  // peeks share one recess, so opening a test closes the previous one.
+  const [openCase, setOpenCase] = useState<number | null>(null);
   const [status, setStatus] = useState<AnchorStatus | null>(null);
 
   // Live check, same as a source anchor: the backend resolves a test's name
@@ -326,7 +327,12 @@ function TestLine({
         type="button"
         data-cam="resp-test"
         disabled={!anchored}
-        onClick={() => anchored && setOpen((o) => !o)}
+        onClick={() => {
+          if (!anchored) return;
+          // Reopening starts all-collapsed — no memory of the last open test.
+          setOpenCase(null);
+          setOpen((o) => !o);
+        }}
         className={`group/src inline-flex max-w-full items-baseline gap-1 text-left ${
           anchored ? "" : "cursor-default"
         }`}
@@ -379,37 +385,67 @@ function TestLine({
         </span>
         {locs.length > 1 && <span className="text-[var(--text-muted)]">×{locs.length}</span>}
       </button>
-      {/* The tab strip: a merged line's tests, one peek at a time. The names —
-          tooltip-only on the closed line — surface here, where they're doing a
-          job (picking a test) instead of restating the claim. A lone test
-          needs no strip: the peek just opens, as before. */}
-      {open && anchoredLocs.length > 1 && (
-        <div className="mt-0.5 flex flex-wrap items-center gap-1">
-          {anchoredLocs.map((l, i) => (
-            <button
+      {/* A lone test opens its peek directly. A merged ×N line discloses one
+          indented line PER TEST — full name on its own row, the same
+          chevron-line anatomy as everything else here — and each line toggles
+          its own peek. No tabs: pills are foreign to this page's language,
+          and truncating long it() names to fit them said nothing. */}
+      {open &&
+        (anchoredLocs.length === 1 ? (
+          <InlinePeek loc={anchoredLocs[0]} projectPath={projectPath} bleed={bleed} />
+        ) : (
+          anchoredLocs.map((l, i) => (
+            <TestCaseLine
               key={i}
-              type="button"
-              onClick={() => setTab(i)}
-              className={`max-w-[280px] truncate rounded px-1.5 py-0.5 text-left font-mono text-2xs ${
-                i === Math.min(tab, anchoredLocs.length - 1)
-                  ? "bg-[var(--surface-active)] text-[var(--text)]"
-                  : "text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
-              }`}
-              title={l.symbol ?? `${file}:${l.line}`}
-            >
-              {l.symbol ?? `line ${l.line}`}
-            </button>
-          ))}
-        </div>
-      )}
-      {open && anchoredLocs.length > 0 && (
-        <InlinePeek
-          loc={anchoredLocs[Math.min(tab, anchoredLocs.length - 1)]}
-          projectPath={projectPath}
-          bleed={bleed}
-        />
-      )}
+              loc={l}
+              projectPath={projectPath}
+              bleed={bleed}
+              open={openCase === i}
+              onToggle={() => setOpenCase((o) => (o === i ? null : i))}
+            />
+          ))
+        ))}
     </div>
+  );
+}
+
+/** One test of a disclosed ×N line: an indented `› “name”` row toggling its
+ *  own peek — the file line above already names where they all live. */
+function TestCaseLine({
+  loc,
+  projectPath,
+  bleed,
+  open,
+  onToggle,
+}: {
+  loc: SourceLocation;
+  projectPath: string | null;
+  bleed?: string;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const name = loc.symbol ? `“${loc.symbol}”` : `line ${loc.line}`;
+  return (
+    <>
+      <div className="pl-4">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="group/src inline-flex max-w-full items-baseline gap-1 text-left"
+          title={loc.symbol ?? "Peek at the test"}
+        >
+          <ChevronRight
+            className={`relative top-px h-3 w-3 shrink-0 text-[var(--text-ghost)] transition-transform ${
+              open ? "rotate-90" : ""
+            }`}
+          />
+          <span className="min-w-0 truncate text-[var(--text-muted)] group-hover/src:text-blue-600 group-hover/src:underline dark:group-hover/src:text-blue-400">
+            {name}
+          </span>
+        </button>
+      </div>
+      {open && <InlinePeek loc={loc} projectPath={projectPath} bleed={bleed} />}
+    </>
   );
 }
 
