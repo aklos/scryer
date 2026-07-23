@@ -10,6 +10,10 @@
 import { useSyncExternalStore } from "react";
 import ReactDOM from "react-dom/client";
 import "../src/index.css";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/jetbrains-mono";
+import "@fontsource-variable/space-grotesk";
+import "./fonts.css";
 import { applyTheme, loadTheme } from "../src/theme";
 import { sceneById } from "./scenes";
 import { Runner } from "./runner";
@@ -39,9 +43,9 @@ const TERMINAL_PREVIEW: TerminalState = {
       kind: "say",
       text: "Refunds aren't modelled yet. I'll plan them across the services they touch — the ledger, the webhook dispatcher, and notifications. Writing it into the model now.",
     },
-    { kind: "tool", tool: "update_nodes", target: "ledger", arg: "Post a refund as a reversing double-entry against the original capture", status: "ok" },
-    { kind: "tool", tool: "update_nodes", target: "webhooks", arg: "Deliver refund.created and refund.settled to the merchant endpoint", status: "ok" },
-    { kind: "tool", tool: "update_nodes", target: "notifications", arg: "Email a refund confirmation to the cardholder", status: "run" },
+    { kind: "tool", tool: "update_nodes", target: "ledger", arg: "When a captured payment is refunded, post a reversing double-entry against the original capture", status: "ok" },
+    { kind: "tool", tool: "update_nodes", target: "webhooks", arg: "When a refund is created or settled, deliver the matching event to the merchant's endpoint", status: "ok" },
+    { kind: "tool", tool: "update_nodes", target: "notifications", arg: "When a refund settles, email the cardholder a confirmation", status: "run" },
   ],
 };
 

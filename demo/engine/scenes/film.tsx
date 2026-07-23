@@ -25,7 +25,7 @@ import {
   IDLE_BUILD,
   type WorkspaceState,
 } from "../Workspace";
-import { paymentsModel } from "../../fixtures";
+import { paymentsModel, cleanHealth } from "../../fixtures";
 import { runRefund, demoEditor, type RefundState } from "./refund";
 import type { Director } from "../director";
 import type { Scene } from "../types";
@@ -71,6 +71,8 @@ interface FilmState extends RefundState {
   stage: "picker" | "shell";
   /** The agent terminal has launched in beside scryer (the seam). */
   launched: boolean;
+  /** The closer: the desktop dissolves into the brand card. */
+  outro: boolean;
 }
 
 /** The destination the prologue builds toward (and the poster frame): the Ledger,
@@ -86,7 +88,7 @@ const LEDGER_SHELL: WorkspaceState = {
   driftScopes: [],
   newNodeIds: EMPTY,
   newRespIds: EMPTY,
-  health: null,
+  health: cleanHealth,
   agent: IDLE_AGENT,
   build: IDLE_BUILD,
 };
@@ -94,6 +96,7 @@ const LEDGER_SHELL: WorkspaceState = {
 const INITIAL: FilmState = {
   stage: "shell",
   launched: false,
+  outro: false,
   term: { cwd: "~/aperture-pay", input: "", running: false, lines: [] },
   shell: LEDGER_SHELL,
 };
@@ -115,6 +118,16 @@ export const filmScene: Scene<FilmState> = {
         </div>
       </div>
       <div className="rf-work" data-cam="work" />
+      <div className="rf-outro" data-show={s.outro ? "true" : undefined}>
+        <div className="rf-outro-frame" data-cam="outro-frame">
+          <div className="rf-outro-brand">
+            <img className="rf-outro-logo" src="/logo.png" alt="" />
+            <span className="rf-outro-name">scryer</span>
+          </div>
+          <span className="rf-outro-tag">Model-driven development for coding agents</span>
+          <span className="rf-outro-url">github.com/aklos/scryer</span>
+        </div>
+      </div>
     </div>
   ),
   run: async (d) => {
@@ -143,8 +156,9 @@ export const filmScene: Scene<FilmState> = {
     await d.wait(350);
 
     // 1. Rewind to the empty picker — where the model comes from. Push in on the
-    //    violet Generate button and click it.
-    await d.set((s) => ({ ...s, stage: "picker" }));
+    //    violet Generate button and click it. (Health goes dark with the model:
+    //    it doesn't exist yet on this side of the rewind.)
+    await d.set((s) => ({ ...s, stage: "picker", shell: { ...s.shell, health: null } }));
     await d.wait(380);
     await d.camera("generate", { zoom: 1.15, duration: 560, hold: 300 });
     await d.cursorTo("generate");
@@ -206,6 +220,7 @@ export const filmScene: Scene<FilmState> = {
         build: IDLE_BUILD,
         pendingIds: new Set(),
         selected: { kind: "node", id: "ledger" },
+        health: cleanHealth,
       },
     }));
     await d.wait(700);
@@ -226,5 +241,14 @@ export const filmScene: Scene<FilmState> = {
     // 6. Hand straight to the refund act (its own establishing shot is skipped —
     //    we're already framed on the pair).
     await runRefund(d as unknown as Director<RefundState>, { skipEstablish: true });
+
+    // 7. THE CLOSER — the last annotation fades, the desktop dissolves into the
+    //    bare stage, and the brand card settles in while the camera glides out
+    //    to frame it. Held long enough to read the tagline and the URL.
+    await d.clear();
+    await d.wait(400);
+    await d.set((s) => ({ ...s, outro: true }));
+    await d.camera("outro-frame", { pad: 0, minZoom: 0.5, duration: 1500 });
+    await d.wait(4200);
   },
 };

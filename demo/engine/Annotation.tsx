@@ -48,8 +48,11 @@ export function AnnotationLayer({ data }: { data: Annotation | null }) {
   const bx = above ? px : px + LEAD;
   const by = above ? py - LEAD : onRight ? py : place === "bottom" ? py + LEAD * 0.62 : py - LEAD * 0.62;
 
+  // The root is keyed by TEXT ONLY: a re-measure of the same annotation must
+  // reposition it, never remount it — a remount restarts the entrance
+  // animation, which reads as a jitter. New text = new annotation, fresh anim.
   return (
-    <div className="film-annot" data-exiting={exiting ? "true" : "false"} key={`${x},${y},${text}`}>
+    <div className="film-annot" data-exiting={exiting ? "true" : "false"} key={text}>
       {/* The leader, in raw frame px (no viewBox), so it lands exactly. */}
       <svg className="film-mark-svg" aria-hidden>
         <path className="film-mark-leader" d={`M${px},${py} L${bx},${by}`} pathLength={100} />

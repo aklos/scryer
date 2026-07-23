@@ -18,7 +18,8 @@
 import { memo } from "react";
 import { Terminal, type TerminalState, type TermLine } from "../Terminal";
 import { WorkspaceShell, IDLE_AGENT, IDLE_BUILD, type WorkspaceState } from "../Workspace";
-import { paymentsModel } from "../../fixtures";
+import { stripMarkup } from "../../../src/markup";
+import { paymentsModel, cleanHealth } from "../../fixtures";
 import type { ScryModel, DriftScope, Responsibility } from "../../../src/viewmodel";
 import type { AgentSession } from "../../../src/hooks/useAgentSession";
 import type { ModelBuild } from "../../../src/hooks/useModelBuild";
@@ -64,20 +65,21 @@ const ESSAY =
   "leads, the implementation follows. I trust this is satisfactory.";
 
 /** The refund claim each service gains, in the order the agent writes them.
- *  These are the args shown in the terminal AND the responsibilities that bloom
- *  into the model. */
+ *  Statements speak EARS with `**bold**` scan anchors (rule 21) — the model
+ *  renders the markup; the terminal shows them stripped (via `stripMarkup`),
+ *  the way a real tool-call arg would read. */
 const WRITES: { id: string; resp: { id: string; statement: string } }[] = [
   {
     id: "ledger",
-    resp: { id: "r-ledger-refund", statement: "Post a refund as a reversing double-entry against the original capture" },
+    resp: { id: "r-ledger-refund", statement: "**When** a captured payment is refunded, **post** a reversing double-entry against the original capture" },
   },
   {
     id: "webhooks",
-    resp: { id: "r-wh-refund", statement: "Deliver refund.created and refund.settled events to the merchant's endpoint" },
+    resp: { id: "r-wh-refund", statement: "**When** a refund is created or settled, **deliver** the matching event to the merchant's endpoint" },
   },
   {
     id: "notifications",
-    resp: { id: "r-notif-refund", statement: "Email a refund confirmation to the cardholder" },
+    resp: { id: "r-notif-refund", statement: "**When** a refund settles, **email** the cardholder a confirmation" },
   },
 ];
 
@@ -95,6 +97,7 @@ const NODE_NAME: Record<string, string> = {
  *  Recent changes page — the blast radius in one place. Fixed timestamps keep the
  *  take deterministic. */
 const PLAN_AT = 1_718_900_000_000;
+// Labels are marker-stripped, matching planDiff (which strips before labeling).
 const PLAN_LOG: readonly ChangeRevision[] = [
   {
     at: PLAN_AT + 52_000,
@@ -103,7 +106,7 @@ const PLAN_LOG: readonly ChangeRevision[] = [
       {
         op: "changed",
         what: "claim",
-        label: WRITES[0].resp.statement,
+        label: stripMarkup(WRITES[0].resp.statement),
         context: NODE_NAME.ledger,
         nodeId: "ledger",
         fields: [{ field: "directive", from: "—", to: CONSTRAINT }],
@@ -116,7 +119,7 @@ const PLAN_LOG: readonly ChangeRevision[] = [
     items: WRITES.map((w) => ({
       op: "added" as const,
       what: "claim" as const,
-      label: w.resp.statement,
+      label: stripMarkup(w.resp.statement),
       context: NODE_NAME[w.id],
       nodeId: w.id,
     })),
@@ -176,6 +179,35 @@ const EDITS: Edit[] = [
       { op: "+", text: "}" },
     ],
   },
+  // --- the tests: each testable claim's trigger arranged, response asserted —
+  //     written as part of the same build (rule 22), not a follow-up chore. -----
+  {
+    file: "ledger/tests/refund.rs",
+    rows: [
+      { op: "+", text: "#[test]" },
+      { op: "+", text: "fn refund_reverses_the_original_capture() {" },
+      { op: "+", text: "    let cap = capture(&tx, dollars(80));" },
+      { op: "+", text: "    post_refund(&tx, &cap, dollars(80)).unwrap();" },
+      { op: "+", text: "    assert_eq!(balance(&tx.account), dollars(0));" },
+      { op: "+", text: "}" },
+      { op: "+", text: "" },
+      { op: "+", text: "#[test]" },
+      { op: "+", text: "fn refund_cannot_exceed_the_captured_amount() {" },
+      { op: "+", text: "    let cap = capture(&tx, dollars(80));" },
+      { op: "+", text: "    assert!(post_refund(&tx, &cap, dollars(100)).is_err());" },
+      { op: "+", text: "}" },
+    ],
+  },
+  {
+    file: "webhooks/dispatch_test.go",
+    rows: [
+      { op: "+", text: "func TestEmitsRefundEvents(t *testing.T) {" },
+      { op: "+", text: "    ev := refundEvent(\"created\")" },
+      { op: "+", text: "    require.NoError(t, d.EmitRefund(ev))" },
+      { op: "+", text: "    require.Equal(t, \"refund.created\", sink.last().Type)" },
+      { op: "+", text: "}" },
+    ],
+  },
   // --- genuine refund plumbing the claims imply (not separate claims): index
   //     existing captures as refundable, and add the column to store the link. --
   {
@@ -215,12 +247,23 @@ const REFUND_SOURCE_MAP = {
   "r-notif-refund": [{ pattern: "notifications/refund.ts", symbol: "sendRefundConfirmation", line: 3, endLine: 24 }],
 };
 
+/** The tests attached in the same `mark_implemented` call (rule 22) — the
+ *  flask lane fills the moment the plan folds into committed. */
+const REFUND_TEST_MAP = {
+  "r-ledger-refund": [
+    { pattern: "ledger/tests/refund.rs", symbol: "refund_reverses_the_original_capture", line: 8, endLine: 20 },
+    { pattern: "ledger/tests/refund.rs", symbol: "refund_cannot_exceed_the_captured_amount", line: 22, endLine: 31 },
+  ],
+  "r-wh-refund": [{ pattern: "webhooks/dispatch_test.go", symbol: "TestEmitsRefundEvents", line: 74, endLine: 92 }],
+  "r-notif-refund": [{ pattern: "notifications/refund.test.ts", symbol: "emails the cardholder when a refund settles", line: 6, endLine: 28 }],
+};
+
 /** The one undescribed behaviour scryer's scan extracts from the overreach — an
  *  unauthorised policy the code now enforces (from the fees.rs change) that no
  *  claim ever asked for. Surfaces as a vagrant claim; the human rejects it. */
 const VAGRANT: Responsibility = {
   id: "r-ledger-vagrant",
-  statement: "Waive the processing fee on every refund",
+  statement: "**Waive** the processing fee on every refund",
   vagrant: true,
 };
 
@@ -308,6 +351,7 @@ export const demoEditor: Editor = {
   addResponsibility: () => "",
   updateResponsibility: noop,
   removeResponsibility: noop,
+  renameConcern: noop,
   adoptResponsibility: noop,
   // Reject a vagrant claim (drop the vagrancy): remove it from the plan and fold
   // an un-flagged copy into committed — so the diff reads it as a deletion to-do
@@ -363,6 +407,7 @@ const RUNNING_AGENT: AgentSession = {
   label: "Planning refund support",
   lastTool: "update_nodes",
   activity: null,
+  outcome: null,
   startFixture: noop,
   startVariation: noop,
   cancel: noop,
@@ -373,6 +418,7 @@ const IMPLEMENTING_AGENT: AgentSession = {
   label: "Implementing refund",
   lastTool: "edit_file",
   activity: null,
+  outcome: null,
   startFixture: noop,
   startVariation: noop,
   cancel: noop,
@@ -416,7 +462,7 @@ const INITIAL: RefundState = {
     driftScopes: [],
     newNodeIds: EMPTY,
     newRespIds: EMPTY,
-    health: null,
+    health: cleanHealth,
     agent: IDLE_AGENT,
     build: IDLE_BUILD,
   },
@@ -518,7 +564,7 @@ export async function runRefund(
         kind: "tool",
         tool: "update_nodes",
         target: w.id,
-        arg: w.resp.statement,
+        arg: stripMarkup(w.resp.statement),
         status: "run",
       });
       await d.set((s) => ({ ...s, shell: { ...s.shell, build: flashOn(w.id) } }));
@@ -611,8 +657,8 @@ export async function runRefund(
     // a sub-1 floor pull the whole shell in off the edges — video-safe.
     await d.camera(".rf-shell", { minZoom: 0.7, pad: 90, duration: 1200, hold: 250 });
 
-    // Open Recent changes from the status bar, and seed the journal it shows.
-    const CHANGES = '[title^="Recent changes"]';
+    // Open the Changes page from the status bar, and seed the journal it shows.
+    const CHANGES = '[title^="Changes"]';
     await d.cursorTo(CHANGES);
     await d.click(CHANGES);
     await d.set((s) => ({
@@ -652,7 +698,7 @@ export async function runRefund(
 
     await pushLine({
       kind: "say",
-      text: "On it — writing the refund across the ledger, the dispatcher, and notifications.",
+      text: "On it — writing the refund across the ledger, the dispatcher, and notifications. Each claim names its trigger and response, so the tests come with it.",
     });
     await d.wait(750);
 
@@ -669,8 +715,9 @@ export async function runRefund(
     });
     await d.wait(900);
 
-    // The agent commits — folding the plan into the committed model.
-    await pushLine({ kind: "tool", tool: "mark_implemented", arg: "refund — 3 claims", status: "run" });
+    // The agent commits — folding the plan into the committed model, anchors
+    // and tests attached in the same call (rule 22).
+    await pushLine({ kind: "tool", tool: "mark_implemented", arg: "refund — 3 claims · 3 anchors · 4 tests", status: "run" });
     await d.wait(780);
     await d.set((s) => ({ ...s, term: { ...s.term, lines: resolveLastTool(s.term.lines) } }));
     await d.wait(450);
@@ -694,15 +741,28 @@ export async function runRefund(
     await d.wait(1200); // the plan is still here — the refund claim reads "Added"
 
     // Commit: the agent maps each new claim to the code it wrote (no longer
-    // "unmapped"), and the planned claims fold into committed — the plan clears.
+    // "unmapped") and attaches each claim's tests, and the planned claims fold
+    // into committed — the plan clears, and the flask lane fills.
     await d.set((s) => {
       const model = {
         ...s.shell.model,
         sourceMap: { ...s.shell.model.sourceMap, ...REFUND_SOURCE_MAP },
+        testMap: { ...s.shell.model.testMap, ...REFUND_TEST_MAP },
       };
       return { ...s, shell: { ...s.shell, model, committed: model } };
     });
     await d.wait(1500); // the plan disappears
+
+    // The claim now reads committed, anchored, AND tested — push in on it and
+    // name the beat: the flask is the trust signal the whole act built toward.
+    await d.camera("#resp-r-ledger-refund", { zoom: 1.5, duration: 1100, hold: 250 });
+    await d.annotate(
+      "#resp-r-ledger-refund",
+      "Folded in with its tests attached — every claim shows whether one backs it",
+      { place: "right" },
+    );
+    await d.wait(2700);
+    await d.clear();
 
     // Then drift surfaces — the ledger files the agent changed beyond the plan.
     await d.set((s) => ({ ...s, shell: { ...s.shell, driftScopes: DRIFT_SCOPES } }));

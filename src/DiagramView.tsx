@@ -422,6 +422,10 @@ function DiagramInner({
         target: e.target,
         type: "rel" as const,
         selectable: false,
+        // Generation choreography (demo-only, like the card `pending` flag): an
+        // edge into a node that hasn't generated yet stays out of the frame
+        // entirely — it arrives with the node, not before it.
+        hidden: pendingIds ? pendingIds.has(e.source) || pendingIds.has(e.target) : undefined,
         sourceHandle: scene.mode === "code" ? "c" : h?.sourceHandle,
         targetHandle: scene.mode === "code" ? "c" : h?.targetHandle,
         data: {
@@ -438,7 +442,7 @@ function DiagramInner({
         },
       };
     });
-  }, [scene, rfNodes, selectedId, highlight, concernLit]);
+  }, [scene, rfNodes, selectedId, highlight, concernLit, pendingIds]);
 
   // Refit when the level changes (a fresh scene of a different size/shape).
   const fitKey = `${focusId ?? "root"}:${rfNodes.length}`;

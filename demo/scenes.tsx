@@ -43,7 +43,8 @@ const agentSession: AgentSession = {
   running: true,
   label: "Filling Ledger Service",
   lastTool: "add_responsibility",
-  activity: 'add_responsibility · "Hold funds in escrow until settlement"',
+  activity: 'add_responsibility · "While settlement is unconfirmed, hold the captured funds in escrow"',
+  outcome: null,
   startFixture: noop,
   startVariation: noop,
   cancel: noop,
@@ -89,8 +90,6 @@ const NodeBody = () => (
     onSelectNode={noop}
     onSelectGroup={noop}
     variationState={null}
-    newRespIds={EMPTY}
-    onClearNewResp={noop}
     changeLog={[]}
     history={[]}
     driftScopes={[]}

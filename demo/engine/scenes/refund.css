@@ -41,14 +41,14 @@
  * layout and slides the whole pair under the fixed camera — which reads exactly
  * like the camera drifting/snapping. Absolute coords make every window box a
  * constant, so nothing the agent does can move it. Geometry (centered in the
- * 3000×1700 canvas): pair = 620 + 90 gap + 1140 = 1850 wide, 940 tall, so
- * pair-left = (3000-1850)/2 = 575, pair-top = (1700-940)/2 = 380.
+ * 3000×1700 canvas): pair = 620 + 90 gap + 1300 = 2010 wide, 940 tall, so
+ * pair-left = (3000-2010)/2 = 495, pair-top = (1700-940)/2 = 380.
  */
 .rf-pair {
   position: absolute;
-  left: 575px;
+  left: 495px;
   top: 380px;
-  width: 1850px;
+  width: 2010px;
   height: 940px;
 }
 
@@ -74,12 +74,14 @@
 }
 
 /* The scryer column — pinned beside the terminal (620 + 90 gap = 710). Wrapped
-   + clipped so the full-bleed app reads as a fixed, framed window. */
+   + clipped so the full-bleed app reads as a fixed, framed window. Width is the
+   claims-column budget: at 1300px the wiki article gives an EARS statement a
+   full line instead of wrapping it three-deep. */
 .rf-shell {
   position: absolute;
   left: 710px;
   top: 0;
-  width: 1140px;
+  width: 1300px;
   height: 940px;
   overflow: hidden;
   border-radius: 14px;
@@ -90,13 +92,13 @@
 /* An invisible camera anchor spanning the terminal's scrollback AND scryer's
    tree — the balanced "watch the agent work" shot, framed so the streaming tool
    calls and the blooming tree marks are both prominent and in the vertical safe
-   band. Its px box tracks the centered layout: pair = 620+90+1140 = 1850 wide,
-   so pair-left = (3000-1850)/2 = 575; the box runs from the terminal's left to
+   band. Its px box tracks the centered layout: pair = 620+90+1300 = 2010 wide,
+   so pair-left = (3000-2010)/2 = 495; the box runs from the terminal's left to
    ~340px into scryer (its tree), and stops short of the windows' bottom so the
    action sits centred. Update if the window sizes change. */
 .rf-work {
   position: absolute;
-  left: 575px;
+  left: 495px;
   top: 392px;
   width: 1055px;
   height: 740px;

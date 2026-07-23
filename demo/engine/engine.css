@@ -79,21 +79,34 @@
   pointer-events: none;
 }
 
-/* --- Anchored annotation (coachmark): focal pin + marker-tag label --------- */
-/* A director's overlay, deliberately UNLIKE the product UI. The app reserves
-   every chromatic hue for meaning on neutral surfaces; this is a single warm
-   "marker" accent used nowhere in the app, rendered as a SOLID fill with dark
-   ink — the inverse of the app's dark-surface/light-text chrome — so it reads
-   as drawn on top, never as another panel. */
+/* --- Anchored annotation (coachmark): focal pin + tooltip chip ------------- */
+/* A director's overlay styled like a refined product-tour callout: a dark
+   surface chip with a hairline border and neutral type, tied to the target by
+   a thin leader and a small azure pin. Sits ABOVE the app but speaks its
+   design language, so it reads as intentional guidance, not marketing paint. */
 .film-annot {
-  --film-annot: #ffc845; /* warm marker amber — the annotation accent */
+  --film-annot: #93c5fd; /* azure accent — pin + leader only, never the text */
   position: absolute;
   inset: 0;
   z-index: 55;
   pointer-events: none;
+  /* One coordinated entrance for the whole mark — pin, leader, and label rise
+     and fade as a single object ('both' holds the pre-anim state, so nothing
+     flashes in early). The leader's draw stagger rides inside this. */
+  animation: film-annot-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
   /* Dismissal fades the whole mark out (the director sets data-exiting, holds,
      then unmounts) rather than letting it pop out of existence. */
   transition: opacity 0.32s ease;
+}
+@keyframes film-annot-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 .film-annot[data-exiting="true"] {
   opacity: 0;
@@ -110,23 +123,22 @@
 }
 .film-mark-leader {
   fill: none;
-  stroke: var(--film-annot);
-  stroke-width: 2.5;
+  stroke: color-mix(in srgb, var(--film-annot) 55%, transparent);
+  stroke-width: 1.5;
   stroke-linecap: round;
   stroke-dasharray: 100;
   stroke-dashoffset: 100;
-  filter: drop-shadow(0 1px 4px rgba(255, 200, 69, 0.45));
   animation: film-mark-draw 0.28s cubic-bezier(0.65, 0, 0.35, 1) 0.16s forwards;
 }
 @keyframes film-mark-draw {
   to { stroke-dashoffset: 0; }
 }
 
-/* The focal pin — a solid dot on the target corner. */
+/* The focal pin — a small dot with a soft halo ring on the target corner. */
 .film-mark-pin {
   position: absolute;
-  width: 12px;
-  height: 12px;
+  width: 8px;
+  height: 8px;
   transform: translate(-50%, -50%);
 }
 .film-mark-pin-dot {
@@ -134,29 +146,30 @@
   inset: 0;
   border-radius: 9999px;
   background: var(--film-annot);
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.55);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--film-annot) 18%, transparent),
+    0 1px 6px rgba(0, 0, 0, 0.55);
 }
 
-/* The label — plain marker-amber text, a shadow to lift it off the background. */
+/* The label — caption type over a feathered scrim: the background + a large
+   blurred box-shadow in the SAME dark tone read as a soft pool of shadow
+   behind the text (film-caption legibility), never as a chip — there is no
+   border and no visible edge. Enters with the parent .film-annot animation. */
 .film-mark-bubble {
   position: absolute;
   transform: translateY(-100%);
   /* Wraps within the director-computed max-width so it never leaves frame. */
   text-wrap: balance;
-  line-height: 1.25;
-  font-family: "Space Grotesk Variable", system-ui, sans-serif;
-  font-weight: 700;
-  font-size: 1.9rem;
+  line-height: 1.42;
+  font-family: "Inter Variable", system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 1.45rem;
   letter-spacing: -0.01em;
-  color: var(--film-annot);
-  /* A solid dark halo so the type reads cleanly over the app text behind it. */
-  text-shadow:
-    0 0 4px rgba(0, 0, 0, 1),
-    0 0 10px rgba(0, 0, 0, 1),
-    0 0 20px rgba(0, 0, 0, 0.95),
-    0 3px 26px rgba(0, 0, 0, 0.9);
-  opacity: 0;
-  animation: film-bubble-in 0.32s ease 0.46s forwards;
+  color: #f4f7fc;
+  background: rgba(6, 8, 13, 0.66);
+  border-radius: 6px;
+  box-shadow: 0 0 24px 16px rgba(6, 8, 13, 0.66);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
 }
 .film-mark-bubble--bottom { transform: none; }
 .film-mark-bubble--right { transform: translateY(-50%); }
@@ -164,9 +177,6 @@
 .film-mark-bubble--above {
   transform: translate(-50%, -100%);
   text-align: center;
-}
-@keyframes film-bubble-in {
-  to { opacity: 1; }
 }
 
 /* --- Caption: centered lower-third for the rare conceptual beat ------------ */
@@ -223,12 +233,58 @@
 }
 
 /* --- Diagram "populate" -----------------------------------------------------
- * The build lands a level's whole structure at once as "generating" placeholders,
- * then the scene fills the cards in one by one. The single "generating" effect for
- * a card (DiagramCard `pending`) is a second ShapeBackground whose fill is the
- * animated barber `<pattern id="barber-gen">` the demo renders (see Workspace) —
- * so the stripes conform to the card's exact shape (silhouette, container tab,
- * component tabs). The pattern animates itself; this just points the fill at it. */
-.fill-barber-gen {
-  fill: url(#barber-gen);
+ * Generation choreography: a node that hasn't generated yet is NOT THERE — no
+ * ghost, and (via the edge `hidden` flag) none of its edges or labels either.
+ * When the agent completes it, the card materializes: its border TRACES itself
+ * around the silhouette in the agent's violet while the body fades in, then
+ * the trace hands back to the normal border. DiagramCard marks the lifecycle
+ * on its root (`data-gen`: "pending" → "live"); product cards never carry the
+ * attribute, so none of this touches the real app. */
+.react-flow__node [data-gen] {
+  transform-origin: 50% 55%;
+}
+.react-flow__node [data-gen="pending"] {
+  opacity: 0;
+}
+.react-flow__node [data-gen="live"] {
+  animation: card-in 520ms ease-out both;
+}
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* The border trace, on the shape svg only (always the first svg in the card
+   body — content icons live deeper and stay untouched). 700 ≈ the longest
+   silhouette perimeter; shorter paths (hats, tabs, caps) complete their trace
+   earlier, so the chrome cascades in around the main outline. The final
+   keyframe fades the violet out and the product stroke returns underneath. */
+.react-flow__node [data-gen="live"] > div > svg:first-child path,
+.react-flow__node [data-gen="live"] > div > svg:first-child rect {
+  animation: card-trace 680ms ease-in-out;
+}
+@keyframes card-trace {
+  0% {
+    stroke-dasharray: 700;
+    stroke-dashoffset: 700;
+    stroke: var(--color-violet-400);
+    stroke-width: 1.75;
+  }
+  78% {
+    stroke-dasharray: 700;
+    stroke-dashoffset: 0;
+    stroke: var(--color-violet-400);
+    stroke-width: 1.75;
+  }
+  100% {
+    stroke-dasharray: 700;
+    stroke-dashoffset: 0;
+    stroke: transparent;
+    stroke-width: 1;
+  }
 }

@@ -32,38 +32,13 @@ export interface CardData extends Record<string, unknown> {
 }
 export type RFCard = RFNode<CardData, "card">;
 
-/** The one "generating" effect: the same animated barber-pole the powerline uses
- *  for agent activity, filling the card UNTIL its content lands, then cross-fading
- *  out. Conforms to the card exactly because it's a second `ShapeBackground` whose
- *  fill is the barber pattern (`url(#barber-gen)`, defined by the demo) — so it
- *  follows the silhouette, the container tab, the component side-tabs, etc.
- *  Rendered only for cards the demo marks pending; `undefined` (the product
- *  default) skips it entirely. */
-function GeneratingFill({
-  shape,
-  kind,
-  external,
-  pending,
-}: {
-  shape: Parameters<typeof ShapeBackground>[0]["shape"];
-  kind: DiagramNode["kind"];
-  external: boolean;
-  pending?: boolean;
-}) {
-  if (pending === undefined) return null;
-  return (
-    <div
-      className="pointer-events-none absolute inset-0 transition-opacity duration-300"
-      style={{ opacity: pending ? 1 : 0 }}
-    >
-      <ShapeBackground
-        shape={shape}
-        kind={kind}
-        external={external}
-        fillClass="fill-barber-gen"
-      />
-    </div>
-  );
+/** The "generating" lifecycle marker: `data-gen` on the card root — "pending"
+ *  while the agent is still filling this node, "live" once its content lands.
+ *  Pure annotation; the ghost-dim and pop-in styling live in the demo's CSS
+ *  (`engine.css`), so the product renders nothing extra. `undefined` (the
+ *  product default) omits the attribute entirely. */
+function genState(pending?: boolean): "pending" | "live" | undefined {
+  return pending === undefined ? undefined : pending ? "pending" : "live";
 }
 
 /** Card outline stroke per change mark — same palette as the tree gutter and
@@ -121,7 +96,10 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
     // and the stroke so all three are always the exact same shape.
     const silhouette = "M 33,72 C 33,42 48,28 76,24 A 22,26 0 1,1 104,24 C 132,28 147,42 147,72";
     return (
-      <div className={`relative h-[160px] w-[180px] transition-opacity ${data.dimmed ? "opacity-30" : ""}`}>
+      <div
+        data-gen={genState(data.pending)}
+        className={`relative h-[160px] w-[180px] transition-opacity ${data.dimmed ? "opacity-30" : ""}`}
+      >
         <NodeHandles />
         <div
           className="absolute flex flex-col items-center justify-center overflow-visible text-[var(--text)]"
@@ -146,13 +124,6 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
               </linearGradient>
             </defs>
             <path d={`${silhouette} Z`} fill={`url(#person-fade-${id})`} />
-            {data.pending !== undefined && (
-              <path
-                d={`${silhouette} Z`}
-                fill="url(#barber-gen)"
-                style={{ opacity: data.pending ? 1 : 0, transition: "opacity 0.3s" }}
-              />
-            )}
             <path
               d={silhouette}
               fill="none"
@@ -190,7 +161,7 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
   const showComp = !!comp && comp.total > 0;
 
   return (
-    <div className={`relative w-[180px] transition-opacity ${dimClass}`}>
+    <div data-gen={genState(data.pending)} className={`relative w-[180px] transition-opacity ${dimClass}`}>
       <div className="relative h-[160px]">
         <ShapeBackground
           shape={shape}
@@ -216,7 +187,6 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
           external={!!isExternal}
         />
         <NodeHandles />
-        <GeneratingFill shape={shape} kind={node.kind} external={!!isExternal} pending={data.pending} />
 
         {/* Completeness pie, bottom-left. Hidden while the card is still
             generating so it doesn't flash on empty. */}

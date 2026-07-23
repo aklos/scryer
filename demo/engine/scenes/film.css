@@ -29,3 +29,84 @@
 .rf-shell .w-screen {
   width: 100% !important;
 }
+
+/* --- Outro card ------------------------------------------------------------
+ * The closer: the desktop dissolves to the bare stage and the brand card fades
+ * up. The layer spans the whole desktop (same stage gradient as the backdrop,
+ * so the dissolve reads as the windows sinking into the dark, not a hard cut);
+ * the inner 16:9 anchor is what the camera frames. */
+.rf-outro {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  opacity: 0;
+  transition: opacity 900ms ease;
+  pointer-events: none;
+  background-color: #08080c;
+  background-image:
+    radial-gradient(115% 100% at 50% 42%, transparent 30%, #050506 82%),
+    radial-gradient(46% 40% at 50% 40%, rgba(98, 104, 140, 0.12), transparent 72%),
+    linear-gradient(180deg, #0a0a11 0%, #08080d 55%, #060608 100%);
+}
+.rf-outro[data-show="true"] {
+  opacity: 1;
+}
+
+/* The synthetic cursor has no business on the brand card — fade it with the
+   desktop as the outro takes over. */
+.film-frame:has(.rf-outro[data-show="true"]) .film-cursor {
+  opacity: 0;
+  transition: opacity 500ms ease;
+}
+
+/* The camera anchor — a 16:9 box centered in the 3000×1700 desktop. */
+.rf-outro-frame {
+  position: absolute;
+  left: 540px;
+  top: 310px;
+  width: 1920px;
+  height: 1080px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.1rem;
+}
+
+.rf-outro-brand {
+  display: flex;
+  align-items: center;
+  gap: 1.15rem;
+  /* Ride up with the fade — a slow settle, not a pop. */
+  transform: translateY(10px);
+  transition: transform 1100ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.rf-outro[data-show="true"] .rf-outro-brand {
+  transform: none;
+}
+.rf-outro-logo {
+  width: 74px;
+  height: 74px;
+  filter: drop-shadow(0 0 26px rgba(96, 165, 250, 0.35));
+}
+.rf-outro-name {
+  font-family: "Space Grotesk Variable", system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 4.6rem;
+  letter-spacing: -0.03em;
+  color: #f4f6fb;
+}
+.rf-outro-tag {
+  font-family: "Space Grotesk Variable", system-ui, sans-serif;
+  font-weight: 500;
+  font-size: 1.7rem;
+  letter-spacing: -0.01em;
+  color: #9aa3b8;
+}
+.rf-outro-url {
+  margin-top: 0.9rem;
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 1.15rem;
+  letter-spacing: 0.02em;
+  color: #5d6578;
+}

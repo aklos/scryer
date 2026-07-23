@@ -39,29 +39,6 @@ import type { ResolvedLaunch } from "../../src/SettingsPanel";
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 const noop = () => {};
 
-/** The animated barber-pole used as a diagram card's "generating" fill — a
- *  hidden SVG `<pattern>` that `DiagramCard`'s pending overlay references via
- *  `fill: url(#barber-gen)`. Self-animating (SMIL shifts the stripes), matching
- *  the powerline's violet barber. Rendered once per shell. */
-function BarberPattern() {
-  return (
-    <svg width="0" height="0" aria-hidden="true" className="absolute">
-      <defs>
-        <pattern
-          id="barber-gen"
-          patternUnits="userSpaceOnUse"
-          width="25.456"
-          height="40"
-          patternTransform="rotate(45)"
-        >
-          <rect width="25.456" height="40" fill="transparent" />
-          <rect width="12.728" height="40" fill="var(--color-violet-500)" fillOpacity="0.32" />
-          <animate attributeName="x" values="0;25.456" dur="0.7s" repeatCount="indefinite" />
-        </pattern>
-      </defs>
-    </svg>
-  );
-}
 
 /** Idle agent/build defaults — overridden per beat for the build + drift acts. */
 export const IDLE_AGENT: AgentSession = {
@@ -69,6 +46,7 @@ export const IDLE_AGENT: AgentSession = {
   label: "",
   lastTool: null,
   activity: null,
+  outcome: null,
   startFixture: noop,
   startVariation: noop,
   cancel: noop,
@@ -175,7 +153,6 @@ export function WorkspaceShell({
 
   return (
     <div data-cam="stage" className="flex h-full w-full min-h-0 flex-col bg-[var(--surface-canvas)]">
-      <BarberPattern />
       <TopBar
         projectPath={projectPath}
         view={view}
@@ -223,7 +200,7 @@ export function WorkspaceShell({
           ) : selected.id === "dark" ? (
             <DarkCodePage model={model} report={health} onSelectNode={sel} />
           ) : selected.id === "unmapped" ? (
-            <UnmappedClaimsPage committed={committed} report={health} onSelectNode={sel} />
+            <UnmappedClaimsPage model={model} committed={committed} report={health} onSelectNode={sel} />
           ) : (
             <NeedsReviewPage
               model={model}

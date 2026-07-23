@@ -48,8 +48,10 @@ const containerNodes: Node[] = [
     technology: "Go",
     description: "Issues and verifies API keys and merchant session tokens.",
     responsibilities: [
-      { id: "r-auth-1", statement: "Verify every request carries a valid, unexpired credential" },
-      { id: "r-auth-2", statement: "Scope each token to the merchant account that owns it",
+      { id: "r-auth-1", statement: "**Verify** every request carries a valid, unexpired credential",
+        concern: "auth" },
+      { id: "r-auth-2", statement: "**Scope** each token to the merchant account that owns it",
+        concern: "auth",
         directives: ["Never widen a token's scope on refresh"] },
     ],
   },
@@ -58,9 +60,10 @@ const containerNodes: Node[] = [
     technology: "Rust",
     description: "The double-entry source of truth for every movement of money.",
     responsibilities: [
-      { id: "r-ledger-1", statement: "Record each authorization and capture as a balanced double-entry" },
-      { id: "r-ledger-2", statement: "Hold funds in escrow until the acquiring bank confirms settlement" },
-      { id: "r-ledger-3", statement: "Refuse any posting that would leave an account balance negative",
+      { id: "r-ledger-1", statement: "**When** a payment is authorized or captured, **record** it as a balanced double-entry" },
+      { id: "r-ledger-2", statement: "**While** settlement is unconfirmed, **hold** the captured funds in escrow" },
+      { id: "r-ledger-3", statement: "**If** a posting would leave an account balance negative, **then** refuse it",
+        concern: "validation",
         directives: ["Every write goes through a single serialized transaction"] },
     ],
   },
@@ -69,8 +72,8 @@ const containerNodes: Node[] = [
     technology: "Python",
     description: "Scores each payment for risk before the ledger commits it.",
     responsibilities: [
-      { id: "r-fraud-1", statement: "Score every payment for risk within the authorization window" },
-      { id: "r-fraud-2", statement: "Block a transaction when its risk score exceeds the merchant's threshold" },
+      { id: "r-fraud-1", statement: "**Score** every payment for risk within the authorization window" },
+      { id: "r-fraud-2", statement: "**When** a payment's risk score exceeds the merchant's threshold, **block** it" },
     ],
   },
   {
@@ -78,8 +81,9 @@ const containerNodes: Node[] = [
     technology: "Go",
     description: "Delivers payment events to merchant endpoints, with retries.",
     responsibilities: [
-      { id: "r-wh-1", statement: "Deliver each payment event to the merchant's endpoint at least once" },
-      { id: "r-wh-2", statement: "Retry failed deliveries with exponential backoff for 24 hours" },
+      { id: "r-wh-1", statement: "**Deliver** each payment event to the merchant's endpoint at least once" },
+      { id: "r-wh-2", statement: "**If** a delivery fails, **then** retry with exponential backoff for up to 24 hours",
+        concern: "failure-handling" },
     ],
   },
   {
@@ -125,6 +129,13 @@ export const paymentsModel: ScryModel = {
   nodes: [...contextNodes, ...containerNodes],
   links,
   groups: [],
+  // The concern registry — one entry per slug the claims above use (auto-minted
+  // on write in the product; hand-rolled here). Drives the concern glyphs.
+  concerns: [
+    { slug: "auth", description: "Identity, authentication, and access control", icon: "Shield" },
+    { slug: "validation", description: "Checking inputs against expected shape and rules", icon: "CheckCircle" },
+    { slug: "failure-handling", description: "Detecting, capturing, and recovering from failures", icon: "AlertTriangle" },
+  ],
   // Each responsibility resolves to code — drives the "traced to code" anchors
   // under each claim on the node page.
   sourceMap: {
@@ -136,6 +147,18 @@ export const paymentsModel: ScryModel = {
     "r-auth-1": [{ pattern: "auth/internal/verify.go", symbol: "VerifyCredential", line: 30, endLine: 71 }],
     "r-wh-1": [{ pattern: "webhooks/dispatch.go", symbol: "Deliver", line: 40, endLine: 88 }],
     "r-wh-2": [{ pattern: "webhooks/retry.go", symbol: "backoff", line: 15, endLine: 52 }],
+  },
+  // Which tests back each claim — the flask lane. Every testable (When/While/If)
+  // claim carries its test except r-wh-2, which stays an honest ghost flask
+  // (`untested`) — the standing work signal the health report counts.
+  testMap: {
+    "r-ledger-1": [{ pattern: "ledger/tests/posting.rs", symbol: "records_balanced_double_entry", line: 18, endLine: 41 }],
+    "r-ledger-2": [{ pattern: "ledger/tests/escrow.rs", symbol: "holds_funds_until_settlement", line: 12, endLine: 36 }],
+    "r-ledger-3": [{ pattern: "ledger/tests/posting.rs", symbol: "refuses_negative_balance", line: 55, endLine: 74 }],
+    "r-fraud-1": [{ pattern: "fraud/tests/test_scoring.py", symbol: "test_scores_within_auth_window", line: 10, endLine: 32 }],
+    "r-fraud-2": [{ pattern: "fraud/tests/test_decision.py", symbol: "test_blocks_over_threshold", line: 8, endLine: 27 }],
+    "r-auth-1": [{ pattern: "auth/internal/verify_test.go", symbol: "TestRejectsExpiredCredential", line: 22, endLine: 51 }],
+    "r-wh-1": [{ pattern: "webhooks/dispatch_test.go", symbol: "TestDeliversAtLeastOnce", line: 30, endLine: 68 }],
   },
   boundaries: {
     ledger: [{ pattern: "ledger/**" }],
@@ -177,7 +200,7 @@ export const driftModel: ScryModel = (() => {
   const fraud = m.nodes.find((n) => n.id === "fraud");
   fraud?.responsibilities?.push({
     id: "r-fraud-vagrant",
-    statement: "Cache risk scores for repeat cardholders within a 10-minute window",
+    statement: "**Cache** risk scores for repeat cardholders within a 10-minute window",
     vagrant: true,
   });
   return m;
@@ -233,7 +256,7 @@ export const SOURCE_SPANS: Record<string, Span> = {
 
 const counts = (p: Partial<HealthCounts>): HealthCounts => ({
   responsibilities: 0, properties: 0, vagrant: 0, stale: 0,
-  anchorable: 0, anchored: 0, unmapped: 0, verified: 0, ...p,
+  anchorable: 0, anchored: 0, unmapped: 0, tested: 0, testable: 0, untested: 0, ...p,
 });
 
 /** A derived observability report: coverage per node, anchor drift, and the
@@ -242,22 +265,27 @@ export const healthReport: ModelHealthReport = {
   health: {
     nodes: {
       ledger: {
-        own: counts({ responsibilities: 3, anchorable: 3, anchored: 3 }),
-        subtree: counts({ responsibilities: 3, anchorable: 3, anchored: 3 }),
+        own: counts({ responsibilities: 3, anchorable: 3, anchored: 3, tested: 3, testable: 3 }),
+        subtree: counts({ responsibilities: 3, anchorable: 3, anchored: 3, tested: 3, testable: 3 }),
         boundary: { totalFiles: 14, anchoredFiles: 11, darkFiles: ["ledger/src/escrow.rs", "ledger/migrations/0007_escrow.sql", "ledger/src/reconcile.rs"] },
       },
       fraud: {
-        own: counts({ responsibilities: 2, vagrant: 1, anchorable: 2, anchored: 2 }),
-        subtree: counts({ responsibilities: 2, vagrant: 1, anchorable: 2, anchored: 2 }),
+        own: counts({ responsibilities: 2, vagrant: 1, anchorable: 2, anchored: 2, tested: 2, testable: 1 }),
+        subtree: counts({ responsibilities: 2, vagrant: 1, anchorable: 2, anchored: 2, tested: 2, testable: 1 }),
         boundary: { totalFiles: 9, anchoredFiles: 8, darkFiles: ["fraud/scoring/cache.py"] },
       },
       auth: {
-        own: counts({ responsibilities: 2, anchorable: 2, anchored: 1, unmapped: 1 }),
-        subtree: counts({ responsibilities: 2, anchorable: 2, anchored: 1, unmapped: 1 }),
+        own: counts({ responsibilities: 2, anchorable: 2, anchored: 1, unmapped: 1, tested: 1 }),
+        subtree: counts({ responsibilities: 2, anchorable: 2, anchored: 1, unmapped: 1, tested: 1 }),
         boundary: { totalFiles: 7, anchoredFiles: 6, darkFiles: ["auth/internal/session.go"] },
       },
+      webhooks: {
+        own: counts({ responsibilities: 2, anchorable: 2, anchored: 2, tested: 1, testable: 1, untested: 1 }),
+        subtree: counts({ responsibilities: 2, anchorable: 2, anchored: 2, tested: 1, testable: 1, untested: 1 }),
+        boundary: { totalFiles: 6, anchoredFiles: 6, darkFiles: [] },
+      },
     },
-    totals: counts({ responsibilities: 7, vagrant: 1, stale: 1, anchorable: 7, anchored: 6, unmapped: 1 }),
+    totals: counts({ responsibilities: 9, vagrant: 1, stale: 1, anchorable: 9, anchored: 8, unmapped: 1, tested: 7, testable: 5, untested: 1 }),
   },
   // Per-node build completeness (subtree anchored/total) — the header badge.
   completeness: {
@@ -279,6 +307,56 @@ export const healthReport: ModelHealthReport = {
     ],
     // Sibling services the code connects but no declared link covers — the
     // diagram draws these as implied-connection ghosts.
+    unmodeled: [{ src: "fraud", dst: "event-bus", count: 4 }],
+    resolvedEdges: [],
+  },
+};
+
+/** The film's opening health: the model just born from the code, fully in sync —
+ *  every claim anchored, no vagrancy/staleness, no changed anchors. Only the
+ *  honest gaps remain: a few dark files, and r-wh-2's missing test (`untested`).
+ *  Feeds the Powerline so the chrome reads inhabited instead of "claims mapped —". */
+export const cleanHealth: ModelHealthReport = {
+  health: {
+    nodes: {
+      ledger: {
+        own: counts({ responsibilities: 3, anchorable: 3, anchored: 3, tested: 3, testable: 3 }),
+        subtree: counts({ responsibilities: 3, anchorable: 3, anchored: 3, tested: 3, testable: 3 }),
+        boundary: { totalFiles: 14, anchoredFiles: 12, darkFiles: ["ledger/migrations/0007_escrow.sql", "ledger/src/reconcile.rs"] },
+      },
+      fraud: {
+        own: counts({ responsibilities: 2, anchorable: 2, anchored: 2, tested: 2, testable: 1 }),
+        subtree: counts({ responsibilities: 2, anchorable: 2, anchored: 2, tested: 2, testable: 1 }),
+        boundary: { totalFiles: 9, anchoredFiles: 8, darkFiles: ["fraud/scoring/cache.py"] },
+      },
+      auth: {
+        own: counts({ responsibilities: 2, anchorable: 2, anchored: 2, tested: 1 }),
+        subtree: counts({ responsibilities: 2, anchorable: 2, anchored: 2, tested: 1 }),
+        boundary: { totalFiles: 7, anchoredFiles: 7, darkFiles: [] },
+      },
+      webhooks: {
+        own: counts({ responsibilities: 2, anchorable: 2, anchored: 2, tested: 1, testable: 1, untested: 1 }),
+        subtree: counts({ responsibilities: 2, anchorable: 2, anchored: 2, tested: 1, testable: 1, untested: 1 }),
+        boundary: { totalFiles: 6, anchoredFiles: 6, darkFiles: [] },
+      },
+    },
+    totals: counts({ responsibilities: 9, anchorable: 9, anchored: 9, tested: 7, testable: 5, untested: 1 }),
+  },
+  completeness: {
+    aperture: { anchored: 10, total: 10, leafTotal: 7, pct: 100 },
+    auth: { anchored: 3, total: 3, leafTotal: 2, pct: 100 },
+    ledger: { anchored: 4, total: 4, leafTotal: 3, pct: 100 },
+    fraud: { anchored: 3, total: 3, leafTotal: 2, pct: 100 },
+    webhooks: { anchored: 3, total: 3, leafTotal: 2, pct: 100 },
+  },
+  anchors: [],
+  reanchored: 0,
+  derived: {
+    linkAudit: [
+      { linkId: "l-3", edgeCount: 14 },
+      { linkId: "l-4", edgeCount: 6 },
+      { linkId: "l-5", edgeCount: 22 },
+    ],
     unmodeled: [{ src: "fraud", dst: "event-bus", count: 4 }],
     resolvedEdges: [],
   },

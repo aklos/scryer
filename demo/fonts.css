@@ -1,0 +1,42 @@
+/*
+ * Demo-only typography. The product ships no webfonts — it inherits the OS
+ * stack, which looks right in the desktop app but falls back to DejaVu on the
+ * headless Linux chromium that records the trailer. The demo bundles real
+ * fonts instead (imported in main.tsx via @fontsource), and this file points
+ * every stack at them:
+ *   - Inter          → the app UI (Tailwind's sans stack)
+ *   - JetBrains Mono → statements, tree, terminal, code (every mono stack)
+ *   - Space Grotesk  → the kinetic treatment + annotations (already named
+ *                      there; it just never had a face to resolve to)
+ * Loaded AFTER src/index.css, so equal-specificity overrides win by order.
+ */
+
+:root {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --default-font-family: var(--font-sans);
+  --default-mono-font-family: var(--font-mono);
+}
+
+html,
+body {
+  font-family: var(--font-sans);
+  /* Inter tracks a touch wide at UI sizes; tighten to match the SF/Segoe feel
+     the product gets natively. */
+  letter-spacing: -0.011em;
+}
+
+/* The app's hand-rolled mono stacks (Powerline, source peeks) name literal
+   faces, so re-point anything using a ui-monospace-first stack. */
+.pl,
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--font-mono);
+}
+
+/* The demo terminal's own stack. */
+.term {
+  --term-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
