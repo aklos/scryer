@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Check, GitCompare, X } from "lucide-react";
+import { Check, CornerDownRight, GitCompare, X } from "lucide-react";
 import type { ChangeRevision } from "../hooks/useModelStorage";
 import type { ScryModel, Node } from "../viewmodel";
 import type { Change, ElementChange, ModelDiff } from "../planDiff";
@@ -159,6 +159,10 @@ interface RowCtx {
    *  stripped for prose surfaces, so claim rows resolve their display markup
    *  through here instead. */
   statements: Map<string, string>;
+  /** Directives by responsibility id — an ADDED claim's row carries its
+   *  directives, or that part of the plan would be invisible here (a directive
+   *  change on an existing claim already surfaces as a field reword row). */
+  directives: Map<string, readonly string[]>;
   onSelectNode: (id: string) => void;
 }
 
@@ -170,6 +174,20 @@ function buildStatementMap(model: ScryModel, committed: ScryModel | null): Map<s
     for (const holder of [...m.nodes, ...m.groups])
       for (const r of holder.responsibilities ?? [])
         if (!map.has(r.id)) map.set(r.id, r.statement);
+  return map;
+}
+
+/** Every responsibility's directives, planned model winning over committed —
+ *  same resolution order as {@link buildStatementMap}. */
+function buildDirectiveMap(
+  model: ScryModel,
+  committed: ScryModel | null,
+): Map<string, readonly string[]> {
+  const map = new Map<string, readonly string[]>();
+  for (const m of [model, ...(committed ? [committed] : [])])
+    for (const holder of [...m.nodes, ...m.groups])
+      for (const r of holder.responsibilities ?? [])
+        if (!map.has(r.id) && r.directives?.length) map.set(r.id, r.directives);
   return map;
 }
 
@@ -255,6 +273,21 @@ function ChildRow({ ec, ctx }: { ec: ElementChange; ctx: RowCtx }) {
             <NodeRef id={moved.to} {...ctx} />
           </span>
         )}
+        {/* An added claim arrives whole — statement AND directives — so its
+            row shows both; without this the hand-pinned constraint on a new
+            claim never appears on the page whose job is "everything the plan
+            changes". Reworded directives keep their field-diff row below. */}
+        {added &&
+          ec.kind === "responsibility" &&
+          (ctx.directives.get(ec.id) ?? []).map((d, i) => (
+            <div
+              key={`dir${i}`}
+              className="mt-px flex items-baseline gap-1.5 text-2xs leading-relaxed"
+            >
+              <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px text-[var(--text-ghost)]" />
+              <span className={CHANGE_COLOR.add}>{d}</span>
+            </div>
+          ))}
         {secondary.map((r) => (
           <div key={r.field} className="mt-px">
             <span className="text-[var(--text-muted)]">{r.field}: </span>
@@ -404,6 +437,7 @@ export function ChangesPage({
       // Only elements still in the plan are selectable; dropped ones link to nothing.
       live: new Set<string>([...model.nodes.map((n) => n.id), ...model.groups.map((g) => g.id)]),
       statements: buildStatementMap(model, committed),
+      directives: buildDirectiveMap(model, committed),
       onSelectNode,
     }),
     [model, committed, onSelectNode],
