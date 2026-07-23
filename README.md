@@ -26,6 +26,9 @@
 
 </div>
 
+> [!IMPORTANT]
+> Scryer is in **alpha**. Expect rough edges, breaking changes between releases, and model-format migrations before 1.0. Bug reports and feedback are very welcome in [issues](https://github.com/aklos/scryer/issues).
+
 <br/>
 
 <!-- https://github.com/user-attachments/assets/66586378-8ba5-43db-8768-872261892667 -->
@@ -34,30 +37,28 @@
 <video src="https://github.com/user-attachments/assets/f3b6c139-5d86-49ca-a2e0-67f1e50dda5d" width="100%" autoplay loop muted></video>
 </p>
 
-Coding agents write faster than you can review. You end up shipping code you don't fully understand, and what you meant drifts from what got built. Scryer keeps a model next to your code: a graph of what each part of the system is responsible for, mapped to the source lines that implement it. Use it to see how the code matches your intent, and to plan changes against that intent before the agent writes them.
+Coding agents write faster than you can review. You end up shipping code you don't fully understand, and what you meant drifts from what got built. Scryer keeps a model next to your code: a graph of what each part of the system is responsible for, mapped to the source lines that implement it and to the tests that back each claim. Use it to see how the code matches your intent, and to plan changes against that intent before the agent writes them.
 
-The model sits above the code. It describes what each part is responsible for, not its class-by-class structure. The code stays the source of truth for how the system works; the model is the source of truth for what it must do and why. Responsibilities are written to outlive a rewrite in another language, because they describe intent rather than implementation. It isn't UML, and it isn't your code redrawn as boxes.
+The model describes what each part is responsible for — not its class-by-class structure — in short, language-independent claims on an opinionated [C4](https://c4model.com/)-style hierarchy. It isn't UML, and it isn't your code redrawn as boxes. You plan a change in the model first; the agent reads it over MCP and builds code to match, so the model stays ahead of the code rather than lagging behind it. Underneath, a deterministic observability layer (no LLM) reports what's built versus planned, source and test coverage, and drift in both directions.
 
-The model leads. You plan a change in the model first; the agent reads it over MCP and builds code to match, keeping the two mapped line by line, so the model stays ahead of the code rather than lagging behind it. Underneath, a deterministic observability layer (no LLM) reads how the code actually measures up: what's built versus planned, source coverage, and drift in both directions.
-
-Works with <b>Claude Code</b> and <b>Codex</b> out of the box. Any agent that supports [MCP](https://modelcontextprotocol.io/) can read and write the model. Agents that support [ACP](https://agentclientprotocol.com/get-started/introduction) can also be spawned by Scryer for automated builds and sync.
-
-Built on an opinionated [C4](https://c4model.com/) hierarchy (person, system, container, component, symbol), with responsibilities, implementation directives, typed relationships, and source mapping.
+Works with <b>Claude Code</b> and <b>Codex</b> out of the box. Any agent that supports [MCP](https://modelcontextprotocol.io/) can read and write the model.
 
 ## Features
 
 - **Wiki-style node pages** — Every node, down to individual symbols, gets a page that leads with whatever helps you plan changes to that kind of thing: responsibilities for handlers and services (each mapped to source lines), properties for data types, a live rendered preview for visual components. Source code shows as reference, with structured metadata — kind, technology, status, connections — surfaced inline on the page. Edit any section in place.
 - **Model tree** — An IDE-style explorer for defining the model: create, rename, move, group, and delete nodes. Groups are folders. Rolled-up plan and drift marks show per row, so you see the model's health at a glance.
-- **Responsibilities & directives** — Each node states what it's responsible for (responsibilities) and, optionally, how the agent should implement it (directives, e.g. "authenticate with JWTs"). Responsibilities are language-independent and survive a rewrite. Each one is mapped to the source lines that implement it, and optionally to the test that demonstrates it.
-- **The plan** — Scryer holds a committed model (what the code satisfies) and a planned draft (what you and the agent edit). Their difference is the plan: the model→code work queue, shown as add/move/delete/reword marks until the agent implements them and they fold into the committed model.
-- **Live component previews** — Visual components (React/TSX) render deterministically through a per-project Vite dev server, with no agent and no per-component build. Prompt for variations, compare live renders, and accept the one you want.
-- **Observability layer** — An always-on, deterministic health report over the model↔code relationship (no LLM): plan and drift rollup, source-anchor coverage, and an import-graph audit of declared links against actual imports. The import graph resolves real declared imports for Rust, TypeScript/JavaScript (including tsconfig path aliases), Python, and Go; Java, Ruby, C/C++, C#, and PHP are covered by a conservative name-matching heuristic, and the health report says which tier applies so the audit's verdict is calibrated. It tells you where work is needed before you read a single page.
+- **Responsibilities & directives** — Each node states what it's responsible for (responsibilities) and, optionally, how the agent should implement it (directives, e.g. "authenticate with JWTs"). Responsibilities are language-independent and survive a rewrite. Claims are written in [EARS](https://alistairmavin.com/ears/) grammar — condition first ("When a save fails, …"), verb-led response last — so a testable claim already names the trigger to arrange and the response to assert, and the editor lints statements live as you write them.
+- **Test backing** — Attaching a test is part of implementing a claim, not a follow-up chore. Every claim row carries a test lane: a filled flask means a test is attached, a ghost outline means testable but bare, and health counts `untested` claims so the gap stays visible. Scryer records attachment only — it never runs your tests.
+- **Concerns** — A cross-cutting third axis over responsibilities: tag claims with a concern slug (`auth`, `persistence`, `idempotency`, …) and scan the model through a concern lens in the tree and on the map. Core domain flow stays untagged.
+- **The plan** — Scryer holds a committed model (what the code satisfies) and a planned draft (what you and the agent edit). Their difference is the plan: the model→code work queue, shown as add/move/delete/reword marks until the agent implements them and they fold into the committed model. Parallel workstreams can be filed as named changes, each folding and closing on its own.
+- **Live component previews** — Visual components (React/TSX) render deterministically through a per-project Vite dev server, with no agent and no per-component build. An in-page appearance workspace lets you prompt for variations, compare live renders, and accept the one you want.
+- **Observability layer** — An always-on, deterministic health report over the model↔code relationship (no LLM): plan and drift rollup, source-anchor and test-backing coverage, disconnected nodes, and an import-graph audit of declared links against actual imports. The import graph resolves real declared imports for Rust, TypeScript/JavaScript (including tsconfig path aliases), Python, and Go; Java, Ruby, C/C++, C#, and PHP are covered by a conservative name-matching heuristic, and the health report says which tier applies so the audit's verdict is calibrated. It tells you where work is needed before you read a single page.
 - **Drift detection & sync** — Scryer tracks when source files change relative to the model. When code diverges, the agent reads the changed files and reconciles the model, adopting new behavior or flagging stale claims.
 - **Source mapping** — Responsibilities and nodes link to files and line ranges. Click to open in your editor.
 - **Build from a codebase** — Point an agent at a project and it scans the code to populate the model.
-- **Diagram view** — A read-only diagram renders the model one level at a time for spatial navigation.
+- **Diagram view** — A diagram renders the model one level at a time for spatial navigation. Drag cards where you want them — placements persist, and auto-layout manages the rest.
 - **MCP server** — Agents connect to read, modify, and build from the model in real time.
-- **AI tool setup** — Detects Claude Code and Codex and writes MCP config and auto-approve permissions.
+- **AI tool setup** — Detects Claude Code and Codex and writes MCP config and auto-approve permissions. Optionally installs a Claude Code statusLine that reports the model's pending work and drift even while Scryer is closed.
 
 ## Getting started
 
@@ -83,6 +84,8 @@ Scryer keeps two layers on disk in `.scryer/`:
 
 The difference between them is the **plan**: the outstanding model→code work. When you add a responsibility or a node, it shows in the plan as an `added` mark in the tree. When the agent writes the code, `mark_implemented` folds that work into the committed model. Drift works the other way: when code changes, the agent reconciles undescribed behavior back into the model.
 
+Plan work can be filed into **named changes**: a session opens a change with `set_change {rationale}` and its plan writes tag to it automatically, so parallel sessions (or you, on the canvas) stay separable. When a change's last entry folds in, it closes and its rationale lands in the history log.
+
 This is how the model stays ahead of the code: intent is captured as a plan before the code exists, and the committed model only ever reflects what's actually been built.
 
 ## Agent support
@@ -107,6 +110,8 @@ Link a project directory in the app and click "Enable" on the prompt, or run `sc
 - **Codex** — `.codex/config.toml`
 
 Existing config files are preserved — only the `scryer` entry is added or updated.
+
+For Claude Code you can also install a **statusLine** (from the app, or `scryer-mcp init --statusline`): a one-line model status — pending work, drift scopes, and changes in flight — in every Claude Code session. It reads the model straight off disk, so it keeps reporting while Scryer is closed.
 
 ### Manual setup
 
@@ -147,9 +152,11 @@ For Claude Code, you can also auto-approve Scryer's tools so the agent doesn't p
 ### What the MCP server provides
 
 **Reading & observability:**
+- `orient` — one-call, task-scoped orientation: pass a task and/or files and get the governing nodes, their claims and binding directives, the scoped pending work and drift, the matching modeling rules, and a phase verdict. The front door for coding sessions.
+- `locate` — reverse lookup from code into the model: a file (and optional symbol) resolves to the claims anchored there, the owning node chain, binding directives, and the surrounding scope's health.
 - `read_model` — the model, or a scoped subtree, with responsibilities, links, and context. Auto-resolves the model linked to the current working directory.
 - `search_model` / `query_model` — find nodes by text or by structure.
-- `get_health` — deterministic observability: rolled-up plan and drift marks, vagrant/stale flags, source-anchor and test-backing coverage, and an import-graph audit of declared links.
+- `get_health` — deterministic observability: rolled-up plan and drift marks, vagrant/stale flags, source-anchor and test-backing coverage, disconnected nodes, and an import-graph audit of declared links.
 - `get_pending` — the plan: model→code work not yet built.
 - `get_drift` — boundary-owning nodes whose code changed since the last reconcile (cheap, deterministic — no LLM verdict).
 - `get_rules` — the authoritative C4 modeling rules and workflow guidance.
@@ -157,6 +164,7 @@ For Claude Code, you can also auto-approve Scryer's tools so the agent doesn't p
 - `validate_model` — check the model against C4 rules.
 
 **Authoring (writes the plan):**
+- `set_change` — open (or resume) a named change so this session's plan writes tag to it, keeping parallel workstreams separable.
 - `add_person` / `add_system` / `add_container` / `add_component` / `add_symbol` — mint nodes from plain responsibility statements.
 - `add_group` / `update_group` / `delete_group` — group sibling nodes (a secondary packaging axis).
 - `add_links` / `update_links` / `delete_links` — typed relationships between nodes.
@@ -176,7 +184,7 @@ Architecture models go stale as code changes. Scryer detects drift deterministic
 When drift is detected:
 
 1. A review surface and drift indicators flag the potentially drifted scopes — click through to the affected node pages.
-2. Trigger a drift check to spawn your agent (Claude Code via `claude -p`, Codex via `codex exec`) with Scryer's MCP server attached. The agent reads the changed source files and updates the model only where code has actually diverged.
+2. Trigger a drift check to spawn your agent (Claude Code via `claude -p`, Codex via `codex exec`) with Scryer's MCP server attached. Drifted scopes are checked in parallel, and each agent gets the changed code embedded inline as evidence, so it judges divergence without re-reading the tree and updates the model only where code has actually diverged.
 3. Undescribed behavior is proposed into the plan as a **vagrant** claim for you to adopt or reject; a **stale** claim is flagged on the committed model where the code regressed from what was claimed.
 4. Model changes appear in the editor in real time. When every scope has been examined, the drift anchor advances so the same changes stop surfacing.
 
