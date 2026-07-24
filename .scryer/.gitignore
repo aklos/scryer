@@ -1,0 +1,9 @@
+*.baseline.scry
+.sync
+.tmp.*
+.lock
+.anchors.json
+.build_edges.json
+hook.json
+preview/
+build-logs/
