@@ -64,6 +64,32 @@ fn fmt_usage(u: &scryer_acp::Usage) -> String {
     }
 }
 
+/// Append one timestamped line to `.scryer/build-logs/build.log` — the
+/// orchestrator's own trail beside the per-session agent streams. The session
+/// files record what each AGENT did; without this, the orchestrator's phase
+/// transitions and its final verdict (validation-gate failures included) exist
+/// only as transient UI events. Best-effort; epoch-second stamps (the workspace
+/// carries no time-formatting dependency) — correlate with session-file mtimes.
+fn orch_log(cwd: &str, line: &str) {
+    use std::io::Write as _;
+    let dir = std::path::Path::new(cwd).join(".scryer").join("build-logs");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("build.log"))
+    else {
+        return;
+    };
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let _ = writeln!(f, "[{secs}] {line}");
+}
+
 /// How a single agent session ended. `Failed` is carried as the `Err` arm of
 /// [`run_wave`]'s result, so this only distinguishes the two non-error endings.
 enum WaveOutcome {
@@ -295,7 +321,12 @@ pub(crate) async fn start_model_build(
     // 4. Background orchestrator: Wave 1, then a bounded-parallel Wave 2.
     tokio::spawn(async move {
         let emit_msg = |text: String| {
+            orch_log(&cwd, &text);
             let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Message { text });
+        };
+        let emit_fail = |error: String| {
+            orch_log(&cwd, &format!("✗ build failed: {error}"));
+            let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Failed { error });
         };
 
         // Debug instrumentation: wall-clock for the whole build and a running
@@ -305,6 +336,7 @@ pub(crate) async fn start_model_build(
         let build_start = std::time::Instant::now();
         let mut total_usage = scryer_acp::Usage::default();
         eprintln!("[build] start: {cwd}");
+        orch_log(&cwd, &format!("build start: {cwd}"));
 
         // No Wave 1 (A2): mint the structural skeleton mechanically — the
         // system + containers land on the canvas instantly, container coverage
@@ -324,12 +356,7 @@ pub(crate) async fn start_model_build(
             match mint() {
                 Ok(v) => v,
                 Err(e) => {
-                    let _ = app.emit(
-                        "agent-event",
-                        &scryer_acp::AgentEvent::Failed {
-                            error: format!("Could not seed the model structure: {e}"),
-                        },
-                    );
+                    emit_fail(format!("Could not seed the model structure: {e}"));
                     return;
                 }
             }
@@ -388,6 +415,7 @@ pub(crate) async fn start_model_build(
         // session is live here, so the runtime cancel was a no-op — this flag
         // is the only signal that survives the gap.
         if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            orch_log(&cwd, "build cancelled during setup");
             let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Cancelled);
             return;
         }
@@ -466,11 +494,13 @@ pub(crate) async fn start_model_build(
                 match outcome {
                     Ok((WaveOutcome::Completed, usage)) => {
                         wave2_usage.lock().await.add(&usage);
-                        eprintln!(
-                            "[build] system semantic pass: {:.1}s, {}",
+                        let line = format!(
+                            "system semantic pass: {:.1}s, {}",
                             s_start.elapsed().as_secs_f64(),
                             fmt_usage(&usage),
                         );
+                        eprintln!("[build] {line}");
+                        orch_log(&cwd, &line);
                     }
                     Ok((WaveOutcome::Cancelled, _)) => {
                         cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -529,6 +559,7 @@ pub(crate) async fn start_model_build(
                 let outcome = if cancelled.load(std::sync::atomic::Ordering::SeqCst) {
                     Ok((WaveOutcome::Cancelled, scryer_acp::Usage::default()))
                 } else {
+                    orch_log(&cwd, &format!("Modeling container: {name}…"));
                     let _ = app.emit(
                         "agent-event",
                         &scryer_acp::AgentEvent::Message {
@@ -558,13 +589,15 @@ pub(crate) async fn start_model_build(
                 match outcome {
                     Ok((WaveOutcome::Completed, usage)) => {
                         wave2_usage.lock().await.add(&usage);
-                        eprintln!(
-                            "[build] Wave 2 container '{name}': {:.1}s, {} (work {}, payload {} bytes)",
+                        let line = format!(
+                            "Wave 2 container '{name}': {:.1}s, {} (work {}, payload {} bytes)",
                             c_start.elapsed().as_secs_f64(),
                             fmt_usage(&usage),
                             work_units,
                             payload_bytes,
                         );
+                        eprintln!("[build] {line}");
+                        orch_log(&cwd, &line);
                     }
                     Ok((WaveOutcome::Cancelled, _)) => {
                         cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -584,27 +617,24 @@ pub(crate) async fn start_model_build(
 
         let failed_jobs = failures.lock().await.clone();
         if !failed_jobs.is_empty() {
-            let _ = app.emit(
-                "agent-event",
-                &scryer_acp::AgentEvent::Failed {
-                    error: format!(
-                        "{} container modeling job(s) failed: {}",
-                        failed_jobs.len(),
-                        failed_jobs.join(" | ")
-                    ),
-                },
-            );
+            emit_fail(format!(
+                "{} container modeling job(s) failed: {}",
+                failed_jobs.len(),
+                failed_jobs.join(" | ")
+            ));
             return;
         }
 
         total_usage.add(&*wave2_usage.lock().await);
 
         if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
-            eprintln!(
-                "[build] cancelled after {:.1}s, {} (partial)",
+            let line = format!(
+                "cancelled after {:.1}s, {} (partial)",
                 build_start.elapsed().as_secs_f64(),
                 fmt_usage(&total_usage),
             );
+            eprintln!("[build] {line}");
+            orch_log(&cwd, &line);
             let _ = app.emit("build-active-node", Vec::<String>::new());
             let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Cancelled);
             return;
@@ -619,19 +649,25 @@ pub(crate) async fn start_model_build(
         let mut completed_model = match scryer_core::read_planned_at(&model_ref) {
             Ok(model) => model,
             Err(e) => {
-                let _ = app.emit(
-                    "agent-event",
-                    &scryer_acp::AgentEvent::Failed {
-                        error: format!("Could not read the completed model: {e}"),
-                    },
-                );
+                emit_fail(format!("Could not read the completed model: {e}"));
                 return;
             }
         };
-        let validate_completed = |model: &scryer_core::ScryModel| {
-            let mut warnings = scryer_core::validate::validate(model);
+        // Validate the WORKING VIEW (committed's code anchors overlaid on the
+        // draft), never the raw draft. Anchors route committed-only: the seed's
+        // boundary globs and the fills' source maps live in `model.scry` and the
+        // draft is seeded clean of them, so `validate_coverage` on the raw draft
+        // flags every manifest directory as uncovered — unconditionally — and no
+        // repair session can clear it (the agent's `validate_model` tool checks
+        // the working view and rightly reports it clean). The fold below merges
+        // this same view into committed, so the view is exactly what a passing
+        // gate lets land.
+        let validate_completed = |planned: &scryer_core::ScryModel| {
+            let committed = scryer_core::read_model_at(&model_ref).unwrap_or_default();
+            let view = scryer_core::working_view(&committed, planned);
+            let mut warnings = scryer_core::validate::validate(&view);
             warnings.extend(scryer_core::validate::validate_coverage(
-                model,
+                &view,
                 std::path::Path::new(&cwd),
             ));
             warnings
@@ -662,6 +698,7 @@ pub(crate) async fn start_model_build(
                 "▶ Repairing {} model validation issue(s)…",
                 warnings.len()
             ));
+            orch_log(&cwd, &format!("validation warnings: {}", warnings.join(" | ")));
             let warnings_json =
                 serde_json::to_string(&warnings).unwrap_or_else(|_| "[]".to_string());
             let repair_prompt = scryer_acp::prompt::repair_model_prompt(&cwd, &warnings_json);
@@ -680,16 +717,12 @@ pub(crate) async fn start_model_build(
             {
                 Ok((WaveOutcome::Completed, usage)) => total_usage.add(&usage),
                 Ok((WaveOutcome::Cancelled, _)) => {
+                    orch_log(&cwd, "build cancelled during validation repair");
                     let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Cancelled);
                     return;
                 }
                 Err(e) => {
-                    let _ = app.emit(
-                        "agent-event",
-                        &scryer_acp::AgentEvent::Failed {
-                            error: format!("Model validation repair failed: {e}"),
-                        },
-                    );
+                    emit_fail(format!("Model validation repair failed: {e}"));
                     return;
                 }
             }
@@ -699,12 +732,7 @@ pub(crate) async fn start_model_build(
             completed_model = match scryer_core::read_planned_at(&model_ref) {
                 Ok(model) => model,
                 Err(e) => {
-                    let _ = app.emit(
-                        "agent-event",
-                        &scryer_acp::AgentEvent::Failed {
-                            error: format!("Could not read the repaired model: {e}"),
-                        },
-                    );
+                    emit_fail(format!("Could not read the repaired model: {e}"));
                     return;
                 }
             };
@@ -713,15 +741,10 @@ pub(crate) async fn start_model_build(
                 .filter(|w| !is_sparse_code_disconnect(w))
                 .collect();
             if !warnings.is_empty() {
-                let _ = app.emit(
-                    "agent-event",
-                    &scryer_acp::AgentEvent::Failed {
-                        error: format!(
-                            "Model remains invalid after repair: {}",
-                            warnings.join(" | ")
-                        ),
-                    },
-                );
+                emit_fail(format!(
+                    "Model remains invalid after repair: {}",
+                    warnings.join(" | ")
+                ));
                 return;
             }
         }
@@ -735,12 +758,9 @@ pub(crate) async fn start_model_build(
         let completed_model = match scryer_core::fold_built_model(&model_ref, &completed_model) {
             Ok(folded) => folded,
             Err(e) => {
-                let _ = app.emit(
-                    "agent-event",
-                    &scryer_acp::AgentEvent::Failed {
-                        error: format!("Could not fold the completed model into the committed layer: {e}"),
-                    },
-                );
+                emit_fail(format!(
+                    "Could not fold the completed model into the committed layer: {e}"
+                ));
                 return;
             }
         };
@@ -762,11 +782,9 @@ pub(crate) async fn start_model_build(
         }
 
         let elapsed = build_start.elapsed().as_secs_f64();
-        eprintln!(
-            "[build] complete: {:.1}s total, {}",
-            elapsed,
-            fmt_usage(&total_usage),
-        );
+        let line = format!("complete: {:.1}s total, {}", elapsed, fmt_usage(&total_usage));
+        eprintln!("[build] {line}");
+        orch_log(&cwd, &line);
 
         let _ = app.emit("build-active-node", Vec::<String>::new());
         let fresh = total_usage.input_tokens
@@ -839,6 +857,7 @@ pub(crate) async fn start_drift_check(
 
     tokio::spawn(async move {
         let emit_msg = |text: String| {
+            orch_log(&cwd, &text);
             let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Message { text });
         };
 
@@ -864,6 +883,7 @@ pub(crate) async fn start_drift_check(
             return;
         }
 
+        orch_log(&cwd, &format!("drift check start: {cwd}"));
         emit_msg(format!(
             "▶ Checking {} changed scope(s) for drift…",
             scopes.len()
@@ -976,6 +996,7 @@ pub(crate) async fn start_drift_check(
                         a.iter().cloned().collect::<Vec<String>>(),
                     );
                 }
+                orch_log(&cwd, &format!("▶ Drift check: {node_name}…"));
                 let _ = app.emit(
                     "agent-event",
                     &scryer_acp::AgentEvent::Message {
@@ -998,11 +1019,13 @@ pub(crate) async fn start_drift_check(
                 }
                 match outcome {
                     Ok((WaveOutcome::Completed, usage)) => {
-                        eprintln!(
-                            "[drift] scope '{node_name}': {:.1}s, {}",
+                        let line = format!(
+                            "drift scope '{node_name}': {:.1}s, {}",
                             d_start.elapsed().as_secs_f64(),
                             fmt_usage(&usage),
                         );
+                        eprintln!("[drift] {line}");
+                        orch_log(&cwd, &line);
                     }
                     Ok((WaveOutcome::Cancelled, _)) => {
                         cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1022,6 +1045,7 @@ pub(crate) async fn start_drift_check(
         }
 
         if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            orch_log(&cwd, "drift check cancelled");
             let _ = app.emit("build-active-node", Vec::<String>::new());
             let _ = app.emit("agent-event", &scryer_acp::AgentEvent::Cancelled);
             return;
@@ -1032,6 +1056,7 @@ pub(crate) async fn start_drift_check(
         // scope (findings already flagged by the scopes that completed persist).
         let failed_scopes = failures.lock().await.clone();
         if !failed_scopes.is_empty() {
+            orch_log(&cwd, &format!("✗ drift check failed: {}", failed_scopes.join(" | ")));
             let _ = app.emit("build-active-node", Vec::<String>::new());
             let _ = app.emit(
                 "agent-event",
@@ -1041,10 +1066,9 @@ pub(crate) async fn start_drift_check(
             );
             return;
         }
-        eprintln!(
-            "[drift] complete: {:.1}s total",
-            drift_start.elapsed().as_secs_f64(),
-        );
+        let line = format!("drift complete: {:.1}s total", drift_start.elapsed().as_secs_f64());
+        eprintln!("[drift] {line}");
+        orch_log(&cwd, &line);
 
         write_anchor();
         let _ = app.emit("build-active-node", Vec::<String>::new());
