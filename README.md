@@ -1,3 +1,5 @@
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Faklos%2Fscryer.svg)](https://mcptoplist.com/server/glama%2Faklos%2Fscryer)
+
 <div align="center">
 
   <h1>
