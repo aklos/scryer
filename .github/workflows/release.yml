@@ -31,10 +31,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # No version pin here — the action reads package.json's packageManager
+      # field, so contributors and CI resolve the same pnpm.
       - name: Install pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 11
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
