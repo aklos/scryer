@@ -28,7 +28,9 @@ const DIFF_ADDED = "rounded-xs bg-emerald-500/15 px-px text-emerald-700 dark:tex
  *  wordDiff's similarity floor) — both still render, struck old then added new,
  *  so a replacement never masquerades as an addition. Unchanged text inherits
  *  its ink: every caller's wrapper must set an explicit text color (the app has
- *  no global body ink to fall back on). */
+ *  no global body ink to fall back on — the root sets a canvas background and
+ *  nothing else, so a bare wrapper falls through to the browser's black and the
+ *  unchanged words vanish in dark mode, as the Changes page rows once did). */
 export function WordDiffText({ from, to }: { from: string; to: string }) {
   const segs = wordDiff(from, to);
   return (

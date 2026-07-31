@@ -201,7 +201,7 @@ function OwnRow({ change, ctx }: { change: Change; ctx: RowCtx }) {
       return null;
     case "reworded":
       return (
-        <div className="text-2xs leading-relaxed">
+        <div className="text-2xs leading-relaxed text-[var(--text-secondary)]">
           <span className="text-[var(--text-muted)]">{change.field}: </span>
           {change.from ? (
             <WordDiffText from={change.from} to={change.to} />
@@ -250,7 +250,7 @@ function ChildRow({ ec, ctx }: { ec: ElementChange; ctx: RowCtx }) {
   const text = (ec.kind === "responsibility" && ctx.statements.get(ec.id)) || ec.label;
   return (
     <DiffRow kind={kind} className="text-xs leading-relaxed">
-      <div className="min-w-0 font-mono">
+      <div className="min-w-0 font-mono text-[var(--text-secondary)]">
         {deleted ? (
           <span className={DIFF_TINT.delete}>
             <StatementText text={text} anchor={DIFF_ANCHOR.delete} />
@@ -312,7 +312,7 @@ function LinkRow({ link, ctx }: { link: LinkChange; ctx: RowCtx }) {
   const kind: ChangeKind = added ? "add" : deleted ? "delete" : "modified";
   return (
     <DiffRow kind={kind} className="text-xs leading-relaxed">
-      <div className="min-w-0 font-mono">
+      <div className="min-w-0 font-mono text-[var(--text-secondary)]">
         <span className="inline-flex flex-wrap items-baseline gap-1">
           <span className="text-2xs uppercase tracking-[0.07em] text-[var(--text-ghost)]">link</span>
           {deleted ? (
