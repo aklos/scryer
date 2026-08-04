@@ -46,6 +46,7 @@ Scryer uses CLI spawning for sync:
 
 - **Claude Code** — spawned via `claude -p` (uses your Anthropic subscription)
 - **Codex** — spawned via `codex exec` (uses your OpenAI API key)
+- **Cursor** — spawned via `cursor agent -p` with legacy `agent -p` fallback (uses your Cursor subscription; MCP from `.cursor/mcp.json`)
 
 The MCP server is attached automatically. For Claude Code, the config is passed inline via `--mcp-config`. For Codex, it reads from the project's `.codex/config.toml`.
 

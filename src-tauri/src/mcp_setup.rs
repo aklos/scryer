@@ -146,13 +146,41 @@ fn check_codex_toml(project_path: &str) -> bool {
     false
 }
 
+/// Check if a project has `.cursor/mcp.json` with a scryer MCP entry.
+fn check_cursor_mcp(project_path: &str) -> bool {
+    let path = PathBuf::from(project_path).join(".cursor").join("mcp.json");
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
+            return root.pointer("/mcpServers/scryer").is_some();
+        }
+    }
+    false
+}
+
+fn check_cursor_approved(project_path: &str) -> bool {
+    scryer_core::cursor_agent::cursor_mcp_permission_enabled(Path::new(project_path))
+}
+
+fn has_cursor_cli() -> bool {
+    scryer_core::cursor_agent::find_cursor_agent().is_some()
+}
+
+fn check_cursor_authenticated() -> bool {
+    scryer_core::cursor_agent::find_cursor_agent()
+        .is_some_and(|p| scryer_core::cursor_agent::cursor_agent_authenticated(&p))
+}
+
 #[tauri::command]
 pub(crate) fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value {
     let has_claude = which::which("claude").is_ok();
     let has_codex = which::which("codex").is_ok();
+    let has_cursor = has_cursor_cli();
+    let cursor_authenticated = has_cursor && check_cursor_authenticated();
 
     let claude_mcp = project_path.as_deref().map(check_mcp_json).unwrap_or(false);
     let codex_mcp = project_path.as_deref().map(check_codex_toml).unwrap_or(false);
+    let cursor_mcp = project_path.as_deref().map(check_cursor_mcp).unwrap_or(false);
+    let cursor_approved = project_path.as_deref().map(check_cursor_approved).unwrap_or(false);
     let claude_approved = project_path.as_deref().map(check_claude_approved).unwrap_or(false);
     let claude_hooks = project_path.as_deref().map(check_claude_hooks).unwrap_or(false);
     let codex_hooks = project_path.as_deref().map(check_codex_hooks).unwrap_or(false);
@@ -162,8 +190,12 @@ pub(crate) fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value
     serde_json::json!({
         "claude": has_claude,
         "codex": has_codex,
+        "cursor": has_cursor,
+        "cursorAuthenticated": cursor_authenticated,
         "claudeMcpEnabled": claude_mcp,
         "codexMcpEnabled": codex_mcp,
+        "cursorMcpEnabled": cursor_mcp,
+        "cursorApproved": cursor_approved,
         "claudeApproved": claude_approved,
         "claudeHooksEnabled": claude_hooks,
         "codexHooksEnabled": codex_hooks,
@@ -249,6 +281,39 @@ pub(crate) fn setup_mcp_integration(
             std::fs::write(&config_path, doc.to_string()).map_err(|e| e.to_string())?;
 
             return Ok(config_path.to_string_lossy().to_string());
+        }
+        "mcp_cursor" => {
+            let binary_path = find_scryer_mcp()
+                .ok_or("scryer-mcp binary not found")?;
+
+            let cursor_dir = PathBuf::from(&project_path).join(".cursor");
+            scryer_core::cursor_agent::install_cursor_mcp_permission(Path::new(&project_path))?;
+            let mcp_path = cursor_dir.join("mcp.json");
+            let mut mcp_root: serde_json::Value = if mcp_path.exists() {
+                let contents = std::fs::read_to_string(&mcp_path).map_err(|e| e.to_string())?;
+                serde_json::from_str(&contents).map_err(|e| {
+                    format!(
+                        "{} is not valid JSON ({e}); refusing to overwrite it",
+                        mcp_path.display()
+                    )
+                })?
+            } else {
+                serde_json::json!({})
+            };
+
+            if !mcp_root.get("mcpServers").is_some_and(|v| v.is_object()) {
+                mcp_root["mcpServers"] = serde_json::json!({});
+            }
+            mcp_root["mcpServers"]["scryer"] = serde_json::json!({
+                "command": binary_path,
+                "args": [],
+            });
+
+            std::fs::create_dir_all(&cursor_dir).map_err(|e| e.to_string())?;
+            std::fs::write(&mcp_path, serde_json::to_string_pretty(&mcp_root).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+
+            return Ok(mcp_path.to_string_lossy().to_string());
         }
         "claude_approve" => {
             let claude_dir = PathBuf::from(&project_path).join(".claude");

@@ -8,8 +8,14 @@ import { invoke } from "@tauri-apps/api/core";
 export interface AiToolsState {
   claude: boolean;
   codex: boolean;
+  cursor: boolean;
   claudeMcpEnabled: boolean;
   codexMcpEnabled: boolean;
+  cursorMcpEnabled: boolean;
+  /** Cursor CLI grants only Scryer's MCP tools non-interactive access. */
+  cursorApproved: boolean;
+  /** Cursor CLI is logged in (`agent status` succeeds). */
+  cursorAuthenticated: boolean;
   claudeApproved: boolean;
   /** Scryer's session hooks are registered in this project's Claude Code settings. */
   claudeHooksEnabled: boolean;
@@ -26,8 +32,12 @@ export interface AiToolsState {
 const EMPTY: AiToolsState = {
   claude: false,
   codex: false,
+  cursor: false,
   claudeMcpEnabled: false,
   codexMcpEnabled: false,
+  cursorMcpEnabled: false,
+  cursorApproved: false,
+  cursorAuthenticated: false,
   claudeApproved: false,
   claudeHooksEnabled: false,
   codexHooksEnabled: false,
@@ -45,8 +55,8 @@ export interface McpSetup {
   dismissed: boolean;
   /** An enable write is in flight. */
   busy: boolean;
-  /** Write every applicable config — `.mcp.json`, `.codex/config.toml`, and
-   *  tool auto-approve in `.claude/settings.local.json` — then re-detect. */
+  /** Write every applicable MCP config and least-privilege tool approval,
+   *  then re-detect. */
   enable: () => Promise<void>;
   /** Explicit, separate opt-in: install scryer's session hooks for one tool —
    *  Claude Code (`.claude/settings.local.json`) or Codex (`.codex/hooks.json`).
@@ -94,6 +104,8 @@ export function useMcpSetup(projectPath: string | null): McpSetup {
       const actions: string[] = [];
       if (tools.claude && !tools.claudeMcpEnabled) actions.push("mcp");
       if (tools.codex && !tools.codexMcpEnabled) actions.push("mcp_codex");
+      if (tools.cursor && (!tools.cursorMcpEnabled || !tools.cursorApproved))
+        actions.push("mcp_cursor");
       if (tools.claude && !tools.claudeApproved) actions.push("claude_approve");
       for (const action of actions) {
         await invoke("setup_mcp_integration", { action, projectPath });
@@ -136,7 +148,9 @@ export function useMcpSetup(projectPath: string | null): McpSetup {
   }, [projectPath]);
 
   const needsSetup =
-    (tools.claude && !tools.claudeMcpEnabled) || (tools.codex && !tools.codexMcpEnabled);
+    (tools.claude && !tools.claudeMcpEnabled) ||
+    (tools.codex && !tools.codexMcpEnabled) ||
+    (tools.cursor && (!tools.cursorMcpEnabled || !tools.cursorApproved));
   const dismissed = projectPath ? dismissedPaths.has(projectPath) : false;
 
   return { tools, needsSetup, dismissed, busy, enable, enableHooks, enableStatusline, dismiss, reload };

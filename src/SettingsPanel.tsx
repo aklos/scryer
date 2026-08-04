@@ -6,7 +6,7 @@ import { Input, Select } from "./ui";
 import { BTN, BTN_GO, BTN_ICON, EYEBROW, SegField } from "./pagekit";
 import { useMcpSetup } from "./hooks/useMcpSetup";
 
-type AgentPref = "auto" | "claudeCode" | "codex";
+type AgentPref = "auto" | "claudeCode" | "codex" | "cursor";
 
 interface AgentSettings {
   model: string;
@@ -17,6 +17,7 @@ export interface SubagentSettings {
   agent: AgentPref;
   claude: AgentSettings;
   codex: AgentSettings;
+  cursor: AgentSettings;
   /** Confirm before a UI action launches an agent. "Don't ask again" clears it. */
   confirmLaunch: boolean;
 }
@@ -24,6 +25,7 @@ export interface SubagentSettings {
 export interface Detected {
   claude: boolean;
   codex: boolean;
+  cursor: boolean;
 }
 
 const DEFAULT_AGENT: AgentSettings = { model: "", effort: "medium" };
@@ -31,6 +33,7 @@ export const SUBAGENT_DEFAULTS: SubagentSettings = {
   agent: "auto",
   claude: { ...DEFAULT_AGENT },
   codex: { ...DEFAULT_AGENT },
+  cursor: { ...DEFAULT_AGENT },
   confirmLaunch: true,
 };
 
@@ -39,44 +42,65 @@ export const SUBAGENT_DEFAULTS: SubagentSettings = {
  *  powerline so the launch readout and the editor can never disagree. `model`
  *  empty means the agent CLI's own default. */
 export interface ResolvedLaunch {
-  agent: "claudeCode" | "codex" | null;
+  agent: "claudeCode" | "codex" | "cursor" | null;
   model: string;
   effort: string;
 }
 
-export const AGENT_LABEL: Record<"claudeCode" | "codex", string> = {
+export const AGENT_LABEL: Record<"claudeCode" | "codex" | "cursor", string> = {
   claudeCode: "Claude Code",
   codex: "Codex",
+  cursor: "Cursor",
 };
 
+function resolveAgent(
+  pref: AgentPref,
+  detected: Detected,
+): ResolvedLaunch["agent"] {
+  const pick = (
+    primary: keyof Detected,
+    fallbacks: (keyof Detected)[],
+  ): ResolvedLaunch["agent"] => {
+    if (detected[primary]) {
+      return primary === "claude" ? "claudeCode" : primary;
+    }
+    for (const fb of fallbacks) {
+      if (detected[fb]) {
+        return fb === "claude" ? "claudeCode" : fb;
+      }
+    }
+    return null;
+  };
+
+  switch (pref) {
+    case "codex":
+      return pick("codex", ["claude", "cursor"]);
+    case "claudeCode":
+      return pick("claude", ["codex", "cursor"]);
+    case "cursor":
+      return pick("cursor", ["claude", "codex"]);
+    default:
+      return pick("claude", ["codex", "cursor"]);
+  }
+}
+
 export function resolveLaunch(settings: SubagentSettings, detected: Detected): ResolvedLaunch {
-  const c = detected.claude;
-  const x = detected.codex;
-  const agent: ResolvedLaunch["agent"] =
-    settings.agent === "codex"
-      ? x
-        ? "codex"
-        : c
-          ? "claudeCode"
-          : null
-      : settings.agent === "claudeCode"
-        ? c
-          ? "claudeCode"
-          : x
-            ? "codex"
-            : null
-        : c
-          ? "claudeCode"
-          : x
-            ? "codex"
-            : null;
-  const a = agent === "codex" ? settings.codex : agent === "claudeCode" ? settings.claude : null;
+  const agent = resolveAgent(settings.agent, detected);
+  const a =
+    agent === "codex"
+      ? settings.codex
+      : agent === "cursor"
+        ? settings.cursor
+        : agent === "claudeCode"
+          ? settings.claude
+          : null;
   return { agent, model: a?.model ?? "", effort: a?.effort ?? "" };
 }
 
 // Effort levels are agent-specific (from each CLI's own option set).
 const CLAUDE_EFFORT = ["low", "medium", "high", "xhigh", "max"];
 const CODEX_EFFORT = ["minimal", "low", "medium", "high", "xhigh"];
+const CURSOR_MODELS = ["composer-2.5-fast", "gpt-5.6-sol-medium", "claude-opus-5-thinking-high"];
 
 // Curated models. Claude aliases auto-track the latest version; Codex uses
 // explicit slugs. "Custom…" drops to a free-text field for anything else.
@@ -101,7 +125,7 @@ export function SettingsPanel({
   projectPath?: string | null;
 }) {
   const [settings, setSettings] = useState<SubagentSettings>(SUBAGENT_DEFAULTS);
-  const [detected, setDetected] = useState<Detected>({ claude: false, codex: false });
+  const [detected, setDetected] = useState<Detected>({ claude: false, codex: false, cursor: false });
   const [saving, setSaving] = useState(false);
   const mcpSetup = useMcpSetup(projectPath ?? null);
 
@@ -110,7 +134,9 @@ export function SettingsPanel({
       .then((s) => setSettings({ ...SUBAGENT_DEFAULTS, ...s }))
       .catch(() => {});
     invoke<Detected>("detect_ai_tools", { projectPath: null })
-      .then((d) => setDetected({ claude: !!d.claude, codex: !!d.codex }))
+      .then((d) =>
+        setDetected({ claude: !!d.claude, codex: !!d.codex, cursor: !!d.cursor }),
+      )
       .catch(() => {});
   }, []);
 
@@ -158,10 +184,17 @@ export function SettingsPanel({
           </p>
 
           <Field label="Detected agents">
-            <div className="flex gap-4 text-xs">
+            <div className="flex flex-wrap gap-4 text-xs">
               <AgentStatus name="Claude Code" available={detected.claude} />
               <AgentStatus name="Codex" available={detected.codex} />
+              <AgentStatus name="Cursor" available={detected.cursor} />
             </div>
+            {detected.cursor && mcpSetup.tools.cursor && !mcpSetup.tools.cursorAuthenticated && (
+              <p className="mt-1 text-2xs text-amber-500">
+                Cursor CLI found but not logged in — run <code className="font-mono">agent login</code> in a
+                terminal.
+              </p>
+            )}
           </Field>
 
           <Field label="Agent">
@@ -170,14 +203,15 @@ export function SettingsPanel({
                 { value: "auto", label: "Auto" },
                 { value: "claudeCode", label: "Claude Code" },
                 { value: "codex", label: "Codex" },
+                { value: "cursor", label: "Cursor" },
               ]}
               value={settings.agent}
               onChange={(agent) => setSettings((s) => ({ ...s, agent }))}
             />
             <p className="text-2xs text-[var(--text-muted)]">
               {resolvedAgent
-                ? `Fills will use ${resolvedAgent === "claudeCode" ? "Claude Code" : "Codex"}.`
-                : "No agent detected — install Claude Code or Codex."}
+                ? `Fills will use ${AGENT_LABEL[resolvedAgent]}.`
+                : "No agent detected — install Claude Code, Codex, or Cursor CLI."}
             </p>
           </Field>
 
@@ -195,6 +229,15 @@ export function SettingsPanel({
             models={CODEX_MODELS}
             value={settings.codex}
             onChange={(codex) => setSettings((s) => ({ ...s, codex }))}
+          />
+
+          <AgentSettingsGroup
+            title="Cursor"
+            efforts={[]}
+            models={CURSOR_MODELS}
+            value={settings.cursor}
+            onChange={(cursor) => setSettings((s) => ({ ...s, cursor }))}
+            hideEffort
           />
 
           {projectPath && (mcpSetup.tools.claude || mcpSetup.tools.codex) && (
@@ -362,12 +405,14 @@ function AgentSettingsGroup({
   models,
   value,
   onChange,
+  hideEffort,
 }: {
   title: string;
   efforts: string[];
   models: string[];
   value: AgentSettings;
   onChange: (next: AgentSettings) => void;
+  hideEffort?: boolean;
 }) {
   return (
     <div className="rounded-md border border-[var(--border)] p-3">
@@ -375,13 +420,15 @@ function AgentSettingsGroup({
         {title}
       </h3>
       <div className="flex flex-col gap-3">
-        <Field label="Reasoning effort">
-          <SegField
-            options={efforts.map((e) => ({ value: e, label: cap(e) }))}
-            value={value.effort}
-            onChange={(effort) => onChange({ ...value, effort })}
-          />
-        </Field>
+        {!hideEffort && (
+          <Field label="Reasoning effort">
+            <SegField
+              options={efforts.map((e) => ({ value: e, label: cap(e) }))}
+              value={value.effort}
+              onChange={(effort) => onChange({ ...value, effort })}
+            />
+          </Field>
+        )}
         <Field label="Model">
           <ModelPicker
             aliases={models}

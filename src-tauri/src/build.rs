@@ -292,7 +292,7 @@ pub(crate) async fn start_model_build(
     let mcp_binary = find_scryer_mcp().ok_or("scryer-mcp binary not found")?;
     let settings = scryer_core::read_subagent_settings();
     let launch = scryer_acp::detect_available_agent_pref(&settings.agent)
-        .ok_or("No AI agent found. Install Claude Code or Codex first.")?;
+        .ok_or("No AI agent found. Install Claude Code, Codex, or Cursor CLI first.")?;
     let (model_name, effort) = config_for_launch(&settings, &launch);
     let (agent_binary, mode) = match launch {
         scryer_acp::AgentLaunch::Cli { binary, kind } => {
@@ -828,7 +828,7 @@ pub(crate) async fn start_drift_check(
     let mcp_binary = find_scryer_mcp().ok_or("scryer-mcp binary not found")?;
     let settings = scryer_core::read_subagent_settings();
     let launch = scryer_acp::detect_available_agent_pref(&settings.agent)
-        .ok_or("No AI agent found. Install Claude Code or Codex first.")?;
+        .ok_or("No AI agent found. Install Claude Code, Codex, or Cursor CLI first.")?;
     let (model_name, effort) = config_for_launch(&settings, &launch);
     let (agent_binary, mode) = match launch {
         scryer_acp::AgentLaunch::Cli { binary, kind } => {

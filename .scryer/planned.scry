@@ -57,7 +57,18 @@
           "statement": "**Surface** plan and drift status so the developer sees the model's health at a glance.",
           "lastTouchedAt": 1784883634
         }
-      ]
+      ],
+      "properties": [
+        {
+          "label": "cursor",
+          "description": "Per-agent model and effort settings for Cursor CLI fills",
+          "lastTouchedAt": 1785544979
+        }
+      ],
+      "position": {
+        "x": -840.0,
+        "y": 552.0
+      }
     },
     {
       "id": "node-3",
@@ -76,8 +87,24 @@
           "id": "resp-24",
           "statement": "**Translate** agent tool calls and progress into model updates and UI-visible session state.",
           "lastTouchedAt": 1784883634
+        },
+        {
+          "id": "resp-687",
+          "statement": "**Record** each CLI agent session's streamed stdout and stderr to per-session log files under `.scryer/build-logs`.",
+          "lastTouchedAt": 1785545011
         }
-      ]
+      ],
+      "properties": [
+        {
+          "label": "Cursor",
+          "description": "The Cursor CLI agent harness",
+          "lastTouchedAt": 1785544976
+        }
+      ],
+      "position": {
+        "x": -1104.0,
+        "y": 120.0
+      }
     },
     {
       "id": "node-4",
@@ -102,7 +129,11 @@
           "statement": "**Validate** the model's structural integrity and source coverage.",
           "lastTouchedAt": 1784883634
         }
-      ]
+      ],
+      "position": {
+        "x": -1632.0,
+        "y": -408.0
+      }
     },
     {
       "id": "node-5",
@@ -122,7 +153,11 @@
           "statement": "**Resolve** declared imports across supported languages to audit links against real dependencies.",
           "lastTouchedAt": 1784883634
         }
-      ]
+      ],
+      "position": {
+        "x": -1632.0,
+        "y": 120.0
+      }
     },
     {
       "id": "node-6",
@@ -147,7 +182,11 @@
           "statement": "**Discover and authenticate** against a running desktop app instance for a linked project.",
           "lastTouchedAt": 1784883634
         }
-      ]
+      ],
+      "position": {
+        "x": -1920.0,
+        "y": 552.0
+      }
     },
     {
       "id": "node-7",
@@ -167,7 +206,11 @@
           "statement": "**Validate** a project's architecture model for structural and source-coverage issues.",
           "lastTouchedAt": 1784883634
         }
-      ]
+      ],
+      "position": {
+        "x": -2160.0,
+        "y": 120.0
+      }
     },
     {
       "id": "node-8",
@@ -182,7 +225,11 @@
           "statement": "**Publish** user-facing documentation for installing, configuring, and using Scryer.",
           "lastTouchedAt": 1784883634
         }
-      ]
+      ],
+      "position": {
+        "x": -432.0,
+        "y": 552.0
+      }
     },
     {
       "id": "node-9",
@@ -217,7 +264,11 @@
           "statement": "**Detect and configure** AI coding tool MCP integration for the linked project.",
           "lastTouchedAt": 1784883634
         }
-      ]
+      ],
+      "position": {
+        "x": -1320.0,
+        "y": 552.0
+      }
     },
     {
       "id": "node-10",
@@ -532,8 +583,8 @@
         },
         {
           "id": "resp-53",
-          "statement": "Registers scryer-mcp as an MCP server for Claude Code and/or OpenAI Codex in a project, merging with any existing config.",
-          "lastTouchedAt": 1784883763
+          "statement": "**Registers** scryer-mcp as an MCP server for Claude Code, OpenAI Codex, and/or Cursor in a project, merging with any existing config.",
+          "lastTouchedAt": 1785544877
         }
       ]
     },
@@ -6517,17 +6568,18 @@
       "kind": "component",
       "name": "AI Tool Integration Setup",
       "parentId": "node-9",
-      "description": "Detects and configures per-project integration with Claude Code and Codex.",
+      "description": "Detects and configures per-project integration with Claude Code, Codex, and Cursor.",
       "responsibilities": [
         {
           "id": "resp-387",
-          "statement": "Detects whether Claude Code or Codex, their MCP registration, hooks, and status line are set up for a project",
-          "lastTouchedAt": 1784883930
+          "statement": "**Detect** whether Claude Code, Codex, or Cursor is available and whether each tool's scryer MCP integration — plus Claude/Codex hooks and status line — is configured for the project",
+          "lastTouchedAt": 1785544886
         },
         {
           "id": "resp-388",
-          "statement": "Idempotently installs scryer's MCP entry, session hooks, and status line without clobbering foreign config",
-          "lastTouchedAt": 1784883930
+          "statement": "**Idempotently install** agent integration and least-privilege permissions without clobbering foreign config",
+          "concern": "security",
+          "lastTouchedAt": 1785805729
         },
         {
           "id": "resp-389",
@@ -6648,8 +6700,8 @@
       "responsibilities": [
         {
           "id": "resp-398",
-          "statement": "**When** the user opts in, **write** the requested MCP, hook, or status line registration for Claude Code or Codex",
-          "lastTouchedAt": 1784883930
+          "statement": "**When** the user opts in, **write** the requested MCP, hook, or status line registration for Claude Code, Codex, or Cursor",
+          "lastTouchedAt": 1785544895
         }
       ]
     },
@@ -9112,8 +9164,8 @@
         },
         {
           "id": "resp-550",
-          "statement": "Falls back between Claude Code and Codex when the preferred agent binary isn't found on PATH",
-          "lastTouchedAt": 1784884036
+          "statement": "**Fall back** between Claude Code, Codex, and Cursor when the preferred agent binary isn't found on PATH.",
+          "lastTouchedAt": 1785544897
         }
       ]
     },
@@ -9179,8 +9231,8 @@
       "responsibilities": [
         {
           "id": "resp-552",
-          "statement": "Detects an available agent honoring an auto/claudeCode/codex preference, falling back to the other agent if the preferred binary is missing",
-          "lastTouchedAt": 1784884036
+          "statement": "Detects an available agent honoring an auto/claudeCode/codex/cursor preference, falling back to the other agents if the preferred binary is missing.",
+          "lastTouchedAt": 1785544900
         }
       ]
     },
@@ -9331,8 +9383,9 @@
         },
         {
           "id": "resp-564",
-          "statement": "Spawns and configures agent subprocesses for both CLI print-mode (Claude Code, Codex) and the ACP protocol handshake",
-          "lastTouchedAt": 1784884036
+          "statement": "Spawns agent subprocesses with only the integrations required for their assigned workflow",
+          "concern": "security",
+          "lastTouchedAt": 1785805729
         },
         {
           "id": "resp-565",
@@ -9426,8 +9479,8 @@
       "responsibilities": [
         {
           "id": "resp-570",
-          "statement": "Spawns and configures a CLI-mode agent subprocess (Claude Code or Codex), piping the prompt over stdin to avoid the OS argv size cap",
-          "lastTouchedAt": 1784884036
+          "statement": "Spawns and configures a CLI-mode agent subprocess (Claude Code, Codex, or Cursor), piping the prompt over stdin to avoid the OS argv size cap.",
+          "lastTouchedAt": 1785544907
         }
       ]
     },
@@ -11663,8 +11716,8 @@
       "responsibilities": [
         {
           "id": "resp-670",
-          "statement": "Persists per-agent (Claude/Codex) model and reasoning-effort preferences applied to spawned fill sessions",
-          "lastTouchedAt": 1784884312
+          "statement": "Persists per-agent (Claude/Codex/Cursor) model and reasoning-effort preferences applied to spawned fill sessions",
+          "lastTouchedAt": 1785544910
         }
       ]
     },
@@ -11693,6 +11746,11 @@
           "label": "confirmLaunch",
           "description": "",
           "lastTouchedAt": 1784884312
+        },
+        {
+          "label": "cursor",
+          "description": "Per-agent model and reasoning-effort settings for the Cursor agent CLI",
+          "lastTouchedAt": 1785544939
         }
       ]
     },
@@ -11844,6 +11902,128 @@
           "id": "resp-679",
           "statement": "Cross-references the model's source map against the real filesystem to catch uncovered manifests and cross-boundary sharing",
           "lastTouchedAt": 1784884312
+        }
+      ]
+    },
+    {
+      "id": "node-645",
+      "kind": "symbol",
+      "name": "init_cursor",
+      "parentId": "node-29",
+      "responsibilities": [
+        {
+          "id": "resp-680",
+          "statement": "**Writes** or merges `.cursor/mcp.json` so Cursor CLI discovers scryer-mcp.",
+          "lastTouchedAt": 1785545009
+        }
+      ]
+    },
+    {
+      "id": "node-646",
+      "kind": "component",
+      "name": "Cursor Agent Discovery",
+      "parentId": "node-4",
+      "technology": "Rust",
+      "description": "Locates and identifies the Cursor agent CLI on the developer machine."
+    },
+    {
+      "id": "node-647",
+      "kind": "symbol",
+      "name": "find_cursor_agent",
+      "parentId": "node-646",
+      "responsibilities": [
+        {
+          "id": "resp-681",
+          "statement": "Locates a compatible Cursor agent entry point, preferring the current launcher and falling back to legacy installations",
+          "lastTouchedAt": 1785807101
+        }
+      ]
+    },
+    {
+      "id": "node-648",
+      "kind": "symbol",
+      "name": "is_cursor_agent",
+      "parentId": "node-646",
+      "responsibilities": [
+        {
+          "id": "resp-682",
+          "statement": "Identifies whether an executable is Cursor's agent CLI rather than an unrelated `agent` binary on PATH",
+          "lastTouchedAt": 1785544991
+        }
+      ]
+    },
+    {
+      "id": "node-649",
+      "kind": "symbol",
+      "name": "cursor_agent_authenticated",
+      "parentId": "node-646",
+      "responsibilities": [
+        {
+          "id": "resp-683",
+          "statement": "Reports whether the Cursor agent CLI is authenticated (logged in)",
+          "lastTouchedAt": 1785544988
+        }
+      ]
+    },
+    {
+      "id": "node-650",
+      "kind": "symbol",
+      "name": "check_cursor_mcp",
+      "parentId": "node-359",
+      "responsibilities": [
+        {
+          "id": "resp-684",
+          "statement": "**When** detection runs, **check** whether the project's `.cursor/mcp.json` registers a scryer MCP server",
+          "lastTouchedAt": 1785544986
+        }
+      ]
+    },
+    {
+      "id": "node-651",
+      "kind": "symbol",
+      "name": "has_cursor_cli",
+      "parentId": "node-359",
+      "responsibilities": [
+        {
+          "id": "resp-685",
+          "statement": "**When** detection runs, **report** whether the Cursor agent CLI is available",
+          "lastTouchedAt": 1785544985
+        }
+      ]
+    },
+    {
+      "id": "node-652",
+      "kind": "symbol",
+      "name": "check_cursor_authenticated",
+      "parentId": "node-359",
+      "responsibilities": [
+        {
+          "id": "resp-686",
+          "statement": "**When** detection runs, **report** whether the Cursor agent CLI is authenticated",
+          "lastTouchedAt": 1785544982
+        }
+      ]
+    },
+    {
+      "id": "node-653",
+      "kind": "symbol",
+      "name": "AiToolsState",
+      "parentId": "node-213",
+      "properties": [
+        {
+          "label": "cursor",
+          "description": "Whether Cursor CLI is installed on PATH",
+          "lastTouchedAt": 1785544926
+        },
+        {
+          "label": "cursorMcpEnabled",
+          "description": "Whether this project has scryer wired into Cursor's MCP config",
+          "lastTouchedAt": 1785544918
+        },
+        {
+          "label": "cursorAuthenticated",
+          "description": "Whether Cursor CLI is logged in",
+          "lastTouchedAt": 1785544866
         }
       ]
     }
@@ -15398,6 +15578,11 @@
         "node-621"
       ],
       "parentNodeId": "node-4"
+    }
+  ],
+  "concerns": [
+    {
+      "slug": "security"
     }
   ]
 }

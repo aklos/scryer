@@ -16,6 +16,9 @@ function plannedWrites(tools: McpSetup["tools"]): string[] {
   const out: string[] = [];
   if (tools.claude && !tools.claudeMcpEnabled) out.push(".mcp.json");
   if (tools.codex && !tools.codexMcpEnabled) out.push(".codex/config.toml");
+  if (tools.cursor && !tools.cursorMcpEnabled) out.push(".cursor/mcp.json");
+  if (tools.cursor && !tools.cursorApproved)
+    out.push(".cursor/cli.json — approve only scryer MCP tools");
   if (tools.claude && !tools.claudeApproved)
     out.push(".claude/settings.local.json — auto-approve all scryer tools");
   return out;
@@ -34,8 +37,10 @@ export function McpSetupPrompt({
    *  and rely on the "Not now" button. Both routes call `setup.dismiss()`. */
   dismissable?: boolean;
 }) {
-  const { claude, codex } = setup.tools;
-  const agents = [claude && "Claude Code", codex && "Codex"].filter(Boolean).join(" and ");
+  const { claude, codex, cursor } = setup.tools;
+  const agents = [claude && "Claude Code", codex && "Codex", cursor && "Cursor"]
+    .filter(Boolean)
+    .join(" and ");
   const writes = plannedWrites(setup.tools);
 
   const enable = async () => {

@@ -1,6 +1,6 @@
 ---
 title: Connecting AI Tools
-description: Set up Claude Code, Codex, or any MCP-compatible agent to work with your architecture model.
+description: Set up Claude Code, Codex, Cursor, or any MCP-compatible agent to work with your architecture model.
 ---
 
 Scryer's real power comes from having AI agents work directly with your architecture model. The agent sees the same nodes, edges, and contracts you see in the editor — no lossy text descriptions.
@@ -21,6 +21,18 @@ Scryer writes two files:
 
 - **`.mcp.json`** in your project root — tells Claude Code where to find the scryer MCP server
 - **`.claude/settings.local.json`** — auto-approves scryer's read-only tools so the agent doesn't prompt you for every `get_model` call
+
+### Cursor
+
+Scryer writes two project-local files:
+
+- **`.cursor/mcp.json`** — MCP server configuration for the Cursor CLI (`cursor agent`)
+- **`.cursor/cli.json`** — grants non-interactive access only to `Mcp(scryer:*)`
+
+Log in with `cursor agent login` if you haven't already. Scryer also supports
+older installations that still expose the standalone `agent` command.
+It never launches Cursor with the global `--approve-mcps` switch, so unrelated
+MCP servers in the project remain outside Scryer's automated sessions.
 
 ### Codex
 
@@ -54,6 +66,29 @@ If you prefer to configure things yourself:
 ```toml
 [mcp_servers.scryer]
 command = "/path/to/scryer-mcp"
+```
+
+**Cursor** — add to `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "scryer": {
+      "command": "/path/to/scryer-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Then add the least-privilege approval to `.cursor/cli.json`:
+
+```json
+{
+  "permissions": {
+    "allow": ["Mcp(scryer:*)"]
+  }
+}
 ```
 
 You can also run `scryer-mcp init` from the command line in your project directory — it detects installed tools and writes the config files for you.
