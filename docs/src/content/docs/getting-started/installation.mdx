@@ -38,6 +38,21 @@ If you want to build scryer yourself:
 - [pnpm](https://pnpm.io/)
 - System dependencies for [Tauri 2](https://v2.tauri.app/start/prerequisites/)
 
+**Debian / Ubuntu** — install GTK/WebKit build deps (required for `pnpm tauri dev`):
+
+```bash
+bash scripts/install-linux-dev-deps.sh
+# or: ./scripts/install-linux-dev-deps.sh
+```
+
+If `apt update` fails because of a **cdrom** entry in `/etc/apt/sources.list`, the script still installs packages. You can disable the CD source with:
+
+```bash
+sudo sed -i 's|^deb cdrom|# deb cdrom|' /etc/apt/sources.list
+```
+
+If the build fails with `glib-2.0 was not found`, the packages above are still missing — run the install script again.
+
 If you use Nix, `shell.nix` provides everything:
 
 ```bash

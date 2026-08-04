@@ -201,6 +201,21 @@ Scryer is a [Tauri](https://tauri.app/) desktop app. The UI is written in [React
 - [pnpm](https://pnpm.io/)
 - System dependencies for [Tauri 2](https://v2.tauri.app/start/prerequisites/)
 
+**Debian / Ubuntu:**
+
+```bash
+bash scripts/install-linux-dev-deps.sh
+```
+
+If `pnpm tauri dev` fails with `glib-2.0 was not found`, run that script. If `apt update` fails on a cdrom repo, the script still installs; see `installation.mdx` in the docs.
+
+To wire Cursor MCP from the CLI, use a **current** `scryer-mcp` binary (the one in `/usr/bin` may be outdated):
+
+```bash
+cargo build -p scryer-mcp --release
+./target/release/scryer-mcp init   # in your project directory
+```
+
 If you use Nix, `shell.nix` provides everything:
 
 ```bash
