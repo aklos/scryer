@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use agent_client_protocol::{
     self as acp, Agent as _, CancelNotification, ClientSideConnection,
@@ -199,6 +199,24 @@ fn runtime_thread(
 // CLI mode: spawn `agent -p` with MCP config flags
 // ---------------------------------------------------------------------------
 
+fn cursor_cli_args(agent_binary: &str, model_name: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    if scryer_core::cursor_agent::uses_cursor_agent_subcommand(Path::new(agent_binary)) {
+        args.push("agent".to_string());
+    }
+    args.extend([
+        "-p".to_string(),
+        "--force".to_string(),
+        "--output-format".to_string(),
+        "stream-json".to_string(),
+    ]);
+    if !model_name.is_empty() {
+        args.push("--model".to_string());
+        args.push(model_name.to_string());
+    }
+    args
+}
+
 fn start_cli_session(
     agent_binary: &str,
     kind: &AgentKind,
@@ -254,6 +272,12 @@ fn start_cli_session(
             }
             // `-` = read the prompt from stdin.
             cmd.arg("-");
+        }
+        AgentKind::Cursor => {
+            // Cursor reads MCP and granular permissions from `.cursor/`.
+            // Never pass `--approve-mcps`: it trusts every server in the
+            // project's merged config, not just Scryer.
+            cmd.args(cursor_cli_args(agent_binary, model_name));
         }
         AgentKind::Other => {
             // Best-effort: pass prompt as last arg (unknown CLIs may not read
@@ -530,6 +554,22 @@ fn summarize_event(line: &str) -> Option<String> {
             let subtype = val.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
             Some(format!("Done ({})", subtype))
         }
+        "tool_call" => {
+            let subtype = val.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
+            if subtype == "started" {
+                if let Some(tc) = val.get("tool_call") {
+                    if let Some(w) = tc.get("writeToolCall") {
+                        let path = w.pointer("/args/path").and_then(|v| v.as_str()).unwrap_or("file");
+                        return Some(format!("-> write {}", path));
+                    }
+                    if let Some(r) = tc.get("readToolCall") {
+                        let path = r.pointer("/args/path").and_then(|v| v.as_str()).unwrap_or("file");
+                        return Some(format!("-> read {}", path));
+                    }
+                }
+            }
+            None
+        }
         _ => None,
     }
 }
@@ -672,4 +712,28 @@ async fn kill_process_tree(child: &mut tokio::process::Child, pid: Option<u32>) 
 
     let _ = child.kill().await;
     let _ = child.wait().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cursor_cli_never_globally_approves_mcp_servers() {
+        let args = cursor_cli_args("/usr/bin/cursor", "composer-2.5-fast");
+
+        assert!(!args.iter().any(|arg| arg == "--approve-mcps"));
+        assert_eq!(args.first().map(String::as_str), Some("agent"));
+        assert!(args.iter().any(|arg| arg == "--force"));
+        assert!(args.windows(2).any(|pair| {
+            pair == ["--model".to_string(), "composer-2.5-fast".to_string()]
+        }));
+    }
+
+    #[test]
+    fn legacy_cursor_agent_needs_no_subcommand() {
+        let args = cursor_cli_args("/home/dev/.local/bin/agent", "");
+
+        assert_eq!(args.first().map(String::as_str), Some("-p"));
+    }
 }

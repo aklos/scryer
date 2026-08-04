@@ -73,10 +73,11 @@ fn init_project(statusline: bool) -> Result<(), Box<dyn std::error::Error>> {
 
     let has_claude = which("claude");
     let has_codex = which("codex");
+    let has_cursor = scryer_core::cursor_agent::find_cursor_agent().is_some();
 
-    if !has_claude && !has_codex {
-        eprintln!("Neither `claude` nor `codex` found in PATH.");
-        eprintln!("Install Claude Code or OpenAI Codex first, then re-run `scryer-mcp init`.");
+    if !has_claude && !has_codex && !has_cursor {
+        eprintln!("Neither `claude`, `codex`, nor Cursor's `cursor agent` CLI found in PATH.");
+        eprintln!("Install Claude Code, OpenAI Codex, or Cursor CLI first, then re-run `scryer-mcp init`.");
         std::process::exit(1);
     }
 
@@ -111,15 +112,30 @@ fn init_project(statusline: bool) -> Result<(), Box<dyn std::error::Error>> {
         wrote_any = true;
     }
 
+    if has_cursor {
+        let permissions_path = scryer_core::cursor_agent::install_cursor_mcp_permission(&cwd)
+            .map_err(std::io::Error::other)?;
+        eprintln!("Wrote {}", permissions_path.display());
+        init_cursor(&cwd, &binary_path)?;
+        wrote_any = true;
+    }
+
     if wrote_any {
         let tools: Vec<&str> = [
             if has_claude { Some("Claude Code") } else { None },
             if has_codex { Some("Codex") } else { None },
+            if has_cursor { Some("Cursor") } else { None },
         ].into_iter().flatten().collect();
         eprintln!("\nDone. {} will use scryer in this project.", tools.join(" and "));
         if has_claude {
             eprintln!("\nTo auto-approve scryer tools in Claude Code, add to .claude/settings.local.json:");
             eprintln!("  \"permissions\": {{ \"allow\": [\"mcp__scryer\"] }}");
+        }
+        if has_cursor {
+            eprintln!(
+                "\nCursor CLI detected. Scryer alone is approved in .cursor/cli.json; \
+                 MCP configuration loads from .cursor/mcp.json."
+            );
         }
         if has_claude && !statusline {
             eprintln!("\nTip: `scryer-mcp init --statusline` puts the model's status line in Claude Code's prompt.");
@@ -196,5 +212,33 @@ fn init_codex(
     std::fs::create_dir_all(&codex_dir)?;
     std::fs::write(&config_toml_path, doc.to_string())?;
     eprintln!("Wrote {}", config_toml_path.display());
+    Ok(())
+}
+
+/// Write `.cursor/mcp.json` for Cursor CLI, merging with any existing config.
+fn init_cursor(
+    cwd: &std::path::Path,
+    binary_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let cursor_dir = cwd.join(".cursor");
+    let mcp_path = cursor_dir.join("mcp.json");
+    let mut root: serde_json::Value = if mcp_path.exists() {
+        let contents = std::fs::read_to_string(&mcp_path)?;
+        serde_json::from_str(&contents).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    if !root.get("mcpServers").is_some_and(|v| v.is_object()) {
+        root["mcpServers"] = serde_json::json!({});
+    }
+    root["mcpServers"]["scryer"] = serde_json::json!({
+        "command": binary_path,
+        "args": [],
+    });
+
+    std::fs::create_dir_all(&cursor_dir)?;
+    std::fs::write(&mcp_path, serde_json::to_string_pretty(&root)?)?;
+    eprintln!("Wrote {}", mcp_path.display());
     Ok(())
 }

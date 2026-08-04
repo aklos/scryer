@@ -167,7 +167,10 @@ async fn main() {
                 scryer_acp::AgentKind::ClaudeCode => {
                     (settings.claude.model.clone(), settings.claude.effort.clone())
                 }
-                _ => (settings.codex.model.clone(), settings.codex.effort.clone()),
+                scryer_acp::AgentKind::Codex => {
+                    (settings.codex.model.clone(), settings.codex.effort.clone())
+                }
+                _ => (settings.cursor.model.clone(), settings.cursor.effort.clone()),
             };
             (binary, kind, m, e)
         }

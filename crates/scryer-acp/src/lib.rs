@@ -12,6 +12,7 @@ pub use runtime::AcpRuntime;
 pub enum AgentKind {
     ClaudeCode,
     Codex,
+    Cursor,
     Other,
 }
 
@@ -46,6 +47,7 @@ pub fn resolve_agent_binary(client_name: &str) -> Option<AgentLaunch> {
                 });
             }
         }
+        "cursor" => return cursor_launch(),
         _ => {}
     }
 
@@ -75,14 +77,24 @@ fn codex_launch() -> Option<AgentLaunch> {
     })
 }
 
+/// Resolve Cursor's current launcher or legacy standalone agent binary.
+fn cursor_launch() -> Option<AgentLaunch> {
+    scryer_core::cursor_agent::find_cursor_agent().map(|path| AgentLaunch::Cli {
+        binary: path.to_string_lossy().to_string(),
+        kind: AgentKind::Cursor,
+    })
+}
+
 /// Detect an available agent honoring a user preference. The preferred agent is
 /// tried first; if it isn't on PATH we fall back to the other so a fill still
-/// runs. `pref` is "auto" | "claudeCode" | "codex".
+/// runs. `pref` is "auto" | "claudeCode" | "codex" | "cursor".
 pub fn detect_available_agent_pref(pref: &str) -> Option<AgentLaunch> {
+    let auto = || claude_launch().or_else(codex_launch).or_else(cursor_launch);
     match pref {
-        "codex" => codex_launch().or_else(claude_launch),
-        "claudeCode" => claude_launch().or_else(codex_launch),
-        _ => claude_launch().or_else(codex_launch),
+        "codex" => codex_launch().or_else(claude_launch).or_else(cursor_launch),
+        "claudeCode" => claude_launch().or_else(codex_launch).or_else(cursor_launch),
+        "cursor" => cursor_launch().or_else(claude_launch).or_else(codex_launch),
+        _ => auto(),
     }
 }
 

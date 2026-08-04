@@ -1,6 +1,7 @@
 pub mod build_edges;
 pub mod changes;
 pub mod concerns;
+pub mod cursor_agent;
 pub mod diff;
 pub mod drift;
 pub mod ears;
