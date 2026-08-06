@@ -145,8 +145,9 @@ export interface Node {
   notes?: string;
   /** Node-level prescriptive HOW-constraints ("must"/"never" rules), the
    *  node-altitude twin of a responsibility's `directives`. They CARRY DOWN: a
-   *  node is bound by its own plus every ancestor's, resolved at read time (see
-   *  `inheritedDirectives`) — never copied onto descendants. User-authored,
+   *  node is bound by its own plus every ancestor's, resolved at read time by
+   *  the agent-facing `inherited_directives` (scryer-core) — never copied onto
+   *  descendants, and never repeated on a descendant's page. User-authored,
    *  read-only to the agent. Plain text — not part of conformance. Mirrors Rust
    *  `Node.directives`. */
   directives?: string[];
@@ -544,34 +545,10 @@ export function renameConcern(model: ScryModel, from: string, to: string): ScryM
   };
 }
 
-export interface InheritedDirectives {
-  /** The ancestor that authored these directives. */
-  nodeId: string;
-  name: string;
-  directives: string[];
-}
-
-/** The directives a node inherits from its ancestry: every ancestor's
- *  node-level `directives`, NEAREST ancestor first, walking up to the root. The
- *  node's OWN `directives` are excluded — the full binding set is the node's own
- *  followed by this. Ancestors with no directives are skipped. Mirrors Rust
- *  `inherited_directives` (`crates/scryer-core/src/lib.rs`) — keep in lockstep. */
-export function inheritedDirectives(model: ScryModel, nodeId: string): InheritedDirectives[] {
-  const byId = new Map(model.nodes.map((n) => [n.id, n] as const));
-  const out: InheritedDirectives[] = [];
-  const seen = new Set<string>();
-  let cur = byId.get(nodeId)?.parentId;
-  while (cur !== undefined && !seen.has(cur)) {
-    seen.add(cur);
-    const p = byId.get(cur);
-    if (!p) break;
-    if (p.directives && p.directives.length > 0) {
-      out.push({ nodeId: p.id, name: p.name, directives: p.directives });
-    }
-    cur = p.parentId;
-  }
-  return out;
-}
+// Directive INHERITANCE has no canvas mirror: an ancestor's directives bind a
+// node (rule 1) and the agent gets the resolved set from `inherited_directives`
+// in scryer-core, but no UI surface repeats them — a directive is read on the
+// page that authored it.
 
 export function updateNode(
   model: ScryModel,

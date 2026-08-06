@@ -526,14 +526,12 @@ function NodePageBody(props: PageProps & { node: Node }) {
             </article>
             <DetailRail
               node={node}
-              model={model}
               committed={committed}
               editor={editor}
               notesEditing={ed.isEditing("notes")}
               onToggleNotes={() => ed.toggle("notes")}
               dirEditing={ed.isEditing("directives")}
               onToggleDir={() => ed.toggle("directives")}
-              onSelectNode={onSelectNode}
             />
           </div>
         )}

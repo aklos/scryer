@@ -4548,8 +4548,8 @@
       "responsibilities": [
         {
           "id": "resp-268",
-          "statement": "**Show** a node's own and inherited directives, and its freeform user notes, in the right-margin rail",
-          "lastTouchedAt": 1784883905
+          "statement": "**Show** a node's own directives and its freeform user notes in the right-margin rail",
+          "lastTouchedAt": 1786009082
         }
       ]
     },
@@ -5361,19 +5361,6 @@
         {
           "id": "resp-310",
           "statement": "**Register** every concern slug a claim uses in the model's concern registry, seeding new entries from the standard vocabulary",
-          "lastTouchedAt": 1784883905
-        }
-      ]
-    },
-    {
-      "id": "node-294",
-      "kind": "symbol",
-      "name": "inheritedDirectives",
-      "parentId": "node-281",
-      "responsibilities": [
-        {
-          "id": "resp-311",
-          "statement": "**Collect** the directives a node inherits from its ancestry, nearest ancestor first",
           "lastTouchedAt": 1784883905
         }
       ]
@@ -13548,12 +13535,6 @@
       "label": ""
     },
     {
-      "id": "link-node-294-node-282",
-      "src": "node-294",
-      "dst": "node-282",
-      "label": ""
-    },
-    {
       "id": "link-node-295-node-283",
       "src": "node-295",
       "dst": "node-283",
@@ -15401,64 +15382,34 @@
     }
   ],
   "sourceMap": {
-    "resp-370": [
+    "resp-393": [
       {
-        "pattern": "src-tauri/src/highlight.rs",
-        "symbol": "highlight_lines"
+        "pattern": "src-tauri/src/mcp_setup.rs",
+        "symbol": "check_claude_statusline"
       }
     ],
-    "node-449": [
+    "resp-352": [
       {
-        "pattern": "crates/scryer-extract/src/context.rs",
-        "symbol": "ProjectContext",
-        "line": 35,
-        "endLine": 50
+        "pattern": "src-tauri/src/build.rs",
+        "symbol": "session_pool_size"
       }
     ],
-    "resp-371": [
+    "resp-296": [
       {
-        "pattern": "src-tauri/src/highlight.rs",
-        "symbol": "highlight_lines"
+        "pattern": "src/changeMarks.ts",
+        "symbol": "rollupMarks"
       }
     ],
-    "resp-518": [
+    "resp-394": [
       {
-        "pattern": "crates/scryer-extract/src/manifest.rs",
-        "symbol": "discover_containers_from_files"
+        "pattern": "src-tauri/src/mcp_setup.rs",
+        "symbol": "check_codex_hooks"
       }
     ],
-    "node-551": [
+    "resp-195": [
       {
-        "pattern": "crates/scryer-core/src/diff.rs",
-        "symbol": "ElementChange",
-        "line": 92,
-        "endLine": 101
-      }
-    ],
-    "resp-89": [
-      {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "resolve_model_ref"
-      }
-    ],
-    "resp-148": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/read.rs",
-        "symbol": "score_node"
-      }
-    ],
-    "node-229": [
-      {
-        "pattern": "src/ModelTree.tsx",
-        "symbol": "TreeRow",
-        "line": 71,
-        "endLine": 83
-      }
-    ],
-    "resp-342": [
-      {
-        "pattern": "src/SearchPalette.tsx",
-        "symbol": "SearchPalette"
+        "pattern": "demo/render.mjs",
+        "symbol": "leadingFlatEnd"
       }
     ],
     "node-625": [
@@ -15469,712 +15420,10 @@
         "endLine": 106
       }
     ],
-    "resp-662": [
-      {
-        "pattern": "crates/scryer-core/src/scan.rs",
-        "symbol": "is_codebase"
-      }
-    ],
-    "resp-9": [
-      {
-        "pattern": "crates/xtask/src/main.rs",
-        "symbol": "validate_model"
-      }
-    ],
-    "resp-665": [
-      {
-        "pattern": "crates/scryer-core/src/build_edges.rs",
-        "symbol": "derive_graph"
-      }
-    ],
-    "resp-298": [
-      {
-        "pattern": "src/ledger.ts",
-        "symbol": "tagEdit"
-      }
-    ],
-    "resp-331": [
-      {
-        "pattern": "src/theme.ts",
-        "symbol": "loadTheme"
-      }
-    ],
-    "node-590": [
-      {
-        "pattern": "crates/scryer-core/src/health.rs",
-        "symbol": "ModelHealth",
-        "line": 122,
-        "endLine": 133
-      }
-    ],
-    "node-23": [
-      {
-        "pattern": "crates/scryer-mcp/src/cli.rs",
-        "symbol": "CheckReport",
-        "line": 156,
-        "endLine": 162
-      }
-    ],
-    "resp-655": [
-      {
-        "pattern": "crates/scryer-core/src/rules.rs",
-        "symbol": "lookup"
-      }
-    ],
-    "resp-408": [
-      {
-        "pattern": "src-tauri/src/observability.rs",
-        "symbol": "get_drift_status"
-      }
-    ],
-    "resp-125": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/misc.rs",
-        "symbol": "update_group"
-      }
-    ],
-    "resp-210": [
-      {
-        "pattern": "preview/server.mjs",
-        "symbol": "startPreviewServer"
-      }
-    ],
-    "resp-109": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
-        "symbol": "add_container"
-      }
-    ],
-    "resp-425": [
-      {
-        "pattern": "src-tauri/src/preview.rs",
-        "symbol": "node_source_file"
-      }
-    ],
-    "resp-328": [
-      {
-        "pattern": "src/ui/Input.tsx",
-        "symbol": "Input"
-      }
-    ],
-    "resp-287": [
-      {
-        "pattern": "src/special/RevisionList.tsx",
-        "symbol": "RevisionList"
-      }
-    ],
-    "resp-154": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/read.rs",
-        "symbol": "search_model"
-      }
-    ],
-    "node-128": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "Layer",
-        "line": 7,
-        "endLine": 15
-      }
-    ],
-    "resp-461": [
-      {
-        "pattern": "src-tauri/src/verdicts.rs",
-        "symbol": "adopt_property"
-      }
-    ],
-    "resp-123": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/misc.rs",
-        "symbol": "update_source_map"
-      }
-    ],
-    "node-443": [
-      {
-        "pattern": "crates/scryer-extract/src/lang.rs",
-        "symbol": "ImportRef",
-        "line": 124,
-        "endLine": 135
-      }
-    ],
-    "node-299": [
-      {
-        "pattern": "src/health.ts",
-        "symbol": "Completeness",
-        "line": 117,
-        "endLine": 127
-      }
-    ],
-    "resp-51": [
-      {
-        "pattern": "crates/scryer-mcp/src/cli.rs",
-        "symbol": "status_json"
-      }
-    ],
-    "resp-253": [
-      {
-        "pattern": "src/layout/planar.ts",
-        "symbol": "planarLayout"
-      }
-    ],
-    "resp-570": [
-      {
-        "pattern": "crates/scryer-acp/src/runtime.rs",
-        "symbol": "start_cli_session"
-      }
-    ],
-    "resp-417": [
-      {
-        "pattern": "src-tauri/src/preview.rs",
-        "symbol": "config_for_launch"
-      }
-    ],
-    "resp-613": [
-      {
-        "pattern": "crates/scryer-core/src/commit.rs",
-        "symbol": "commit_element"
-      }
-    ],
-    "resp-418": [
-      {
-        "pattern": "src-tauri/src/preview.rs",
-        "symbol": "ensure_preview_server"
-      }
-    ],
-    "resp-537": [
-      {
-        "pattern": "crates/scryer-acp/examples/full_build_bench.rs",
-        "symbol": "run_session"
-      }
-    ],
-    "node-208": [
-      {
-        "pattern": "src/hooks/useModelBuild.ts",
-        "symbol": "ModelBuild",
-        "line": 17,
-        "endLine": 38
-      }
-    ],
-    "resp-225": [
-      {
-        "pattern": "src/hooks/useModelBuild.ts",
-        "symbol": "useModelBuild"
-      }
-    ],
-    "node-135": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "StatementInput",
-        "line": 673,
-        "endLine": 683
-      }
-    ],
-    "resp-449": [
-      {
-        "pattern": "src-tauri/src/symbols.rs",
-        "symbol": "is_definition_kind"
-      }
-    ],
-    "resp-198": [
-      {
-        "pattern": "harness/main.tsx",
-        "symbol": "Harness"
-      }
-    ],
-    "resp-141": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
-        "symbol": "delete_nodes"
-      }
-    ],
-    "resp-202": [
-      {
-        "pattern": "preview/plugin.mjs",
-        "symbol": "scryerPreviewPlugin"
-      }
-    ],
-    "resp-538": [
-      {
-        "pattern": "crates/scryer-acp/examples/wave2_bench.rs",
-        "symbol": "strip_code"
-      }
-    ],
-    "resp-92": [
-      {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "write_planned_tagged"
-      }
-    ],
-    "resp-312": [
-      {
-        "pattern": "src/viewmodel.ts",
-        "symbol": "isNodeEmpty"
-      }
-    ],
-    "node-464": [
+    "resp-513": [
       {
         "pattern": "crates/scryer-extract/src/anchors.rs",
-        "symbol": "UntrackedAnchor",
-        "line": 716,
-        "endLine": 721
-      }
-    ],
-    "resp-288": [
-      {
-        "pattern": "src/special/UnmappedClaimsPage.tsx",
-        "symbol": "UnmappedClaimsPage"
-      }
-    ],
-    "resp-510": [
-      {
-        "pattern": "crates/scryer-extract/src/anchors.rs",
-        "symbol": "untracked_anchors"
-      }
-    ],
-    "resp-189": [
-      {
-        "pattern": "demo/runner.tsx",
-        "symbol": "Runner"
-      }
-    ],
-    "resp-238": [
-      {
-        "pattern": "src/AgentLaunchConfirm.tsx",
-        "symbol": "AgentLaunchConfirm"
-      }
-    ],
-    "resp-153": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/read.rs",
-        "symbol": "read_model"
-      }
-    ],
-    "resp-206": [
-      {
-        "pattern": "preview/props.mjs",
-        "symbol": "synthValue"
-      }
-    ],
-    "resp-472": [
-      {
-        "pattern": "docs/src/components/ContractBadgeDemo.tsx",
-        "symbol": "ContractBadgeDemo"
-      }
-    ],
-    "resp-256": [
-      {
-        "pattern": "src/hooks/useDotSim.ts",
-        "symbol": "useDotSim"
-      }
-    ],
-    "resp-151": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/read.rs",
-        "symbol": "resolve_field"
-      }
-    ],
-    "node-151": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "FlagDriftRequest",
-        "line": 947,
-        "endLine": 985
-      }
-    ],
-    "resp-465": [
-      {
-        "pattern": "src-tauri/src/verdicts.rs",
-        "symbol": "drop_property"
-      }
-    ],
-    "resp-539": [
-      {
-        "pattern": "crates/scryer-acp/examples/wave2_bench.rs",
-        "symbol": "revert_prompt_to_pre_a1"
-      }
-    ],
-    "node-35": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "Endpoint",
-        "line": 56,
-        "endLine": 59
-      }
-    ],
-    "node-624": [
-      {
-        "pattern": "crates/scryer-core/src/build_edges.rs",
-        "symbol": "LinkAudit",
-        "line": 87,
-        "endLine": 90
-      }
-    ],
-    "resp-460": [
-      {
-        "pattern": "src-tauri/src/verdicts.rs",
-        "symbol": "fold_vagrant_property"
-      }
-    ],
-    "resp-421": [
-      {
-        "pattern": "src-tauri/src/preview.rs",
-        "symbol": "start_visual_variation_session"
-      }
-    ],
-    "resp-197": [
-      {
-        "pattern": "export-viewer/ExportApp.tsx",
-        "symbol": "ExportApp"
-      }
-    ],
-    "node-282": [
-      {
-        "pattern": "src/viewmodel.ts",
-        "symbol": "ScryModel",
-        "line": 196,
-        "endLine": 223
-      }
-    ],
-    "node-556": [
-      {
-        "pattern": "crates/scryer-core/src/changes.rs",
-        "symbol": "ChangeMeta",
-        "line": 45,
-        "endLine": 53
-      }
-    ],
-    "resp-326": [
-      {
-        "pattern": "src/kit/sections.tsx",
-        "symbol": "PageSection"
-      }
-    ],
-    "resp-54": [
-      {
-        "pattern": "crates/scryer-mcp/src/main.rs",
-        "symbol": "init_project"
-      }
-    ],
-    "resp-356": [
-      {
-        "pattern": "src-tauri/src/build.rs",
-        "symbol": "start_model_build"
-      }
-    ],
-    "resp-615": [
-      {
-        "pattern": "crates/scryer-core/src/commit.rs",
-        "symbol": "commit_plan_only_ancestors"
-      }
-    ],
-    "resp-267": [
-      {
-        "pattern": "src/page/PageHeader.tsx",
-        "symbol": "PageHeader"
-      }
-    ],
-    "resp-252": [
-      {
-        "pattern": "src/diagramLayout.ts",
-        "symbol": "dotLayout"
-      }
-    ],
-    "resp-82": [
-      {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "lock_or_err"
-      }
-    ],
-    "node-631": [
-      {
-        "pattern": "crates/scryer-core/src/seed.rs",
-        "symbol": "SeedUnit",
-        "line": 13,
-        "endLine": 21
-      }
-    ],
-    "resp-504": [
-      {
-        "pattern": "crates/scryer-extract/src/anchors.rs",
-        "symbol": "ExtentResolver"
-      }
-    ],
-    "resp-481": [
-      {
-        "pattern": "crates/scryer-extract/src/lib.rs",
-        "symbol": "extract_context_with_stats"
-      }
-    ],
-    "resp-573": [
-      {
-        "pattern": "crates/scryer-acp/src/runtime.rs",
-        "symbol": "start_acp_session"
-      }
-    ],
-    "resp-447": [
-      {
-        "pattern": "src-tauri/src/symbols.rs",
-        "symbol": "resolve"
-      }
-    ],
-    "resp-606": [
-      {
-        "pattern": "crates/scryer-core/src/changes.rs",
-        "symbol": "gc"
-      }
-    ],
-    "node-462": [
-      {
-        "pattern": "crates/scryer-extract/src/anchors.rs",
-        "symbol": "AnchorState",
-        "line": 104,
-        "endLine": 111
-      }
-    ],
-    "node-176": [
-      {
-        "pattern": "demo/fixtures.ts",
-        "symbol": "paymentsModel",
-        "line": 127,
-        "endLine": 169
-      }
-    ],
-    "resp-431": [
-      {
-        "pattern": "src-tauri/src/project.rs",
-        "symbol": "read_planned"
-      }
-    ],
-    "node-429": [
-      {
-        "pattern": "docs/src/components/NodeDemo.tsx",
-        "symbol": "NodeDemoProps",
-        "line": 13,
-        "endLine": 21
-      }
-    ],
-    "resp-61": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "discover"
-      }
-    ],
-    "resp-77": [
-      {
-        "pattern": "crates/scryer-mcp/src/server.rs",
-        "symbol": "get_info"
-      }
-    ],
-    "resp-499": [
-      {
-        "pattern": "crates/scryer-extract/src/context.rs",
-        "symbol": "compact_scope_impl"
-      }
-    ],
-    "resp-333": [
-      {
-        "pattern": "src/markup.tsx",
-        "symbol": "parseMarkup"
-      }
-    ],
-    "resp-359": [
-      {
-        "pattern": "src-tauri/src/build.rs",
-        "symbol": "start_drift_check"
-      }
-    ],
-    "resp-155": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/read.rs",
-        "symbol": "locate"
-      }
-    ],
-    "node-131": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "OrientRequest",
-        "line": 239,
-        "endLine": 248
-      }
-    ],
-    "resp-660": [
-      {
-        "pattern": "crates/scryer-core/src/scan.rs",
-        "symbol": "project_structure"
-      }
-    ],
-    "resp-419": [
-      {
-        "pattern": "src-tauri/src/preview.rs",
-        "symbol": "ensure_preview_server"
-      }
-    ],
-    "resp-589": [
-      {
-        "pattern": "crates/scryer-core/src/storage.rs",
-        "symbol": "read_planned_at"
-      }
-    ],
-    "resp-571": [
-      {
-        "pattern": "crates/scryer-acp/src/runtime.rs",
-        "symbol": "extract_usage"
-      }
-    ],
-    "resp-487": [
-      {
-        "pattern": "crates/scryer-extract/src/lang.rs",
-        "symbol": "language_for_ext"
-      }
-    ],
-    "resp-292": [
-      {
-        "pattern": "src/planDiff.ts",
-        "symbol": "planDiff"
-      }
-    ],
-    "resp-490": [
-      {
-        "pattern": "crates/scryer-extract/src/lang.rs",
-        "symbol": "collect_string_named_calls"
-      }
-    ],
-    "resp-435": [
-      {
-        "pattern": "src-tauri/src/project.rs",
-        "symbol": "create_blank_model"
-      }
-    ],
-    "node-580": [
-      {
-        "pattern": "crates/scryer-core/src/drift.rs",
-        "symbol": "DriftScope",
-        "line": 102,
-        "endLine": 107
-      }
-    ],
-    "resp-285": [
-      {
-        "pattern": "src/special/NeedsReviewPage.tsx",
-        "symbol": "NeedsReviewPage"
-      }
-    ],
-    "resp-677": [
-      {
-        "pattern": "crates/scryer-core/src/validate.rs",
-        "symbol": "link_violation"
-      }
-    ],
-    "node-298": [
-      {
-        "pattern": "src/health.ts",
-        "symbol": "HealthCounts",
-        "line": 11,
-        "endLine": 37
-      }
-    ],
-    "resp-457": [
-      {
-        "pattern": "src-tauri/src/verdicts.rs",
-        "symbol": "fold_vagrant"
-      }
-    ],
-    "node-72": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/generation.rs",
-        "symbol": "IdMinter",
-        "line": 27,
-        "endLine": 31
-      }
-    ],
-    "node-350": [
-      {
-        "pattern": "src-tauri/src/hooks.rs",
-        "symbol": "HookServer",
-        "line": 66,
-        "endLine": 70
-      }
-    ],
-    "resp-360": [
-      {
-        "pattern": "src-tauri/src/build.rs",
-        "symbol": "start_drift_check"
-      }
-    ],
-    "resp-265": [
-      {
-        "pattern": "src/NodePage.tsx",
-        "symbol": "NodePageBody"
-      }
-    ],
-    "resp-93": [
-      {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "pending_changes"
-      }
-    ],
-    "resp-514": [
-      {
-        "pattern": "crates/scryer-extract/src/anchors.rs",
-        "symbol": "rescue_missing"
-      }
-    ],
-    "resp-335": [
-      {
-        "pattern": "src/markup.tsx",
-        "symbol": "lintEars"
-      }
-    ],
-    "node-412": [
-      {
-        "pattern": "src-tauri/src/verdicts.rs",
-        "symbol": "FoldedVagrant",
-        "line": 25,
-        "endLine": 30
-      }
-    ],
-    "resp-675": [
-      {
-        "pattern": "crates/scryer-core/src/validate.rs",
-        "symbol": "validate"
-      }
-    ],
-    "resp-114": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
-        "symbol": "reconcile_drift"
-      }
-    ],
-    "resp-327": [
-      {
-        "pattern": "src/kit/sections.tsx",
-        "symbol": "SectionEditor"
-      }
-    ],
-    "node-139": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "GroupItem",
-        "line": 578,
-        "endLine": 592
-      }
-    ],
-    "resp-233": [
-      {
-        "pattern": "src/SettingsPanel.tsx",
-        "symbol": "resolveLaunch"
-      }
-    ],
-    "resp-85": [
-      {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "breadcrumb"
-      }
-    ],
-    "resp-494": [
-      {
-        "pattern": "crates/scryer-extract/src/context.rs",
-        "symbol": "build_context"
+        "symbol": "whole_symbol_warnings"
       }
     ],
     "resp-396": [
@@ -16183,898 +15432,10 @@
         "symbol": "detect_ai_tools"
       }
     ],
-    "resp-63": [
+    "resp-179": [
       {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "call"
-      }
-    ],
-    "node-342": [
-      {
-        "pattern": "src-tauri/src/state.rs",
-        "symbol": "AcpState",
-        "line": 12,
-        "endLine": 15
-      }
-    ],
-    "resp-239": [
-      {
-        "pattern": "src/AgentFailure.tsx",
-        "symbol": "AgentFailureProvider"
-      }
-    ],
-    "node-604": [
-      {
-        "pattern": "crates/scryer-core/src/locate.rs",
-        "symbol": "LocateReport",
-        "line": 167,
-        "endLine": 175
-      }
-    ],
-    "resp-218": [
-      {
-        "pattern": "src/Powerline.tsx",
-        "symbol": "Powerline"
-      }
-    ],
-    "resp-659": [
-      {
-        "pattern": "crates/scryer-core/src/scan.rs",
-        "symbol": "is_product_code"
-      }
-    ],
-    "resp-74": [
-      {
-        "pattern": "crates/scryer-mcp/src/server.rs",
-        "symbol": "new"
-      }
-    ],
-    "resp-496": [
-      {
-        "pattern": "crates/scryer-extract/src/context.rs",
-        "symbol": "build_edges"
-      }
-    ],
-    "resp-355": [
-      {
-        "pattern": "src-tauri/src/build.rs",
-        "symbol": "run_wave"
-      }
-    ],
-    "resp-392": [
-      {
-        "pattern": "src-tauri/src/mcp_setup.rs",
-        "symbol": "check_claude_hooks"
-      }
-    ],
-    "resp-251": [
-      {
-        "pattern": "src/diagramLayout.ts",
-        "symbol": "archLayout"
-      }
-    ],
-    "resp-383": [
-      {
-        "pattern": "src-tauri/src/hooks.rs",
-        "symbol": "prune_touches"
-      }
-    ],
-    "resp-441": [
-      {
-        "pattern": "src-tauri/src/source_view.rs",
-        "symbol": "read_source_span"
-      }
-    ],
-    "node-286": [
-      {
-        "pattern": "src/viewmodel.ts",
-        "symbol": "Group",
-        "line": 170,
-        "endLine": 180
-      }
-    ],
-    "resp-442": [
-      {
-        "pattern": "src-tauri/src/source_view.rs",
-        "symbol": "read_source_span"
-      }
-    ],
-    "resp-296": [
-      {
-        "pattern": "src/changeMarks.ts",
-        "symbol": "rollupMarks"
-      }
-    ],
-    "resp-306": [
-      {
-        "pattern": "src/viewmodel.ts",
-        "symbol": "moveNode"
-      }
-    ],
-    "resp-187": [
-      {
-        "pattern": "demo/engine/scenes/refund.tsx",
-        "symbol": "runRefund"
-      }
-    ],
-    "node-578": [
-      {
-        "pattern": "crates/scryer-core/src/drift.rs",
-        "symbol": "SyncState",
-        "line": 27,
-        "endLine": 52
-      }
-    ],
-    "node-67": [
-      {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "BaselineCounts",
-        "line": 477,
-        "endLine": 481
-      }
-    ],
-    "node-142": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "ProposedLink",
-        "line": 790,
-        "endLine": 795
-      }
-    ],
-    "node-140": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "ProposedComponent",
-        "line": 749,
-        "endLine": 761
-      }
-    ],
-    "resp-94": [
-      {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "status_counts"
-      }
-    ],
-    "resp-468": [
-      {
-        "pattern": "src-tauri/src/verdicts.rs",
-        "symbol": "drop_node"
-      }
-    ],
-    "resp-67": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "pre_tool_use"
-      }
-    ],
-    "resp-473": [
-      {
-        "pattern": "docs/src/components/FlowDemo.tsx",
-        "symbol": "FlowDemo"
-      }
-    ],
-    "resp-276": [
-      {
-        "pattern": "src/page/AppearanceWorkspace.tsx",
-        "symbol": "AppearanceWorkspace"
-      }
-    ],
-    "resp-49": [
-      {
-        "pattern": "crates/scryer-mcp/src/cli.rs",
-        "symbol": "install_statusline"
-      }
-    ],
-    "resp-521": [
-      {
-        "pattern": "crates/scryer-extract/src/manifest.rs",
-        "symbol": "parse_cargo"
-      }
-    ],
-    "resp-110": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
-        "symbol": "add_component"
-      }
-    ],
-    "resp-215": [
-      {
-        "pattern": "src/App.tsx",
-        "symbol": "Workspace"
-      }
-    ],
-    "resp-497": [
-      {
-        "pattern": "crates/scryer-extract/src/context.rs",
-        "symbol": "slice_container"
-      }
-    ],
-    "resp-548": [
-      {
-        "pattern": "crates/scryer-acp/src/events.rs",
-        "symbol": "Usage"
-      }
-    ],
-    "node-515": [
-      {
-        "pattern": "crates/scryer-acp/src/runtime.rs",
-        "symbol": "RuntimeCommand",
-        "line": 25,
-        "endLine": 43
-      }
-    ],
-    "resp-361": [
-      {
-        "pattern": "src-tauri/src/build.rs",
-        "symbol": "start_drift_check"
-      }
-    ],
-    "resp-137": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
-        "symbol": "update_nodes"
-      }
-    ],
-    "node-153": [
-      {
-        "pattern": "demo/engine/Annotation.tsx",
-        "symbol": "Annotation",
-        "line": 14,
-        "endLine": 33
-      }
-    ],
-    "resp-186": [
-      {
-        "pattern": "demo/engine/scenes/refund.tsx",
-        "symbol": "refundScene"
-      }
-    ],
-    "node-504": [
-      {
-        "pattern": "crates/scryer-acp/src/lib.rs",
-        "symbol": "ActiveClient",
-        "line": 90,
-        "endLine": 93
-      }
-    ],
-    "resp-160": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/read.rs",
-        "symbol": "get_rules"
-      }
-    ],
-    "node-48": [
-      {
-        "pattern": "crates/scryer-mcp/src/server.rs",
-        "symbol": "ScryerServer",
-        "line": 12,
-        "endLine": 22
-      }
-    ],
-    "resp-279": [
-      {
-        "pattern": "src/page/PageHeader.tsx",
-        "symbol": "NodeHistory"
-      }
-    ],
-    "resp-274": [
-      {
-        "pattern": "src/ConnectionsSection.tsx",
-        "symbol": "ImpliedConnectionsSection"
-      }
-    ],
-    "resp-325": [
-      {
-        "pattern": "src/kit/WikiLink.tsx",
-        "symbol": "WikiLink"
-      }
-    ],
-    "resp-234": [
-      {
-        "pattern": "src/SettingsPanel.tsx",
-        "symbol": "SettingsPanel"
-      }
-    ],
-    "node-388": [
-      {
-        "pattern": "src-tauri/src/state.rs",
-        "symbol": "PreviewServer",
-        "line": 27,
-        "endLine": 31
-      }
-    ],
-    "resp-476": [
-      {
-        "pattern": "docs/src/components/NodeDemo.tsx",
-        "symbol": "ShapeGallery"
-      }
-    ],
-    "node-586": [
-      {
-        "pattern": "crates/scryer-core/src/ears.rs",
-        "symbol": "EarsPattern",
-        "line": 10,
-        "endLine": 21
-      }
-    ],
-    "resp-173": [
-      {
-        "pattern": "demo/engine/Workspace.tsx",
-        "symbol": "WorkspaceShell"
-      }
-    ],
-    "resp-652": [
-      {
-        "pattern": "crates/scryer-core/src/ownership.rs",
-        "symbol": "owns"
-      }
-    ],
-    "resp-440": [
-      {
-        "pattern": "src-tauri/src/source_view.rs",
-        "symbol": "open_in_editor"
-      }
-    ],
-    "node-524": [
-      {
-        "pattern": "crates/scryer-core/src/model.rs",
-        "symbol": "Kind",
-        "line": 11,
-        "endLine": 23
-      }
-    ],
-    "node-549": [
-      {
-        "pattern": "crates/scryer-core/src/diff.rs",
-        "symbol": "ElementKind",
-        "line": 45,
-        "endLine": 51
-      }
-    ],
-    "node-402": [
-      {
-        "pattern": "src-tauri/src/source_view.rs",
-        "symbol": "AnchorStatus",
-        "line": 293,
-        "endLine": 302
-      }
-    ],
-    "resp-150": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/read.rs",
-        "symbol": "subtree_payload"
-      }
-    ],
-    "resp-651": [
-      {
-        "pattern": "crates/scryer-core/src/ownership.rs",
-        "symbol": "pattern_rank"
-      }
-    ],
-    "resp-607": [
-      {
-        "pattern": "crates/scryer-core/src/changes.rs",
-        "symbol": "close_change"
-      }
-    ],
-    "node-271": [
-      {
-        "pattern": "src/planDiff.ts",
-        "symbol": "ModelDiff",
-        "line": 58,
-        "endLine": 60
-      }
-    ],
-    "node-145": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "UndescribedItem",
-        "line": 824,
-        "endLine": 847
-      }
-    ],
-    "node-283": [
-      {
-        "pattern": "src/viewmodel.ts",
-        "symbol": "Node",
-        "line": 112,
-        "endLine": 160
-      }
-    ],
-    "node-137": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "ContainerItem",
-        "line": 529,
-        "endLine": 545
-      }
-    ],
-    "resp-308": [
-      {
-        "pattern": "src/viewmodel.ts",
-        "symbol": "addLink"
-      }
-    ],
-    "resp-409": [
-      {
-        "pattern": "src-tauri/src/observability.rs",
-        "symbol": "get_drift_status"
-      }
-    ],
-    "resp-552": [
-      {
-        "pattern": "crates/scryer-acp/src/lib.rs",
-        "symbol": "detect_available_agent_pref"
-      }
-    ],
-    "resp-162": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/read.rs",
-        "symbol": "validate_model"
-      }
-    ],
-    "node-434": [
-      {
-        "pattern": "docs/src/content.config.ts",
-        "symbol": "collections",
-        "line": 5,
-        "endLine": 7
-      }
-    ],
-    "resp-62": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "parse_live_endpoint"
-      }
-    ],
-    "resp-46": [
-      {
-        "pattern": "crates/scryer-mcp/src/cli.rs",
-        "symbol": "find_project"
-      }
-    ],
-    "resp-622": [
-      {
-        "pattern": "crates/scryer-core/src/concerns.rs",
-        "symbol": "register_concerns"
-      }
-    ],
-    "resp-90": [
-      {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "read_fail"
-      }
-    ],
-    "resp-672": [
-      {
-        "pattern": "crates/scryer-core/src/settings.rs",
-        "symbol": "write_subagent_settings"
-      }
-    ],
-    "node-442": [
-      {
-        "pattern": "crates/scryer-extract/src/lang.rs",
-        "symbol": "Def",
-        "line": 78,
-        "endLine": 90
-      }
-    ],
-    "node-602": [
-      {
-        "pattern": "crates/scryer-core/src/locate.rs",
-        "symbol": "LocateResult",
-        "line": 60,
-        "endLine": 74
-      }
-    ],
-    "resp-345": [
-      {
-        "pattern": "src/Toast.tsx",
-        "symbol": "ToastProvider"
-      }
-    ],
-    "resp-526": [
-      {
-        "pattern": "crates/scryer-extract/src/tsconfig.rs",
-        "symbol": "resolve_config"
-      }
-    ],
-    "node-450": [
-      {
-        "pattern": "crates/scryer-extract/src/context.rs",
-        "symbol": "ContainerFacts",
-        "line": 63,
-        "endLine": 72
-      }
-    ],
-    "resp-390": [
-      {
-        "pattern": "src-tauri/src/mcp_setup.rs",
-        "symbol": "check_mcp_json"
-      }
-    ],
-    "resp-626": [
-      {
-        "pattern": "crates/scryer-core/src/drift.rs",
-        "symbol": "changed_files_since"
-      }
-    ],
-    "resp-264": [
-      {
-        "pattern": "src/NodePage.tsx",
-        "symbol": "NodePage"
-      }
-    ],
-    "resp-170": [
-      {
-        "pattern": "demo/engine/Annotation.tsx",
-        "symbol": "AnnotationLayer"
-      }
-    ],
-    "resp-676": [
-      {
-        "pattern": "crates/scryer-core/src/validate.rs",
-        "symbol": "check_disconnected"
-      }
-    ],
-    "resp-365": [
-      {
-        "pattern": "src-tauri/src/build.rs",
-        "symbol": "seed_units"
-      }
-    ],
-    "resp-450": [
-      {
-        "pattern": "src-tauri/src/symbols.rs",
-        "symbol": "first_string_arg"
-      }
-    ],
-    "resp-466": [
-      {
-        "pattern": "src-tauri/src/verdicts.rs",
-        "symbol": "reimplement_property"
-      }
-    ],
-    "resp-330": [
-      {
-        "pattern": "src/theme.ts",
-        "symbol": "applyTheme"
-      }
-    ],
-    "resp-334": [
-      {
-        "pattern": "src/markup.tsx",
-        "symbol": "earsTokenize"
-      }
-    ],
-    "resp-400": [
-      {
-        "pattern": "src-tauri/src/mcp_setup.rs",
-        "symbol": "write_claude_statusline"
-      }
-    ],
-    "resp-636": [
-      {
-        "pattern": "crates/scryer-core/src/health.rs",
-        "symbol": "disconnected_nodes"
-      }
-    ],
-    "resp-297": [
-      {
-        "pattern": "src/ledger.ts",
-        "symbol": "elementKey"
-      }
-    ],
-    "resp-616": [
-      {
-        "pattern": "crates/scryer-core/src/commit.rs",
-        "symbol": "committed_node_copy"
-      }
-    ],
-    "resp-569": [
-      {
-        "pattern": "crates/scryer-acp/src/runtime.rs",
-        "symbol": "runtime_thread"
-      }
-    ],
-    "resp-340": [
-      {
-        "pattern": "src/IconPicker.tsx",
-        "symbol": "IconPicker"
-      }
-    ],
-    "resp-60": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "run_hook_client"
-      }
-    ],
-    "resp-544": [
-      {
-        "pattern": "crates/scryer-acp/src/client.rs",
-        "symbol": "ScryerClient"
-      }
-    ],
-    "resp-623": [
-      {
-        "pattern": "crates/scryer-core/src/concerns.rs",
-        "symbol": "sync_concern_metadata"
-      }
-    ],
-    "node-530": [
-      {
-        "pattern": "crates/scryer-core/src/model.rs",
-        "symbol": "Group",
-        "line": 346,
-        "endLine": 362
-      }
-    ],
-    "resp-463": [
-      {
-        "pattern": "src-tauri/src/verdicts.rs",
-        "symbol": "drop_responsibility"
-      }
-    ],
-    "resp-599": [
-      {
-        "pattern": "crates/scryer-core/src/diff.rs",
-        "symbol": "plan_carrier_count"
-      }
-    ],
-    "node-451": [
-      {
-        "pattern": "crates/scryer-extract/src/context.rs",
-        "symbol": "SymbolContext",
-        "line": 100,
-        "endLine": 122
-      }
-    ],
-    "resp-275": [
-      {
-        "pattern": "src/page/PreviewSection.tsx",
-        "symbol": "PreviewSection"
-      }
-    ],
-    "resp-578": [
-      {
-        "pattern": "crates/scryer-core/src/model.rs",
-        "symbol": "is_node_empty"
-      }
-    ],
-    "resp-420": [
-      {
-        "pattern": "src-tauri/src/preview.rs",
-        "symbol": "start_preview_fixture_session"
-      }
-    ],
-    "resp-403": [
-      {
-        "pattern": "src-tauri/src/mcp_setup.rs",
-        "symbol": "write_scryer_hooks"
-      }
-    ],
-    "resp-398": [
-      {
-        "pattern": "src-tauri/src/mcp_setup.rs",
-        "symbol": "setup_mcp_integration"
-      }
-    ],
-    "resp-562": [
-      {
-        "pattern": "crates/scryer-acp/src/prompt.rs",
-        "symbol": "visual_variation_prompt"
-      }
-    ],
-    "resp-178": [
-      {
-        "pattern": "demo/engine/types.ts",
-        "symbol": "CancelledError"
-      }
-    ],
-    "node-390": [
-      {
-        "pattern": "src-tauri/src/state.rs",
-        "symbol": "WatcherState",
-        "line": 18,
-        "endLine": 20
-      }
-    ],
-    "resp-260": [
-      {
-        "pattern": "src/shapes/index.ts",
-        "symbol": "resolveShape"
-      }
-    ],
-    "node-497": [
-      {
-        "pattern": "crates/scryer-acp/src/events.rs",
-        "symbol": "Usage",
-        "line": 8,
-        "endLine": 32
-      }
-    ],
-    "resp-159": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/read.rs",
-        "symbol": "get_pending"
-      }
-    ],
-    "node-454": [
-      {
-        "pattern": "crates/scryer-extract/src/context.rs",
-        "symbol": "PromptScopeContext",
-        "line": 1096,
-        "endLine": 1103
-      }
-    ],
-    "resp-646": [
-      {
-        "pattern": "crates/scryer-core/src/locate.rs",
-        "symbol": "locate_at"
-      }
-    ],
-    "resp-579": [
-      {
-        "pattern": "crates/scryer-core/src/model.rs",
-        "symbol": "inherited_directives"
-      }
-    ],
-    "resp-410": [
-      {
-        "pattern": "src-tauri/src/observability.rs",
-        "symbol": "get_model_health"
-      }
-    ],
-    "resp-250": [
-      {
-        "pattern": "src/diagramLayout.ts",
-        "symbol": "buildDiagramScene"
-      }
-    ],
-    "resp-568": [
-      {
-        "pattern": "crates/scryer-acp/src/runtime.rs",
-        "symbol": "AcpRuntime"
-      }
-    ],
-    "node-501": [
-      {
-        "pattern": "crates/scryer-acp/src/lib.rs",
-        "symbol": "AgentLaunch",
-        "line": 21,
-        "endLine": 26
-      }
-    ],
-    "resp-488": [
-      {
-        "pattern": "crates/scryer-extract/src/lang.rs",
-        "symbol": "import_resolution_tier"
-      }
-    ],
-    "resp-236": [
-      {
-        "pattern": "src/McpSetupPrompt.tsx",
-        "symbol": "McpSetupPrompt"
-      }
-    ],
-    "node-177": [
-      {
-        "pattern": "demo/fixtures.ts",
-        "symbol": "healthReport",
-        "line": 264,
-        "endLine": 313
-      }
-    ],
-    "node-613": [
-      {
-        "pattern": "crates/scryer-core/src/rules.rs",
-        "symbol": "Rule",
-        "line": 11,
-        "endLine": 16
-      }
-    ],
-    "node-175": [
-      {
-        "pattern": "demo/engine/scenes/refund.tsx",
-        "symbol": "RefundState",
-        "line": 440,
-        "endLine": 443
-      }
-    ],
-    "resp-379": [
-      {
-        "pattern": "src-tauri/src/hooks.rs",
-        "symbol": "handle_request"
-      }
-    ],
-    "resp-511": [
-      {
-        "pattern": "crates/scryer-extract/src/anchors.rs",
-        "symbol": "out_of_plan_scopes"
-      }
-    ],
-    "node-622": [
-      {
-        "pattern": "crates/scryer-core/src/build_edges.rs",
-        "symbol": "BuildEdges",
-        "line": 25,
-        "endLine": 29
-      }
-    ],
-    "resp-83": [
-      {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "denormalize_node"
-      }
-    ],
-    "resp-432": [
-      {
-        "pattern": "src-tauri/src/project.rs",
-        "symbol": "write_planned"
-      }
-    ],
-    "resp-195": [
-      {
-        "pattern": "demo/render.mjs",
-        "symbol": "leadingFlatEnd"
-      }
-    ],
-    "resp-678": [
-      {
-        "pattern": "crates/scryer-core/src/validate.rs",
-        "symbol": "describe_violation"
-      }
-    ],
-    "resp-44": [
-      {
-        "pattern": "crates/scryer-mcp/src/cli.rs",
-        "symbol": "run_statusline"
-      }
-    ],
-    "resp-112": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
-        "symbol": "add_symbol"
-      }
-    ],
-    "node-129": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "QueryCondition",
-        "line": 75,
-        "endLine": 91
-      }
-    ],
-    "resp-134": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
-        "symbol": "fold_change_by_id"
-      }
-    ],
-    "resp-184": [
-      {
-        "pattern": "demo/engine/scenes/film.tsx",
-        "symbol": "filmScene"
-      }
-    ],
-    "node-330": [
-      {
-        "pattern": "src-tauri/src/build.rs",
-        "symbol": "WaveOutcome",
-        "line": 95,
-        "endLine": 100
-      }
-    ],
-    "resp-69": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "envelope_files"
-      }
-    ],
-    "resp-75": [
-      {
-        "pattern": "crates/scryer-mcp/src/server.rs",
-        "symbol": "session_change"
+        "pattern": "demo/engine/ShellDemo.tsx",
+        "symbol": "ShellDemo"
       }
     ],
     "resp-343": [
@@ -17083,16 +15444,22 @@
         "symbol": "ConfirmPopover"
       }
     ],
-    "resp-209": [
+    "resp-447": [
       {
-        "pattern": "preview/server.mjs",
-        "symbol": "startRouter"
+        "pattern": "src-tauri/src/symbols.rs",
+        "symbol": "resolve"
       }
     ],
-    "resp-598": [
+    "resp-589": [
       {
-        "pattern": "crates/scryer-core/src/diff.rs",
-        "symbol": "diff"
+        "pattern": "crates/scryer-core/src/storage.rs",
+        "symbol": "read_planned_at"
+      }
+    ],
+    "resp-422": [
+      {
+        "pattern": "src-tauri/src/preview.rs",
+        "symbol": "accept_visual_variation"
       }
     ],
     "node-136": [
@@ -17103,510 +15470,36 @@
         "endLine": 735
       }
     ],
-    "resp-394": [
-      {
-        "pattern": "src-tauri/src/mcp_setup.rs",
-        "symbol": "check_codex_hooks"
-      }
-    ],
-    "resp-207": [
-      {
-        "pattern": "preview/server.mjs",
-        "symbol": "findViteRoots"
-      }
-    ],
-    "resp-661": [
-      {
-        "pattern": "crates/scryer-core/src/scan.rs",
-        "symbol": "manifest_dirs"
-      }
-    ],
-    "resp-177": [
-      {
-        "pattern": "demo/engine/tween.ts",
-        "symbol": "tween"
-      }
-    ],
-    "resp-382": [
-      {
-        "pattern": "src-tauri/src/hooks.rs",
-        "symbol": "close_payload"
-      }
-    ],
-    "node-130": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "MarkImplementedRequest",
-        "line": 181,
-        "endLine": 236
-      }
-    ],
-    "node-400": [
-      {
-        "pattern": "src-tauri/src/source_view.rs",
-        "symbol": "SourceSpan",
-        "line": 132,
-        "endLine": 143
-      }
-    ],
-    "resp-7": [
-      {
-        "pattern": "crates/xtask/src/main.rs",
-        "symbol": "workspace_root"
-      }
-    ],
-    "resp-617": [
-      {
-        "pattern": "crates/scryer-core/src/commit.rs",
-        "symbol": "committed_group_copy"
-      }
-    ],
-    "resp-395": [
-      {
-        "pattern": "src-tauri/src/mcp_setup.rs",
-        "symbol": "check_codex_toml"
-      }
-    ],
-    "resp-628": [
-      {
-        "pattern": "crates/scryer-core/src/drift.rs",
-        "symbol": "subtree_ids"
-      }
-    ],
-    "resp-232": [
-      {
-        "pattern": "src/hooks/useLaunchSettings.ts",
-        "symbol": "useLaunchSettings"
-      }
-    ],
-    "resp-216": [
-      {
-        "pattern": "src/TopBar.tsx",
-        "symbol": "TopBar"
-      }
-    ],
-    "resp-117": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/links.rs",
-        "symbol": "update_links"
-      }
-    ],
-    "resp-574": [
-      {
-        "pattern": "crates/scryer-acp/src/runtime.rs",
-        "symbol": "kill_process_tree"
-      }
-    ],
-    "resp-204": [
-      {
-        "pattern": "preview/props.mjs",
-        "symbol": "analyzeProject"
-      }
-    ],
-    "resp-381": [
-      {
-        "pattern": "src-tauri/src/hooks.rs",
-        "symbol": "close_payload"
-      }
-    ],
-    "resp-430": [
-      {
-        "pattern": "src-tauri/src/project.rs",
-        "symbol": "watch_project"
-      }
-    ],
-    "node-626": [
-      {
-        "pattern": "crates/scryer-core/src/build_edges.rs",
-        "symbol": "DerivedGraph",
-        "line": 110,
-        "endLine": 120
-      }
-    ],
-    "node-527": [
-      {
-        "pattern": "crates/scryer-core/src/model.rs",
-        "symbol": "Node",
-        "line": 192,
-        "endLine": 278
-      }
-    ],
-    "resp-645": [
-      {
-        "pattern": "crates/scryer-core/src/locate.rs",
-        "symbol": "locate"
-      }
-    ],
-    "resp-378": [
-      {
-        "pattern": "src-tauri/src/hooks.rs",
-        "symbol": "start"
-      }
-    ],
-    "resp-590": [
-      {
-        "pattern": "crates/scryer-core/src/storage.rs",
-        "symbol": "write_planned_at"
-      }
-    ],
-    "node-525": [
-      {
-        "pattern": "crates/scryer-core/src/model.rs",
-        "symbol": "Responsibility",
-        "line": 32,
-        "endLine": 82
-      }
-    ],
-    "resp-136": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
-        "symbol": "set_model"
-      }
-    ],
-    "resp-5": [
-      {
-        "pattern": "crates/xtask/src/main.rs",
-        "symbol": "build_sidecar"
-      }
-    ],
-    "resp-132": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
-        "symbol": "replace_subtree"
-      }
-    ],
-    "node-444": [
-      {
-        "pattern": "crates/scryer-extract/src/lang.rs",
-        "symbol": "PathRef",
-        "line": 109,
-        "endLine": 114
-      }
-    ],
-    "resp-329": [
-      {
-        "pattern": "src/ui/Select.tsx",
-        "symbol": "Select"
-      }
-    ],
-    "resp-124": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/misc.rs",
-        "symbol": "set_groups"
-      }
-    ],
-    "resp-618": [
-      {
-        "pattern": "crates/scryer-core/src/commit.rs",
-        "symbol": "structure_only_copy"
-      }
-    ],
-    "resp-404": [
-      {
-        "pattern": "src-tauri/src/mcp_setup.rs",
-        "symbol": "write_scryer_hooks"
-      }
-    ],
-    "resp-293": [
-      {
-        "pattern": "src/diffkit.tsx",
-        "symbol": "buildElementDiff"
-      }
-    ],
-    "resp-376": [
-      {
-        "pattern": "src-tauri/src/hooks.rs",
-        "symbol": "mint_token"
-      }
-    ],
-    "resp-8": [
-      {
-        "pattern": "crates/xtask/src/main.rs",
-        "symbol": "validate_model"
-      }
-    ],
-    "node-157": [
-      {
-        "pattern": "demo/engine/Terminal.tsx",
-        "symbol": "TermLine",
-        "line": 29,
-        "endLine": 34
-      }
-    ],
-    "node-526": [
-      {
-        "pattern": "crates/scryer-core/src/model.rs",
-        "symbol": "SchemaProperty",
-        "line": 88,
-        "endLine": 114
-      }
-    ],
-    "node-156": [
-      {
-        "pattern": "demo/engine/Terminal.tsx",
-        "symbol": "TerminalState",
-        "line": 36,
-        "endLine": 46
-      }
-    ],
-    "resp-591": [
-      {
-        "pattern": "crates/scryer-core/src/storage.rs",
-        "symbol": "working_view"
-      }
-    ],
-    "resp-608": [
-      {
-        "pattern": "crates/scryer-core/src/changes.rs",
-        "symbol": "record_closed"
-      }
-    ],
-    "resp-310": [
-      {
-        "pattern": "src/viewmodel.ts",
-        "symbol": "registerConcerns"
-      }
-    ],
-    "node-285": [
-      {
-        "pattern": "src/viewmodel.ts",
-        "symbol": "SchemaProperty",
-        "line": 69,
-        "endLine": 81
-      }
-    ],
-    "node-143": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "ProposedGroup",
-        "line": 799,
-        "endLine": 807
-      }
-    ],
-    "resp-71": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "stop"
-      }
-    ],
-    "resp-358": [
-      {
-        "pattern": "src-tauri/src/build.rs",
-        "symbol": "start_model_build"
-      }
-    ],
-    "resp-76": [
-      {
-        "pattern": "crates/scryer-mcp/src/server.rs",
-        "symbol": "set_session_change"
-      }
-    ],
-    "node-144": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "CommitContainerModelRequest",
-        "line": 812,
-        "endLine": 820
-      }
-    ],
-    "resp-156": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/read.rs",
-        "symbol": "orient"
-      }
-    ],
-    "resp-142": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
-        "symbol": "descope"
-      }
-    ],
-    "resp-604": [
-      {
-        "pattern": "crates/scryer-core/src/changes.rs",
-        "symbol": "tag"
-      }
-    ],
-    "resp-512": [
-      {
-        "pattern": "crates/scryer-extract/src/anchors.rs",
-        "symbol": "out_of_plan_scopes"
-      }
-    ],
-    "node-204": [
-      {
-        "pattern": "src/hooks/useModelStorage.ts",
-        "symbol": "ModelStorage",
-        "line": 239,
-        "endLine": 306
-      }
-    ],
-    "resp-332": [
-      {
-        "pattern": "src/kindIcon.ts",
-        "symbol": "kindIcon"
-      }
-    ],
-    "resp-324": [
-      {
-        "pattern": "src/kit/Editable.tsx",
-        "symbol": "Editable"
-      }
-    ],
-    "resp-175": [
-      {
-        "pattern": "demo/engine/director.ts",
-        "symbol": "Director"
-      }
-    ],
-    "resp-642": [
-      {
-        "pattern": "crates/scryer-core/src/history.rs",
-        "symbol": "read_history"
-      }
-    ],
-    "node-232": [
-      {
-        "pattern": "src/diagramLayout.ts",
-        "symbol": "DiagramScene",
-        "line": 68,
-        "endLine": 74
-      }
-    ],
-    "resp-255": [
-      {
-        "pattern": "src/edgeRouting.ts",
-        "symbol": "assignAllHandles"
-      }
-    ],
-    "resp-532": [
-      {
-        "pattern": "crates/scryer-extract/examples/cluster.rs",
-        "symbol": "cluster_by_dir"
-      }
-    ],
-    "node-148": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "NewNode",
-        "line": 895,
-        "endLine": 916
-      }
-    ],
-    "resp-126": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/misc.rs",
-        "symbol": "delete_group"
-      }
-    ],
-    "node-623": [
-      {
-        "pattern": "crates/scryer-core/src/build_edges.rs",
-        "symbol": "DerivedEdge",
-        "line": 75,
-        "endLine": 79
-      }
-    ],
-    "node-159": [
-      {
-        "pattern": "demo/engine/Workspace.tsx",
-        "symbol": "WorkspaceState",
-        "line": 74,
-        "endLine": 93
-      }
-    ],
-    "resp-506": [
-      {
-        "pattern": "crates/scryer-extract/src/anchors.rs",
-        "symbol": "write_baseline"
-      }
-    ],
-    "resp-242": [
-      {
-        "pattern": "src/ProjectPicker.tsx",
-        "symbol": "ProjectPicker"
-      }
-    ],
-    "resp-107": [
+    "resp-111": [
       {
         "pattern": "crates/scryer-mcp/src/tools/intent.rs",
-        "symbol": "add_person"
+        "symbol": "add_group"
       }
     ],
-    "node-146": [
+    "node-402": [
       {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "UndescribedProperty",
-        "line": 854,
-        "endLine": 875
+        "pattern": "src-tauri/src/source_view.rs",
+        "symbol": "AnchorStatus",
+        "line": 293,
+        "endLine": 302
       }
     ],
-    "node-332": [
+    "resp-469": [
       {
-        "pattern": "src-tauri/src/build.rs",
-        "symbol": "DriftJob",
-        "line": 112,
-        "endLine": 117
+        "pattern": "src-tauri/src/verdicts.rs",
+        "symbol": "reimplement_node"
       }
     ],
-    "node-529": [
+    "resp-535": [
       {
-        "pattern": "crates/scryer-core/src/model.rs",
-        "symbol": "Link",
-        "line": 334,
-        "endLine": 342
+        "pattern": "crates/scryer-acp/examples/full_build_bench.rs",
+        "symbol": "pool_size"
       }
     ],
-    "resp-629": [
-      {
-        "pattern": "crates/scryer-core/src/drift.rs",
-        "symbol": "product_file_inventory"
-      }
-    ],
-    "resp-483": [
-      {
-        "pattern": "crates/scryer-extract/src/lib.rs",
-        "symbol": "list_project_files"
-      }
-    ],
-    "resp-401": [
+    "resp-398": [
       {
         "pattern": "src-tauri/src/mcp_setup.rs",
-        "symbol": "write_claude_statusline"
-      }
-    ],
-    "resp-222": [
-      {
-        "pattern": "src/hooks/useModelStorage.ts",
-        "symbol": "useModelStorage"
-      }
-    ],
-    "node-134": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "ResponsibilityInput",
-        "line": 620,
-        "endLine": 635
-      }
-    ],
-    "resp-171": [
-      {
-        "pattern": "demo/engine/Stage.tsx",
-        "symbol": "Stage"
-      }
-    ],
-    "node-160": [
-      {
-        "pattern": "demo/engine/Workspace.tsx",
-        "symbol": "WorkspaceActions",
-        "line": 97,
-        "endLine": 106
-      }
-    ],
-    "resp-397": [
-      {
-        "pattern": "src-tauri/src/mcp_setup.rs",
-        "symbol": "find_scryer_mcp"
+        "symbol": "setup_mcp_integration"
       }
     ],
     "resp-190": [
@@ -17615,252 +15508,42 @@
         "symbol": "sceneById"
       }
     ],
-    "resp-495": [
-      {
-        "pattern": "crates/scryer-extract/src/context.rs",
-        "symbol": "build_edges"
-      }
-    ],
-    "resp-505": [
-      {
-        "pattern": "crates/scryer-extract/src/anchors.rs",
-        "symbol": "write_baseline"
-      }
-    ],
     "resp-587": [
       {
         "pattern": "crates/scryer-core/src/storage.rs",
         "symbol": "read_model_at"
       }
     ],
-    "resp-489": [
+    "node-434": [
       {
-        "pattern": "crates/scryer-extract/src/lang.rs",
-        "symbol": "parse_file_with"
+        "pattern": "docs/src/content.config.ts",
+        "symbol": "collections",
+        "line": 5,
+        "endLine": 7
       }
     ],
-    "resp-377": [
+    "resp-656": [
       {
-        "pattern": "src-tauri/src/hooks.rs",
-        "symbol": "start"
+        "pattern": "crates/scryer-core/src/rules.rs",
+        "symbol": "rules_index"
       }
     ],
-    "resp-543": [
+    "resp-458": [
       {
-        "pattern": "crates/scryer-acp/src/client.rs",
-        "symbol": "ScryerClient"
+        "pattern": "src-tauri/src/verdicts.rs",
+        "symbol": "adopt_responsibility"
       }
     ],
-    "resp-602": [
+    "resp-335": [
       {
-        "pattern": "crates/scryer-core/src/changes.rs",
-        "symbol": "element_key"
+        "pattern": "src/markup.tsx",
+        "symbol": "lintEars"
       }
     ],
-    "resp-429": [
+    "resp-253": [
       {
-        "pattern": "src-tauri/src/project.rs",
-        "symbol": "watch_project"
-      }
-    ],
-    "resp-135": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
-        "symbol": "surviving_ancestor"
-      }
-    ],
-    "resp-172": [
-      {
-        "pattern": "demo/engine/Terminal.tsx",
-        "symbol": "Terminal"
-      }
-    ],
-    "resp-138": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
-        "symbol": "mark_implemented"
-      }
-    ],
-    "resp-369": [
-      {
-        "pattern": "src-tauri/src/highlight.rs",
-        "symbol": "config_for_ext"
-      }
-    ],
-    "resp-581": [
-      {
-        "pattern": "crates/scryer-core/src/ids.rs",
-        "symbol": "next_group_id_union"
-      }
-    ],
-    "resp-163": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/read.rs",
-        "symbol": "get_health"
-      }
-    ],
-    "resp-106": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
-        "symbol": "commit"
-      }
-    ],
-    "node-641": [
-      {
-        "pattern": "crates/scryer-core/src/validate.rs",
-        "symbol": "LinkViolation",
-        "line": 519,
-        "endLine": 532
-      }
-    ],
-    "resp-278": [
-      {
-        "pattern": "src/SourceSection.tsx",
-        "symbol": "InlinePeek"
-      }
-    ],
-    "resp-311": [
-      {
-        "pattern": "src/viewmodel.ts",
-        "symbol": "inheritedDirectives"
-      }
-    ],
-    "resp-525": [
-      {
-        "pattern": "crates/scryer-extract/src/tsconfig.rs",
-        "symbol": "discover_ts_aliases"
-      }
-    ],
-    "resp-341": [
-      {
-        "pattern": "src/InlineText.tsx",
-        "symbol": "InlineText"
-      }
-    ],
-    "resp-268": [
-      {
-        "pattern": "src/page/DetailRail.tsx",
-        "symbol": "DetailRail"
-      }
-    ],
-    "resp-111": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
-        "symbol": "add_group"
-      }
-    ],
-    "node-312": [
-      {
-        "pattern": "src/theme.ts",
-        "symbol": "ThemeConfig",
-        "line": 81,
-        "endLine": 116
-      }
-    ],
-    "resp-556": [
-      {
-        "pattern": "crates/scryer-acp/src/prompt.rs",
-        "symbol": "serialize_subtree_for_prompt"
-      }
-    ],
-    "resp-346": [
-      {
-        "pattern": "src/ErrorBoundary.tsx",
-        "symbol": "ErrorBoundary"
-      }
-    ],
-    "resp-498": [
-      {
-        "pattern": "crates/scryer-extract/src/context.rs",
-        "symbol": "compact_scope_impl"
-      }
-    ],
-    "node-25": [
-      {
-        "pattern": "crates/scryer-mcp/src/cli.rs",
-        "symbol": "StatuslineInstall",
-        "line": 323,
-        "endLine": 329
-      }
-    ],
-    "resp-277": [
-      {
-        "pattern": "src/SourceSection.tsx",
-        "symbol": "ClaimSource"
-      }
-    ],
-    "node-149": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "StaleResponsibility",
-        "line": 920,
-        "endLine": 932
-      }
-    ],
-    "resp-423": [
-      {
-        "pattern": "src-tauri/src/preview.rs",
-        "symbol": "discard_visual_variations"
-      }
-    ],
-    "resp-87": [
-      {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "restore_node_positions"
-      }
-    ],
-    "resp-318": [
-      {
-        "pattern": "src/health.ts",
-        "symbol": "impliedLeaves"
-      }
-    ],
-    "node-550": [
-      {
-        "pattern": "crates/scryer-core/src/diff.rs",
-        "symbol": "Change",
-        "line": 57,
-        "endLine": 87
-      }
-    ],
-    "resp-559": [
-      {
-        "pattern": "crates/scryer-acp/src/prompt.rs",
-        "symbol": "repair_model_prompt"
-      }
-    ],
-    "node-216": [
-      {
-        "pattern": "src/SettingsPanel.tsx",
-        "symbol": "SubagentSettings",
-        "line": 16,
-        "endLine": 22
-      }
-    ],
-    "resp-443": [
-      {
-        "pattern": "src-tauri/src/source_view.rs",
-        "symbol": "verify_anchor"
-      }
-    ],
-    "node-219": [
-      {
-        "pattern": "src/hooks/useMcpSetup.ts",
-        "symbol": "McpSetup",
-        "line": 38,
-        "endLine": 65
-      }
-    ],
-    "resp-637": [
-      {
-        "pattern": "crates/scryer-core/src/health.rs",
-        "symbol": "compute_health"
-      }
-    ],
-    "resp-299": [
-      {
-        "pattern": "src/wordDiff.ts",
-        "symbol": "wordDiff"
+        "pattern": "src/layout/planar.ts",
+        "symbol": "planarLayout"
       }
     ],
     "node-331": [
@@ -17871,446 +15554,54 @@
         "endLine": 108
       }
     ],
-    "resp-45": [
-      {
-        "pattern": "crates/scryer-mcp/src/cli.rs",
-        "symbol": "statusline_start_dir"
-      }
-    ],
-    "resp-133": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
-        "symbol": "fold_out_layer"
-      }
-    ],
-    "resp-223": [
-      {
-        "pattern": "src/hooks/useModelStorage.ts",
-        "symbol": "diffRevision"
-      }
-    ],
-    "resp-469": [
-      {
-        "pattern": "src-tauri/src/verdicts.rs",
-        "symbol": "reimplement_node"
-      }
-    ],
-    "resp-557": [
-      {
-        "pattern": "crates/scryer-acp/src/prompt.rs",
-        "symbol": "enrich_system_prompt"
-      }
-    ],
-    "resp-183": [
-      {
-        "pattern": "demo/engine/scenes/comprehend.tsx",
-        "symbol": "comprehendScene"
-      }
-    ],
-    "resp-185": [
-      {
-        "pattern": "demo/engine/scenes/prologue.tsx",
-        "symbol": "prologueScene"
-      }
-    ],
-    "resp-259": [
-      {
-        "pattern": "src/shapes/ShapeBackground.tsx",
-        "symbol": "ShapeBackground"
-      }
-    ],
-    "resp-364": [
-      {
-        "pattern": "src-tauri/src/build.rs",
-        "symbol": "derive_container_dir"
-      }
-    ],
-    "resp-656": [
-      {
-        "pattern": "crates/scryer-core/src/rules.rs",
-        "symbol": "rules_index"
-      }
-    ],
-    "node-452": [
-      {
-        "pattern": "crates/scryer-extract/src/context.rs",
-        "symbol": "Edge",
-        "line": 127,
-        "endLine": 130
-      }
-    ],
-    "resp-319": [
-      {
-        "pattern": "src/health.ts",
-        "symbol": "pathsForLink"
-      }
-    ],
-    "resp-434": [
-      {
-        "pattern": "src-tauri/src/project.rs",
-        "symbol": "read_history"
-      }
-    ],
-    "resp-143": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
-        "symbol": "move_responsibilities"
-      }
-    ],
-    "node-460": [
-      {
-        "pattern": "crates/scryer-extract/src/anchors.rs",
-        "symbol": "AnchorEntry",
-        "line": 30,
-        "endLine": 53
-      }
-    ],
-    "resp-4": [
-      {
-        "pattern": "crates/xtask/src/main.rs",
-        "symbol": "build_sidecar"
-      }
-    ],
-    "node-552": [
-      {
-        "pattern": "crates/scryer-core/src/diff.rs",
-        "symbol": "ModelDiff",
-        "line": 106,
-        "endLine": 108
-      }
-    ],
-    "resp-588": [
-      {
-        "pattern": "crates/scryer-core/src/storage.rs",
-        "symbol": "write_model_at"
-      }
-    ],
-    "resp-422": [
-      {
-        "pattern": "src-tauri/src/preview.rs",
-        "symbol": "accept_visual_variation"
-      }
-    ],
-    "resp-316": [
-      {
-        "pattern": "src/health.ts",
-        "symbol": "completenessBadge"
-      }
-    ],
-    "resp-152": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/read.rs",
-        "symbol": "eval_condition"
-      }
-    ],
-    "resp-55": [
-      {
-        "pattern": "crates/scryer-mcp/src/main.rs",
-        "symbol": "init_claude_code"
-      }
-    ],
-    "resp-462": [
-      {
-        "pattern": "src-tauri/src/verdicts.rs",
-        "symbol": "reject_property"
-      }
-    ],
-    "node-165": [
-      {
-        "pattern": "demo/engine/types.ts",
-        "symbol": "Scene",
-        "line": 11,
-        "endLine": 17
-      }
-    ],
-    "resp-353": [
-      {
-        "pattern": "src-tauri/src/build.rs",
-        "symbol": "session_permits"
-      }
-    ],
-    "resp-594": [
-      {
-        "pattern": "crates/scryer-core/src/storage.rs",
-        "symbol": "delete_model_at"
-      }
-    ],
-    "resp-519": [
-      {
-        "pattern": "crates/scryer-extract/src/manifest.rs",
-        "symbol": "discover_containers_from_files"
-      }
-    ],
-    "node-141": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "ProposedSymbol",
-        "line": 765,
-        "endLine": 781
-      }
-    ],
-    "resp-424": [
-      {
-        "pattern": "src-tauri/src/preview.rs",
-        "symbol": "cancel_agent_session"
-      }
-    ],
-    "resp-113": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
-        "symbol": "flag_drift"
-      }
-    ],
-    "resp-567": [
-      {
-        "pattern": "crates/scryer-acp/src/runtime.rs",
-        "symbol": "AcpRuntime"
-      }
-    ],
-    "node-500": [
-      {
-        "pattern": "crates/scryer-acp/src/lib.rs",
-        "symbol": "AgentKind",
-        "line": 12,
-        "endLine": 16
-      }
-    ],
-    "resp-547": [
-      {
-        "pattern": "crates/scryer-acp/src/events.rs",
-        "symbol": "Usage"
-      }
-    ],
-    "resp-527": [
-      {
-        "pattern": "crates/scryer-extract/src/tsconfig.rs",
-        "symbol": "load_chain"
-      }
-    ],
-    "resp-558": [
-      {
-        "pattern": "crates/scryer-acp/src/prompt.rs",
-        "symbol": "build_container_prompt"
-      }
-    ],
-    "resp-671": [
-      {
-        "pattern": "crates/scryer-core/src/settings.rs",
-        "symbol": "read_subagent_settings"
-      }
-    ],
-    "resp-433": [
-      {
-        "pattern": "src-tauri/src/project.rs",
-        "symbol": "close_change"
-      }
-    ],
-    "resp-459": [
-      {
-        "pattern": "src-tauri/src/verdicts.rs",
-        "symbol": "reject_responsibility"
-      }
-    ],
-    "resp-118": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/links.rs",
-        "symbol": "delete_links"
-      }
-    ],
-    "resp-258": [
-      {
-        "pattern": "src/edges/RelationshipEdge.tsx",
-        "symbol": "RelationshipEdge"
-      }
-    ],
-    "resp-464": [
-      {
-        "pattern": "src-tauri/src/verdicts.rs",
-        "symbol": "reimplement_responsibility"
-      }
-    ],
-    "node-589": [
-      {
-        "pattern": "crates/scryer-core/src/health.rs",
-        "symbol": "HealthCounts",
-        "line": 31,
-        "endLine": 72
-      }
-    ],
-    "node-498": [
-      {
-        "pattern": "crates/scryer-acp/src/events.rs",
-        "symbol": "AgentEvent",
-        "line": 38,
-        "endLine": 62
-      }
-    ],
-    "resp-208": [
-      {
-        "pattern": "preview/server.mjs",
-        "symbol": "startViteFor"
-      }
-    ],
-    "resp-254": [
-      {
-        "pattern": "src/layout/lrPlanarity.ts",
-        "symbol": "LRPlanarity"
-      }
-    ],
-    "resp-593": [
-      {
-        "pattern": "crates/scryer-core/src/storage.rs",
-        "symbol": "read_planned_seeded_at"
-      }
-    ],
-    "node-66": [
-      {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "StatusCounts",
-        "line": 457,
-        "endLine": 475
-      }
-    ],
-    "node-211": [
-      {
-        "pattern": "src/hooks/useAgentSession.ts",
-        "symbol": "AgentSession",
-        "line": 16,
-        "endLine": 39
-      }
-    ],
-    "resp-482": [
-      {
-        "pattern": "crates/scryer-extract/src/lib.rs",
-        "symbol": "extract_context_with_stats"
-      }
-    ],
-    "resp-592": [
-      {
-        "pattern": "crates/scryer-core/src/storage.rs",
-        "symbol": "stamp_touches"
-      }
-    ],
-    "resp-266": [
-      {
-        "pattern": "src/page/GroupPage.tsx",
-        "symbol": "GroupPageBody"
-      }
-    ],
-    "resp-344": [
-      {
-        "pattern": "src/CompletenessPie.tsx",
-        "symbol": "CompletenessPie"
-      }
-    ],
-    "resp-140": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
-        "symbol": "set_node"
-      }
-    ],
-    "resp-347": [
-      {
-        "pattern": "src/pageMenu.tsx",
-        "symbol": "PageMenuProvider"
-      }
-    ],
-    "resp-245": [
-      {
-        "pattern": "src/ModelTree.tsx",
-        "symbol": "ModelTree"
-      }
-    ],
-    "resp-639": [
-      {
-        "pattern": "crates/scryer-core/src/health.rs",
-        "symbol": "resolve_completeness"
-      }
-    ],
-    "resp-43": [
-      {
-        "pattern": "crates/scryer-mcp/src/cli.rs",
-        "symbol": "run_status"
-      }
-    ],
-    "resp-191": [
-      {
-        "pattern": "demo/treatment.tsx",
-        "symbol": "Treated"
-      }
-    ],
-    "resp-91": [
-      {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "RespIdReminter"
-      }
-    ],
     "resp-100": [
       {
         "pattern": "crates/scryer-mcp/src/tools/generation.rs",
         "symbol": "validate_request"
       }
     ],
-    "resp-605": [
+    "resp-206": [
       {
-        "pattern": "crates/scryer-core/src/changes.rs",
-        "symbol": "foreign_to_host"
+        "pattern": "preview/props.mjs",
+        "symbol": "synthValue"
       }
     ],
-    "resp-48": [
+    "resp-210": [
       {
-        "pattern": "crates/scryer-mcp/src/cli.rs",
-        "symbol": "check_report"
+        "pattern": "preview/server.mjs",
+        "symbol": "startPreviewServer"
       }
     ],
-    "resp-317": [
+    "resp-531": [
       {
-        "pattern": "src/health.ts",
-        "symbol": "impliedFor"
+        "pattern": "crates/scryer-extract/examples/cluster.rs",
+        "symbol": "louvain"
       }
     ],
-    "node-445": [
+    "resp-64": [
       {
-        "pattern": "crates/scryer-extract/src/lang.rs",
-        "symbol": "FileParse",
-        "line": 158,
-        "endLine": 171
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "session_start"
       }
     ],
-    "resp-307": [
+    "resp-669": [
       {
-        "pattern": "src/viewmodel.ts",
-        "symbol": "addResponsibility"
+        "pattern": "crates/scryer-core/src/seed.rs",
+        "symbol": "mint_initial_structure"
       }
     ],
-    "resp-572": [
+    "node-602": [
       {
-        "pattern": "crates/scryer-acp/src/runtime.rs",
-        "symbol": "summarize_event"
+        "pattern": "crates/scryer-core/src/locate.rs",
+        "symbol": "LocateResult",
+        "line": 60,
+        "endLine": 74
       }
     ],
-    "resp-444": [
+    "resp-598": [
       {
-        "pattern": "src-tauri/src/source_view.rs",
-        "symbol": "text_search_symbol"
-      }
-    ],
-    "resp-188": [
-      {
-        "pattern": "demo/engine/scenes/refund.tsx",
-        "symbol": "demoEditor"
-      }
-    ],
-    "resp-179": [
-      {
-        "pattern": "demo/engine/ShellDemo.tsx",
-        "symbol": "ShellDemo"
-      }
-    ],
-    "resp-127": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/misc.rs",
-        "symbol": "set_change"
+        "pattern": "crates/scryer-core/src/diff.rs",
+        "symbol": "diff"
       }
     ],
     "node-536": [
@@ -18321,204 +15612,98 @@
         "endLine": 13
       }
     ],
-    "resp-88": [
-      {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "record_event"
-      }
-    ],
-    "resp-304": [
-      {
-        "pattern": "src/editor.ts",
-        "symbol": "Editor"
-      }
-    ],
-    "resp-270": [
-      {
-        "pattern": "src/page/ResponsibilitiesSection.tsx",
-        "symbol": "ResponsibilitiesSection"
-      }
-    ],
-    "resp-235": [
-      {
-        "pattern": "src/hooks/useMcpSetup.ts",
-        "symbol": "useMcpSetup"
-      }
-    ],
-    "resp-412": [
-      {
-        "pattern": "src-tauri/src/observability.rs",
-        "symbol": "reconcile_drift_node"
-      }
-    ],
-    "resp-273": [
-      {
-        "pattern": "src/ConnectionsSection.tsx",
-        "symbol": "ConnectionsSection"
-      }
-    ],
-    "resp-157": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/read.rs",
-        "symbol": "query_model"
-      }
-    ],
-    "resp-595": [
-      {
-        "pattern": "crates/scryer-core/src/storage.rs",
-        "symbol": "plan_diff_at"
-      }
-    ],
-    "node-374": [
-      {
-        "pattern": "src-tauri/src/observability.rs",
-        "symbol": "ModelHealthReport",
-        "line": 41,
-        "endLine": 52
-      }
-    ],
-    "resp-269": [
-      {
-        "pattern": "src/page/DescriptionSection.tsx",
-        "symbol": "DescriptionSection"
-      }
-    ],
-    "resp-357": [
-      {
-        "pattern": "src-tauri/src/build.rs",
-        "symbol": "start_model_build"
-      }
-    ],
-    "resp-272": [
-      {
-        "pattern": "src/page/PropertiesSection.tsx",
-        "symbol": "PropertiesSection"
-      }
-    ],
-    "node-479": [
-      {
-        "pattern": "crates/scryer-extract/src/tsconfig.rs",
-        "symbol": "TsAliases",
-        "line": 17,
-        "endLine": 28
-      }
-    ],
-    "node-635": [
-      {
-        "pattern": "crates/scryer-core/src/settings.rs",
-        "symbol": "AgentSettings",
-        "line": 20,
-        "endLine": 25
-      }
-    ],
-    "resp-227": [
-      {
-        "pattern": "src/hooks/useAgentSession.ts",
-        "symbol": "useAgentSession"
-      }
-    ],
-    "resp-399": [
-      {
-        "pattern": "src-tauri/src/mcp_setup.rs",
-        "symbol": "write_claude_hooks"
-      }
-    ],
-    "resp-679": [
+    "node-641": [
       {
         "pattern": "crates/scryer-core/src/validate.rs",
-        "symbol": "validate_coverage"
+        "symbol": "LinkViolation",
+        "line": 519,
+        "endLine": 532
       }
     ],
-    "node-147": [
+    "resp-141": [
       {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "StaleProperty",
-        "line": 881,
-        "endLine": 888
+        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
+        "symbol": "delete_nodes"
       }
     ],
-    "resp-354": [
-      {
-        "pattern": "src-tauri/src/build.rs",
-        "symbol": "run_wave"
-      }
-    ],
-    "resp-653": [
-      {
-        "pattern": "crates/scryer-core/src/ownership.rs",
-        "symbol": "owning_node_for_location"
-      }
-    ],
-    "resp-458": [
-      {
-        "pattern": "src-tauri/src/verdicts.rs",
-        "symbol": "adopt_responsibility"
-      }
-    ],
-    "node-463": [
-      {
-        "pattern": "crates/scryer-extract/src/anchors.rs",
-        "symbol": "AnchorObservation",
-        "line": 117,
-        "endLine": 125
-      }
-    ],
-    "resp-669": [
-      {
-        "pattern": "crates/scryer-core/src/seed.rs",
-        "symbol": "mint_initial_structure"
-      }
-    ],
-    "resp-475": [
-      {
-        "pattern": "docs/src/components/NodeDemo.tsx",
-        "symbol": "NodeGallery"
-      }
-    ],
-    "node-224": [
-      {
-        "pattern": "src/AgentFailure.tsx",
-        "symbol": "AgentFailure",
-        "line": 22,
-        "endLine": 30
-      }
-    ],
-    "resp-149": [
+    "resp-163": [
       {
         "pattern": "crates/scryer-mcp/src/tools/read.rs",
-        "symbol": "overview_payload"
+        "symbol": "get_health"
       }
     ],
-    "node-453": [
+    "resp-196": [
       {
-        "pattern": "crates/scryer-extract/src/context.rs",
-        "symbol": "ScopeContext",
-        "line": 1078,
-        "endLine": 1088
+        "pattern": "demo/render.mjs",
+        "symbol": "detectPickerCut"
       }
     ],
-    "resp-560": [
+    "resp-208": [
       {
-        "pattern": "crates/scryer-acp/src/prompt.rs",
-        "symbol": "drift_check_prompt"
+        "pattern": "preview/server.mjs",
+        "symbol": "startViteFor"
       }
     ],
-    "resp-50": [
+    "resp-383": [
       {
-        "pattern": "crates/scryer-mcp/src/cli.rs",
-        "symbol": "status_line"
+        "pattern": "src-tauri/src/hooks.rs",
+        "symbol": "prune_touches"
       }
     ],
-    "resp-86": [
+    "resp-456": [
+      {
+        "pattern": "src-tauri/src/verdicts.rs",
+        "symbol": "vagrant_chain"
+      }
+    ],
+    "resp-476": [
+      {
+        "pattern": "docs/src/components/NodeDemo.tsx",
+        "symbol": "ShapeGallery"
+      }
+    ],
+    "node-67": [
       {
         "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "enforce_readonly_directives"
+        "symbol": "BaselineCounts",
+        "line": 477,
+        "endLine": 481
       }
     ],
-    "resp-411": [
+    "resp-381": [
       {
-        "pattern": "src-tauri/src/observability.rs",
-        "symbol": "reconcile_drift"
+        "pattern": "src-tauri/src/hooks.rs",
+        "symbol": "close_payload"
+      }
+    ],
+    "resp-499": [
+      {
+        "pattern": "crates/scryer-extract/src/context.rs",
+        "symbol": "compact_scope_impl"
+      }
+    ],
+    "resp-646": [
+      {
+        "pattern": "crates/scryer-core/src/locate.rs",
+        "symbol": "locate_at"
+      }
+    ],
+    "resp-71": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "stop"
+      }
+    ],
+    "resp-622": [
+      {
+        "pattern": "crates/scryer-core/src/concerns.rs",
+        "symbol": "register_concerns"
+      }
+    ],
+    "resp-504": [
+      {
+        "pattern": "crates/scryer-extract/src/anchors.rs",
+        "symbol": "ExtentResolver"
       }
     ],
     "resp-632": [
@@ -18527,52 +15712,108 @@
         "symbol": "classify"
       }
     ],
+    "resp-293": [
+      {
+        "pattern": "src/diffkit.tsx",
+        "symbol": "buildElementDiff"
+      }
+    ],
+    "resp-77": [
+      {
+        "pattern": "crates/scryer-mcp/src/server.rs",
+        "symbol": "get_info"
+      }
+    ],
+    "resp-89": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "resolve_model_ref"
+      }
+    ],
+    "resp-653": [
+      {
+        "pattern": "crates/scryer-core/src/ownership.rs",
+        "symbol": "owning_node_for_location"
+      }
+    ],
+    "resp-235": [
+      {
+        "pattern": "src/hooks/useMcpSetup.ts",
+        "symbol": "useMcpSetup"
+      }
+    ],
+    "resp-284": [
+      {
+        "pattern": "src/special/DarkCodePage.tsx",
+        "symbol": "DarkCodePage"
+      }
+    ],
+    "resp-463": [
+      {
+        "pattern": "src-tauri/src/verdicts.rs",
+        "symbol": "drop_responsibility"
+      }
+    ],
+    "resp-345": [
+      {
+        "pattern": "src/Toast.tsx",
+        "symbol": "ToastProvider"
+      }
+    ],
+    "resp-48": [
+      {
+        "pattern": "crates/scryer-mcp/src/cli.rs",
+        "symbol": "check_report"
+      }
+    ],
+    "resp-536": [
+      {
+        "pattern": "crates/scryer-acp/examples/full_build_bench.rs",
+        "symbol": "job_permits"
+      }
+    ],
+    "resp-509": [
+      {
+        "pattern": "crates/scryer-extract/src/anchors.rs",
+        "symbol": "check_anchors"
+      }
+    ],
     "resp-56": [
       {
         "pattern": "crates/scryer-mcp/src/main.rs",
         "symbol": "init_codex"
       }
     ],
-    "resp-436": [
+    "node-634": [
       {
-        "pattern": "src-tauri/src/project.rs",
-        "symbol": "is_legacy_model"
+        "pattern": "crates/scryer-core/src/settings.rs",
+        "symbol": "SubagentSettings",
+        "line": 41,
+        "endLine": 54
       }
     ],
-    "resp-116": [
+    "resp-440": [
       {
-        "pattern": "crates/scryer-mcp/src/tools/links.rs",
-        "symbol": "add_links"
+        "pattern": "src-tauri/src/source_view.rs",
+        "symbol": "open_in_editor"
       }
     ],
-    "resp-105": [
+    "resp-561": [
       {
-        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
-        "symbol": "existing_same_node"
+        "pattern": "crates/scryer-acp/src/prompt.rs",
+        "symbol": "preview_fixture_prompt"
       }
     ],
-    "resp-237": [
+    "resp-69": [
       {
-        "pattern": "src/AgentLaunchConfirm.tsx",
-        "symbol": "useAgentLaunchGate"
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "envelope_files"
       }
     ],
-    "resp-6": [
+    "resp-626": [
       {
-        "pattern": "crates/xtask/src/main.rs",
-        "symbol": "get_target_triple"
-      }
-    ],
-    "resp-380": [
-      {
-        "pattern": "src-tauri/src/hooks.rs",
-        "symbol": "status_payload"
-      }
-    ],
-    "resp-580": [
-      {
-        "pattern": "crates/scryer-core/src/ids.rs",
-        "symbol": "next_node_id_union"
+        "pattern": "crates/scryer-core/src/drift.rs",
+        "symbol": "changed_files_since"
       }
     ],
     "node-438": [
@@ -18583,10 +15824,1406 @@
         "endLine": 57
       }
     ],
+    "resp-487": [
+      {
+        "pattern": "crates/scryer-extract/src/lang.rs",
+        "symbol": "language_for_ext"
+      }
+    ],
+    "resp-183": [
+      {
+        "pattern": "demo/engine/scenes/comprehend.tsx",
+        "symbol": "comprehendScene"
+      }
+    ],
+    "node-479": [
+      {
+        "pattern": "crates/scryer-extract/src/tsconfig.rs",
+        "symbol": "TsAliases",
+        "line": 17,
+        "endLine": 28
+      }
+    ],
+    "resp-327": [
+      {
+        "pattern": "src/kit/sections.tsx",
+        "symbol": "SectionEditor"
+      }
+    ],
+    "resp-113": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
+        "symbol": "flag_drift"
+      }
+    ],
+    "resp-188": [
+      {
+        "pattern": "demo/engine/scenes/refund.tsx",
+        "symbol": "demoEditor"
+      }
+    ],
+    "resp-279": [
+      {
+        "pattern": "src/page/PageHeader.tsx",
+        "symbol": "NodeHistory"
+      }
+    ],
+    "resp-386": [
+      {
+        "pattern": "src-tauri/src/lib.rs",
+        "symbol": "ensure_full_path"
+      }
+    ],
+    "resp-510": [
+      {
+        "pattern": "crates/scryer-extract/src/anchors.rs",
+        "symbol": "untracked_anchors"
+      }
+    ],
+    "node-150": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "StaleNode",
+        "line": 939,
+        "endLine": 944
+      }
+    ],
+    "resp-515": [
+      {
+        "pattern": "crates/scryer-extract/src/anchors.rs",
+        "symbol": "rescue_missing"
+      }
+    ],
+    "resp-329": [
+      {
+        "pattern": "src/ui/Select.tsx",
+        "symbol": "Select"
+      }
+    ],
+    "resp-137": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
+        "symbol": "update_nodes"
+      }
+    ],
+    "resp-286": [
+      {
+        "pattern": "src/special/NeedsReviewPage.tsx",
+        "symbol": "buildReviewIndex"
+      }
+    ],
+    "node-497": [
+      {
+        "pattern": "crates/scryer-acp/src/events.rs",
+        "symbol": "Usage",
+        "line": 8,
+        "endLine": 32
+      }
+    ],
+    "resp-444": [
+      {
+        "pattern": "src-tauri/src/source_view.rs",
+        "symbol": "text_search_symbol"
+      }
+    ],
+    "resp-562": [
+      {
+        "pattern": "crates/scryer-acp/src/prompt.rs",
+        "symbol": "visual_variation_prompt"
+      }
+    ],
+    "resp-242": [
+      {
+        "pattern": "src/ProjectPicker.tsx",
+        "symbol": "ProjectPicker"
+      }
+    ],
+    "resp-482": [
+      {
+        "pattern": "crates/scryer-extract/src/lib.rs",
+        "symbol": "extract_context_with_stats"
+      }
+    ],
+    "resp-202": [
+      {
+        "pattern": "preview/plugin.mjs",
+        "symbol": "scryerPreviewPlugin"
+      }
+    ],
+    "node-145": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "UndescribedItem",
+        "line": 824,
+        "endLine": 847
+      }
+    ],
+    "node-452": [
+      {
+        "pattern": "crates/scryer-extract/src/context.rs",
+        "symbol": "Edge",
+        "line": 127,
+        "endLine": 130
+      }
+    ],
+    "node-613": [
+      {
+        "pattern": "crates/scryer-core/src/rules.rs",
+        "symbol": "Rule",
+        "line": 11,
+        "endLine": 16
+      }
+    ],
+    "resp-392": [
+      {
+        "pattern": "src-tauri/src/mcp_setup.rs",
+        "symbol": "check_claude_hooks"
+      }
+    ],
+    "resp-594": [
+      {
+        "pattern": "crates/scryer-core/src/storage.rs",
+        "symbol": "delete_model_at"
+      }
+    ],
+    "resp-593": [
+      {
+        "pattern": "crates/scryer-core/src/storage.rs",
+        "symbol": "read_planned_seeded_at"
+      }
+    ],
+    "node-143": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "ProposedGroup",
+        "line": 799,
+        "endLine": 807
+      }
+    ],
+    "resp-308": [
+      {
+        "pattern": "src/viewmodel.ts",
+        "symbol": "addLink"
+      }
+    ],
+    "resp-285": [
+      {
+        "pattern": "src/special/NeedsReviewPage.tsx",
+        "symbol": "NeedsReviewPage"
+      }
+    ],
+    "node-133": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "UpdateSourceMapRequest",
+        "line": 435,
+        "endLine": 456
+      }
+    ],
+    "resp-358": [
+      {
+        "pattern": "src-tauri/src/build.rs",
+        "symbol": "start_model_build"
+      }
+    ],
+    "resp-608": [
+      {
+        "pattern": "crates/scryer-core/src/changes.rs",
+        "symbol": "record_closed"
+      }
+    ],
+    "resp-647": [
+      {
+        "pattern": "crates/scryer-core/src/locate.rs",
+        "symbol": "resolve_claim"
+      }
+    ],
+    "resp-233": [
+      {
+        "pattern": "src/SettingsPanel.tsx",
+        "symbol": "resolveLaunch"
+      }
+    ],
+    "resp-461": [
+      {
+        "pattern": "src-tauri/src/verdicts.rs",
+        "symbol": "adopt_property"
+      }
+    ],
+    "resp-90": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "read_fail"
+      }
+    ],
+    "resp-514": [
+      {
+        "pattern": "crates/scryer-extract/src/anchors.rs",
+        "symbol": "rescue_missing"
+      }
+    ],
+    "node-140": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "ProposedComponent",
+        "line": 749,
+        "endLine": 761
+      }
+    ],
+    "resp-328": [
+      {
+        "pattern": "src/ui/Input.tsx",
+        "symbol": "Input"
+      }
+    ],
+    "node-129": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "QueryCondition",
+        "line": 75,
+        "endLine": 91
+      }
+    ],
+    "node-604": [
+      {
+        "pattern": "crates/scryer-core/src/locate.rs",
+        "symbol": "LocateReport",
+        "line": 167,
+        "endLine": 175
+      }
+    ],
+    "node-461": [
+      {
+        "pattern": "crates/scryer-extract/src/anchors.rs",
+        "symbol": "AnchorBaseline",
+        "line": 97,
+        "endLine": 100
+      }
+    ],
+    "resp-520": [
+      {
+        "pattern": "crates/scryer-extract/src/manifest.rs",
+        "symbol": "scan_dir"
+      }
+    ],
+    "resp-380": [
+      {
+        "pattern": "src-tauri/src/hooks.rs",
+        "symbol": "status_payload"
+      }
+    ],
+    "node-147": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "StaleProperty",
+        "line": 881,
+        "endLine": 888
+      }
+    ],
+    "resp-419": [
+      {
+        "pattern": "src-tauri/src/preview.rs",
+        "symbol": "ensure_preview_server"
+      }
+    ],
+    "resp-7": [
+      {
+        "pattern": "crates/xtask/src/main.rs",
+        "symbol": "workspace_root"
+      }
+    ],
+    "node-204": [
+      {
+        "pattern": "src/hooks/useModelStorage.ts",
+        "symbol": "ModelStorage",
+        "line": 245,
+        "endLine": 312
+      }
+    ],
+    "node-598": [
+      {
+        "pattern": "crates/scryer-core/src/history.rs",
+        "symbol": "HistoryEvent",
+        "line": 63,
+        "endLine": 81
+      }
+    ],
+    "resp-557": [
+      {
+        "pattern": "crates/scryer-acp/src/prompt.rs",
+        "symbol": "enrich_system_prompt"
+      }
+    ],
+    "resp-676": [
+      {
+        "pattern": "crates/scryer-core/src/validate.rs",
+        "symbol": "check_disconnected"
+      }
+    ],
+    "resp-548": [
+      {
+        "pattern": "crates/scryer-acp/src/events.rs",
+        "symbol": "Usage"
+      }
+    ],
+    "resp-156": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "orient"
+      }
+    ],
+    "resp-267": [
+      {
+        "pattern": "src/page/PageHeader.tsx",
+        "symbol": "PageHeader"
+      }
+    ],
+    "node-498": [
+      {
+        "pattern": "crates/scryer-acp/src/events.rs",
+        "symbol": "AgentEvent",
+        "line": 38,
+        "endLine": 62
+      }
+    ],
+    "node-284": [
+      {
+        "pattern": "src/viewmodel.ts",
+        "symbol": "Responsibility",
+        "line": 33,
+        "endLine": 67
+      }
+    ],
+    "resp-559": [
+      {
+        "pattern": "crates/scryer-acp/src/prompt.rs",
+        "symbol": "repair_model_prompt"
+      }
+    ],
+    "resp-249": [
+      {
+        "pattern": "src/DiagramView.tsx",
+        "symbol": "DiagramView"
+      }
+    ],
+    "resp-614": [
+      {
+        "pattern": "crates/scryer-core/src/commit.rs",
+        "symbol": "commit_ready_dependents"
+      }
+    ],
+    "resp-157": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "query_model"
+      }
+    ],
+    "resp-275": [
+      {
+        "pattern": "src/page/PreviewSection.tsx",
+        "symbol": "PreviewSection"
+      }
+    ],
+    "resp-435": [
+      {
+        "pattern": "src-tauri/src/project.rs",
+        "symbol": "create_blank_model"
+      }
+    ],
+    "resp-370": [
+      {
+        "pattern": "src-tauri/src/highlight.rs",
+        "symbol": "highlight_lines"
+      }
+    ],
+    "resp-462": [
+      {
+        "pattern": "src-tauri/src/verdicts.rs",
+        "symbol": "reject_property"
+      }
+    ],
+    "resp-191": [
+      {
+        "pattern": "demo/treatment.tsx",
+        "symbol": "Treated"
+      }
+    ],
+    "resp-490": [
+      {
+        "pattern": "crates/scryer-extract/src/lang.rs",
+        "symbol": "collect_string_named_calls"
+      }
+    ],
+    "node-130": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "MarkImplementedRequest",
+        "line": 181,
+        "endLine": 236
+      }
+    ],
+    "resp-580": [
+      {
+        "pattern": "crates/scryer-core/src/ids.rs",
+        "symbol": "next_node_id_union"
+      }
+    ],
+    "resp-217": [
+      {
+        "pattern": "src/TopBar.tsx",
+        "symbol": "ThemeToggle"
+      }
+    ],
+    "resp-226": [
+      {
+        "pattern": "src/hooks/useModelHealth.ts",
+        "symbol": "useModelHealth"
+      }
+    ],
+    "node-285": [
+      {
+        "pattern": "src/viewmodel.ts",
+        "symbol": "SchemaProperty",
+        "line": 69,
+        "endLine": 81
+      }
+    ],
+    "resp-637": [
+      {
+        "pattern": "crates/scryer-core/src/health.rs",
+        "symbol": "compute_health"
+      }
+    ],
+    "resp-68": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "patched_files"
+      }
+    ],
+    "resp-605": [
+      {
+        "pattern": "crates/scryer-core/src/changes.rs",
+        "symbol": "foreign_to_host"
+      }
+    ],
+    "node-504": [
+      {
+        "pattern": "crates/scryer-acp/src/lib.rs",
+        "symbol": "ActiveClient",
+        "line": 90,
+        "endLine": 93
+      }
+    ],
+    "node-148": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "NewNode",
+        "line": 895,
+        "endLine": 916
+      }
+    ],
+    "node-462": [
+      {
+        "pattern": "crates/scryer-extract/src/anchors.rs",
+        "symbol": "AnchorState",
+        "line": 104,
+        "endLine": 111
+      }
+    ],
+    "node-139": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "GroupItem",
+        "line": 578,
+        "endLine": 592
+      }
+    ],
+    "resp-672": [
+      {
+        "pattern": "crates/scryer-core/src/settings.rs",
+        "symbol": "write_subagent_settings"
+      }
+    ],
+    "resp-488": [
+      {
+        "pattern": "crates/scryer-extract/src/lang.rs",
+        "symbol": "import_resolution_tier"
+      }
+    ],
+    "resp-342": [
+      {
+        "pattern": "src/SearchPalette.tsx",
+        "symbol": "SearchPalette"
+      }
+    ],
+    "resp-114": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
+        "symbol": "reconcile_drift"
+      }
+    ],
+    "resp-176": [
+      {
+        "pattern": "demo/engine/camera.ts",
+        "symbol": "frameTransform"
+      }
+    ],
+    "resp-450": [
+      {
+        "pattern": "src-tauri/src/symbols.rs",
+        "symbol": "first_string_arg"
+      }
+    ],
+    "resp-591": [
+      {
+        "pattern": "crates/scryer-core/src/storage.rs",
+        "symbol": "working_view"
+      }
+    ],
+    "resp-170": [
+      {
+        "pattern": "demo/engine/Annotation.tsx",
+        "symbol": "AnnotationLayer"
+      }
+    ],
+    "resp-390": [
+      {
+        "pattern": "src-tauri/src/mcp_setup.rs",
+        "symbol": "check_mcp_json"
+      }
+    ],
+    "resp-107": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
+        "symbol": "add_person"
+      }
+    ],
+    "node-23": [
+      {
+        "pattern": "crates/scryer-mcp/src/cli.rs",
+        "symbol": "CheckReport",
+        "line": 156,
+        "endLine": 162
+      }
+    ],
+    "resp-133": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
+        "symbol": "fold_out_layer"
+      }
+    ],
+    "resp-174": [
+      {
+        "pattern": "demo/engine/director.ts",
+        "symbol": "Director"
+      }
+    ],
+    "resp-339": [
+      {
+        "pattern": "src/ContextMenu.tsx",
+        "symbol": "ContextMenu"
+      }
+    ],
+    "resp-126": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/misc.rs",
+        "symbol": "delete_group"
+      }
+    ],
+    "resp-232": [
+      {
+        "pattern": "src/hooks/useLaunchSettings.ts",
+        "symbol": "useLaunchSettings"
+      }
+    ],
+    "resp-507": [
+      {
+        "pattern": "crates/scryer-extract/src/anchors.rs",
+        "symbol": "check_anchors"
+      }
+    ],
+    "resp-522": [
+      {
+        "pattern": "crates/scryer-extract/src/manifest.rs",
+        "symbol": "parse_package_json"
+      }
+    ],
+    "resp-234": [
+      {
+        "pattern": "src/SettingsPanel.tsx",
+        "symbol": "SettingsPanel"
+      }
+    ],
+    "node-179": [
+      {
+        "pattern": "demo/scenes.tsx",
+        "symbol": "timeline",
+        "line": 169,
+        "endLine": 208
+      }
+    ],
+    "node-350": [
+      {
+        "pattern": "src-tauri/src/hooks.rs",
+        "symbol": "HookServer",
+        "line": 66,
+        "endLine": 70
+      }
+    ],
+    "resp-354": [
+      {
+        "pattern": "src-tauri/src/build.rs",
+        "symbol": "run_wave"
+      }
+    ],
+    "resp-62": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "parse_live_endpoint"
+      }
+    ],
+    "resp-662": [
+      {
+        "pattern": "crates/scryer-core/src/scan.rs",
+        "symbol": "is_codebase"
+      }
+    ],
+    "node-450": [
+      {
+        "pattern": "crates/scryer-extract/src/context.rs",
+        "symbol": "ContainerFacts",
+        "line": 63,
+        "endLine": 72
+      }
+    ],
+    "resp-223": [
+      {
+        "pattern": "src/hooks/useModelStorage.ts",
+        "symbol": "diffRevision"
+      }
+    ],
+    "resp-475": [
+      {
+        "pattern": "docs/src/components/NodeDemo.tsx",
+        "symbol": "NodeGallery"
+      }
+    ],
+    "resp-417": [
+      {
+        "pattern": "src-tauri/src/preview.rs",
+        "symbol": "config_for_launch"
+      }
+    ],
+    "node-515": [
+      {
+        "pattern": "crates/scryer-acp/src/runtime.rs",
+        "symbol": "RuntimeCommand",
+        "line": 25,
+        "endLine": 43
+      }
+    ],
+    "resp-362": [
+      {
+        "pattern": "src-tauri/src/build.rs",
+        "symbol": "orch_log"
+      }
+    ],
+    "node-160": [
+      {
+        "pattern": "demo/engine/Workspace.tsx",
+        "symbol": "WorkspaceActions",
+        "line": 97,
+        "endLine": 106
+      }
+    ],
+    "node-500": [
+      {
+        "pattern": "crates/scryer-acp/src/lib.rs",
+        "symbol": "AgentKind",
+        "line": 12,
+        "endLine": 16
+      }
+    ],
+    "resp-251": [
+      {
+        "pattern": "src/diagramLayout.ts",
+        "symbol": "archLayout"
+      }
+    ],
+    "resp-347": [
+      {
+        "pattern": "src/pageMenu.tsx",
+        "symbol": "PageMenuProvider"
+      }
+    ],
+    "node-141": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "ProposedSymbol",
+        "line": 765,
+        "endLine": 781
+      }
+    ],
+    "resp-403": [
+      {
+        "pattern": "src-tauri/src/mcp_setup.rs",
+        "symbol": "write_scryer_hooks"
+      }
+    ],
+    "resp-628": [
+      {
+        "pattern": "crates/scryer-core/src/drift.rs",
+        "symbol": "subtree_ids"
+      }
+    ],
+    "node-76": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
+        "symbol": "RespMinter",
+        "line": 34,
+        "endLine": 36
+      }
+    ],
+    "resp-357": [
+      {
+        "pattern": "src-tauri/src/build.rs",
+        "symbol": "start_model_build"
+      }
+    ],
+    "resp-330": [
+      {
+        "pattern": "src/theme.ts",
+        "symbol": "applyTheme"
+      }
+    ],
+    "resp-153": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "read_model"
+      }
+    ],
+    "resp-123": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/misc.rs",
+        "symbol": "update_source_map"
+      }
+    ],
+    "resp-424": [
+      {
+        "pattern": "src-tauri/src/preview.rs",
+        "symbol": "cancel_agent_session"
+      }
+    ],
+    "resp-125": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/misc.rs",
+        "symbol": "update_group"
+      }
+    ],
+    "resp-88": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "record_event"
+      }
+    ],
+    "node-444": [
+      {
+        "pattern": "crates/scryer-extract/src/lang.rs",
+        "symbol": "PathRef",
+        "line": 109,
+        "endLine": 114
+      }
+    ],
+    "resp-273": [
+      {
+        "pattern": "src/ConnectionsSection.tsx",
+        "symbol": "ConnectionsSection"
+      }
+    ],
+    "resp-307": [
+      {
+        "pattern": "src/viewmodel.ts",
+        "symbol": "addResponsibility"
+      }
+    ],
+    "resp-505": [
+      {
+        "pattern": "crates/scryer-extract/src/anchors.rs",
+        "symbol": "write_baseline"
+      }
+    ],
+    "node-131": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "OrientRequest",
+        "line": 239,
+        "endLine": 248
+      }
+    ],
+    "resp-149": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "overview_payload"
+      }
+    ],
+    "resp-227": [
+      {
+        "pattern": "src/hooks/useAgentSession.ts",
+        "symbol": "useAgentSession"
+      }
+    ],
+    "node-551": [
+      {
+        "pattern": "crates/scryer-core/src/diff.rs",
+        "symbol": "ElementChange",
+        "line": 92,
+        "endLine": 101
+      }
+    ],
+    "resp-43": [
+      {
+        "pattern": "crates/scryer-mcp/src/cli.rs",
+        "symbol": "run_status"
+      }
+    ],
+    "resp-95": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "status_header"
+      }
+    ],
+    "node-151": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "FlagDriftRequest",
+        "line": 947,
+        "endLine": 985
+      }
+    ],
+    "node-524": [
+      {
+        "pattern": "crates/scryer-core/src/model.rs",
+        "symbol": "Kind",
+        "line": 11,
+        "endLine": 23
+      }
+    ],
+    "node-550": [
+      {
+        "pattern": "crates/scryer-core/src/diff.rs",
+        "symbol": "Change",
+        "line": 57,
+        "endLine": 87
+      }
+    ],
+    "resp-45": [
+      {
+        "pattern": "crates/scryer-mcp/src/cli.rs",
+        "symbol": "statusline_start_dir"
+      }
+    ],
+    "resp-547": [
+      {
+        "pattern": "crates/scryer-acp/src/events.rs",
+        "symbol": "Usage"
+      }
+    ],
+    "resp-382": [
+      {
+        "pattern": "src-tauri/src/hooks.rs",
+        "symbol": "close_payload"
+      }
+    ],
+    "resp-272": [
+      {
+        "pattern": "src/page/PropertiesSection.tsx",
+        "symbol": "PropertiesSection"
+      }
+    ],
+    "resp-651": [
+      {
+        "pattern": "crates/scryer-core/src/ownership.rs",
+        "symbol": "pattern_rank"
+      }
+    ],
+    "resp-346": [
+      {
+        "pattern": "src/ErrorBoundary.tsx",
+        "symbol": "ErrorBoundary"
+      }
+    ],
+    "resp-304": [
+      {
+        "pattern": "src/editor.ts",
+        "symbol": "Editor"
+      }
+    ],
+    "resp-74": [
+      {
+        "pattern": "crates/scryer-mcp/src/server.rs",
+        "symbol": "new"
+      }
+    ],
+    "resp-60": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "run_hook_client"
+      }
+    ],
+    "resp-266": [
+      {
+        "pattern": "src/page/GroupPage.tsx",
+        "symbol": "GroupPageBody"
+      }
+    ],
     "resp-294": [
       {
         "pattern": "src/changeMarks.ts",
         "symbol": "classifyPlan"
+      }
+    ],
+    "node-332": [
+      {
+        "pattern": "src-tauri/src/build.rs",
+        "symbol": "DriftJob",
+        "line": 112,
+        "endLine": 117
+      }
+    ],
+    "node-25": [
+      {
+        "pattern": "crates/scryer-mcp/src/cli.rs",
+        "symbol": "StatuslineInstall",
+        "line": 323,
+        "endLine": 329
+      }
+    ],
+    "resp-186": [
+      {
+        "pattern": "demo/engine/scenes/refund.tsx",
+        "symbol": "refundScene"
+      }
+    ],
+    "resp-65": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "post_tool_use"
+      }
+    ],
+    "resp-512": [
+      {
+        "pattern": "crates/scryer-extract/src/anchors.rs",
+        "symbol": "out_of_plan_scopes"
+      }
+    ],
+    "resp-629": [
+      {
+        "pattern": "crates/scryer-core/src/drift.rs",
+        "symbol": "product_file_inventory"
+      }
+    ],
+    "node-374": [
+      {
+        "pattern": "src-tauri/src/observability.rs",
+        "symbol": "ModelHealthReport",
+        "line": 41,
+        "endLine": 52
+      }
+    ],
+    "resp-300": [
+      {
+        "pattern": "src/diffkit.tsx",
+        "symbol": "VerdictBar"
+      }
+    ],
+    "resp-325": [
+      {
+        "pattern": "src/kit/WikiLink.tsx",
+        "symbol": "WikiLink"
+      }
+    ],
+    "resp-400": [
+      {
+        "pattern": "src-tauri/src/mcp_setup.rs",
+        "symbol": "write_claude_statusline"
+      }
+    ],
+    "resp-397": [
+      {
+        "pattern": "src-tauri/src/mcp_setup.rs",
+        "symbol": "find_scryer_mcp"
+      }
+    ],
+    "resp-442": [
+      {
+        "pattern": "src-tauri/src/source_view.rs",
+        "symbol": "read_source_span"
+      }
+    ],
+    "resp-356": [
+      {
+        "pattern": "src-tauri/src/build.rs",
+        "symbol": "start_model_build"
+      }
+    ],
+    "resp-376": [
+      {
+        "pattern": "src-tauri/src/hooks.rs",
+        "symbol": "mint_token"
+      }
+    ],
+    "resp-497": [
+      {
+        "pattern": "crates/scryer-extract/src/context.rs",
+        "symbol": "slice_container"
+      }
+    ],
+    "node-342": [
+      {
+        "pattern": "src-tauri/src/state.rs",
+        "symbol": "AcpState",
+        "line": 12,
+        "endLine": 15
+      }
+    ],
+    "resp-571": [
+      {
+        "pattern": "crates/scryer-acp/src/runtime.rs",
+        "symbol": "extract_usage"
+      }
+    ],
+    "resp-135": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
+        "symbol": "surviving_ancestor"
+      }
+    ],
+    "resp-602": [
+      {
+        "pattern": "crates/scryer-core/src/changes.rs",
+        "symbol": "element_key"
+      }
+    ],
+    "resp-606": [
+      {
+        "pattern": "crates/scryer-core/src/changes.rs",
+        "symbol": "gc"
+      }
+    ],
+    "resp-642": [
+      {
+        "pattern": "crates/scryer-core/src/history.rs",
+        "symbol": "read_history"
+      }
+    ],
+    "resp-344": [
+      {
+        "pattern": "src/CompletenessPie.tsx",
+        "symbol": "CompletenessPie"
+      }
+    ],
+    "resp-136": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
+        "symbol": "set_model"
+      }
+    ],
+    "node-525": [
+      {
+        "pattern": "crates/scryer-core/src/model.rs",
+        "symbol": "Responsibility",
+        "line": 32,
+        "endLine": 82
+      }
+    ],
+    "resp-143": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
+        "symbol": "move_responsibilities"
+      }
+    ],
+    "resp-359": [
+      {
+        "pattern": "src-tauri/src/build.rs",
+        "symbol": "start_drift_check"
+      }
+    ],
+    "node-138": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "ComponentItem",
+        "line": 557,
+        "endLine": 566
+      }
+    ],
+    "node-35": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "Endpoint",
+        "line": 56,
+        "endLine": 59
+      }
+    ],
+    "resp-675": [
+      {
+        "pattern": "crates/scryer-core/src/validate.rs",
+        "symbol": "validate"
+      }
+    ],
+    "resp-160": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "get_rules"
+      }
+    ],
+    "node-330": [
+      {
+        "pattern": "src-tauri/src/build.rs",
+        "symbol": "WaveOutcome",
+        "line": 95,
+        "endLine": 100
+      }
+    ],
+    "resp-155": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "locate"
+      }
+    ],
+    "node-463": [
+      {
+        "pattern": "crates/scryer-extract/src/anchors.rs",
+        "symbol": "AnchorObservation",
+        "line": 117,
+        "endLine": 125
+      }
+    ],
+    "resp-434": [
+      {
+        "pattern": "src-tauri/src/project.rs",
+        "symbol": "read_history"
+      }
+    ],
+    "resp-537": [
+      {
+        "pattern": "crates/scryer-acp/examples/full_build_bench.rs",
+        "symbol": "run_session"
+      }
+    ],
+    "resp-586": [
+      {
+        "pattern": "crates/scryer-core/src/storage.rs",
+        "symbol": "lock_model"
+      }
+    ],
+    "node-626": [
+      {
+        "pattern": "crates/scryer-core/src/build_edges.rs",
+        "symbol": "DerivedGraph",
+        "line": 110,
+        "endLine": 120
+      }
+    ],
+    "resp-678": [
+      {
+        "pattern": "crates/scryer-core/src/validate.rs",
+        "symbol": "describe_violation"
+      }
+    ],
+    "resp-319": [
+      {
+        "pattern": "src/health.ts",
+        "symbol": "pathsForLink"
+      }
+    ],
+    "node-390": [
+      {
+        "pattern": "src-tauri/src/state.rs",
+        "symbol": "WatcherState",
+        "line": 18,
+        "endLine": 20
+      }
+    ],
+    "resp-607": [
+      {
+        "pattern": "crates/scryer-core/src/changes.rs",
+        "symbol": "close_change"
+      }
+    ],
+    "resp-331": [
+      {
+        "pattern": "src/theme.ts",
+        "symbol": "loadTheme"
+      }
+    ],
+    "resp-360": [
+      {
+        "pattern": "src-tauri/src/build.rs",
+        "symbol": "start_drift_check"
+      }
+    ],
+    "node-282": [
+      {
+        "pattern": "src/viewmodel.ts",
+        "symbol": "ScryModel",
+        "line": 197,
+        "endLine": 224
+      }
+    ],
+    "resp-173": [
+      {
+        "pattern": "demo/engine/Workspace.tsx",
+        "symbol": "WorkspaceShell"
+      }
+    ],
+    "resp-377": [
+      {
+        "pattern": "src-tauri/src/hooks.rs",
+        "symbol": "start"
+      }
+    ],
+    "resp-431": [
+      {
+        "pattern": "src-tauri/src/project.rs",
+        "symbol": "read_planned"
+      }
+    ],
+    "resp-527": [
+      {
+        "pattern": "crates/scryer-extract/src/tsconfig.rs",
+        "symbol": "load_chain"
+      }
+    ],
+    "resp-460": [
+      {
+        "pattern": "src-tauri/src/verdicts.rs",
+        "symbol": "fold_vagrant_property"
+      }
+    ],
+    "resp-411": [
+      {
+        "pattern": "src-tauri/src/observability.rs",
+        "symbol": "reconcile_drift"
+      }
+    ],
+    "resp-318": [
+      {
+        "pattern": "src/health.ts",
+        "symbol": "impliedLeaves"
+      }
+    ],
+    "resp-61": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "discover"
+      }
+    ],
+    "resp-295": [
+      {
+        "pattern": "src/changeMarks.ts",
+        "symbol": "collectPlanEntries"
+      }
+    ],
+    "resp-268": [
+      {
+        "pattern": "src/page/DetailRail.tsx",
+        "symbol": "DetailRail"
+      }
+    ],
+    "resp-660": [
+      {
+        "pattern": "crates/scryer-core/src/scan.rs",
+        "symbol": "project_structure"
+      }
+    ],
+    "node-473": [
+      {
+        "pattern": "crates/scryer-extract/src/manifest.rs",
+        "symbol": "Container",
+        "line": 18,
+        "endLine": 32
+      }
+    ],
+    "resp-150": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "subtree_payload"
+      }
+    ],
+    "resp-49": [
+      {
+        "pattern": "crates/scryer-mcp/src/cli.rs",
+        "symbol": "install_statusline"
+      }
+    ],
+    "resp-573": [
+      {
+        "pattern": "crates/scryer-acp/src/runtime.rs",
+        "symbol": "start_acp_session"
+      }
+    ],
+    "resp-590": [
+      {
+        "pattern": "crates/scryer-core/src/storage.rs",
+        "symbol": "write_planned_at"
+      }
+    ],
+    "resp-9": [
+      {
+        "pattern": "crates/xtask/src/main.rs",
+        "symbol": "validate_model"
+      }
+    ],
+    "resp-87": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "restore_node_positions"
+      }
+    ],
+    "node-454": [
+      {
+        "pattern": "crates/scryer-extract/src/context.rs",
+        "symbol": "PromptScopeContext",
+        "line": 1096,
+        "endLine": 1103
+      }
+    ],
+    "resp-92": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "write_planned_tagged"
+      }
+    ],
+    "resp-83": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "denormalize_node"
+      }
+    ],
+    "node-232": [
+      {
+        "pattern": "src/diagramLayout.ts",
+        "symbol": "DiagramScene",
+        "line": 68,
+        "endLine": 74
+      }
+    ],
+    "resp-204": [
+      {
+        "pattern": "preview/props.mjs",
+        "symbol": "analyzeProject"
+      }
+    ],
+    "resp-236": [
+      {
+        "pattern": "src/McpSetupPrompt.tsx",
+        "symbol": "McpSetupPrompt"
+      }
+    ],
+    "resp-257": [
+      {
+        "pattern": "src/nodes/DiagramCard.tsx",
+        "symbol": "DiagramCard"
       }
     ],
     "resp-320": [
@@ -18603,208 +17240,52 @@
         "endLine": 56
       }
     ],
-    "resp-161": [
+    "resp-8": [
+      {
+        "pattern": "crates/xtask/src/main.rs",
+        "symbol": "validate_model"
+      }
+    ],
+    "resp-151": [
       {
         "pattern": "crates/scryer-mcp/src/tools/read.rs",
-        "symbol": "read_codebase"
+        "symbol": "resolve_field"
       }
     ],
-    "resp-70": [
+    "resp-494": [
       {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "render_overlay"
+        "pattern": "crates/scryer-extract/src/context.rs",
+        "symbol": "build_context"
       }
     ],
-    "resp-520": [
+    "resp-209": [
       {
-        "pattern": "crates/scryer-extract/src/manifest.rs",
-        "symbol": "scan_dir"
+        "pattern": "preview/server.mjs",
+        "symbol": "startRouter"
       }
     ],
-    "resp-586": [
-      {
-        "pattern": "crates/scryer-core/src/storage.rs",
-        "symbol": "lock_model"
-      }
-    ],
-    "node-597": [
-      {
-        "pattern": "crates/scryer-core/src/history.rs",
-        "symbol": "EventKind",
-        "line": 22,
-        "endLine": 35
-      }
-    ],
-    "resp-363": [
-      {
-        "pattern": "src-tauri/src/build.rs",
-        "symbol": "fmt_usage"
-      }
-    ],
-    "resp-64": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "session_start"
-      }
-    ],
-    "node-284": [
-      {
-        "pattern": "src/viewmodel.ts",
-        "symbol": "Responsibility",
-        "line": 33,
-        "endLine": 67
-      }
-    ],
-    "resp-522": [
-      {
-        "pattern": "crates/scryer-extract/src/manifest.rs",
-        "symbol": "parse_package_json"
-      }
-    ],
-    "resp-271": [
-      {
-        "pattern": "src/page/ResponsibilitiesSection.tsx",
-        "symbol": "ResponsibilitiesEditor"
-      }
-    ],
-    "resp-108": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
-        "symbol": "add_system"
-      }
-    ],
-    "resp-305": [
-      {
-        "pattern": "src/viewmodel.ts",
-        "symbol": "addNode"
-      }
-    ],
-    "resp-603": [
-      {
-        "pattern": "crates/scryer-core/src/changes.rs",
-        "symbol": "open_change"
-      }
-    ],
-    "resp-174": [
-      {
-        "pattern": "demo/engine/director.ts",
-        "symbol": "Director"
-      }
-    ],
-    "resp-352": [
-      {
-        "pattern": "src-tauri/src/build.rs",
-        "symbol": "session_pool_size"
-      }
-    ],
-    "node-179": [
-      {
-        "pattern": "demo/scenes.tsx",
-        "symbol": "timeline",
-        "line": 169,
-        "endLine": 208
-      }
-    ],
-    "resp-508": [
-      {
-        "pattern": "crates/scryer-extract/src/anchors.rs",
-        "symbol": "check_anchors"
-      }
-    ],
-    "resp-561": [
-      {
-        "pattern": "crates/scryer-acp/src/prompt.rs",
-        "symbol": "preview_fixture_prompt"
-      }
-    ],
-    "node-593": [
-      {
-        "pattern": "crates/scryer-core/src/health.rs",
-        "symbol": "Completeness",
-        "line": 511,
-        "endLine": 524
-      }
-    ],
-    "resp-531": [
-      {
-        "pattern": "crates/scryer-extract/examples/cluster.rs",
-        "symbol": "louvain"
-      }
-    ],
-    "resp-551": [
-      {
-        "pattern": "crates/scryer-acp/src/lib.rs",
-        "symbol": "resolve_agent_binary"
-      }
-    ],
-    "resp-638": [
-      {
-        "pattern": "crates/scryer-core/src/health.rs",
-        "symbol": "compute_completeness"
-      }
-    ],
-    "node-344": [
-      {
-        "pattern": "src-tauri/src/highlight.rs",
-        "symbol": "Segment",
-        "line": 21,
-        "endLine": 25
-      }
-    ],
-    "resp-217": [
-      {
-        "pattern": "src/TopBar.tsx",
-        "symbol": "ThemeToggle"
-      }
-    ],
-    "resp-283": [
-      {
-        "pattern": "src/special/ChangesPage.tsx",
-        "symbol": "ChangesPage"
-      }
-    ],
-    "resp-507": [
-      {
-        "pattern": "crates/scryer-extract/src/anchors.rs",
-        "symbol": "check_anchors"
-      }
-    ],
-    "resp-362": [
-      {
-        "pattern": "src-tauri/src/build.rs",
-        "symbol": "orch_log"
-      }
-    ],
-    "resp-226": [
-      {
-        "pattern": "src/hooks/useModelHealth.ts",
-        "symbol": "useModelHealth"
-      }
-    ],
-    "node-63": [
-      {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "RespIdReminter",
-        "line": 287,
-        "endLine": 295
-      }
-    ],
-    "resp-542": [
+    "resp-543": [
       {
         "pattern": "crates/scryer-acp/src/client.rs",
         "symbol": "ScryerClient"
       }
     ],
-    "resp-214": [
+    "resp-260": [
       {
-        "pattern": "src/App.tsx",
-        "symbol": "App"
+        "pattern": "src/shapes/index.ts",
+        "symbol": "resolveShape"
       }
     ],
-    "resp-402": [
+    "resp-410": [
       {
-        "pattern": "src-tauri/src/mcp_setup.rs",
-        "symbol": "write_codex_hooks"
+        "pattern": "src-tauri/src/observability.rs",
+        "symbol": "get_model_health"
+      }
+    ],
+    "resp-621": [
+      {
+        "pattern": "crates/scryer-core/src/concerns.rs",
+        "symbol": "normalize_slug"
       }
     ],
     "node-297": [
@@ -18815,50 +17296,6 @@
         "endLine": 158
       }
     ],
-    "resp-65": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "post_tool_use"
-      }
-    ],
-    "resp-139": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
-        "symbol": "move_nodes"
-      }
-    ],
-    "resp-456": [
-      {
-        "pattern": "src-tauri/src/verdicts.rs",
-        "symbol": "vagrant_chain"
-      }
-    ],
-    "resp-68": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "patched_files"
-      }
-    ],
-    "resp-391": [
-      {
-        "pattern": "src-tauri/src/mcp_setup.rs",
-        "symbol": "check_claude_approved"
-      }
-    ],
-    "node-76": [
-      {
-        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
-        "symbol": "RespMinter",
-        "line": 34,
-        "endLine": 36
-      }
-    ],
-    "resp-257": [
-      {
-        "pattern": "src/nodes/DiagramCard.tsx",
-        "symbol": "DiagramCard"
-      }
-    ],
     "node-531": [
       {
         "pattern": "crates/scryer-core/src/model.rs",
@@ -18867,30 +17304,58 @@
         "endLine": 411
       }
     ],
-    "resp-536": [
+    "resp-312": [
       {
-        "pattern": "crates/scryer-acp/examples/full_build_bench.rs",
-        "symbol": "job_permits"
+        "pattern": "src/viewmodel.ts",
+        "symbol": "isNodeEmpty"
       }
     ],
-    "node-473": [
+    "resp-539": [
       {
-        "pattern": "crates/scryer-extract/src/manifest.rs",
-        "symbol": "Container",
-        "line": 18,
-        "endLine": 32
+        "pattern": "crates/scryer-acp/examples/wave2_bench.rs",
+        "symbol": "revert_prompt_to_pre_a1"
       }
     ],
-    "resp-393": [
+    "resp-655": [
       {
-        "pattern": "src-tauri/src/mcp_setup.rs",
-        "symbol": "check_claude_statusline"
+        "pattern": "crates/scryer-core/src/rules.rs",
+        "symbol": "lookup"
       }
     ],
-    "resp-96": [
+    "node-128": [
       {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "apply_resp_anchor_entries"
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "Layer",
+        "line": 7,
+        "endLine": 15
+      }
+    ],
+    "node-177": [
+      {
+        "pattern": "demo/fixtures.ts",
+        "symbol": "healthReport",
+        "line": 264,
+        "endLine": 313
+      }
+    ],
+    "resp-187": [
+      {
+        "pattern": "demo/engine/scenes/refund.tsx",
+        "symbol": "runRefund"
+      }
+    ],
+    "resp-245": [
+      {
+        "pattern": "src/ModelTree.tsx",
+        "symbol": "ModelTree"
+      }
+    ],
+    "node-72": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/generation.rs",
+        "symbol": "IdMinter",
+        "line": 27,
+        "endLine": 31
       }
     ],
     "resp-203": [
@@ -18899,148 +17364,136 @@
         "symbol": "previewHtml"
       }
     ],
-    "resp-509": [
+    "node-224": [
       {
-        "pattern": "crates/scryer-extract/src/anchors.rs",
-        "symbol": "check_anchors"
-      }
-    ],
-    "resp-66": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "touch"
-      }
-    ],
-    "resp-647": [
-      {
-        "pattern": "crates/scryer-core/src/locate.rs",
-        "symbol": "resolve_claim"
-      }
-    ],
-    "resp-621": [
-      {
-        "pattern": "crates/scryer-core/src/concerns.rs",
-        "symbol": "normalize_slug"
-      }
-    ],
-    "node-138": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "ComponentItem",
-        "line": 557,
-        "endLine": 566
-      }
-    ],
-    "node-461": [
-      {
-        "pattern": "crates/scryer-extract/src/anchors.rs",
-        "symbol": "AnchorBaseline",
-        "line": 97,
-        "endLine": 100
-      }
-    ],
-    "node-278": [
-      {
-        "pattern": "src/history.ts",
-        "symbol": "HistoryEvent",
+        "pattern": "src/AgentFailure.tsx",
+        "symbol": "AgentFailure",
         "line": 22,
-        "endLine": 33
+        "endLine": 30
       }
     ],
-    "node-573": [
+    "resp-299": [
       {
-        "pattern": "crates/scryer-core/src/concerns.rs",
-        "symbol": "ConcernDef",
-        "line": 27,
+        "pattern": "src/wordDiff.ts",
+        "symbol": "wordDiff"
+      }
+    ],
+    "resp-464": [
+      {
+        "pattern": "src-tauri/src/verdicts.rs",
+        "symbol": "reimplement_responsibility"
+      }
+    ],
+    "resp-506": [
+      {
+        "pattern": "crates/scryer-extract/src/anchors.rs",
+        "symbol": "write_baseline"
+      }
+    ],
+    "resp-276": [
+      {
+        "pattern": "src/page/AppearanceWorkspace.tsx",
+        "symbol": "AppearanceWorkspace"
+      }
+    ],
+    "resp-6": [
+      {
+        "pattern": "crates/xtask/src/main.rs",
+        "symbol": "get_target_triple"
+      }
+    ],
+    "node-271": [
+      {
+        "pattern": "src/planDiff.ts",
+        "symbol": "ModelDiff",
+        "line": 58,
+        "endLine": 60
+      }
+    ],
+    "resp-310": [
+      {
+        "pattern": "src/viewmodel.ts",
+        "symbol": "registerConcerns"
+      }
+    ],
+    "resp-395": [
+      {
+        "pattern": "src-tauri/src/mcp_setup.rs",
+        "symbol": "check_codex_toml"
+      }
+    ],
+    "resp-75": [
+      {
+        "pattern": "crates/scryer-mcp/src/server.rs",
+        "symbol": "session_change"
+      }
+    ],
+    "resp-82": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "lock_or_err"
+      }
+    ],
+    "node-312": [
+      {
+        "pattern": "src/theme.ts",
+        "symbol": "ThemeConfig",
+        "line": 81,
+        "endLine": 116
+      }
+    ],
+    "node-549": [
+      {
+        "pattern": "crates/scryer-core/src/diff.rs",
+        "symbol": "ElementKind",
+        "line": 45,
+        "endLine": 51
+      }
+    ],
+    "resp-278": [
+      {
+        "pattern": "src/SourceSection.tsx",
+        "symbol": "InlinePeek"
+      }
+    ],
+    "resp-378": [
+      {
+        "pattern": "src-tauri/src/hooks.rs",
+        "symbol": "start"
+      }
+    ],
+    "resp-172": [
+      {
+        "pattern": "demo/engine/Terminal.tsx",
+        "symbol": "Terminal"
+      }
+    ],
+    "node-527": [
+      {
+        "pattern": "crates/scryer-core/src/model.rs",
+        "symbol": "Node",
+        "line": 192,
+        "endLine": 278
+      }
+    ],
+    "resp-109": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
+        "symbol": "add_container"
+      }
+    ],
+    "node-208": [
+      {
+        "pattern": "src/hooks/useModelBuild.ts",
+        "symbol": "ModelBuild",
+        "line": 17,
         "endLine": 38
       }
     ],
-    "resp-627": [
+    "resp-361": [
       {
-        "pattern": "crates/scryer-core/src/drift.rs",
-        "symbol": "drifted_scopes"
-      }
-    ],
-    "resp-386": [
-      {
-        "pattern": "src-tauri/src/lib.rs",
-        "symbol": "ensure_full_path"
-      }
-    ],
-    "resp-300": [
-      {
-        "pattern": "src/diffkit.tsx",
-        "symbol": "VerdictBar"
-      }
-    ],
-    "node-488": [
-      {
-        "pattern": "crates/scryer-acp/examples/full_build_bench.rs",
-        "symbol": "Job",
-        "line": 15,
-        "endLine": 21
-      }
-    ],
-    "resp-224": [
-      {
-        "pattern": "src/hooks/useModelStorage.ts",
-        "symbol": "arrivals"
-      }
-    ],
-    "resp-368": [
-      {
-        "pattern": "src-tauri/src/highlight.rs",
-        "symbol": "class_for"
-      }
-    ],
-    "resp-612": [
-      {
-        "pattern": "crates/scryer-core/src/commit.rs",
-        "symbol": "fold_built_model"
-      }
-    ],
-    "resp-667": [
-      {
-        "pattern": "crates/scryer-core/src/build_edges.rs",
-        "symbol": "write_build_edges"
-      }
-    ],
-    "resp-585": [
-      {
-        "pattern": "crates/scryer-core/src/storage.rs",
-        "symbol": "ModelLock"
-      }
-    ],
-    "node-133": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "UpdateSourceMapRequest",
-        "line": 435,
-        "endLine": 456
-      }
-    ],
-    "resp-284": [
-      {
-        "pattern": "src/special/DarkCodePage.tsx",
-        "symbol": "DarkCodePage"
-      }
-    ],
-    "resp-176": [
-      {
-        "pattern": "demo/engine/camera.ts",
-        "symbol": "frameTransform"
-      }
-    ],
-    "resp-339": [
-      {
-        "pattern": "src/ContextMenu.tsx",
-        "symbol": "ContextMenu"
-      }
-    ],
-    "resp-295": [
-      {
-        "pattern": "src/changeMarks.ts",
-        "symbol": "collectPlanEntries"
+        "pattern": "src-tauri/src/build.rs",
+        "symbol": "start_drift_check"
       }
     ],
     "resp-158": [
@@ -19049,24 +17502,120 @@
         "symbol": "get_drift"
       }
     ],
-    "resp-666": [
+    "resp-363": [
       {
-        "pattern": "crates/scryer-core/src/build_edges.rs",
-        "symbol": "read_build_edges"
+        "pattern": "src-tauri/src/build.rs",
+        "symbol": "fmt_usage"
       }
     ],
-    "node-150": [
+    "resp-483": [
       {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "StaleNode",
-        "line": 939,
-        "endLine": 944
+        "pattern": "crates/scryer-extract/src/lib.rs",
+        "symbol": "list_project_files"
       }
     ],
-    "resp-467": [
+    "resp-222": [
       {
-        "pattern": "src-tauri/src/verdicts.rs",
-        "symbol": "reword_responsibility"
+        "pattern": "src/hooks/useModelStorage.ts",
+        "symbol": "useModelStorage"
+      }
+    ],
+    "resp-85": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "breadcrumb"
+      }
+    ],
+    "node-156": [
+      {
+        "pattern": "demo/engine/Terminal.tsx",
+        "symbol": "TerminalState",
+        "line": 36,
+        "endLine": 46
+      }
+    ],
+    "node-157": [
+      {
+        "pattern": "demo/engine/Terminal.tsx",
+        "symbol": "TermLine",
+        "line": 29,
+        "endLine": 34
+      }
+    ],
+    "resp-316": [
+      {
+        "pattern": "src/health.ts",
+        "symbol": "completenessBadge"
+      }
+    ],
+    "node-216": [
+      {
+        "pattern": "src/SettingsPanel.tsx",
+        "symbol": "SubagentSettings",
+        "line": 16,
+        "endLine": 22
+      }
+    ],
+    "resp-264": [
+      {
+        "pattern": "src/NodePage.tsx",
+        "symbol": "NodePage"
+      }
+    ],
+    "resp-556": [
+      {
+        "pattern": "crates/scryer-acp/src/prompt.rs",
+        "symbol": "serialize_subtree_for_prompt"
+      }
+    ],
+    "resp-638": [
+      {
+        "pattern": "crates/scryer-core/src/health.rs",
+        "symbol": "compute_completeness"
+      }
+    ],
+    "node-48": [
+      {
+        "pattern": "crates/scryer-mcp/src/server.rs",
+        "symbol": "ScryerServer",
+        "line": 12,
+        "endLine": 22
+      }
+    ],
+    "resp-489": [
+      {
+        "pattern": "crates/scryer-extract/src/lang.rs",
+        "symbol": "parse_file_with"
+      }
+    ],
+    "resp-659": [
+      {
+        "pattern": "crates/scryer-core/src/scan.rs",
+        "symbol": "is_product_code"
+      }
+    ],
+    "resp-197": [
+      {
+        "pattern": "export-viewer/ExportApp.tsx",
+        "symbol": "ExportApp"
+      }
+    ],
+    "resp-250": [
+      {
+        "pattern": "src/diagramLayout.ts",
+        "symbol": "buildDiagramScene"
+      }
+    ],
+    "resp-117": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/links.rs",
+        "symbol": "update_links"
+      }
+    ],
+    "resp-650": [
+      {
+        "pattern": "crates/scryer-core/src/ownership.rs",
+        "symbol": "BoundaryOwnership"
       }
     ],
     "node-349": [
@@ -19077,10 +17626,554 @@
         "endLine": 61
       }
     ],
-    "resp-528": [
+    "node-66": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "StatusCounts",
+        "line": 457,
+        "endLine": 475
+      }
+    ],
+    "resp-270": [
+      {
+        "pattern": "src/page/ResponsibilitiesSection.tsx",
+        "symbol": "ResponsibilitiesSection"
+      }
+    ],
+    "resp-214": [
+      {
+        "pattern": "src/App.tsx",
+        "symbol": "App"
+      }
+    ],
+    "resp-498": [
+      {
+        "pattern": "crates/scryer-extract/src/context.rs",
+        "symbol": "compact_scope_impl"
+      }
+    ],
+    "resp-5": [
+      {
+        "pattern": "crates/xtask/src/main.rs",
+        "symbol": "build_sidecar"
+      }
+    ],
+    "resp-639": [
+      {
+        "pattern": "crates/scryer-core/src/health.rs",
+        "symbol": "resolve_completeness"
+      }
+    ],
+    "resp-341": [
+      {
+        "pattern": "src/InlineText.tsx",
+        "symbol": "InlineText"
+      }
+    ],
+    "resp-239": [
+      {
+        "pattern": "src/AgentFailure.tsx",
+        "symbol": "AgentFailureProvider"
+      }
+    ],
+    "node-530": [
+      {
+        "pattern": "crates/scryer-core/src/model.rs",
+        "symbol": "Group",
+        "line": 346,
+        "endLine": 362
+      }
+    ],
+    "resp-671": [
+      {
+        "pattern": "crates/scryer-core/src/settings.rs",
+        "symbol": "read_subagent_settings"
+      }
+    ],
+    "resp-277": [
+      {
+        "pattern": "src/SourceSection.tsx",
+        "symbol": "ClaimSource"
+      }
+    ],
+    "resp-532": [
+      {
+        "pattern": "crates/scryer-extract/examples/cluster.rs",
+        "symbol": "cluster_by_dir"
+      }
+    ],
+    "resp-93": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "pending_changes"
+      }
+    ],
+    "node-135": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "StatementInput",
+        "line": 673,
+        "endLine": 683
+      }
+    ],
+    "resp-76": [
+      {
+        "pattern": "crates/scryer-mcp/src/server.rs",
+        "symbol": "set_session_change"
+      }
+    ],
+    "node-443": [
+      {
+        "pattern": "crates/scryer-extract/src/lang.rs",
+        "symbol": "ImportRef",
+        "line": 124,
+        "endLine": 135
+      }
+    ],
+    "resp-154": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "search_model"
+      }
+    ],
+    "resp-127": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/misc.rs",
+        "symbol": "set_change"
+      }
+    ],
+    "resp-207": [
+      {
+        "pattern": "preview/server.mjs",
+        "symbol": "findViteRoots"
+      }
+    ],
+    "resp-665": [
+      {
+        "pattern": "crates/scryer-core/src/build_edges.rs",
+        "symbol": "derive_graph"
+      }
+    ],
+    "resp-94": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "status_counts"
+      }
+    ],
+    "node-580": [
+      {
+        "pattern": "crates/scryer-core/src/drift.rs",
+        "symbol": "DriftScope",
+        "line": 102,
+        "endLine": 107
+      }
+    ],
+    "resp-110": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
+        "symbol": "add_component"
+      }
+    ],
+    "node-229": [
+      {
+        "pattern": "src/ModelTree.tsx",
+        "symbol": "TreeRow",
+        "line": 71,
+        "endLine": 83
+      }
+    ],
+    "node-464": [
+      {
+        "pattern": "crates/scryer-extract/src/anchors.rs",
+        "symbol": "UntrackedAnchor",
+        "line": 716,
+        "endLine": 721
+      }
+    ],
+    "node-453": [
+      {
+        "pattern": "crates/scryer-extract/src/context.rs",
+        "symbol": "ScopeContext",
+        "line": 1078,
+        "endLine": 1088
+      }
+    ],
+    "resp-159": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "get_pending"
+      }
+    ],
+    "node-445": [
+      {
+        "pattern": "crates/scryer-extract/src/lang.rs",
+        "symbol": "FileParse",
+        "line": 158,
+        "endLine": 171
+      }
+    ],
+    "resp-466": [
+      {
+        "pattern": "src-tauri/src/verdicts.rs",
+        "symbol": "reimplement_property"
+      }
+    ],
+    "resp-326": [
+      {
+        "pattern": "src/kit/sections.tsx",
+        "symbol": "PageSection"
+      }
+    ],
+    "resp-679": [
+      {
+        "pattern": "crates/scryer-core/src/validate.rs",
+        "symbol": "validate_coverage"
+      }
+    ],
+    "node-622": [
+      {
+        "pattern": "crates/scryer-core/src/build_edges.rs",
+        "symbol": "BuildEdges",
+        "line": 25,
+        "endLine": 29
+      }
+    ],
+    "resp-544": [
+      {
+        "pattern": "crates/scryer-acp/src/client.rs",
+        "symbol": "ScryerClient"
+      }
+    ],
+    "resp-542": [
+      {
+        "pattern": "crates/scryer-acp/src/client.rs",
+        "symbol": "ScryerClient"
+      }
+    ],
+    "resp-256": [
+      {
+        "pattern": "src/hooks/useDotSim.ts",
+        "symbol": "useDotSim"
+      }
+    ],
+    "resp-425": [
+      {
+        "pattern": "src-tauri/src/preview.rs",
+        "symbol": "node_source_file"
+      }
+    ],
+    "resp-152": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "eval_condition"
+      }
+    ],
+    "resp-449": [
+      {
+        "pattern": "src-tauri/src/symbols.rs",
+        "symbol": "is_definition_kind"
+      }
+    ],
+    "resp-474": [
+      {
+        "pattern": "docs/src/components/NodeDemo.tsx",
+        "symbol": "NodeDemo"
+      }
+    ],
+    "resp-132": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
+        "symbol": "replace_subtree"
+      }
+    ],
+    "resp-305": [
+      {
+        "pattern": "src/viewmodel.ts",
+        "symbol": "addNode"
+      }
+    ],
+    "resp-91": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "RespIdReminter"
+      }
+    ],
+    "resp-448": [
+      {
+        "pattern": "src-tauri/src/symbols.rs",
+        "symbol": "language_for_ext"
+      }
+    ],
+    "resp-259": [
+      {
+        "pattern": "src/shapes/ShapeBackground.tsx",
+        "symbol": "ShapeBackground"
+      }
+    ],
+    "resp-432": [
+      {
+        "pattern": "src-tauri/src/project.rs",
+        "symbol": "write_planned"
+      }
+    ],
+    "resp-581": [
+      {
+        "pattern": "crates/scryer-core/src/ids.rs",
+        "symbol": "next_group_id_union"
+      }
+    ],
+    "resp-592": [
+      {
+        "pattern": "crates/scryer-core/src/storage.rs",
+        "symbol": "stamp_touches"
+      }
+    ],
+    "resp-627": [
+      {
+        "pattern": "crates/scryer-core/src/drift.rs",
+        "symbol": "drifted_scopes"
+      }
+    ],
+    "node-159": [
+      {
+        "pattern": "demo/engine/Workspace.tsx",
+        "symbol": "WorkspaceState",
+        "line": 74,
+        "endLine": 93
+      }
+    ],
+    "resp-124": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/misc.rs",
+        "symbol": "set_groups"
+      }
+    ],
+    "resp-134": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
+        "symbol": "fold_change_by_id"
+      }
+    ],
+    "resp-457": [
+      {
+        "pattern": "src-tauri/src/verdicts.rs",
+        "symbol": "fold_vagrant"
+      }
+    ],
+    "resp-525": [
       {
         "pattern": "crates/scryer-extract/src/tsconfig.rs",
-        "symbol": "strip_jsonc"
+        "symbol": "discover_ts_aliases"
+      }
+    ],
+    "resp-298": [
+      {
+        "pattern": "src/ledger.ts",
+        "symbol": "tagEdit"
+      }
+    ],
+    "resp-526": [
+      {
+        "pattern": "crates/scryer-extract/src/tsconfig.rs",
+        "symbol": "resolve_config"
+      }
+    ],
+    "resp-572": [
+      {
+        "pattern": "crates/scryer-acp/src/runtime.rs",
+        "symbol": "summarize_event"
+      }
+    ],
+    "resp-175": [
+      {
+        "pattern": "demo/engine/director.ts",
+        "symbol": "Director"
+      }
+    ],
+    "node-449": [
+      {
+        "pattern": "crates/scryer-extract/src/context.rs",
+        "symbol": "ProjectContext",
+        "line": 35,
+        "endLine": 50
+      }
+    ],
+    "resp-288": [
+      {
+        "pattern": "src/special/UnmappedClaimsPage.tsx",
+        "symbol": "UnmappedClaimsPage"
+      }
+    ],
+    "node-298": [
+      {
+        "pattern": "src/health.ts",
+        "symbol": "HealthCounts",
+        "line": 11,
+        "endLine": 37
+      }
+    ],
+    "node-165": [
+      {
+        "pattern": "demo/engine/types.ts",
+        "symbol": "Scene",
+        "line": 11,
+        "endLine": 17
+      }
+    ],
+    "resp-519": [
+      {
+        "pattern": "crates/scryer-extract/src/manifest.rs",
+        "symbol": "discover_containers_from_files"
+      }
+    ],
+    "resp-623": [
+      {
+        "pattern": "crates/scryer-core/src/concerns.rs",
+        "symbol": "sync_concern_metadata"
+      }
+    ],
+    "node-488": [
+      {
+        "pattern": "crates/scryer-acp/examples/full_build_bench.rs",
+        "symbol": "Job",
+        "line": 15,
+        "endLine": 21
+      }
+    ],
+    "node-63": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "RespIdReminter",
+        "line": 287,
+        "endLine": 295
+      }
+    ],
+    "resp-677": [
+      {
+        "pattern": "crates/scryer-core/src/validate.rs",
+        "symbol": "link_violation"
+      }
+    ],
+    "node-299": [
+      {
+        "pattern": "src/health.ts",
+        "symbol": "Completeness",
+        "line": 117,
+        "endLine": 127
+      }
+    ],
+    "resp-652": [
+      {
+        "pattern": "crates/scryer-core/src/ownership.rs",
+        "symbol": "owns"
+      }
+    ],
+    "resp-198": [
+      {
+        "pattern": "harness/main.tsx",
+        "symbol": "Harness"
+      }
+    ],
+    "resp-66": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "touch"
+      }
+    ],
+    "resp-399": [
+      {
+        "pattern": "src-tauri/src/mcp_setup.rs",
+        "symbol": "write_claude_hooks"
+      }
+    ],
+    "node-529": [
+      {
+        "pattern": "crates/scryer-core/src/model.rs",
+        "symbol": "Link",
+        "line": 334,
+        "endLine": 342
+      }
+    ],
+    "resp-551": [
+      {
+        "pattern": "crates/scryer-acp/src/lib.rs",
+        "symbol": "resolve_agent_binary"
+      }
+    ],
+    "resp-588": [
+      {
+        "pattern": "crates/scryer-core/src/storage.rs",
+        "symbol": "write_model_at"
+      }
+    ],
+    "node-573": [
+      {
+        "pattern": "crates/scryer-core/src/concerns.rs",
+        "symbol": "ConcernDef",
+        "line": 27,
+        "endLine": 38
+      }
+    ],
+    "node-211": [
+      {
+        "pattern": "src/hooks/useAgentSession.ts",
+        "symbol": "AgentSession",
+        "line": 16,
+        "endLine": 39
+      }
+    ],
+    "node-412": [
+      {
+        "pattern": "src-tauri/src/verdicts.rs",
+        "symbol": "FoldedVagrant",
+        "line": 25,
+        "endLine": 30
+      }
+    ],
+    "resp-613": [
+      {
+        "pattern": "crates/scryer-core/src/commit.rs",
+        "symbol": "commit_element"
+      }
+    ],
+    "resp-63": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "call"
+      }
+    ],
+    "node-146": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "UndescribedProperty",
+        "line": 854,
+        "endLine": 875
+      }
+    ],
+    "resp-332": [
+      {
+        "pattern": "src/kindIcon.ts",
+        "symbol": "kindIcon"
+      }
+    ],
+    "resp-473": [
+      {
+        "pattern": "docs/src/components/FlowDemo.tsx",
+        "symbol": "FlowDemo"
+      }
+    ],
+    "node-176": [
+      {
+        "pattern": "demo/fixtures.ts",
+        "symbol": "paymentsModel",
+        "line": 127,
+        "endLine": 169
+      }
+    ],
+    "resp-379": [
+      {
+        "pattern": "src-tauri/src/hooks.rs",
+        "symbol": "handle_request"
       }
     ],
     "resp-309": [
@@ -19089,18 +18182,338 @@
         "symbol": "stampTouches"
       }
     ],
-    "resp-205": [
+    "resp-467": [
       {
-        "pattern": "preview/props.mjs",
-        "symbol": "synthProps"
+        "pattern": "src-tauri/src/verdicts.rs",
+        "symbol": "reword_responsibility"
       }
     ],
-    "node-579": [
+    "node-388": [
+      {
+        "pattern": "src-tauri/src/state.rs",
+        "symbol": "PreviewServer",
+        "line": 27,
+        "endLine": 31
+      }
+    ],
+    "resp-368": [
+      {
+        "pattern": "src-tauri/src/highlight.rs",
+        "symbol": "class_for"
+      }
+    ],
+    "resp-353": [
+      {
+        "pattern": "src-tauri/src/build.rs",
+        "symbol": "session_permits"
+      }
+    ],
+    "resp-185": [
+      {
+        "pattern": "demo/engine/scenes/prologue.tsx",
+        "symbol": "prologueScene"
+      }
+    ],
+    "resp-340": [
+      {
+        "pattern": "src/IconPicker.tsx",
+        "symbol": "IconPicker"
+      }
+    ],
+    "resp-429": [
+      {
+        "pattern": "src-tauri/src/project.rs",
+        "symbol": "watch_project"
+      }
+    ],
+    "resp-44": [
+      {
+        "pattern": "crates/scryer-mcp/src/cli.rs",
+        "symbol": "run_statusline"
+      }
+    ],
+    "resp-552": [
+      {
+        "pattern": "crates/scryer-acp/src/lib.rs",
+        "symbol": "detect_available_agent_pref"
+      }
+    ],
+    "resp-558": [
+      {
+        "pattern": "crates/scryer-acp/src/prompt.rs",
+        "symbol": "build_container_prompt"
+      }
+    ],
+    "resp-615": [
+      {
+        "pattern": "crates/scryer-core/src/commit.rs",
+        "symbol": "commit_plan_only_ancestors"
+      }
+    ],
+    "resp-595": [
+      {
+        "pattern": "crates/scryer-core/src/storage.rs",
+        "symbol": "plan_diff_at"
+      }
+    ],
+    "node-460": [
+      {
+        "pattern": "crates/scryer-extract/src/anchors.rs",
+        "symbol": "AnchorEntry",
+        "line": 30,
+        "endLine": 53
+      }
+    ],
+    "resp-287": [
+      {
+        "pattern": "src/special/RevisionList.tsx",
+        "symbol": "RevisionList"
+      }
+    ],
+    "resp-252": [
+      {
+        "pattern": "src/diagramLayout.ts",
+        "symbol": "dotLayout"
+      }
+    ],
+    "resp-139": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
+        "symbol": "move_nodes"
+      }
+    ],
+    "node-593": [
+      {
+        "pattern": "crates/scryer-core/src/health.rs",
+        "symbol": "Completeness",
+        "line": 511,
+        "endLine": 524
+      }
+    ],
+    "resp-116": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/links.rs",
+        "symbol": "add_links"
+      }
+    ],
+    "node-134": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "ResponsibilityInput",
+        "line": 620,
+        "endLine": 635
+      }
+    ],
+    "resp-579": [
+      {
+        "pattern": "crates/scryer-core/src/model.rs",
+        "symbol": "inherited_directives"
+      }
+    ],
+    "node-578": [
       {
         "pattern": "crates/scryer-core/src/drift.rs",
-        "symbol": "NodeAnchor",
-        "line": 72,
-        "endLine": 83
+        "symbol": "SyncState",
+        "line": 27,
+        "endLine": 52
+      }
+    ],
+    "node-589": [
+      {
+        "pattern": "crates/scryer-core/src/health.rs",
+        "symbol": "HealthCounts",
+        "line": 31,
+        "endLine": 72
+      }
+    ],
+    "resp-224": [
+      {
+        "pattern": "src/hooks/useModelStorage.ts",
+        "symbol": "arrivals"
+      }
+    ],
+    "resp-324": [
+      {
+        "pattern": "src/kit/Editable.tsx",
+        "symbol": "Editable"
+      }
+    ],
+    "resp-574": [
+      {
+        "pattern": "crates/scryer-acp/src/runtime.rs",
+        "symbol": "kill_process_tree"
+      }
+    ],
+    "node-344": [
+      {
+        "pattern": "src-tauri/src/highlight.rs",
+        "symbol": "Segment",
+        "line": 21,
+        "endLine": 25
+      }
+    ],
+    "node-142": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "ProposedLink",
+        "line": 790,
+        "endLine": 795
+      }
+    ],
+    "resp-334": [
+      {
+        "pattern": "src/markup.tsx",
+        "symbol": "earsTokenize"
+      }
+    ],
+    "resp-297": [
+      {
+        "pattern": "src/ledger.ts",
+        "symbol": "elementKey"
+      }
+    ],
+    "resp-402": [
+      {
+        "pattern": "src-tauri/src/mcp_setup.rs",
+        "symbol": "write_codex_hooks"
+      }
+    ],
+    "node-283": [
+      {
+        "pattern": "src/viewmodel.ts",
+        "symbol": "Node",
+        "line": 112,
+        "endLine": 160
+      }
+    ],
+    "resp-51": [
+      {
+        "pattern": "crates/scryer-mcp/src/cli.rs",
+        "symbol": "status_json"
+      }
+    ],
+    "resp-511": [
+      {
+        "pattern": "crates/scryer-extract/src/anchors.rs",
+        "symbol": "out_of_plan_scopes"
+      }
+    ],
+    "node-149": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "StaleResponsibility",
+        "line": 920,
+        "endLine": 932
+      }
+    ],
+    "resp-118": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/links.rs",
+        "symbol": "delete_links"
+      }
+    ],
+    "resp-4": [
+      {
+        "pattern": "crates/xtask/src/main.rs",
+        "symbol": "build_sidecar"
+      }
+    ],
+    "resp-459": [
+      {
+        "pattern": "src-tauri/src/verdicts.rs",
+        "symbol": "reject_responsibility"
+      }
+    ],
+    "resp-578": [
+      {
+        "pattern": "crates/scryer-core/src/model.rs",
+        "symbol": "is_node_empty"
+      }
+    ],
+    "node-175": [
+      {
+        "pattern": "demo/engine/scenes/refund.tsx",
+        "symbol": "RefundState",
+        "line": 440,
+        "endLine": 443
+      }
+    ],
+    "resp-369": [
+      {
+        "pattern": "src-tauri/src/highlight.rs",
+        "symbol": "config_for_ext"
+      }
+    ],
+    "resp-667": [
+      {
+        "pattern": "crates/scryer-core/src/build_edges.rs",
+        "symbol": "write_build_edges"
+      }
+    ],
+    "node-137": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "ContainerItem",
+        "line": 529,
+        "endLine": 545
+      }
+    ],
+    "resp-70": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "render_overlay"
+      }
+    ],
+    "resp-105": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
+        "symbol": "existing_same_node"
+      }
+    ],
+    "node-144": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "CommitContainerModelRequest",
+        "line": 812,
+        "endLine": 820
+      }
+    ],
+    "node-429": [
+      {
+        "pattern": "docs/src/components/NodeDemo.tsx",
+        "symbol": "NodeDemoProps",
+        "line": 13,
+        "endLine": 21
+      }
+    ],
+    "resp-412": [
+      {
+        "pattern": "src-tauri/src/observability.rs",
+        "symbol": "reconcile_drift_node"
+      }
+    ],
+    "resp-636": [
+      {
+        "pattern": "crates/scryer-core/src/health.rs",
+        "symbol": "disconnected_nodes"
+      }
+    ],
+    "resp-518": [
+      {
+        "pattern": "crates/scryer-extract/src/manifest.rs",
+        "symbol": "discover_containers_from_files"
+      }
+    ],
+    "resp-528": [
+      {
+        "pattern": "crates/scryer-extract/src/tsconfig.rs",
+        "symbol": "strip_jsonc"
+      }
+    ],
+    "resp-333": [
+      {
+        "pattern": "src/markup.tsx",
+        "symbol": "parseMarkup"
       }
     ],
     "node-514": [
@@ -19111,68 +18524,60 @@
         "endLine": 22
       }
     ],
-    "resp-535": [
+    "resp-54": [
       {
-        "pattern": "crates/scryer-acp/examples/full_build_bench.rs",
-        "symbol": "pool_size"
+        "pattern": "crates/scryer-mcp/src/main.rs",
+        "symbol": "init_project"
       }
     ],
-    "node-634": [
+    "resp-238": [
       {
-        "pattern": "crates/scryer-core/src/settings.rs",
-        "symbol": "SubagentSettings",
-        "line": 41,
-        "endLine": 54
+        "pattern": "src/AgentLaunchConfirm.tsx",
+        "symbol": "AgentLaunchConfirm"
       }
     ],
-    "resp-614": [
+    "resp-441": [
       {
-        "pattern": "crates/scryer-core/src/commit.rs",
-        "symbol": "commit_ready_dependents"
+        "pattern": "src-tauri/src/source_view.rs",
+        "symbol": "read_source_span"
       }
     ],
-    "resp-95": [
+    "node-501": [
       {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "status_header"
+        "pattern": "crates/scryer-acp/src/lib.rs",
+        "symbol": "AgentLaunch",
+        "line": 21,
+        "endLine": 26
       }
     ],
-    "resp-474": [
+    "resp-585": [
       {
-        "pattern": "docs/src/components/NodeDemo.tsx",
-        "symbol": "NodeDemo"
+        "pattern": "crates/scryer-core/src/storage.rs",
+        "symbol": "ModelLock"
       }
     ],
-    "resp-84": [
+    "resp-138": [
       {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "outline_tree"
+        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
+        "symbol": "mark_implemented"
       }
     ],
-    "node-598": [
+    "resp-603": [
       {
-        "pattern": "crates/scryer-core/src/history.rs",
-        "symbol": "HistoryEvent",
-        "line": 63,
-        "endLine": 81
+        "pattern": "crates/scryer-core/src/changes.rs",
+        "symbol": "open_change"
       }
     ],
-    "resp-249": [
+    "resp-538": [
       {
-        "pattern": "src/DiagramView.tsx",
-        "symbol": "DiagramView"
+        "pattern": "crates/scryer-acp/examples/wave2_bench.rs",
+        "symbol": "strip_code"
       }
     ],
-    "resp-47": [
+    "resp-443": [
       {
-        "pattern": "crates/scryer-mcp/src/cli.rs",
-        "symbol": "run_check"
-      }
-    ],
-    "resp-196": [
-      {
-        "pattern": "demo/render.mjs",
-        "symbol": "detectPickerCut"
+        "pattern": "src-tauri/src/source_view.rs",
+        "symbol": "verify_anchor"
       }
     ],
     "resp-101": [
@@ -19181,28 +18586,210 @@
         "symbol": "fill_container"
       }
     ],
-    "resp-641": [
+    "resp-161": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "read_codebase"
+      }
+    ],
+    "node-586": [
+      {
+        "pattern": "crates/scryer-core/src/ears.rs",
+        "symbol": "EarsPattern",
+        "line": 10,
+        "endLine": 21
+      }
+    ],
+    "node-597": [
       {
         "pattern": "crates/scryer-core/src/history.rs",
-        "symbol": "append_event"
+        "symbol": "EventKind",
+        "line": 22,
+        "endLine": 35
       }
     ],
-    "resp-513": [
+    "node-624": [
+      {
+        "pattern": "crates/scryer-core/src/build_edges.rs",
+        "symbol": "LinkAudit",
+        "line": 87,
+        "endLine": 90
+      }
+    ],
+    "resp-171": [
+      {
+        "pattern": "demo/engine/Stage.tsx",
+        "symbol": "Stage"
+      }
+    ],
+    "resp-177": [
+      {
+        "pattern": "demo/engine/tween.ts",
+        "symbol": "tween"
+      }
+    ],
+    "resp-215": [
+      {
+        "pattern": "src/App.tsx",
+        "symbol": "Workspace"
+      }
+    ],
+    "resp-317": [
+      {
+        "pattern": "src/health.ts",
+        "symbol": "impliedFor"
+      }
+    ],
+    "resp-420": [
+      {
+        "pattern": "src-tauri/src/preview.rs",
+        "symbol": "start_preview_fixture_session"
+      }
+    ],
+    "resp-495": [
+      {
+        "pattern": "crates/scryer-extract/src/context.rs",
+        "symbol": "build_edges"
+      }
+    ],
+    "resp-496": [
+      {
+        "pattern": "crates/scryer-extract/src/context.rs",
+        "symbol": "build_edges"
+      }
+    ],
+    "resp-508": [
       {
         "pattern": "crates/scryer-extract/src/anchors.rs",
-        "symbol": "whole_symbol_warnings"
+        "symbol": "check_anchors"
       }
     ],
-    "resp-286": [
+    "resp-306": [
       {
-        "pattern": "src/special/NeedsReviewPage.tsx",
-        "symbol": "buildReviewIndex"
+        "pattern": "src/viewmodel.ts",
+        "symbol": "moveNode"
       }
     ],
-    "resp-650": [
+    "resp-569": [
       {
-        "pattern": "crates/scryer-core/src/ownership.rs",
-        "symbol": "BoundaryOwnership"
+        "pattern": "crates/scryer-acp/src/runtime.rs",
+        "symbol": "runtime_thread"
+      }
+    ],
+    "resp-421": [
+      {
+        "pattern": "src-tauri/src/preview.rs",
+        "symbol": "start_visual_variation_session"
+      }
+    ],
+    "resp-618": [
+      {
+        "pattern": "crates/scryer-core/src/commit.rs",
+        "symbol": "structure_only_copy"
+      }
+    ],
+    "resp-86": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "enforce_readonly_directives"
+      }
+    ],
+    "resp-599": [
+      {
+        "pattern": "crates/scryer-core/src/diff.rs",
+        "symbol": "plan_carrier_count"
+      }
+    ],
+    "resp-47": [
+      {
+        "pattern": "crates/scryer-mcp/src/cli.rs",
+        "symbol": "run_check"
+      }
+    ],
+    "node-286": [
+      {
+        "pattern": "src/viewmodel.ts",
+        "symbol": "Group",
+        "line": 171,
+        "endLine": 181
+      }
+    ],
+    "resp-292": [
+      {
+        "pattern": "src/planDiff.ts",
+        "symbol": "planDiff"
+      }
+    ],
+    "resp-612": [
+      {
+        "pattern": "crates/scryer-core/src/commit.rs",
+        "symbol": "fold_built_model"
+      }
+    ],
+    "resp-108": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
+        "symbol": "add_system"
+      }
+    ],
+    "resp-408": [
+      {
+        "pattern": "src-tauri/src/observability.rs",
+        "symbol": "get_drift_status"
+      }
+    ],
+    "node-623": [
+      {
+        "pattern": "crates/scryer-core/src/build_edges.rs",
+        "symbol": "DerivedEdge",
+        "line": 75,
+        "endLine": 79
+      }
+    ],
+    "resp-255": [
+      {
+        "pattern": "src/edgeRouting.ts",
+        "symbol": "assignAllHandles"
+      }
+    ],
+    "resp-274": [
+      {
+        "pattern": "src/ConnectionsSection.tsx",
+        "symbol": "ImpliedConnectionsSection"
+      }
+    ],
+    "node-451": [
+      {
+        "pattern": "crates/scryer-extract/src/context.rs",
+        "symbol": "SymbolContext",
+        "line": 100,
+        "endLine": 122
+      }
+    ],
+    "resp-465": [
+      {
+        "pattern": "src-tauri/src/verdicts.rs",
+        "symbol": "drop_property"
+      }
+    ],
+    "resp-661": [
+      {
+        "pattern": "crates/scryer-core/src/scan.rs",
+        "symbol": "manifest_dirs"
+      }
+    ],
+    "resp-401": [
+      {
+        "pattern": "src-tauri/src/mcp_setup.rs",
+        "symbol": "write_claude_statusline"
+      }
+    ],
+    "node-400": [
+      {
+        "pattern": "src-tauri/src/source_view.rs",
+        "symbol": "SourceSpan",
+        "line": 132,
+        "endLine": 143
       }
     ],
     "node-132": [
@@ -19213,28 +18800,411 @@
         "endLine": 414
       }
     ],
-    "resp-515": [
+    "node-590": [
       {
-        "pattern": "crates/scryer-extract/src/anchors.rs",
-        "symbol": "rescue_missing"
+        "pattern": "crates/scryer-core/src/health.rs",
+        "symbol": "ModelHealth",
+        "line": 122,
+        "endLine": 133
       }
     ],
-    "resp-448": [
+    "node-442": [
       {
-        "pattern": "src-tauri/src/symbols.rs",
-        "symbol": "language_for_ext"
+        "pattern": "crates/scryer-extract/src/lang.rs",
+        "symbol": "Def",
+        "line": 78,
+        "endLine": 90
+      }
+    ],
+    "resp-364": [
+      {
+        "pattern": "src-tauri/src/build.rs",
+        "symbol": "derive_container_dir"
+      }
+    ],
+    "resp-567": [
+      {
+        "pattern": "crates/scryer-acp/src/runtime.rs",
+        "symbol": "AcpRuntime"
+      }
+    ],
+    "resp-641": [
+      {
+        "pattern": "crates/scryer-core/src/history.rs",
+        "symbol": "append_event"
+      }
+    ],
+    "node-556": [
+      {
+        "pattern": "crates/scryer-core/src/changes.rs",
+        "symbol": "ChangeMeta",
+        "line": 45,
+        "endLine": 53
+      }
+    ],
+    "resp-112": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
+        "symbol": "add_symbol"
+      }
+    ],
+    "resp-616": [
+      {
+        "pattern": "crates/scryer-core/src/commit.rs",
+        "symbol": "committed_node_copy"
+      }
+    ],
+    "resp-140": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
+        "symbol": "set_node"
+      }
+    ],
+    "resp-365": [
+      {
+        "pattern": "src-tauri/src/build.rs",
+        "symbol": "seed_units"
+      }
+    ],
+    "resp-218": [
+      {
+        "pattern": "src/Powerline.tsx",
+        "symbol": "Powerline"
+      }
+    ],
+    "node-153": [
+      {
+        "pattern": "demo/engine/Annotation.tsx",
+        "symbol": "Annotation",
+        "line": 14,
+        "endLine": 33
+      }
+    ],
+    "resp-371": [
+      {
+        "pattern": "src-tauri/src/highlight.rs",
+        "symbol": "highlight_lines"
+      }
+    ],
+    "resp-269": [
+      {
+        "pattern": "src/page/DescriptionSection.tsx",
+        "symbol": "DescriptionSection"
+      }
+    ],
+    "resp-46": [
+      {
+        "pattern": "crates/scryer-mcp/src/cli.rs",
+        "symbol": "find_project"
+      }
+    ],
+    "resp-283": [
+      {
+        "pattern": "src/special/ChangesPage.tsx",
+        "symbol": "ChangesPage"
+      }
+    ],
+    "resp-617": [
+      {
+        "pattern": "crates/scryer-core/src/commit.rs",
+        "symbol": "committed_group_copy"
+      }
+    ],
+    "resp-225": [
+      {
+        "pattern": "src/hooks/useModelBuild.ts",
+        "symbol": "useModelBuild"
+      }
+    ],
+    "resp-265": [
+      {
+        "pattern": "src/NodePage.tsx",
+        "symbol": "NodePageBody"
+      }
+    ],
+    "resp-570": [
+      {
+        "pattern": "crates/scryer-acp/src/runtime.rs",
+        "symbol": "start_cli_session"
+      }
+    ],
+    "resp-666": [
+      {
+        "pattern": "crates/scryer-core/src/build_edges.rs",
+        "symbol": "read_build_edges"
+      }
+    ],
+    "resp-148": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "score_node"
+      }
+    ],
+    "resp-55": [
+      {
+        "pattern": "crates/scryer-mcp/src/main.rs",
+        "symbol": "init_claude_code"
+      }
+    ],
+    "resp-271": [
+      {
+        "pattern": "src/page/ResponsibilitiesSection.tsx",
+        "symbol": "ResponsibilitiesEditor"
+      }
+    ],
+    "resp-205": [
+      {
+        "pattern": "preview/props.mjs",
+        "symbol": "synthProps"
+      }
+    ],
+    "resp-50": [
+      {
+        "pattern": "crates/scryer-mcp/src/cli.rs",
+        "symbol": "status_line"
+      }
+    ],
+    "node-552": [
+      {
+        "pattern": "crates/scryer-core/src/diff.rs",
+        "symbol": "ModelDiff",
+        "line": 106,
+        "endLine": 108
+      }
+    ],
+    "resp-237": [
+      {
+        "pattern": "src/AgentLaunchConfirm.tsx",
+        "symbol": "useAgentLaunchGate"
+      }
+    ],
+    "node-278": [
+      {
+        "pattern": "src/history.ts",
+        "symbol": "HistoryEvent",
+        "line": 22,
+        "endLine": 33
+      }
+    ],
+    "resp-568": [
+      {
+        "pattern": "crates/scryer-acp/src/runtime.rs",
+        "symbol": "AcpRuntime"
+      }
+    ],
+    "resp-481": [
+      {
+        "pattern": "crates/scryer-extract/src/lib.rs",
+        "symbol": "extract_context_with_stats"
+      }
+    ],
+    "resp-391": [
+      {
+        "pattern": "src-tauri/src/mcp_setup.rs",
+        "symbol": "check_claude_approved"
+      }
+    ],
+    "node-631": [
+      {
+        "pattern": "crates/scryer-core/src/seed.rs",
+        "symbol": "SeedUnit",
+        "line": 13,
+        "endLine": 21
+      }
+    ],
+    "resp-216": [
+      {
+        "pattern": "src/TopBar.tsx",
+        "symbol": "TopBar"
+      }
+    ],
+    "resp-178": [
+      {
+        "pattern": "demo/engine/types.ts",
+        "symbol": "CancelledError"
+      }
+    ],
+    "resp-645": [
+      {
+        "pattern": "crates/scryer-core/src/locate.rs",
+        "symbol": "locate"
+      }
+    ],
+    "node-526": [
+      {
+        "pattern": "crates/scryer-core/src/model.rs",
+        "symbol": "SchemaProperty",
+        "line": 88,
+        "endLine": 114
+      }
+    ],
+    "resp-106": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
+        "symbol": "commit"
+      }
+    ],
+    "resp-162": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "validate_model"
+      }
+    ],
+    "resp-404": [
+      {
+        "pattern": "src-tauri/src/mcp_setup.rs",
+        "symbol": "write_scryer_hooks"
+      }
+    ],
+    "resp-436": [
+      {
+        "pattern": "src-tauri/src/project.rs",
+        "symbol": "is_legacy_model"
+      }
+    ],
+    "resp-96": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "apply_resp_anchor_entries"
+      }
+    ],
+    "resp-355": [
+      {
+        "pattern": "src-tauri/src/build.rs",
+        "symbol": "run_wave"
+      }
+    ],
+    "resp-409": [
+      {
+        "pattern": "src-tauri/src/observability.rs",
+        "symbol": "get_drift_status"
+      }
+    ],
+    "node-219": [
+      {
+        "pattern": "src/hooks/useMcpSetup.ts",
+        "symbol": "McpSetup",
+        "line": 38,
+        "endLine": 65
+      }
+    ],
+    "resp-184": [
+      {
+        "pattern": "demo/engine/scenes/film.tsx",
+        "symbol": "filmScene"
+      }
+    ],
+    "resp-423": [
+      {
+        "pattern": "src-tauri/src/preview.rs",
+        "symbol": "discard_visual_variations"
+      }
+    ],
+    "resp-472": [
+      {
+        "pattern": "docs/src/components/ContractBadgeDemo.tsx",
+        "symbol": "ContractBadgeDemo"
+      }
+    ],
+    "resp-560": [
+      {
+        "pattern": "crates/scryer-acp/src/prompt.rs",
+        "symbol": "drift_check_prompt"
+      }
+    ],
+    "resp-67": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "pre_tool_use"
+      }
+    ],
+    "resp-468": [
+      {
+        "pattern": "src-tauri/src/verdicts.rs",
+        "symbol": "drop_node"
+      }
+    ],
+    "resp-254": [
+      {
+        "pattern": "src/layout/lrPlanarity.ts",
+        "symbol": "LRPlanarity"
+      }
+    ],
+    "resp-418": [
+      {
+        "pattern": "src-tauri/src/preview.rs",
+        "symbol": "ensure_preview_server"
+      }
+    ],
+    "resp-258": [
+      {
+        "pattern": "src/edges/RelationshipEdge.tsx",
+        "symbol": "RelationshipEdge"
+      }
+    ],
+    "resp-430": [
+      {
+        "pattern": "src-tauri/src/project.rs",
+        "symbol": "watch_project"
+      }
+    ],
+    "resp-84": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "outline_tree"
+      }
+    ],
+    "node-579": [
+      {
+        "pattern": "crates/scryer-core/src/drift.rs",
+        "symbol": "NodeAnchor",
+        "line": 72,
+        "endLine": 83
+      }
+    ],
+    "resp-604": [
+      {
+        "pattern": "crates/scryer-core/src/changes.rs",
+        "symbol": "tag"
+      }
+    ],
+    "node-635": [
+      {
+        "pattern": "crates/scryer-core/src/settings.rs",
+        "symbol": "AgentSettings",
+        "line": 20,
+        "endLine": 25
+      }
+    ],
+    "resp-521": [
+      {
+        "pattern": "crates/scryer-extract/src/manifest.rs",
+        "symbol": "parse_cargo"
+      }
+    ],
+    "resp-189": [
+      {
+        "pattern": "demo/runner.tsx",
+        "symbol": "Runner"
+      }
+    ],
+    "resp-433": [
+      {
+        "pattern": "src-tauri/src/project.rs",
+        "symbol": "close_change"
+      }
+    ],
+    "resp-142": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
+        "symbol": "descope"
       }
     ]
   },
   "boundaries": {
-    "node-5": [
+    "node-4": [
       {
-        "pattern": "crates/scryer-extract/**/*"
-      }
-    ],
-    "node-7": [
-      {
-        "pattern": "crates/xtask/**/*"
+        "pattern": "crates/scryer-core/**/*"
       }
     ],
     "node-8": [
@@ -19252,19 +19222,24 @@
         "pattern": "crates/scryer-mcp/**/*"
       }
     ],
-    "node-4": [
+    "node-5": [
       {
-        "pattern": "crates/scryer-core/**/*"
+        "pattern": "crates/scryer-extract/**/*"
       }
     ],
-    "node-9": [
+    "node-7": [
       {
-        "pattern": "src-tauri/**/*"
+        "pattern": "crates/xtask/**/*"
       }
     ],
     "node-2": [
       {
         "pattern": "src/**/*"
+      }
+    ],
+    "node-9": [
+      {
+        "pattern": "src-tauri/**/*"
       }
     ]
   }

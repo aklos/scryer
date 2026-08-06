@@ -4548,8 +4548,8 @@
       "responsibilities": [
         {
           "id": "resp-268",
-          "statement": "**Show** a node's own and inherited directives, and its freeform user notes, in the right-margin rail",
-          "lastTouchedAt": 1784883905
+          "statement": "**Show** a node's own directives and its freeform user notes in the right-margin rail",
+          "lastTouchedAt": 1786008950
         }
       ]
     },
@@ -5361,19 +5361,6 @@
         {
           "id": "resp-310",
           "statement": "**Register** every concern slug a claim uses in the model's concern registry, seeding new entries from the standard vocabulary",
-          "lastTouchedAt": 1784883905
-        }
-      ]
-    },
-    {
-      "id": "node-294",
-      "kind": "symbol",
-      "name": "inheritedDirectives",
-      "parentId": "node-281",
-      "responsibilities": [
-        {
-          "id": "resp-311",
-          "statement": "**Collect** the directives a node inherits from its ancestry, nearest ancestor first",
           "lastTouchedAt": 1784883905
         }
       ]
@@ -13544,12 +13531,6 @@
     {
       "id": "link-node-290-node-282",
       "src": "node-290",
-      "dst": "node-282",
-      "label": ""
-    },
-    {
-      "id": "link-node-294-node-282",
-      "src": "node-294",
       "dst": "node-282",
       "label": ""
     },

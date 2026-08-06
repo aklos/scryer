@@ -1,8 +1,6 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { CornerDownRight } from "lucide-react";
 import type { ScryModel, Node } from "../viewmodel";
-import type { InheritedDirectives } from "../viewmodel";
-import { inheritedDirectives } from "../viewmodel";
 import type { Editor } from "../editor";
 import { DIFF_TINT } from "../diffkit";
 import {
@@ -137,19 +135,9 @@ function RailHeader({
 }
 
 /** Read-only directive bullets, rendered as plain text. */
-function DirectiveList({
-  directives,
-  muted = false,
-}: {
-  directives: readonly string[];
-  muted?: boolean;
-}) {
+function DirectiveList({ directives }: { directives: readonly string[] }) {
   return (
-    <ul
-      className={`list-disc space-y-1.5 pl-4 text-sm leading-relaxed ${
-        muted ? "text-[var(--text-tertiary)]" : "text-[var(--text-secondary)]"
-      }`}
-    >
+    <ul className="list-disc space-y-1.5 pl-4 text-sm leading-relaxed text-[var(--text-secondary)]">
       {directives.map((d, i) => (
         <li key={i}>{d}</li>
       ))}
@@ -179,42 +167,35 @@ function DirectiveDiffList({ prev, next }: { prev: readonly string[]; next: read
 }
 
 /** Top of the detail rail: the node's OWN node-level directives (user-authored
- *  HOW-constraints), editable here, followed by the directives INHERITED from
- *  ancestors — shown read-only, grouped under the ancestor that authored them
- *  (click to jump). Mirrors the Notes section's chrome. User-only; the agent
- *  reads directives but never authors them. */
+ *  HOW-constraints), editable here. Ancestors' directives still BIND this node
+ *  — `inherited_directives` hands the agent the full set through orient/locate
+ *  — but they are not shown: repeating an ancestor's constraint on every
+ *  descendant page is noise the reader has to re-skip, and the page it belongs
+ *  to is one click up the breadcrumb. Mirrors the Notes section's chrome.
+ *  User-only; the agent reads directives but never authors them. */
 function DirectivesSection({
   node,
-  model,
   committed,
   editor,
   editing,
   onToggle,
-  onSelectNode,
 }: {
   node: Node;
-  model: ScryModel;
   committed: ScryModel | null;
   editor: Editor | undefined;
   editing: boolean;
   onToggle: () => void;
-  onSelectNode: (id: string) => void;
 }) {
   const own = node.directives ?? [];
-  const inherited: InheritedDirectives[] = useMemo(
-    () => inheritedDirectives(model, node.id),
-    [model, node.id],
-  );
   // The own list shows its plan divergence inline, on the same joined string the
   // plan diff tracks: additions paint green, removals strike through, edits
   // word-diff — every case, not just edit-in-place. Only an unchanged list (or
-  // one with no committed base yet) reads plain. Inherited directives are an
-  // ancestor's edit, so they always read plain.
+  // one with no committed base yet) reads plain.
   const prevOwn = committed?.nodes.find((n) => n.id === node.id)?.directives ?? [];
   const ownJoined = own.join("\n");
   const prevJoined = prevOwn.join("\n");
   const changed = !!committed && prevJoined !== ownJoined;
-  const nothing = !changed && own.length === 0 && inherited.length === 0;
+  const nothing = !changed && own.length === 0;
   return (
     // In edit mode the section wears the same shell as PageSection — inset
     // surface + accent ring; the negative margins compensate the padding so
@@ -317,19 +298,6 @@ function DirectivesSection({
           ) : own.length > 0 ? (
             <DirectiveList directives={own} />
           ) : null}
-          {inherited.map((g) => (
-            <div key={g.nodeId}>
-              <button
-                type="button"
-                onClick={() => onSelectNode(g.nodeId)}
-                title={`Inherited from ${g.name}`}
-                className="mb-0.5 text-2xs font-medium uppercase tracking-[0.07em] text-[var(--text-muted)] hover:text-blue-700 dark:hover:text-blue-400"
-              >
-                ↑ {g.name}
-              </button>
-              <DirectiveList directives={g.directives} muted />
-            </div>
-          ))}
           {/* Empty state: one quiet affordance instead of a placeholder that
               says nothing — read-only emptiness renders nothing at all (the
               rail collapses; see DetailRail). */}
@@ -349,32 +317,28 @@ function DirectivesSection({
 }
 
 /**
- * The right-margin detail rail. Top: this node's directives — its own
- * (editable) plus those inherited from ancestors (read-only). Below: the user's
- * own freeform notes — self-context and traversal aids, NOT part of the spec.
- * User-only; the agent authors neither. Node-only (groups carry no `notes` or
- * node-level `directives`).
+ * The right-margin detail rail. Top: this node's OWN directives (editable) —
+ * an ancestor's directives bind too, but they live on the ancestor's page, not
+ * repeated here. Below: the user's own freeform notes — self-context and
+ * traversal aids, NOT part of the spec. User-only; the agent authors neither.
+ * Node-only (groups carry no `notes` or node-level `directives`).
  */
 export function DetailRail({
   node,
-  model,
   committed,
   editor,
   notesEditing,
   onToggleNotes,
   dirEditing,
   onToggleDir,
-  onSelectNode,
 }: {
   node: Node;
-  model: ScryModel;
   committed: ScryModel | null;
   editor: Editor | undefined;
   notesEditing: boolean;
   onToggleNotes: () => void;
   dirEditing: boolean;
   onToggleDir: () => void;
-  onSelectNode: (id: string) => void;
 }) {
   const notes = node.notes;
   // With no editor and nothing to say, the rail says nothing — a column of
@@ -382,21 +346,17 @@ export function DetailRail({
   const own = node.directives ?? [];
   const prevOwn = committed?.nodes.find((n) => n.id === node.id)?.directives ?? [];
   const hasDirectives =
-    own.length > 0 ||
-    inheritedDirectives(model, node.id).length > 0 ||
-    (!!committed && prevOwn.join("\n") !== own.join("\n"));
+    own.length > 0 || (!!committed && prevOwn.join("\n") !== own.join("\n"));
   if (!editor && !hasDirectives && !notes) return null;
   return (
     <aside className="ml-auto hidden w-[300px] shrink-0 lg:block">
       <div className="sticky top-0 flex flex-col gap-8">
         <DirectivesSection
           node={node}
-          model={model}
           committed={committed}
           editor={editor}
           editing={dirEditing}
           onToggle={onToggleDir}
-          onSelectNode={onSelectNode}
         />
         <div
           className={`group/notes ${

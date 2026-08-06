@@ -72,3 +72,4 @@
 {"at":1784884312,"by":"agent","driver":"build","kind":"born","nodeId":"node-630","rows":[{"marker":"+","text":"1 responsibility · 2 symbols · component"}]}
 {"at":1784884312,"by":"agent","driver":"build","kind":"born","nodeId":"node-633","rows":[{"marker":"+","text":"1 responsibility · 4 symbols · component"}]}
 {"at":1784884312,"by":"agent","driver":"build","kind":"born","nodeId":"node-638","rows":[{"marker":"+","text":"2 responsibilities · 6 symbols · component"}]}
+{"at":1786009082,"by":"agent","driver":"fill","kind":"impl","nodeId":"node-250","rows":[{"marker":"~","text":"**Show** a node's own directives and its freeform user notes in the right-margin rail","source":{"pattern":"src/page/DetailRail.tsx","symbol":"DetailRail"}}]}
