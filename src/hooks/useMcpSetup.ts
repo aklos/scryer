@@ -8,8 +8,13 @@ import { invoke } from "@tauri-apps/api/core";
 export interface AiToolsState {
   claude: boolean;
   codex: boolean;
+  copilot: boolean;
   claudeMcpEnabled: boolean;
   codexMcpEnabled: boolean;
+  /** Copilot reads the same `.mcp.json` Claude Code does (and an optional
+   *  committed `.github/mcp.json`), so this is usually true the moment
+   *  `claudeMcpEnabled` is — no config file of its own. */
+  copilotMcpEnabled: boolean;
   claudeApproved: boolean;
   /** Scryer's session hooks are registered in this project's Claude Code settings. */
   claudeHooksEnabled: boolean;
@@ -26,8 +31,10 @@ export interface AiToolsState {
 const EMPTY: AiToolsState = {
   claude: false,
   codex: false,
+  copilot: false,
   claudeMcpEnabled: false,
   codexMcpEnabled: false,
+  copilotMcpEnabled: false,
   claudeApproved: false,
   claudeHooksEnabled: false,
   codexHooksEnabled: false,
@@ -92,7 +99,9 @@ export function useMcpSetup(projectPath: string | null): McpSetup {
       // Only write what's actually missing, so re-enabling is a no-op rather
       // than churning files. Each command merges into existing config.
       const actions: string[] = [];
-      if (tools.claude && !tools.claudeMcpEnabled) actions.push("mcp");
+      // One `.mcp.json` write serves Claude Code and Copilot both.
+      if ((tools.claude && !tools.claudeMcpEnabled) || (tools.copilot && !tools.copilotMcpEnabled))
+        actions.push("mcp");
       if (tools.codex && !tools.codexMcpEnabled) actions.push("mcp_codex");
       if (tools.claude && !tools.claudeApproved) actions.push("claude_approve");
       for (const action of actions) {
@@ -136,7 +145,9 @@ export function useMcpSetup(projectPath: string | null): McpSetup {
   }, [projectPath]);
 
   const needsSetup =
-    (tools.claude && !tools.claudeMcpEnabled) || (tools.codex && !tools.codexMcpEnabled);
+    (tools.claude && !tools.claudeMcpEnabled) ||
+    (tools.codex && !tools.codexMcpEnabled) ||
+    (tools.copilot && !tools.copilotMcpEnabled);
   const dismissed = projectPath ? dismissedPaths.has(projectPath) : false;
 
   return { tools, needsSetup, dismissed, busy, enable, enableHooks, enableStatusline, dismiss, reload };

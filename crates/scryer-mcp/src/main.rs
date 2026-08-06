@@ -58,11 +58,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Write project-scoped MCP config files in the current directory so that
-/// Claude Code and/or Codex discover scryer-mcp when working in this project.
-/// Only writes config for tools that are actually installed. With
-/// `statusline`, also register the model's status one-liner as Claude Code's
-/// statusline (never clobbering a foreign one).
+/// Write project-scoped MCP config files in the current directory so that the
+/// installed agent CLIs discover scryer-mcp when working in this project. Only
+/// writes config for tools that are actually installed. With `statusline`, also
+/// register the model's status one-liner as Claude Code's statusline (never
+/// clobbering a foreign one).
 fn init_project(statusline: bool) -> Result<(), Box<dyn std::error::Error>> {
     let binary_path = std::env::current_exe()?
         .canonicalize()?
@@ -73,35 +73,39 @@ fn init_project(statusline: bool) -> Result<(), Box<dyn std::error::Error>> {
 
     let has_claude = which("claude");
     let has_codex = which("codex");
+    let has_copilot = which("copilot");
 
-    if !has_claude && !has_codex {
-        eprintln!("Neither `claude` nor `codex` found in PATH.");
-        eprintln!("Install Claude Code or OpenAI Codex first, then re-run `scryer-mcp init`.");
+    if !has_claude && !has_codex && !has_copilot {
+        eprintln!("None of `claude`, `codex` or `copilot` found in PATH.");
+        eprintln!("Install Claude Code, OpenAI Codex or GitHub Copilot CLI first, then re-run `scryer-mcp init`.");
         std::process::exit(1);
     }
 
     let mut wrote_any = false;
 
-    if has_claude {
-        init_claude_code(&cwd, &binary_path)?;
-        if statusline {
-            match cli::install_statusline(&cwd, &binary_path)? {
-                cli::StatuslineInstall::Installed(path) => {
-                    eprintln!("Registered the scryer statusline in {}", path.display());
-                }
-                // statusLine is a single slot (whole-line replacement), so a
-                // foreign entry is composed with by hand, never clobbered.
-                cli::StatuslineInstall::ForeignExists(path) => {
-                    eprintln!(
-                        "A statusLine is already configured in {} — left untouched.",
-                        path.display()
-                    );
-                    eprintln!("To add scryer to it, append this to your statusline script's output:");
-                    eprintln!("  \"{binary_path}\" statusline");
-                }
+    // One `.mcp.json` serves both Claude Code and Copilot CLI — they read the
+    // same file, so this is written once when either is installed.
+    if has_claude || has_copilot {
+        init_mcp_json(&cwd, &binary_path)?;
+        wrote_any = true;
+    }
+
+    if has_claude && statusline {
+        match cli::install_statusline(&cwd, &binary_path)? {
+            cli::StatuslineInstall::Installed(path) => {
+                eprintln!("Registered the scryer statusline in {}", path.display());
+            }
+            // statusLine is a single slot (whole-line replacement), so a
+            // foreign entry is composed with by hand, never clobbered.
+            cli::StatuslineInstall::ForeignExists(path) => {
+                eprintln!(
+                    "A statusLine is already configured in {} — left untouched.",
+                    path.display()
+                );
+                eprintln!("To add scryer to it, append this to your statusline script's output:");
+                eprintln!("  \"{binary_path}\" statusline");
             }
         }
-        wrote_any = true;
     } else if statusline {
         eprintln!("--statusline is a Claude Code integration; `claude` was not found in PATH.");
     }
@@ -115,6 +119,7 @@ fn init_project(statusline: bool) -> Result<(), Box<dyn std::error::Error>> {
         let tools: Vec<&str> = [
             if has_claude { Some("Claude Code") } else { None },
             if has_codex { Some("Codex") } else { None },
+            if has_copilot { Some("Copilot CLI") } else { None },
         ].into_iter().flatten().collect();
         eprintln!("\nDone. {} will use scryer in this project.", tools.join(" and "));
         if has_claude {
@@ -141,8 +146,12 @@ fn which(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Write .mcp.json for Claude Code, merging with any existing config.
-fn init_claude_code(
+/// Write `.mcp.json`, merging with any existing config. Both Claude Code and
+/// Copilot CLI read this one file, so it is written once for either. Copilot
+/// treats `"stdio"` as an alias of its own `"local"` type and defaults an entry
+/// with no `tools` key to every tool, so the Claude-shaped entry serves both
+/// verbatim.
+fn init_mcp_json(
     cwd: &std::path::Path,
     binary_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {

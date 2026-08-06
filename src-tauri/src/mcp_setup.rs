@@ -2,8 +2,23 @@ use std::path::{Path, PathBuf};
 
 /// Check if a project has .mcp.json with a scryer entry.
 fn check_mcp_json(project_path: &str) -> bool {
-    let path = PathBuf::from(project_path).join(".mcp.json");
-    if let Ok(contents) = std::fs::read_to_string(&path) {
+    has_mcp_scryer_entry(&PathBuf::from(project_path).join(".mcp.json"))
+}
+
+/// Copilot reads the SAME `.mcp.json` Claude Code does — the one scryer already
+/// writes — so its MCP setup needs no file of its own. It also accepts a
+/// committed `.github/mcp.json`, which `.mcp.json` overrides; a project wired
+/// up by hand there is already set up, so detection honours both and the setup
+/// offer stays quiet. Omitting `tools` is fine: Copilot defaults a server to
+/// all tools, and it treats `"stdio"` as an alias of its own `"local"`.
+fn check_copilot_mcp(project_path: &str) -> bool {
+    let root = PathBuf::from(project_path);
+    has_mcp_scryer_entry(&root.join(".mcp.json"))
+        || has_mcp_scryer_entry(&root.join(".github").join("mcp.json"))
+}
+
+fn has_mcp_scryer_entry(path: &Path) -> bool {
+    if let Ok(contents) = std::fs::read_to_string(path) {
         if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
             return root.pointer("/mcpServers/scryer").is_some();
         }
@@ -150,9 +165,11 @@ fn check_codex_toml(project_path: &str) -> bool {
 pub(crate) fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value {
     let has_claude = which::which("claude").is_ok();
     let has_codex = which::which("codex").is_ok();
+    let has_copilot = which::which("copilot").is_ok();
 
     let claude_mcp = project_path.as_deref().map(check_mcp_json).unwrap_or(false);
     let codex_mcp = project_path.as_deref().map(check_codex_toml).unwrap_or(false);
+    let copilot_mcp = project_path.as_deref().map(check_copilot_mcp).unwrap_or(false);
     let claude_approved = project_path.as_deref().map(check_claude_approved).unwrap_or(false);
     let claude_hooks = project_path.as_deref().map(check_claude_hooks).unwrap_or(false);
     let codex_hooks = project_path.as_deref().map(check_codex_hooks).unwrap_or(false);
@@ -162,8 +179,10 @@ pub(crate) fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value
     serde_json::json!({
         "claude": has_claude,
         "codex": has_codex,
+        "copilot": has_copilot,
         "claudeMcpEnabled": claude_mcp,
         "codexMcpEnabled": codex_mcp,
+        "copilotMcpEnabled": copilot_mcp,
         "claudeApproved": claude_approved,
         "claudeHooksEnabled": claude_hooks,
         "codexHooksEnabled": codex_hooks,
