@@ -42,9 +42,27 @@ impl Drop for InflightGuard {
 /// a stale run's touches age out.
 const TOUCH_TTL: Duration = Duration::from_secs(2 * 3600);
 
-/// Drop touches older than [`TOUCH_TTL`].
-fn prune_touches(log: &mut Vec<(Instant, Touch)>, now: Instant) {
-    log.retain(|(at, _)| now.saturating_duration_since(*at) < TOUCH_TTL);
+/// Everything the endpoint remembers about live sessions, behind one lock.
+#[derive(Default)]
+struct SessionLog {
+    /// Files each session has edited, with when — see [`TOUCH_TTL`].
+    touches: Vec<(Instant, Touch)>,
+    /// Sessions already handed a close gate. The gate fires ONCE per session:
+    /// its whole point is to make the agent look at claims it touched, and the
+    /// verdict may legitimately be "the claim still describes the code" — which
+    /// writes nothing, so a re-derived gate would fire again on the next stop,
+    /// forever. Claude Code's `stop_hook_active` flag guards its own side of
+    /// that, but Copilot sends no such flag, so the promise has to be kept
+    /// here, where the session is already known, rather than per harness.
+    gated: Vec<(Instant, String)>,
+}
+
+/// Drop touches and close-gate marks older than [`TOUCH_TTL`].
+fn prune_touches(log: &mut SessionLog, now: Instant) {
+    log.touches
+        .retain(|(at, _)| now.saturating_duration_since(*at) < TOUCH_TTL);
+    log.gated
+        .retain(|(at, _)| now.saturating_duration_since(*at) < TOUCH_TTL);
 }
 
 /// Managed Tauri state: the endpoint for the currently open project, if any.
@@ -129,7 +147,7 @@ pub fn start(
     .map_err(|e| e.to_string())?;
 
     let shutdown = Arc::new(AtomicBool::new(false));
-    let touches: Arc<Mutex<Vec<(Instant, Touch)>>> = Arc::new(Mutex::new(Vec::new()));
+    let touches: Arc<Mutex<SessionLog>> = Arc::new(Mutex::new(SessionLog::default()));
     // Shared across the accept loop and every worker thread it spawns.
     let project = Arc::new(project.to_path_buf());
     let token = Arc::new(token);
@@ -183,7 +201,7 @@ fn handle_request(
     mut stream: std::net::TcpStream,
     project: &Path,
     token: &str,
-    touches: &Arc<Mutex<Vec<(Instant, Touch)>>>,
+    touches: &Arc<Mutex<SessionLog>>,
     on_touch: &(impl Fn(&Touch) + Send + 'static),
 ) {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
@@ -294,23 +312,43 @@ fn handle_request(
             let now = Instant::now();
             let mut log = touches.lock().unwrap();
             prune_touches(&mut log, now);
-            if !log.iter().any(|(_, t)| t == &touch) {
+            if !log.touches.iter().any(|(_, t)| t == &touch) {
                 on_touch(&touch);
-                log.push((now, touch));
+                log.touches.push((now, touch));
             }
-            respond(&mut stream, 200, &serde_json::json!({ "recorded": log.len() }));
+            respond(&mut stream, 200, &serde_json::json!({ "recorded": log.touches.len() }));
         }
         ("GET", "/close") => {
             let session = param("session").unwrap_or_default();
+            let now = Instant::now();
             let mut log = touches.lock().unwrap();
-            prune_touches(&mut log, Instant::now());
+            prune_touches(&mut log, now);
+            // Already gated once — say nothing, and skip the model read the
+            // answer would need. The session was told what to reconcile; a
+            // second gate on the same touches would be a loop, not a reminder.
+            if log.gated.iter().any(|(_, s)| *s == session) {
+                drop(log);
+                respond(&mut stream, 200, &empty_close_payload());
+                return;
+            }
             let touched: Vec<Touch> = log
+                .touches
                 .iter()
                 .filter(|(_, t)| session.is_empty() || t.session == session)
                 .map(|(_, t)| t.clone())
                 .collect();
             drop(log);
-            respond(&mut stream, 200, &close_payload(project, &touched));
+
+            let payload = close_payload(project, &touched);
+            // Only a gate that actually fires burns the session's one shot: a
+            // clean close leaves it armed for the edits still to come.
+            if payload["needsReconcile"]
+                .as_array()
+                .is_some_and(|n| !n.is_empty())
+            {
+                touches.lock().unwrap().gated.push((now, session));
+            }
+            respond(&mut stream, 200, &payload);
         }
         _ => respond(
             &mut stream,
@@ -468,6 +506,16 @@ fn status_payload(project: &Path) -> Result<serde_json::Value, String> {
 /// The fingerprint check compares against the last reconcile baseline, so a
 /// long-unreconciled file may surface pre-session changes too — still the
 /// right call: the claim needs a look and this session just worked there.
+/// The close view for a session that has nothing to answer for — same shape as
+/// [`close_payload`], reached without a model read.
+fn empty_close_payload() -> serde_json::Value {
+    serde_json::json!({
+        "needsReconcile": [],
+        "cleanModeled": [],
+        "unmodeled": [],
+    })
+}
+
 fn close_payload(project: &Path, touched: &[Touch]) -> serde_json::Value {
     let r = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
 
@@ -668,18 +716,24 @@ mod tests {
     }
 
     /// Touches older than the TTL are pruned; fresh ones survive — a resumed
-    /// session must not re-gate on a prior run's hours-old edits.
+    /// session must not re-gate on a prior run's hours-old edits. The same
+    /// applies to the gate marks: a session id resurfacing hours later is a new
+    /// run, and it gets its one gate back.
     #[test]
     fn prune_drops_only_stale_touches() {
         let now = Instant::now();
+        let stale = now.checked_sub(TOUCH_TTL + Duration::from_secs(60)).unwrap();
+        let fresh = now.checked_sub(Duration::from_secs(60)).unwrap();
         let touch = |f: &str| Touch { session: "s".into(), file: f.into(), symbol: None };
-        let mut log = vec![
-            (now.checked_sub(TOUCH_TTL + Duration::from_secs(60)).unwrap(), touch("old.rs")),
-            (now.checked_sub(Duration::from_secs(60)).unwrap(), touch("fresh.rs")),
-        ];
+        let mut log = SessionLog {
+            touches: vec![(stale, touch("old.rs")), (fresh, touch("fresh.rs"))],
+            gated: vec![(stale, "old-session".into()), (fresh, "live-session".into())],
+        };
         prune_touches(&mut log, now);
-        assert_eq!(log.len(), 1);
-        assert_eq!(log[0].1.file, "fresh.rs");
+        assert_eq!(log.touches.len(), 1);
+        assert_eq!(log.touches[0].1.file, "fresh.rs");
+        assert_eq!(log.gated.len(), 1);
+        assert_eq!(log.gated[0].1, "live-session");
     }
 
     /// System > Container with a claim anchored in src/auth.rs.
@@ -806,9 +860,10 @@ mod tests {
 
     /// With a reconcile baseline in place, /close gates on the anchor
     /// fingerprints: editing the anchored symbol puts the claim in
-    /// needsReconcile; editing around it leaves the file cleanModeled.
+    /// needsReconcile; editing around it leaves the file cleanModeled. And a
+    /// gate that fires is spent — see the tail of the test.
     #[test]
-    fn close_gates_on_anchor_fingerprints() {
+    fn close_gates_on_anchor_fingerprints_once_per_session() {
         let (dir, _) = temp_project();
         let root = dir.path();
         std::fs::create_dir_all(root.join("src")).unwrap();
@@ -863,6 +918,28 @@ mod tests {
         assert_eq!(claim["id"], "r-1");
         assert_eq!(claim["statement"], "serves requests");
         assert_eq!(claim["state"], "changed");
+
+        // That gate is now spent. The code is still out of sync — a session
+        // may legitimately answer "the claim still describes it" and write
+        // nothing — so re-deriving the gate would block the same session on
+        // every stop, forever. Only Claude Code carries a `stop_hook_active`
+        // flag to break that; the guarantee has to hold without one.
+        let (_, again) = request(server.port, &token, "GET", "/close?session=s1", "");
+        assert!(
+            again["needsReconcile"].as_array().unwrap().is_empty(),
+            "the gate fires once per session: {again}"
+        );
+
+        // A different session working the same file still gets its own gate.
+        request(
+            server.port,
+            &token,
+            "POST",
+            "/touch",
+            r#"{"session":"s2","file":"src/auth.rs"}"#,
+        );
+        let (_, other) = request(server.port, &token, "GET", "/close?session=s2", "");
+        assert_eq!(other["needsReconcile"][0]["file"], "src/auth.rs", "{other}");
     }
 
     /// A claim authored AND anchored during the session — living only in the
