@@ -500,8 +500,8 @@
       "responsibilities": [
         {
           "id": "resp-50",
-          "statement": "Formats the human-facing status line: pending count, drift scopes, anchor health, and changes in flight.",
-          "lastTouchedAt": 1784883763
+          "statement": "Formats the human-facing status line: outstanding plan work at both altitudes, drift scopes, anchor health, and changes in flight.",
+          "lastTouchedAt": 1786009447
         }
       ]
     },
@@ -1048,19 +1048,6 @@
         {
           "id": "resp-92",
           "statement": "Writes the plan and tags whatever this write changed to the session's current change, warning on cross-change collisions.",
-          "lastTouchedAt": 1784883763
-        }
-      ]
-    },
-    {
-      "id": "node-65",
-      "kind": "symbol",
-      "name": "pending_changes",
-      "parentId": "node-53",
-      "responsibilities": [
-        {
-          "id": "resp-93",
-          "statement": "Lists the plan-diff elements that make up the agent's implement queue, excluding drift-review vagrants.",
           "lastTouchedAt": 1784883763
         }
       ]
@@ -3653,8 +3640,8 @@
       "responsibilities": [
         {
           "id": "resp-218",
-          "statement": "**Report** live build progress, agent activity, and model coverage in the bottom status bar",
-          "lastTouchedAt": 1784883905
+          "statement": "**Report** live build progress, agent activity, model coverage, and outstanding plan work in the bottom status bar",
+          "lastTouchedAt": 1786009447
         }
       ]
     },
@@ -10086,8 +10073,8 @@
         },
         {
           "id": "resp-597",
-          "statement": "Counts the plan-change carriers surfaced to the user as pending work items, folding element-level diffs under their owning node or group",
-          "lastTouchedAt": 1784884312
+          "statement": "Counts outstanding plan work at both altitudes the tool reports — diverging elements, and the node/group carriers they fold under",
+          "lastTouchedAt": 1786009426
         }
       ]
     },
@@ -11831,6 +11818,19 @@
           "id": "resp-679",
           "statement": "Cross-references the model's source map against the real filesystem to catch uncovered manifests and cross-boundary sharing",
           "lastTouchedAt": 1784884312
+        }
+      ]
+    },
+    {
+      "id": "node-645",
+      "kind": "symbol",
+      "name": "pending_elements",
+      "parentId": "node-548",
+      "responsibilities": [
+        {
+          "id": "resp-680",
+          "statement": "Lists the diverging plan elements a build still owes, excluding drift-flagged content awaiting a verdict",
+          "lastTouchedAt": 1786009421
         }
       ]
     }
@@ -15339,6 +15339,18 @@
       "src": "node-638",
       "dst": "node-616",
       "label": ""
+    },
+    {
+      "id": "link-node-645-node-553",
+      "src": "node-645",
+      "dst": "node-553",
+      "label": "diffs through"
+    },
+    {
+      "id": "link-node-645-node-551",
+      "src": "node-645",
+      "dst": "node-551",
+      "label": "returns"
     }
   ],
   "groups": [

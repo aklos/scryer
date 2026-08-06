@@ -395,9 +395,11 @@ fn status_payload(project: &Path) -> Result<serde_json::Value, String> {
     let model = scryer_core::read_model_at(&r)?;
     let planned = scryer_core::read_planned_at(&r)?;
 
-    // Carrier count — the node/group cards the canvas shows — so this ambient
-    // status agrees with what the user reads in-app, not the raw element count.
-    let pending = scryer_core::diff::plan_carrier_count(&model, &planned);
+    // Both altitudes: the element queue (what get_pending hands the agent) and
+    // the node/group carriers the canvas draws. One without the other is how
+    // this endpoint used to disagree with the agent's own count.
+    let pending = scryer_core::diff::pending_element_count(&model, &planned);
+    let carriers = scryer_core::diff::plan_carrier_count(&model, &planned);
 
     // A model never reconciled has no anchor to measure against — reporting
     // "everything drifted" would be the false alarm this endpoint exists to
@@ -429,11 +431,20 @@ fn status_payload(project: &Path) -> Result<serde_json::Value, String> {
         Err(_) => (0, 0),
     };
 
+    // Same phrasing as `scryer-mcp statusline` — one sentence for the model's
+    // standing state, wherever it is read.
+    let plural = if carriers == 1 { "" } else { "s" };
+    let work = if pending == 0 {
+        "0 pending".to_string()
+    } else {
+        format!("{pending} pending across {carriers} node{plural}")
+    };
     let status_line = format!(
-        "scryer: {pending} pending · {drift} drift scope(s) · anchors: {broken} broken, {changed} changed"
+        "scryer: {work} · {drift} drift scope(s) · anchors: {broken} broken, {changed} changed"
     );
     Ok(serde_json::json!({
         "pending": pending,
+        "carriers": carriers,
         "driftScopes": drift,
         "anchorsBroken": broken,
         "anchorsChanged": changed,

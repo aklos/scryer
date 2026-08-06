@@ -387,23 +387,42 @@ pub(crate) fn status_line(c: &StatusCounts) -> String {
         1 => " · 1 change in flight".to_string(),
         n => format!(" · {n} changes in flight"),
     };
-    // "pending" here is the carrier count — the node/group cards the canvas
-    // shows — so the terminal line agrees with what the user reads in-app,
-    // not the finer element queue the agent's header and get_pending report.
+    // Both altitudes, always together: the ELEMENT queue (what the agent's own
+    // header and get_pending report — a node with three reworded claims counts
+    // three) and the carriers it lands on (the cards the canvas draws).
+    // Reporting only carriers is what let this line read "5 pending" while the
+    // agent in the same terminal read 23.
+    let pending = pending_phrase(c);
     match &c.baseline {
-        None => format!("scryer: {} pending · no reconcile anchor yet{changes}", c.carriers),
+        None => format!("scryer: {pending} · no reconcile anchor yet{changes}"),
         Some(b) => format!(
-            "scryer: {} pending · {} drift scope(s) · anchors: {} broken, {} changed{changes}",
-            c.carriers, b.drift_scopes, b.anchors_broken, b.anchors_changed
+            "scryer: {pending} · {} drift scope(s) · anchors: {} broken, {} changed{changes}",
+            b.drift_scopes, b.anchors_broken, b.anchors_changed
         ),
     }
 }
 
+/// "23 pending across 8 nodes" — the shared phrasing for outstanding plan work.
+/// An empty plan drops the breakdown: "0 pending across 0 nodes" is noise.
+/// Mirrors `planCountLabel` (src/changeMarks.ts).
+pub(crate) fn pending_phrase(c: &StatusCounts) -> String {
+    if c.pending == 0 {
+        return "0 pending".to_string();
+    }
+    format!(
+        "{} pending across {} node{}",
+        c.pending,
+        c.carriers,
+        if c.carriers == 1 { "" } else { "s" }
+    )
+}
+
 fn status_json(c: &StatusCounts) -> String {
-    // Report the carrier count as "pending" so the `status` subcommand agrees
-    // with the terminal status line and the canvas.
+    // `pending` is the element queue — the same number get_pending returns —
+    // with `carriers` beside it for the node/group altitude the canvas draws.
     let v = serde_json::json!({
-        "pending": c.carriers,
+        "pending": c.pending,
+        "carriers": c.carriers,
         "openChanges": c.open_changes,
         "driftScopes": c.baseline.as_ref().map(|b| b.drift_scopes),
         "anchorsBroken": c.baseline.as_ref().map(|b| b.anchors_broken),
@@ -460,7 +479,42 @@ mod tests {
         scryer_core::write_planned_at(&r, &plan).unwrap();
 
         let c = status_counts(&r).unwrap();
-        assert_eq!(status_line(&c), "scryer: 1 pending · no reconcile anchor yet");
+        assert_eq!(status_line(&c), "scryer: 1 pending across 1 node · no reconcile anchor yet");
+    }
+
+    /// The line reports BOTH altitudes, because they differ: three reworded
+    /// claims on one node are three items in the agent's queue and one card on
+    /// the canvas. Quoting only the carrier count is what made the terminal
+    /// read "1 pending" beside an agent reading 3.
+    #[test]
+    fn status_line_reports_elements_and_the_carriers_they_sit_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut committed = ScryModel::new();
+        let mut sys = node("sys", Kind::System, "Acme", None);
+        for i in 1..=3 {
+            sys.responsibilities.push(
+                serde_json::from_value(serde_json::json!({
+                    "id": format!("r{i}"), "statement": format!("does thing {i}"),
+                }))
+                .unwrap(),
+            );
+        }
+        committed.nodes.push(sys.clone());
+        scryer_core::write_model_at(&r, &committed).unwrap();
+
+        let mut plan = ScryModel::new();
+        let mut planned_sys = sys;
+        for (i, resp) in planned_sys.responsibilities.iter_mut().enumerate() {
+            resp.statement = format!("does thing {}, revised", i + 1);
+        }
+        plan.nodes.push(planned_sys);
+        scryer_core::write_planned_at(&r, &plan).unwrap();
+
+        let c = status_counts(&r).unwrap();
+        assert_eq!(c.pending, 3);
+        assert_eq!(c.carriers, 1);
+        assert_eq!(status_line(&c), "scryer: 3 pending across 1 node · no reconcile anchor yet");
     }
 
     /// A clean, fully-anchored model passes — and the unverifiable anchor

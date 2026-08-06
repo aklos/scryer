@@ -235,6 +235,55 @@ export function collectPlanEntries(
   return entries;
 }
 
+/** The two pending numbers, always computed together so no surface can show
+ *  one without the other. `elements` is the agent's queue — one per diverging
+ *  element, so a node with three reworded claims counts three, exactly what
+ *  `get_pending` lists; `carriers` is how many nodes/groups those land on, the
+ *  cards the tree and Changes page show. Reporting only carriers is what made
+ *  the app read "5 pending" against the agent's "23": the same work, counted at
+ *  two altitudes. Mirrors `pending_changes` / `plan_carrier_count`
+ *  (crates/scryer-mcp/src/helpers.rs, crates/scryer-core/src/diff.rs). */
+export interface PlanCounts {
+  elements: number;
+  carriers: number;
+}
+
+export function planCounts(
+  diff: ModelDiff,
+  model: ScryModel,
+  committed: ScryModel | null,
+): PlanCounts {
+  // Vagrant elements are drift review awaiting a verdict, never implement-queue
+  // work — the same exclusion collectPlanEntries applies to a carrier's content.
+  const vagrantNodes = new Set<string>();
+  const vagrantResps = new Set<string>();
+  const vagrantProps = new Set<string>();
+  for (const n of model.nodes) {
+    if (n.vagrant) vagrantNodes.add(n.id);
+    for (const r of n.responsibilities ?? []) if (r.vagrant) vagrantResps.add(r.id);
+    for (const p of n.properties ?? []) if (p.vagrant) vagrantProps.add(`${n.id}\0${p.label}`);
+  }
+  for (const g of model.groups)
+    for (const r of g.responsibilities ?? []) if (r.vagrant) vagrantResps.add(r.id);
+  let elements = 0;
+  for (const ec of diff.changes) {
+    const vagrant =
+      (ec.kind === "node" && vagrantNodes.has(ec.id)) ||
+      (ec.kind === "responsibility" && vagrantResps.has(ec.id)) ||
+      (ec.kind === "property" && vagrantProps.has(`${ec.ownerId ?? ""}\0${ec.id}`));
+    if (!vagrant) elements++;
+  }
+  return { elements, carriers: collectPlanEntries(diff, model, committed).length };
+}
+
+/** The one phrasing for pending work — "23 across 8 nodes". Both numbers or
+ *  neither: the element count alone says nothing about how concentrated the
+ *  work is, and the carrier count alone is the number that used to disagree
+ *  with the agent. Mirrors `status_line` (crates/scryer-mcp/src/cli.rs). */
+export function planCountLabel({ elements, carriers }: PlanCounts): string {
+  return `${elements} across ${carriers} node${carriers === 1 ? "" : "s"}`;
+}
+
 // --- subtree roll-up ----------------------------------------------------------
 
 /** Priority when several descendant marks collapse into one rolled-up letter:

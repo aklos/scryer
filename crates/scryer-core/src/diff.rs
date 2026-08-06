@@ -136,6 +136,51 @@ pub fn diff(from: &ScryModel, to: &ScryModel) -> ModelDiff {
     out
 }
 
+/// The plan-diff ELEMENTS outstanding — one per diverging element (a reworded
+/// claim, an added property, a repointed link), which is the queue `get_pending`
+/// hands the agent and the finer of the two altitudes every status surface
+/// reports. Vagrant (code-discovered) elements are excluded: they await a drift
+/// verdict and are never implement-queue work.
+///
+/// The counterpart to [`plan_carrier_count`], which folds these same diffs under
+/// their owning node/group. Report BOTH or the app and the agent end up quoting
+/// different numbers for the same plan.
+pub fn pending_elements(committed: &ScryModel, planned: &ScryModel) -> Vec<ElementChange> {
+    let plan = diff(committed, planned);
+    plan.changes
+        .into_iter()
+        .filter(|ch| {
+            let vagrant = match ch.kind {
+                ElementKind::Node => planned
+                    .nodes
+                    .iter()
+                    .any(|n| n.id == ch.id && n.vagrant == Some(true)),
+                ElementKind::Responsibility => planned
+                    .nodes
+                    .iter()
+                    .flat_map(|n| n.responsibilities.iter())
+                    .chain(planned.groups.iter().flat_map(|g| g.responsibilities.iter()))
+                    .any(|r| r.id == ch.id && r.vagrant == Some(true)),
+                ElementKind::Property => ch.owner_id.as_deref().is_some_and(|oid| {
+                    planned.nodes.iter().any(|n| {
+                        n.id == oid
+                            && n.properties
+                                .iter()
+                                .any(|p| p.label == ch.id && p.vagrant == Some(true))
+                    })
+                }),
+                _ => false,
+            };
+            !vagrant
+        })
+        .collect()
+}
+
+/// [`pending_elements`] counted — the agent-facing "N pending".
+pub fn pending_element_count(committed: &ScryModel, planned: &ScryModel) -> usize {
+    pending_elements(committed, planned).len()
+}
+
 /// Count the plan-change CARRIERS — the node/group cards the Changes page lists
 /// and the tree's Changes lens counts, i.e. the number a user reads in-app.
 ///
@@ -1014,6 +1059,43 @@ mod tests {
         assert_eq!(diff(&committed, &planned).changes.len(), 5);
         // …but two carriers: A (its two real claims) and C (new node + its
         // link). B carries only a vagrant claim, so it is not counted.
+        assert_eq!(plan_carrier_count(&committed, &planned), 2);
+    }
+
+    /// The two altitudes on ONE plan: the element queue an agent implements,
+    /// and the cards a user reads. They are different numbers by design — the
+    /// bug this pins is a surface quoting one of them as if it were the other.
+    #[test]
+    fn pending_elements_counts_the_queue_the_carriers_fold() {
+        let mut committed = ScryModel::new();
+        let mut a = node("a", "A", None);
+        a.responsibilities.push(resp("r1", "does one thing"));
+        committed.nodes.push(a);
+        committed.nodes.push(node("b", "B", None));
+
+        let mut planned = ScryModel::new();
+        let mut a2 = node("a", "A", None);
+        a2.responsibilities.push(resp("r1", "does one thing"));
+        a2.responsibilities.push(resp("r2", "does a second thing"));
+        a2.responsibilities.push(resp("r3", "does a third thing"));
+        planned.nodes.push(a2);
+        let mut b2 = node("b", "B", None);
+        let mut rv = resp("rv", "code already does this");
+        rv.vagrant = Some(true);
+        b2.responsibilities.push(rv);
+        planned.nodes.push(b2);
+        planned.nodes.push(node("c", "C", None));
+        planned.links.push(link("l1", "c", "a"));
+
+        // Four elements owed: r2, r3, node C, link l1 — the vagrant claim is a
+        // drift verdict, never implement-queue work.
+        assert_eq!(pending_element_count(&committed, &planned), 4);
+        let ids: Vec<String> = pending_elements(&committed, &planned)
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
+        assert!(!ids.iter().any(|i| i == "rv"), "vagrant content is not pending work: {ids:?}");
+        // Same plan, coarser altitude — and never the number an agent is given.
         assert_eq!(plan_carrier_count(&committed, &planned), 2);
     }
 }

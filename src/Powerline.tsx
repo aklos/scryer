@@ -2,11 +2,11 @@
  * The powerline status bar — chevron-tiled segments along the window's bottom
  * edge (replacing the old SyncBar). Left side reads the model's standing at a
  * glance: the subagent launch setup (which agent + model + effort a fill runs
- * with), coverage, and the model's size + schema. Plan-ahead and drift counts
- * deliberately live on the tree's Changes/Drift lenses instead — they own both
- * the count and where it is. Right side folds in the live bits the SyncBar
- * carried — the agent's activity (barber-pole) with Cancel while it works, and
- * the review / recent-changes jumps when idle.
+ * with), coverage, and the model's size + schema. Right side folds in the live
+ * bits the SyncBar carried — the agent's activity (barber-pole) with Cancel
+ * while it works, and the review / recent-changes jumps when idle. The pending
+ * count rides the changes segment: the tree's lenses are a FILTER, and hanging
+ * the model's standing state off a filter meant it vanished with the sidebar.
  *
  * Segment shades come from the theme surface vars via an inline `--sb`, which the
  * CSS reuses for each chevron's triangle so the tiling stays seamless (see the
@@ -15,6 +15,7 @@
 
 import type { CSSProperties } from "react";
 import { Flag, History, Loader2, X } from "lucide-react";
+import { type PlanCounts, planCountLabel } from "./changeMarks";
 import { AgentMark } from "./pagekit";
 import type { AgentSession } from "./hooks/useAgentSession";
 import type { ModelBuild } from "./hooks/useModelBuild";
@@ -28,6 +29,8 @@ interface PowerlineProps {
   model: ScryModel;
   agent: AgentSession;
   build: ModelBuild;
+  /** Pending plan work — elements and the carriers they sit on. */
+  plan: PlanCounts;
   /** Everything awaiting a human verdict (vagrant / stale / agent edits …). */
   reviewIndex: ReviewIndex;
   /** Coverage + flag totals; null until the first health fetch lands. */
@@ -45,6 +48,7 @@ export function Powerline({
   model,
   agent,
   build,
+  plan,
   reviewIndex,
   health,
   launch,
@@ -201,6 +205,19 @@ export function Powerline({
             <History className="h-3.5 w-3.5" />
             <span>
               changes
+              {/* The pending count, at both altitudes the app talks in: the
+                  element queue the agent implements, and the cards it lands on.
+                  It reads here rather than on the tree's lens because the
+                  standing state of the model belongs in the standing bar. */}
+              {plan.elements > 0 && (
+                <span
+                  className="text-[var(--text-muted)]"
+                  title="Pending plan work — diverging elements (the queue get_pending hands the agent), and the nodes/groups carrying them."
+                >
+                  {" "}
+                  · <span className="pl-strong">{planCountLabel(plan)}</span>
+                </span>
+              )}
               {(model.changes?.length ?? 0) > 0 && (
                 <span
                   className="text-[var(--text-muted)]"

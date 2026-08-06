@@ -230,15 +230,6 @@ export function ModelTree({
   const hasPlan = (id: string) => markOf.get(id)?.plan != null;
   const hasDrift = (id: string) => markOf.get(id)?.drift != null;
 
-  // Lens counts on the segmented control. "Changes" counts plan CARRIERS —
-  // exactly the entries the Changes page lists (deleted elements and changed
-  // links included) — not just the rows that happen to exist in the tree.
-  const changeCount = planEntries.length;
-  let driftCount = 0;
-  for (const n of model.nodes) {
-    if (hasDrift(n.id)) driftCount++;
-  }
-
   // Concern lens: subtree tallies for the active slug. A node id absent from
   // the map means "this concern lives nowhere below here" — its row dims (it
   // never hides: the dark rows ARE the finding). Registry totals label the
@@ -972,11 +963,14 @@ export function ModelTree({
             control language across the chrome: single border, hairline
             dividers, the active cell filled. */}
         <div className="flex items-stretch overflow-hidden rounded-md border border-[var(--border)] divide-x divide-[var(--border)]">
+          {/* Lenses are a FILTER, not a readout — the standing counts live in
+              the powerline (pending work) and its "to review" segment (drift),
+              where they survive the sidebar being narrowed or closed. */}
           {(
             [
-              { id: "all", label: "All", count: null, countColor: "" },
-              { id: "changes", label: "Changes", count: changeCount, countColor: MARK_META.M.color },
-              { id: "drift", label: "Drift", count: driftCount, countColor: MARK_META.Q.color },
+              { id: "all", label: "All" },
+              { id: "changes", label: "Changes" },
+              { id: "drift", label: "Drift" },
             ] as const
           ).map((opt) => (
             <button
@@ -997,9 +991,6 @@ export function ModelTree({
               }`}
             >
               {opt.label}
-              {opt.count != null && opt.count > 0 && (
-                <span className={`font-mono text-2xs tabular-nums ${opt.countColor}`}>{opt.count}</span>
-              )}
             </button>
           ))}
         </div>

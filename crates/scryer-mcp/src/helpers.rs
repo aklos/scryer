@@ -409,47 +409,13 @@ pub(crate) fn write_planned_tagged(
 }
 
 /// Plan-diff element count with vagrants excluded — the same queue
-/// `get_pending` reports (vagrant elements are drift review, never the
-/// implement queue).
+/// `get_pending` reports. Lives in `scryer_core::diff` so the desktop app's
+/// hook endpoint counts identically; re-exported here for the call sites that
+/// have always spelled it this way.
+pub(crate) use scryer_core::diff::pending_elements as pending_changes;
+
 pub(crate) fn pending_change_count(committed: &ScryModel, planned: &ScryModel) -> usize {
     pending_changes(committed, planned).len()
-}
-
-/// The plan-diff elements behind [`pending_change_count`], for callers that
-/// list the queue rather than count it.
-pub(crate) fn pending_changes(
-    committed: &ScryModel,
-    planned: &ScryModel,
-) -> Vec<scryer_core::diff::ElementChange> {
-    use scryer_core::diff::ElementKind as EK;
-    let plan = scryer_core::diff::diff(committed, planned);
-    plan.changes
-        .into_iter()
-        .filter(|ch| {
-            let vagrant = match ch.kind {
-                EK::Node => planned
-                    .nodes
-                    .iter()
-                    .any(|n| n.id == ch.id && n.vagrant == Some(true)),
-                EK::Responsibility => planned
-                    .nodes
-                    .iter()
-                    .flat_map(|n| n.responsibilities.iter())
-                    .chain(planned.groups.iter().flat_map(|g| g.responsibilities.iter()))
-                    .any(|r| r.id == ch.id && r.vagrant == Some(true)),
-                EK::Property => ch.owner_id.as_deref().is_some_and(|oid| {
-                    planned.nodes.iter().any(|n| {
-                        n.id == oid
-                            && n.properties
-                                .iter()
-                                .any(|p| p.label == ch.id && p.vagrant == Some(true))
-                    })
-                }),
-                _ => false,
-            };
-            !vagrant
-        })
-        .collect()
 }
 
 /// The loop-state counts behind every ambient status line — shared by the MCP

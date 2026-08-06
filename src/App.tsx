@@ -26,6 +26,7 @@ import {
 } from "./SpecialPages";
 import { ProjectPicker } from "./ProjectPicker";
 import { SearchPalette } from "./SearchPalette";
+import { planCounts } from "./changeMarks";
 import { Powerline } from "./Powerline";
 import { SettingsPanel } from "./SettingsPanel";
 import { useLaunchSettings } from "./hooks/useLaunchSettings";
@@ -752,6 +753,7 @@ function Workspace({
   // The status-bar counters, shared with the special pages so the number and
   // the list can never disagree.
   const reviewIndex = buildReviewIndex(model, healthReport, driftScopes, newNodeIds, newRespIds);
+  const plan = planCounts(planDiff, model, committed);
 
   return (
     <div className="relative flex h-screen w-screen flex-col bg-[var(--surface-canvas)]">
@@ -870,6 +872,7 @@ function Workspace({
         model={model}
         agent={agent}
         build={build}
+        plan={plan}
         reviewIndex={reviewIndex}
         health={healthReport}
         launch={launch}
