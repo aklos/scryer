@@ -129,6 +129,103 @@ pub fn tag(model: &mut ScryModel, keys: &[String], change_id: &str) -> Vec<(Stri
     conflicts
 }
 
+/// What a [`retag`] pass moved, for the caller's report.
+#[derive(Debug, Default)]
+pub struct Retag {
+    /// Element keys whose change tag changed, with where they came from —
+    /// `(key, previous change id or None for unfiled)`.
+    pub moved: Vec<(String, Option<String>)>,
+    /// Targets that named nothing pending. Never an error on their own (an id
+    /// whose work is already folded is a no-op, not a mistake), but always
+    /// reported: silence here is how a caller concludes a move happened when
+    /// it didn't.
+    pub unmatched: Vec<String>,
+}
+
+/// The host a pending element files under — the carrier the Changes page and
+/// `get_pending` show it beneath, so "retag this node" means the same set of
+/// elements the caller was just looking at. A claim/property files under its
+/// owner, a link under the side that performs it, a node/group under itself.
+fn host_of(planned: &ScryModel, committed: &ScryModel, ec: &ElementChange) -> Option<String> {
+    match ec.kind {
+        ElementKind::Node | ElementKind::Group => Some(ec.id.clone()),
+        ElementKind::Responsibility | ElementKind::Property => ec.owner_id.clone(),
+        ElementKind::Link => planned
+            .links
+            .iter()
+            .chain(committed.links.iter())
+            .find(|l| l.id == ec.id)
+            .map(|l| l.src.clone()),
+    }
+}
+
+/// Move pending work between changes — the ledger's only re-filing verb.
+///
+/// Tags are otherwise a side-effect of writing: whatever a session touches
+/// lands in whatever change that session selected. That is right until it
+/// isn't (work filed under the wrong change, or one task's plan turning out to
+/// be two), and without this the only repair is re-writing the elements
+/// themselves under a different selection — editing the spec to fix its
+/// bookkeeping.
+///
+/// `targets` are the BARE ids the caller already holds, resolved against the
+/// CURRENT plan diff (the gc invariant: a tag with no pending entry is dead):
+///   - a node or group id — that carrier AND every pending element under it,
+///     the same unit `get_pending` shows;
+///   - a responsibility or link id — that element alone;
+///   - a `chg-N` id — everything currently filed under it;
+///   - `"unfiled"` — every pending element with no tag.
+/// `to` is the destination change, or None to detach to unfiled. Idempotent:
+/// an element already filed where it is being sent is not reported as moved.
+pub fn retag(
+    committed: &ScryModel,
+    planned: &mut ScryModel,
+    targets: &[String],
+    to: Option<&str>,
+) -> Result<Retag, String> {
+    if let Some(dst) = to {
+        if !planned.changes.iter().any(|c| c.id == dst) {
+            return Err(format!("no open change '{dst}'"));
+        }
+    }
+    let pending = crate::diff::pending_elements(committed, planned);
+    let mut out = Retag::default();
+    for target in targets {
+        let mut hit = false;
+        for ec in &pending {
+            let key = key_for(ec);
+            let current = planned.change_map.get(&key).cloned();
+            let matches = if target == "unfiled" {
+                current.is_none()
+            } else if target.starts_with("chg-") {
+                current.as_deref() == Some(target.as_str())
+            } else {
+                // Direct id, or the carrier this element files under. A
+                // property's `id` is its label, never an id — it moves only
+                // through its owner.
+                (ec.kind != ElementKind::Property && &ec.id == target)
+                    || host_of(planned, committed, ec).as_ref() == Some(target)
+            };
+            if !matches {
+                continue;
+            }
+            hit = true;
+            if current.as_deref() == to {
+                continue;
+            }
+            match to {
+                Some(dst) => planned.change_map.insert(key.clone(), dst.to_string()),
+                None => planned.change_map.remove(&key),
+            };
+            out.moved.push((key, current));
+        }
+        if !hit {
+            out.unmatched.push(target.clone());
+        }
+    }
+    Ok(out)
+}
+
 /// Whether folding the element at `host_key` must NOT carry the element at
 /// `elem_key` along: the element belongs to a different change than its host,
 /// so it is another task's pending work — a whole-node fold leaves it in the
@@ -484,5 +581,82 @@ mod tests {
             vec![("resp:r1".into(), "chg-1".into()), ("resp:r2".into(), "chg-1".into())]
         );
         assert_eq!(m.change_map["resp:r1"], "chg-2");
+    }
+
+    /// Retag by the CARRIER: a node id takes the node's own pending change and
+    /// every pending element under it — the unit `get_pending` shows — so
+    /// re-filing a mis-filed task is one id, not a hand-assembled key list.
+    #[test]
+    fn retag_moves_a_carrier_with_everything_pending_under_it() {
+        let committed = model_with_resps(&[("r1", "exists")]);
+        let mut plan = model_with_resps(&[("r1", "exists"), ("r2", "new A"), ("r3", "new B")]);
+        let wrong = open_change(&mut plan, "the wrong home", 100);
+        let right = open_change(&mut plan, "where it belongs", 200);
+        tag(
+            &mut plan,
+            &[
+                element_key(ElementKind::Responsibility, None, "r2"),
+                element_key(ElementKind::Responsibility, None, "r3"),
+            ],
+            &wrong,
+        );
+
+        let out = retag(&committed, &mut plan, &["n1".into()], Some(&right)).unwrap();
+
+        assert_eq!(out.moved.len(), 2, "both claims under the node moved: {:?}", out.moved);
+        assert!(out.unmatched.is_empty());
+        assert_eq!(plan.change_map["resp:r2"], right);
+        assert_eq!(plan.change_map["resp:r3"], right);
+        assert!(out.moved.iter().all(|(_, from)| from.as_deref() == Some(wrong.as_str())));
+    }
+
+    /// The other three target forms: one element by its own id, a whole change
+    /// by `chg-N`, and `unfiled` for everything untagged. Detaching (`to:
+    /// None`) drops the key rather than pointing it somewhere.
+    #[test]
+    fn retag_targets_elements_whole_changes_and_the_unfiled_bucket() {
+        let committed = model_with_resps(&[("r1", "exists")]);
+        let mut plan = model_with_resps(&[("r1", "exists"), ("r2", "new A"), ("r3", "new B")]);
+        let a = open_change(&mut plan, "change A", 100);
+        let b = open_change(&mut plan, "change B", 200);
+        tag(&mut plan, &[element_key(ElementKind::Responsibility, None, "r2")], &a);
+        // r3 stays unfiled.
+
+        // One element by id, into B.
+        let out = retag(&committed, &mut plan, &["r3".into()], Some(&b)).unwrap();
+        assert_eq!(out.moved, vec![("resp:r3".to_string(), None)]);
+
+        // A whole change: everything filed under A joins B.
+        let out = retag(&committed, &mut plan, &[a.clone()], Some(&b)).unwrap();
+        assert_eq!(out.moved, vec![("resp:r2".to_string(), Some(a.clone()))]);
+        assert_eq!(plan.change_map["resp:r2"], b);
+
+        // Detach everything under B back to unfiled.
+        let out = retag(&committed, &mut plan, &[b.clone()], None).unwrap();
+        assert_eq!(out.moved.len(), 2);
+        assert!(plan.change_map.is_empty(), "detached keys leave the map: {:?}", plan.change_map);
+
+        // And now "unfiled" is what names them.
+        let out = retag(&committed, &mut plan, &["unfiled".into()], Some(&a)).unwrap();
+        assert_eq!(out.moved.len(), 2);
+    }
+
+    /// An id with no pending work is reported, never silently swallowed — and
+    /// an already-correct filing is not counted as a move. A caller that reads
+    /// "moved 0" must be able to tell "nothing to do" from "wrong id".
+    #[test]
+    fn retag_reports_unmatched_ids_and_stays_idempotent() {
+        let committed = model_with_resps(&[("r1", "exists")]);
+        let mut plan = model_with_resps(&[("r1", "exists"), ("r2", "new A")]);
+        let a = open_change(&mut plan, "change A", 100);
+        tag(&mut plan, &[element_key(ElementKind::Responsibility, None, "r2")], &a);
+
+        // r1 is committed and unchanged — it carries no pending entry.
+        let out = retag(&committed, &mut plan, &["r1".into(), "r2".into()], Some(&a)).unwrap();
+        assert_eq!(out.unmatched, vec!["r1".to_string()]);
+        assert!(out.moved.is_empty(), "r2 was already filed under A");
+
+        // A destination that does not exist is refused outright.
+        assert!(retag(&committed, &mut plan, &["r2".into()], Some("chg-99")).is_err());
     }
 }

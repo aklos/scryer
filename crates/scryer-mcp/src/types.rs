@@ -138,6 +138,17 @@ pub(crate) struct SetChangeRequest {
     /// the change still has tagged entries (those close by folding or
     /// reverting). Recorded in history as "abandoned".
     pub close: Option<String>,
+    /// MOVE existing pending work into another change — the repair for work
+    /// filed under the wrong change, or a task that turned out to be two.
+    /// Bare ids, as you already hold them: a node or group id moves that
+    /// carrier and every pending element under it (the unit `get_pending`
+    /// shows); a responsibility or link id moves just that element; a `chg-N`
+    /// id moves everything currently filed under it; `"unfiled"` moves
+    /// everything untagged. Pass `to` for the destination.
+    pub retag: Option<Vec<String>>,
+    /// Where `retag` sends its targets: an open change id, or "unfiled" to
+    /// detach them. Omit to send them to the session's current change.
+    pub to: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

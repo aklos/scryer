@@ -3328,6 +3328,8 @@ mod tests {
                 change_id: None,
                 clear: None,
                 close: None,
+                retag: None,
+                to: None,
             }))
             .unwrap();
         assert!(tool_text(&r).contains("Opened chg-1"), "{}", tool_text(&r));
@@ -3378,6 +3380,8 @@ mod tests {
                 change_id: Some("chg-1".into()),
                 clear: None,
                 close: None,
+                retag: None,
+                to: None,
             }))
             .unwrap();
         assert!(tool_text(&r).contains("Resumed chg-1"), "{}", tool_text(&r));
@@ -3421,6 +3425,88 @@ mod tests {
         assert_eq!(impl_ev.change_id.as_deref(), Some("chg-1"));
     }
 
+    /// `set_change {retag}` re-files work that already exists: a node id moves
+    /// the carrier and everything pending under it, so an agent that filed a
+    /// task under the wrong change repairs the ledger instead of re-writing
+    /// the spec. The response names what moved and what matched nothing.
+    #[test]
+    fn set_change_retag_moves_pending_work_between_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let project = dir.path().to_string_lossy().to_string();
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::System, "Acme", None));
+        m.nodes.push(node("node-2", Kind::Container, "API", Some("node-1")));
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+
+        let server = ScryerServer::new();
+        let open = |rationale: &str| {
+            server
+                .set_change(Parameters(SetChangeRequest {
+                    project: Some(project.clone()),
+                    rationale: Some(rationale.into()),
+                    change_id: None,
+                    clear: None,
+                    close: None,
+                    retag: None,
+                    to: None,
+                }))
+                .unwrap()
+        };
+        open("give the API rate limiting");
+        // Written while chg-1 is selected — this is the mis-filing.
+        server
+            .add_component(Parameters(AddComponentRequest {
+                project: Some(project.clone()),
+                items: vec![ComponentItem {
+                    parent_id: "node-2".into(),
+                    name: "RateLimiter".into(),
+                    description: None,
+                    responsibilities: vec!["throttles requests per client".into()],
+                }],
+            }))
+            .unwrap();
+        open("the change it actually belongs to");
+
+        let r = server
+            .set_change(Parameters(SetChangeRequest {
+                project: Some(project.clone()),
+                rationale: None,
+                change_id: None,
+                clear: None,
+                close: None,
+                retag: Some(vec!["node-3".into(), "node-99".into()]),
+                to: Some("chg-2".into()),
+            }))
+            .unwrap();
+        let text = tool_text(&r);
+        assert!(text.contains("Moved 2 entries to chg-2"), "{text}");
+        assert!(text.contains("node:node-3 (was chg-1)"), "{text}");
+        assert!(text.contains("resp:resp-1 (was chg-1)"), "{text}");
+        assert!(text.contains("No pending work under: node-99"), "{text}");
+
+        // The carrier AND its claim moved together — the unit get_pending shows.
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(planned.change_map.get("node:node-3").map(String::as_str), Some("chg-2"));
+        assert_eq!(planned.change_map.get("resp:resp-1").map(String::as_str), Some("chg-2"));
+
+        // Detaching sends them back to the unfiled bucket.
+        let r = server
+            .set_change(Parameters(SetChangeRequest {
+                project: Some(project.clone()),
+                rationale: None,
+                change_id: None,
+                clear: None,
+                close: None,
+                retag: Some(vec!["chg-2".into()]),
+                to: Some("unfiled".into()),
+            }))
+            .unwrap();
+        assert!(tool_text(&r).contains("Moved 2 entries to unfiled"), "{}", tool_text(&r));
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert!(planned.change_map.is_empty(), "{:?}", planned.change_map);
+    }
+
     /// `set_change {close}` is the escape hatch for a stranded empty ledger:
     /// it refuses while the change has tagged entries, closes it once empty,
     /// and detaches a session selection pointing at the closed id.
@@ -3443,6 +3529,8 @@ mod tests {
                 change_id: None,
                 clear: None,
                 close: None,
+                retag: None,
+                to: None,
             }))
             .unwrap();
         server
@@ -3463,6 +3551,8 @@ mod tests {
                 change_id: None,
                 clear: None,
                 close: None,
+                retag: None,
+                to: None,
             }))
             .unwrap();
         let close = |id: &str| {
@@ -3472,6 +3562,8 @@ mod tests {
                 change_id: None,
                 clear: None,
                 close: Some(id.into()),
+                retag: None,
+                to: None,
             }))
         };
 
@@ -3524,6 +3616,8 @@ mod tests {
                 change_id: None,
                 clear: None,
                 close: None,
+                retag: None,
+                to: None,
             }))
             .unwrap();
         session1
@@ -3546,6 +3640,8 @@ mod tests {
                 change_id: None,
                 clear: None,
                 close: None,
+                retag: None,
+                to: None,
             }))
             .unwrap();
         let r = session2

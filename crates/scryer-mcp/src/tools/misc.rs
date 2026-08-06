@@ -505,7 +505,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Select which CHANGE this session's plan writes belong to — a named partition of the plan carrying the dev's rationale, so parallel workstreams stay separable and review/fold can work per task. Pass `rationale` (the task in one sentence, as the dev put it) to OPEN a new change, or `change_id` to RESUME an open one from a prior session (list them via get_pending's openChanges). After this, every plan write in this session is tagged to the change automatically; `mark_implemented {change}` folds exactly its entries, and the change closes when its last entry folds — the rationale survives in the history log. Pass `clear: true` to detach (writes go unfiled, today's serial behavior). Pass `close` (a change id) to close an EMPTY stranded change — one whose work ended up tagged elsewhere; refused while it has tagged entries, since a change normally closes itself when its last entry folds or reverts. With no arguments, reports the current selection and the open changes. Use this at the start of a task when other work may share the plan; skip it for quick serial edits."
+        description = "Select which CHANGE this session's plan writes belong to — a named partition of the plan carrying the dev's rationale, so parallel workstreams stay separable and review/fold can work per task. Pass `rationale` (the task in one sentence, as the dev put it) to OPEN a new change, or `change_id` to RESUME an open one from a prior session (list them via get_pending's openChanges). After this, every plan write in this session is tagged to the change automatically; `mark_implemented {change}` folds exactly its entries, and the change closes when its last entry folds — the rationale survives in the history log. Pass `clear: true` to detach (writes go unfiled, today's serial behavior). Pass `close` (a change id) to close an EMPTY stranded change — one whose work ended up tagged elsewhere; refused while it has tagged entries, since a change normally closes itself when its last entry folds or reverts. Pass `retag` (bare ids) with `to` to MOVE work that is already pending into another change — a node/group id takes that carrier and everything pending under it, a responsibility/link id takes just that element, a `chg-N` id takes everything filed under it, and \"unfiled\" takes everything untagged; `to` accepts a change id or \"unfiled\", and defaults to this session's change. Use it when work landed in the wrong change or one task turns out to be two — never re-write elements just to re-file them. With no arguments, reports the current selection and the open changes. Use this at the start of a task when other work may share the plan; skip it for quick serial edits."
     )]
     pub(crate) fn set_change(
         &self,
@@ -530,6 +530,104 @@ impl ScryerServer {
             }
             s
         };
+
+        // Retag: move work that ALREADY exists between changes. Distinct from
+        // every other verb here — it edits the ledger's filing, never the
+        // session's selection — so it runs first and returns on its own.
+        if let Some(targets) = req.retag.as_ref() {
+            let targets: Vec<String> = targets
+                .iter()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect();
+            if targets.is_empty() {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "retag needs at least one id — a node, group, responsibility, link, \
+                     or change id, or \"unfiled\"."
+                        .to_string(),
+                )]));
+            }
+            if req.rationale.is_some() || req.change_id.is_some() || req.close.is_some() {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "Pass retag alone — it moves existing work, it does not open, resume, \
+                     or close a change."
+                        .to_string(),
+                )]));
+            }
+            let _lock = match lock_or_err(&model_ref) {
+                Ok(l) => l,
+                Err(e) => return Ok(e),
+            };
+            let mut plan = match scryer_core::read_planned_seeded_at(&model_ref) {
+                Ok(p) => p,
+                Err(e) => {
+                    return Ok(CallToolResult::error(vec![Content::text(read_fail(
+                        "plan", &model_ref, &e,
+                    ))]));
+                }
+            };
+            let committed = scryer_core::read_model_at(&model_ref).unwrap_or_default();
+            // No `to` means "into what I'm working on" — the session's own
+            // change. With no selection either, there is nothing to infer.
+            let session = self.session_change(&model_ref);
+            let dest = match req.to.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                Some("unfiled") => None,
+                Some(cid) => Some(cid.to_string()),
+                None => match session {
+                    Some(c) => Some(c),
+                    None => {
+                        return Ok(CallToolResult::error(vec![Content::text(
+                            "Pass `to` (a change id, or \"unfiled\") — this session has no \
+                             current change to move the work into."
+                                .to_string(),
+                        )]));
+                    }
+                },
+            };
+            let outcome =
+                match scryer_core::changes::retag(&committed, &mut plan, &targets, dest.as_deref())
+                {
+                    Ok(o) => o,
+                    Err(e) => {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "{e}\n{}",
+                            open_changes_line(&plan)
+                        ))]));
+                    }
+                };
+            if !outcome.moved.is_empty() {
+                if let Err(e) = scryer_core::write_planned_at(&model_ref, &plan) {
+                    return Ok(CallToolResult::error(vec![Content::text(e)]));
+                }
+            }
+            let where_to = dest.as_deref().unwrap_or("unfiled");
+            let mut msg = format!(
+                "Moved {} entr{} to {where_to}.",
+                outcome.moved.len(),
+                if outcome.moved.len() == 1 { "y" } else { "ies" }
+            );
+            // Name what came from where: a re-file across three changes is
+            // exactly when the caller needs to see what it actually touched.
+            for (key, from) in &outcome.moved {
+                msg.push_str(&format!(
+                    "\n- {key} (was {})",
+                    from.as_deref().unwrap_or("unfiled")
+                ));
+            }
+            if !outcome.unmatched.is_empty() {
+                msg.push_str(&format!(
+                    "\nNo pending work under: {} — already folded, or never planned.",
+                    outcome.unmatched.join(", ")
+                ));
+            }
+            msg.push('\n');
+            msg.push_str(&open_changes_line(&plan));
+            drop(_lock);
+            if let Some(h) = status_header(&model_ref) {
+                msg.push_str(&format!("\n{h}"));
+            }
+            return Ok(CallToolResult::success(vec![Content::text(msg)]));
+        }
 
         if req.clear == Some(true) {
             self.set_session_change(None);

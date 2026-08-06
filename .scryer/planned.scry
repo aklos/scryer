@@ -1531,6 +1531,11 @@
           "id": "resp-127",
           "statement": "Opens a new named change, resumes an existing one by id, detaches the session from its current change, or closes an empty stranded one.",
           "lastTouchedAt": 1784883763
+        },
+        {
+          "id": "resp-683",
+          "statement": "**When** `retag` names ids, **re-file** their pending work into the target change instead of the session's selection",
+          "lastTouchedAt": 1786010084
         }
       ]
     },
@@ -11833,6 +11838,24 @@
           "lastTouchedAt": 1786009421
         }
       ]
+    },
+    {
+      "id": "node-646",
+      "kind": "symbol",
+      "name": "retag",
+      "parentId": "node-555",
+      "responsibilities": [
+        {
+          "id": "resp-681",
+          "statement": "**When** a bare id names a node or group, **move** that carrier and every pending element under it to the target change",
+          "lastTouchedAt": 1786010079
+        },
+        {
+          "id": "resp-682",
+          "statement": "**If** the target change is not in the plan's registry, **then** refuse the whole move",
+          "lastTouchedAt": 1786010079
+        }
+      ]
     }
   ],
   "links": [
@@ -15351,6 +15374,12 @@
       "src": "node-645",
       "dst": "node-551",
       "label": "returns"
+    },
+    {
+      "id": "link-node-646-node-557",
+      "src": "node-646",
+      "dst": "node-557",
+      "label": "keys elements via"
     }
   ],
   "groups": [
