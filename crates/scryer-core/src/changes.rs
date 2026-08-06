@@ -175,6 +175,7 @@ fn host_of(planned: &ScryModel, committed: &ScryModel, ec: &ElementChange) -> Op
 ///   - a responsibility or link id — that element alone;
 ///   - a `chg-N` id — everything currently filed under it;
 ///   - `"unfiled"` — every pending element with no tag.
+///
 /// `to` is the destination change, or None to detach to unfiled. Idempotent:
 /// an element already filed where it is being sent is not reported as moved.
 pub fn retag(

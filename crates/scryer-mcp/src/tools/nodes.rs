@@ -37,6 +37,23 @@ fn prune_code_map(model: &mut ScryModel, removed_node_ids: &HashSet<String>) {
 /// caller can apply the same replacement to both layers and skip whichever lacks
 /// the target; `dropped` describes every payload link discarded for an endpoint
 /// that no node in the resulting layer provides, so the loss is never silent.
+/// The ids a subtree replacement legitimately owns: `node_id` itself plus every
+/// descendant, i.e. exactly what [`replace_subtree`] swaps out. An id outside
+/// this set belongs to some other part of the model and is not the caller's to
+/// reuse (see `remint_colliding_node_ids`).
+fn subtree_ids(model: &ScryModel, node_id: &str) -> HashSet<String> {
+    let mut ids: HashSet<String> = HashSet::from([node_id.to_string()]);
+    let mut frontier = vec![node_id.to_string()];
+    while let Some(id) = frontier.pop() {
+        for child in model.nodes.iter().filter(|n| n.parent_id.as_deref() == Some(&id)) {
+            if ids.insert(child.id.clone()) {
+                frontier.push(child.id.clone());
+            }
+        }
+    }
+    ids
+}
+
 fn replace_subtree(
     model: &mut ScryModel,
     node_id: &str,
@@ -484,7 +501,7 @@ impl ScryerServer {
         // unrelated new one (see RespIdReminter).
         let prior_committed = scryer_core::read_model_at(&model_ref).unwrap_or_default();
         let prior_planned = scryer_core::read_planned_at(&model_ref).unwrap_or_default();
-        let mut reminter = RespIdReminter::new(&[&prior_committed, &prior_planned]);
+        let mut reminter = RespIdReminter::for_replacement(&[&prior_committed, &prior_planned]);
         for n in &model.nodes {
             reminter.absorb(n.responsibilities.iter());
         }
@@ -1640,13 +1657,27 @@ impl ScryerServer {
         // subtree is applied — both layers then receive identical ids (see
         // RespIdReminter).
         let committed_floor = scryer_core::read_model_at(&model_ref).unwrap_or_default();
-        let mut reminter = RespIdReminter::new(&[&model, &committed_floor]);
+        let mut reminter = RespIdReminter::for_replacement(&[&model, &committed_floor]);
         for n in &payload.nodes {
             reminter.absorb(n.responsibilities.iter());
         }
         for n in &mut payload.nodes {
             reminter.remint(&n.id, n.responsibilities.iter_mut());
         }
+
+        // Node ids get the same guard. This write owns exactly the subtree it
+        // replaces; a payload id naming a node ANYWHERE else is a stale
+        // snapshot's collision, and pushing it in would leave two nodes sharing
+        // an id (see remint_colliding_node_ids). Runs against both layers, and
+        // before the replacement, so the ids that land are already unique.
+        let replaced: std::collections::HashSet<String> =
+            subtree_ids(&model, &req.node_id);
+        let node_remints = remint_colliding_node_ids(
+            &mut payload.nodes,
+            &mut payload.links,
+            &replaced,
+            &[&model, &committed_floor],
+        );
 
         // Apply the subtree replacement to the plan. The dropped-link report
         // comes from the plan layer — always applied (node existence checked
@@ -1690,6 +1721,16 @@ impl ScryerServer {
         let warnings = validate::validate(&model);
         let mut msg = format!("Replaced subtree under {}", req.node_id);
         reminter.report_into(&mut msg);
+        if !node_remints.is_empty() {
+            msg.push_str(&format!(
+                "\n{} caller-supplied node id(s) re-minted (ids are server-assigned; \
+                 use the new ids from here on):",
+                node_remints.len()
+            ));
+            for line in &node_remints {
+                msg.push_str(&format!("\n- {line}"));
+            }
+        }
         if !dropped_links.is_empty() {
             msg.push_str(&format!(
                 "\n\nDropped {} link(s) with endpoints absent from the subtree:",
@@ -3729,6 +3770,128 @@ mod tests {
         assert_eq!(ids, vec!["resp-1", "resp-10", "resp-9", "resp-11"], "{ids:?}");
         let text = tool_text(&r);
         assert!(text.contains("node-1: 'new' → resp-10"), "reports the re-mint: {text}");
+    }
+
+    /// The stale-snapshot collision: an agent working from an old read picks a
+    /// `resp-N` for a NEW claim that has since been taken by a claim on ANOTHER
+    /// node. That id is minted-format and known, so it used to sail through —
+    /// hijacking the real claim's identity (directives, anchors, attached
+    /// tests, change tag) and leaving two claims sharing one id. It must be
+    /// re-minted, and the caller must be told why.
+    #[test]
+    fn update_nodes_remints_an_id_that_belongs_to_another_nodes_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut committed = ScryModel::new();
+        let mut a = node("node-1", Kind::Component, "A", None);
+        a.responsibilities = vec![resp("resp-1")];
+        let mut b = node("node-2", Kind::Component, "B", None);
+        b.responsibilities = vec![resp("resp-2")];
+        committed.nodes.push(a);
+        committed.nodes.push(b);
+        scryer_core::write_model_at(&model_ref, &committed).unwrap();
+        scryer_core::write_planned_at(&model_ref, &committed).unwrap();
+
+        // node-1 is written with resp-2 — which lives on node-2.
+        let server = ScryerServer::new();
+        let r = server
+            .update_nodes(Parameters(UpdateNodeRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                nodes: vec![UpdateNodeItem {
+                    node_id: "node-1".into(),
+                    kind: None,
+                    name: None,
+                    description: None,
+                    technology: None,
+                    external: None,
+                    responsibilities: Some(vec![resp("resp-1"), resp("resp-2")]),
+                    properties: None,
+                    visual: None,
+                    parent_id: None,
+                }],
+            }))
+            .unwrap();
+
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        let on = |id: &str| -> Vec<String> {
+            planned
+                .nodes
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap()
+                .responsibilities
+                .iter()
+                .map(|r| r.id.clone())
+                .collect()
+        };
+        assert_eq!(on("node-1"), vec!["resp-1", "resp-3"], "the colliding id was re-minted");
+        assert_eq!(on("node-2"), vec!["resp-2"], "the real resp-2 is untouched");
+        let text = tool_text(&r);
+        assert!(
+            text.contains("node-1: 'resp-2' → resp-3 (that id belongs to a claim on another node)"),
+            "the report names the collision and the new id: {text}"
+        );
+    }
+
+    /// The node-level twin, on the tool that mints subtrees: a payload node id
+    /// naming a node OUTSIDE the replaced subtree is re-minted rather than
+    /// pushed in beside the real one, and the payload's own references follow
+    /// the rename.
+    #[test]
+    fn set_node_remints_a_node_id_that_is_taken_outside_the_subtree() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        m.nodes.push(node("node-1", Kind::System, "Acme", None));
+        m.nodes.push(node("node-2", Kind::Container, "API", Some("node-1")));
+        // Lives elsewhere in the tree — not the subtree being replaced.
+        m.nodes.push(node("node-3", Kind::Container, "Worker", Some("node-1")));
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+
+        // A stale snapshot: the agent thinks node-3 is free and mints two
+        // components with node-3 / node-4, linked to each other.
+        let payload = serde_json::json!({
+            "nodes": [
+                { "id": "node-2", "kind": "container", "name": "API", "parentId": "node-1" },
+                { "id": "node-3", "kind": "component", "name": "Router", "parentId": "node-2" },
+                { "id": "node-4", "kind": "component", "name": "Auth", "parentId": "node-3" },
+            ],
+            "links": [{ "id": "link-1", "src": "node-4", "dst": "node-3", "label": "routes via" }],
+        });
+        let server = ScryerServer::new();
+        let r = server
+            .set_node(Parameters(SetNodeRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                node_id: "node-2".into(),
+                data: payload.to_string(),
+            }))
+            .unwrap();
+
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        let worker = planned.nodes.iter().find(|n| n.id == "node-3").unwrap();
+        assert_eq!(worker.name, "Worker", "the real node-3 still stands");
+        assert_eq!(
+            planned.nodes.iter().filter(|n| n.id == "node-3").count(),
+            1,
+            "no duplicate id landed"
+        );
+        let router = planned.nodes.iter().find(|n| n.name == "Router").unwrap();
+        assert_eq!(router.id, "node-5", "the collision took a fresh id");
+        let auth = planned.nodes.iter().find(|n| n.name == "Auth").unwrap();
+        assert_eq!(
+            auth.parent_id.as_deref(),
+            Some("node-5"),
+            "the child's parent followed the rename"
+        );
+        let link = planned.links.iter().find(|l| l.id == "link-1").unwrap();
+        assert_eq!(link.dst, "node-5", "the link endpoint followed the rename");
+        let text = tool_text(&r);
+        assert!(
+            text.contains("'node-3' → node-5 (that id belongs to a node outside this subtree)"),
+            "the report names the collision: {text}"
+        );
     }
 
     /// set_node writes the same subtree into BOTH layers, so a re-minted id

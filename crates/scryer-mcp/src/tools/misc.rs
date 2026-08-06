@@ -302,7 +302,7 @@ impl ScryerServer {
         // Caller-invented responsibility ids never enter the model — re-mint
         // them against both layers (see RespIdReminter).
         let committed_floor = scryer_core::read_model_at(&model_ref).unwrap_or_default();
-        let mut reminter = RespIdReminter::new(&[&model, &committed_floor]);
+        let mut reminter = RespIdReminter::for_replacement(&[&model, &committed_floor]);
         for g in &groups {
             reminter.absorb(g.responsibilities.iter());
         }

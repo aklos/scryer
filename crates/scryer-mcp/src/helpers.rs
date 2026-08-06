@@ -275,30 +275,70 @@ fn is_minted_resp_id(id: &str) -> bool {
 /// `set_groups`, `set_model`) accept full `Responsibility` structs, so a
 /// caller that doesn't know the next free id invents one ("new", "", "temp")
 /// — and every lookup in the system (`find_responsibility`, source_map, fold)
-/// keys on that id being globally unique. An id is re-minted only when it is
-/// UNKNOWN to both layers AND not minted-format: echoing an existing claim
-/// keeps its identity whatever its id looks like (legacy models carry ids the
-/// minters never issued, and renaming one would orphan its source anchors),
-/// and a hand-written `resp-N` is unique and well-formed, so it stands. Seed
-/// with BOTH layers (plan and committed), for the same union guard the intent
-/// tools use: a plan-deleted claim's id must not be re-issued while committed
-/// still holds it — and `enforce_readonly_directives` would staple the dead
-/// claim's user directives onto the unrelated new one.
+/// keys on that id being globally unique. Three ways a payload id fails that,
+/// each re-minted with a reported reason:
+///
+///  1. **Invented** — unknown to both layers and not minted-format ("new").
+///     Echoing an EXISTING claim keeps its identity whatever its id looks like
+///     (legacy models carry ids the minters never issued, and renaming one
+///     would orphan its source anchors), and a hand-written `resp-N` that
+///     collides with nothing stands.
+///  2. **Repeated** — the same id twice in one payload. Never legitimate: the
+///     second claim would silently overwrite the first.
+///  3. **Wrong host** — an id that lives on a DIFFERENT node/group in either
+///     layer. This is the stale-snapshot failure: an agent working from an old
+///     read picks `resp-712` for a NEW claim, and because that id is
+///     minted-format and known, the write used to sail through and hijack the
+///     real resp-712's identity — its directives, anchors, attached tests and
+///     change tag — while leaving two claims sharing one id. Only the
+///     patch-shaped tools guard on host ([`RespIdReminter::new`]); the
+///     whole-payload writers ([`RespIdReminter::for_replacement`]) legitimately
+///     relocate claims, so for them a host change is a move, not a collision.
+///
+/// Seed with BOTH layers (plan and committed), for the same union guard the
+/// intent tools use: a plan-deleted claim's id must not be re-issued while
+/// committed still holds it — and `enforce_readonly_directives` would staple
+/// the dead claim's user directives onto the unrelated new one.
 pub(crate) struct RespIdReminter {
     next: u64,
-    /// Every responsibility id the floor layers already hold — an incoming id
-    /// found here is an existing claim being echoed, never an invention.
-    known: std::collections::HashSet<String>,
-    /// One `host: 'old' → new` line per re-mint, for the tool response — the
-    /// caller has to learn the real ids it should use from now on.
+    /// Every responsibility id the floor layers already hold → the host ids it
+    /// lives on. An incoming id found here is an existing claim being echoed
+    /// (never an invention) — and the hosts say whether it is being echoed
+    /// where it actually lives.
+    known: std::collections::HashMap<String, std::collections::HashSet<String>>,
+    /// Ids this payload has already consumed — the within-write duplicate guard.
+    used: std::collections::HashSet<String>,
+    /// Whether a claim appearing on a host it doesn't live on is a collision
+    /// (patch writes) or a legitimate relocation (whole-payload writes).
+    guard_host: bool,
+    /// One `host: 'old' → new (why)` line per re-mint, for the tool response —
+    /// the caller has to learn the real ids it should use from now on, and WHY
+    /// its own id was refused.
     minted: Vec<String>,
 }
 
 impl RespIdReminter {
+    /// For the patch-shaped writers (`update_nodes`, `update_group`,
+    /// `set_groups`), where a claim cannot change host: moving one is
+    /// `move_responsibilities`' job, so an id arriving on a foreign host is a
+    /// collision.
     pub(crate) fn new(floors: &[&ScryModel]) -> Self {
+        Self::build(floors, true)
+    }
+
+    /// For the whole-payload writers (`set_model`, `set_node`), which restate
+    /// an entire model or subtree and may legitimately carry a claim to a new
+    /// host. Duplicate and invented ids are still re-minted.
+    pub(crate) fn for_replacement(floors: &[&ScryModel]) -> Self {
+        Self::build(floors, false)
+    }
+
+    fn build(floors: &[&ScryModel], guard_host: bool) -> Self {
         let mut me = Self {
             next: 1,
-            known: std::collections::HashSet::new(),
+            known: std::collections::HashMap::new(),
+            used: std::collections::HashSet::new(),
+            guard_host,
             minted: Vec::new(),
         };
         for m in floors {
@@ -308,13 +348,17 @@ impl RespIdReminter {
                     .flat_map(|n| n.responsibilities.iter())
                     .chain(m.groups.iter().flat_map(|g| g.responsibilities.iter())),
             );
-            for r in m
+            let hosted = m
                 .nodes
                 .iter()
-                .flat_map(|n| n.responsibilities.iter())
-                .chain(m.groups.iter().flat_map(|g| g.responsibilities.iter()))
-            {
-                me.known.insert(r.id.clone());
+                .flat_map(|n| n.responsibilities.iter().map(move |r| (&n.id, r)))
+                .chain(
+                    m.groups
+                        .iter()
+                        .flat_map(|g| g.responsibilities.iter().map(move |r| (&g.id, r))),
+                );
+            for (host, r) in hosted {
+                me.known.entry(r.id.clone()).or_default().insert(host.clone());
             }
         }
         me
@@ -332,21 +376,37 @@ impl RespIdReminter {
         self.next = self.next.max(max + 1);
     }
 
-    /// Replace every invented id in `resps` (unknown to the floors, not
-    /// minted-format) with a fresh `resp-N`, recording a report line under
-    /// `host` (the node or group id) per replacement.
+    /// Re-mint every id in `resps` that cannot safely stand — invented,
+    /// repeated within this payload, or (patch writes only) belonging to a
+    /// claim that lives on another host. `host` is the node or group being
+    /// written; it names the report line and is what the host guard compares
+    /// against.
     pub(crate) fn remint<'a>(
         &mut self,
         host: &str,
         resps: impl Iterator<Item = &'a mut Responsibility>,
     ) {
         for r in resps {
-            if is_minted_resp_id(&r.id) || self.known.contains(&r.id) {
+            let homes = self.known.get(&r.id);
+            let reason = if self.used.contains(&r.id) {
+                Some("repeated in this write")
+            } else if homes.is_some_and(|h| self.guard_host && !h.contains(host)) {
+                // The stale-snapshot collision: this id is a REAL claim, and it
+                // lives somewhere else. Taking it here would hijack that claim.
+                Some("that id belongs to a claim on another node")
+            } else if homes.is_none() && !is_minted_resp_id(&r.id) {
+                Some("ids are server-assigned")
+            } else {
+                None
+            };
+            let Some(reason) = reason else {
+                self.used.insert(r.id.clone());
                 continue;
-            }
+            };
             let fresh = format!("resp-{}", self.next);
             self.next += 1;
-            self.minted.push(format!("{host}: '{}' → {fresh}", r.id));
+            self.minted.push(format!("{host}: '{}' → {fresh} ({reason})", r.id));
+            self.used.insert(fresh.clone());
             r.id = fresh;
         }
     }
@@ -366,6 +426,84 @@ impl RespIdReminter {
             msg.push_str(&format!("\n- {line}"));
         }
     }
+}
+
+/// Re-mint payload NODE ids that name a node living outside the region this
+/// write replaces — the node-level twin of [`RespIdReminter`]'s wrong-host
+/// guard, and the same stale-snapshot failure: an agent reading the model,
+/// then writing a subtree minted against that old snapshot, picks `node-41`
+/// for something new while `node-41` has since been taken. `replace_subtree`
+/// would push it in beside the real one, leaving two nodes sharing an id —
+/// after which every id lookup in the system silently picks whichever comes
+/// first.
+///
+/// `replaced` is the id set this write legitimately owns (the subtree being
+/// swapped out); anything else live in either layer is taken. Renamed ids are
+/// repointed inside the payload — a child's `parentId` and both endpoints of
+/// every payload link — so the incoming shape survives the rename intact.
+/// Ids repeated WITHIN the payload are re-minted too, but not repointed: which
+/// of the twins a reference meant is not knowable.
+pub(crate) fn remint_colliding_node_ids(
+    nodes: &mut [Node],
+    links: &mut [scryer_core::Link],
+    replaced: &std::collections::HashSet<String>,
+    floors: &[&ScryModel],
+) -> Vec<String> {
+    use std::collections::{HashMap, HashSet};
+    let taken: HashSet<&str> = floors
+        .iter()
+        .flat_map(|m| m.nodes.iter().map(|n| n.id.as_str()))
+        .filter(|id| !replaced.contains(*id))
+        .collect();
+    // Mint past every id either layer has seen AND every id this payload
+    // carries, so a fresh id can't collide with a sibling later in the batch.
+    let mut next = floors
+        .iter()
+        .flat_map(|m| m.nodes.iter().map(|n| n.id.as_str()))
+        .chain(nodes.iter().map(|n| n.id.as_str()))
+        .filter_map(|id| id.strip_prefix("node-")?.parse::<u64>().ok())
+        .max()
+        .unwrap_or(0)
+        + 1;
+
+    let mut renamed: HashMap<String, String> = HashMap::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut report = Vec::new();
+    for n in nodes.iter_mut() {
+        let reason = if !seen.insert(n.id.clone()) {
+            "repeated in this write"
+        } else if taken.contains(n.id.as_str()) {
+            "that id belongs to a node outside this subtree"
+        } else {
+            continue;
+        };
+        let fresh = format!("node-{next}");
+        next += 1;
+        report.push(format!("'{}' → {fresh} ({reason})", n.id));
+        // Only a first-seen collision can be repointed; a duplicate's
+        // references are ambiguous, so they are left pointing at the twin.
+        if reason.starts_with("that id") {
+            renamed.insert(n.id.clone(), fresh.clone());
+        }
+        seen.insert(fresh.clone());
+        n.id = fresh;
+    }
+    if !renamed.is_empty() {
+        for n in nodes.iter_mut() {
+            if let Some(p) = n.parent_id.as_ref().and_then(|p| renamed.get(p)) {
+                n.parent_id = Some(p.clone());
+            }
+        }
+        for l in links.iter_mut() {
+            if let Some(s) = renamed.get(&l.src) {
+                l.src = s.clone();
+            }
+            if let Some(d) = renamed.get(&l.dst) {
+                l.dst = d.clone();
+            }
+        }
+    }
+    report
 }
 
 /// Write the plan, first tagging what THIS write changed to the session's

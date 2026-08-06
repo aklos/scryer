@@ -1019,6 +1019,11 @@
           "id": "resp-91",
           "statement": "Re-mints any caller-invented responsibility id in a raw-write payload that is unknown to both layers and not already minted-format.",
           "lastTouchedAt": 1784883763
+        },
+        {
+          "id": "resp-684",
+          "statement": "**If** a payload reuses a responsibility id that belongs to another host or repeats one within the write, **then** re-mint it and report why",
+          "lastTouchedAt": 1786010464
         }
       ],
       "properties": [
@@ -1029,13 +1034,23 @@
         },
         {
           "label": "known",
-          "description": "Every responsibility id already held by the plan and committed layers.",
-          "lastTouchedAt": 1784883763
+          "description": "Every responsibility id the plan and committed layers hold, mapped to the hosts it lives on.",
+          "lastTouchedAt": 1786010464
+        },
+        {
+          "label": "used",
+          "description": "Ids this payload has already consumed, catching a repeat within one write.",
+          "lastTouchedAt": 1786010464
+        },
+        {
+          "label": "guard_host",
+          "description": "Whether an id arriving on a foreign host is a collision or a legitimate relocation.",
+          "lastTouchedAt": 1786010464
         },
         {
           "label": "minted",
-          "description": "Report lines for every id re-minted during this call.",
-          "lastTouchedAt": 1784883763
+          "description": "Report lines for every id re-minted during this call, each naming its reason.",
+          "lastTouchedAt": 1786010464
         }
       ]
     },
@@ -11854,6 +11869,19 @@
           "id": "resp-682",
           "statement": "**If** the target change is not in the plan's registry, **then** refuse the whole move",
           "lastTouchedAt": 1786010079
+        }
+      ]
+    },
+    {
+      "id": "node-647",
+      "kind": "symbol",
+      "name": "remint_colliding_node_ids",
+      "parentId": "node-53",
+      "responsibilities": [
+        {
+          "id": "resp-685",
+          "statement": "**If** a subtree payload reuses a node id that is live outside the region being replaced, **then** re-mint it and repoint the payload's own references to it",
+          "lastTouchedAt": 1786010469
         }
       ]
     }
