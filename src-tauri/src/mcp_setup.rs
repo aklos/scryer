@@ -2,8 +2,23 @@ use std::path::{Path, PathBuf};
 
 /// Check if a project has .mcp.json with a scryer entry.
 fn check_mcp_json(project_path: &str) -> bool {
-    let path = PathBuf::from(project_path).join(".mcp.json");
-    if let Ok(contents) = std::fs::read_to_string(&path) {
+    has_mcp_scryer_entry(&PathBuf::from(project_path).join(".mcp.json"))
+}
+
+/// Copilot reads the SAME `.mcp.json` Claude Code does — the one scryer already
+/// writes — so its MCP setup needs no file of its own. It also accepts a
+/// committed `.github/mcp.json`, which `.mcp.json` overrides; a project wired
+/// up by hand there is already set up, so detection honours both and the setup
+/// offer stays quiet. Omitting `tools` is fine: Copilot defaults a server to
+/// all tools, and it treats `"stdio"` as an alias of its own `"local"`.
+fn check_copilot_mcp(project_path: &str) -> bool {
+    let root = PathBuf::from(project_path);
+    has_mcp_scryer_entry(&root.join(".mcp.json"))
+        || has_mcp_scryer_entry(&root.join(".github").join("mcp.json"))
+}
+
+fn has_mcp_scryer_entry(path: &Path) -> bool {
+    if let Ok(contents) = std::fs::read_to_string(path) {
         if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
             return root.pointer("/mcpServers/scryer").is_some();
         }
@@ -58,15 +73,48 @@ const SCRYER_CODEX_HOOK_EVENTS: &[(&str, Option<&str>, u64)] = &[
     ("Stop", None, 15),
 ];
 
-/// Does this hook entry belong to scryer? Identified by the command invoking
-/// the scryer-mcp binary's `hook` subcommand — the marker `install` writes.
+/// The Copilot CLI hook events. Copilot accepts Claude Code's PascalCase event
+/// names as an explicit compatibility mode, which also switches its payloads to
+/// the snake_case field names the one hook client already reads, so the events
+/// line up — but the tool VOCABULARY is its own (`view` to read, `create` /
+/// `edit` / `str_replace_editor` / native `apply_patch` to write), and matchers
+/// test the runtime name. Reads fire here like they do on Claude Code, so the
+/// overlay rides post-read rather than the edit. `bash` is deliberately absent:
+/// Copilot has a native patch tool, so unlike Codex there is no heredoc route
+/// worth spawning this client for on every shell command.
+const SCRYER_COPILOT_HOOK_EVENTS: &[(&str, Option<&str>, u64)] = &[
+    ("SessionStart", None, 10),
+    ("PostToolUse", Some("view"), 10),
+    ("PostToolUse", Some("create|edit|str_replace_editor|apply_patch"), 10),
+    ("Stop", None, 15),
+];
+
+/// Does the command in this hook entry invoke scryer's hook client? The marker
+/// `install` writes, and the only thing that identifies an entry as ours.
+fn is_scryer_hook_command(command: &str) -> bool {
+    command.contains("scryer-mcp")
+        && command
+            .trim_end()
+            .trim_end_matches(" --copilot")
+            .ends_with(" hook")
+}
+
+/// Does this hook entry belong to scryer? Claude Code and Codex nest the
+/// commands under a `hooks` array; Copilot puts the command on the entry
+/// itself. Both shapes are checked so one predicate serves every install.
 fn is_scryer_hook_entry(entry: &serde_json::Value) -> bool {
+    if entry["command"]
+        .as_str()
+        .is_some_and(is_scryer_hook_command)
+    {
+        return true;
+    }
     entry["hooks"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|h| h["command"].as_str())
-        .any(|c| c.contains("scryer-mcp") && c.trim_end().ends_with(" hook"))
+        .any(is_scryer_hook_command)
 }
 
 /// Check if Claude Code has scryer's session hooks installed for the project.
@@ -132,6 +180,41 @@ fn check_codex_hooks(project_path: &str) -> bool {
     false
 }
 
+/// Where Copilot's hook registration goes. `.github/hooks/` is the only
+/// project-scoped location Copilot actually loads: the `hooks` key in
+/// `.github/copilot/settings.local.json` is documented but inert as of 1.0.61
+/// (verified against real sessions), and the user-level hooks directory is
+/// global to every project rather than an opt-in for this one.
+///
+/// It is a COMMITTED path, unlike Claude Code's `settings.local.json` — so this
+/// registration is shared with the checkout, the same way `.codex/hooks.json`
+/// already is. That costs teammates nothing: the registered command exits in
+/// milliseconds unless the Scryer app has this project open, so a checkout
+/// without Scryer — including a CI run of the Copilot cloud agent, which reads
+/// exactly this directory — sees no behaviour at all.
+///
+/// Scryer owns this file outright (hence its own name in a directory Copilot
+/// reads whole), which is what lets it be written wholesale rather than merged.
+fn copilot_hooks_path(project_path: &str) -> PathBuf {
+    PathBuf::from(project_path)
+        .join(".github")
+        .join("hooks")
+        .join("scryer.json")
+}
+
+/// Check if Copilot CLI has scryer's session hooks installed for the project.
+fn check_copilot_hooks(project_path: &str) -> bool {
+    if let Ok(contents) = std::fs::read_to_string(copilot_hooks_path(project_path)) {
+        if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
+            return root
+                .pointer("/hooks/SessionStart")
+                .and_then(|v| v.as_array())
+                .is_some_and(|entries| entries.iter().any(is_scryer_hook_entry));
+        }
+    }
+    false
+}
+
 /// Check if a project has .codex/config.toml with a scryer MCP entry.
 fn check_codex_toml(project_path: &str) -> bool {
     let path = PathBuf::from(project_path).join(".codex").join("config.toml");
@@ -150,23 +233,29 @@ fn check_codex_toml(project_path: &str) -> bool {
 pub(crate) fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value {
     let has_claude = which::which("claude").is_ok();
     let has_codex = which::which("codex").is_ok();
+    let has_copilot = which::which("copilot").is_ok();
 
     let claude_mcp = project_path.as_deref().map(check_mcp_json).unwrap_or(false);
     let codex_mcp = project_path.as_deref().map(check_codex_toml).unwrap_or(false);
+    let copilot_mcp = project_path.as_deref().map(check_copilot_mcp).unwrap_or(false);
     let claude_approved = project_path.as_deref().map(check_claude_approved).unwrap_or(false);
     let claude_hooks = project_path.as_deref().map(check_claude_hooks).unwrap_or(false);
     let codex_hooks = project_path.as_deref().map(check_codex_hooks).unwrap_or(false);
+    let copilot_hooks = project_path.as_deref().map(check_copilot_hooks).unwrap_or(false);
     let (claude_statusline, claude_statusline_foreign) =
         project_path.as_deref().map(check_claude_statusline).unwrap_or((false, false));
 
     serde_json::json!({
         "claude": has_claude,
         "codex": has_codex,
+        "copilot": has_copilot,
         "claudeMcpEnabled": claude_mcp,
         "codexMcpEnabled": codex_mcp,
+        "copilotMcpEnabled": copilot_mcp,
         "claudeApproved": claude_approved,
         "claudeHooksEnabled": claude_hooks,
         "codexHooksEnabled": codex_hooks,
+        "copilotHooksEnabled": copilot_hooks,
         "claudeStatuslineEnabled": claude_statusline,
         "claudeStatuslineForeign": claude_statusline_foreign,
     })
@@ -289,6 +378,10 @@ pub(crate) fn setup_mcp_integration(
             let binary_path = find_scryer_mcp().ok_or("scryer-mcp binary not found")?;
             return write_codex_hooks(&project_path, &binary_path);
         }
+        "copilot_hooks" => {
+            let binary_path = find_scryer_mcp().ok_or("scryer-mcp binary not found")?;
+            return write_copilot_hooks(&project_path, &binary_path);
+        }
         "claude_statusline" => {
             let binary_path = find_scryer_mcp().ok_or("scryer-mcp binary not found")?;
             return write_claude_statusline(&project_path, &binary_path);
@@ -323,17 +416,7 @@ fn write_claude_statusline(project_path: &str, binary_path: &str) -> Result<Stri
     let claude_dir = PathBuf::from(project_path).join(".claude");
     let settings_path = claude_dir.join("settings.local.json");
 
-    let mut root: serde_json::Value = if settings_path.exists() {
-        let contents = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&contents).map_err(|e| {
-            format!(
-                "{} is not valid JSON ({e}); refusing to overwrite it — fix the file and retry.",
-                settings_path.display()
-            )
-        })?
-    } else {
-        serde_json::json!({})
-    };
+    let mut root = read_json_or_refuse(&settings_path)?;
 
     if root
         .get("statusLine")
@@ -374,9 +457,75 @@ fn write_codex_hooks(project_path: &str, binary_path: &str) -> Result<String, St
     )
 }
 
-/// Idempotent hook install into one file's `{"hooks": {...}}` block — both
-/// harnesses use the same entry schema. Two passes because an event may get
-/// two scryer entries: first strip every prior scryer entry per event (they
+/// The same opt-in for Copilot CLI. Copilot reads every `*.json` in
+/// `.github/hooks/`, so scryer takes a file of its own and writes it whole —
+/// no merge pass, and nothing of anyone else's to preserve or corrupt, which is
+/// the one simplification this location buys over the shared settings files the
+/// other two installs have to edit in place. Re-installing is therefore
+/// idempotent by construction, and a previously corrupted file is repaired
+/// rather than refused (it is only ever scryer's own).
+///
+/// The entry schema is Copilot's: FLAT, with the command on the entry rather
+/// than nested under a `hooks` array. `timeout` is written rather than
+/// Copilot's own `timeoutSec` because it normalises one to the other, keeping a
+/// single vocabulary across the three installs. The registered command carries
+/// `--copilot` so the client knows whose tool names and reply shape to speak.
+fn write_copilot_hooks(project_path: &str, binary_path: &str) -> Result<String, String> {
+    let path = copilot_hooks_path(project_path);
+    let dir = path
+        .parent()
+        .ok_or("no parent directory for the Copilot hooks file")?
+        .to_path_buf();
+    let command = format!("\"{binary_path}\" hook --copilot");
+
+    let mut hooks = serde_json::Map::new();
+    for (event, matcher, timeout) in SCRYER_COPILOT_HOOK_EVENTS {
+        let mut entry = serde_json::json!({
+            "type": "command",
+            "command": command,
+            "timeout": timeout,
+        });
+        if let Some(m) = matcher {
+            entry["matcher"] = serde_json::json!(m);
+        }
+        hooks
+            .entry(event.to_string())
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .unwrap()
+            .push(entry);
+    }
+    let root = serde_json::json!({ "version": 1, "hooks": hooks });
+
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Read a settings file we're about to merge into. A file that doesn't parse is
+/// an ERROR, never a blank slate: a stray comma in the user's config must not
+/// cost them everything else the file holds.
+fn read_json_or_refuse(path: &Path) -> Result<serde_json::Value, String> {
+    if !path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&contents).map_err(|e| {
+        format!(
+            "{} is not valid JSON ({e}); refusing to overwrite it — fix the file and retry.",
+            path.display()
+        )
+    })
+}
+
+/// Idempotent hook install into one file's `{"hooks": {...}}` block — Claude
+/// Code and Codex use the same entry schema. Two passes because an event may
+/// get two scryer entries: first strip every prior scryer entry per event (they
 /// all share the `… hook` command marker; foreign hooks are kept), then
 /// append the current set.
 fn write_scryer_hooks(
@@ -387,17 +536,7 @@ fn write_scryer_hooks(
 ) -> Result<String, String> {
     let command = format!("\"{}\" hook", binary_path);
 
-    let mut root: serde_json::Value = if file_path.exists() {
-        let contents = std::fs::read_to_string(file_path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&contents).map_err(|e| {
-            format!(
-                "{} is not valid JSON ({e}); refusing to overwrite it — fix the file and retry.",
-                file_path.display()
-            )
-        })?
-    } else {
-        serde_json::json!({})
-    };
+    let mut root = read_json_or_refuse(file_path)?;
 
     if !root.get("hooks").is_some_and(|v| v.is_object()) {
         root["hooks"] = serde_json::json!({});
@@ -612,5 +751,88 @@ mod hook_install_tests {
         );
         assert_eq!(root["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
         assert_eq!(root["hooks"]["Stop"].as_array().unwrap().len(), 1);
+    }
+
+    /// The Copilot install writes its own file in `.github/hooks/` using
+    /// Copilot's FLAT entry schema (command on the entry, not nested under a
+    /// `hooks` array), with Copilot's own tool names in the matchers and
+    /// `--copilot` on the command. Owning the file makes re-installing
+    /// idempotent by construction — and repairs a corrupted one, since there is
+    /// never anything of anyone else's in it to lose.
+    #[test]
+    fn copilot_hook_install_owns_its_file_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks_file = dir.path().join(".github/hooks/scryer.json");
+        std::fs::create_dir_all(hooks_file.parent().unwrap()).unwrap();
+        std::fs::write(&hooks_file, "{ not json at all").unwrap();
+
+        let project = dir.path().to_string_lossy().to_string();
+        assert!(!check_copilot_hooks(&project));
+        write_copilot_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
+        write_copilot_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
+        assert!(check_copilot_hooks(&project));
+
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_file).unwrap()).unwrap();
+        assert_eq!(root["version"], 1);
+        let post = root["hooks"]["PostToolUse"].as_array().unwrap();
+        assert_eq!(post.len(), 2, "read overlay + write touch, no duplicates: {post:?}");
+        // Copilot's own tool vocabulary, matched on the runtime names.
+        assert!(post.iter().any(|e| e["matcher"] == "view"));
+        assert!(post
+            .iter()
+            .any(|e| e["matcher"] == "create|edit|str_replace_editor|apply_patch"));
+        // Flat schema, and the client is told which harness it is serving.
+        assert_eq!(post[0]["type"], "command");
+        assert_eq!(post[0]["command"], "\"/opt/scryer/scryer-mcp\" hook --copilot");
+        assert!(post.iter().all(is_scryer_hook_entry));
+        assert_eq!(root["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+        assert_eq!(root["hooks"]["Stop"].as_array().unwrap().len(), 1);
+    }
+
+    /// Sibling files in `.github/hooks/` belong to other tools — Copilot loads
+    /// the whole directory — so the install must never touch them.
+    #[test]
+    fn copilot_hook_install_leaves_sibling_hook_files_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let siblings = dir.path().join(".github/hooks/my-linter.json");
+        std::fs::create_dir_all(siblings.parent().unwrap()).unwrap();
+        let original = serde_json::json!({
+            "hooks": { "PostToolUse": [{ "type": "command", "command": "my-linter" }] }
+        })
+        .to_string();
+        std::fs::write(&siblings, &original).unwrap();
+
+        let project = dir.path().to_string_lossy().to_string();
+        write_copilot_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
+        assert_eq!(std::fs::read_to_string(&siblings).unwrap(), original);
+    }
+
+    /// A Copilot entry and a Claude/Codex entry are both recognised as ours —
+    /// one predicate over two schemas — while a foreign command in either shape
+    /// is left alone.
+    #[test]
+    fn scryer_entries_are_recognised_in_both_schemas() {
+        let nested = serde_json::json!({
+            "matcher": "Read",
+            "hooks": [{ "type": "command", "command": "\"/opt/scryer-mcp\" hook" }],
+        });
+        let flat = serde_json::json!({
+            "type": "command",
+            "matcher": "view",
+            "command": "\"/opt/scryer-mcp\" hook --copilot",
+        });
+        assert!(is_scryer_hook_entry(&nested));
+        assert!(is_scryer_hook_entry(&flat));
+
+        // Not ours: a foreign command, and a command that merely mentions the
+        // binary without being the hook client (e.g. a wrapper running
+        // `scryer-mcp check`).
+        assert!(!is_scryer_hook_entry(&serde_json::json!({
+            "type": "command", "command": "my-linter",
+        })));
+        assert!(!is_scryer_hook_entry(&serde_json::json!({
+            "type": "command", "command": "\"/opt/scryer-mcp\" check",
+        })));
     }
 }

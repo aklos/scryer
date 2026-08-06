@@ -6,7 +6,12 @@ import { Input, Select } from "./ui";
 import { BTN, BTN_GO, BTN_ICON, EYEBROW, SegField } from "./pagekit";
 import { useMcpSetup } from "./hooks/useMcpSetup";
 
-type AgentPref = "auto" | "claudeCode" | "codex";
+/** The agents a fill can run with, in the order they're fallen back to when the
+ *  preferred one isn't installed. Mirrors `detect_available_agent_pref`, so the
+ *  readout here and the agent that actually launches can't disagree. */
+const AGENTS = ["claudeCode", "codex", "copilot"] as const;
+type LaunchAgent = (typeof AGENTS)[number];
+type AgentPref = "auto" | LaunchAgent;
 
 interface AgentSettings {
   model: string;
@@ -17,6 +22,7 @@ export interface SubagentSettings {
   agent: AgentPref;
   claude: AgentSettings;
   codex: AgentSettings;
+  copilot: AgentSettings;
   /** Confirm before a UI action launches an agent. "Don't ask again" clears it. */
   confirmLaunch: boolean;
 }
@@ -24,13 +30,23 @@ export interface SubagentSettings {
 export interface Detected {
   claude: boolean;
   codex: boolean;
+  copilot: boolean;
 }
+
+/** Each agent's key in `Detected` and in the settings blocks — the same word in
+ *  both, so one map serves the availability check and the model/effort lookup. */
+const AGENT_KEY: Record<LaunchAgent, "claude" | "codex" | "copilot"> = {
+  claudeCode: "claude",
+  codex: "codex",
+  copilot: "copilot",
+};
 
 const DEFAULT_AGENT: AgentSettings = { model: "", effort: "medium" };
 export const SUBAGENT_DEFAULTS: SubagentSettings = {
   agent: "auto",
   claude: { ...DEFAULT_AGENT },
   codex: { ...DEFAULT_AGENT },
+  copilot: { ...DEFAULT_AGENT },
   confirmLaunch: true,
 };
 
@@ -39,44 +55,32 @@ export const SUBAGENT_DEFAULTS: SubagentSettings = {
  *  powerline so the launch readout and the editor can never disagree. `model`
  *  empty means the agent CLI's own default. */
 export interface ResolvedLaunch {
-  agent: "claudeCode" | "codex" | null;
+  agent: LaunchAgent | null;
   model: string;
   effort: string;
 }
 
-export const AGENT_LABEL: Record<"claudeCode" | "codex", string> = {
+export const AGENT_LABEL: Record<LaunchAgent, string> = {
   claudeCode: "Claude Code",
   codex: "Codex",
+  copilot: "Copilot CLI",
 };
 
 export function resolveLaunch(settings: SubagentSettings, detected: Detected): ResolvedLaunch {
-  const c = detected.claude;
-  const x = detected.codex;
-  const agent: ResolvedLaunch["agent"] =
-    settings.agent === "codex"
-      ? x
-        ? "codex"
-        : c
-          ? "claudeCode"
-          : null
-      : settings.agent === "claudeCode"
-        ? c
-          ? "claudeCode"
-          : x
-            ? "codex"
-            : null
-        : c
-          ? "claudeCode"
-          : x
-            ? "codex"
-            : null;
-  const a = agent === "codex" ? settings.codex : agent === "claudeCode" ? settings.claude : null;
+  const installed = (a: LaunchAgent) => detected[AGENT_KEY[a]];
+  // Preference first, then the standing order — so an uninstalled preference
+  // degrades to a working agent rather than to nothing.
+  const order: LaunchAgent[] =
+    settings.agent === "auto" ? [...AGENTS] : [settings.agent, ...AGENTS];
+  const agent = order.find(installed) ?? null;
+  const a = agent ? settings[AGENT_KEY[agent]] : null;
   return { agent, model: a?.model ?? "", effort: a?.effort ?? "" };
 }
 
 // Effort levels are agent-specific (from each CLI's own option set).
 const CLAUDE_EFFORT = ["low", "medium", "high", "xhigh", "max"];
 const CODEX_EFFORT = ["minimal", "low", "medium", "high", "xhigh"];
+const COPILOT_EFFORT = ["none", "low", "medium", "high", "xhigh", "max"];
 
 // Curated models. Claude aliases auto-track the latest version; Codex uses
 // explicit slugs. "Custom…" drops to a free-text field for anything else.
@@ -87,6 +91,18 @@ const CODEX_MODELS = [
   "gpt-5.4-mini",
   "gpt-5.3-codex",
   "gpt-5.3-codex-spark",
+];
+// Copilot fronts several providers on one subscription — the reason to want it
+// — so its shortlist spans them rather than favouring one. "auto" is Copilot's
+// own per-task pick, distinct from "Default" (whatever the CLI is set to).
+const COPILOT_MODELS = [
+  "auto",
+  "claude-opus-4.8",
+  "claude-sonnet-4.6",
+  "claude-haiku-4.5",
+  "gpt-5.5",
+  "gpt-5.3-codex",
+  "gemini-3.1-pro-preview",
 ];
 const CUSTOM = "__custom__";
 
@@ -101,7 +117,11 @@ export function SettingsPanel({
   projectPath?: string | null;
 }) {
   const [settings, setSettings] = useState<SubagentSettings>(SUBAGENT_DEFAULTS);
-  const [detected, setDetected] = useState<Detected>({ claude: false, codex: false });
+  const [detected, setDetected] = useState<Detected>({
+    claude: false,
+    codex: false,
+    copilot: false,
+  });
   const [saving, setSaving] = useState(false);
   const mcpSetup = useMcpSetup(projectPath ?? null);
 
@@ -110,7 +130,7 @@ export function SettingsPanel({
       .then((s) => setSettings({ ...SUBAGENT_DEFAULTS, ...s }))
       .catch(() => {});
     invoke<Detected>("detect_ai_tools", { projectPath: null })
-      .then((d) => setDetected({ claude: !!d.claude, codex: !!d.codex }))
+      .then((d) => setDetected({ claude: !!d.claude, codex: !!d.codex, copilot: !!d.copilot }))
       .catch(() => {});
   }, []);
 
@@ -158,9 +178,10 @@ export function SettingsPanel({
           </p>
 
           <Field label="Detected agents">
-            <div className="flex gap-4 text-xs">
-              <AgentStatus name="Claude Code" available={detected.claude} />
-              <AgentStatus name="Codex" available={detected.codex} />
+            <div className="flex flex-wrap gap-4 text-xs">
+              {AGENTS.map((a) => (
+                <AgentStatus key={a} name={AGENT_LABEL[a]} available={detected[AGENT_KEY[a]]} />
+              ))}
             </div>
           </Field>
 
@@ -168,16 +189,15 @@ export function SettingsPanel({
             <SegField<AgentPref>
               options={[
                 { value: "auto", label: "Auto" },
-                { value: "claudeCode", label: "Claude Code" },
-                { value: "codex", label: "Codex" },
+                ...AGENTS.map((a) => ({ value: a, label: AGENT_LABEL[a] })),
               ]}
               value={settings.agent}
               onChange={(agent) => setSettings((s) => ({ ...s, agent }))}
             />
             <p className="text-2xs text-[var(--text-muted)]">
               {resolvedAgent
-                ? `Fills will use ${resolvedAgent === "claudeCode" ? "Claude Code" : "Codex"}.`
-                : "No agent detected — install Claude Code or Codex."}
+                ? `Fills will use ${AGENT_LABEL[resolvedAgent]}.`
+                : "No agent detected — install Claude Code, Codex or Copilot CLI."}
             </p>
           </Field>
 
@@ -197,7 +217,17 @@ export function SettingsPanel({
             onChange={(codex) => setSettings((s) => ({ ...s, codex }))}
           />
 
-          {projectPath && (mcpSetup.tools.claude || mcpSetup.tools.codex) && (
+          <AgentSettingsGroup
+            title="Copilot CLI"
+            efforts={COPILOT_EFFORT}
+            models={COPILOT_MODELS}
+            customNote="Copilot ignores a model name it doesn't recognise instead of reporting it, so a typo here runs on its default model rather than failing. Check the spelling against `copilot help config`."
+            value={settings.copilot}
+            onChange={(copilot) => setSettings((s) => ({ ...s, copilot }))}
+          />
+
+          {projectPath &&
+            (mcpSetup.tools.claude || mcpSetup.tools.codex || mcpSetup.tools.copilot) && (
             <Field label="Session hooks (this project)">
               <p className="text-2xs leading-relaxed text-[var(--text-muted)]">
                 Let agent sessions see the model as they work: the status line on start, each
@@ -222,6 +252,22 @@ export function SettingsPanel({
                   busy={mcpSetup.busy}
                   onInstall={() => void mcpSetup.enableHooks("codex")}
                 />
+              )}
+              {mcpSetup.tools.copilot && (
+                <>
+                  <HooksRow
+                    name="Copilot CLI"
+                    target=".github/hooks/scryer.json"
+                    installed={mcpSetup.tools.copilotHooksEnabled}
+                    busy={mcpSetup.busy}
+                    onInstall={() => void mcpSetup.enableHooks("copilot")}
+                  />
+                  <p className="text-2xs leading-relaxed text-[var(--text-muted)]">
+                    Copilot loads a project's hooks — and its MCP servers — only in a folder
+                    you've trusted, and asks the first time you open one. Until you do, it stays
+                    silent about both.
+                  </p>
+                </>
               )}
             </Field>
           )}
@@ -360,12 +406,16 @@ function AgentSettingsGroup({
   title,
   efforts,
   models,
+  customNote,
   value,
   onChange,
 }: {
   title: string;
   efforts: string[];
   models: string[];
+  /** Shown only when the free-text model field is open — for an agent whose CLI
+   *  won't tell the user when the name they typed doesn't land. */
+  customNote?: string;
   value: AgentSettings;
   onChange: (next: AgentSettings) => void;
 }) {
@@ -385,6 +435,7 @@ function AgentSettingsGroup({
         <Field label="Model">
           <ModelPicker
             aliases={models}
+            customNote={customNote}
             value={value.model}
             onChange={(model) => onChange({ ...value, model })}
           />
@@ -398,10 +449,12 @@ function AgentSettingsGroup({
  *  reveals a free-text field for full model names. */
 function ModelPicker({
   aliases,
+  customNote,
   value,
   onChange,
 }: {
   aliases: string[];
+  customNote?: string;
   value: string;
   onChange: (value: string) => void;
 }) {
@@ -432,12 +485,17 @@ function ModelPicker({
         }}
       />
       {custom && (
-        <Input
-          variant="bordered"
-          value={value}
-          placeholder="Full model name (e.g. claude-opus-4-7)"
-          onChange={(e) => onChange(e.target.value)}
-        />
+        <>
+          <Input
+            variant="bordered"
+            value={value}
+            placeholder="Full model name (e.g. claude-opus-4-7)"
+            onChange={(e) => onChange(e.target.value)}
+          />
+          {customNote && (
+            <p className="text-2xs leading-relaxed text-[var(--text-muted)]">{customNote}</p>
+          )}
+        </>
       )}
     </div>
   );

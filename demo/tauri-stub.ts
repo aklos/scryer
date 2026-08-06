@@ -29,12 +29,13 @@ export async function invoke<T = unknown>(cmd: string, args?: unknown): Promise<
   // reads. Serve a real Claude Code · opus · high setup so the lifted ProjectPicker
   // and Powerline show an authentic launch — and `confirmLaunch: false` so the
   // prologue's "Generate" fires straight into the build with no modal.
-  if (cmd === "detect_ai_tools") return { claude: true, codex: false } as T;
+  if (cmd === "detect_ai_tools") return { claude: true, codex: false, copilot: false } as T;
   if (cmd === "get_subagent_settings") {
     return {
       agent: "claudeCode",
       claude: { model: "claude-opus-4-8", effort: "high" },
       codex: { model: "", effort: "medium" },
+      copilot: { model: "", effort: "medium" },
       confirmLaunch: false,
     } as T;
   }

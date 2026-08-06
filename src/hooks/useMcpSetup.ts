@@ -8,13 +8,22 @@ import { invoke } from "@tauri-apps/api/core";
 export interface AiToolsState {
   claude: boolean;
   codex: boolean;
+  copilot: boolean;
   claudeMcpEnabled: boolean;
   codexMcpEnabled: boolean;
+  /** Copilot reads the same `.mcp.json` Claude Code does (and an optional
+   *  committed `.github/mcp.json`), so this is usually true the moment
+   *  `claudeMcpEnabled` is — no config file of its own. */
+  copilotMcpEnabled: boolean;
   claudeApproved: boolean;
   /** Scryer's session hooks are registered in this project's Claude Code settings. */
   claudeHooksEnabled: boolean;
   /** Scryer's session hooks are registered in this project's `.codex/hooks.json`. */
   codexHooksEnabled: boolean;
+  /** Scryer's session hooks are registered in this project's
+   *  `.github/hooks/scryer.json` — the only project-scoped location Copilot
+   *  actually loads, and only once the folder is trusted. */
+  copilotHooksEnabled: boolean;
   /** Scryer's status one-liner is registered as this project's Claude Code
    *  statusLine — the persistent segment that also works while Scryer is closed. */
   claudeStatuslineEnabled: boolean;
@@ -26,11 +35,14 @@ export interface AiToolsState {
 const EMPTY: AiToolsState = {
   claude: false,
   codex: false,
+  copilot: false,
   claudeMcpEnabled: false,
   codexMcpEnabled: false,
+  copilotMcpEnabled: false,
   claudeApproved: false,
   claudeHooksEnabled: false,
   codexHooksEnabled: false,
+  copilotHooksEnabled: false,
   claudeStatuslineEnabled: false,
   claudeStatuslineForeign: false,
 };
@@ -49,11 +61,11 @@ export interface McpSetup {
    *  tool auto-approve in `.claude/settings.local.json` — then re-detect. */
   enable: () => Promise<void>;
   /** Explicit, separate opt-in: install scryer's session hooks for one tool —
-   *  Claude Code (`.claude/settings.local.json`) or Codex (`.codex/hooks.json`).
-   *  Never bundled into `enable` — the hooks change every session's behavior
-   *  (while the app is open), so they are only written when the user asks for
-   *  exactly that. */
-  enableHooks: (tool: "claude" | "codex") => Promise<void>;
+   *  Claude Code (`.claude/settings.local.json`), Codex (`.codex/hooks.json`)
+   *  or Copilot (`.github/hooks/scryer.json`). Never bundled into `enable` —
+   *  the hooks change every session's behavior (while the app is open), so they
+   *  are only written when the user asks for exactly that. */
+  enableHooks: (tool: "claude" | "codex" | "copilot") => Promise<void>;
   /** Its own opt-in, separate from the session hooks: register scryer's status
    *  one-liner as Claude Code's persistent statusLine. The only integration that
    *  keeps reporting while Scryer is closed (it reads the model off disk), so it
@@ -92,7 +104,9 @@ export function useMcpSetup(projectPath: string | null): McpSetup {
       // Only write what's actually missing, so re-enabling is a no-op rather
       // than churning files. Each command merges into existing config.
       const actions: string[] = [];
-      if (tools.claude && !tools.claudeMcpEnabled) actions.push("mcp");
+      // One `.mcp.json` write serves Claude Code and Copilot both.
+      if ((tools.claude && !tools.claudeMcpEnabled) || (tools.copilot && !tools.copilotMcpEnabled))
+        actions.push("mcp");
       if (tools.codex && !tools.codexMcpEnabled) actions.push("mcp_codex");
       if (tools.claude && !tools.claudeApproved) actions.push("claude_approve");
       for (const action of actions) {
@@ -105,11 +119,11 @@ export function useMcpSetup(projectPath: string | null): McpSetup {
   }, [projectPath, tools, reload]);
 
   const enableHooks = useCallback(
-    async (tool: "claude" | "codex") => {
+    async (tool: "claude" | "codex" | "copilot") => {
       if (!projectPath) return;
       setBusy(true);
       try {
-        const action = tool === "codex" ? "codex_hooks" : "claude_hooks";
+        const action = `${tool}_hooks`;
         await invoke("setup_mcp_integration", { action, projectPath });
         reload();
       } finally {
@@ -136,7 +150,9 @@ export function useMcpSetup(projectPath: string | null): McpSetup {
   }, [projectPath]);
 
   const needsSetup =
-    (tools.claude && !tools.claudeMcpEnabled) || (tools.codex && !tools.codexMcpEnabled);
+    (tools.claude && !tools.claudeMcpEnabled) ||
+    (tools.codex && !tools.codexMcpEnabled) ||
+    (tools.copilot && !tools.copilotMcpEnabled);
   const dismissed = projectPath ? dismissedPaths.has(projectPath) : false;
 
   return { tools, needsSetup, dismissed, busy, enable, enableHooks, enableStatusline, dismiss, reload };

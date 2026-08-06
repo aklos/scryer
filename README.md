@@ -39,7 +39,7 @@ Coding agents write faster than you can review. You end up shipping code you don
 
 The model describes what each part is responsible for — not its class-by-class structure — in short, language-independent claims on an opinionated [C4](https://c4model.com/)-style hierarchy. It isn't UML, and it isn't your code redrawn as boxes. You plan a change in the model first; the agent reads it over MCP and builds code to match, so the model stays ahead of the code rather than lagging behind it. Underneath, a deterministic observability layer (no LLM) reports what's built versus planned, source and test coverage, and drift in both directions.
 
-Works with <b>Claude Code</b> and <b>Codex</b> out of the box. Any agent that supports [MCP](https://modelcontextprotocol.io/) can read and write the model.
+Works with <b>Claude Code</b>, <b>Codex</b> and <b>GitHub Copilot CLI</b> out of the box. Any agent that supports [MCP](https://modelcontextprotocol.io/) can read and write the model.
 
 ## Features
 
@@ -56,7 +56,7 @@ Works with <b>Claude Code</b> and <b>Codex</b> out of the box. Any agent that su
 - **Build from a codebase** — Point an agent at a project and it scans the code to populate the model.
 - **Diagram view** — A diagram renders the model one level at a time for spatial navigation. Drag cards where you want them — placements persist, and auto-layout manages the rest.
 - **MCP server** — Agents connect to read, modify, and build from the model in real time.
-- **AI tool setup** — Detects Claude Code and Codex and writes MCP config and auto-approve permissions. Optionally installs a Claude Code statusLine that reports the model's pending work and drift even while Scryer is closed.
+- **AI tool setup** — Detects Claude Code, Codex and Copilot CLI and writes MCP config and auto-approve permissions. Session hooks put the model in front of the agent as it works, per project and per tool. Optionally installs a Claude Code statusLine that reports the model's pending work and drift even while Scryer is closed.
 
 ## Getting started
 
@@ -88,13 +88,18 @@ This is how the model stays ahead of the code: intent is captured as a plan befo
 
 ## Agent support
 
-Scryer is built to work with **Claude Code** and **Codex** first.
+Scryer works with **Claude Code**, **Codex** and **GitHub Copilot CLI**.
 
 - **MCP** (Model Context Protocol) — how agents read and write architecture models. Required for any agent integration.
 - **CLI spawning** — how Scryer launches agents for automated model builds and drift sync. Claude Code is spawned via `claude -p` (uses your subscription), Codex via `codex exec` (uses your API key). Both get the Scryer MCP server attached automatically.
-- **ACP** (Agent Client Protocol) — for agents that implement the full ACP handshake (e.g. via [claude-agent-acp](https://github.com/zed-industries/claude-agent-acp)). Scryer falls back to ACP if a `{name}-acp` binary is found on PATH.
+- **ACP** (Agent Client Protocol) — Copilot CLI serves ACP from its own binary (`copilot --acp`), so that's how Scryer launches it; any other agent with a `{name}-acp` adapter on PATH is launched the same way.
+- **Session hooks** — an optional, per-project opt-in for all three: the model's status on session start, the claims governing a file as the agent works in it, and a one-time close check for claims it touched. Inert whenever the Scryer app isn't open on the project.
 
-When an agent connects via MCP, Scryer captures its identity from the protocol handshake. When a build or sync is triggered, Scryer resolves that identity to a binary and launches it with the right flags. Claude Code and Codex are mapped automatically. For other agents, Scryer tries ACP conventions.
+When an agent connects via MCP, Scryer captures its identity from the protocol handshake. When a build or sync is triggered, Scryer resolves that identity to a binary and launches it with the right flags.
+
+**Copilot notes.** Copilot reads the same project `.mcp.json` Claude Code does, so one file serves both. Two things differ from the others: it reaches Scryer *only* through that file (its ACP mode doesn't accept a stdio MCP server over the protocol), and it loads a project's MCP servers and hooks only in a folder you've **trusted** — it asks the first time you open one. Until you do, it stays quiet about both.
+
+Copilot fronts several model providers on one subscription, so its model list spans Claude, GPT and Gemini; pick one under Subagent settings. If you type a model name by hand there, check the spelling — run `copilot help config` for the current list. Copilot ignores an unrecognised model in ACP mode rather than reporting it, so a typo runs on its default model instead of failing.
 
 ## MCP server
 
@@ -106,8 +111,11 @@ Link a project directory in the app and click "Enable" on the prompt, or run `sc
 
 - **Claude Code** — `.mcp.json` + tool auto-approve in `.claude/settings.local.json`
 - **Codex** — `.codex/config.toml`
+- **Copilot CLI** — `.mcp.json`, the same file Claude Code reads (Copilot also accepts a committed `.github/mcp.json`, if you'd rather keep it there)
 
 Existing config files are preserved — only the `scryer` entry is added or updated.
+
+Session hooks are a separate opt-in, per tool, from Subagent settings: `.claude/settings.local.json`, `.codex/hooks.json`, or `.github/hooks/scryer.json` for Copilot.
 
 For Claude Code you can also install a **statusLine** (from the app, or `scryer-mcp init --statusline`): a one-line model status — pending work, drift scopes, and changes in flight — in every Claude Code session. It reads the model straight off disk, so it keeps reporting while Scryer is closed.
 
@@ -182,7 +190,7 @@ Architecture models go stale as code changes. Scryer detects drift deterministic
 When drift is detected:
 
 1. A review surface and drift indicators flag the potentially drifted scopes — click through to the affected node pages.
-2. Trigger a drift check to spawn your agent (Claude Code via `claude -p`, Codex via `codex exec`) with Scryer's MCP server attached. Drifted scopes are checked in parallel, and each agent gets the changed code embedded inline as evidence, so it judges divergence without re-reading the tree and updates the model only where code has actually diverged.
+2. Trigger a drift check to spawn your agent (Claude Code via `claude -p`, Codex via `codex exec`, Copilot via `copilot --acp`) with Scryer's MCP server attached. Drifted scopes are checked in parallel, and each agent gets the changed code embedded inline as evidence, so it judges divergence without re-reading the tree and updates the model only where code has actually diverged.
 3. Undescribed behavior is proposed into the plan as a **vagrant** claim for you to adopt or reject; a **stale** claim is flagged on the committed model where the code regressed from what was claimed.
 4. Model changes appear in the editor in real time. When every scope has been examined, the drift anchor advances so the same changes stop surfacing.
 

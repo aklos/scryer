@@ -14,7 +14,9 @@ import { BTN, BTN_GO } from "./pagekit";
  *  still missing — the consent list shown to the user. */
 function plannedWrites(tools: McpSetup["tools"]): string[] {
   const out: string[] = [];
-  if (tools.claude && !tools.claudeMcpEnabled) out.push(".mcp.json");
+  // Claude Code and Copilot share `.mcp.json`, so it's listed once for either.
+  if ((tools.claude && !tools.claudeMcpEnabled) || (tools.copilot && !tools.copilotMcpEnabled))
+    out.push(".mcp.json");
   if (tools.codex && !tools.codexMcpEnabled) out.push(".codex/config.toml");
   if (tools.claude && !tools.claudeApproved)
     out.push(".claude/settings.local.json — auto-approve all scryer tools");
@@ -34,8 +36,15 @@ export function McpSetupPrompt({
    *  and rely on the "Not now" button. Both routes call `setup.dismiss()`. */
   dismissable?: boolean;
 }) {
-  const { claude, codex } = setup.tools;
-  const agents = [claude && "Claude Code", codex && "Codex"].filter(Boolean).join(" and ");
+  const { claude, codex, copilot } = setup.tools;
+  const names = [claude && "Claude Code", codex && "Codex", copilot && "Copilot CLI"].filter(
+    Boolean,
+  ) as string[];
+  // "A", "A and B", "A, B and C" — three agents can be detected at once.
+  const agents =
+    names.length > 2
+      ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
+      : names.join(" and ");
   const writes = plannedWrites(setup.tools);
 
   const enable = async () => {
@@ -57,7 +66,7 @@ export function McpSetupPrompt({
       )}
       <div className="pr-4 text-xs font-medium text-[var(--text)]">Enable AI tool integration</div>
       <div className="text-2xs leading-relaxed text-[var(--text-muted)]">
-        {agents} {claude && codex ? "are" : "is"} installed. Wire scryer into this project so your
+        {agents} {names.length > 1 ? "are" : "is"} installed. Wire scryer into this project so your
         agent can read and update the model over MCP. This creates:
       </div>
       <ul className="flex flex-col gap-0.5 text-2xs text-[var(--text-secondary)]">
