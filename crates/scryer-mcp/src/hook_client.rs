@@ -1,21 +1,26 @@
-//! `scryer-mcp hook` — the session-hook client for Claude Code and Codex.
+//! `scryer-mcp hook` — the session-hook client for Claude Code, Codex and
+//! Copilot CLI.
 //!
 //! The harness invokes this once per hook event with the event JSON on stdin.
-//! Both harnesses use the same field names and output schema, so one client
-//! serves both, dispatching on the event and tool names. It bridges the event
-//! to the desktop app's loopback endpoint (advertised in `.scryer/hook.json`
-//! while the app has the project open):
+//! All three name the event fields the same way — `hook_event_name`,
+//! `session_id`, `cwd`, `tool_name`, `tool_input` — so one client serves them
+//! all, dispatching on the event and tool names. It bridges the event to the
+//! desktop app's loopback endpoint (advertised in `.scryer/hook.json` while the
+//! app has the project open):
 //!
 //! - SessionStart      → GET /status   → inject the model's status line
-//! - PostToolUse Read  → GET /overlay  → inject the file's governing intent
-//! - PostToolUse Edit… → POST /touch   → record the touch, say nothing
+//! - PostToolUse read  → GET /overlay  → inject the file's governing intent
+//! - PostToolUse edit… → POST /touch   → record the touch, say nothing
 //! - Stop              → GET /close    → block once with unreconciled claims
 //!
-//! Codex names its tools differently — edits arrive as `apply_patch` (or a
-//! Bash `apply_patch` heredoc) carrying a patch envelope instead of a file
-//! path, and reads fire no hooks at all — so there the overlay rides
-//! PreToolUse on the patch (intent lands just before the edit) and touches
-//! are recorded per file named in the envelope.
+//! Where they differ is the tool vocabulary and the reply shape, and neither is
+//! discoverable from the event — so the install writes which harness it is
+//! (`--copilot`) rather than the client sniffing for it. See [`Harness`].
+//!
+//! Codex reads fire no hooks at all, so there the overlay rides PreToolUse on
+//! the patch (intent lands just before the edit) and touches are recorded per
+//! file named in the envelope. Copilot fires post-read like Claude Code does,
+//! so it gets the same post-Read overlay.
 //!
 //! Every failure path — no discovery file, endpoint gone, malformed input —
 //! exits 0 with no output: installed hooks are inert unless the Scryer app is
@@ -30,7 +35,79 @@ use std::path::{Path, PathBuf};
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
 
-pub fn run_hook_client() -> Result<(), Box<dyn std::error::Error>> {
+/// Which harness registered this hook. The event JSON is the same shape
+/// everywhere, but two things about it are not, and neither can be read off the
+/// event:
+///
+/// - **Tool vocabulary.** Claude Code and Codex call the tools scryer cares
+///   about `Read` / `Edit` / `Write` / `apply_patch` / `Bash`, and name the
+///   edited file in `tool_input.file_path`. Copilot calls them `view` /
+///   `create` / `edit` / `str_replace_editor` / `apply_patch`, and names the
+///   file in `tool_input.path`.
+/// - **Where injected context goes.** Claude Code reads it out of the
+///   `hookSpecificOutput` envelope; Copilot reads a top-level
+///   `additionalContext` on SessionStart and PostToolUse (only its PreToolUse
+///   accepts either). One reply can't satisfy both without guessing.
+///
+/// So the install records the harness in the registered command — `hook` or
+/// `hook --copilot` — and the client is told rather than left to sniff.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Harness {
+    /// Claude Code and Codex: same vocabulary, same envelope.
+    ClaudeLike,
+    Copilot,
+}
+
+/// What a tool call means to scryer, once the harness's own name for it is
+/// resolved. Everything else is [`ToolKind::Other`] and costs nothing.
+#[derive(PartialEq, Eq)]
+enum ToolKind {
+    /// Read a file — the moment to inject the intent governing it.
+    Read,
+    /// Write to the file named in the arguments.
+    Write,
+    /// Write to every file named in an `apply_patch` envelope.
+    Patch,
+    Other,
+}
+
+impl Harness {
+    fn tool_kind(self, tool: &str) -> ToolKind {
+        match (self, tool) {
+            (Harness::ClaudeLike, "Read") | (Harness::Copilot, "view") => ToolKind::Read,
+            (Harness::ClaudeLike, "Edit" | "Write" | "NotebookEdit") => ToolKind::Write,
+            (Harness::Copilot, "create" | "edit" | "str_replace_editor") => ToolKind::Write,
+            // Codex routes edits through a native `apply_patch` or a Bash
+            // heredoc wrapping the same envelope; Copilot has the native tool
+            // only. A Bash command with no envelope in it parses to no files
+            // and costs one no-op.
+            (Harness::ClaudeLike, "apply_patch" | "Bash") => ToolKind::Patch,
+            (Harness::Copilot, "apply_patch") => ToolKind::Patch,
+            _ => ToolKind::Other,
+        }
+    }
+
+    /// Emit injected context in the shape this harness reads.
+    fn emit_context(self, event_name: &str, text: &str) {
+        match self {
+            Harness::ClaudeLike => emit(&serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": event_name,
+                    "additionalContext": text,
+                }
+            })),
+            Harness::Copilot => emit(&serde_json::json!({ "additionalContext": text })),
+        }
+    }
+}
+
+pub fn run_hook_client(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let harness = if args.iter().any(|a| a == "--copilot") {
+        Harness::Copilot
+    } else {
+        Harness::ClaudeLike
+    };
+
     let mut input = String::new();
     if std::io::stdin().read_to_string(&mut input).is_err() {
         return Ok(());
@@ -44,9 +121,9 @@ pub fn run_hook_client() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     match event["hook_event_name"].as_str().unwrap_or_default() {
-        "SessionStart" => session_start(&endpoint),
-        "PreToolUse" => pre_tool_use(&endpoint, &event),
-        "PostToolUse" => post_tool_use(&endpoint, &event),
+        "SessionStart" => session_start(&endpoint, harness),
+        "PreToolUse" => pre_tool_use(&endpoint, &event, harness),
+        "PostToolUse" => post_tool_use(&endpoint, &event, harness),
         "Stop" => stop(&endpoint, &event),
         _ => {}
     }
@@ -169,29 +246,33 @@ fn emit(v: &serde_json::Value) {
     println!("{}", serde_json::to_string(v).unwrap_or_default());
 }
 
-fn session_start(ep: &Endpoint) {
+fn session_start(ep: &Endpoint, harness: Harness) {
     let Some(status) = call(ep, "GET", "/status", "") else { return };
     let Some(line) = status["statusLine"].as_str() else { return };
-    // Harness-neutral wording: on Claude Code the overlay arrives as files are
-    // read, on Codex as they are edited — "work in" covers both truthfully.
+    // Harness-neutral wording: on Claude Code and Copilot the overlay arrives
+    // as files are read, on Codex as they are edited — "work in" covers all
+    // three truthfully.
     let context = format!(
         "{line}\nThe Scryer app is open on this project, so its architecture model is live and \
          binding. The claims and directives governing a file are injected automatically as you \
          work in it; `locate {{file}}` (MCP) answers on demand, `get_pending` lists \
          outstanding plan work."
     );
-    emit(&serde_json::json!({
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": context,
-        }
-    }));
+    harness.emit_context("SessionStart", &context);
 }
 
-fn post_tool_use(ep: &Endpoint, event: &serde_json::Value) {
-    match event["tool_name"].as_str().unwrap_or_default() {
-        "Read" => {
-            let Some(file) = event["tool_input"]["file_path"].as_str() else { return };
+/// The file a tool call names. `file_path` is Claude Code's and Codex's key,
+/// `path` Copilot's; accepting both keeps one lookup for every harness.
+fn tool_file(event: &serde_json::Value) -> Option<&str> {
+    event["tool_input"]["file_path"]
+        .as_str()
+        .or_else(|| event["tool_input"]["path"].as_str())
+}
+
+fn post_tool_use(ep: &Endpoint, event: &serde_json::Value, harness: Harness) {
+    match harness.tool_kind(event["tool_name"].as_str().unwrap_or_default()) {
+        ToolKind::Read => {
+            let Some(file) = tool_file(event) else { return };
             let Some(overlay) = call(
                 ep,
                 "GET",
@@ -201,25 +282,19 @@ fn post_tool_use(ep: &Endpoint, event: &serde_json::Value) {
                 return;
             };
             if let Some(text) = render_overlay(&overlay) {
-                emit(&serde_json::json!({
-                    "hookSpecificOutput": {
-                        "hookEventName": "PostToolUse",
-                        "additionalContext": text,
-                    }
-                }));
+                harness.emit_context("PostToolUse", &text);
             }
         }
-        "Edit" | "Write" | "NotebookEdit" => {
-            let Some(file) = event["tool_input"]["file_path"].as_str() else { return };
+        ToolKind::Write => {
+            let Some(file) = tool_file(event) else { return };
             touch(ep, event, file);
         }
-        // Codex: edits carry a patch envelope, not a file_path.
-        "apply_patch" | "Bash" => {
+        ToolKind::Patch => {
             for file in patched_files(event) {
                 touch(ep, event, &file);
             }
         }
-        _ => {}
+        ToolKind::Other => {}
     }
 }
 
@@ -238,9 +313,10 @@ const OVERLAY_FILE_CAP: usize = 5;
 
 /// Codex reads fire no hook events, so the intent overlay rides the edit
 /// instead: just before a patch lands, inject the claims and directives
-/// governing the files it names. Claude Code never sends this event (scryer
-/// doesn't register PreToolUse there — post-Read is the better moment).
-fn pre_tool_use(ep: &Endpoint, event: &serde_json::Value) {
+/// governing the files it names. Claude Code and Copilot never send this event
+/// (scryer registers PreToolUse for neither — post-Read is the better moment,
+/// and both fire it).
+fn pre_tool_use(ep: &Endpoint, event: &serde_json::Value, harness: Harness) {
     let mut sections: Vec<String> = Vec::new();
     for file in patched_files(event).iter().take(OVERLAY_FILE_CAP) {
         let Some(overlay) = call(
@@ -258,22 +334,25 @@ fn pre_tool_use(ep: &Endpoint, event: &serde_json::Value) {
     if sections.is_empty() {
         return;
     }
-    emit(&serde_json::json!({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "additionalContext": sections.join("\n\n"),
-        }
-    }));
+    harness.emit_context("PreToolUse", &sections.join("\n\n"));
 }
 
 /// File paths named by the apply_patch envelope in this tool call, if any.
-/// The native `apply_patch` tool carries the envelope in `tool_input.command`;
+/// Codex's native `apply_patch` carries the envelope in `tool_input.command`;
 /// newer Codex builds route edits through Bash as an `apply_patch <<'EOF'`
-/// heredoc with the same envelope inside, so both tools get the same parse.
-/// Envelope paths are cwd-relative — absolutized here so the endpoint's
-/// project-prefix stripping works even when the session runs in a subdirectory.
+/// heredoc with the same envelope inside; Copilot's `apply_patch` is a freeform
+/// tool whose whole `tool_input` IS the patch string. The envelope grammar is
+/// identical in all three, so the same parse serves them — only where to look
+/// for it differs, and trying the string form first covers that without needing
+/// to know the harness. Envelope paths are cwd-relative — absolutized here so
+/// the endpoint's project-prefix stripping works even when the session runs in
+/// a subdirectory.
 fn patched_files(event: &serde_json::Value) -> Vec<String> {
-    let command = event["tool_input"]["command"].as_str().unwrap_or_default();
+    let input = &event["tool_input"];
+    let command = input
+        .as_str()
+        .or_else(|| input["command"].as_str())
+        .unwrap_or_default();
     let cwd = event["cwd"].as_str().unwrap_or_default();
     envelope_files(command)
         .into_iter()

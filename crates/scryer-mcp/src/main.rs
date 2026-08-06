@@ -31,9 +31,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             return init_project(statusline);
         }
-        // Claude Code session hook: event JSON on stdin, hook JSON on stdout.
+        // Agent session hook: event JSON on stdin, hook JSON on stdout. Takes
+        // `--copilot` because Copilot's tool names and reply shape differ and
+        // the event can't be sniffed for them — the install writes the flag.
         // Silent no-op unless the Scryer app has this project open.
-        Some("hook") => return hook_client::run_hook_client(),
+        Some("hook") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            return hook_client::run_hook_client(&args);
+        }
         // Loop-state one-liner for humans, straight from disk (no app needed).
         Some("status") => {
             let args: Vec<String> = std::env::args().skip(2).collect();

@@ -20,6 +20,10 @@ export interface AiToolsState {
   claudeHooksEnabled: boolean;
   /** Scryer's session hooks are registered in this project's `.codex/hooks.json`. */
   codexHooksEnabled: boolean;
+  /** Scryer's session hooks are registered in this project's
+   *  `.github/hooks/scryer.json` — the only project-scoped location Copilot
+   *  actually loads, and only once the folder is trusted. */
+  copilotHooksEnabled: boolean;
   /** Scryer's status one-liner is registered as this project's Claude Code
    *  statusLine — the persistent segment that also works while Scryer is closed. */
   claudeStatuslineEnabled: boolean;
@@ -38,6 +42,7 @@ const EMPTY: AiToolsState = {
   claudeApproved: false,
   claudeHooksEnabled: false,
   codexHooksEnabled: false,
+  copilotHooksEnabled: false,
   claudeStatuslineEnabled: false,
   claudeStatuslineForeign: false,
 };
@@ -56,11 +61,11 @@ export interface McpSetup {
    *  tool auto-approve in `.claude/settings.local.json` — then re-detect. */
   enable: () => Promise<void>;
   /** Explicit, separate opt-in: install scryer's session hooks for one tool —
-   *  Claude Code (`.claude/settings.local.json`) or Codex (`.codex/hooks.json`).
-   *  Never bundled into `enable` — the hooks change every session's behavior
-   *  (while the app is open), so they are only written when the user asks for
-   *  exactly that. */
-  enableHooks: (tool: "claude" | "codex") => Promise<void>;
+   *  Claude Code (`.claude/settings.local.json`), Codex (`.codex/hooks.json`)
+   *  or Copilot (`.github/hooks/scryer.json`). Never bundled into `enable` —
+   *  the hooks change every session's behavior (while the app is open), so they
+   *  are only written when the user asks for exactly that. */
+  enableHooks: (tool: "claude" | "codex" | "copilot") => Promise<void>;
   /** Its own opt-in, separate from the session hooks: register scryer's status
    *  one-liner as Claude Code's persistent statusLine. The only integration that
    *  keeps reporting while Scryer is closed (it reads the model off disk), so it
@@ -114,11 +119,11 @@ export function useMcpSetup(projectPath: string | null): McpSetup {
   }, [projectPath, tools, reload]);
 
   const enableHooks = useCallback(
-    async (tool: "claude" | "codex") => {
+    async (tool: "claude" | "codex" | "copilot") => {
       if (!projectPath) return;
       setBusy(true);
       try {
-        const action = tool === "codex" ? "codex_hooks" : "claude_hooks";
+        const action = `${tool}_hooks`;
         await invoke("setup_mcp_integration", { action, projectPath });
         reload();
       } finally {

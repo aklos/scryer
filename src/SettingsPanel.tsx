@@ -197,7 +197,8 @@ export function SettingsPanel({
             onChange={(codex) => setSettings((s) => ({ ...s, codex }))}
           />
 
-          {projectPath && (mcpSetup.tools.claude || mcpSetup.tools.codex) && (
+          {projectPath &&
+            (mcpSetup.tools.claude || mcpSetup.tools.codex || mcpSetup.tools.copilot) && (
             <Field label="Session hooks (this project)">
               <p className="text-2xs leading-relaxed text-[var(--text-muted)]">
                 Let agent sessions see the model as they work: the status line on start, each
@@ -222,6 +223,22 @@ export function SettingsPanel({
                   busy={mcpSetup.busy}
                   onInstall={() => void mcpSetup.enableHooks("codex")}
                 />
+              )}
+              {mcpSetup.tools.copilot && (
+                <>
+                  <HooksRow
+                    name="Copilot CLI"
+                    target=".github/hooks/scryer.json"
+                    installed={mcpSetup.tools.copilotHooksEnabled}
+                    busy={mcpSetup.busy}
+                    onInstall={() => void mcpSetup.enableHooks("copilot")}
+                  />
+                  <p className="text-2xs leading-relaxed text-[var(--text-muted)]">
+                    Copilot loads a project's hooks — and its MCP servers — only in a folder
+                    you've trusted, and asks the first time you open one. Until you do, it stays
+                    silent about both.
+                  </p>
+                </>
               )}
             </Field>
           )}
