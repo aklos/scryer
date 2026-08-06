@@ -10,7 +10,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::client::ScryerClient;
 use crate::events::{AgentEvent, Usage};
-use crate::AgentKind;
+use crate::{AcpKind, AgentKind};
 
 /// How the agent should be launched.
 #[derive(Clone)]
@@ -18,7 +18,7 @@ pub enum LaunchMode {
     /// CLI print mode. Uses the user's subscription.
     Cli { kind: AgentKind },
     /// ACP subprocess.
-    Acp,
+    Acp { kind: AcpKind },
 }
 
 /// Commands sent to the runtime.
@@ -159,8 +159,8 @@ fn runtime_thread(
                             &agent_binary, &kind, &cwd, &model_name, &effort, &mcp_binary,
                             &prompt, &tool_refs, id, event_tx, done_tx.clone(),
                         ),
-                        LaunchMode::Acp => start_acp_session(
-                            &agent_binary, &cwd, &model_name, &mcp_binary,
+                        LaunchMode::Acp { kind } => start_acp_session(
+                            &agent_binary, &kind, &cwd, &model_name, &effort, &mcp_binary,
                             &prompt, id, event_tx, done_tx.clone(),
                         ).await,
                     };
@@ -538,10 +538,81 @@ fn summarize_event(line: &str) -> Option<String> {
 // ACP mode: full protocol handshake
 // ---------------------------------------------------------------------------
 
+/// The command line an ACP subprocess is spawned with. The protocol carries the
+/// session — cwd, MCP servers, the prompt — but not which model or how hard to
+/// think, so for a dialect that takes those as process flags they belong here.
+fn acp_args(kind: &AcpKind, model_name: &str, effort: &str) -> Vec<String> {
+    match kind {
+        AcpKind::Copilot => {
+            let mut args = vec!["--acp".to_string(), "--stdio".to_string()];
+            if !model_name.is_empty() {
+                args.push("--model".into());
+                args.push(model_name.to_string());
+            }
+            if !effort.is_empty() {
+                args.push("--effort".into());
+                args.push(effort.to_string());
+            }
+            args
+        }
+        // Nothing is known about an adapter's flags, so it gets none: its own
+        // config decides the model, exactly as it does outside scryer.
+        AcpKind::Adapter => Vec::new(),
+    }
+}
+
+/// Does this project's MCP config declare scryer? The question only arises for
+/// an agent that won't take a server over the protocol, so the config on disk
+/// is the only route in — checking it turns "the agent said it has no scryer
+/// tool" into a message that names what to fix. Both files Copilot reads count.
+fn project_declares_scryer_mcp(cwd: &str) -> bool {
+    let root = std::path::Path::new(cwd);
+    [root.join(".mcp.json"), root.join(".github").join("mcp.json")]
+        .iter()
+        .any(|p| {
+            std::fs::read_to_string(p)
+                .ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .is_some_and(|v| v.pointer("/mcpServers/scryer").is_some())
+        })
+}
+
+#[cfg(test)]
+mod acp_args_tests {
+    use super::*;
+
+    /// Copilot serves ACP from its own binary, so the mode flags are mandatory
+    /// and model/effort ride along as process flags. An empty model or effort
+    /// means "whatever the CLI is already set to" and must not be passed as an
+    /// empty string, which Copilot rejects as an unknown model.
+    #[test]
+    fn copilot_gets_its_mode_flags_and_only_the_settings_that_are_set() {
+        assert_eq!(
+            acp_args(&AcpKind::Copilot, "gpt-5.5", "high"),
+            ["--acp", "--stdio", "--model", "gpt-5.5", "--effort", "high"]
+        );
+        assert_eq!(acp_args(&AcpKind::Copilot, "", ""), ["--acp", "--stdio"]);
+        assert_eq!(
+            acp_args(&AcpKind::Copilot, "", "medium"),
+            ["--acp", "--stdio", "--effort", "medium"]
+        );
+    }
+
+    /// An adapter binary is spawned bare: nothing is known about its flags, so
+    /// inventing any would be a guess that fails at spawn.
+    #[test]
+    fn an_adapter_is_spawned_with_no_flags() {
+        assert!(acp_args(&AcpKind::Adapter, "gpt-5.5", "high").is_empty());
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn start_acp_session(
     agent_binary: &str,
+    kind: &AcpKind,
     cwd: &str,
-    _model_name: &str,
+    model_name: &str,
+    effort: &str,
     mcp_binary: &str,
     prompt: &str,
     id: u64,
@@ -549,15 +620,40 @@ async fn start_acp_session(
     done_tx: mpsc::UnboundedSender<RuntimeCommand>,
 ) -> Result<oneshot::Sender<()>, String> {
     let mut child = tokio::process::Command::new(agent_binary)
+        .args(acp_args(kind, model_name, effort))
+        .current_dir(cwd)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("Failed to spawn {agent_binary}: {e}"))?;
 
     let stdin = child.stdin.take().ok_or("No stdin on child")?;
     let stdout = child.stdout.take().ok_or("No stdout on child")?;
+
+    // ACP carries no channel for an agent's own diagnostics, and stdout is the
+    // protocol — so when one of these subprocesses dies, everything it said
+    // about why went to stderr. Tee it to the same place CLI sessions log to,
+    // or a failure surfaces as nothing more useful than "server shut down".
+    if let Some(stderr) = child.stderr.take() {
+        let log_path = std::path::Path::new(cwd)
+            .join(".scryer")
+            .join("build-logs")
+            .join(format!("session-{id}.err.log"));
+        let _ = std::fs::create_dir_all(log_path.parent().unwrap());
+        tokio::task::spawn_local(async move {
+            use std::io::Write as _;
+            use tokio::io::{AsyncBufReadExt, BufReader};
+            let mut log = std::fs::File::create(&log_path).ok();
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Some(f) = log.as_mut() {
+                    let _ = writeln!(f, "{line}");
+                }
+            }
+        });
+    }
 
     let client = ScryerClient::new(event_tx.clone());
 
@@ -581,19 +677,44 @@ async fn start_acp_session(
         .await
         .map_err(|e| format!("ACP initialize failed: {e}"))?;
 
-    let mcp_server = McpServer::Stdio(McpServerStdio::new("scryer", mcp_binary));
+    // Hand the session the scryer MCP server — except where the agent has told
+    // us it can't take one this way. Copilot's ACP advertises `http` and `sse`
+    // MCP transports and no stdio, and true to that it accepts a stdio entry
+    // here without complaint and then ignores it, leaving the session with no
+    // scryer tools at all. It does read the project's own `.mcp.json`, which is
+    // the file scryer already writes, so there the config on disk is the route
+    // in — and folder trust becomes a prerequisite for the launch path too, not
+    // just for hooks.
+    let mcp_servers = match kind {
+        AcpKind::Copilot => {
+            if !project_declares_scryer_mcp(cwd) {
+                return Err(format!(
+                    "Copilot can only reach scryer through this project's own MCP config, and \
+                     {cwd}/.mcp.json doesn't declare it. Enable AI tool integration for this \
+                     project (or run `scryer-mcp init`), and make sure you've trusted the folder \
+                     in Copilot — it skips project MCP servers in untrusted folders."
+                ));
+            }
+            Vec::new()
+        }
+        AcpKind::Adapter => vec![McpServer::Stdio(McpServerStdio::new("scryer", mcp_binary))],
+    };
     let session = connection
-        .new_session(
-            NewSessionRequest::new(PathBuf::from(cwd)).mcp_servers(vec![mcp_server]),
-        )
+        .new_session(NewSessionRequest::new(PathBuf::from(cwd)).mcp_servers(mcp_servers))
         .await
         .map_err(|e| format!("ACP new_session failed: {e}"))?;
 
     let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
     let prompt_text = prompt.to_string();
     let sid = session.session_id.clone();
+    let child_pid = child.id();
 
     tokio::task::spawn_local(async move {
+        // `child` is owned by this task for the life of the session. It was
+        // spawned `kill_on_drop`, so leaving it in the starting frame killed the
+        // agent the moment the session was handed back — the whole ACP path
+        // died between `session/new` and the first prompt.
+        let mut child = child;
         let prompt_fut = connection.prompt(PromptRequest::new(
             sid.clone(),
             vec![prompt_text.into()],
@@ -621,10 +742,15 @@ async fn start_acp_session(
                 }
             }
             _ = cancel_rx => {
+                // Ask politely over the protocol first, then make sure: an
+                // agent that ignores the notification would otherwise outlive
+                // the session it was cancelled out of.
                 let _ = connection.cancel(CancelNotification::new(sid)).await;
+                kill_process_tree(&mut child, child_pid).await;
                 let _ = event_tx.send(AgentEvent::Cancelled);
             }
         }
+        drop(child); // ends the agent process for a completed session too
         let _ = done_tx.send(RuntimeCommand::Done { id });
     });
 

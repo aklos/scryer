@@ -14,7 +14,8 @@ pub fn global_dir() -> PathBuf {
 
 /// Per-agent model + reasoning effort. An empty model means "use the agent
 /// CLI's own default". Effort values are agent-specific (Claude accepts
-/// low/medium/high/xhigh/max; Codex accepts minimal/low/medium/high).
+/// low/medium/high/xhigh/max; Codex accepts minimal/low/medium/high; Copilot
+/// accepts none/low/medium/high/xhigh/max).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSettings {
@@ -39,13 +40,15 @@ impl Default for AgentSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentSettings {
-    /// Which agent to launch: "auto" | "claudeCode" | "codex".
+    /// Which agent to launch: "auto" | "claudeCode" | "codex" | "copilot".
     #[serde(default = "default_agent")]
     pub agent: String,
     #[serde(default)]
     pub claude: AgentSettings,
     #[serde(default)]
     pub codex: AgentSettings,
+    #[serde(default)]
+    pub copilot: AgentSettings,
     /// Confirm before any UI action launches an agent (a billable run). Lets the
     /// user see which agent + model + effort will run; "don't ask again" clears
     /// it. Defaults to true so the gate is opt-out, not opt-in.
@@ -59,6 +62,7 @@ impl Default for SubagentSettings {
             agent: default_agent(),
             claude: AgentSettings::default(),
             codex: AgentSettings::default(),
+            copilot: AgentSettings::default(),
             confirm_launch: default_confirm_launch(),
         }
     }

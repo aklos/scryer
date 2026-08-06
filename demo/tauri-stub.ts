@@ -35,6 +35,7 @@ export async function invoke<T = unknown>(cmd: string, args?: unknown): Promise<
       agent: "claudeCode",
       claude: { model: "claude-opus-4-8", effort: "high" },
       codex: { model: "", effort: "medium" },
+      copilot: { model: "", effort: "medium" },
       confirmLaunch: false,
     } as T;
   }

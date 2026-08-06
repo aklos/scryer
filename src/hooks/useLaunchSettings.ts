@@ -26,14 +26,18 @@ export interface LaunchSettings {
 /// ever mounted.
 export function useLaunchSettings(): LaunchSettings {
   const [subagent, setSubagent] = useState<SubagentSettings>(SUBAGENT_DEFAULTS);
-  const [detected, setDetected] = useState<Detected>({ claude: false, codex: false });
+  const [detected, setDetected] = useState<Detected>({
+    claude: false,
+    codex: false,
+    copilot: false,
+  });
 
   const reload = useCallback(() => {
     invoke<SubagentSettings>("get_subagent_settings")
       .then((s) => setSubagent({ ...SUBAGENT_DEFAULTS, ...s }))
       .catch(() => {});
     invoke<Detected>("detect_ai_tools", { projectPath: null })
-      .then((d) => setDetected({ claude: !!d.claude, codex: !!d.codex }))
+      .then((d) => setDetected({ claude: !!d.claude, codex: !!d.codex, copilot: !!d.copilot }))
       .catch(() => {});
   }, []);
   useEffect(reload, [reload]);

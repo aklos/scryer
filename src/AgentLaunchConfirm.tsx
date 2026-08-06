@@ -122,7 +122,7 @@ export function AgentLaunchConfirm({
               </span>
             ) : (
               <span className="text-[var(--text-tertiary)]">
-                No agent detected — install Claude Code or Codex.
+                No agent detected — install Claude Code, Codex or Copilot CLI.
               </span>
             )}
           </div>

@@ -22,6 +22,10 @@ pub(crate) fn config_for_launch(
             kind: scryer_acp::AgentKind::Codex,
             ..
         } => (s.codex.model.clone(), s.codex.effort.clone()),
+        scryer_acp::AgentLaunch::Acp {
+            kind: scryer_acp::AcpKind::Copilot,
+            ..
+        } => (s.copilot.model.clone(), s.copilot.effort.clone()),
         _ => (String::new(), "medium".to_string()),
     }
 }
@@ -184,7 +188,7 @@ pub(crate) async fn start_preview_fixture_session(
 
     let settings = scryer_core::read_subagent_settings();
     let launch = scryer_acp::detect_available_agent_pref(&settings.agent)
-        .ok_or("No AI agent found. Install Claude Code or Codex first.")?;
+        .ok_or("No AI agent found. Install Claude Code, Codex or Copilot CLI first.")?;
 
     let parsed_ref = scryer_core::ModelRef::parse(&model_ref)?;
     let model = scryer_core::read_model_at(&parsed_ref)?;
@@ -235,8 +239,8 @@ pub(crate) async fn start_preview_fixture_session(
         scryer_acp::AgentLaunch::Cli { binary, kind } => {
             (binary, scryer_acp::runtime::LaunchMode::Cli { kind })
         }
-        scryer_acp::AgentLaunch::Acp { binary } => {
-            (binary, scryer_acp::runtime::LaunchMode::Acp)
+        scryer_acp::AgentLaunch::Acp { binary, kind } => {
+            (binary, scryer_acp::runtime::LaunchMode::Acp { kind })
         }
     };
 
@@ -275,7 +279,7 @@ pub(crate) async fn start_visual_variation_session(
 
     let settings = scryer_core::read_subagent_settings();
     let launch = scryer_acp::detect_available_agent_pref(&settings.agent)
-        .ok_or("No AI agent found. Install Claude Code or Codex first.")?;
+        .ok_or("No AI agent found. Install Claude Code, Codex or Copilot CLI first.")?;
 
     let parsed_ref = scryer_core::ModelRef::parse(&model_ref)?;
     let model = scryer_core::read_model_at(&parsed_ref)?;
@@ -336,8 +340,8 @@ pub(crate) async fn start_visual_variation_session(
         scryer_acp::AgentLaunch::Cli { binary, kind } => {
             (binary, scryer_acp::runtime::LaunchMode::Cli { kind })
         }
-        scryer_acp::AgentLaunch::Acp { binary } => {
-            (binary, scryer_acp::runtime::LaunchMode::Acp)
+        scryer_acp::AgentLaunch::Acp { binary, kind } => {
+            (binary, scryer_acp::runtime::LaunchMode::Acp { kind })
         }
     };
 
