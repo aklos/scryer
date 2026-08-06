@@ -1,8 +1,9 @@
 import { FileClock } from "lucide-react";
 import type { ScryModel, Node } from "../viewmodel";
 import type { Editor } from "../editor";
-import { DiffRow, diffTextClass, kindOfGlyph } from "../diffkit";
+import { DiffRow, diffAnchorClass, diffTextClass, kindOfGlyph } from "../diffkit";
 import { EVENT_META, type HistoryEvent, relativeTime } from "../history";
+import { StatementText } from "../markup";
 import { ClaimSource } from "../SourceSection";
 import {
   BTN,
@@ -287,7 +288,15 @@ export function NodeHistory({
                   <span
                     className={`font-mono text-sm leading-relaxed ${diffTextClass(kindOfGlyph(row.marker))}`}
                   >
-                    {row.text}
+                    {/* A row's text is a claim statement as it was written, so
+                        it carries the statement markup — render it, never print
+                        the markers. Rows that aren't statements (a node's birth
+                        summary, a reparent line) hold no markers and pass
+                        through unchanged. */}
+                    <StatementText
+                      text={row.text}
+                      anchor={diffAnchorClass(kindOfGlyph(row.marker))}
+                    />
                   </span>
                   {row.source && (
                     // Bleed spec: undo DiffRow's 16px gutter + 4px gap; the

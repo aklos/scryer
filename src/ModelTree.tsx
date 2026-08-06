@@ -816,7 +816,7 @@ export function ModelTree({
           </span>
         )}
         {active && (
-          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-indigo-500 dark:text-indigo-400" />
+          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-violet-500 dark:text-violet-400" />
         )}
       </div>
     );

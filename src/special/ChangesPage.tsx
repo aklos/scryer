@@ -380,7 +380,7 @@ function EntryCard({ entry, ctx }: { entry: DiffEntry; ctx: RowCtx }) {
             <span
               className={
                 entry.by === "agent"
-                  ? "ml-1.5 font-sans font-medium text-indigo-600 dark:text-indigo-400"
+                  ? "ml-1.5 font-sans font-medium text-violet-600 dark:text-violet-400"
                   : "ml-1.5 font-sans font-medium text-[var(--text-tertiary)]"
               }
             >

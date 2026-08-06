@@ -128,12 +128,17 @@ function nodeFieldDiffs(prev: ScryModel, a: Node, b: Node): FieldDiff[] {
 }
 
 function respFieldDiffs(a: Responsibility, b: Responsibility): FieldDiff[] {
-  return fieldDiffs([
-    ["statement", stripMarkup(a.statement), stripMarkup(b.statement)],
+  const out = fieldDiffs([
     ["directives", a.directives, b.directives],
     ["stale", !!a.stale, !!b.stale],
     ["vagrant", !!a.vagrant, !!b.vagrant],
   ]);
+  // The statement compares STRIPPED — a markup-only touch is not a reword — but
+  // carries its markers into the row, which renders them like every other
+  // statement surface. Kept first, as the claim's own field.
+  if (stripMarkup(a.statement) !== stripMarkup(b.statement))
+    out.unshift({ field: "statement", from: a.statement, to: b.statement });
+  return out;
 }
 
 /** Diff two models into a Recent-changes revision: per-field before → after
@@ -182,7 +187,8 @@ function diffRevision(prev: ScryModel, loaded: ScryModel): ChangeItem[] {
     for (const r of n.responsibilities ?? []) {
       loadedRespIds.add(r.id);
       const old = prevResps.get(r.id);
-      const label = stripMarkup(r.statement) || "Untitled responsibility";
+      // Markers kept — the feed renders them (see RevisionList), never prints them.
+      const label = r.statement || "Untitled responsibility";
       if (!old) {
         items.push({ op: "added", what: "claim", label, context: n.name, nodeId: n.id });
       } else if (respTruthChanged(old.resp, r)) {
@@ -201,7 +207,7 @@ function diffRevision(prev: ScryModel, loaded: ScryModel): ChangeItem[] {
       items.push({
         op: "removed",
         what: "claim",
-        label: stripMarkup(resp.statement) || "Untitled responsibility",
+        label: resp.statement || "Untitled responsibility",
         context: nodeName(nodeId),
         // The host may survive the claim's removal — keep the jump if it did.
         nodeId: loadedNodeById.has(nodeId) ? nodeId : undefined,

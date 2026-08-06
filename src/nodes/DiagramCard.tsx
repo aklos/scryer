@@ -24,7 +24,7 @@ export interface CardData extends Record<string, unknown> {
   /** A selection exists elsewhere and this node isn't a neighbour — fade it. */
   dimmed?: boolean;
   /** Structure is laid out but the agent hasn't generated the semantics yet —
-   *  render the card with the indigo "working on this" treatment (matching the
+   *  render the card with the violet "working on this" treatment (matching the
    *  tree's active-node spinner) and cross-fade the content in once it lands. */
   pending?: boolean;
   /** Build completeness for this node — drives the corner % + anchorage badge. */

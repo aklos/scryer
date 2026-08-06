@@ -279,16 +279,26 @@
   padding-right: 13px;
 }
 /* Interactive segments are <button>s (drift jump, to-review, changes, cancel);
-   static readouts are <div>s. Brightening via filter lifts the fill AND its
-   chevron pseudo-element together — a background change can't reach the chevron,
-   which borrows the inline --sb. Works in both themes (always toward lighter). */
+   static readouts are <div>s. A filter lifts the fill AND its chevron
+   pseudo-element together — a background change can't reach the chevron, which
+   borrows the inline --sb. Direction is per-theme: the segments are mixes
+   toward the canvas, so on a dark canvas hover brightens, but on a light one
+   brightening runs the near-white fills straight into white and the segment
+   vanishes under the cursor. Light mode therefore hovers DOWNWARD, toward the
+   ink, for the same "this responds" read. */
+.pl {
+  --pl-hover: brightness(0.94);
+}
+.dark .pl {
+  --pl-hover: brightness(1.4);
+}
 .pl button.seg,
 .pl button.rseg {
   transition: filter 0.12s ease;
 }
 .pl button.seg:hover,
 .pl button.rseg:hover {
-  filter: brightness(1.4);
+  filter: var(--pl-hover);
 }
 /* The hover filter turns the segment into a stacking context, which would trap
    its chevron (.seg::after, normally z-index:2 above the next segment) inside

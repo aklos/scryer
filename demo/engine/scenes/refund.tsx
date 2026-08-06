@@ -424,7 +424,7 @@ const IMPLEMENTING_AGENT: AgentSession = {
   cancel: noop,
 };
 
-/** A build state that lights one service indigo in the tree (the "agent working
+/** A build state that lights one service violet in the tree (the "agent working
  *  on this" highlight) as its refund claim lands — the flash on the bloom. */
 function flashOn(nodeId: string): ModelBuild {
   return {
@@ -557,7 +557,7 @@ export async function runRefund(
     await d.wait(1100);
 
     // 4. Each write streams in the terminal (left) and lands in the tree (right):
-    //    the target service flashes indigo as the tool runs, then settles with
+    //    the target service flashes violet as the tool runs, then settles with
     //    its new claim — the plan appearing service by service, before any code.
     for (const w of WRITES) {
       await pushLine({

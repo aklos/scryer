@@ -14,6 +14,7 @@
  */
 
 import { CHANGE_COLOR, type ChangeKind } from "./changeMarks";
+import { ANCHOR_CALM } from "./markup";
 
 export { WordDiffText } from "./pagekit";
 export type { ChangeKind } from "./changeMarks";
@@ -98,6 +99,18 @@ export function diffTextClass(kind: ChangeKind | undefined): string {
     : kind === "delete"
       ? DIFF_TINT.delete
       : "text-[var(--text-secondary)]";
+}
+
+/** The statement-markup anchor tone that goes with {@link diffTextClass} —
+ *  tinted rows lift within their own hue, everything else takes the calm
+ *  secondary→text lift. Paired so a row's body and its bold anchors are never
+ *  chosen apart. */
+export function diffAnchorClass(kind: ChangeKind | undefined): string {
+  return kind === "add"
+    ? DIFF_ANCHOR.add
+    : kind === "delete"
+      ? DIFF_ANCHOR.delete
+      : ANCHOR_CALM;
 }
 
 /** How one element diverges from its committed copy — the shared vocabulary

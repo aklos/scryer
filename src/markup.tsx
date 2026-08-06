@@ -1,15 +1,16 @@
 /**
  * Statement markup — the display structure of a responsibility claim.
  *
- * A statement may carry a markdown-lite subset: `**bold**` marks the scan
- * anchors — the EARS keyword (including "then") and the response verbs. The
- * markers live inside the canonical statement string — there is no schema
- * field — so everything here is presentation: parse for display, strip for
- * comparison, search, and word-diffing. Malformed or unmatched markers are
- * never an error; they render literally. `_underscore_` spans are a retired
- * clause marker: still parsed and stripped (statements minted under the old
- * convention must not show literal underscores), but rendered as plain text —
- * the bold keyword and its comma already delimit the clause.
+ * A statement carries exactly one markdown-lite marker: `**bold**` on the scan
+ * anchors — the EARS keyword (including "then") and the response verbs (rule
+ * 21). The markers live inside the canonical statement string — there is no
+ * schema field — so everything here is presentation: parse for display, strip
+ * for comparison, search, and word-diffing. Malformed or unmatched markers are
+ * never an error; they render literally.
+ *
+ * Wherever a statement is shown it goes through {@link StatementText} — markup
+ * is ALWAYS rendered, never printed raw and never silently flattened, so no
+ * surface leaks asterisks at the reader.
  *
  * Two producers write markers: agents author them directly (rule 21), and the
  * editor mints them for hand-typed marker-free statements via the positional
@@ -20,11 +21,10 @@
  */
 import type { ReactNode } from "react";
 
-/** `**…**` opens/closes on any non-asterisk run. `_…_` only opens after
- *  start/whitespace/( and only closes before end/whitespace/punctuation, so
- *  snake_case identifiers inside a statement never trigger a marker. */
-const MARKER =
-  /\*\*([^*]+?)\*\*|(?<=^|[\s(])_([^_\s](?:[^_]*?[^_\s])?)_(?=[\s,.;:!?)]|$)/g;
+/** `**…**` opens/closes on any non-asterisk run — the only marker in the
+ *  vocabulary. Underscores carry no meaning at all, so `snake_case` identifiers
+ *  inside a statement pass through untouched. */
+const MARKER = /\*\*([^*]+?)\*\*/g;
 
 export interface MarkupSeg {
   text: string;
@@ -37,8 +37,7 @@ export function parseMarkup(statement: string): MarkupSeg[] {
   let last = 0;
   for (const m of statement.matchAll(MARKER)) {
     if (m.index > last) segs.push({ text: statement.slice(last, m.index) });
-    if (m[1] !== undefined) segs.push({ text: m[1], bold: true });
-    else segs.push({ text: m[2] });
+    segs.push({ text: m[1], bold: true });
     last = m.index + m[0].length;
   }
   if (last < statement.length) segs.push({ text: statement.slice(last) });
@@ -48,7 +47,7 @@ export function parseMarkup(statement: string): MarkupSeg[] {
 /** The statement as plain text — what comparisons, search, word-diffs, and
  *  labels operate on, so a markup-only touch never reads as a reword. */
 export function stripMarkup(statement: string): string {
-  return statement.replace(MARKER, (_, bold, dim) => bold ?? dim);
+  return statement.replace(MARKER, (_, bold) => bold);
 }
 
 /** Whether the statement carries any well-formed marker. Gates the editor's
@@ -267,14 +266,12 @@ export function MarkupMirror({ text }: { text: string }) {
     let last = 0;
     for (const m of text.matchAll(MARKER)) {
       if (m.index > last) nodes.push(<span key={key++}>{text.slice(last, m.index)}</span>);
-      const bold = m[1] !== undefined;
-      const mark = bold ? "**" : "_";
       nodes.push(
-        <span key={key++} className="text-[var(--text-ghost)]">{mark}</span>,
-        <span key={key++} className={bold ? "font-bold" : ""}>
-          {bold ? m[1] : m[2]}
+        <span key={key++} className="text-[var(--text-ghost)]">**</span>,
+        <span key={key++} className="font-bold">
+          {m[1]}
         </span>,
-        <span key={key++} className="text-[var(--text-ghost)]">{mark}</span>,
+        <span key={key++} className="text-[var(--text-ghost)]">**</span>,
       );
       last = m.index + m[0].length;
     }

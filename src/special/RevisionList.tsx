@@ -1,4 +1,5 @@
 import type { ChangeItem, ChangeRevision } from "../hooks/useModelStorage";
+import { ANCHOR_CALM, StatementText } from "../markup";
 import { LINK } from "../pagekit";
 import { timeLabel } from "./shell";
 
@@ -44,7 +45,11 @@ function RevisionItems({
                   onClick={() => onSelectNode(it.nodeId!)}
                   className={`min-w-0 truncate text-left ${LINK}`}
                 >
-                  {it.label}
+                  {/* A claim's label IS its statement, markers and all — render
+                      them. Node and link labels carry none and pass through.
+                      The link's own blue owns the row, so the anchors take
+                      weight only. */}
+                  <StatementText text={it.label} />
                 </button>
               ) : (
                 <span
@@ -54,7 +59,11 @@ function RevisionItems({
                       : "text-[var(--text-secondary)]"
                   }`}
                 >
-                  {it.label}
+                  {/* A struck removal already shouts — no anchor lift there. */}
+                  <StatementText
+                    text={it.label}
+                    anchor={it.op === "removed" ? undefined : ANCHOR_CALM}
+                  />
                 </span>
               )}
               {showContext && it.context && (
@@ -68,11 +77,15 @@ function RevisionItems({
                 {it.fields.map((f) => (
                   <li key={f.field} className="text-2xs leading-relaxed">
                     <span className="text-[var(--text-muted)]">{f.field}: </span>
+                    {/* Same rule as the label: a statement field carries its
+                        markers into the before → after, and renders them. */}
                     <del className="text-[var(--text-muted)] decoration-[var(--text-ghost)]">
-                      {f.from}
+                      <StatementText text={f.from} />
                     </del>
                     <span className="text-[var(--text-ghost)]"> → </span>
-                    <span className="text-[var(--text-secondary)]">{f.to}</span>
+                    <span className="text-[var(--text-secondary)]">
+                      <StatementText text={f.to} />
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -106,11 +119,12 @@ export function RevisionList({
         >
           <div className="mb-1.5 flex items-center gap-2 font-mono text-2xs tabular-nums text-[var(--text-muted)]">
             {timeLabel(rev.at)}
-            {/* Attribution — indigo is the agent's hue. */}
+            {/* Attribution — violet is the agent's hue (the color contract in
+                kit/tokens: AgentMark, the powerline's agent segment). */}
             <span
               className={
                 rev.by === "agent"
-                  ? "font-sans font-medium text-indigo-600 dark:text-indigo-400"
+                  ? "font-sans font-medium text-violet-600 dark:text-violet-400"
                   : "font-sans font-medium text-[var(--text-tertiary)]"
               }
             >

@@ -1,21 +1,19 @@
 /**
  * Statement display markup (`src/markup.tsx`) — the markdown-lite subset
- * agents author into claim statements (`**bold**` scan anchors; `_…_` is a
- * retired clause marker that still strips clean but renders plain). The
+ * agents author into claim statements. `**bold**` scan anchors are the WHOLE
+ * vocabulary: underscores were retired and now carry no meaning at all. The
  * invariants that matter: strip(parse) round-trips to plain text, malformed
- * markers degrade to literal text (never an error), and identifier
- * underscores never read as markers.
+ * markers degrade to literal text (never an error), and no underscore run —
+ * identifier or prose — is ever consumed as a marker.
  */
 import { describe, expect, it } from "vitest";
 import { earsTestable, earsTokenize, hasMarkup, lintEars, parseMarkup, serializeEars, stripMarkup } from "../src/markup";
 
 describe("parseMarkup", () => {
-  it("splits a marked statement into anchor / plain segments (legacy clause markers go plain)", () => {
-    expect(parseMarkup("**When** _a callback arrives_, **append** an event")).toEqual([
+  it("splits a marked statement into anchor / plain segments", () => {
+    expect(parseMarkup("**When** a callback arrives, **append** an event")).toEqual([
       { text: "When", bold: true },
-      { text: " " },
-      { text: "a callback arrives" },
-      { text: ", " },
+      { text: " a callback arrives, " },
       { text: "append", bold: true },
       { text: " an event" },
     ]);
@@ -37,12 +35,10 @@ describe("parseMarkup", () => {
     ]);
   });
 
-  it("consumes a legacy underscore marker only at a word boundary", () => {
+  it("never consumes an underscore span — the marker is retired, not honoured", () => {
     expect(parseMarkup("**If** _the id is claimed_, **drop** it")).toEqual([
       { text: "If", bold: true },
-      { text: " " },
-      { text: "the id is claimed" },
-      { text: ", " },
+      { text: " _the id is claimed_, " },
       { text: "drop", bold: true },
       { text: " it" },
     ]);
@@ -60,8 +56,14 @@ describe("parseMarkup", () => {
 
 describe("stripMarkup", () => {
   it("round-trips a marked statement to its plain text", () => {
-    expect(stripMarkup("**When** _a callback arrives_, **append** an event")).toBe(
+    expect(stripMarkup("**When** a callback arrives, **append** an event")).toBe(
       "When a callback arrives, append an event",
+    );
+  });
+
+  it("leaves a retired underscore span standing as written", () => {
+    expect(stripMarkup("**If** _the id is claimed_, **drop** it")).toBe(
+      "If _the id is claimed_, drop it",
     );
   });
 
