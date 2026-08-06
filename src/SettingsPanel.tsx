@@ -221,6 +221,7 @@ export function SettingsPanel({
             title="Copilot CLI"
             efforts={COPILOT_EFFORT}
             models={COPILOT_MODELS}
+            customNote="Copilot ignores a model name it doesn't recognise instead of reporting it, so a typo here runs on its default model rather than failing. Check the spelling against `copilot help config`."
             value={settings.copilot}
             onChange={(copilot) => setSettings((s) => ({ ...s, copilot }))}
           />
@@ -405,12 +406,16 @@ function AgentSettingsGroup({
   title,
   efforts,
   models,
+  customNote,
   value,
   onChange,
 }: {
   title: string;
   efforts: string[];
   models: string[];
+  /** Shown only when the free-text model field is open — for an agent whose CLI
+   *  won't tell the user when the name they typed doesn't land. */
+  customNote?: string;
   value: AgentSettings;
   onChange: (next: AgentSettings) => void;
 }) {
@@ -430,6 +435,7 @@ function AgentSettingsGroup({
         <Field label="Model">
           <ModelPicker
             aliases={models}
+            customNote={customNote}
             value={value.model}
             onChange={(model) => onChange({ ...value, model })}
           />
@@ -443,10 +449,12 @@ function AgentSettingsGroup({
  *  reveals a free-text field for full model names. */
 function ModelPicker({
   aliases,
+  customNote,
   value,
   onChange,
 }: {
   aliases: string[];
+  customNote?: string;
   value: string;
   onChange: (value: string) => void;
 }) {
@@ -477,12 +485,17 @@ function ModelPicker({
         }}
       />
       {custom && (
-        <Input
-          variant="bordered"
-          value={value}
-          placeholder="Full model name (e.g. claude-opus-4-7)"
-          onChange={(e) => onChange(e.target.value)}
-        />
+        <>
+          <Input
+            variant="bordered"
+            value={value}
+            placeholder="Full model name (e.g. claude-opus-4-7)"
+            onChange={(e) => onChange(e.target.value)}
+          />
+          {customNote && (
+            <p className="text-2xs leading-relaxed text-[var(--text-muted)]">{customNote}</p>
+          )}
+        </>
       )}
     </div>
   );

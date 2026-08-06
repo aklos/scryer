@@ -97,7 +97,9 @@ Scryer works with **Claude Code**, **Codex** and **GitHub Copilot CLI**.
 
 When an agent connects via MCP, Scryer captures its identity from the protocol handshake. When a build or sync is triggered, Scryer resolves that identity to a binary and launches it with the right flags.
 
-**Copilot notes.** Copilot reads the same project `.mcp.json` Claude Code does, so one file serves both. Two things differ from the others: it reaches Scryer *only* through that file (its ACP mode doesn't accept a stdio MCP server over the protocol), and it loads a project's MCP servers and hooks only in a folder you've **trusted** — it asks the first time you open one. Until you do, it stays quiet about both. Copilot also fronts several model providers on one subscription, so its model list spans Claude, GPT and Gemini; pick one under Subagent settings.
+**Copilot notes.** Copilot reads the same project `.mcp.json` Claude Code does, so one file serves both. Two things differ from the others: it reaches Scryer *only* through that file (its ACP mode doesn't accept a stdio MCP server over the protocol), and it loads a project's MCP servers and hooks only in a folder you've **trusted** — it asks the first time you open one. Until you do, it stays quiet about both.
+
+Copilot fronts several model providers on one subscription, so its model list spans Claude, GPT and Gemini; pick one under Subagent settings. If you type a model name by hand there, check the spelling — run `copilot help config` for the current list. Copilot ignores an unrecognised model in ACP mode rather than reporting it, so a typo runs on its default model instead of failing.
 
 ## MCP server
 
