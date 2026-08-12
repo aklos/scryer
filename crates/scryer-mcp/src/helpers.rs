@@ -157,16 +157,18 @@ pub(crate) fn breadcrumb(model: &ScryModel, node_id: &str) -> String {
     names.join(" / ")
 }
 
-/// Directives are user-authored and read-only to the AI — both a
-/// responsibility's `directives` and a node's own node-level `directives`.
-/// Before committing any AI write, force each back to whatever the prior
-/// on-disk model held for that id; ids with no prior entry get none. This lets
-/// the AI create, edit, and move responsibilities and nodes while leaving
-/// directives entirely under the user's control. (The interactive patch path
-/// can't reach them — they're `schemars(skip)` — but the whole-node generation
-/// primitives `set_model`/`set_node` rebuild nodes from JSON and would
-/// otherwise drop them.) Not applied to `move_responsibilities`, which
-/// preserves directives across a deliberate responsibility-id rename.
+/// Directives are user-authored and read-only to the AI's ordinary writes —
+/// both a responsibility's `directives` and a node's own node-level
+/// `directives`. Before committing any AI write, force each back to whatever
+/// the prior on-disk model held for that id; ids with no prior entry get none.
+/// This lets the AI create, edit, and move responsibilities and nodes while
+/// leaving directives entirely under the user's control. (The interactive
+/// patch path can't reach them — they're `schemars(skip)` — but the whole-node
+/// generation primitives `set_model`/`set_node` rebuild nodes from JSON and
+/// would otherwise drop them.) Not applied to `move_responsibilities`, which
+/// preserves directives across a deliberate responsibility-id rename — nor to
+/// `set_directives`, the one deliberate write path, reserved for edits the
+/// user explicitly asked for.
 pub(crate) fn enforce_readonly_directives(model: &mut ScryModel, prior: &ScryModel) {
     let prior_resps = prior
         .nodes

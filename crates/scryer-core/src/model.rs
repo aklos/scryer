@@ -64,9 +64,11 @@ pub struct Responsibility {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stale_proposal: Option<String>,
     /// Optional prescriptive HOW-constraints — verb-led "must"/"never" rules
-    /// the implementation has to satisfy. User-authored: read-only to the agent,
-    /// so hidden from write-tool input schemas (`schemars(skip)`) while still
-    /// serialized for storage and surfaced on read. Not part of conformance.
+    /// the implementation has to satisfy. User-authored: read-only to the
+    /// agent's ordinary writes, so hidden from write-tool input schemas
+    /// (`schemars(skip)`) while still serialized for storage and surfaced on
+    /// read; `set_directives` is the one deliberate write path, reserved for
+    /// edits the user explicitly requested. Not part of conformance.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(skip)]
     pub directives: Vec<String>,
@@ -268,10 +270,11 @@ pub struct Node {
     /// responsibility's `directives`. These CARRY DOWN: a node is bound by its
     /// own directives plus every ancestor's, computed at read time (never copied
     /// onto descendants), so editing a container's directive instantly re-binds
-    /// its whole subtree. User-authored: read-only to the agent, so hidden from
-    /// write-tool input schemas (`schemars(skip)`) while still serialized for
-    /// storage and surfaced (own + inherited) on read. Plain text — not part of
-    /// conformance.
+    /// its whole subtree. User-authored: read-only to the agent's ordinary
+    /// writes, so hidden from write-tool input schemas (`schemars(skip)`) while
+    /// still serialized for storage and surfaced (own + inherited) on read;
+    /// `set_directives` is the one deliberate write path, reserved for edits
+    /// the user explicitly requested. Plain text — not part of conformance.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(skip)]
     pub directives: Vec<String>,

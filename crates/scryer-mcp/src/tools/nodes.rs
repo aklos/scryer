@@ -795,6 +795,81 @@ impl ScryerServer {
     }
 
     #[tool(
+        description = "Replace the directives on nodes or responsibilities — the ONE write path to directives, which every other tool leaves read-only. Directives are the USER's prescriptive HOW-constraints: call this ONLY when the user has explicitly asked, in this conversation, for directives to be written, edited, or deleted (e.g. a bulk reword they dictated) — never on your own initiative, and never to relax a constraint you find inconvenient while implementing. Each item names a `node_id` (node-level directives, binding that node's whole subtree) OR a `responsibility_id` (that claim's directives), plus `directives` as the FULL replacement array — an empty array clears. Writes the plan layer like other authoring tools; the change surfaces in the plan diff for the user to see."
+    )]
+    fn set_directives(
+        &self,
+        Parameters(req): Parameters<SetDirectivesRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
+        let mut model = match scryer_core::read_planned_seeded_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(read_fail("model", &model_ref, &e))]));
+            }
+        };
+
+        let mut updated = 0usize;
+        for item in &req.items {
+            match (&item.node_id, &item.responsibility_id) {
+                (Some(node_id), None) => {
+                    let Some(n) = model.nodes.iter_mut().find(|n| &n.id == node_id) else {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Node '{}' not found",
+                            node_id
+                        ))]));
+                    };
+                    n.directives = item.directives.clone();
+                }
+                (None, Some(resp_id)) => {
+                    let resp = model
+                        .nodes
+                        .iter_mut()
+                        .flat_map(|n| n.responsibilities.iter_mut())
+                        .chain(model.groups.iter_mut().flat_map(|g| g.responsibilities.iter_mut()))
+                        .find(|r| &r.id == resp_id);
+                    let Some(r) = resp else {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "Responsibility '{}' not found",
+                            resp_id
+                        ))]));
+                    };
+                    r.directives = item.directives.clone();
+                }
+                _ => {
+                    return Ok(CallToolResult::error(vec![Content::text(
+                        "Each item must set exactly one of `node_id` or `responsibility_id`"
+                            .to_string(),
+                    )]));
+                }
+            }
+            updated += 1;
+        }
+
+        let tag_warnings = match write_planned_tagged(
+            &model_ref,
+            &mut model,
+            self.session_change(&model_ref).as_deref(),
+        ) {
+            Ok(w) => w,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+        };
+        drop(_lock);
+        let mut msg = format!("Set directives on {} target(s)", updated);
+        for w in &tag_warnings {
+            msg.push_str(&format!("\n{w}"));
+        }
+        if let Some(h) = status_header(&model_ref) {
+            msg.push_str(&format!("\n{h}"));
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
+    }
+
+    #[tool(
         description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. This is THE build checkpoint, and it is one atomic statement with three parts: the fold ('I built this'), `anchors` ('here is where it lives'), and `tests` ('here is the test I attached to it') — pass all three in the SAME call rather than folding now and anchoring/attaching later. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities, and/or `propertyLabels` to fold only those data fields (properties are identified by label). A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. In a DESIGN-FIRST model (never committed), folding a built leaf is refused while its ancestors are plan-only — pass `commit_ancestors: true` to fold the ancestor chain structure-only first: the ancestors' identity and boundaries land in committed while their unbuilt claims stay pending in the plan, so partial implementation reads honestly. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. Pass `anchors` (same shape as update_source_map `entries`) to anchor the folded claims to code IN THE SAME CALL — 'here's what I built and where it lives' as one atomic statement; an unanchored claim reads as scaffolding and carries no drift tripwire. Pass `tests` (same shape) to ATTACH each claim's test alongside — 'and this test exercises it' (`pattern` = test file, `symbol` = the test function; optional `command` records how to run it, never executed). For a claim in a When/While/If form the test is EXPECTED, not opportunistic — and on a symbol host it is MANDATORY (rule 22): the claim names a concrete trigger/state/failure, so write the test that arranges it and asserts the response, and attach it here in the same call. A fold that leaves a testable claim with no test attached succeeds, but the response calls out each such claim and how to fix it; health counts them as `untested`. Ubiquitous claims stay a judgment call; absence is simply visible in health. Every node fold's response ends with a scoped POST-FLIGHT: what's still pending on that node, which of its committed claims lack anchors, and any validation warnings this fold introduced — act on those lines; you do not need a separate validate_model run after every fold. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. Pass `change` (standalone — a change id from `set_change`/`get_pending`) to fold an ENTIRE change: every plan entry tagged to it, in dependency order; when its last entry folds, the change closes and its rationale is recorded in the history log. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
     )]
     fn mark_implemented(
@@ -2128,6 +2203,168 @@ mod tests {
             scryer_core::working_view(&committed, &planned).source_map.contains_key("r-main"),
             "the working view still lights the file"
         );
+    }
+
+    /// set_directives is the ONE deliberate write path to directives (every
+    /// other tool restores them via enforce_readonly_directives). It replaces
+    /// the full array on a node (node-level), a node-hosted claim, and a
+    /// group-hosted claim — writing the PLAN layer only, like the other
+    /// authoring tools, so the edit surfaces in the plan diff.
+    #[test]
+    fn set_directives_replaces_on_node_and_responsibility_hosts() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut m = ScryModel::new();
+        let mut sys = node("sys", Kind::System, "S", None);
+        sys.directives = vec!["old node rule".into()];
+        let mut con = node("con", Kind::Container, "C", Some("sys"));
+        con.responsibilities = vec![resp("r-con")];
+        m.nodes.push(sys);
+        m.nodes.push(con);
+        m.groups.push(scryer_core::Group {
+            id: "grp".into(),
+            name: "G".into(),
+            description: None,
+            member_ids: Vec::new(),
+            parent_group_id: None,
+            parent_node_id: Some("sys".into()),
+            responsibilities: vec![resp("r-grp")],
+            icon: None,
+        });
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+
+        let server = ScryerServer::new();
+        let item = |n: Option<&str>, r: Option<&str>, d: &[&str]| SetDirectivesItem {
+            node_id: n.map(Into::into),
+            responsibility_id: r.map(Into::into),
+            directives: d.iter().map(|s| s.to_string()).collect(),
+        };
+        let res = server
+            .set_directives(Parameters(SetDirectivesRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                items: vec![
+                    item(Some("sys"), None, &["must stay stateless"]),
+                    item(None, Some("r-con"), &["never trust client input"]),
+                    item(None, Some("r-grp"), &["must audit-log"]),
+                ],
+            }))
+            .unwrap();
+        assert_ne!(res.is_error, Some(true), "{:?}", res.content);
+
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        let sys = planned.nodes.iter().find(|n| n.id == "sys").unwrap();
+        assert_eq!(sys.directives, vec!["must stay stateless"], "node-level replaced");
+        let con = planned.nodes.iter().find(|n| n.id == "con").unwrap();
+        assert_eq!(con.responsibilities[0].directives, vec!["never trust client input"]);
+        assert_eq!(planned.groups[0].responsibilities[0].directives, vec!["must audit-log"]);
+
+        // The committed model is untouched — the edit is plan work like any
+        // other authoring write, visible in the plan diff until folded.
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        let sys_c = committed.nodes.iter().find(|n| n.id == "sys").unwrap();
+        assert_eq!(sys_c.directives, vec!["old node rule"], "committed layer untouched");
+    }
+
+    /// An empty replacement array CLEARS — without it directives could be set
+    /// but never removed through this tool.
+    #[test]
+    fn set_directives_clears_with_an_empty_array() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut m = ScryModel::new();
+        let mut sys = node("sys", Kind::System, "S", None);
+        let mut r = resp("r-sys");
+        r.directives = vec!["must do things".into()];
+        sys.responsibilities = vec![r];
+        sys.directives = vec!["a node rule".into()];
+        m.nodes.push(sys);
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+
+        let server = ScryerServer::new();
+        server
+            .set_directives(Parameters(SetDirectivesRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                items: vec![
+                    SetDirectivesItem {
+                        node_id: Some("sys".into()),
+                        responsibility_id: None,
+                        directives: Vec::new(),
+                    },
+                    SetDirectivesItem {
+                        node_id: None,
+                        responsibility_id: Some("r-sys".into()),
+                        directives: Vec::new(),
+                    },
+                ],
+            }))
+            .unwrap();
+
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        let sys = planned.nodes.iter().find(|n| n.id == "sys").unwrap();
+        assert!(sys.directives.is_empty(), "node-level cleared");
+        assert!(sys.responsibilities[0].directives.is_empty(), "claim-level cleared");
+    }
+
+    /// An unknown id — or an item that names both / neither target — is
+    /// rejected before anything lands, leaving the model untouched.
+    #[test]
+    fn set_directives_rejects_bad_items_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let mut m = ScryModel::new();
+        let mut sys = node("sys", Kind::System, "S", None);
+        sys.directives = vec!["keep me".into()];
+        m.nodes.push(sys);
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+
+        let server = ScryerServer::new();
+        let bad_items = [
+            SetDirectivesItem {
+                node_id: Some("nope".into()),
+                responsibility_id: None,
+                directives: vec!["x".into()],
+            },
+            SetDirectivesItem {
+                node_id: None,
+                responsibility_id: Some("nope".into()),
+                directives: vec!["x".into()],
+            },
+            SetDirectivesItem {
+                node_id: Some("sys".into()),
+                responsibility_id: Some("r-x".into()),
+                directives: vec!["x".into()],
+            },
+            SetDirectivesItem { node_id: None, responsibility_id: None, directives: vec!["x".into()] },
+        ];
+        for bad in bad_items {
+            // A valid edit batched BEHIND the bad item must not land either.
+            let res = server
+                .set_directives(Parameters(SetDirectivesRequest {
+                    project: Some(dir.path().to_string_lossy().to_string()),
+                    items: vec![
+                        bad,
+                        SetDirectivesItem {
+                            node_id: Some("sys".into()),
+                            responsibility_id: None,
+                            directives: vec!["should not land".into()],
+                        },
+                    ],
+                }))
+                .unwrap();
+            assert_eq!(res.is_error, Some(true));
+            let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+            assert_eq!(
+                planned.nodes[0].directives,
+                vec!["keep me"],
+                "model untouched after a rejected batch"
+            );
+        }
     }
 
     /// Canvas placements are user-authored, like directives: a whole-model

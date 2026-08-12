@@ -20,7 +20,7 @@ pub const RULES: &[Rule] = &[
         id: 1,
         title: "Responsibilities are pure business statements",
         tags: &["responsibility", "business", "mechanism", "directives", "wording"],
-        body: r#"A responsibility says what a node is accountable for in business terms — not how it does it. "restricts access to private content" — yes. "restricts access via JWT" — no, the "via JWT" is mechanism. Same for technology names, library calls, specific protocols. Keep mechanism out of the statement entirely. The `directives` field beside a responsibility holds prescriptive "must"/"never" constraints ("must verify ownership server-side", "never trust a client-supplied role") — but directives are authored by the user, not the agent. Treat any directives present as binding constraints you must satisfy when implementing; never write, edit, or delete them. Where reality discharges a responsibility belongs in the source map, not in directives."#,
+        body: r#"A responsibility says what a node is accountable for in business terms — not how it does it. "restricts access to private content" — yes. "restricts access via JWT" — no, the "via JWT" is mechanism. Same for technology names, library calls, specific protocols. Keep mechanism out of the statement entirely. The `directives` field beside a responsibility holds prescriptive "must"/"never" constraints ("must verify ownership server-side", "never trust a client-supplied role") — but directives are authored by the user, not the agent. Treat any directives present as binding constraints you must satisfy when implementing; write, edit, or delete them only when the user explicitly asks for it. Where reality discharges a responsibility belongs in the source map, not in directives."#,
     },
     Rule {
         id: 2,
@@ -93,7 +93,7 @@ NEVER describe a data shape in a responsibility statement. "Defines the lead rec
         id: 12,
         title: "`technology` is node identity",
         tags: &["technology", "identity", "directives"],
-        body: r#"`technology` is what the node IS as software ("Payload 3.0", "PostgreSQL 16", "S3 Bucket"). Separate from `directives` on responsibilities, which are user-authored constraints prescribing how a responsibility must be discharged — never set by the agent. Do not put technology vocabulary inside responsibility statements."#,
+        body: r#"`technology` is what the node IS as software ("Payload 3.0", "PostgreSQL 16", "S3 Bucket"). Separate from `directives` on responsibilities, which are user-authored constraints prescribing how a responsibility must be discharged — set by the agent only at the user's explicit request. Do not put technology vocabulary inside responsibility statements."#,
     },
     Rule {
         id: 14,
