@@ -26,7 +26,8 @@ to see where work is needed, then `search_model` / `read_model` to load the \
 governing nodes, their responsibilities, and any binding `directives`. Directives are user-authored, \
 read-only HOW-constraints (\"must\"/\"never\" rules). They attach to a responsibility OR to a node, and \
 node-level directives CARRY DOWN: a node is bound by its own plus every ancestor's. `read_model` \
-returns the inherited set in `inheritedDirectives`; honor all of them and never edit a directive.\n\
+returns the inherited set in `inheritedDirectives`; honor all of them, and never edit a directive \
+unless the user explicitly asks you to.\n\
 2. PLAN — author the intended change into the model BEFORE writing code: add/extend the nodes, \
 responsibilities, and links it implies, at the right altitude, with the intent tools (`add_person` / \
 `add_system` / `add_container` / `add_component` / `add_symbol`, `update_nodes`, `add_links`, …). \

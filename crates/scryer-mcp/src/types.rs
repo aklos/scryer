@@ -361,6 +361,26 @@ pub(crate) struct UpdateNodeRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SetDirectivesItem {
+    /// Node id — replaces that node's own node-level directives (which carry down,
+    /// binding its whole subtree). Exactly one of `node_id` / `responsibility_id` per item.
+    pub node_id: Option<String>,
+    /// Responsibility id — replaces that claim's directives. The claim may live on a
+    /// node or on a group. Exactly one of `node_id` / `responsibility_id` per item.
+    pub responsibility_id: Option<String>,
+    /// Full replacement list of directives — verb-led "must"/"never" constraints.
+    /// Pass an empty array to clear.
+    pub directives: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SetDirectivesRequest {
+    pub project: Option<String>,
+    /// Directive replacements to apply. Batch-friendly: one item per node or responsibility.
+    pub items: Vec<SetDirectivesItem>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct SetNodeRequest {
     pub project: Option<String>,
     /// ID of the existing node whose subtree is being replaced.
