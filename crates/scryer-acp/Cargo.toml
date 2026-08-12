@@ -1,6 +1,6 @@
 [package]
 name = "scryer-acp"
-version = "0.3.7"
+version = "0.3.8"
 edition = "2021"
 description = "Agent sync for Scryer — spawns AI agents to update architecture models"
 authors = ["Alexander Klos"]

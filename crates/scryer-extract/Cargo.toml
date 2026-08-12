@@ -1,6 +1,6 @@
 [package]
 name = "scryer-extract"
-version = "0.3.7"
+version = "0.3.8"
 edition = "2021"
 description = "Deterministic, parser-only first-pass C4 model extraction for Scryer"
 authors = ["Alexander Klos"]
