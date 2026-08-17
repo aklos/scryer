@@ -15,6 +15,7 @@ import { useLaunchSettings } from "./hooks/useLaunchSettings";
 import { useMcpSetup } from "./hooks/useMcpSetup";
 import { McpSetupPrompt } from "./McpSetupPrompt";
 import { useAgentLaunchGate } from "./AgentLaunchConfirm";
+import { WindowControls } from "./TopBar";
 
 type Phase = "picker" | "needs-model";
 
@@ -238,8 +239,19 @@ export function ProjectPicker({
 
 function Centered({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-[var(--surface-canvas)] p-8">
-      {children}
+    // The window is frameless and TopBar isn't mounted yet on these screens, so
+    // this strip is the only titlebar: without it the window can't be moved or
+    // closed before a project is open — which is the first thing a user sees.
+    <div className="flex h-screen w-screen flex-col bg-[var(--surface-canvas)]">
+      <div
+        data-tauri-drag-region
+        className="flex h-9 shrink-0 items-center justify-end px-2 select-none"
+      >
+        <WindowControls divider={false} />
+      </div>
+      <div className="flex min-h-0 flex-1 items-center justify-center p-8">
+        {children}
+      </div>
     </div>
   );
 }
