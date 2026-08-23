@@ -870,7 +870,7 @@ function ConcernPicker({
         className="w-full border-b border-[var(--border-subtle)] bg-transparent px-3 py-2 text-xs outline-none placeholder:text-[var(--text-ghost)]"
         style={{ color: "var(--text)" }}
       />
-      <div className="max-h-64 overflow-y-auto p-1 text-xs">
+      <div className="max-h-64 overflow-y-auto overscroll-contain p-1 text-xs">
         <button
           type="button"
           onClick={() => pick(undefined)}

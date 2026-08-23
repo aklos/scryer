@@ -282,7 +282,7 @@ export function SearchPalette({
             style={{ color: "var(--text)" }}
           />
         </div>
-        <ul ref={listRef} className="overflow-y-auto py-1">
+        <ul ref={listRef} className="overflow-y-auto overscroll-contain py-1">
           {hits.length === 0 && (
             <li className="px-3 py-2 text-xs italic text-[var(--text-muted)]">
               No matches

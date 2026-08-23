@@ -204,7 +204,7 @@ function PreviewError({ error }: { error: string }) {
         </button>
       </p>
       {open && (
-        <pre className="mt-2 max-h-60 select-text overflow-auto whitespace-pre-wrap rounded-md border border-[var(--border)] bg-[var(--surface-inset)] p-3 text-2xs leading-relaxed">
+        <pre className="mt-2 max-h-60 select-text overflow-auto overscroll-contain whitespace-pre-wrap rounded-md border border-[var(--border)] bg-[var(--surface-inset)] p-3 text-2xs leading-relaxed">
           {error}
         </pre>
       )}

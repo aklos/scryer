@@ -576,7 +576,15 @@ function InlinePeek({
           ) : (
             <div
               ref={scrollRef}
-              className="max-h-[420px] overflow-auto py-2 font-mono text-xs leading-[1.6]"
+              // `overscroll-contain`: the peek is a scroll box nested inside
+              // the article's own scroller, and reading code means scrolling
+              // to an edge constantly — every one of those would otherwise
+              // hand the gesture straight to the page and rip the snippet out
+              // from under the reader. Contained, the scroll stops at the
+              // peek's edge and moving the page takes a deliberate new
+              // gesture. Both axes: long lines scroll sideways here, and a
+              // chained horizontal overscroll is a back-navigation swipe.
+              className="max-h-[420px] overflow-auto overscroll-contain py-2 font-mono text-xs leading-[1.6]"
             >
               {span.lines.map((segs, i) => {
                 const lineNo = span.startLine + i;
