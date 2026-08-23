@@ -835,4 +835,132 @@ mod hook_install_tests {
             "type": "command", "command": "\"/opt/scryer-mcp\" check",
         })));
     }
+
+    /// `.mcp.json` detection: only a real `mcpServers.scryer` entry counts —
+    /// no file, a scryer-less file, or malformed JSON all read as not set up.
+    #[test]
+    fn mcp_json_detection_requires_a_scryer_server_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().to_string_lossy().to_string();
+        let mcp = dir.path().join(".mcp.json");
+
+        assert!(!check_mcp_json(&project), "no file");
+        std::fs::write(&mcp, r#"{ "mcpServers": { "other": {} } }"#).unwrap();
+        assert!(!check_mcp_json(&project), "no scryer entry");
+        std::fs::write(&mcp, "{ not json").unwrap();
+        assert!(!check_mcp_json(&project), "malformed reads as absent");
+        std::fs::write(&mcp, r#"{ "mcpServers": { "scryer": { "type": "stdio" } } }"#).unwrap();
+        assert!(check_mcp_json(&project));
+    }
+
+    /// Auto-approval detection: the server-wide `mcp__scryer` allow entry is
+    /// recognised in either Claude Code settings file.
+    #[test]
+    fn approval_detection_finds_the_allow_entry_in_either_settings_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().to_string_lossy().to_string();
+        let claude_dir = dir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+
+        assert!(!check_claude_approved(&project));
+        std::fs::write(
+            claude_dir.join("settings.json"),
+            r#"{ "permissions": { "allow": ["Bash(ls:*)", "mcp__scryer"] } }"#,
+        )
+        .unwrap();
+        assert!(check_claude_approved(&project), "shared settings.json counts");
+
+        std::fs::remove_file(claude_dir.join("settings.json")).unwrap();
+        std::fs::write(
+            claude_dir.join("settings.local.json"),
+            r#"{ "permissions": { "allow": ["mcp__scryer"] } }"#,
+        )
+        .unwrap();
+        assert!(check_claude_approved(&project), "local settings count too");
+    }
+
+    /// Codex config detection: only an `[mcp_servers.scryer]` table counts.
+    #[test]
+    fn codex_toml_detection_requires_a_scryer_mcp_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().to_string_lossy().to_string();
+        let codex_dir = dir.path().join(".codex");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        let config = codex_dir.join("config.toml");
+
+        assert!(!check_codex_toml(&project), "no file");
+        std::fs::write(&config, "[mcp_servers.other]\ncommand = \"x\"\n").unwrap();
+        assert!(!check_codex_toml(&project), "no scryer entry");
+        std::fs::write(&config, "[mcp_servers.scryer]\ncommand = \"/opt/scryer-mcp\"\n").unwrap();
+        assert!(check_codex_toml(&project));
+    }
+
+    /// The setup UI's one payload aggregates every per-tool check: a fully
+    /// wired project reports every project-scoped flag true, and no project
+    /// reports them all false.
+    #[test]
+    fn detection_aggregates_every_check_into_one_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().to_string_lossy().to_string();
+        std::fs::write(
+            dir.path().join(".mcp.json"),
+            r#"{ "mcpServers": { "scryer": { "type": "stdio" } } }"#,
+        )
+        .unwrap();
+        let claude_dir = dir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("settings.local.json"),
+            r#"{ "permissions": { "allow": ["mcp__scryer"] } }"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join(".codex")).unwrap();
+        std::fs::write(
+            dir.path().join(".codex/config.toml"),
+            "[mcp_servers.scryer]\ncommand = \"/opt/scryer-mcp\"\n",
+        )
+        .unwrap();
+        write_claude_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
+        write_claude_statusline(&project, "/opt/scryer/scryer-mcp").unwrap();
+        write_codex_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
+        write_copilot_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
+
+        let status = detect_ai_tools(Some(project));
+        for flag in [
+            "claudeMcpEnabled",
+            "codexMcpEnabled",
+            "copilotMcpEnabled",
+            "claudeApproved",
+            "claudeHooksEnabled",
+            "codexHooksEnabled",
+            "copilotHooksEnabled",
+            "claudeStatuslineEnabled",
+        ] {
+            assert_eq!(status[flag], true, "{flag}: {status}");
+        }
+        assert_eq!(status["claudeStatuslineForeign"], false);
+
+        let none = detect_ai_tools(None);
+        assert_eq!(none["claudeMcpEnabled"], false, "no project, no project flags");
+        assert_eq!(none["claudeHooksEnabled"], false);
+    }
+
+    /// With no binary beside the app, the PATH lookup finds scryer-mcp.
+    #[test]
+    fn find_scryer_mcp_falls_back_to_the_path_lookup() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let fake = dir.path().join("scryer-mcp");
+        std::fs::write(&fake, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let old_path = std::env::var_os("PATH").unwrap_or_default();
+        let mut paths = vec![dir.path().to_path_buf()];
+        paths.extend(std::env::split_paths(&old_path));
+        std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
+        let found = find_scryer_mcp();
+        std::env::set_var("PATH", &old_path);
+
+        assert_eq!(found.as_deref(), Some(fake.to_string_lossy().as_ref()));
+    }
 }

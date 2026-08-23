@@ -578,12 +578,26 @@ pub(crate) struct StatusCounts {
     /// None until a reconcile baseline exists — drift and anchor states have
     /// nothing to measure against, and reporting zeros would fake certainty.
     pub baseline: Option<BaselineCounts>,
+    /// None until a test report has been ingested — with no recorded verdicts
+    /// there is no test state to report, and zeros would fake certainty.
+    pub tests: Option<TestCounts>,
 }
 
 pub(crate) struct BaselineCounts {
     pub drift_scopes: usize,
     pub anchors_changed: usize,
     pub anchors_broken: usize,
+}
+
+/// Recorded test-verdict counts. Verified-green is the norm and stays silent
+/// in the headers; `failing` (a current verdict that is red — rare, and an
+/// alarm precisely because the loop normally fixes red before it lands) and
+/// `stale` (verdicts the code has moved past — the standing signal that
+/// feeds `get_test_radius`) are what get spoken.
+pub(crate) struct TestCounts {
+    pub failing: usize,
+    pub stale: usize,
+    pub recorded: usize,
 }
 
 /// Compute [`StatusCounts`] straight from disk. Best-effort: None when there
@@ -598,8 +612,26 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
     let open_changes = planned.changes.len();
     let untested =
         scryer_core::health::compute_health(&committed, Some(&planned), None).totals.untested;
+    // Recorded test verdicts, re-verified against the tree (fingerprint
+    // compare with an mtime fast path — cheap enough for every response).
+    let verdicts = scryer_extract::test_status::test_statuses(model_ref).unwrap_or_default();
+    let tests = (!verdicts.is_empty()).then(|| TestCounts {
+        failing: verdicts
+            .iter()
+            .filter(|s| {
+                !s.stale
+                    && matches!(
+                        s.outcome,
+                        scryer_core::test_results::TestOutcome::Failed
+                            | scryer_core::test_results::TestOutcome::Errored
+                    )
+            })
+            .count(),
+        stale: verdicts.iter().filter(|s| s.stale).count(),
+        recorded: verdicts.len(),
+    });
     if !model_ref.sync_path().exists() {
-        return Some(StatusCounts { pending, carriers, open_changes, untested, baseline: None });
+        return Some(StatusCounts { pending, carriers, open_changes, untested, baseline: None, tests });
     }
     let sync = scryer_core::read_sync_state(model_ref);
     let scopes =
@@ -621,7 +653,23 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
             anchors_changed: changed,
             anchors_broken: broken,
         }),
+        tests,
     })
+}
+
+/// The header/statusline fragment for recorded test verdicts — empty unless
+/// something is failing or stale. Verified-green is the norm; the line only
+/// speaks when there is work: red left behind, or verdicts the code moved
+/// past (run `get_test_radius` for exactly what to re-run).
+pub(crate) fn tests_phrase(c: &StatusCounts) -> String {
+    match &c.tests {
+        Some(t) if t.failing > 0 && t.stale > 0 => {
+            format!(" · tests: {} failing, {} stale", t.failing, t.stale)
+        }
+        Some(t) if t.failing > 0 => format!(" · tests: {} failing", t.failing),
+        Some(t) if t.stale > 0 => format!(" · tests: {} stale", t.stale),
+        _ => String::new(),
+    }
 }
 
 /// One-line loop-state header for write responses — `plan: N pending ·
@@ -639,14 +687,16 @@ pub(crate) fn status_header(model_ref: &ModelRef) -> Option<String> {
     } else {
         String::new()
     };
+    // Test verdicts speak only when red or stale — verified-green is silence.
+    let tests = tests_phrase(&c);
     Some(match c.baseline {
         // Never reconciled: drift/anchors have no baseline to report against.
         None => format!(
-            "plan: {} pending · untested: {} · drift: no reconcile anchor yet{changes}",
+            "plan: {} pending · untested: {} · drift: no reconcile anchor yet{tests}{changes}",
             c.pending, c.untested
         ),
         Some(b) => format!(
-            "plan: {} pending · untested: {} · drift: {} scope(s) · anchors: {} changed, {} broken{changes}",
+            "plan: {} pending · untested: {} · drift: {} scope(s) · anchors: {} changed, {} broken{tests}{changes}",
             c.pending, c.untested, b.drift_scopes, b.anchors_changed, b.anchors_broken
         ),
     })

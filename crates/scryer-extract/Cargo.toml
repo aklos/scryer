@@ -31,3 +31,7 @@ tree-sitter-php = "0.24"
 
 [dev-dependencies]
 tempfile = "3"
+
+[[example]]
+name = "cluster"
+test = true

@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { CircleDashed, CornerDownRight, FlaskConical, Tag } from "lucide-react";
+import { Check, CircleDashed, CornerDownRight, FlaskConical, RotateCw, Tag, X } from "lucide-react";
 import type { ConcernDef, ScryModel, Responsibility, SourceLocation } from "../viewmodel";
 import { STANDARD_CONCERNS } from "../viewmodel";
 import { lookupIcon } from "../IconPicker";
 import type { Editor } from "../editor";
-import type { AnchorState } from "../health";
+import type { AnchorState, ClaimTestStatus } from "../health";
+import { testLaneTitle, testLaneTone } from "../health";
 import { FLAG_COLORS } from "../statusColors";
 import {
   buildElementDiff,
@@ -146,6 +147,7 @@ export function ResponsibilitiesSection({
   sourceMap,
   testMap,
   testStates,
+  testVerdicts,
   projectPath,
   leafHost,
   codeBackedHost,
@@ -171,6 +173,9 @@ export function ResponsibilitiesSection({
   testMap: Record<string, SourceLocation[]>;
   /** respId → fingerprint state of the attached test, when it regressed. */
   testStates: Record<string, AnchorState>;
+  /** respId → recorded test verdict (with re-verified staleness), from the
+   *  `get_test_statuses` feed. Colors the test lane. */
+  testVerdicts: Record<string, ClaimTestStatus>;
   projectPath: string | null;
   /** Whether claims here must anchor to source (leaf node). Structural hosts
    *  discharge through their subtree and never flag "unmapped". */
@@ -237,6 +242,7 @@ export function ResponsibilitiesSection({
               locations={sourceMap[row.resp.id] ?? []}
               testLocations={testMap[row.resp.id] ?? []}
               testState={testStates[row.resp.id] ?? null}
+              testVerdict={testVerdicts[row.resp.id] ?? null}
               projectPath={projectPath}
               leafHost={leafHost}
               codeBackedHost={codeBackedHost}
@@ -426,6 +432,7 @@ function RespDiffRow({
   locations,
   testLocations,
   testState,
+  testVerdict,
   projectPath,
   leafHost,
   codeBackedHost,
@@ -442,6 +449,8 @@ function RespDiffRow({
   testLocations: SourceLocation[];
   /** Fingerprint state of the attached test, when it regressed since reconcile. */
   testState: AnchorState | null;
+  /** The claim's recorded test verdict, or null when no run was ingested. */
+  testVerdict: ClaimTestStatus | null;
   projectPath: string | null;
   leafHost: boolean;
   /** See {@link ResponsibilitiesSection}: gates "untested", structural hosts included. */
@@ -666,35 +675,62 @@ function RespDiffRow({
       </div>
 
       {/* The test lane — the 180px control gutter is empty in read mode, so
-          its right edge is an aligned flask column, scannable down the page:
-          a flask at reading weight = a test is attached (backed, no verdict
-          implied); a ghost flask = testable but nothing attached (rule 22);
-          nothing = the test dimension doesn't apply. Edit mode swaps the whole
-          section for the editor, so the lane never collides with the hover
-          controls. */}
-      {tested && (
-        <span
-          className="absolute right-1 top-[3px] flex items-center text-[var(--text-secondary)]"
-          title={`${testLocations.length > 1 ? `${testLocations.length} tests` : "A test"} attached — this claim is backed. The test lines under the claim peek and open.`}
-        >
-          {/* A flask WITH LIQUID IN IT: the outline glyph, plus a second copy
-              fill-closed into a silhouette and clipped to below the glyph's
-              own fill line (y=15 of the 24-unit viewBox → inset 62.5%). Backed
-              reads as "the flask has contents" vs the untested empty outline. */}
-          <FlaskConical className="h-3 w-3" aria-label="Test attached" />
-          <FlaskConical
-            className="absolute inset-0 h-3 w-3 fill-current"
-            style={{ clipPath: "inset(62.5% 0 0 0)" }}
-            aria-hidden="true"
-          />
-        </span>
-      )}
+          its right edge is an aligned test column, scannable down the page.
+          Two marks, two facts, never conflated: the flask + count means
+          exactly one thing (tests are attached), and the verdict rides
+          BESIDE it as its own glyph — a green check when the last run passed
+          and still holds, an amber ↻ when the code moved past the verdict
+          (re-run to refresh), a red ✗ when a current verdict is failing or
+          errored, and nothing at all when no run was recorded. Green earns a
+          mark of its own precisely because "passing" and "never run" are
+          different states and must not read alike. The flask keeps reading
+          weight while the verdict is fine and takes the tone only when
+          something is wrong, so a page of green claims stays calm. The
+          rule-22 nudge is deliberately NOT a flask — a dashed circle, the
+          page's "expected but absent" mark — so fill-state never carries
+          meaning again. Edit mode swaps the whole section for the editor, so
+          the lane never collides with the hover controls. */}
+      {tested &&
+        (() => {
+          const tone = testLaneTone(testVerdict ?? undefined);
+          const toneCls =
+            tone === "failing"
+              ? "text-red-600 dark:text-red-400"
+              : tone === "stale"
+                ? "text-orange-600 dark:text-orange-400"
+                : "text-[var(--text-secondary)]";
+          const VerdictMark =
+            tone === "passing" ? Check : tone === "stale" ? RotateCw : tone === "failing" ? X : null;
+          return (
+            <span
+              className={`absolute right-1 top-[3px] flex items-center gap-px font-mono text-2xs ${toneCls}`}
+              title={testLaneTitle(testLocations.length, testVerdict ?? undefined)}
+            >
+              <FlaskConical className="h-3 w-3" aria-label="Tests attached" />
+              {testLocations.length}
+              {VerdictMark && (
+                <VerdictMark
+                  className={`ml-0.5 h-3 w-3 ${
+                    tone === "passing" ? "text-emerald-600 dark:text-emerald-400" : ""
+                  }`}
+                  aria-label={
+                    tone === "passing"
+                      ? "Tests passing"
+                      : tone === "stale"
+                        ? "Verdict stale — re-run"
+                        : "Tests failing"
+                  }
+                />
+              )}
+            </span>
+          );
+        })()}
       {untested && (
         <span
           className="absolute right-1 top-[3px] flex items-center text-[var(--text-ghost)]"
           title="This claim names a trigger, state, or failure a test could exercise — but no test is attached (rule 22)."
         >
-          <FlaskConical className="h-3 w-3" aria-label="No test attached" />
+          <CircleDashed className="h-3 w-3" aria-label="No test attached" />
         </span>
       )}
     </li>
@@ -834,7 +870,7 @@ function ConcernPicker({
         className="w-full border-b border-[var(--border-subtle)] bg-transparent px-3 py-2 text-xs outline-none placeholder:text-[var(--text-ghost)]"
         style={{ color: "var(--text)" }}
       />
-      <div className="max-h-64 overflow-y-auto p-1 text-xs">
+      <div className="max-h-64 overflow-y-auto overscroll-contain p-1 text-xs">
         <button
           type="button"
           onClick={() => pick(undefined)}

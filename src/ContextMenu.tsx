@@ -142,7 +142,7 @@ export function ContextMenu({
           style={{ color: "var(--text)" }}
         />
       )}
-      <ul className="max-h-60 overflow-y-auto py-1">
+      <ul className="max-h-60 overflow-y-auto overscroll-contain py-1">
         {filtered.length === 0 && (
           <li className="px-3 py-2 text-xs text-[var(--text-ghost)] italic">
             No matches

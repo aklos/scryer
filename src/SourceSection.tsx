@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Anchor, ChevronRight, ExternalLink, FlaskConical, Slash } from "lucide-react";
 import type { SourceLocation } from "./viewmodel";
-import type { AnchorState } from "./health";
+import { testRegression, type AnchorState } from "./health";
 
 /** Whether a source anchor currently lands in real code — mirrors the backend
  *  `verify_anchor` command. Anything but `resolved` reads as a broken anchor. */
@@ -231,10 +231,14 @@ export function ClaimTests({
     byFile.set(loc.pattern, group);
   }
   return (
-    // Same level as the source anchors: a test exercises the CLAIM, not any
-    // one of its implementation sites, so the two dimensions are siblings —
-    // the leading flask (vs the anchors' trailing ⚓) tells them apart.
-    <div className="mt-0.5 flex flex-col gap-0.5">
+    // Same level and same line anatomy as the source anchors — a test
+    // exercises the CLAIM, not any one of its implementation sites. NO
+    // section label: a two-line list doesn't need a heading, and an
+    // uppercase "TESTS" row read as a hierarchy level that isn't there,
+    // pushing the tests a rung below the anchors they sit beside. The
+    // dimension is carried per line by the leading flask instead, in the
+    // same slot the anchor mark occupies above it.
+    <div className="mt-1 flex flex-col gap-0.5">
       {[...byFile.values()].map((locs, i) => (
         <TestLine key={i} locs={locs} state={state} projectPath={projectPath} deleted={deleted} bleed={bleed} />
       ))}
@@ -296,12 +300,9 @@ function TestLine({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- anchorKey covers anchoredLocs
   }, [anchored, deleted, projectPath, file, anchorKey]);
 
-  // Two inputs, one verdict: the live resolve (does it land right now) and
-  // the fingerprint observation (did it change since the reconcile). Gone
-  // outranks changed — an unresolvable test can't be "just edited".
-  const gone =
-    (status != null && status !== "resolved") || state === "broken" || state === "fileMissing";
-  const changed = !gone && state === "changed";
+  const regression = testRegression(status, state);
+  const gone = regression === "gone";
+  const changed = regression === "changed";
   // The visible token is MINIMAL — one line per file, no test names. The
   // claim above already says what the tests exercise; names and run command
   // live in the tooltip, and the peek shows the tests themselves.
@@ -347,25 +348,24 @@ function TestLine({
         ) : (
           <span className="h-3 w-3 shrink-0" />
         )}
-        {/* The flask LEADS the line — the dimension is the first thing read,
-            so test lines separate from anchor lines at a glance while sitting
-            at the same level (both belong to the claim). No test-name suffix:
-            names restate the claim the line sits under, so the claim IS the
-            identifier (names live in the tooltip). */}
-        <span
-          className={`relative top-px inline-block h-3 w-3 shrink-0 ${
+        {/* The flask LEADS the line, in the slot the anchor mark holds on a
+            source line — with no cluster label above, this glyph is what
+            says "test" — and it carries the same regression tint as the path
+            so mark and text never disagree. No test-name suffix: names
+            restate the claim the line sits under, so the claim IS the
+            identifier (names live in the tooltip and in the disclosed rows). */}
+        <FlaskConical
+          className={`relative top-px h-3 w-3 shrink-0 ${
             deleted
-              ? "text-[var(--text-muted)]"
+              ? "text-[var(--text-ghost)]"
               : gone
-                ? "text-red-600 dark:text-red-400"
+                ? "text-red-700 dark:text-red-400"
                 : changed
-                  ? "text-orange-600 dark:text-orange-400"
-                  : "text-[var(--text-muted)]"
+                  ? "text-orange-700 dark:text-orange-400"
+                  : "text-[var(--text-ghost)]"
           }`}
-        >
-          <FlaskConical className="h-3 w-3" />
-          {gone && !deleted && <Slash className="absolute inset-0 h-3 w-3" />}
-        </span>
+          aria-label="Attached test"
+        />
         <span
           className={
             deleted
@@ -576,7 +576,15 @@ function InlinePeek({
           ) : (
             <div
               ref={scrollRef}
-              className="max-h-[420px] overflow-auto py-2 font-mono text-xs leading-[1.6]"
+              // `overscroll-contain`: the peek is a scroll box nested inside
+              // the article's own scroller, and reading code means scrolling
+              // to an edge constantly — every one of those would otherwise
+              // hand the gesture straight to the page and rip the snippet out
+              // from under the reader. Contained, the scroll stops at the
+              // peek's edge and moving the page takes a deliberate new
+              // gesture. Both axes: long lines scroll sideways here, and a
+              // chained horizontal overscroll is a back-navigation swipe.
+              className="max-h-[420px] overflow-auto overscroll-contain py-2 font-mono text-xs leading-[1.6]"
             >
               {span.lines.map((segs, i) => {
                 const lineNo = span.startLine + i;

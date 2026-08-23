@@ -799,3 +799,138 @@ async fn kill_process_tree(child: &mut tokio::process::Child, pid: Option<u32>) 
     let _ = child.kill().await;
     let _ = child.wait().await;
 }
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+
+    fn feed() -> (mpsc::UnboundedSender<AgentEvent>, mpsc::UnboundedReceiver<AgentEvent>) {
+        mpsc::unbounded_channel()
+    }
+
+    async fn start(
+        rt: &AcpRuntime,
+        binary: &str,
+        prompt: &str,
+        cwd: &str,
+        tx: mpsc::UnboundedSender<AgentEvent>,
+    ) -> Result<String, String> {
+        rt.start_session(
+            binary.into(),
+            LaunchMode::Cli { kind: AgentKind::Other },
+            cwd.into(),
+            String::new(),
+            String::new(),
+            String::new(),
+            prompt.into(),
+            Vec::new(),
+            tx,
+        )
+        .await
+    }
+
+    /// The caller's start_session resolves over the session's dedicated
+    /// channel: a spawn failure comes back as the error, a live session as its
+    /// id — and the session's own end arrives on the event feed.
+    #[tokio::test]
+    async fn a_caller_awaits_the_sessions_result_over_its_channel() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path().to_string_lossy().into_owned();
+        let rt = AcpRuntime::new();
+
+        let (tx, _rx) = feed();
+        let err = start(&rt, "/nonexistent/agent-binary", "", &cwd, tx).await.unwrap_err();
+        assert!(err.contains("Failed to spawn"), "{err}");
+
+        let (tx, mut rx) = feed();
+        let id = start(&rt, "true", "", &cwd, tx).await.unwrap();
+        assert!(id.starts_with("sync-"), "{id}");
+        loop {
+            match rx.recv().await.expect("event feed closed before the session ended") {
+                AgentEvent::Completed { stop_reason } => {
+                    assert_eq!(stop_reason, "end_turn");
+                    break;
+                }
+                _ => continue,
+            }
+        }
+    }
+
+    /// One cancel stops EVERY active session — both report Cancelled, and a
+    /// follow-up cancel finds nothing left to stop.
+    #[tokio::test]
+    async fn cancel_stops_every_active_session_at_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path().to_string_lossy().into_owned();
+        let rt = AcpRuntime::new();
+        assert!(rt.cancel().await.is_err(), "nothing to stop yet");
+
+        let (tx1, mut rx1) = feed();
+        let (tx2, mut rx2) = feed();
+        start(&rt, "sleep", "30", &cwd, tx1).await.unwrap();
+        start(&rt, "sleep", "30", &cwd, tx2).await.unwrap();
+
+        rt.cancel().await.unwrap();
+        for rx in [&mut rx1, &mut rx2] {
+            loop {
+                match rx.recv().await.expect("event feed closed without a Cancelled") {
+                    AgentEvent::Cancelled => break,
+                    _ => continue,
+                }
+            }
+        }
+        assert!(rt.cancel().await.is_err(), "no session may survive the cancel");
+    }
+
+    /// Killing a session takes down the agent's whole process group — the
+    /// grandchild dies with it — and a groupless child still dies via the
+    /// plain-kill fallback.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_process_tree_takes_the_grandchild_and_falls_back_to_plain_kill() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pidfile = tmp.path().join("grandchild.pid");
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c")
+            .arg(format!("sleep 30 & echo $! > '{}'; wait", pidfile.display()))
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true);
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn().unwrap();
+        let pid = child.id();
+        let grandchild: libc::pid_t = loop {
+            if let Ok(s) = std::fs::read_to_string(&pidfile) {
+                if let Ok(p) = s.trim().parse() {
+                    break p;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        };
+
+        kill_process_tree(&mut child, pid).await;
+        assert!(child.try_wait().unwrap().is_some(), "the agent process must be gone");
+        let mut gone = false;
+        for _ in 0..100 {
+            if unsafe { libc::kill(grandchild, 0) } == -1 {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(gone, "the grandchild must die with the group");
+
+        // No known pid: the plain-kill fallback still ends the child.
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        kill_process_tree(&mut child, None).await;
+        assert!(child.try_wait().unwrap().is_some(), "the fallback must kill the child");
+    }
+}

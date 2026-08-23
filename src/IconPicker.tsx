@@ -209,7 +209,7 @@ export function IconPicker({
         className="w-full bg-transparent px-3 py-2 text-xs outline-none border-b border-[var(--border-subtle)] placeholder:text-[var(--text-ghost)]"
         style={{ color: "var(--text)" }}
       />
-      <div className="grid grid-cols-8 gap-0.5 p-1.5 max-h-64 overflow-y-auto">
+      <div className="grid grid-cols-8 gap-0.5 p-1.5 max-h-64 overflow-y-auto overscroll-contain">
         <button
           type="button"
           onClick={() => {

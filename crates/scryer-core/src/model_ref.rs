@@ -97,6 +97,16 @@ impl ModelRef {
         }
     }
 
+    /// The claim test-status cache — each claim's last reported test outcome
+    /// beside the anchor fingerprints it was computed against (see
+    /// `scryer_extract::test_status`). Regenerable, git-free, never
+    /// hand-authored.
+    pub fn test_results_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".test-results.json"),
+        }
+    }
+
     pub fn dir(&self) -> PathBuf {
         match self {
             ModelRef::ProjectLocal(path) => path.join(".scryer"),

@@ -564,4 +564,24 @@ mod tests {
         assert!(!is_product_code("src/schema.generated.ts"));
         assert!(!is_product_code("app/__generated__/gql.ts"));
     }
+
+    /// A directory counts as a codebase when it has a `.git` folder or a
+    /// manifest file at the root (including .csproj/.sln discovered by
+    /// extension); a bare directory does not.
+    #[test]
+    fn a_git_folder_or_manifest_marks_a_codebase() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_codebase(dir.path()), "an empty directory is not a codebase");
+
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        assert!(is_codebase(dir.path()));
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "").unwrap();
+        assert!(is_codebase(dir.path()));
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("App.csproj"), "").unwrap();
+        assert!(is_codebase(dir.path()));
+    }
 }

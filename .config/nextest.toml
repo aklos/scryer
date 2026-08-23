@@ -1,0 +1,6 @@
+# cargo-nextest configuration. The `junit` profile writes a JUnit XML report
+# (target/nextest/junit/junit.xml) that scryer's `ingest_test_report` reads to
+# record per-claim test verdicts:
+#   cargo nextest run --workspace --profile junit
+[profile.junit.junit]
+path = "junit.xml"

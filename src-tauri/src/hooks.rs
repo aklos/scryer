@@ -720,6 +720,15 @@ mod tests {
     /// applies to the gate marks: a session id resurfacing hours later is a new
     /// run, and it gets its one gate back.
     #[test]
+    fn minted_tokens_are_long_and_never_repeat() {
+        let a = mint_token();
+        let b = mint_token();
+        assert_eq!(a.len(), 32, "128 bits as hex: {a}");
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a, b, "two mints must not collide");
+    }
+
+    #[test]
     fn prune_drops_only_stale_touches() {
         let now = Instant::now();
         let stale = now.checked_sub(TOUCH_TTL + Duration::from_secs(60)).unwrap();

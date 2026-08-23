@@ -796,4 +796,31 @@ serde = "1"
         let interp = "ARG BASE\nFROM ${BASE}\n";
         assert_eq!(dockerfile_base_image(interp), None);
     }
+
+    /// A manifest-bearing directory yields its declared name, technology
+    /// (the Dockerfile base image), and path dependencies on one container.
+    #[test]
+    fn a_scanned_dir_carries_name_technology_and_path_deps() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let write = |rel: &str, text: &str| {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+            path
+        };
+        let files = vec![
+            write(
+                "api/package.json",
+                r#"{"name":"@acme/api","dependencies":{"lib":"file:../lib"}}"#,
+            ),
+            write("api/Dockerfile", "FROM node:20-alpine\nCOPY . .\n"),
+            write("lib/package.json", r#"{"name":"@acme/lib"}"#),
+        ];
+        let containers = discover_containers_from_files(root, &files);
+        let api = containers.iter().find(|c| c.name == "@acme/api").unwrap();
+        assert_eq!(api.dir, "api");
+        assert_eq!(api.technology.as_deref(), Some("node:20-alpine"));
+        assert_eq!(api.dep_dirs, vec!["lib"]);
+    }
 }

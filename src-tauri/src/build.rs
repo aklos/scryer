@@ -170,6 +170,123 @@ mod build_scheduling_tests {
         assert_eq!(session_permits(medium[0], 0, 4), 2);
         assert_eq!(session_permits(large[0], 0, 4), 4);
     }
+
+    /// Permits weigh BOTH dimensions: a small payload with many work units is
+    /// throttled just like a big payload, and permits never exceed the pool.
+    #[test]
+    fn permits_weigh_work_units_alongside_payload_size() {
+        assert_eq!(session_permits(60_000, 9_000, 4), 4, "heavy work units take the pool");
+        assert_eq!(session_permits(60_000, 4_000, 4), 2, "medium work units take two");
+        assert_eq!(session_permits(60_000, 100, 4), 1, "light stays at one");
+        assert_eq!(session_permits(900_000, 9_000, 2), 2, "capped at the pool");
+        assert_eq!(session_permits(0, 0, 1), 1, "never below one");
+    }
+}
+
+#[cfg(test)]
+mod build_helper_tests {
+    use super::*;
+
+    /// A monorepo with a root package and one `api/` sub-package, extracted for
+    /// real so the context carries genuine container facts.
+    fn ctx() -> (tempfile::TempDir, scryer_extract::ProjectContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |rel: &str, text: &str| {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write("package.json", r#"{"name":"app"}"#);
+        write("src/main.ts", "export function main() { return 1; }");
+        write("api/package.json", r#"{"name":"api-svc"}"#);
+        write("api/src/server.ts", "export function serve() { return 2; }");
+        let ctx = scryer_extract::extract_context(dir.path()).unwrap();
+        (dir, ctx)
+    }
+
+    fn node(v: serde_json::Value) -> scryer_core::Node {
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// A container maps back to its owned directory through its boundary glob;
+    /// without one, by matching its name against the extracted facts — which
+    /// also covers the root container's empty dir.
+    #[test]
+    fn a_container_maps_back_to_the_directory_it_owns() {
+        let (_dir, ctx) = ctx();
+        let mut model = scryer_core::ScryModel::new();
+        model.boundaries.insert(
+            "node-2".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "api/**/*" })).unwrap()],
+        );
+
+        let via_boundary = node(
+            serde_json::json!({ "id": "node-2", "kind": "container", "name": "Renamed API" }),
+        );
+        assert_eq!(derive_container_dir(&via_boundary, &model, &ctx).as_deref(), Some("api"));
+
+        let via_name =
+            node(serde_json::json!({ "id": "node-3", "kind": "container", "name": "api-svc" }));
+        assert_eq!(derive_container_dir(&via_name, &model, &ctx).as_deref(), Some("api"));
+
+        let root = node(serde_json::json!({ "id": "node-4", "kind": "container", "name": "app" }));
+        assert_eq!(derive_container_dir(&root, &model, &ctx).as_deref(), Some(""));
+
+        let unknown =
+            node(serde_json::json!({ "id": "node-5", "kind": "container", "name": "ghost" }));
+        assert_eq!(derive_container_dir(&unknown, &model, &ctx), None);
+    }
+
+    /// Extracted container facts adapt one-to-one into the seeding input.
+    #[test]
+    fn seed_units_mirror_the_extracted_container_facts() {
+        let (_dir, ctx) = ctx();
+        let units = seed_units(&ctx);
+        assert_eq!(units.len(), ctx.containers.len());
+        for (unit, fact) in units.iter().zip(&ctx.containers) {
+            assert_eq!(unit.dir, fact.dir);
+            assert_eq!(unit.name, fact.name);
+            assert_eq!(unit.dep_dirs, fact.dep_dirs);
+        }
+        assert!(units.iter().any(|u| u.name == "api-svc" && u.dir == "api"));
+    }
+
+    /// Usage renders as one line: fresh tokens lead, cache-read is broken out,
+    /// and the API-equivalent cost appears only when the agent reported one.
+    #[test]
+    fn usage_renders_a_one_line_summary_with_cost_only_when_reported() {
+        let with_cost = scryer_acp::Usage {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_creation_input_tokens: 10,
+            cache_read_input_tokens: 9_000,
+            cost_usd: 1.23,
+        };
+        let line = fmt_usage(&with_cost);
+        assert!(line.starts_with("160 fresh tokens"), "{line}");
+        assert!(line.contains("cache-read 9000"), "{line}");
+        assert!(line.contains("≈$1.2300 API-equiv"), "{line}");
+
+        let no_cost = scryer_acp::Usage { cost_usd: 0.0, ..with_cost };
+        assert!(!fmt_usage(&no_cost).contains('$'), "Codex reports no cost");
+    }
+
+    /// Each orchestrator line lands timestamped in the build log, appended
+    /// across calls.
+    #[test]
+    fn orchestrator_lines_append_timestamped_to_the_build_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_string_lossy().to_string();
+        orch_log(&cwd, "build start");
+        orch_log(&cwd, "✓ wave done");
+
+        let log =
+            std::fs::read_to_string(dir.path().join(".scryer/build-logs/build.log")).unwrap();
+        let lines: Vec<&str> = log.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with('[') && lines[0].ends_with("build start"), "{}", lines[0]);
+        assert!(lines[1].ends_with("✓ wave done"));
+    }
 }
 
 /// Run one modeling agent session to completion. Forwards only the session's

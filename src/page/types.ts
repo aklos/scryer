@@ -1,6 +1,6 @@
 import type { ScryModel, DriftScope } from "../viewmodel";
 import type { Editor } from "../editor";
-import type { ModelHealthReport } from "../health";
+import type { ClaimTestStatus, ModelHealthReport } from "../health";
 import type { ChangeRevision } from "../hooks/useModelStorage";
 import type { HistoryEvent } from "../history";
 
@@ -29,6 +29,9 @@ export interface PageProps {
   committed: ScryModel | null;
   selected: Selected;
   report: ModelHealthReport | null;
+  /** respId → recorded test verdict (re-verified staleness), from the
+   *  `get_test_statuses` feed. Empty until a report has been ingested. */
+  testVerdicts: Record<string, ClaimTestStatus>;
   projectPath: string | null;
   editor: Editor | undefined;
   onSelectNode: (id: string) => void;

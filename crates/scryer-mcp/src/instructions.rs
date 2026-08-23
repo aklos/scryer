@@ -10,8 +10,13 @@ claims (the Proportionality section below draws that line).\n\
 A claim either HAS tests attached or it DOESN'T, and that binary is the model's PRIMARY signal: an \
 attached test is the one artifact that attempts to hold the code to the claim's words, so \
 attaching tests as you implement is not a follow-up chore — it is part of implementing. Scryer \
-records attachment only (it never runs tests, never certifies what they prove); the `untested` \
-count in every status line is your standing work signal.\n\
+never RUNS tests itself, but it tracks their VERDICTS: after a run, `ingest_test_report {path}` \
+reads the runner's JUnit XML and records each attached test's result against its claim — one call \
+per report file — fingerprint-keyed so a later edit to the implementation or the test flips the \
+verdict to stale. `get_test_radius` answers \"what needs running\": exactly the test files whose \
+claims hold missing or stale verdicts, never the whole suite. The `untested` count in every status \
+line is your standing work signal; `tests: N failing/stale` joins it only when something needs \
+attention.\n\
 \n\
 ## Every task that changes behaviour\n\
 1. ORIENT — figure out which phase you're in first. `get_health` reports how well the COMMITTED \
@@ -68,8 +73,11 @@ layered build, never a reason to withhold the skeleton (rules 18-19). Never anch
 not implemented: anchoring is the build checkpoint, which is what makes the completeness figure \
 trustworthy. If you opened a change, `mark_implemented {change}` folds exactly its entries; when \
 the last one folds the change closes and its rationale is recorded in the history log. Then \
-reconcile and continue: `reconcile_drift` advances the anchor once the scope is clean, and the \
-next responsibility starts the loop again at BUILD.\n\
+VERIFY: `get_test_radius` names the test files your change invalidated (missing or stale \
+verdicts) — run exactly those with the runner's JUnit reporter on and `ingest_test_report` each \
+report file, so the claims' verdicts are current before you move on. Then reconcile and continue: \
+`reconcile_drift` advances the anchor once the scope is clean, and the next responsibility starts \
+the loop again at BUILD.\n\
 \n\
 If no model exists yet, build one first: `read_codebase` to see the codebase, then build top-down \
 (`fill_container` commits an existing container's subtree at once). Then work the loop above.\n\

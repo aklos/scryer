@@ -15,6 +15,7 @@ pub mod anchors;
 pub mod context;
 pub mod lang;
 pub mod manifest;
+pub mod test_status;
 pub mod tsconfig;
 
 pub use context::{
@@ -666,6 +667,30 @@ func main() {
                 ctx.symbol_edges
             );
         }
+    }
+
+    /// The claimed-territory listing enumerates EVERY project file — parseable
+    /// or not — skipping only dependency/build directories.
+    #[test]
+    fn project_file_listing_covers_unparseable_files_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |rel: &str| {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "x").unwrap();
+        };
+        write("src/main.ts");
+        write("README.md");
+        write("assets/logo.svg");
+        write("node_modules/pkg/index.js");
+        write("target/debug/out.rs");
+
+        let files = list_project_files(dir.path());
+        assert!(files.contains("src/main.ts"));
+        assert!(files.contains("README.md"), "non-source files are listed");
+        assert!(files.contains("assets/logo.svg"));
+        assert!(!files.contains("node_modules/pkg/index.js"));
+        assert!(!files.contains("target/debug/out.rs"));
     }
 
     #[test]

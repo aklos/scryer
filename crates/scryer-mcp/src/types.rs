@@ -189,6 +189,21 @@ pub(crate) struct ReconcileDriftRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct IngestTestReportRequest {
+    /// Absolute path to the project root. If omitted, uses the current working directory.
+    pub project: Option<String>,
+    /// The JUnit XML report file a test run just wrote — absolute, or relative
+    /// to the project root. One call ingests the whole file.
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct GetTestRadiusRequest {
+    /// Absolute path to the project root. If omitted, uses the current working directory.
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct MarkImplementedRequest {
     /// Absolute path to the project root. If omitted, uses the current working directory.
     pub project: Option<String>,

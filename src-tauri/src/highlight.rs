@@ -17,7 +17,7 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
-#[derive(serde::Serialize, Clone)]
+#[derive(Debug, serde::Serialize, Clone)]
 pub struct Segment {
     pub text: String,
     /// Coarse token class (empty = default text). Mapped to a colour in the UI.
@@ -173,4 +173,36 @@ pub fn highlight_lines(path: &Path, source: &str) -> Option<Vec<Vec<Segment>>> {
         }
         Some(lines)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    /// The whole file highlights into one segment list per line — each line's
+    /// segments concatenate back to the original text, with captures collapsed
+    /// to coarse themeable classes.
+    #[test]
+    fn highlighting_returns_concatenable_segments_per_line() {
+        let src = "fn main() {\n    let s = \"hi\";\n}\n";
+        let lines = highlight_lines(Path::new("main.rs"), src).expect("rust is bundled");
+        let originals: Vec<&str> = src.lines().collect();
+        assert!(lines.len() >= originals.len());
+        for (line, original) in lines.iter().zip(&originals) {
+            let joined: String = line.iter().map(|s| s.text.as_str()).collect();
+            assert_eq!(&joined, original, "segments must concatenate back");
+        }
+        let kinds: std::collections::BTreeSet<&str> =
+            lines.iter().flatten().map(|s| s.kind.as_str()).collect();
+        assert!(kinds.contains("keyword"), "fn/let collapse to keyword: {kinds:?}");
+        assert!(kinds.contains("string"), "the literal collapses to string: {kinds:?}");
+    }
+
+    /// An unsupported language yields None so the caller renders plain text.
+    #[test]
+    fn unsupported_language_falls_back_to_plain() {
+        assert!(highlight_lines(Path::new("notes.xyz"), "plain words\n").is_none());
+        assert!(highlight_lines(Path::new("Makefile"), "all:\n").is_none(), "no extension");
+    }
 }

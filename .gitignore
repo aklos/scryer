@@ -52,3 +52,6 @@ AUDIT.md
 *.tsbuildinfo
 vite.config.js
 vite.config.d.ts
+
+# Test run artifacts — the JUnit reports scryer ingests for claim verdicts.
+test-results/

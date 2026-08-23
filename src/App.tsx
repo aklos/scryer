@@ -37,6 +37,7 @@ import { useModelStorage } from "./hooks/useModelStorage";
 import { useModelBuild, type ModelBuild } from "./hooks/useModelBuild";
 import { useAgentSession } from "./hooks/useAgentSession";
 import { useModelHealth } from "./hooks/useModelHealth";
+import { useTestStatuses } from "./hooks/useTestStatuses";
 import {
   addGroup as addGroupHelper,
   addLink as addLinkHelper,
@@ -204,6 +205,10 @@ function Workspace({
     projectPath,
     writing,
   );
+
+  // Claim test verdicts: cheap, refreshed live when the on-disk cache changes
+  // (an agent ingesting a report mid-session) — not only on the busy edge.
+  const { verdicts: testVerdicts } = useTestStatuses(projectPath, writing);
 
   // Cheap, agent-free nudge: which scopes have code changes since the last
   // reconcile. Refreshes on open, when ANY writer finishes (builds and
@@ -846,6 +851,7 @@ function Workspace({
             committed={committed}
             selected={selected}
             report={healthReport}
+            testVerdicts={testVerdicts}
             projectPath={projectPath}
             editor={pageEditor}
             onSelectNode={selectNode}

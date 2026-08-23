@@ -551,4 +551,31 @@ mod tests {
         let inh = inherited_directives(&m, "leaf");
         assert_eq!(inh.iter().map(|i| i.node_id.as_str()).collect::<Vec<_>>(), vec!["mid", "root"]);
     }
+
+    /// A symbol with no responsibilities, properties, or rendered appearance —
+    /// and not external — is flagged empty. Any one of those, or being a
+    /// structural node, gives it content of its own.
+    #[test]
+    fn a_contentless_internal_symbol_is_empty() {
+        let node = |json: &str| -> Node { serde_json::from_str(json).unwrap() };
+        assert!(is_node_empty(&node(r#"{ "id": "n1", "kind": "symbol", "name": "S" }"#)));
+
+        assert!(!is_node_empty(&node(
+            r#"{ "id": "n1", "kind": "symbol", "name": "S",
+                 "responsibilities": [{ "id": "r1", "statement": "does X" }] }"#
+        )));
+        assert!(!is_node_empty(&node(
+            r#"{ "id": "n1", "kind": "symbol", "name": "S",
+                 "properties": [{ "label": "phone" }] }"#
+        )));
+        assert!(!is_node_empty(&node(
+            r#"{ "id": "n1", "kind": "symbol", "name": "S",
+                 "appearance": { "status": "implemented" } }"#
+        )));
+        assert!(!is_node_empty(&node(
+            r#"{ "id": "n1", "kind": "symbol", "name": "S", "external": true }"#
+        )));
+        // Structural nodes carry meaning through their children — never "empty".
+        assert!(!is_node_empty(&node(r#"{ "id": "n1", "kind": "component", "name": "C" }"#)));
+    }
 }
