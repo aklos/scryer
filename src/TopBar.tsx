@@ -3,11 +3,29 @@
  * (open / close project, settings); the project name sits beside it for
  * context, and search lives on the right. Page content lives below; this bar
  * is app chrome only.
+ *
+ * The window is frameless (`decorations: false`), so this bar IS the titlebar:
+ * every non-interactive part of it carries `data-tauri-drag-region` to move the
+ * window, and the minimize / maximize / close controls live at its right edge.
+ * The attribute does not inherit — each element the cursor can land on needs
+ * its own, so the flex wings and the project path carry it too.
  */
 
 import { useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { ChevronDown, FileText, Moon, Network, Search, Sun } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  ChevronDown,
+  Copy,
+  FileText,
+  Minus,
+  Moon,
+  Network,
+  Search,
+  Square,
+  Sun,
+  X,
+} from "lucide-react";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { applyColorMode, loadTheme, saveTheme, type ColorMode } from "./theme";
 
@@ -55,11 +73,14 @@ export function TopBar({
     // Three zones — identity | search | view — with the search dead-center
     // (the command-center idiom): equal flex wings on either side keep it
     // centered regardless of how long the project path runs.
-    <div className="flex h-9 shrink-0 items-center border-b border-[var(--border)] bg-[var(--surface)] px-2 select-none">
+    <div
+      data-tauri-drag-region
+      className="flex h-9 shrink-0 items-center border-b border-[var(--border)] bg-[var(--surface)] px-2 select-none"
+    >
       {/* Box-centered, with a 1px optical nudge on the path below. NOT
           items-baseline: the button's exported baseline is its first child's —
           the logo image, i.e. its bottom edge — which drags the path ~3px low. */}
-      <div className="flex min-w-0 flex-1 items-center">
+      <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center">
         <button
           type="button"
           onClick={(e) => {
@@ -76,6 +97,7 @@ export function TopBar({
 
         {projectPath && (
           <span
+            data-tauri-drag-region
             title={projectPath}
             // translate-y-px: 11px mono centered next to 12px sans sits ~1px
             // high by box math; the nudge lands the two baselines together.
@@ -99,7 +121,7 @@ export function TopBar({
         </span>
       </button>
 
-      <div className="flex min-w-0 flex-1 items-center justify-end">
+      <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center justify-end">
         {/* Wiki / Map view toggle — a primary nav surface onto the same model
             and selection. Ctrl+Space flips it. One joined control: single
             border, hairline dividers, the active cell filled. */}
@@ -128,6 +150,7 @@ export function TopBar({
         </div>
 
         <ThemeToggle />
+        <WindowControls />
       </div>
 
       {menu && (
@@ -139,6 +162,98 @@ export function TopBar({
           onClose={() => setMenu(null)}
         />
       )}
+    </div>
+  );
+}
+
+/** Minimize / maximize / close for the frameless window. Without these the
+ *  window can only be quit from outside the app, since `decorations: false`
+ *  removes the native controls along with the titlebar. The maximize icon
+ *  mirrors the real window state, which the OS can change behind our back
+ *  (a double-click on the drag region, a window-manager shortcut), so it is
+ *  re-read on every resize rather than tracked locally. */
+export function WindowControls({ divider = true }: { divider?: boolean } = {}) {
+  const [maximized, setMaximized] = useState(false);
+
+  useEffect(() => {
+    const win = getCurrentWindow();
+    let alive = true;
+    let unlisten: (() => void) | undefined;
+
+    const sync = () => {
+      void win
+        .isMaximized()
+        .then((m) => {
+          if (alive) setMaximized(m);
+        })
+        .catch(() => {});
+    };
+
+    sync();
+    void win
+      .onResized(sync)
+      .then((fn) => {
+        // The listener may resolve after unmount; drop it rather than leak.
+        if (alive) unlisten = fn;
+        else fn();
+      })
+      .catch(() => {});
+
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
+
+  const controls = [
+    {
+      id: "minimize",
+      label: "Minimize",
+      Icon: Minus,
+      onClick: () => getCurrentWindow().minimize(),
+    },
+    {
+      id: "maximize",
+      label: maximized ? "Restore" : "Maximize",
+      Icon: maximized ? Copy : Square,
+      onClick: () => getCurrentWindow().toggleMaximize(),
+    },
+    {
+      id: "close",
+      label: "Close",
+      Icon: X,
+      onClick: () => getCurrentWindow().close(),
+      danger: true,
+    },
+  ];
+
+  return (
+    // Separated from the app's own controls by a hairline: these act on the
+    // window, not on the model, and shouldn't read as part of the toolbar.
+    // On a bare titlebar there is nothing to separate from, hence `divider`.
+    <div
+      className={`flex shrink-0 items-center gap-0.5 ${
+        divider ? "ml-2 border-l border-[var(--border)] pl-2" : ""
+      }`}
+    >
+      {controls.map(({ id, label, Icon, onClick, danger }) => (
+        <button
+          key={id}
+          type="button"
+          title={label}
+          aria-label={label}
+          onClick={() => void onClick().catch(() => {})}
+          className={`flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] ${
+            // Close gets the conventional red wash — no palette token for it,
+            // and it should read as terminal rather than as one more toolbar hit.
+            danger
+              ? "hover:bg-red-600 hover:text-white"
+              : "hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+          }`}
+        >
+          <Icon className="h-3.5 w-3.5" />
+        </button>
+      ))}
     </div>
   );
 }
