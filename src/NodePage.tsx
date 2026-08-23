@@ -349,21 +349,28 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 extra > 0
                   ? `; ${extra} more test${extra === 1 ? "" : "s"} on always-active claims`
                   : "";
-              // The subtree's verdict tone — quiet is the norm; the gauge
-              // only takes color when something below is failing or stale.
+              // The subtree's verdict tone. Green is a state the gauge can
+              // reach, not just the absence of red: the chip goes emerald
+              // once the verdicts below are passing and current, amber when
+              // any is stale, red when any is failing — and stays neutral
+              // only while nothing down there has been run at all.
               const tone = subtreeTestTone(model, node.id, props.testVerdicts);
               const toneCls =
                 tone === "failing"
                   ? "text-red-600 dark:text-red-400"
                   : tone === "stale"
                     ? "text-orange-600 dark:text-orange-400"
-                    : "";
+                    : tone === "passing"
+                      ? "text-emerald-600 dark:text-emerald-400"
+                      : "";
               const toneNote =
                 tone === "failing"
                   ? "; FAILING verdicts below"
                   : tone === "stale"
                     ? "; stale verdicts below — re-run to refresh"
-                    : "";
+                    : tone === "passing"
+                      ? "; recorded verdicts below are passing"
+                      : "; no test run recorded below yet";
               if (h.testable === 0) {
                 return (
                   <span

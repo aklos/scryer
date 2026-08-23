@@ -4549,8 +4549,8 @@
         },
         {
           "id": "resp-734",
-          "statement": "**When** a claim carries attached tests, **show** their count and recorded verdict — quiet when green or unrecorded, amber when stale, red when failing — and **mark** testable claims lacking one with a non-flask nudge",
-          "lastTouchedAt": 1786957053
+          "statement": "**When** a claim carries attached tests, **show** their count and, beside it, the recorded verdict as its own mark — a green check when the last run passed and still holds, amber when stale, red when failing, nothing at all when no run was recorded — and **mark** testable claims lacking a test with a non-flask nudge",
+          "lastTouchedAt": 1787473772
         }
       ]
     },
@@ -12482,8 +12482,8 @@
       "responsibilities": [
         {
           "id": "resp-736",
-          "statement": "**List** a claim's attached tests under a whisper-weight tests label — one line per spec file, a merged line disclosing one row per test — each expanding to an inline code peek",
-          "lastTouchedAt": 1786957491
+          "statement": "**List** a claim's attached tests as flask-led lines under no header — one line per spec file, a merged line disclosing one row per test — each expanding to an inline code peek",
+          "lastTouchedAt": 1787473772
         },
         {
           "id": "resp-737",
@@ -12500,8 +12500,8 @@
       "responsibilities": [
         {
           "id": "resp-738",
-          "statement": "**When** any claim in a node's subtree holds a current failing verdict, **report** failing; **when** any holds a stale one, **report** stale; quiet otherwise — failing outranks stale at the rollup",
-          "lastTouchedAt": 1786957491
+          "statement": "**When** any claim in a node's subtree holds a current failing verdict, **report** failing; **when** any holds a stale one, **report** stale; **when** any holds a current passing one and none are worse, **report** passing; quiet only when nothing was recorded — failing outranks stale, and stale outranks passing, at the rollup",
+          "lastTouchedAt": 1787473772
         }
       ]
     },

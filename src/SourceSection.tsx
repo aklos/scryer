@@ -9,7 +9,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Anchor, ChevronRight, ExternalLink, Slash } from "lucide-react";
+import { Anchor, ChevronRight, ExternalLink, FlaskConical, Slash } from "lucide-react";
 import type { SourceLocation } from "./viewmodel";
 import { testRegression, type AnchorState } from "./health";
 
@@ -231,15 +231,14 @@ export function ClaimTests({
     byFile.set(loc.pattern, group);
   }
   return (
-    // Same level as the source anchors — a test exercises the CLAIM, not any
-    // one of its implementation sites — but SEGREGATED: the cluster label
-    // names the dimension once, so the lines beneath it read as tests without
-    // borrowing the anchors' line anatomy (no per-line flask; the claim row's
-    // lane already carries that glyph).
+    // Same level and same line anatomy as the source anchors — a test
+    // exercises the CLAIM, not any one of its implementation sites. NO
+    // section label: a two-line list doesn't need a heading, and an
+    // uppercase "TESTS" row read as a hierarchy level that isn't there,
+    // pushing the tests a rung below the anchors they sit beside. The
+    // dimension is carried per line by the leading flask instead, in the
+    // same slot the anchor mark occupies above it.
     <div className="mt-1 flex flex-col gap-0.5">
-      <span className="select-none font-mono text-2xs uppercase tracking-wider text-[var(--text-ghost)]">
-        tests
-      </span>
       {[...byFile.values()].map((locs, i) => (
         <TestLine key={i} locs={locs} state={state} projectPath={projectPath} deleted={deleted} bleed={bleed} />
       ))}
@@ -349,11 +348,24 @@ function TestLine({
         ) : (
           <span className="h-3 w-3 shrink-0" />
         )}
-        {/* No per-line dimension glyph — the cluster's "tests" label already
-            said it, and a leading icon is exactly what made these lines read
-            as anchors. No test-name suffix either: names restate the claim
-            the line sits under, so the claim IS the identifier (names live in
-            the tooltip); regression states speak through the text tint. */}
+        {/* The flask LEADS the line, in the slot the anchor mark holds on a
+            source line — with no cluster label above, this glyph is what
+            says "test" — and it carries the same regression tint as the path
+            so mark and text never disagree. No test-name suffix: names
+            restate the claim the line sits under, so the claim IS the
+            identifier (names live in the tooltip and in the disclosed rows). */}
+        <FlaskConical
+          className={`relative top-px h-3 w-3 shrink-0 ${
+            deleted
+              ? "text-[var(--text-ghost)]"
+              : gone
+                ? "text-red-700 dark:text-red-400"
+                : changed
+                  ? "text-orange-700 dark:text-orange-400"
+                  : "text-[var(--text-ghost)]"
+          }`}
+          aria-label="Attached test"
+        />
         <span
           className={
             deleted

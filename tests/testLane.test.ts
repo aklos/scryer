@@ -1,8 +1,9 @@
 /**
  * The claim row's test lane: tone and words for a recorded verdict
- * (`src/health.ts`). Quiet is the norm — green and unrecorded read the same
- * at rest — and stale outranks failing, because a red verdict the code moved
- * past is outdated, not an alarm.
+ * (`src/health.ts`). A current green verdict is its OWN tone (`passing`, the
+ * lane's check mark) — quiet is reserved for the unmeasured, so "passing" and
+ * "never run" can never read alike — and stale outranks failing, because a
+ * red verdict the code moved past is outdated, not an alarm.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -23,9 +24,10 @@ const verdict = (over: Partial<ClaimTestStatus>): ClaimTestStatus => ({
 });
 
 describe("testLaneTone", () => {
-  it("is quiet for green and for no recorded verdict alike", () => {
+  it("reads a current green verdict as passing, and only the unmeasured as quiet", () => {
+    expect(testLaneTone(verdict({ outcome: "passed" }))).toBe("passing");
+    // No run recorded, and a test that ran but asserted nothing: unmeasured.
     expect(testLaneTone(undefined)).toBe("quiet");
-    expect(testLaneTone(verdict({ outcome: "passed" }))).toBe("quiet");
     expect(testLaneTone(verdict({ outcome: "skipped" }))).toBe("quiet");
   });
 
@@ -71,21 +73,29 @@ describe("subtreeTestTone", () => {
     ).toBe("failing");
   });
 
-  it("failing outranks stale at the rollup; stale beats quiet", () => {
+  it("ranks the rollup failing over stale over passing over quiet", () => {
     expect(
       subtreeTestTone(model, "root", {
         "r-mid": verdict({ stale: true }),
         "r-leaf": verdict({ outcome: "failed" }),
       }),
     ).toBe("failing");
+    // One stale verdict outranks its green neighbours — the subtree can't be
+    // called green while part of it hasn't been measured against this code.
+    expect(
+      subtreeTestTone(model, "root", { "r-mid": verdict({ stale: true }), "r-leaf": verdict({}) }),
+    ).toBe("stale");
     expect(subtreeTestTone(model, "root", { "r-mid": verdict({ stale: true }) })).toBe("stale");
   });
 
-  it("stays quiet on green subtrees and ignores verdicts outside the scope", () => {
-    expect(subtreeTestTone(model, "root", { "r-leaf": verdict({}) })).toBe("quiet");
+  it("reports passing on a green subtree, quiet only when nothing was recorded", () => {
+    expect(subtreeTestTone(model, "root", { "r-leaf": verdict({}) })).toBe("passing");
+    expect(subtreeTestTone(model, "root", {})).toBe("quiet");
+    // Verdicts outside the scope neither green it nor alarm it.
     expect(subtreeTestTone(model, "mid", { "r-out": verdict({ outcome: "failed" }) })).toBe(
       "quiet",
     );
+    expect(subtreeTestTone(model, "mid", { "r-out": verdict({}) })).toBe("quiet");
   });
 });
 

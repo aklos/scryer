@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { CircleDashed, CornerDownRight, FlaskConical, Tag } from "lucide-react";
+import { Check, CircleDashed, CornerDownRight, FlaskConical, RotateCw, Tag, X } from "lucide-react";
 import type { ConcernDef, ScryModel, Responsibility, SourceLocation } from "../viewmodel";
 import { STANDARD_CONCERNS } from "../viewmodel";
 import { lookupIcon } from "../IconPicker";
@@ -676,15 +676,20 @@ function RespDiffRow({
 
       {/* The test lane — the 180px control gutter is empty in read mode, so
           its right edge is an aligned test column, scannable down the page.
-          The flask means exactly one thing here: tests are attached. It
-          carries a VISIBLE count and takes the verdict's tone — reading
-          weight when the verdict is green or nobody recorded one (quiet is
-          the norm), amber when the code moved past the verdict (stale), red
-          when a current verdict is failing/errored. The rule-22 nudge is
-          deliberately NOT a flask — a dashed circle, the page's "expected
-          but absent" mark — so fill-state never carries meaning again. Edit
-          mode swaps the whole section for the editor, so the lane never
-          collides with the hover controls. */}
+          Two marks, two facts, never conflated: the flask + count means
+          exactly one thing (tests are attached), and the verdict rides
+          BESIDE it as its own glyph — a green check when the last run passed
+          and still holds, an amber ↻ when the code moved past the verdict
+          (re-run to refresh), a red ✗ when a current verdict is failing or
+          errored, and nothing at all when no run was recorded. Green earns a
+          mark of its own precisely because "passing" and "never run" are
+          different states and must not read alike. The flask keeps reading
+          weight while the verdict is fine and takes the tone only when
+          something is wrong, so a page of green claims stays calm. The
+          rule-22 nudge is deliberately NOT a flask — a dashed circle, the
+          page's "expected but absent" mark — so fill-state never carries
+          meaning again. Edit mode swaps the whole section for the editor, so
+          the lane never collides with the hover controls. */}
       {tested &&
         (() => {
           const tone = testLaneTone(testVerdict ?? undefined);
@@ -694,6 +699,8 @@ function RespDiffRow({
               : tone === "stale"
                 ? "text-orange-600 dark:text-orange-400"
                 : "text-[var(--text-secondary)]";
+          const VerdictMark =
+            tone === "passing" ? Check : tone === "stale" ? RotateCw : tone === "failing" ? X : null;
           return (
             <span
               className={`absolute right-1 top-[3px] flex items-center gap-px font-mono text-2xs ${toneCls}`}
@@ -701,6 +708,20 @@ function RespDiffRow({
             >
               <FlaskConical className="h-3 w-3" aria-label="Tests attached" />
               {testLocations.length}
+              {VerdictMark && (
+                <VerdictMark
+                  className={`ml-0.5 h-3 w-3 ${
+                    tone === "passing" ? "text-emerald-600 dark:text-emerald-400" : ""
+                  }`}
+                  aria-label={
+                    tone === "passing"
+                      ? "Tests passing"
+                      : tone === "stale"
+                        ? "Verdict stale — re-run"
+                        : "Tests failing"
+                  }
+                />
+              )}
             </span>
           );
         })()}

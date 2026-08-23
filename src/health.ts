@@ -205,18 +205,23 @@ export function testVerdictsOf(
   return out;
 }
 
-/** The claim row's test-lane tone. Quiet is the norm and covers both
- *  current-and-green and no-verdict-recorded; `stale` outranks `failing`
- *  because a red verdict the code has moved past is OUTDATED, not an alarm —
- *  re-running decides, and claiming "failing" would be asserting something
- *  the current code was never measured on. */
+/** The claim row's test-lane tone. `passing` is a POSITIVE state, not the
+ *  absence of a problem: it means a run was recorded, it was green, and the
+ *  code still hashes as it did — the lane earns a check mark. `quiet` is
+ *  reserved for the genuinely unmeasured (no verdict recorded, or a skipped
+ *  test that asserted nothing), which must not read the same as green.
+ *  `stale` outranks `failing` because a red verdict the code has moved past
+ *  is OUTDATED, not an alarm — re-running decides, and claiming "failing"
+ *  would be asserting something the current code was never measured on. */
 export function testLaneTone(
   verdict: ClaimTestStatus | undefined,
-): "quiet" | "stale" | "failing" {
+): "quiet" | "passing" | "stale" | "failing" {
   if (!verdict) return "quiet";
   if (verdict.stale) return "stale";
   if (verdict.outcome === "failed" || verdict.outcome === "errored") return "failing";
-  return "quiet";
+  // A skipped test ran nothing and asserted nothing — unmeasured, not green.
+  if (verdict.outcome === "skipped") return "quiet";
+  return "passing";
 }
 
 /** An attached test's regression state, from its two inputs: the live resolve
@@ -236,7 +241,9 @@ export function testRegression(
 }
 
 /** The lane tooltip: attachment count first (the lane's primary fact), then
- *  the verdict in words — silent about verdicts nobody recorded. */
+ *  the verdict in words — saying "no run recorded yet" outright, since the
+ *  lane's missing check mark is an absence the reader shouldn't have to
+ *  interpret. */
 export function testLaneTitle(
   count: number,
   verdict: ClaimTestStatus | undefined,
@@ -260,12 +267,15 @@ export function testLaneTitle(
 /** Roll a subtree's recorded verdicts up to one gauge tone. Per-claim tones
  *  come from {@link testLaneTone} (so a stale red verdict counts as stale, not
  *  failing); at the rollup FAILING outranks stale — one current red verdict
- *  below is the alarm, however many quiet or stale neighbours it has. */
+ *  below is the alarm, however many quiet or stale neighbours it has — and
+ *  both outrank `passing`, which the gauge earns only when the verdicts below
+ *  are green with nothing worse beside them. Quiet means nobody has recorded
+ *  a verdict down there at all. */
 export function subtreeTestTone(
   model: Pick<ScryModel, "nodes" | "groups">,
   nodeId: string,
   verdicts: Record<string, ClaimTestStatus>,
-): "quiet" | "stale" | "failing" {
+): "quiet" | "passing" | "stale" | "failing" {
   const children = new Map<string | null | undefined, string[]>();
   for (const n of model.nodes) {
     const list = children.get(n.parentId) ?? [];
@@ -280,11 +290,11 @@ export function subtreeTestTone(
     inScope.add(id);
     queue.push(...(children.get(id) ?? []));
   }
-  let tone: "quiet" | "stale" | "failing" = "quiet";
+  const RANK = { quiet: 0, passing: 1, stale: 2, failing: 3 } as const;
+  let tone: "quiet" | "passing" | "stale" | "failing" = "quiet";
   const fold = (respId: string) => {
     const t = testLaneTone(verdicts[respId]);
-    if (t === "failing") tone = "failing";
-    else if (t === "stale" && tone === "quiet") tone = "stale";
+    if (RANK[t] > RANK[tone]) tone = t;
   };
   for (const n of model.nodes) {
     if (!inScope.has(n.id)) continue;
