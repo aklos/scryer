@@ -279,3 +279,40 @@ fn louvain(n: usize, weights: &HashMap<(usize, usize), f64>) -> Vec<usize> {
     }
     node_label
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two dense cliques joined by one weak edge partition into two
+    /// communities — every member shares its clique's label.
+    #[test]
+    fn louvain_separates_two_weakly_joined_cliques() {
+        let mut weights: HashMap<(usize, usize), f64> = HashMap::new();
+        for a in 0..4usize {
+            for b in (a + 1)..4 {
+                weights.insert((a, b), 10.0);
+                weights.insert((a + 4, b + 4), 10.0);
+            }
+        }
+        weights.insert((0, 4), 0.1);
+
+        let labels = louvain(8, &weights);
+        assert!(labels[0..4].iter().all(|&l| l == labels[0]));
+        assert!(labels[4..8].iter().all(|&l| l == labels[4]));
+        assert_ne!(labels[0], labels[4], "the weak bridge must not merge them");
+    }
+
+    /// Files group by their directory below the container's source root —
+    /// siblings land together, root-level files form their own bucket.
+    #[test]
+    fn cluster_by_dir_groups_below_the_source_root() {
+        let paths = ["crate/src/tools/x.rs", "crate/src/tools/y.rs", "crate/src/a.rs", "crate/src/b.rs"];
+        let mut groups = cluster_by_dir(&paths, "crate");
+        for g in &mut groups {
+            g.sort();
+        }
+        groups.sort();
+        assert_eq!(groups, vec![vec![0, 1], vec![2, 3]]);
+    }
+}

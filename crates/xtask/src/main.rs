@@ -137,3 +137,31 @@ fn workspace_root() -> PathBuf {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The resolved triple must agree with rustc's own authoritative `host:`
+    /// line — the fallback source the function parses when `--print
+    /// host-tuple` is unavailable.
+    #[test]
+    fn target_triple_matches_the_rustc_host() {
+        let out = Command::new("rustc").arg("-vV").output().expect("rustc runs");
+        let host = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .find_map(|l| l.strip_prefix("host: ").map(str::to_string))
+            .expect("rustc -vV reports a host");
+        assert_eq!(get_target_triple(), host);
+    }
+
+    /// Walking up from the test's working directory (crates/xtask) lands on
+    /// the directory whose Cargo.toml declares `[workspace]`.
+    #[test]
+    fn workspace_root_finds_the_workspace_manifest() {
+        let root = workspace_root();
+        let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        assert!(manifest.contains("[workspace]"));
+        assert!(env::current_dir().unwrap().starts_with(&root));
+    }
+}

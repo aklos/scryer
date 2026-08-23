@@ -9,9 +9,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Anchor, ChevronRight, ExternalLink, FlaskConical, Slash } from "lucide-react";
+import { Anchor, ChevronRight, ExternalLink, Slash } from "lucide-react";
 import type { SourceLocation } from "./viewmodel";
-import type { AnchorState } from "./health";
+import { testRegression, type AnchorState } from "./health";
 
 /** Whether a source anchor currently lands in real code — mirrors the backend
  *  `verify_anchor` command. Anything but `resolved` reads as a broken anchor. */
@@ -231,10 +231,15 @@ export function ClaimTests({
     byFile.set(loc.pattern, group);
   }
   return (
-    // Same level as the source anchors: a test exercises the CLAIM, not any
-    // one of its implementation sites, so the two dimensions are siblings —
-    // the leading flask (vs the anchors' trailing ⚓) tells them apart.
-    <div className="mt-0.5 flex flex-col gap-0.5">
+    // Same level as the source anchors — a test exercises the CLAIM, not any
+    // one of its implementation sites — but SEGREGATED: the cluster label
+    // names the dimension once, so the lines beneath it read as tests without
+    // borrowing the anchors' line anatomy (no per-line flask; the claim row's
+    // lane already carries that glyph).
+    <div className="mt-1 flex flex-col gap-0.5">
+      <span className="select-none font-mono text-2xs uppercase tracking-wider text-[var(--text-ghost)]">
+        tests
+      </span>
       {[...byFile.values()].map((locs, i) => (
         <TestLine key={i} locs={locs} state={state} projectPath={projectPath} deleted={deleted} bleed={bleed} />
       ))}
@@ -296,12 +301,9 @@ function TestLine({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- anchorKey covers anchoredLocs
   }, [anchored, deleted, projectPath, file, anchorKey]);
 
-  // Two inputs, one verdict: the live resolve (does it land right now) and
-  // the fingerprint observation (did it change since the reconcile). Gone
-  // outranks changed — an unresolvable test can't be "just edited".
-  const gone =
-    (status != null && status !== "resolved") || state === "broken" || state === "fileMissing";
-  const changed = !gone && state === "changed";
+  const regression = testRegression(status, state);
+  const gone = regression === "gone";
+  const changed = regression === "changed";
   // The visible token is MINIMAL — one line per file, no test names. The
   // claim above already says what the tests exercise; names and run command
   // live in the tooltip, and the peek shows the tests themselves.
@@ -347,25 +349,11 @@ function TestLine({
         ) : (
           <span className="h-3 w-3 shrink-0" />
         )}
-        {/* The flask LEADS the line — the dimension is the first thing read,
-            so test lines separate from anchor lines at a glance while sitting
-            at the same level (both belong to the claim). No test-name suffix:
-            names restate the claim the line sits under, so the claim IS the
-            identifier (names live in the tooltip). */}
-        <span
-          className={`relative top-px inline-block h-3 w-3 shrink-0 ${
-            deleted
-              ? "text-[var(--text-muted)]"
-              : gone
-                ? "text-red-600 dark:text-red-400"
-                : changed
-                  ? "text-orange-600 dark:text-orange-400"
-                  : "text-[var(--text-muted)]"
-          }`}
-        >
-          <FlaskConical className="h-3 w-3" />
-          {gone && !deleted && <Slash className="absolute inset-0 h-3 w-3" />}
-        </span>
+        {/* No per-line dimension glyph — the cluster's "tests" label already
+            said it, and a leading icon is exactly what made these lines read
+            as anchors. No test-name suffix either: names restate the claim
+            the line sits under, so the claim IS the identifier (names live in
+            the tooltip); regression states speak through the text tint. */}
         <span
           className={
             deleted

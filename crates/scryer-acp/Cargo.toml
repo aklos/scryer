@@ -20,3 +20,4 @@ libc = "0.2"
 
 [dev-dependencies]
 scryer-extract = { path = "../scryer-extract" }
+tempfile = "3"

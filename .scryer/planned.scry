@@ -56,6 +56,53 @@
           "id": "resp-17",
           "statement": "**Surface** plan and drift status so the developer sees the model's health at a glance.",
           "lastTouchedAt": 1784883634
+        },
+        {
+          "id": "resp-692",
+          "statement": "Let the user filter/dim the model tree by a concern-registry lens, so rows whose subtree carries no responsibility tagged with that concern visually recede",
+          "lastTouchedAt": 1786085470
+        }
+      ],
+      "properties": [
+        {
+          "label": "icon",
+          "description": "Optional lucide icon name overriding the node's kind-default glyph",
+          "lastTouchedAt": 1786085514
+        },
+        {
+          "label": "appearance",
+          "description": "The visual component's render-artifact state (proposed/implemented/changed), build output path, and build timestamp",
+          "lastTouchedAt": 1786085516
+        },
+        {
+          "label": "staleProposal",
+          "description": "Drift's proposed replacement statement for a stale claim, matching what the code now does instead of what vanished",
+          "lastTouchedAt": 1786085517
+        },
+        {
+          "label": "modelRef",
+          "description": "Opaque reference/version tag for the currently loaded model",
+          "lastTouchedAt": 1786085518
+        },
+        {
+          "label": "error",
+          "description": "The last load/save error message, if any",
+          "lastTouchedAt": 1786085519
+        },
+        {
+          "label": "recentProjects",
+          "description": "Paths of recently opened projects",
+          "lastTouchedAt": 1786085521
+        },
+        {
+          "label": "externalGeneration",
+          "description": "Counter bumped on every external (agent) write, signalling derived state to re-fetch",
+          "lastTouchedAt": 1786085522
+        },
+        {
+          "label": "activeChange",
+          "description": "The ledger change id canvas edits currently stamp into, or null if unfiled",
+          "lastTouchedAt": 1786085523
         }
       ]
     },
@@ -101,6 +148,18 @@
           "id": "resp-27",
           "statement": "**Validate** the model's structural integrity and source coverage.",
           "lastTouchedAt": 1784883634
+        },
+        {
+          "id": "resp-696",
+          "statement": "retag() also moves work by a bare element id (a responsibility/link alone), by a whole change id (chg-N, moving everything filed under it), and detaches everything under a target back to unfiled when no destination is given — only the node/group-carrier form and the invalid-destination refusal are currently described.",
+          "lastTouchedAt": 1786085474
+        }
+      ],
+      "properties": [
+        {
+          "label": "copilot",
+          "description": "Per-agent model/effort settings for the Copilot CLI",
+          "lastTouchedAt": 1786085524
         }
       ]
     },
@@ -350,18 +409,18 @@
       "responsibilities": [
         {
           "id": "resp-40",
-          "statement": "Reports the model's live plan, drift, and anchor status for the terminal and for a Claude Code statusline segment.",
-          "lastTouchedAt": 1784883763
+          "statement": "Reports the model's live plan, drift, anchor, and test-verdict status for the terminal and for a Claude Code statusline segment.",
+          "lastTouchedAt": 1786527236
         },
         {
           "id": "resp-41",
           "statement": "Gates CI on validator findings and missing/broken anchors, with opt-in stricter checks for drift and pending work.",
-          "lastTouchedAt": 1784883763
+          "lastTouchedAt": 1786527278
         },
         {
           "id": "resp-42",
           "statement": "Registers scryer-mcp as the project's Claude Code statusline without clobbering a foreign one.",
-          "lastTouchedAt": 1784883763
+          "lastTouchedAt": 1786527278
         }
       ]
     },
@@ -610,6 +669,11 @@
           "id": "resp-60",
           "statement": "Reads a hook event from stdin and dispatches it to the SessionStart/PreToolUse/PostToolUse/Stop handler.",
           "lastTouchedAt": 1784883763
+        },
+        {
+          "id": "resp-693",
+          "statement": "Selects ClaudeLike vs Copilot from a `--copilot` CLI flag on the hook subcommand, since the harness can't be inferred from the event JSON alone, and threads it through every hook handler",
+          "lastTouchedAt": 1786085479
         }
       ]
     },
@@ -691,8 +755,8 @@
       "responsibilities": [
         {
           "id": "resp-65",
-          "statement": "On a Claude Code file read, fetches and injects that file's governing model overlay; on an edit, records the file as touched.",
-          "lastTouchedAt": 1784883763
+          "statement": "On a file read (any supported harness), fetches and injects that file's governing model overlay; on an edit, records the file as touched.",
+          "lastTouchedAt": 1786085551
         }
       ]
     },
@@ -730,8 +794,8 @@
       "responsibilities": [
         {
           "id": "resp-68",
-          "statement": "Extracts and absolutizes the file paths a Codex apply_patch tool call names.",
-          "lastTouchedAt": 1784883763
+          "statement": "Extracts and absolutizes the file paths a Codex or Copilot apply_patch tool call names.",
+          "lastTouchedAt": 1786085547
         }
       ]
     },
@@ -873,22 +937,22 @@
         {
           "id": "resp-78",
           "statement": "Serializes every model write behind an exclusive lock and turns lock failure into an agent-facing error.",
-          "lastTouchedAt": 1784883763
+          "lastTouchedAt": 1786527278
         },
         {
           "id": "resp-79",
           "statement": "Re-mints caller-invented responsibility ids against both model layers so no write can collide with or resurrect a deleted claim.",
-          "lastTouchedAt": 1784883763
+          "lastTouchedAt": 1786527278
         },
         {
           "id": "resp-80",
           "statement": "Restores user-owned fields — directives and canvas positions — after any AI regeneration so authoring can never silently strip them.",
-          "lastTouchedAt": 1784883763
+          "lastTouchedAt": 1786527278
         },
         {
           "id": "resp-81",
-          "statement": "Computes the ambient plan/drift/anchor status counts and one-line header carried on every write response.",
-          "lastTouchedAt": 1784883763
+          "statement": "Computes the ambient plan/drift/anchor/test-verdict status counts and one-line header carried on every write response, mentioning test state only when a verdict is failing or stale.",
+          "lastTouchedAt": 1786527236
         }
       ]
     },
@@ -3439,19 +3503,9 @@
       "id": "node-187",
       "kind": "component",
       "name": "Preview Server",
-      "parentId": "node-2",
-      "description": "A per-project Vite dev server that discovers React components and serves them for live in-app preview.",
+      "parentId": "node-664",
+      "description": "A per-project Vite dev server that serves each component as a standalone module inside an isolated preview iframe, booting one instance per resolving sub-package.",
       "responsibilities": [
-        {
-          "id": "resp-199",
-          "statement": "**Discover** every previewable component export in a project via TypeScript analysis",
-          "lastTouchedAt": 1784883905
-        },
-        {
-          "id": "resp-200",
-          "statement": "**Synthesize** placeholder props for a component's props type so it can render standalone",
-          "lastTouchedAt": 1784883905
-        },
         {
           "id": "resp-201",
           "statement": "**Serve** each discovered component in an isolated preview iframe, routing across monorepo sub-packages",
@@ -3489,7 +3543,7 @@
       "id": "node-190",
       "kind": "symbol",
       "name": "analyzeProject",
-      "parentId": "node-187",
+      "parentId": "node-665",
       "responsibilities": [
         {
           "id": "resp-204",
@@ -3502,7 +3556,7 @@
       "id": "node-191",
       "kind": "symbol",
       "name": "synthProps",
-      "parentId": "node-187",
+      "parentId": "node-665",
       "responsibilities": [
         {
           "id": "resp-205",
@@ -3515,7 +3569,7 @@
       "id": "node-192",
       "kind": "symbol",
       "name": "synthValue",
-      "parentId": "node-187",
+      "parentId": "node-665",
       "responsibilities": [
         {
           "id": "resp-206",
@@ -4481,7 +4535,7 @@
         {
           "id": "resp-261",
           "statement": "**Render** a node's whole article — lede, responsibilities, properties, connections, preview, appearance — as a diff against committed",
-          "lastTouchedAt": 1784883905
+          "lastTouchedAt": 1786957067
         },
         {
           "id": "resp-262",
@@ -4492,6 +4546,11 @@
           "id": "resp-263",
           "statement": "**Surface** a node's declared and code-implied connections, expandable into their backing code paths",
           "lastTouchedAt": 1784883905
+        },
+        {
+          "id": "resp-734",
+          "statement": "**When** a claim carries attached tests, **show** their count and recorded verdict — quiet when green or unrecorded, amber when stale, red when failing — and **mark** testable claims lacking one with a non-flask nudge",
+          "lastTouchedAt": 1786957053
         }
       ]
     },
@@ -6427,6 +6486,11 @@
           "id": "resp-379",
           "statement": "**When** a request arrives, **check** its token and route it to the status/overlay/touch/close handler",
           "lastTouchedAt": 1784883930
+        },
+        {
+          "id": "resp-702",
+          "statement": "Enforces that the close gate fires only once per session: a repeat close for an already-gated session returns an empty payload without re-reading the model",
+          "lastTouchedAt": 1786085482
         }
       ]
     },
@@ -6730,6 +6794,11 @@
           "id": "resp-407",
           "statement": "Lets the user dismiss a drift nudge at whole-model or single-node scope",
           "lastTouchedAt": 1784883930
+        },
+        {
+          "id": "resp-732",
+          "statement": "**When** the canvas asks, **serve** each claim's recorded test verdict and staleness, re-verified against the working tree",
+          "lastTouchedAt": 1786957053
         }
       ]
     },
@@ -7036,6 +7105,11 @@
           "id": "resp-430",
           "statement": "**When** the watched project changes, **bring up** the session-hook endpoint for the new project and drop the old one",
           "lastTouchedAt": 1784883930
+        },
+        {
+          "id": "resp-733",
+          "statement": "**When** the test-results cache changes on disk, **emit** a test-results event so verdict badges refresh live",
+          "lastTouchedAt": 1786957053
         }
       ]
     },
@@ -9173,8 +9247,8 @@
       "responsibilities": [
         {
           "id": "resp-552",
-          "statement": "Detects an available agent honoring an auto/claudeCode/codex preference, falling back to the other agent if the preferred binary is missing",
-          "lastTouchedAt": 1784884036
+          "statement": "Detects an available agent honoring an auto/claudeCode/codex/copilot preference, falling back through the other agents in a fixed order if the preferred binary is missing",
+          "lastTouchedAt": 1786085549
         }
       ]
     },
@@ -9461,6 +9535,16 @@
           "id": "resp-573",
           "statement": "Spawns an ACP-compatible agent subprocess and drives the ACP initialize/new-session handshake with the MCP server configured",
           "lastTouchedAt": 1784884036
+        },
+        {
+          "id": "resp-689",
+          "statement": "For a Copilot session, skips protocol-level MCP wiring and instead requires the project's own .mcp.json to already declare scryer, failing the session with a corrective error message if it doesn't; for an adapter session, wires the scryer MCP server over the ACP protocol as before",
+          "lastTouchedAt": 1786085484
+        },
+        {
+          "id": "resp-690",
+          "statement": "Tees the ACP subprocess's stderr to a per-session log file, since ACP carries no diagnostic channel and stdout is the protocol itself",
+          "lastTouchedAt": 1786085487
         }
       ]
     },
@@ -11884,6 +11968,571 @@
           "lastTouchedAt": 1786010469
         }
       ]
+    },
+    {
+      "id": "node-648",
+      "kind": "symbol",
+      "name": "AcpKind",
+      "parentId": "node-499",
+      "properties": [
+        {
+          "label": "Copilot",
+          "description": "Copilot CLI, which serves ACP from its own binary with model/effort set as spawn flags rather than negotiated per session",
+          "lastTouchedAt": 1786085525
+        },
+        {
+          "label": "Adapter",
+          "description": "A generic {name}-acp adapter binary, spawned bare with no assumed flags",
+          "lastTouchedAt": 1786085526
+        }
+      ]
+    },
+    {
+      "id": "node-649",
+      "kind": "symbol",
+      "name": "copilot_launch",
+      "parentId": "node-499",
+      "responsibilities": [
+        {
+          "id": "resp-686",
+          "statement": "Resolves Copilot CLI, recognized under any of its several MCP client-name aliases, to an ACP launch — since Copilot serves ACP from its own binary rather than a print-mode CLI",
+          "lastTouchedAt": 1786085491
+        }
+      ]
+    },
+    {
+      "id": "node-650",
+      "kind": "symbol",
+      "name": "acp_args",
+      "parentId": "node-513",
+      "responsibilities": [
+        {
+          "id": "resp-687",
+          "statement": "Builds the ACP subprocess command-line flags for the resolved ACP dialect — Copilot's mode/model/effort flags, or no flags at all for a generic {name}-acp adapter",
+          "lastTouchedAt": 1786085495
+        }
+      ]
+    },
+    {
+      "id": "node-651",
+      "kind": "symbol",
+      "name": "project_declares_scryer_mcp",
+      "parentId": "node-513",
+      "responsibilities": [
+        {
+          "id": "resp-688",
+          "statement": "Checks whether the project's .mcp.json or .github/mcp.json declares the scryer MCP server, so a Copilot session (which can't take a server over the ACP protocol) can be given a precise, corrective error when it's missing",
+          "lastTouchedAt": 1786085497
+        }
+      ]
+    },
+    {
+      "id": "node-652",
+      "kind": "component",
+      "name": "ACP Smoke Test",
+      "parentId": "node-3",
+      "description": "Standalone example binary that drives one real ACP session end to end against a project to verify the agent can reach the scryer MCP server."
+    },
+    {
+      "id": "node-653",
+      "kind": "symbol",
+      "name": "main",
+      "parentId": "node-652",
+      "responsibilities": [
+        {
+          "id": "resp-691",
+          "statement": "Drives one real ACP session end-to-end against a project — resolving the ACP-capable agent, starting a session asking it to call the scryer get_health MCP tool, and reporting whether a scryer tool call was actually observed — as a manual check that an ACP-launched agent (e.g. Copilot) really gets the scryer server",
+          "lastTouchedAt": 1786085499
+        }
+      ]
+    },
+    {
+      "id": "node-654",
+      "kind": "symbol",
+      "name": "Harness",
+      "parentId": "node-33",
+      "properties": [
+        {
+          "label": "ClaudeLike",
+          "description": "Claude Code and Codex — same tool vocabulary and injected-context envelope",
+          "lastTouchedAt": 1786085527
+        },
+        {
+          "label": "Copilot",
+          "description": "GitHub Copilot CLI — its own tool vocabulary and injected-context envelope",
+          "lastTouchedAt": 1786085528
+        }
+      ]
+    },
+    {
+      "id": "node-655",
+      "kind": "symbol",
+      "name": "ToolKind",
+      "parentId": "node-33",
+      "properties": [
+        {
+          "label": "Read",
+          "description": "Reading a file — the moment to inject the intent governing it",
+          "lastTouchedAt": 1786085530
+        },
+        {
+          "label": "Write",
+          "description": "Writing to the file named in the tool arguments",
+          "lastTouchedAt": 1786085531
+        },
+        {
+          "label": "Patch",
+          "description": "Writing to every file named in an apply_patch envelope",
+          "lastTouchedAt": 1786085533
+        },
+        {
+          "label": "Other",
+          "description": "Any tool call scryer doesn't care about",
+          "lastTouchedAt": 1786085534
+        }
+      ]
+    },
+    {
+      "id": "node-656",
+      "kind": "symbol",
+      "name": "tool_kind",
+      "parentId": "node-33",
+      "responsibilities": [
+        {
+          "id": "resp-694",
+          "statement": "Maps a harness's own tool-call name to a normalized Read/Write/Patch/Other classification, since Claude Code/Codex and Copilot name their read/write/patch tools differently",
+          "lastTouchedAt": 1786085501
+        }
+      ]
+    },
+    {
+      "id": "node-657",
+      "kind": "symbol",
+      "name": "emit_context",
+      "parentId": "node-33",
+      "responsibilities": [
+        {
+          "id": "resp-695",
+          "statement": "Emits injected context in the reply shape the connected harness reads — Claude Code/Codex expect a `hookSpecificOutput.additionalContext` envelope, Copilot expects a top-level `additionalContext`",
+          "lastTouchedAt": 1786085503
+        }
+      ]
+    },
+    {
+      "id": "node-658",
+      "kind": "symbol",
+      "name": "save_baseline_at",
+      "parentId": "node-535",
+      "responsibilities": [
+        {
+          "id": "resp-697",
+          "statement": "Persists a baseline snapshot of the committed model to disk.",
+          "lastTouchedAt": 1786085505
+        }
+      ]
+    },
+    {
+      "id": "node-659",
+      "kind": "symbol",
+      "name": "read_baseline_at",
+      "parentId": "node-535",
+      "responsibilities": [
+        {
+          "id": "resp-698",
+          "statement": "Reads the baseline snapshot back, returning nothing if it is absent or its schema version no longer matches.",
+          "lastTouchedAt": 1786085507
+        }
+      ]
+    },
+    {
+      "id": "node-660",
+      "kind": "symbol",
+      "name": "check_copilot_mcp",
+      "parentId": "node-359",
+      "responsibilities": [
+        {
+          "id": "resp-699",
+          "statement": "Detects whether Copilot CLI has scryer's MCP entry available via the shared .mcp.json or a committed .github/mcp.json",
+          "lastTouchedAt": 1786085509
+        }
+      ]
+    },
+    {
+      "id": "node-661",
+      "kind": "symbol",
+      "name": "check_copilot_hooks",
+      "parentId": "node-359",
+      "responsibilities": [
+        {
+          "id": "resp-700",
+          "statement": "Detects whether Copilot CLI has scryer's session hooks installed for the project",
+          "lastTouchedAt": 1786085511
+        }
+      ]
+    },
+    {
+      "id": "node-662",
+      "kind": "symbol",
+      "name": "write_copilot_hooks",
+      "parentId": "node-359",
+      "responsibilities": [
+        {
+          "id": "resp-701",
+          "statement": "Installs scryer's session-hook registrations into Copilot CLI's own committed hooks file, using Copilot's flat entry schema and tool vocabulary",
+          "lastTouchedAt": 1786085513
+        }
+      ]
+    },
+    {
+      "id": "node-663",
+      "kind": "symbol",
+      "name": "SessionLog",
+      "parentId": "node-348",
+      "properties": [
+        {
+          "label": "gated",
+          "description": "Sessions already handed a close gate this run, aged out on the touch TTL",
+          "lastTouchedAt": 1786085535
+        }
+      ]
+    },
+    {
+      "id": "node-664",
+      "kind": "container",
+      "name": "Preview Sidecar",
+      "parentId": "node-1",
+      "technology": "Node.js + Vite",
+      "description": "A standalone Node process the desktop app spawns per project, serving each discovered React component as an isolated live preview.",
+      "responsibilities": [
+        {
+          "id": "resp-703",
+          "statement": "**Serve** an opened project's React components as standalone, live-reloading previews",
+          "lastTouchedAt": 1786089278
+        },
+        {
+          "id": "resp-704",
+          "statement": "**When** a project spans several sub-packages, **serve** each component from the sub-package that owns it",
+          "lastTouchedAt": 1786089278
+        }
+      ]
+    },
+    {
+      "id": "node-665",
+      "kind": "component",
+      "name": "Props Synthesis",
+      "parentId": "node-664",
+      "description": "Discovers a project's exported React components through its own TypeScript install and synthesizes placeholder props from their prop types, drawing on shared fixtures where a type has one.",
+      "responsibilities": [
+        {
+          "id": "resp-199",
+          "statement": "**Discover** every previewable component export in a project via TypeScript analysis",
+          "lastTouchedAt": 1786089943
+        },
+        {
+          "id": "resp-200",
+          "statement": "**Synthesize** placeholder props for a component's props type so it can render standalone",
+          "lastTouchedAt": 1786089943
+        }
+      ]
+    },
+    {
+      "id": "node-666",
+      "kind": "component",
+      "name": "Test Result Ingestion",
+      "parentId": "node-4",
+      "description": "Parses runner-emitted JUnit XML reports and resolves each test case to the claim whose attached test names it.",
+      "responsibilities": [
+        {
+          "id": "resp-705",
+          "statement": "**When** a JUnit report is ingested, **parse** every test case into its file hint, leaf name, and outcome, collapsing parametrized case ids onto their test function",
+          "lastTouchedAt": 1786523682
+        },
+        {
+          "id": "resp-706",
+          "statement": "**When** a case's normalized leaf name matches attached tests, **resolve** it to the claim, breaking same-name ties by file-path suffix and refusing to guess when the tie survives",
+          "lastTouchedAt": 1786523682
+        },
+        {
+          "id": "resp-707",
+          "statement": "**When** report cases match no attachment or attachments never appear in the report, **surface** both leftovers instead of dropping them",
+          "lastTouchedAt": 1786523682
+        }
+      ]
+    },
+    {
+      "id": "node-667",
+      "kind": "symbol",
+      "name": "parse_junit",
+      "parentId": "node-666",
+      "responsibilities": [
+        {
+          "id": "resp-708",
+          "statement": "**When** given JUnit XML, **yield** each test case's classname, name, and pass/fail/error/skip outcome, tolerant of both nested and flat testsuite layouts",
+          "lastTouchedAt": 1786523706
+        },
+        {
+          "id": "resp-709",
+          "statement": "**When** a case carries an <error> element (import/collection breakage), **classify** it as errored, never as passing",
+          "lastTouchedAt": 1786523706
+        },
+        {
+          "id": "resp-710",
+          "statement": "**If** the document is not well-formed JUnit XML, **fail** with a diagnostic instead of returning an empty, healthy-looking report",
+          "lastTouchedAt": 1786523706
+        }
+      ]
+    },
+    {
+      "id": "node-668",
+      "kind": "symbol",
+      "name": "match_report",
+      "parentId": "node-666",
+      "responsibilities": [
+        {
+          "id": "resp-711",
+          "statement": "**When** matching, **normalize** names (unicode quote folding, whitespace, case) and take the leaf of vitest-style ' > ' suite paths and Rust-style '::' module paths so runner conventions don't break identity",
+          "lastTouchedAt": 1786970390
+        },
+        {
+          "id": "resp-712",
+          "statement": "**When** several report cases collapse onto one attached test (parametrized runs), **aggregate** them to the worst outcome",
+          "lastTouchedAt": 1786523706
+        },
+        {
+          "id": "resp-713",
+          "statement": "**When** a leaf name is shared across files, **disambiguate** by comparing the attachment's stored path against the case's file hint as a path suffix, since reports are rooted at the invocation directory",
+          "lastTouchedAt": 1786523706
+        }
+      ]
+    },
+    {
+      "id": "node-669",
+      "kind": "component",
+      "name": "Claim Test Status",
+      "parentId": "node-5",
+      "description": "Caches each claim's last reported test outcome, fingerprint-keyed so any edit behind the claim reads as stale without running anything.",
+      "responsibilities": [
+        {
+          "id": "resp-714",
+          "statement": "Persists per-claim test outcomes beside the content fingerprints of the implementation and test anchors they were computed against",
+          "lastTouchedAt": 1786525877
+        },
+        {
+          "id": "resp-715",
+          "statement": "**When** any anchored span behind a cached result no longer hashes the same — implementation or attached test — **report** the result as stale rather than current",
+          "lastTouchedAt": 1786525877
+        },
+        {
+          "id": "resp-716",
+          "statement": "**When** a JUnit report arrives, **ingest** it end to end: parse, match against the model, and record per-claim outcomes in one call",
+          "lastTouchedAt": 1786525877
+        }
+      ]
+    },
+    {
+      "id": "node-670",
+      "kind": "symbol",
+      "name": "record_test_results",
+      "parentId": "node-669",
+      "responsibilities": [
+        {
+          "id": "resp-717",
+          "statement": "**When** a matched report is recorded, **fingerprint** each claim's implementation and test anchors against the working tree as it stands and store the hashes beside the outcome",
+          "lastTouchedAt": 1786525891
+        },
+        {
+          "id": "resp-718",
+          "statement": "**If** a claim's anchors resolve to nothing at record time, **store** the outcome with no fingerprints so it can only ever read as stale, never as silently current",
+          "lastTouchedAt": 1786525891
+        },
+        {
+          "id": "resp-719",
+          "statement": "**When** a claim already has a cached outcome, **replace** it — the cache holds the latest word, not a history",
+          "lastTouchedAt": 1786525891
+        }
+      ]
+    },
+    {
+      "id": "node-671",
+      "kind": "symbol",
+      "name": "test_statuses",
+      "parentId": "node-669",
+      "responsibilities": [
+        {
+          "id": "resp-720",
+          "statement": "**When** statuses are read, **re-resolve** every cached claim's anchors and compare hashes — any difference, including attachments added or removed since recording, reads as stale",
+          "lastTouchedAt": 1786527278
+        },
+        {
+          "id": "resp-721",
+          "statement": "**When** a cached claim no longer exists in the model, **omit** it rather than reporting a ghost",
+          "lastTouchedAt": 1786527278
+        },
+        {
+          "id": "resp-731",
+          "statement": "**When** none of a cached claim's anchor files changed since its record was taken, **skip** re-hashing it — a stat, not a parse, is the ambient-frequency cost",
+          "lastTouchedAt": 1786527236
+        }
+      ]
+    },
+    {
+      "id": "node-672",
+      "kind": "symbol",
+      "name": "ingest_report",
+      "parentId": "node-669",
+      "responsibilities": [
+        {
+          "id": "resp-722",
+          "statement": "**When** given JUnit XML, **parse** it, **match** it against the model's attached tests, **record** the outcomes, and return the match summary — unmatched, ambiguous, and unseen included — for the caller to surface",
+          "lastTouchedAt": 1786525891
+        }
+      ]
+    },
+    {
+      "id": "node-673",
+      "kind": "symbol",
+      "name": "test_blast_radius",
+      "parentId": "node-669",
+      "responsibilities": [
+        {
+          "id": "resp-723",
+          "statement": "**When** the radius is computed, **include** every test-attached claim whose verdict is missing or stale, grouped per test file with the recorded run commands so each file is one invocation",
+          "lastTouchedAt": 1786526717
+        },
+        {
+          "id": "resp-724",
+          "statement": "**When** a claim's verdict is current, **exclude** its tests — the radius is what needs re-running, never the whole suite",
+          "lastTouchedAt": 1786526717
+        }
+      ]
+    },
+    {
+      "id": "node-674",
+      "kind": "component",
+      "name": "Test Status Tools",
+      "parentId": "node-6",
+      "description": "Report ingestion and blast-radius tools closing the claim-level test-status loop over MCP.",
+      "responsibilities": [
+        {
+          "id": "resp-725",
+          "statement": "**When** an agent finishes a test run, **ingest** its JUnit report in one call and record claim verdicts — never a per-test upload",
+          "lastTouchedAt": 1786526725
+        },
+        {
+          "id": "resp-726",
+          "statement": "**When** asked what to run, **answer** with exactly the test files whose claims hold missing or stale verdicts, never the whole suite",
+          "lastTouchedAt": 1786526725
+        }
+      ]
+    },
+    {
+      "id": "node-675",
+      "kind": "symbol",
+      "name": "ingest_test_report",
+      "parentId": "node-674",
+      "responsibilities": [
+        {
+          "id": "resp-727",
+          "statement": "**When** given a report path, **resolve** it against the project root and ingest it into the claim status cache",
+          "lastTouchedAt": 1786526736
+        },
+        {
+          "id": "resp-728",
+          "statement": "**If** the file is unreadable or not JUnit XML, **answer** with the diagnostic rather than an empty success",
+          "lastTouchedAt": 1786526736
+        },
+        {
+          "id": "resp-729",
+          "statement": "**When** ingestion succeeds, **report** recorded and failing counts, unmatched/ambiguous/unseen leftovers, and the remaining blast radius so the agent knows what still needs running",
+          "lastTouchedAt": 1786526736
+        }
+      ]
+    },
+    {
+      "id": "node-676",
+      "kind": "symbol",
+      "name": "get_test_radius",
+      "parentId": "node-674",
+      "responsibilities": [
+        {
+          "id": "resp-730",
+          "statement": "**When** called, **return** the blast radius grouped per test file — claims, counts, and recorded run commands — plus a current-verdict summary of passing, failing, and stale claims",
+          "lastTouchedAt": 1786526736
+        }
+      ]
+    },
+    {
+      "id": "node-677",
+      "kind": "symbol",
+      "name": "useTestStatuses",
+      "parentId": "node-203",
+      "responsibilities": [
+        {
+          "id": "resp-735",
+          "statement": "**When** the project opens, an agent run ends, or the test-results cache changes on disk, **refresh** the per-claim test verdict map",
+          "lastTouchedAt": 1786957068
+        }
+      ]
+    },
+    {
+      "id": "node-678",
+      "kind": "symbol",
+      "name": "ClaimTests",
+      "parentId": "node-245",
+      "responsibilities": [
+        {
+          "id": "resp-736",
+          "statement": "**List** a claim's attached tests under a whisper-weight tests label — one line per spec file, a merged line disclosing one row per test — each expanding to an inline code peek",
+          "lastTouchedAt": 1786957491
+        },
+        {
+          "id": "resp-737",
+          "statement": "**When** an attached test changed or no longer resolves since the last reconcile, **tint** its line orange or red",
+          "lastTouchedAt": 1786957491
+        }
+      ]
+    },
+    {
+      "id": "node-679",
+      "kind": "symbol",
+      "name": "subtreeTestTone",
+      "parentId": "node-296",
+      "responsibilities": [
+        {
+          "id": "resp-738",
+          "statement": "**When** any claim in a node's subtree holds a current failing verdict, **report** failing; **when** any holds a stale one, **report** stale; quiet otherwise — failing outranks stale at the rollup",
+          "lastTouchedAt": 1786957491
+        }
+      ]
+    },
+    {
+      "id": "node-680",
+      "kind": "component",
+      "name": "Test Report Watcher",
+      "parentId": "node-9",
+      "description": "Passively ingests JUnit reports that test runs drop into the project's report directories, no agent involved.",
+      "responsibilities": [
+        {
+          "id": "resp-739",
+          "statement": "**Resolve** the project's test-report directories — conventional defaults, overridden by testReportDirs in .scryer/config.json — keeping only ones that exist",
+          "lastTouchedAt": 1786957842
+        },
+        {
+          "id": "resp-740",
+          "statement": "**When** an XML file changes under a watched report directory, **ingest** it into the claim status cache after a short settle delay, so a run from any terminal or CI checkout lights the verdict badges",
+          "lastTouchedAt": 1786957842
+        },
+        {
+          "id": "resp-741",
+          "statement": "**When** a changed file is not parseable JUnit, **skip** it quietly — report directories hold other artifacts",
+          "lastTouchedAt": 1786957842
+        },
+        {
+          "id": "resp-742",
+          "statement": "**Never** sweep pre-existing reports on open — a report written before watching began is evidence about older code and must not be recorded against the current tree",
+          "lastTouchedAt": 1786957842
+        }
+      ]
     }
   ],
   "links": [
@@ -12881,12 +13530,6 @@
       "id": "link-node-188-node-189",
       "src": "node-188",
       "dst": "node-189",
-      "label": ""
-    },
-    {
-      "id": "link-node-188-node-190",
-      "src": "node-188",
-      "dst": "node-190",
       "label": ""
     },
     {
@@ -15408,6 +16051,144 @@
       "src": "node-646",
       "dst": "node-557",
       "label": "keys elements via"
+    },
+    {
+      "id": "link-node-47-node-110",
+      "src": "node-47",
+      "dst": "node-110",
+      "label": "routes tool calls to"
+    },
+    {
+      "id": "link-node-47-node-97",
+      "src": "node-47",
+      "dst": "node-97",
+      "label": "routes tool calls to"
+    },
+    {
+      "id": "link-node-47-node-87",
+      "src": "node-47",
+      "dst": "node-87",
+      "label": "routes tool calls to"
+    },
+    {
+      "id": "link-node-47-node-91",
+      "src": "node-47",
+      "dst": "node-91",
+      "label": "routes tool calls to"
+    },
+    {
+      "id": "link-node-47-node-71",
+      "src": "node-47",
+      "dst": "node-71",
+      "label": "routes tool calls to"
+    },
+    {
+      "id": "link-node-47-node-75",
+      "src": "node-47",
+      "dst": "node-75",
+      "label": "routes tool calls to"
+    },
+    {
+      "id": "link-node-29-node-33",
+      "src": "node-29",
+      "dst": "node-33",
+      "label": "dispatches hook subcommand to"
+    },
+    {
+      "id": "link-node-513-node-505",
+      "src": "node-513",
+      "dst": "node-505",
+      "label": "builds prompts from"
+    },
+    {
+      "id": "link-node-652-node-499",
+      "src": "node-652",
+      "dst": "node-499",
+      "label": "resolves agent via"
+    },
+    {
+      "id": "link-node-652-node-496",
+      "src": "node-652",
+      "dst": "node-496",
+      "label": "consumes session events from"
+    },
+    {
+      "id": "link-node-652-node-513",
+      "src": "node-652",
+      "dst": "node-513",
+      "label": "drives session via"
+    },
+    {
+      "id": "link-node-484-node-435",
+      "src": "node-484",
+      "dst": "node-435",
+      "label": "extracts context via"
+    },
+    {
+      "id": "link-node-484-node-448",
+      "src": "node-484",
+      "dst": "node-448",
+      "label": "slices graph via"
+    },
+    {
+      "id": "link-node-10-node-6",
+      "src": "node-10",
+      "dst": "node-6",
+      "label": "builds sidecar binary from"
+    },
+    {
+      "id": "link-node-10-node-4",
+      "src": "node-10",
+      "dst": "node-4",
+      "label": "validates models using"
+    },
+    {
+      "id": "link-node-373-node-4",
+      "src": "node-373",
+      "dst": "node-4",
+      "label": "reads health and drift from"
+    },
+    {
+      "id": "link-node-410-node-4",
+      "src": "node-410",
+      "dst": "node-4",
+      "label": "folds verdicts into"
+    },
+    {
+      "id": "link-node-426-node-2",
+      "src": "node-426",
+      "dst": "node-2",
+      "label": "imports source via alias"
+    },
+    {
+      "id": "link-node-9-node-664",
+      "src": "node-9",
+      "dst": "node-664",
+      "label": "spawns preview server"
+    },
+    {
+      "id": "link-node-2-node-664",
+      "src": "node-2",
+      "dst": "node-664",
+      "label": "loads previews from"
+    },
+    {
+      "id": "link-node-379-node-664",
+      "src": "node-379",
+      "dst": "node-664",
+      "label": "spawns preview server"
+    },
+    {
+      "id": "link-node-245-node-664",
+      "src": "node-245",
+      "dst": "node-664",
+      "label": "loads component previews from"
+    },
+    {
+      "id": "link-node-187-node-665",
+      "src": "node-187",
+      "dst": "node-665",
+      "label": "synthesizes props via"
     }
   ],
   "groups": [

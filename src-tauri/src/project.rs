@@ -66,6 +66,15 @@ pub(crate) fn watch_project(
     let _ = std::fs::create_dir_all(&target_dir);
     let handle = app.clone();
     let ref_string = ref_str.clone();
+    // Passive test-report ingestion: the same watcher also covers the
+    // project's report directories, and any XML written under one is ingested
+    // after a short settle. Only files that CHANGE while watching count — the
+    // event-driven design is what guarantees no pre-existing (older-code)
+    // report is ever swept in.
+    let report_dirs = crate::test_reports::report_dirs(project_path);
+    let debounce =
+        crate::test_reports::ReportDebounce::new(std::time::Duration::from_millis(800));
+    let project_root = project_path.clone();
     let mut watcher =
         recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
             let Ok(event) = res else { return };
@@ -73,6 +82,19 @@ pub(crate) fn watch_project(
                 return;
             }
             for path in &event.paths {
+                // The test-status cache lives beside the model files; an agent
+                // ingesting a report mid-session must light the verdict badges
+                // without waiting for the session to end.
+                if path.file_name().is_some_and(|n| n == ".test-results.json") {
+                    let _ = handle.emit("test-results-changed", ref_string.clone());
+                    continue;
+                }
+                if path.extension().is_some_and(|e| e == "xml")
+                    && report_dirs.iter().any(|d| path.starts_with(d))
+                {
+                    debounce.schedule(project_root.clone(), path.clone());
+                    continue;
+                }
                 if path.extension().map_or(true, |e| e != "scry") {
                     continue;
                 }
@@ -90,6 +112,11 @@ pub(crate) fn watch_project(
     watcher
         .watch(&target_dir, RecursiveMode::NonRecursive)
         .map_err(|e| e.to_string())?;
+    // Report directories are best-effort: a vanished one must not break the
+    // model watch that everything else depends on.
+    for dir in crate::test_reports::report_dirs(project_path) {
+        let _ = watcher.watch(&dir, RecursiveMode::Recursive);
+    }
 
     state.project = Some((target_dir, watcher));
     Ok(())
@@ -172,4 +199,118 @@ pub(crate) fn get_subagent_settings() -> scryer_core::SubagentSettings {
 #[tauri::command]
 pub(crate) fn set_subagent_settings(settings: scryer_core::SubagentSettings) -> Result<(), String> {
     scryer_core::write_subagent_settings(&settings)
+}
+
+#[cfg(test)]
+mod tests {
+    use scryer_core::{ModelRef, ScryModel};
+
+    fn committed_project() -> (tempfile::TempDir, ModelRef, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        let mut node: scryer_core::Node = serde_json::from_value(
+            serde_json::json!({ "id": "node-1", "kind": "system", "name": "Acme" }),
+        )
+        .unwrap();
+        node.responsibilities = vec![serde_json::from_value(
+            serde_json::json!({ "id": "resp-1", "statement": "does the thing" }),
+        )
+        .unwrap()];
+        m.nodes.push(node);
+        m.source_map.insert(
+            "resp-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/a.rs" })).unwrap()],
+        );
+        scryer_core::write_model_at(&r, &m).unwrap();
+        let ref_str = r.to_ref_string();
+        (dir, r, ref_str)
+    }
+
+    /// The canvas load heals a legacy shadow draft first: a plan that mirrors
+    /// committed's anchors verbatim loses the shadow before the canvas can
+    /// echo it back on save.
+    #[test]
+    fn canvas_read_heals_a_legacy_shadow_draft_first() {
+        let (_dir, r, ref_str) = committed_project();
+        // A pre-seeding draft: identical content, committed's source_map shadowed.
+        let committed = scryer_core::read_model_at(&r).unwrap();
+        scryer_core::write_planned_raw_at(&r, &serde_json::to_string(&committed).unwrap())
+            .unwrap();
+
+        let raw = super::read_planned(ref_str).unwrap();
+        let plan: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(
+            plan["sourceMap"].as_object().is_none_or(|m| m.is_empty()),
+            "the shadow anchors are healed away: {}",
+            plan["sourceMap"]
+        );
+    }
+
+    /// The canvas save round-trips: what write_planned stores, read_planned
+    /// returns.
+    #[test]
+    fn canvas_save_round_trips_the_planned_layer() {
+        let (_dir, r, ref_str) = committed_project();
+        let mut plan = scryer_core::read_model_at(&r).unwrap();
+        plan.nodes[0].responsibilities[0].statement = "does the revised thing".into();
+        plan.source_map.clear();
+        super::write_planned(ref_str.clone(), serde_json::to_string(&plan).unwrap()).unwrap();
+
+        let read_back = super::read_planned(ref_str).unwrap();
+        assert!(read_back.contains("does the revised thing"));
+    }
+
+    /// Closing an empty open change from the canvas records it as an
+    /// abandoned history entry — which the History tab then reads back.
+    #[test]
+    fn closing_an_empty_change_records_an_abandoned_history_entry() {
+        let (_dir, r, ref_str) = committed_project();
+        let mut plan = scryer_core::read_model_at(&r).unwrap();
+        plan.source_map.clear();
+        let stranded = scryer_core::changes::open_change(&mut plan, "never started", 100);
+        scryer_core::write_planned_at(&r, &plan).unwrap();
+
+        super::close_change(ref_str.clone(), stranded).unwrap();
+
+        let raw = super::read_history(ref_str).unwrap();
+        let events: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let abandoned = events
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["driver"] == "abandoned")
+            .expect("the close lands on the durable log");
+        assert_eq!(abandoned["rows"][0]["text"], "never started");
+    }
+
+    /// A new project gets a blank model at `.scryer/model.scry`; a bogus path
+    /// is refused.
+    #[test]
+    fn a_new_project_gets_a_blank_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let ref_str =
+            super::create_blank_model(dir.path().to_string_lossy().to_string()).unwrap();
+        assert!(dir.path().join(".scryer/model.scry").exists());
+        let r = ModelRef::parse(&ref_str).unwrap();
+        assert!(scryer_core::read_model_at(&r).unwrap().nodes.is_empty());
+
+        assert!(super::create_blank_model("/nonexistent/nowhere".into()).is_err());
+    }
+
+    /// Legacy detection: a model predating the current schema reports legacy;
+    /// a current one (or no model at all) does not.
+    #[test]
+    fn legacy_models_are_reported_current_ones_are_not() {
+        let (dir, r, _) = committed_project();
+        let project = dir.path().to_string_lossy().to_string();
+        assert!(!super::is_legacy_model(project.clone()), "current schema");
+
+        std::fs::write(r.model_path(), r#"{ "version": "0.1", "nodes": [], "links": [] }"#)
+            .unwrap();
+        assert!(super::is_legacy_model(project));
+
+        let empty = tempfile::tempdir().unwrap();
+        assert!(!super::is_legacy_model(empty.path().to_string_lossy().to_string()));
+    }
 }

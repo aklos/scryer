@@ -412,19 +412,41 @@ mod tests {
         let solution = write(
             tmp.path(),
             "tsconfig.json",
-            r#"{ "extends": "@tsconfig/node18", "files": [] }"#,
+            r#"{ "extends": "@tsconfig/node18", "files": [],
+                 "compilerOptions": { "paths": { "@/*": ["./src/*"] } } }"#,
         );
         let app = write(
             tmp.path(),
             "tsconfig.app.json",
-            r#"{ "compilerOptions": { "paths": { "@/*": ["./src/*"] } } }"#,
+            r#"{ "compilerOptions": { "paths": { "@/*": ["./app/*"], "~lib/*": ["./lib/*"] } } }"#,
         );
         let aliases = discover_ts_aliases(tmp.path(), &[solution, app]);
         assert_eq!(aliases.len(), 1);
+        // The plain tsconfig.json wins the tied `@/*`; the variant still
+        // contributes what only it declares.
         assert_eq!(
             aliases[0].paths,
-            vec![("@/*".to_string(), vec!["src/*".to_string()])]
+            vec![
+                ("@/*".to_string(), vec!["src/*".to_string()]),
+                ("~lib/*".to_string(), vec!["lib/*".to_string()])
+            ]
         );
+    }
+
+    /// An `extends` that names an npm package (no `./`/`../` prefix) would
+    /// need node_modules resolution — the chain stops there rather than
+    /// guessing, and the child's own declarations still apply.
+    #[test]
+    fn an_npm_package_base_stops_the_chain_without_guessing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = write(
+            tmp.path(),
+            "tsconfig.json",
+            r#"{ "extends": "@tsconfig/strictest/tsconfig.json",
+                 "compilerOptions": { "baseUrl": ".", "paths": { "@app/*": ["src/*"] } } }"#,
+        );
+        let aliases = discover_ts_aliases(tmp.path(), &[cfg]);
+        assert_eq!(aliases.len(), 1, "{aliases:?}");
     }
 
     #[test]

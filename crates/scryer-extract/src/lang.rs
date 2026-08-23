@@ -1716,4 +1716,18 @@ async function f(p: string) { return import(p); }
             3
         );
     }
+
+    /// Extensions whose real declared imports are followed read `full`;
+    /// grammar-backed languages resolved only by bare-identifier coincidence
+    /// read `nameHeuristic`; no grammar, no tier.
+    #[test]
+    fn resolution_tier_classifies_full_and_name_heuristic() {
+        for ext in ["rs", "ts", "tsx", "py", "go"] {
+            assert_eq!(import_resolution_tier(ext), Some("full"), "{ext}");
+        }
+        for ext in ["c", "cpp", "h"] {
+            assert_eq!(import_resolution_tier(ext), Some("nameHeuristic"), "{ext}");
+        }
+        assert_eq!(import_resolution_tier("xyz"), None);
+    }
 }

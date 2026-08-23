@@ -124,13 +124,18 @@ function listenOnFreePort(server, startPort) {
   });
 }
 
+/** The sub-package that owns a project-relative file: the nearest (deepest)
+ *  package whose directory encloses it, falling back to the first package for
+ *  files outside every one. Exported for tests. */
+export function ownerOf(pkgs, file) {
+  // Deepest package first, so the nearest enclosing package owns a file.
+  const byDepth = [...pkgs].sort((a, b) => b.rel.length - a.rel.length);
+  return byDepth.find((p) => file === p.rel || file.startsWith(p.rel + "/")) ?? pkgs[0];
+}
+
 /** The front router for multi-package projects: merges component lists and
  *  redirects previews to the package server owning the requested file. */
 async function startRouter({ pkgs, port }) {
-  // Deepest package first, so the nearest enclosing package owns a file.
-  const byDepth = [...pkgs].sort((a, b) => b.rel.length - a.rel.length);
-  const ownerOf = (file) =>
-    byDepth.find((p) => file === p.rel || file.startsWith(p.rel + "/")) ?? pkgs[0];
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
@@ -158,7 +163,7 @@ async function startRouter({ pkgs, port }) {
     }
 
     if (url.pathname === "/__preview") {
-      const target = ownerOf(url.searchParams.get("file") ?? "");
+      const target = ownerOf(pkgs, url.searchParams.get("file") ?? "");
       res.statusCode = 302;
       res.setHeader("Location", target.url + "/__preview" + url.search);
       res.end();

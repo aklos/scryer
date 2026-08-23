@@ -393,10 +393,12 @@ pub(crate) fn status_line(c: &StatusCounts) -> String {
     // Reporting only carriers is what let this line read "5 pending" while the
     // agent in the same terminal read 23.
     let pending = pending_phrase(c);
+    // Test verdicts only when red or stale — verified-green stays silent.
+    let tests = crate::helpers::tests_phrase(c);
     match &c.baseline {
-        None => format!("scryer: {pending} · no reconcile anchor yet{changes}"),
+        None => format!("scryer: {pending} · no reconcile anchor yet{tests}{changes}"),
         Some(b) => format!(
-            "scryer: {pending} · {} drift scope(s) · anchors: {} broken, {} changed{changes}",
+            "scryer: {pending} · {} drift scope(s) · anchors: {} broken, {} changed{tests}{changes}",
             b.drift_scopes, b.anchors_broken, b.anchors_changed
         ),
     }
@@ -427,6 +429,9 @@ fn status_json(c: &StatusCounts) -> String {
         "driftScopes": c.baseline.as_ref().map(|b| b.drift_scopes),
         "anchorsBroken": c.baseline.as_ref().map(|b| b.anchors_broken),
         "anchorsChanged": c.baseline.as_ref().map(|b| b.anchors_changed),
+        "testsRecorded": c.tests.as_ref().map(|t| t.recorded),
+        "testsFailing": c.tests.as_ref().map(|t| t.failing),
+        "testsStale": c.tests.as_ref().map(|t| t.stale),
         "statusLine": status_line(c),
     });
     serde_json::to_string_pretty(&v).unwrap_or_else(|_| "{}".into())

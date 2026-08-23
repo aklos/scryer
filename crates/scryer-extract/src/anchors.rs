@@ -88,7 +88,7 @@ fn keyed_locs_mut<'m>(
 }
 
 /// A sourceMap pattern with glob metacharacters claims territory, not a file.
-fn is_glob_pattern(p: &str) -> bool {
+pub(crate) fn is_glob_pattern(p: &str) -> bool {
     p.contains(['*', '?', '['])
 }
 
@@ -137,7 +137,7 @@ pub struct AnchorCheck {
 /// dependency-free (std's DefaultHasher is documented unstable across
 /// releases). Line endings are normalized so a CRLF/LF round-trip never reads
 /// as a content change.
-fn span_hash(lines: &[&str], start: u32, end: u32) -> String {
+pub(crate) fn span_hash(lines: &[&str], start: u32, end: u32) -> String {
     let s = start.max(1) as usize - 1;
     let e = (end as usize).min(lines.len());
     let mut h: u64 = 0xcbf29ce484222325;
@@ -180,12 +180,12 @@ fn find_spans_by_hash(lines: &[&str], len: u32, hash: &str, limit: usize) -> Vec
 }
 
 /// Per-call parse memo: each touched file is parsed at most once.
-struct FileCache {
+pub(crate) struct FileCache {
     files: HashMap<String, Option<(String, Option<lang::FileParse>)>>,
 }
 
 impl FileCache {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             files: HashMap::new(),
         }
@@ -193,7 +193,7 @@ impl FileCache {
 
     /// Returns (source, parse) for a project-relative path; `None` when the
     /// file doesn't exist. Parse is `None` for unsupported grammars.
-    fn get(&mut self, project: &Path, rel: &str) -> Option<&(String, Option<lang::FileParse>)> {
+    pub(crate) fn get(&mut self, project: &Path, rel: &str) -> Option<&(String, Option<lang::FileParse>)> {
         if !self.files.contains_key(rel) {
             let loaded = std::fs::read_to_string(project.join(rel))
                 .ok()
@@ -222,7 +222,7 @@ fn named_defs<'p>(parse: &'p lang::FileParse, name: &'p str) -> impl Iterator<It
 /// Symbol anchors resolve through the parse (nearest same-named def to `near`);
 /// `None` means the symbol is gone. Anchors without a symbol use the recorded
 /// line range, or the whole file.
-fn resolve_span(
+pub(crate) fn resolve_span(
     source: &str,
     parse: Option<&lang::FileParse>,
     symbol: Option<&str>,
@@ -1401,5 +1401,40 @@ mod tests {
         assert_eq!(scopes.len(), 1, "the out-of-plan deletion surfaces");
         assert_eq!(scopes[0].node_id, "sym");
         assert!(scopes[0].changed_files.iter().any(|f| f == "src/m.ts"));
+    }
+
+    /// An explicit line range that covers its whole enclosing symbol draws the
+    /// warning — a symbol-only anchor was intended; a proper subset maps
+    /// specific work and stays quiet.
+    #[test]
+    fn whole_symbol_range_warns_a_proper_subset_does_not() {
+        let src = "export function alpha() {\n    const a = 1;\n    const b = 2;\n    return a + b;\n}\n";
+        let (_dir, r) = project_with("src/m.ts", src);
+
+        let m = leaf_model("alpha", "src/m.ts", 1, 5);
+        let warnings = whole_symbol_warnings(&m, r.project_path());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("covers the whole symbol"));
+
+        let m = leaf_model("alpha", "src/m.ts", 2, 3);
+        assert!(whole_symbol_warnings(&m, r.project_path()).is_empty());
+    }
+
+    /// A missing file whose remembered content now matches MORE than one place
+    /// is not rescued — declining beats guessing, and the miss reports.
+    #[test]
+    fn an_ambiguous_content_rescue_is_declined() {
+        let (_dir, r) = project_with("src/m.ts", TS);
+        scryer_core::write_model_at(&r, &leaf_model("alpha", "src/m.ts", 1, 3)).unwrap();
+        reconcile(&r);
+
+        std::fs::remove_file(r.project_path().join("src/m.ts")).unwrap();
+        std::fs::write(r.project_path().join("src/copy1.ts"), TS).unwrap();
+        std::fs::write(r.project_path().join("src/copy2.ts"), TS).unwrap();
+
+        let check = check_anchors(&r).unwrap();
+        assert_eq!(check.reanchored, 0, "no guess between two matches");
+        assert_eq!(check.observations.len(), 1, "{:?}", check.observations);
+        assert_eq!(check.observations[0].state, AnchorState::FileMissing);
     }
 }

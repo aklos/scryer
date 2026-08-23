@@ -32,6 +32,55 @@ impl Usage {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// total_tokens is every billed bucket — fresh input, output, and both
+    /// cache tiers.
+    #[test]
+    fn total_tokens_sums_every_billed_bucket() {
+        let u = Usage {
+            input_tokens: 1,
+            output_tokens: 2,
+            cache_creation_input_tokens: 4,
+            cache_read_input_tokens: 8,
+            cost_usd: 0.5,
+        };
+        assert_eq!(u.total_tokens(), 15);
+    }
+
+    /// Another session's usage folds into the running total bucket-by-bucket,
+    /// cost included.
+    #[test]
+    fn add_folds_another_sessions_usage_into_the_total() {
+        let mut total = Usage {
+            input_tokens: 10,
+            output_tokens: 20,
+            cache_creation_input_tokens: 30,
+            cache_read_input_tokens: 40,
+            cost_usd: 1.0,
+        };
+        total.add(&Usage {
+            input_tokens: 1,
+            output_tokens: 2,
+            cache_creation_input_tokens: 3,
+            cache_read_input_tokens: 4,
+            cost_usd: 0.25,
+        });
+        assert_eq!(
+            (total.input_tokens, total.output_tokens),
+            (11, 22)
+        );
+        assert_eq!(
+            (total.cache_creation_input_tokens, total.cache_read_input_tokens),
+            (33, 44)
+        );
+        assert!((total.cost_usd - 1.25).abs() < 1e-9);
+        assert_eq!(total.total_tokens(), 110);
+    }
+}
+
 /// Events emitted during an agent session, forwarded to the Tauri frontend.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]

@@ -127,7 +127,7 @@ pub(crate) fn open_in_editor(
     Ok(())
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SourceSpan {
     /// Path actually read, relative form echoed back for display.
@@ -355,5 +355,137 @@ pub(crate) fn verify_anchor(
         }
         // No symbol and no line isn't an anchor; the file exists, so it's fine.
         None => AnchorStatus::Resolved,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RS: &str = "fn other() {}\n\nfn target() {\n    let a = 1;\n    let b = 2;\n}\n";
+
+    fn project() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/m.rs"), RS).unwrap();
+        let p = dir.path().to_string_lossy().to_string();
+        (dir, p)
+    }
+
+    /// The inspector's span: the whole enclosing symbol body is returned with
+    /// the claim's focus lines flagged inside it.
+    #[test]
+    fn span_returns_the_enclosing_symbol_with_the_focus_flagged() {
+        let (_dir, project) = project();
+        let span = read_source_span(
+            project,
+            "src/m.rs".into(),
+            Some("target".into()),
+            Some(4),
+            Some(5),
+        )
+        .unwrap();
+        assert_eq!(span.start_line, 3, "window opens at the symbol");
+        assert_eq!((span.focus_start, span.focus_end), (4, 5), "focus lines flagged");
+        let first_line: String = span.lines[0].iter().map(|s| s.text.as_str()).collect();
+        assert!(first_line.contains("fn target"), "{first_line}");
+        assert!(span.lines.len() >= 4, "whole symbol body returned");
+    }
+
+    /// A read that would escape the project directory is rejected.
+    #[test]
+    fn a_read_escaping_the_project_is_rejected() {
+        let outer = tempfile::tempdir().unwrap();
+        let project_dir = outer.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(outer.path().join("secret.txt"), "s3cret").unwrap();
+
+        let err = read_source_span(
+            project_dir.to_string_lossy().to_string(),
+            "../secret.txt".into(),
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.contains("outside the project"), "{err}");
+    }
+
+    /// The anchor pre-flight distinguishes every state: resolved, symbol gone,
+    /// file gone, line past the end.
+    #[test]
+    fn anchor_verification_reports_each_state() {
+        let (_dir, project) = project();
+        let verify = |file: &str, symbol: Option<&str>, line: Option<u32>| {
+            serde_json::to_value(verify_anchor(
+                project.clone(),
+                file.into(),
+                symbol.map(String::from),
+                line,
+            ))
+            .unwrap()
+        };
+        assert_eq!(verify("src/m.rs", Some("target"), None), "resolved");
+        assert_eq!(verify("src/m.rs", Some("vanished"), None), "symbolMissing");
+        assert_eq!(verify("src/gone.rs", Some("target"), None), "fileMissing");
+        assert_eq!(verify("src/m.rs", None, Some(3)), "resolved");
+        assert_eq!(verify("src/m.rs", None, Some(99)), "lineOutOfRange");
+    }
+
+    /// With no grammar for the file, a text search finds the first line that
+    /// DEFINES the symbol — a mere mention doesn't count.
+    #[test]
+    fn text_search_finds_the_defining_line_not_a_mention() {
+        let lines = vec!["-- talks about total sums", "local total = 5", "print(total)"];
+        assert_eq!(text_search_symbol(&lines, "total"), Some(2), "the assignment defines it");
+        let lines = vec!["// about widgets", "widgets are nice", "def widget():", "    pass"];
+        assert_eq!(text_search_symbol(&lines, "widget"), Some(3));
+        assert_eq!(text_search_symbol(&lines, "gadget"), None);
+    }
+
+    /// Jumping to source resolves the anchor's line and hands the file to the
+    /// configured GUI editor — a TUI $VISUAL is skipped for the GUI $EDITOR.
+    #[test]
+    fn jump_resolves_the_line_and_skips_tui_editors() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (_dir, project) = project();
+        let bin = tempfile::tempdir().unwrap();
+        // A fake Sublime: `subl` gets the `path:line` argument form.
+        let args_file = bin.path().join("args.txt");
+        let editor = bin.path().join("subl");
+        std::fs::write(
+            &editor,
+            format!("#!/bin/sh\necho \"$@\" > '{}'\n", args_file.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        std::env::set_var("VISUAL", "vim"); // TUI — must be skipped
+        std::env::set_var("EDITOR", editor.to_string_lossy().to_string());
+        let result = open_in_editor(
+            "src/m.rs".into(),
+            None,
+            Some("target".into()),
+            Some(project.clone()),
+        );
+        std::env::remove_var("VISUAL");
+        std::env::remove_var("EDITOR");
+        result.unwrap();
+
+        let mut args = String::new();
+        for _ in 0..100 {
+            if let Ok(a) = std::fs::read_to_string(&args_file) {
+                args = a;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            args.trim().ends_with("src/m.rs:3"),
+            "the symbol's line rides the jump: {args:?}"
+        );
+
+        let err = open_in_editor("src/gone.rs".into(), None, None, Some(project)).unwrap_err();
+        assert!(err.contains("File not found"), "{err}");
     }
 }

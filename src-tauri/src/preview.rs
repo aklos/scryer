@@ -435,3 +435,133 @@ pub(crate) async fn cancel_agent_session(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The launch config comes from the launched agent's OWN settings slot,
+    /// with the CLI's default (empty model, medium effort) for unknown agents.
+    #[test]
+    fn launch_config_resolves_the_agents_own_settings() {
+        let mut s = scryer_core::SubagentSettings::default();
+        s.claude.model = "opus".into();
+        s.claude.effort = "high".into();
+        s.codex.model = "gpt-x".into();
+        s.copilot.model = "cp".into();
+
+        let cli = |kind| scryer_acp::AgentLaunch::Cli { binary: "b".into(), kind };
+        assert_eq!(
+            config_for_launch(&s, &cli(scryer_acp::AgentKind::ClaudeCode)),
+            ("opus".to_string(), "high".to_string())
+        );
+        assert_eq!(config_for_launch(&s, &cli(scryer_acp::AgentKind::Codex)).0, "gpt-x");
+        assert_eq!(
+            config_for_launch(
+                &s,
+                &scryer_acp::AgentLaunch::Acp { binary: "b".into(), kind: scryer_acp::AcpKind::Copilot }
+            )
+            .0,
+            "cp"
+        );
+        assert_eq!(
+            config_for_launch(
+                &s,
+                &scryer_acp::AgentLaunch::Acp { binary: "b".into(), kind: scryer_acp::AcpKind::Adapter }
+            ),
+            (String::new(), "medium".to_string()),
+            "unknown agents fall back to the CLI's own default"
+        );
+    }
+
+    /// A node's source file comes from its own source-map entry first, then
+    /// its first anchored responsibility; empty when nothing anchors.
+    #[test]
+    fn node_source_resolves_own_anchor_then_first_responsibility() {
+        let mut m = scryer_core::ScryModel::new();
+        let mut node: scryer_core::Node = serde_json::from_value(
+            serde_json::json!({ "id": "node-1", "kind": "symbol", "name": "Card" }),
+        )
+        .unwrap();
+        node.responsibilities = vec![serde_json::from_value(
+            serde_json::json!({ "id": "resp-1", "statement": "renders the card" }),
+        )
+        .unwrap()];
+        m.nodes.push(node);
+
+        assert_eq!(node_source_file(&m, "node-1"), "", "nothing anchored yet");
+        m.source_map.insert(
+            "resp-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/Card.tsx" })).unwrap()],
+        );
+        assert_eq!(node_source_file(&m, "node-1"), "src/Card.tsx", "claim anchor found");
+        m.source_map.insert(
+            "node-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/CardDecl.tsx" })).unwrap()],
+        );
+        assert_eq!(node_source_file(&m, "node-1"), "src/CardDecl.tsx", "own anchor wins");
+    }
+
+    /// Accepting a variation persists it as the node's appearance, stamps the
+    /// plan with pending design intent, and clears the variation files.
+    #[test]
+    fn accepting_a_variation_persists_it_and_stamps_the_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_string_lossy().to_string();
+        let r = scryer_core::ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = scryer_core::ScryModel::new();
+        m.nodes.push(
+            serde_json::from_value(
+                serde_json::json!({ "id": "node-1", "kind": "symbol", "name": "Card", "visual": true }),
+            )
+            .unwrap(),
+        );
+        scryer_core::write_model_at(&r, &m).unwrap();
+        let vars = dir.path().join(".scryer/preview/variations/node-1");
+        std::fs::create_dir_all(&vars).unwrap();
+        std::fs::write(vars.join("2.tsx"), "export const V2 = () => null;").unwrap();
+
+        tauri::async_runtime::block_on(accept_visual_variation(
+            cwd,
+            r.to_ref_string(),
+            "node-1".into(),
+            2,
+        ))
+        .unwrap();
+
+        let accepted = dir.path().join(".scryer/preview/accepted/node-1.tsx");
+        assert!(accepted.exists(), "the chosen variant is persisted");
+        assert!(!vars.exists(), "variation files are cleared");
+        let plan = scryer_core::read_planned_at(&r).unwrap();
+        let appearance = plan.nodes[0].appearance.as_ref().expect("plan stamped");
+        assert_eq!(appearance.status, Some(scryer_core::RenderState::Changed));
+        assert_eq!(appearance.dist_path.as_deref(), Some(".scryer/preview/accepted/node-1.tsx"));
+
+        // A missing variant is an error, not a silent accept.
+        let err = tauri::async_runtime::block_on(accept_visual_variation(
+            dir.path().to_string_lossy().to_string(),
+            r.to_ref_string(),
+            "node-1".into(),
+            9,
+        ))
+        .unwrap_err();
+        assert!(err.contains("not found"), "{err}");
+    }
+
+    /// Discarding removes the node's variation files — and is a quiet no-op
+    /// when there are none.
+    #[test]
+    fn discarding_variations_removes_the_nodes_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_string_lossy().to_string();
+        let vars = dir.path().join(".scryer/preview/variations/node-1");
+        std::fs::create_dir_all(&vars).unwrap();
+        std::fs::write(vars.join("0.tsx"), "x").unwrap();
+
+        tauri::async_runtime::block_on(discard_visual_variations(cwd.clone(), "node-1".into()))
+            .unwrap();
+        assert!(!vars.exists());
+        tauri::async_runtime::block_on(discard_visual_variations(cwd, "node-1".into()))
+            .expect("no files is not an error");
+    }
+}

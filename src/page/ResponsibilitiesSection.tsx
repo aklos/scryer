@@ -5,7 +5,8 @@ import type { ConcernDef, ScryModel, Responsibility, SourceLocation } from "../v
 import { STANDARD_CONCERNS } from "../viewmodel";
 import { lookupIcon } from "../IconPicker";
 import type { Editor } from "../editor";
-import type { AnchorState } from "../health";
+import type { AnchorState, ClaimTestStatus } from "../health";
+import { testLaneTitle, testLaneTone } from "../health";
 import { FLAG_COLORS } from "../statusColors";
 import {
   buildElementDiff,
@@ -146,6 +147,7 @@ export function ResponsibilitiesSection({
   sourceMap,
   testMap,
   testStates,
+  testVerdicts,
   projectPath,
   leafHost,
   codeBackedHost,
@@ -171,6 +173,9 @@ export function ResponsibilitiesSection({
   testMap: Record<string, SourceLocation[]>;
   /** respId → fingerprint state of the attached test, when it regressed. */
   testStates: Record<string, AnchorState>;
+  /** respId → recorded test verdict (with re-verified staleness), from the
+   *  `get_test_statuses` feed. Colors the test lane. */
+  testVerdicts: Record<string, ClaimTestStatus>;
   projectPath: string | null;
   /** Whether claims here must anchor to source (leaf node). Structural hosts
    *  discharge through their subtree and never flag "unmapped". */
@@ -237,6 +242,7 @@ export function ResponsibilitiesSection({
               locations={sourceMap[row.resp.id] ?? []}
               testLocations={testMap[row.resp.id] ?? []}
               testState={testStates[row.resp.id] ?? null}
+              testVerdict={testVerdicts[row.resp.id] ?? null}
               projectPath={projectPath}
               leafHost={leafHost}
               codeBackedHost={codeBackedHost}
@@ -426,6 +432,7 @@ function RespDiffRow({
   locations,
   testLocations,
   testState,
+  testVerdict,
   projectPath,
   leafHost,
   codeBackedHost,
@@ -442,6 +449,8 @@ function RespDiffRow({
   testLocations: SourceLocation[];
   /** Fingerprint state of the attached test, when it regressed since reconcile. */
   testState: AnchorState | null;
+  /** The claim's recorded test verdict, or null when no run was ingested. */
+  testVerdict: ClaimTestStatus | null;
   projectPath: string | null;
   leafHost: boolean;
   /** See {@link ResponsibilitiesSection}: gates "untested", structural hosts included. */
@@ -666,35 +675,41 @@ function RespDiffRow({
       </div>
 
       {/* The test lane — the 180px control gutter is empty in read mode, so
-          its right edge is an aligned flask column, scannable down the page:
-          a flask at reading weight = a test is attached (backed, no verdict
-          implied); a ghost flask = testable but nothing attached (rule 22);
-          nothing = the test dimension doesn't apply. Edit mode swaps the whole
-          section for the editor, so the lane never collides with the hover
-          controls. */}
-      {tested && (
-        <span
-          className="absolute right-1 top-[3px] flex items-center text-[var(--text-secondary)]"
-          title={`${testLocations.length > 1 ? `${testLocations.length} tests` : "A test"} attached — this claim is backed. The test lines under the claim peek and open.`}
-        >
-          {/* A flask WITH LIQUID IN IT: the outline glyph, plus a second copy
-              fill-closed into a silhouette and clipped to below the glyph's
-              own fill line (y=15 of the 24-unit viewBox → inset 62.5%). Backed
-              reads as "the flask has contents" vs the untested empty outline. */}
-          <FlaskConical className="h-3 w-3" aria-label="Test attached" />
-          <FlaskConical
-            className="absolute inset-0 h-3 w-3 fill-current"
-            style={{ clipPath: "inset(62.5% 0 0 0)" }}
-            aria-hidden="true"
-          />
-        </span>
-      )}
+          its right edge is an aligned test column, scannable down the page.
+          The flask means exactly one thing here: tests are attached. It
+          carries a VISIBLE count and takes the verdict's tone — reading
+          weight when the verdict is green or nobody recorded one (quiet is
+          the norm), amber when the code moved past the verdict (stale), red
+          when a current verdict is failing/errored. The rule-22 nudge is
+          deliberately NOT a flask — a dashed circle, the page's "expected
+          but absent" mark — so fill-state never carries meaning again. Edit
+          mode swaps the whole section for the editor, so the lane never
+          collides with the hover controls. */}
+      {tested &&
+        (() => {
+          const tone = testLaneTone(testVerdict ?? undefined);
+          const toneCls =
+            tone === "failing"
+              ? "text-red-600 dark:text-red-400"
+              : tone === "stale"
+                ? "text-orange-600 dark:text-orange-400"
+                : "text-[var(--text-secondary)]";
+          return (
+            <span
+              className={`absolute right-1 top-[3px] flex items-center gap-px font-mono text-2xs ${toneCls}`}
+              title={testLaneTitle(testLocations.length, testVerdict ?? undefined)}
+            >
+              <FlaskConical className="h-3 w-3" aria-label="Tests attached" />
+              {testLocations.length}
+            </span>
+          );
+        })()}
       {untested && (
         <span
           className="absolute right-1 top-[3px] flex items-center text-[var(--text-ghost)]"
           title="This claim names a trigger, state, or failure a test could exercise — but no test is attached (rule 22)."
         >
-          <FlaskConical className="h-3 w-3" aria-label="No test attached" />
+          <CircleDashed className="h-3 w-3" aria-label="No test attached" />
         </span>
       )}
     </li>

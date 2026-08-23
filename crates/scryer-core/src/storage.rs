@@ -940,4 +940,26 @@ mod tests {
             last_touched_at: None,
         }
     }
+
+    /// A model file whose schema version does not match the current one is
+    /// refused, not silently migrated — the error names both versions.
+    #[test]
+    fn read_refuses_a_schema_version_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        std::fs::create_dir_all(r.dir()).unwrap();
+        std::fs::write(
+            r.model_path(),
+            r#"{ "version": "0.1", "nodes": [], "links": [] }"#,
+        )
+        .unwrap();
+
+        let err = read_model_at(&r).unwrap_err();
+        assert!(err.contains("'0.1'"), "names the file's version: {err}");
+        assert!(err.contains(SCRY_VERSION), "names the required version: {err}");
+
+        // A missing version field is refused the same way.
+        std::fs::write(r.model_path(), r#"{ "nodes": [], "links": [] }"#).unwrap();
+        assert!(read_model_at(&r).unwrap_err().contains("<missing>"));
+    }
 }

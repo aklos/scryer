@@ -29,7 +29,8 @@ impl ScryerServer {
                 + Self::tool_router_links()
                 + Self::tool_router_misc()
                 + Self::tool_router_generation()
-                + Self::tool_router_intent(),
+                + Self::tool_router_intent()
+                + Self::tool_router_testing(),
             current_change: Arc::new(Mutex::new(None)),
         }
     }

@@ -178,6 +178,125 @@ export function testStatesOf(
   return out;
 }
 
+// --- Claim test verdicts: the `get_test_statuses` feed ------------------------
+
+/** Worst-of aggregation order, as the Rust `TestOutcome` serializes. */
+export type TestOutcome = "passed" | "skipped" | "failed" | "errored";
+
+/** One claim's recorded test verdict, re-verified against the working tree by
+ *  the backend: `stale` = the implementation or the attached test no longer
+ *  hashes as it did when this outcome was reported. */
+export interface ClaimTestStatus {
+  respId: string;
+  outcome: TestOutcome;
+  /** Report cases that fed the verdict (a parametrized test is many cases). */
+  cases: number;
+  stale: boolean;
+  /** Unix seconds when the report was ingested. */
+  recordedAt: number;
+}
+
+/** respId → verdict, for row lookups. */
+export function testVerdictsOf(
+  statuses: ClaimTestStatus[],
+): Record<string, ClaimTestStatus> {
+  const out: Record<string, ClaimTestStatus> = {};
+  for (const s of statuses) out[s.respId] = s;
+  return out;
+}
+
+/** The claim row's test-lane tone. Quiet is the norm and covers both
+ *  current-and-green and no-verdict-recorded; `stale` outranks `failing`
+ *  because a red verdict the code has moved past is OUTDATED, not an alarm —
+ *  re-running decides, and claiming "failing" would be asserting something
+ *  the current code was never measured on. */
+export function testLaneTone(
+  verdict: ClaimTestStatus | undefined,
+): "quiet" | "stale" | "failing" {
+  if (!verdict) return "quiet";
+  if (verdict.stale) return "stale";
+  if (verdict.outcome === "failed" || verdict.outcome === "errored") return "failing";
+  return "quiet";
+}
+
+/** An attached test's regression state, from its two inputs: the live resolve
+ *  (does the test's anchor land right now) and the fingerprint observation
+ *  (did it change since the last reconcile). `gone` (red) outranks `changed`
+ *  (orange) — an unresolvable test can't be "just edited". */
+export function testRegression(
+  liveStatus: string | null,
+  state: AnchorState | null,
+): "gone" | "changed" | null {
+  const gone =
+    (liveStatus != null && liveStatus !== "resolved") ||
+    state === "broken" ||
+    state === "fileMissing";
+  if (gone) return "gone";
+  return state === "changed" ? "changed" : null;
+}
+
+/** The lane tooltip: attachment count first (the lane's primary fact), then
+ *  the verdict in words — silent about verdicts nobody recorded. */
+export function testLaneTitle(
+  count: number,
+  verdict: ClaimTestStatus | undefined,
+): string {
+  const attached = `${count} test${count === 1 ? "" : "s"} attached`;
+  if (!verdict) return `${attached} — no run recorded yet.`;
+  const said =
+    verdict.outcome === "passed"
+      ? "passing"
+      : verdict.outcome === "skipped"
+        ? "skipped"
+        : verdict.outcome === "failed"
+          ? "FAILING"
+          : "ERRORED (the runner never got to assert)";
+  if (verdict.stale) {
+    return `${attached} — last verdict ${said}, but the code or tests changed since: STALE. Re-run to refresh.`;
+  }
+  return `${attached} — ${said} (${verdict.cases} case${verdict.cases === 1 ? "" : "s"}).`;
+}
+
+/** Roll a subtree's recorded verdicts up to one gauge tone. Per-claim tones
+ *  come from {@link testLaneTone} (so a stale red verdict counts as stale, not
+ *  failing); at the rollup FAILING outranks stale — one current red verdict
+ *  below is the alarm, however many quiet or stale neighbours it has. */
+export function subtreeTestTone(
+  model: Pick<ScryModel, "nodes" | "groups">,
+  nodeId: string,
+  verdicts: Record<string, ClaimTestStatus>,
+): "quiet" | "stale" | "failing" {
+  const children = new Map<string | null | undefined, string[]>();
+  for (const n of model.nodes) {
+    const list = children.get(n.parentId) ?? [];
+    list.push(n.id);
+    children.set(n.parentId, list);
+  }
+  const inScope = new Set<string>();
+  const queue = [nodeId];
+  while (queue.length > 0) {
+    const id = queue.pop()!;
+    if (inScope.has(id)) continue;
+    inScope.add(id);
+    queue.push(...(children.get(id) ?? []));
+  }
+  let tone: "quiet" | "stale" | "failing" = "quiet";
+  const fold = (respId: string) => {
+    const t = testLaneTone(verdicts[respId]);
+    if (t === "failing") tone = "failing";
+    else if (t === "stale" && tone === "quiet") tone = "stale";
+  };
+  for (const n of model.nodes) {
+    if (!inScope.has(n.id)) continue;
+    for (const r of n.responsibilities ?? []) fold(r.id);
+  }
+  for (const g of model.groups ?? []) {
+    if (!g.parentNodeId || !inScope.has(g.parentNodeId)) continue;
+    for (const r of g.responsibilities ?? []) fold(r.id);
+  }
+  return tone;
+}
+
 /** Fold anchor observations that share host + file + symbol + state into one
  *  row each. The key omits `key` (the responsibility/node id) precisely because
  *  that's the only thing that differs between the duplicates we're collapsing. */

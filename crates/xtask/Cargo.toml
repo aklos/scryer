@@ -5,3 +5,6 @@ edition = "2021"
 
 [dependencies]
 scryer-core = { path = "../scryer-core" }
+
+[dev-dependencies]
+tempfile = "3"

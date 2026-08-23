@@ -8,6 +8,7 @@ mod project;
 mod source_view;
 mod state;
 mod symbols;
+mod test_reports;
 mod verdicts;
 
 use std::sync::Mutex;
@@ -94,6 +95,7 @@ pub fn run() {
             build::start_drift_check,
             observability::get_drift_status,
             observability::get_model_health,
+            observability::get_test_statuses,
             observability::reconcile_drift,
             observability::reconcile_drift_node,
             verdicts::adopt_responsibility,
