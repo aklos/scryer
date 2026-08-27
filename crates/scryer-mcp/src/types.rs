@@ -204,6 +204,31 @@ pub(crate) struct GetTestRadiusRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ProbeClaimRequest {
+    /// Absolute path to the project root. If omitted, uses the current working directory.
+    pub project: Option<String>,
+    /// The claim to probe. It must have an attached test holding a current,
+    /// passing verdict — otherwise the probe is refused with the reason.
+    pub resp_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct EndProbeRequest {
+    /// Absolute path to the project root. If omitted, uses the current working directory.
+    pub project: Option<String>,
+    /// The claim whose probe is open.
+    pub resp_id: String,
+    /// How many deliberate breaks you tried in total, survivors included.
+    pub probes: u32,
+    /// One entry per break the test did NOT catch, describing what you changed
+    /// (e.g. "flipped the boundary at line 356 from > to >="). Empty means every
+    /// break was caught. These are the audit trail — write what you actually did,
+    /// never a summary.
+    #[serde(default)]
+    pub survivors: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct MarkImplementedRequest {
     /// Absolute path to the project root. If omitted, uses the current working directory.
     pub project: Option<String>,

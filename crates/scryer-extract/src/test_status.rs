@@ -38,11 +38,41 @@ pub struct ClaimRecord {
     pub fingerprints: BTreeMap<String, String>,
 }
 
+/// One claim's probe history: how many deliberate breaks were tried against
+/// its span, and how many its attached test failed to catch.
+///
+/// Kept apart from [`ClaimRecord`] on purpose. A verdict answers "does the
+/// test pass"; a probe answers "would it fail if the code were wrong". They
+/// go stale together — same anchors, same fingerprints — but they are never
+/// the same claim about the code, and collapsing them would let a green
+/// verdict read as proof it isn't.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeRecord {
+    pub resp_id: String,
+    /// Deliberate breaks tried against the claim's span.
+    pub probes: u32,
+    /// How many of them the attached test did NOT catch.
+    pub survived: u32,
+    /// What each survivor was, in the prober's words — the audit trail for a
+    /// claim that reads as probed, and the to-do list for one that doesn't.
+    #[serde(default)]
+    pub survivors: Vec<String>,
+    pub recorded_at: u64,
+    /// Same anchor identity → content hash map a verdict records, taken the
+    /// same way, so an edit to the implementation or the test ages a probe
+    /// result exactly as it ages a verdict.
+    #[serde(default)]
+    pub fingerprints: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TestStatusCache {
     #[serde(default)]
     pub results: Vec<ClaimRecord>,
+    #[serde(default)]
+    pub probes: Vec<ProbeRecord>,
 }
 
 /// A cached verdict as the caller should present it.
@@ -54,6 +84,20 @@ pub struct ClaimTestStatus {
     pub cases: usize,
     /// The code behind the claim (implementation or attached test) no longer
     /// hashes as it did when this outcome was reported.
+    pub stale: bool,
+    pub recorded_at: u64,
+}
+
+/// A cached probe result as the caller should present it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaimProbeStatus {
+    pub resp_id: String,
+    pub probes: u32,
+    pub survived: u32,
+    pub survivors: Vec<String>,
+    /// The code behind the claim no longer hashes as it did when these
+    /// probes ran — the result describes code that has since moved on.
     pub stale: bool,
     pub recorded_at: u64,
 }
@@ -359,6 +403,210 @@ pub fn ingest_report(r: &ModelRef, xml: &str) -> Result<IngestSummary, String> {
     Ok(IngestSummary { cases: cases.len(), recorded, report })
 }
 
+/// Where a probe should aim, and what to run afterwards.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeTarget {
+    pub resp_id: String,
+    pub statement: String,
+    /// Project-relative file holding the claim's implementation.
+    pub file: String,
+    /// 1-based inclusive span to break. Resolved the same way a fingerprint
+    /// resolves it, so the probe lands inside exactly the region the claim is
+    /// anchored to and nowhere else.
+    pub start_line: u32,
+    pub end_line: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// The attached tests to re-run, and the commands recorded for them.
+    pub tests: Vec<String>,
+    pub commands: Vec<String>,
+}
+
+/// Resolve one claim into a probe target, or explain why it can't be probed.
+///
+/// The refusals are the point. Breaking code behind a claim with no attached
+/// test proves nothing — there is no assertion to fail. Breaking code behind a
+/// test whose verdict is missing or stale proves nothing either: a probe reads
+/// "the test went red", which only means something when you already know it
+/// was green.
+pub fn probe_target(r: &ModelRef, resp_id: &str) -> Result<ProbeTarget, String> {
+    let model = read_model_at(r)?;
+    let statement = model
+        .nodes
+        .iter()
+        .flat_map(|n| n.responsibilities.iter())
+        .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
+        .find(|resp| resp.id == resp_id)
+        .map(|resp| resp.statement.clone())
+        .ok_or_else(|| format!("no claim {resp_id} in the model"))?;
+
+    let attachments = model
+        .test_map
+        .get(resp_id)
+        .filter(|locs| !locs.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "{resp_id} has no attached test — a probe asks whether the test would \
+                 catch the break, so there must be one to ask about. Attach it first \
+                 (update_source_map test_entries), then probe."
+            )
+        })?;
+
+    match test_statuses(r)?.into_iter().find(|s| s.resp_id == resp_id) {
+        None => {
+            return Err(format!(
+                "{resp_id} has no recorded verdict — run its tests and ingest_test_report \
+                 first. A probe means 'the test went red on a break', which says nothing \
+                 unless it was green to begin with."
+            ))
+        }
+        Some(status) if status.stale => {
+            return Err(format!(
+                "{resp_id}'s verdict is stale — the code or test changed since it was \
+                 recorded. Re-run and ingest before probing."
+            ))
+        }
+        Some(status) if status.outcome != TestOutcome::Passed => {
+            return Err(format!(
+                "{resp_id}'s test is not passing ({:?}) — fix it before probing. A probe \
+                 cannot tell a break it caught from one it was already failing on.",
+                status.outcome
+            ))
+        }
+        Some(_) => {}
+    }
+
+    let project = r.project_path();
+    let mut files = FileCache::new();
+    let loc = model
+        .source_map
+        .get(resp_id)
+        .into_iter()
+        .flatten()
+        .find(|loc| !is_glob_pattern(&loc.pattern))
+        .ok_or_else(|| {
+            format!("{resp_id} has no file-level source anchor to break — nothing to probe")
+        })?;
+    let (source, parse) = files
+        .get(project, &loc.pattern)
+        .ok_or_else(|| format!("{} is not readable", loc.pattern))?;
+    let (start_line, end_line) = resolve_span(
+        source,
+        parse.as_ref(),
+        loc.symbol.as_deref(),
+        loc.line,
+        loc.line,
+        loc.end_line,
+    )
+    .map_err(|()| {
+        format!(
+            "{resp_id}'s anchor no longer resolves in {} — re-anchor it before probing",
+            loc.pattern
+        )
+    })?;
+
+    let mut tests = Vec::new();
+    let mut commands = Vec::new();
+    for t in attachments {
+        if let Some(sym) = &t.symbol {
+            let entry = format!("{} :: {sym}", t.pattern);
+            if !tests.contains(&entry) {
+                tests.push(entry);
+            }
+        } else if !tests.contains(&t.pattern) {
+            tests.push(t.pattern.clone());
+        }
+        if let Some(cmd) = &t.command {
+            if !commands.contains(cmd) {
+                commands.push(cmd.clone());
+            }
+        }
+    }
+
+    Ok(ProbeTarget {
+        resp_id: resp_id.to_string(),
+        statement,
+        file: loc.pattern.clone(),
+        start_line,
+        end_line,
+        symbol: loc.symbol.clone(),
+        tests,
+        commands,
+    })
+}
+
+/// Record what a finished round of probes found. Fingerprinted against the
+/// same anchors a verdict uses, so an edit to the implementation or the test
+/// ages the probe result exactly as it ages the verdict — a probe proves
+/// something about the code that was there, never about code that came after.
+pub fn record_probe_result(
+    r: &ModelRef,
+    resp_id: &str,
+    probes: u32,
+    survivors: Vec<String>,
+) -> Result<(), String> {
+    let model = read_model_at(r)?;
+    let project = r.project_path();
+    let mut files = FileCache::new();
+    let mut project_files: Option<BTreeSet<String>> = None;
+    let record = ProbeRecord {
+        resp_id: resp_id.to_string(),
+        probes,
+        survived: survivors.len() as u32,
+        survivors,
+        recorded_at: now_secs(),
+        fingerprints: claim_fingerprints(&model, resp_id, project, &mut files, &mut project_files),
+    };
+    let mut cache = read_cache(r);
+    match cache.probes.iter_mut().find(|p| p.resp_id == resp_id) {
+        Some(existing) => *existing = record,
+        None => cache.probes.push(record),
+    }
+    write_cache(r, &cache)
+}
+
+/// Every cached probe result, re-verified against the working tree the same
+/// way verdicts are. A claim absent from this list has never been probed —
+/// which is NOT the same as one probed clean, and callers must not render it
+/// that way.
+pub fn probe_statuses(r: &ModelRef) -> Result<Vec<ClaimProbeStatus>, String> {
+    let cache = read_cache(r);
+    if cache.probes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let model = read_model_at(r)?;
+    let project = r.project_path();
+    let live: BTreeSet<&str> = model
+        .nodes
+        .iter()
+        .flat_map(|n| n.responsibilities.iter())
+        .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
+        .map(|resp| resp.id.as_str())
+        .collect();
+    let mut files = FileCache::new();
+    let mut project_files: Option<BTreeSet<String>> = None;
+    let mut out = Vec::new();
+    for rec in &cache.probes {
+        if !live.contains(rec.resp_id.as_str()) {
+            continue;
+        }
+        let stale = rec.fingerprints.is_empty()
+            || claim_fingerprints(&model, &rec.resp_id, project, &mut files, &mut project_files)
+                != rec.fingerprints;
+        out.push(ClaimProbeStatus {
+            resp_id: rec.resp_id.clone(),
+            probes: rec.probes,
+            survived: rec.survived,
+            survivors: rec.survivors.clone(),
+            stale,
+            recorded_at: rec.recorded_at,
+        });
+    }
+    out.sort_by(|a, b| a.resp_id.cmp(&b.resp_id));
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -640,4 +888,130 @@ mod tests {
         assert_eq!(summary.report.unmatched_cases, 1);
         assert_eq!(summary.report.unseen.len(), 1, "the attached test went unseen");
     }
+
+    // --- probes ---
+
+    /// resp-748's core refusal: no attached test means there is no assertion
+    /// to fail, so the question a probe asks cannot be asked.
+    #[test]
+    fn probing_a_claim_with_no_attached_test_is_refused() {
+        let (_dir, r) = project();
+        let mut m = read_model_at(&r).unwrap();
+        m.test_map.remove("r1");
+        scryer_core::write_model_at(&r, &m).unwrap();
+
+        let err = probe_target(&r, "r1").unwrap_err();
+
+        assert!(err.contains("no attached test"), "{err}");
+    }
+
+    /// resp-748: a probe reads "the test went red on a break", which says
+    /// nothing unless the test was known green first.
+    #[test]
+    fn probing_without_a_recorded_verdict_is_refused() {
+        let (_dir, r) = project();
+        let err = probe_target(&r, "r1").unwrap_err();
+        assert!(err.contains("no recorded verdict"), "{err}");
+    }
+
+    #[test]
+    fn probing_on_a_stale_verdict_is_refused() {
+        let (_dir, r) = project();
+        fresh_statuses(&r);
+        std::fs::write(
+            r.project_path().join("src/m.ts"),
+            IMPL_TS.replace("return 1", "return 2"),
+        )
+        .unwrap();
+
+        let err = probe_target(&r, "r1").unwrap_err();
+
+        assert!(err.contains("stale"), "{err}");
+    }
+
+    /// resp-747's payload: the span to break, resolved the same way a
+    /// fingerprint resolves it, plus the tests to re-run.
+    #[test]
+    fn a_probe_target_names_the_span_and_the_tests() {
+        let (_dir, r) = project();
+        fresh_statuses(&r);
+
+        let target = probe_target(&r, "r1").unwrap();
+
+        assert_eq!(target.file, "src/m.ts");
+        assert_eq!(target.symbol.as_deref(), Some("alpha"));
+        assert_eq!((target.start_line, target.end_line), (1, 3), "the whole symbol");
+        assert_eq!(target.tests, vec!["src/m.spec.ts :: answers one"]);
+    }
+
+    /// resp-751: probes-run and probes-survived are reported separately, and
+    /// a claim nobody probed is simply absent — never a clean one.
+    #[test]
+    fn probe_results_report_runs_and_survivors_and_omit_the_unprobed() {
+        let (_dir, r) = project();
+        fresh_statuses(&r);
+        assert!(probe_statuses(&r).unwrap().is_empty(), "unprobed is absent, not clean");
+
+        record_probe_result(&r, "r1", 3, vec!["boundary at line 2 survived".into()]).unwrap();
+
+        let statuses = probe_statuses(&r).unwrap();
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].probes, 3);
+        assert_eq!(statuses[0].survived, 1);
+        assert_eq!(statuses[0].survivors, vec!["boundary at line 2 survived"]);
+        assert!(!statuses[0].stale);
+    }
+
+    /// resp-750: a probe result is fingerprinted against the same anchors a
+    /// verdict uses, so it ages the same way — it proved something about the
+    /// code that was there, never about the code that replaced it.
+    #[test]
+    fn editing_the_implementation_ages_a_probe_result() {
+        let (_dir, r) = project();
+        fresh_statuses(&r);
+        record_probe_result(&r, "r1", 2, Vec::new()).unwrap();
+        assert!(!probe_statuses(&r).unwrap()[0].stale);
+
+        std::fs::write(
+            r.project_path().join("src/m.ts"),
+            IMPL_TS.replace("return 1", "return 2"),
+        )
+        .unwrap();
+
+        assert!(probe_statuses(&r).unwrap()[0].stale);
+    }
+
+    /// Editing the TEST ages it too — the probe was about that test's power
+    /// to catch a break, and a rewritten test is a different test.
+    #[test]
+    fn editing_the_attached_test_ages_a_probe_result() {
+        let (_dir, r) = project();
+        fresh_statuses(&r);
+        record_probe_result(&r, "r1", 2, Vec::new()).unwrap();
+        assert!(!probe_statuses(&r).unwrap()[0].stale);
+
+        std::fs::write(
+            r.project_path().join("src/m.spec.ts"),
+            SPEC_TS.replace("toBe(1)", "toBe(1); expect(true).toBe(true)"),
+        )
+        .unwrap();
+
+        assert!(probe_statuses(&r).unwrap()[0].stale);
+    }
+
+    /// A verdict and a probe are separate claims about the code: recording
+    /// probes must not disturb the verdict cache beside it.
+    #[test]
+    fn recording_probes_leaves_the_verdict_alone() {
+        let (_dir, r) = project();
+        fresh_statuses(&r);
+        record_probe_result(&r, "r1", 1, Vec::new()).unwrap();
+
+        let verdicts = test_statuses(&r).unwrap();
+
+        assert_eq!(verdicts.len(), 1);
+        assert_eq!(verdicts[0].outcome, TestOutcome::Passed);
+        assert!(!verdicts[0].stale);
+    }
+
 }

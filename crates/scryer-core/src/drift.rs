@@ -172,6 +172,12 @@ pub fn changed_files_since(project: &Path, sync: &SyncState) -> BTreeSet<String>
             touched.insert(file.clone());
         }
     }
+    // A file an open probe is deliberately mutating is not drift — the edit
+    // is scryer's own, it is about to be reverted, and surfacing it would
+    // have every probe trip the tripwire it exists to keep honest.
+    for probed in crate::probe::probed_files(project) {
+        touched.remove(&probed);
+    }
     touched
 }
 
@@ -715,4 +721,45 @@ mod tests {
         assert!(ids.contains(&"node-2".to_string()));
         assert_eq!(ids.len(), 2, "each cycle member visited exactly once");
     }
+
+    /// resp-752: a file an open probe is deliberately mutating is scryer's own
+    /// edit, about to be reverted — surfacing it would have every probe trip
+    /// the tripwire it exists to keep honest.
+    #[test]
+    fn an_open_probe_takes_its_file_out_of_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "fn limit(n: u32) -> bool { n > 10 }\n").unwrap();
+
+        // Anchor in the past so the file reads as edited since the reconcile.
+        let sync = SyncState {
+            reconciled_at: 1,
+            reconciled_at_ns: Some(1_000_000_000),
+            ..Default::default()
+        };
+        assert!(
+            changed_files_since(root, &sync).contains("src/lib.rs"),
+            "precondition: the edit is visible as drift"
+        );
+
+        crate::probe::open_probe(
+            &crate::ModelRef::ProjectLocal(root.to_path_buf()),
+            crate::probe::ProbeEntry {
+                resp_id: "r1".into(),
+                file: "src/lib.rs".into(),
+                start_line: 1,
+                end_line: 1,
+                original: "fn limit(n: u32) -> bool { n > 10 }\n".into(),
+                opened_at: 0,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            !changed_files_since(root, &sync).contains("src/lib.rs"),
+            "while the probe is open the file is scryer's own churn, not drift"
+        );
+    }
+
 }

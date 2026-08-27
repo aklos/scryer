@@ -680,6 +680,22 @@ pub(crate) fn tests_phrase(c: &StatusCounts) -> String {
 /// work signal. Same locking contract as [`status_counts`].
 pub(crate) fn status_header(model_ref: &ModelRef) -> Option<String> {
     let c = status_counts(model_ref)?;
+    // An open probe means the working tree is deliberately broken right now.
+    // That outranks every other number here: a mutated tree must never read
+    // as a clean one, so it leads the line until end_probe restores it.
+    let probes = scryer_core::probe::open_probes(model_ref);
+    let probe_warning = if probes.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "PROBE OPEN — {} · end_probe to restore · ",
+            probes
+                .iter()
+                .map(|p| format!("{} mutated for {}", p.file, p.resp_id))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
     // Open changes ride the header only when the ledger is in use — the
     // serial (unfiled) workflow keeps its unchanged line.
     let changes = if c.open_changes > 0 {
@@ -692,11 +708,11 @@ pub(crate) fn status_header(model_ref: &ModelRef) -> Option<String> {
     Some(match c.baseline {
         // Never reconciled: drift/anchors have no baseline to report against.
         None => format!(
-            "plan: {} pending · untested: {} · drift: no reconcile anchor yet{tests}{changes}",
+            "{probe_warning}plan: {} pending · untested: {} · drift: no reconcile anchor yet{tests}{changes}",
             c.pending, c.untested
         ),
         Some(b) => format!(
-            "plan: {} pending · untested: {} · drift: {} scope(s) · anchors: {} changed, {} broken{tests}{changes}",
+            "{probe_warning}plan: {} pending · untested: {} · drift: {} scope(s) · anchors: {} changed, {} broken{tests}{changes}",
             c.pending, c.untested, b.drift_scopes, b.anchors_changed, b.anchors_broken
         ),
     })

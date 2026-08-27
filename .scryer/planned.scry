@@ -1210,6 +1210,11 @@
           "id": "resp-95",
           "statement": "Formats the one-line loop-state header carried on write responses so the model's state stays ambient across a session.",
           "lastTouchedAt": 1784883763
+        },
+        {
+          "id": "resp-753",
+          "statement": "**If** a probe is open, **lead** the header with the claim and the mutated file, so a deliberately broken tree never reports an unqualified clean state",
+          "lastTouchedAt": 1787825172
         }
       ]
     },
@@ -10670,6 +10675,11 @@
           "id": "resp-625",
           "statement": "Tracks the reconcile anchor — commit and timestamp, globally and per-node — including dismissed deletions",
           "lastTouchedAt": 1784884312
+        },
+        {
+          "id": "resp-752",
+          "statement": "**While** a probe is open on a span, **exclude** its file from drift, so the probe's own edit never reads as undescribed behaviour",
+          "lastTouchedAt": 1787824331
         }
       ]
     },
@@ -12326,6 +12336,16 @@
           "id": "resp-716",
           "statement": "**When** a JUnit report arrives, **ingest** it end to end: parse, match against the model, and record per-claim outcomes in one call",
           "lastTouchedAt": 1786525877
+        },
+        {
+          "id": "resp-750",
+          "statement": "**When** a probe outcome is recorded, **fingerprint** it against the same implementation and test anchors a verdict uses, so an edit to either reads it as stale",
+          "lastTouchedAt": 1787824320
+        },
+        {
+          "id": "resp-751",
+          "statement": "**When** probe results are read, **report** how many probes ran and how many survived, never collapsing an unprobed claim into a clean one",
+          "lastTouchedAt": 1787824320
         }
       ]
     },
@@ -12422,6 +12442,21 @@
           "id": "resp-726",
           "statement": "**When** asked what to run, **answer** with exactly the test files whose claims hold missing or stale verdicts, never the whole suite",
           "lastTouchedAt": 1786526725
+        },
+        {
+          "id": "resp-747",
+          "statement": "**When** an agent asks to probe a claim, **answer** with its span, its attached test's run command, and an opened ledger entry",
+          "lastTouchedAt": 1787824320
+        },
+        {
+          "id": "resp-748",
+          "statement": "**If** the claim has no attached test, or its verdict is missing or stale, **refuse** the probe and name which — breaking code behind an unverified test settles nothing",
+          "lastTouchedAt": 1787824320
+        },
+        {
+          "id": "resp-749",
+          "statement": "**When** a probe ends, **restore** the span, **record** each mutant's outcome, and **answer** with what survived",
+          "lastTouchedAt": 1787824320
         }
       ]
     },
@@ -12531,6 +12566,35 @@
           "id": "resp-742",
           "statement": "**Never** sweep pre-existing reports on open — a report written before watching began is evidence about older code and must not be recorded against the current tree",
           "lastTouchedAt": 1786957842
+        }
+      ]
+    },
+    {
+      "id": "node-681",
+      "kind": "component",
+      "name": "Claim Probe Ledger",
+      "parentId": "node-4",
+      "description": "Records an open falsification probe — the claim, the span being mutated, and the bytes it replaced — so a mutated working tree is always recoverable.",
+      "responsibilities": [
+        {
+          "id": "resp-743",
+          "statement": "Persists an open probe's claim, its target span, and a whole-file capture of the code it is mutating",
+          "lastTouchedAt": 1787825231
+        },
+        {
+          "id": "resp-744",
+          "statement": "**When** a probe opens, **capture** the claim's anchored span and record the entry before any edit reaches the file",
+          "lastTouchedAt": 1787824304
+        },
+        {
+          "id": "resp-745",
+          "statement": "**When** a probe closes, **restore** the captured bytes and clear the entry, whether the mutant was caught or survived",
+          "lastTouchedAt": 1787824304
+        },
+        {
+          "id": "resp-746",
+          "statement": "**If** an entry outlives the session that opened it, **name** the mutated file as an open probe rather than letting the tree read as clean",
+          "lastTouchedAt": 1787824304
         }
       ]
     }
@@ -16189,6 +16253,36 @@
       "src": "node-187",
       "dst": "node-665",
       "label": "synthesizes props via"
+    },
+    {
+      "id": "link-node-577-node-681",
+      "src": "node-577",
+      "dst": "node-681",
+      "label": "consults open probes"
+    },
+    {
+      "id": "link-node-666-node-523",
+      "src": "node-666",
+      "dst": "node-523",
+      "label": "reads source locations"
+    },
+    {
+      "id": "link-node-669-node-435",
+      "src": "node-669",
+      "dst": "node-435",
+      "label": "lists project files"
+    },
+    {
+      "id": "link-node-674-node-53",
+      "src": "node-674",
+      "dst": "node-53",
+      "label": "reports loop state"
+    },
+    {
+      "id": "link-node-389-node-680",
+      "src": "node-389",
+      "dst": "node-680",
+      "label": "watches report dirs"
     }
   ],
   "groups": [
