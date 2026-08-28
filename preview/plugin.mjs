@@ -182,6 +182,22 @@ if (!Component) {
       server.middlewares.use(async (req, res, next) => {
         const url = new URL(req.url, "http://localhost");
 
+        // The app's webview is always a different origin from this server (the
+        // `tauri://localhost` custom scheme in a bundled app, `localhost:1420`
+        // in dev), so its `/__components.json` fetch is cross-origin. This
+        // middleware is registered from `configureServer`, whose body runs
+        // BEFORE vite installs its own cors middleware — our routes answer
+        // first and nothing downstream ever adds the header. Vite's cors
+        // default wouldn't cover `tauri://` anyway (since CVE-2025-24010 it
+        // only allows http(s) localhost origins). Without this, WebKit fails
+        // the fetch as a bare "TypeError: Load failed" and the Preview section
+        // reports a server that is in fact running fine. The multi-package
+        // router in server.mjs sets the same header on its merged list.
+        if (url.pathname === "/__preview" || url.pathname === "/__components.json") {
+          res.setHeader("Access-Control-Allow-Origin", "*");
+          res.setHeader("Vary", "Origin");
+        }
+
         if (url.pathname === "/__preview") {
           const file = url.searchParams.get("file") ?? "";
           const exportName = url.searchParams.get("export") ?? "default";
