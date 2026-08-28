@@ -168,6 +168,13 @@ if (!Component) {
       }
       server.watcher.on("all", (_event, file) => {
         if (!file.startsWith(previewDir)) return;
+        // Preview CONTENT only. Dot-dirs under .scryer/preview are machinery,
+        // not content — `.vite/` is this server's own dependency-optimizer
+        // cache (see previewCacheDir), and churning it would full-reload every
+        // open preview on our own writes. Vite ignores its cacheDir in the
+        // watcher by default, but the explicit watcher.add above re-adds this
+        // subtree in the sub-package case.
+        if (file.slice(previewDir.length).startsWith(".")) return;
         // A changed manifest (or shared fixture) changes which props.mjs
         // emits — drop the memoized analysis so entries re-synthesize.
         analysis = null;

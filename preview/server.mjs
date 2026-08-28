@@ -63,6 +63,47 @@ function findViteRoots(projectRoot, maxDepth = 4) {
   return roots;
 }
 
+const CONFIG_FILENAMES = ["vite.config.ts", "vite.config.js", "vite.config.mjs"];
+
+/**
+ * The vite config a preview server loads: a project-supplied PREVIEW config at
+ * `{project}/.scryer/preview/vite.config.*` wins over the package's own.
+ *
+ * A project's real config is often the wrong one for rendering a component in
+ * isolation — a framework plugin that owns the whole app (remix, next), or no
+ * config at all because the vite app lives in a sub-package the root resolves
+ * `vite` ahead of. The preview config lets a project state just the narrow
+ * truth previews need — path aliases, the css pipeline — without putting a
+ * preview-only file in its repo root. One config serves every package server.
+ *
+ * `exists` is injectable so this is testable without a filesystem.
+ * Exported for tests.
+ */
+export function previewConfigFile(projectRoot, packageRoot, exists = fs.existsSync) {
+  const preview = CONFIG_FILENAMES
+    .map((f) => path.join(projectRoot, ".scryer", "preview", f))
+    .find(exists);
+  return preview ?? CONFIG_FILENAMES.map((f) => path.join(packageRoot, f)).find(exists);
+}
+
+/**
+ * Where a preview server keeps its dependency-optimizer cache: under
+ * `.scryer/preview/`, never the package's own `node_modules/.vite`.
+ *
+ * The project usually has its OWN dev server on the same root with a different
+ * config. Sharing one cache dir makes each server re-optimize on the other's
+ * heels, and the pages already open against the project's server then fail
+ * with "504 Outdated Optimize Dep" — we'd be breaking the dev server an
+ * engineer is actually working in. A slot per package keeps sibling preview
+ * servers in a multi-package project from colliding with each other too.
+ * Exported for tests.
+ */
+export function previewCacheDir(projectRoot, packageRoot) {
+  const rel = path.relative(projectRoot, packageRoot);
+  const slot = rel === "" ? "root" : rel.split(path.sep).join("__");
+  return path.join(projectRoot, ".scryer", "preview", ".vite", slot);
+}
+
 /** One vite dev server rooted at `packageRoot`, previewing in project-relative
  *  path space (see plugin.mjs). */
 async function startViteFor({ projectRoot, packageRoot, port, useWrapper }) {
@@ -72,15 +113,14 @@ async function startViteFor({ projectRoot, packageRoot, port, useWrapper }) {
   // ESM default export rather than named exports.
   if (!vite.createServer && vite.default?.createServer) vite = vite.default;
 
-  const configFile = ["vite.config.ts", "vite.config.js", "vite.config.mjs"]
-    .map((f) => path.join(packageRoot, f))
-    .find(fs.existsSync);
+  const configFile = previewConfigFile(projectRoot, packageRoot);
 
   const searchForWorkspaceRoot = vite.searchForWorkspaceRoot ?? ((dir) => dir);
 
   const server = await vite.createServer({
     configFile,
     root: packageRoot,
+    cacheDir: previewCacheDir(projectRoot, packageRoot),
     clearScreen: false,
     server: {
       port,

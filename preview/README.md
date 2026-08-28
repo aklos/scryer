@@ -16,6 +16,27 @@ provider fix per project), every entry wraps the component in it. For scryer
 itself the wrapper shims `__TAURI_INTERNALS__` so Tauri calls hang in loading
 states instead of crashing.
 
+## A project's own preview config
+
+`{project}/.scryer/preview/vite.config.*`, when present, is loaded **instead of
+the package's `vite.config.*`** (`previewConfigFile`). Reuse of the project's
+real config is the default because it is usually right, but not always: a
+framework plugin can own the whole app (remix, next) in a way that has nothing
+to do with rendering one component in isolation, and a monorepo root that
+resolves `vite` while its vite app lives in a sub-package has no usable config
+at that root at all. Such a project states just what previews need — path
+aliases, the css pipeline — next to its fixtures and wrapper, instead of
+carrying a preview-only file in its repo root. One preview config serves every
+package server.
+
+Dependency-optimizer caches live in `.scryer/preview/.vite/<package-slot>`
+(`previewCacheDir`), never the package's own `node_modules/.vite`: the project
+normally has its own dev server on the same root with a different config, and
+one shared cache means each server re-optimizes on the other's heels until the
+pages already open against the project's server fail with "504 Outdated
+Optimize Dep". Preview machinery is dot-prefixed inside `.scryer/preview/` so
+the content watcher (fixtures, wrapper, variations) ignores it.
+
 The agent enters only through two repair/creative paths, both served by the
 same running server with no build step:
 
