@@ -1329,7 +1329,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Run the structural validator over your WORKING model (the plan, with committed's code anchors overlaid) — so it sees the edits you just authored, which is what makes it a post-CLOSE gate. Returns a list of warnings: parent-kind mismatches, unknown link endpoints, group members at mixed levels, empty symbols (carrying no responsibility/property), source-map entries that reference unknown ids, and responsibility mappings whose line range covers the whole enclosing symbol (a range must be a proper subset — drop it to mean the whole definition). A clean run is a post-edit gate, not a lookup — to FIND nodes by shape on demand (e.g. every empty symbol) use `query_model`. Does NOT judge responsibility wording quality."
+        description = "Run the structural validator over your WORKING model (the plan, with committed's code anchors overlaid) — so it sees the edits you just authored, which is what makes it a post-CLOSE gate. Returns a list of warnings: parent-kind mismatches, unknown link endpoints, group members at mixed levels, empty symbols (carrying no responsibility/property), source-map entries that reference unknown ids, and responsibility mappings whose line range covers the whole enclosing symbol (a range must be a proper subset — drop it to mean the whole definition). A clean run is a post-edit gate, not a lookup — to FIND nodes by shape on demand (e.g. every empty symbol) use `query_model`. Findings come in two classes: BLOCKING invariant violations (an id the plan diff treats as unique actually names two things — a duplicate node/link/group id, or the same responsibility id on two hosts; a commit of the model is REFUSED until each clears, because the wrong copy would otherwise sit invisible to the diff forever) and advisory warnings (everything else). Does NOT judge responsibility wording quality."
     )]
     fn validate_model(
         &self,
@@ -1353,23 +1353,50 @@ impl ScryerServer {
             }
         };
         let model = scryer_core::working_view(&committed, &planned);
-        let mut warnings = validate::validate(&model);
-        warnings.extend(validate::validate_coverage(&model, model_ref.project_path()));
-        warnings.extend(scryer_extract::anchors::whole_symbol_warnings(
+
+        // Two classes, surfaced apart. BLOCKING = structural invariant violations
+        // (an id the diff treats as unique names two things); `write_model_at`
+        // refuses to persist a model carrying one, so a commit will be rejected
+        // until they clear — the agent must treat these as hard. ADVISORY = the
+        // rest (parent-kind, empty symbols, coverage, whole-symbol ranges): real
+        // gate feedback, but not commit-blocking. De-dup the advisory list against
+        // the blocking one (`validate` reports the same id-collision facts as
+        // advisories) so no single fact costs two lines.
+        let blocking = validate::structural_violations(&model);
+        let blocking_set: std::collections::HashSet<&str> =
+            blocking.iter().map(String::as_str).collect();
+        let mut advisory = validate::validate(&model);
+        advisory.retain(|w| !blocking_set.contains(w.as_str()));
+        advisory.extend(validate::validate_coverage(&model, model_ref.project_path()));
+        advisory.extend(scryer_extract::anchors::whole_symbol_warnings(
             &model,
             model_ref.project_path(),
         ));
-        if warnings.is_empty() {
-            Ok(CallToolResult::success(vec![Content::text(
+
+        if blocking.is_empty() && advisory.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
                 "Model is structurally clean.",
-            )]))
-        } else {
-            let mut msg = format!("Model '{}' — {} warning(s):", model_ref, warnings.len());
-            for w in &warnings {
+            )]));
+        }
+        let mut msg = format!("Model '{}':", model_ref);
+        if !blocking.is_empty() {
+            msg.push_str(&format!(
+                "\n\n{} BLOCKING invariant violation(s) — a commit of this model will be REFUSED \
+                 until each is resolved (an id the plan diff treats as unique names two things, so \
+                 the wrong copy would sit invisible):",
+                blocking.len()
+            ));
+            for w in &blocking {
                 msg.push_str(&format!("\n- {}", w));
             }
-            Ok(CallToolResult::success(vec![Content::text(msg)]))
         }
+        if !advisory.is_empty() {
+            msg.push_str(&format!("\n\n{} advisory warning(s):", advisory.len()));
+            for w in &advisory {
+                msg.push_str(&format!("\n- {}", w));
+            }
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     #[tool(
@@ -1982,6 +2009,42 @@ mod tests {
         assert!(
             !out.contains("unknown"),
             "no unknown-reference warnings for a pending deletion: {out}"
+        );
+    }
+
+    /// The same responsibility id on two hosts — the state a botched move leaves
+    /// (added to the new host, never removed from the old) — is a BLOCKING
+    /// invariant, surfaced in its own section. The plan write path does not gate,
+    /// so the draft can hold it; `validate_model` is where the agent sees it,
+    /// before a commit is refused at the write seam.
+    #[test]
+    fn validate_model_flags_a_cross_host_duplicate_as_blocking() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let project = dir.path().to_string_lossy().to_string();
+
+        let mut committed = ScryModel::new();
+        committed.nodes.push(node("node-1", Kind::System, "Acme", None));
+        committed
+            .nodes
+            .push(node("node-2", Kind::Container, "API", Some("node-1")));
+        scryer_core::write_model_at(&model_ref, &committed).unwrap();
+
+        // The draft puts resp-1 on BOTH hosts.
+        let mut planned = committed.clone();
+        planned.nodes[0].responsibilities.push(resp("resp-1", "serve"));
+        planned.nodes[1].responsibilities.push(resp("resp-1", "serve"));
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let server = ScryerServer::new();
+        let r = server
+            .validate_model(Parameters(ValidateModelRequest { project: Some(project) }))
+            .unwrap();
+        let out = serde_json::to_string(&r.content).unwrap();
+        assert!(out.contains("BLOCKING"), "surfaces a blocking section: {out}");
+        assert!(
+            out.contains("globally unique") && out.contains("resp-1"),
+            "names the invariant and the colliding id: {out}"
         );
     }
 
