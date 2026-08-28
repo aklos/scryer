@@ -328,7 +328,6 @@ mod tests {
                     symbol: symbol.map(str::to_string),
                     line: None,
                     end_line: None,
-                    command: None,
                 });
         }
         map

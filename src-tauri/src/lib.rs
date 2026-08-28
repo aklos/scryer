@@ -96,6 +96,7 @@ pub fn run() {
             observability::get_drift_status,
             observability::get_model_health,
             observability::get_test_statuses,
+            observability::get_probe_statuses,
             observability::reconcile_drift,
             observability::reconcile_drift_node,
             verdicts::adopt_responsibility,

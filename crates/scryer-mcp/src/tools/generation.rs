@@ -400,7 +400,6 @@ impl ScryerServer {
                             symbol: Some(symbol.name.clone()),
                             line: input.line(),
                             end_line: input.end_line(),
-                            command: None,
                         }],
                     );
                     node.responsibilities.push(responsibility);
@@ -414,7 +413,6 @@ impl ScryerServer {
                             symbol: Some(symbol.name.clone()),
                             line: symbol.line,
                             end_line: symbol.end_line,
-                            command: None,
                         }],
                     );
                 }

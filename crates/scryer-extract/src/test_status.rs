@@ -330,9 +330,6 @@ pub fn test_statuses(r: &ModelRef) -> Result<Vec<ClaimTestStatus>, String> {
 pub struct RadiusFile {
     /// The attached test file (as the attachment spells it).
     pub pattern: String,
-    /// Distinct run commands the attachments recorded for this file —
-    /// advisory, never executed by scryer.
-    pub commands: Vec<String>,
     /// The claims whose verdicts running this file would refresh.
     pub claims: Vec<String>,
     /// How many of those claims have a stale verdict (the rest have none).
@@ -370,15 +367,9 @@ pub fn test_blast_radius(r: &ModelRef) -> Result<Vec<RadiusFile>, String> {
         for loc in locs {
             let entry = by_file.entry(&loc.pattern).or_insert_with(|| RadiusFile {
                 pattern: loc.pattern.clone(),
-                commands: Vec::new(),
                 claims: Vec::new(),
                 stale: 0,
             });
-            if let Some(cmd) = &loc.command {
-                if !entry.commands.contains(cmd) {
-                    entry.commands.push(cmd.clone());
-                }
-            }
             if !entry.claims.contains(resp_id) {
                 entry.claims.push(resp_id.clone());
                 entry.stale += stale as usize;
@@ -418,9 +409,8 @@ pub struct ProbeTarget {
     pub end_line: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
-    /// The attached tests to re-run, and the commands recorded for them.
+    /// The attached tests to re-run.
     pub tests: Vec<String>,
-    pub commands: Vec<String>,
 }
 
 /// Resolve one claim into a probe target, or explain why it can't be probed.
@@ -507,7 +497,6 @@ pub fn probe_target(r: &ModelRef, resp_id: &str) -> Result<ProbeTarget, String> 
     })?;
 
     let mut tests = Vec::new();
-    let mut commands = Vec::new();
     for t in attachments {
         if let Some(sym) = &t.symbol {
             let entry = format!("{} :: {sym}", t.pattern);
@@ -516,11 +505,6 @@ pub fn probe_target(r: &ModelRef, resp_id: &str) -> Result<ProbeTarget, String> 
             }
         } else if !tests.contains(&t.pattern) {
             tests.push(t.pattern.clone());
-        }
-        if let Some(cmd) = &t.command {
-            if !commands.contains(cmd) {
-                commands.push(cmd.clone());
-            }
         }
     }
 
@@ -532,7 +516,6 @@ pub fn probe_target(r: &ModelRef, resp_id: &str) -> Result<ProbeTarget, String> 
         end_line,
         symbol: loc.symbol.clone(),
         tests,
-        commands,
     })
 }
 
@@ -660,7 +643,6 @@ mod tests {
                 symbol: Some("alpha".into()),
                 line: None,
                 end_line: None,
-                command: None,
             }],
         );
         m.test_map.insert(
@@ -670,7 +652,6 @@ mod tests {
                 symbol: Some("answers one".into()),
                 line: None,
                 end_line: None,
-                command: None,
             }],
         );
         scryer_core::write_model_at(&r, &m).unwrap();
@@ -728,7 +709,6 @@ mod tests {
             symbol: Some("alpha".into()),
             line: None,
             end_line: None,
-            command: None,
         });
         scryer_core::write_model_at(&r, &m).unwrap();
         assert!(test_statuses(&r).unwrap()[0].stale);
@@ -811,7 +791,6 @@ mod tests {
             symbol: Some("alpha".into()),
             line: None,
             end_line: None,
-            command: None,
         });
         assert_eq!(provably_fresh(&m, &rec, r.project_path()), None);
     }
@@ -843,7 +822,7 @@ mod tests {
     }
 
     #[test]
-    fn radius_groups_claims_per_file_with_their_commands() {
+    fn radius_groups_claims_per_file_so_each_is_one_invocation() {
         let (_dir, r) = project();
         let mut m = read_model_at(&r).unwrap();
         m.nodes[0].responsibilities.push(Responsibility {
@@ -863,14 +842,12 @@ mod tests {
                 symbol: Some("answers two".into()),
                 line: None,
                 end_line: None,
-                command: Some("pnpm test".into()),
             }],
         );
         scryer_core::write_model_at(&r, &m).unwrap();
         let radius = test_blast_radius(&r).unwrap();
         assert_eq!(radius.len(), 1, "one file, one invocation: {radius:?}");
         assert_eq!(radius[0].claims, vec!["r1", "r2"]);
-        assert_eq!(radius[0].commands, vec!["pnpm test"]);
     }
 
     #[test]

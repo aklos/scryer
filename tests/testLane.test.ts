@@ -7,10 +7,13 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  probeMark,
+  probeTitle,
   subtreeTestTone,
   testLaneTitle,
   testLaneTone,
   type ClaimTestStatus,
+  type ClaimProbeStatus,
 } from "../src/health";
 import type { Node, Group, Responsibility } from "../src/viewmodel";
 
@@ -109,5 +112,58 @@ describe("testLaneTitle", () => {
 
   it("says stale in words when the code moved past the verdict", () => {
     expect(testLaneTitle(2, verdict({ outcome: "failed", stale: true }))).toContain("STALE");
+  });
+});
+
+/**
+ * The probe axis. Deliberately independent of the verdict: a claim can be
+ * green and hollow at once, and that combination is the whole reason the mark
+ * exists. Absence is load-bearing — unprobed and probed-clean must never
+ * render alike, the same rule the verdict lane already follows for
+ * never-run vs passing.
+ */
+const probe = (o: Partial<ClaimProbeStatus>): ClaimProbeStatus => ({
+  respId: "r1",
+  probes: 3,
+  survived: 0,
+  survivors: [],
+  stale: false,
+  recordedAt: 1,
+  ...o,
+});
+
+describe("probeMark", () => {
+  it("marks a surviving break as hollow, however green the verdict beside it", () => {
+    expect(probeMark(probe({ survived: 1, survivors: ["returned 2"] }))).toBe("hollow");
+  });
+
+  it("marks a clean round as probed", () => {
+    expect(probeMark(probe({}))).toBe("probed");
+  });
+
+  it("shows nothing for a claim nobody probed — absence is not clean", () => {
+    expect(probeMark(undefined)).toBe("none");
+    expect(probeMark(probe({ probes: 0 }))).toBe("none");
+  });
+
+  it("shows nothing for a stale result, which describes code that has moved on", () => {
+    expect(probeMark(probe({ stale: true }))).toBe("none");
+    expect(probeMark(probe({ survived: 2, stale: true }))).toBe("none");
+  });
+});
+
+describe("probeTitle", () => {
+  it("names every survivor, so the finding is readable without opening anything", () => {
+    const t = probeTitle(probe({ survived: 1, survivors: ["returning 2 went unnoticed"] }));
+    expect(t).toContain("UNCAUGHT");
+    expect(t).toContain("returning 2 went unnoticed");
+  });
+
+  it("calls a clean round a sample, never a proof", () => {
+    expect(probeTitle(probe({}))).toContain("A sample, not a proof");
+  });
+
+  it("says nothing when there is nothing measured", () => {
+    expect(probeTitle(undefined)).toBe("");
   });
 });

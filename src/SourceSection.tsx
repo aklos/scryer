@@ -304,13 +304,9 @@ function TestLine({
   const gone = regression === "gone";
   const changed = regression === "changed";
   // The visible token is MINIMAL — one line per file, no test names. The
-  // claim above already says what the tests exercise; names and run command
-  // live in the tooltip, and the peek shows the tests themselves.
-  const detail = [
-    ...locs.map((l) => (l.symbol ? `“${l.symbol}”` : null)),
-    file,
-    locs[0].command ? `run: ${locs[0].command}` : null,
-  ]
+  // claim above already says what the tests exercise; the names live in the
+  // tooltip, and the peek shows the tests themselves.
+  const detail = [...locs.map((l) => (l.symbol ? `“${l.symbol}”` : null)), file]
     .filter(Boolean)
     .join("\n");
   const noun = locs.length > 1 ? `${locs.length} attached tests` : "Attached test";

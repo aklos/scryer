@@ -8,7 +8,7 @@ pub mod health;
 pub mod history;
 pub mod locate;
 pub mod ownership;
-pub mod probe;
+pub mod worktree;
 pub mod rules;
 pub mod scan;
 pub mod seed;

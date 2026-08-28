@@ -22,6 +22,11 @@ pkgs.mkShell {
     cargo
     rustfmt
     clippy
+    # Test runner that emits JUnit XML (the `junit` profile in
+    # .config/nextest.toml), which `ingest_test_report` reads to record
+    # per-claim verdicts. Plain `cargo test` emits no machine-readable report,
+    # so without this the model's test lane can never be filled in.
+    cargo-nextest
 
     # Image tools
     imagemagick

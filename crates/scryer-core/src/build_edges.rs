@@ -367,7 +367,6 @@ mod tests {
                 symbol: Some(symbol.into()),
                 line: Some(1),
                 end_line: Some(5),
-                command: None,
             }],
         );
     }
@@ -553,7 +552,6 @@ mod tests {
                 symbol: Some("doA".into()),
                 line: Some(1),
                 end_line: None,
-                command: None,
             }],
         );
         anchor(&mut m, "symb", "src/b.ts", "doB");

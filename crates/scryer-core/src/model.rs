@@ -139,8 +139,6 @@ pub struct SourceLocation {
     pub line: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_line: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
 }
 
 // --- Appearance (the look of a UI component) ---

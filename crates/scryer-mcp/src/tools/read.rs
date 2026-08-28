@@ -2125,7 +2125,6 @@ mod tests {
                 symbol: Some("refund".into()),
                 line: None,
                 end_line: None,
-                command: None,
             }],
         );
         scryer_core::write_planned_at(&model_ref, &planned).unwrap();

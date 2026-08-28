@@ -153,7 +153,6 @@ mod tests {
                 symbol: Some("charge".into()),
                 line: Some(40),
                 end_line: Some(78),
-                command: None,
             }),
         ]);
         append_event(&r, &born).unwrap();

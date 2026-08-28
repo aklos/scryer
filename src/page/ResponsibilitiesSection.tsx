@@ -1,12 +1,21 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, CircleDashed, CornerDownRight, FlaskConical, RotateCw, Tag, X } from "lucide-react";
+import {
+  Check,
+  CircleDashed,
+  CornerDownRight,
+  Crosshair,
+  FlaskConical,
+  RotateCw,
+  Tag,
+  X,
+} from "lucide-react";
 import type { ConcernDef, ScryModel, Responsibility, SourceLocation } from "../viewmodel";
 import { STANDARD_CONCERNS } from "../viewmodel";
 import { lookupIcon } from "../IconPicker";
 import type { Editor } from "../editor";
-import type { AnchorState, ClaimTestStatus } from "../health";
-import { testLaneTitle, testLaneTone } from "../health";
+import type { AnchorState, ClaimProbeStatus, ClaimTestStatus } from "../health";
+import { probeMark, probeTitle, testLaneTitle, testLaneTone } from "../health";
 import { FLAG_COLORS } from "../statusColors";
 import {
   buildElementDiff,
@@ -148,6 +157,7 @@ export function ResponsibilitiesSection({
   testMap,
   testStates,
   testVerdicts,
+  probeResults,
   projectPath,
   leafHost,
   codeBackedHost,
@@ -176,6 +186,8 @@ export function ResponsibilitiesSection({
   /** respId → recorded test verdict (with re-verified staleness), from the
    *  `get_test_statuses` feed. Colors the test lane. */
   testVerdicts: Record<string, ClaimTestStatus>;
+  /** respId → probe result; absent for a claim nobody has probed. */
+  probeResults: Record<string, ClaimProbeStatus>;
   projectPath: string | null;
   /** Whether claims here must anchor to source (leaf node). Structural hosts
    *  discharge through their subtree and never flag "unmapped". */
@@ -243,6 +255,7 @@ export function ResponsibilitiesSection({
               testLocations={testMap[row.resp.id] ?? []}
               testState={testStates[row.resp.id] ?? null}
               testVerdict={testVerdicts[row.resp.id] ?? null}
+              probeResult={probeResults[row.resp.id] ?? null}
               projectPath={projectPath}
               leafHost={leafHost}
               codeBackedHost={codeBackedHost}
@@ -433,6 +446,7 @@ function RespDiffRow({
   testLocations,
   testState,
   testVerdict,
+  probeResult,
   projectPath,
   leafHost,
   codeBackedHost,
@@ -451,6 +465,8 @@ function RespDiffRow({
   testState: AnchorState | null;
   /** The claim's recorded test verdict, or null when no run was ingested. */
   testVerdict: ClaimTestStatus | null;
+  /** The claim's recorded probe result, or null when nobody probed it. */
+  probeResult: ClaimProbeStatus | null;
   projectPath: string | null;
   leafHost: boolean;
   /** See {@link ResponsibilitiesSection}: gates "untested", structural hosts included. */
@@ -693,6 +709,7 @@ function RespDiffRow({
       {tested &&
         (() => {
           const tone = testLaneTone(testVerdict ?? undefined);
+          const mark = probeMark(probeResult ?? undefined);
           const toneCls =
             tone === "failing"
               ? "text-red-600 dark:text-red-400"
@@ -704,7 +721,10 @@ function RespDiffRow({
           return (
             <span
               className={`absolute right-1 top-[3px] flex items-center gap-px font-mono text-2xs ${toneCls}`}
-              title={testLaneTitle(testLocations.length, testVerdict ?? undefined)}
+              title={
+                testLaneTitle(testLocations.length, testVerdict ?? undefined) +
+                probeTitle(probeResult ?? undefined)
+              }
             >
               <FlaskConical className="h-3 w-3" aria-label="Tests attached" />
               {testLocations.length}
@@ -719,6 +739,29 @@ function RespDiffRow({
                       : tone === "stale"
                         ? "Verdict stale — re-run"
                         : "Tests failing"
+                  }
+                />
+              )}
+              {/* The probe mark — a THIRD fact, never folded into the verdict
+                  beside it. One glyph, two readings: the claim has been shot
+                  at, and the colour says whether anything got through. Green
+                  is deliberately modest (one to three breaks is a sample, not
+                  a proof), red is the finding — a test the check next to it
+                  calls passing did NOT catch a deliberate break. Nothing at
+                  all for a claim never probed, or one whose probe went stale,
+                  because an absent mark is the honest rendering of "nobody
+                  measured this". */}
+              {mark !== "none" && (
+                <Crosshair
+                  className={`ml-0.5 h-3 w-3 ${
+                    mark === "hollow"
+                      ? "text-red-600 dark:text-red-400"
+                      : "text-emerald-600 dark:text-emerald-400"
+                  }`}
+                  aria-label={
+                    mark === "hollow"
+                      ? "A deliberate break went uncaught — this test does not hold the claim"
+                      : "Probed — every deliberate break was caught"
                   }
                 />
               )}

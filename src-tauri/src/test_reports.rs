@@ -172,7 +172,6 @@ mod tests {
                 symbol: Some("answers one".into()),
                 line: None,
                 end_line: None,
-                command: None,
             }],
         );
         scryer_core::write_model_at(&r, &m).unwrap();

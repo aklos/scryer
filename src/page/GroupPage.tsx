@@ -132,6 +132,7 @@ export function GroupPageBody(props: PageProps & { group: Group }) {
               testMap={testMap}
               testStates={testStates}
               testVerdicts={props.testVerdicts}
+              probeResults={props.probeResults}
               projectPath={projectPath}
               leafHost={false} // group claims discharge through members
               codeBackedHost // groups organize code-backed members

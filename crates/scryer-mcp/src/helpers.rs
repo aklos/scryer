@@ -581,6 +581,11 @@ pub(crate) struct StatusCounts {
     /// None until a test report has been ingested — with no recorded verdicts
     /// there is no test state to report, and zeros would fake certainty.
     pub tests: Option<TestCounts>,
+    /// Claims whose last probe round left a survivor: the attached test went
+    /// green on a deliberate break. Never a count of the UNPROBED — that
+    /// population is nearly everything, and a standing nag for it would be
+    /// noise the reader learns to skip. Findings speak; absence does not.
+    pub probe_survivors: usize,
 }
 
 pub(crate) struct BaselineCounts {
@@ -630,8 +635,23 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
         stale: verdicts.iter().filter(|s| s.stale).count(),
         recorded: verdicts.len(),
     });
+    // A stale probe result describes code that has since moved on, so it is
+    // not a live finding — the next round decides.
+    let probe_survivors = scryer_extract::test_status::probe_statuses(model_ref)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| !p.stale && p.survived > 0)
+        .count();
     if !model_ref.sync_path().exists() {
-        return Some(StatusCounts { pending, carriers, open_changes, untested, baseline: None, tests });
+        return Some(StatusCounts {
+            pending,
+            carriers,
+            open_changes,
+            untested,
+            baseline: None,
+            tests,
+            probe_survivors,
+        });
     }
     let sync = scryer_core::read_sync_state(model_ref);
     let scopes =
@@ -654,6 +674,7 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
             anchors_broken: broken,
         }),
         tests,
+        probe_survivors,
     })
 }
 
@@ -672,6 +693,19 @@ pub(crate) fn tests_phrase(c: &StatusCounts) -> String {
     }
 }
 
+/// The header fragment for probe findings — empty unless a probe left a
+/// survivor. Deliberately asymmetric with `untested`: a claim that has never
+/// been probed is the normal state of almost every claim, so counting it here
+/// would bury the one thing worth reacting to. A survivor is different — it
+/// says a test the model reports as green does not actually hold its claim.
+pub(crate) fn probes_phrase(c: &StatusCounts) -> String {
+    match c.probe_survivors {
+        0 => String::new(),
+        1 => " · probes: 1 claim with a surviving break".to_string(),
+        n => format!(" · probes: {n} claims with surviving breaks"),
+    }
+}
+
 /// One-line loop-state header for write responses — `plan: N pending ·
 /// untested: N · drift: N scope(s) · anchors: N changed, N broken` — so the
 /// model's state stays ambient across a coding session without the agent
@@ -680,22 +714,6 @@ pub(crate) fn tests_phrase(c: &StatusCounts) -> String {
 /// work signal. Same locking contract as [`status_counts`].
 pub(crate) fn status_header(model_ref: &ModelRef) -> Option<String> {
     let c = status_counts(model_ref)?;
-    // An open probe means the working tree is deliberately broken right now.
-    // That outranks every other number here: a mutated tree must never read
-    // as a clean one, so it leads the line until end_probe restores it.
-    let probes = scryer_core::probe::open_probes(model_ref);
-    let probe_warning = if probes.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "PROBE OPEN — {} · end_probe to restore · ",
-            probes
-                .iter()
-                .map(|p| format!("{} mutated for {}", p.file, p.resp_id))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    };
     // Open changes ride the header only when the ledger is in use — the
     // serial (unfiled) workflow keeps its unchanged line.
     let changes = if c.open_changes > 0 {
@@ -705,14 +723,16 @@ pub(crate) fn status_header(model_ref: &ModelRef) -> Option<String> {
     };
     // Test verdicts speak only when red or stale — verified-green is silence.
     let tests = tests_phrase(&c);
+    // A surviving break is a finding about a test the model calls green.
+    let probes = probes_phrase(&c);
     Some(match c.baseline {
         // Never reconciled: drift/anchors have no baseline to report against.
         None => format!(
-            "{probe_warning}plan: {} pending · untested: {} · drift: no reconcile anchor yet{tests}{changes}",
+            "plan: {} pending · untested: {} · drift: no reconcile anchor yet{tests}{probes}{changes}",
             c.pending, c.untested
         ),
         Some(b) => format!(
-            "{probe_warning}plan: {} pending · untested: {} · drift: {} scope(s) · anchors: {} changed, {} broken{tests}{changes}",
+            "plan: {} pending · untested: {} · drift: {} scope(s) · anchors: {} changed, {} broken{tests}{probes}{changes}",
             c.pending, c.untested, b.drift_scopes, b.anchors_changed, b.anchors_broken
         ),
     })

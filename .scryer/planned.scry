@@ -953,6 +953,11 @@
           "id": "resp-81",
           "statement": "Computes the ambient plan/drift/anchor/test-verdict status counts and one-line header carried on every write response, mentioning test state only when a verdict is failing or stale.",
           "lastTouchedAt": 1786527236
+        },
+        {
+          "id": "resp-755",
+          "statement": "**If** a probe found a survivor, **say** so in the ambient header — a green test that misses a deliberate break is a finding, not a statistic — while a claim merely never probed stays silent there",
+          "lastTouchedAt": 1787898372
         }
       ]
     },
@@ -1210,11 +1215,6 @@
           "id": "resp-95",
           "statement": "Formats the one-line loop-state header carried on write responses so the model's state stays ambient across a session.",
           "lastTouchedAt": 1784883763
-        },
-        {
-          "id": "resp-753",
-          "statement": "**If** a probe is open, **lead** the header with the claim and the mutated file, so a deliberately broken tree never reports an unqualified clean state",
-          "lastTouchedAt": 1787825172
         }
       ]
     },
@@ -4556,6 +4556,11 @@
           "id": "resp-734",
           "statement": "**When** a claim carries attached tests, **show** their count and, beside it, the recorded verdict as its own mark — a green check when the last run passed and still holds, amber when stale, red when failing, nothing at all when no run was recorded — and **mark** testable claims lacking a test with a non-flask nudge",
           "lastTouchedAt": 1787473772
+        },
+        {
+          "id": "resp-757",
+          "statement": "**When** a claim carries a probe result, **mark** the lane beside its verdict — green when every deliberate break was caught, red when one survived — and **show** nothing for a claim never probed or whose probe went stale",
+          "lastTouchedAt": 1787898624
         }
       ]
     },
@@ -6804,6 +6809,11 @@
           "id": "resp-732",
           "statement": "**When** the canvas asks, **serve** each claim's recorded test verdict and staleness, re-verified against the working tree",
           "lastTouchedAt": 1786957053
+        },
+        {
+          "id": "resp-756",
+          "statement": "**When** the canvas asks, **serve** each claim's probe result — breaks tried and breaks survived — omitting the claims nobody probed rather than reporting them as clean",
+          "lastTouchedAt": 1787898624
         }
       ]
     },
@@ -10675,11 +10685,6 @@
           "id": "resp-625",
           "statement": "Tracks the reconcile anchor — commit and timestamp, globally and per-node — including dismissed deletions",
           "lastTouchedAt": 1784884312
-        },
-        {
-          "id": "resp-752",
-          "statement": "**While** a probe is open on a span, **exclude** its file from drift, so the probe's own edit never reads as undescribed behaviour",
-          "lastTouchedAt": 1787824331
         }
       ]
     },
@@ -12416,8 +12421,8 @@
       "responsibilities": [
         {
           "id": "resp-723",
-          "statement": "**When** the radius is computed, **include** every test-attached claim whose verdict is missing or stale, grouped per test file with the recorded run commands so each file is one invocation",
-          "lastTouchedAt": 1786526717
+          "statement": "**When** the radius is computed, **include** every test-attached claim whose verdict is missing or stale, grouped per test file so each file is one invocation",
+          "lastTouchedAt": 1787896786
         },
         {
           "id": "resp-724",
@@ -12445,8 +12450,8 @@
         },
         {
           "id": "resp-747",
-          "statement": "**When** an agent asks to probe a claim, **answer** with its span, its attached test's run command, and an opened ledger entry",
-          "lastTouchedAt": 1787824320
+          "statement": "**When** an agent asks to probe a claim, **answer** with the synced worktree path, the span to break, and the attached test files to run there",
+          "lastTouchedAt": 1787897929
         },
         {
           "id": "resp-748",
@@ -12455,8 +12460,13 @@
         },
         {
           "id": "resp-749",
-          "statement": "**When** a probe ends, **restore** the span, **record** each mutant's outcome, and **answer** with what survived",
-          "lastTouchedAt": 1787824320
+          "statement": "**When** a probe ends, **record** each mutant's outcome and **answer** with what survived",
+          "lastTouchedAt": 1787897929
+        },
+        {
+          "id": "resp-754",
+          "statement": "**When** a probe opens, **direct** the caller to delegate the mutate-run-revert loop to a subagent, so its churn never enters the session that asked for it",
+          "lastTouchedAt": 1787897929
         }
       ]
     },
@@ -12491,8 +12501,8 @@
       "responsibilities": [
         {
           "id": "resp-730",
-          "statement": "**When** called, **return** the blast radius grouped per test file — claims, counts, and recorded run commands — plus a current-verdict summary of passing, failing, and stale claims",
-          "lastTouchedAt": 1786526736
+          "statement": "**When** called, **return** the blast radius grouped per test file — claims and counts — plus a current-verdict summary of passing, failing, and stale claims",
+          "lastTouchedAt": 1787896786
         }
       ]
     },
@@ -12572,29 +12582,29 @@
     {
       "id": "node-681",
       "kind": "component",
-      "name": "Claim Probe Ledger",
+      "name": "Probe Worktree",
       "parentId": "node-4",
-      "description": "Records an open falsification probe — the claim, the span being mutated, and the bytes it replaced — so a mutated working tree is always recoverable.",
+      "description": "The isolated git worktree a falsification probe mutates — reused so its build cache survives, synced to the developer's working tree so the probe breaks the code as it actually stands.",
       "responsibilities": [
         {
           "id": "resp-743",
-          "statement": "Persists an open probe's claim, its target span, and a whole-file capture of the code it is mutating",
-          "lastTouchedAt": 1787825231
+          "statement": "Provides one reused git worktree per project, so a probe's build cache survives between rounds and each mutant costs an incremental run rather than a cold checkout",
+          "lastTouchedAt": 1787897929
         },
         {
           "id": "resp-744",
-          "statement": "**When** a probe opens, **capture** the claim's anchored span and record the entry before any edit reaches the file",
-          "lastTouchedAt": 1787824304
+          "statement": "**When** a probe opens, **sync** the worktree to the developer's working tree — committed state plus uncommitted and untracked edits — so the probe breaks the code as it actually stands, not as it was last committed",
+          "lastTouchedAt": 1787897929
         },
         {
           "id": "resp-745",
-          "statement": "**When** a probe closes, **restore** the captured bytes and clear the entry, whether the mutant was caught or survived",
-          "lastTouchedAt": 1787824304
+          "statement": "**When** a probe ends, **reset** the worktree so no mutation survives into the next round",
+          "lastTouchedAt": 1787897929
         },
         {
           "id": "resp-746",
-          "statement": "**If** an entry outlives the session that opened it, **name** the mutated file as an open probe rather than letting the tree read as clean",
-          "lastTouchedAt": 1787824304
+          "statement": "**If** the project is not a git repository, **refuse** the probe rather than falling back to mutating the developer's own working tree",
+          "lastTouchedAt": 1787897929
         }
       ]
     }

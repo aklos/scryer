@@ -270,8 +270,7 @@ pub(crate) struct MarkImplementedRequest {
     /// locations keyed by responsibility id, `pattern` = test file, `symbol` =
     /// the test's NAME — the `it("…")`/`test("…")` description string or the
     /// test function's identifier; both resolve and fingerprint (symbol-only
-    /// means the whole test); set `command` to record how to run it (never
-    /// executed). For a When/While/If claim the
+    /// means the whole test). For a When/While/If claim the
     /// test is EXPECTED — mandatory on symbol hosts (rule 22); a fold that
     /// leaves a testable claim with no test attached succeeds but is called
     /// out in the response. When you just wrote the test, this field is the
@@ -512,8 +511,7 @@ pub(crate) struct UpdateSourceMapRequest {
     /// to which claims. Same shape as `entries` (`pattern` = test file,
     /// `symbol` = the test's NAME — the `it("…")`/`test("…")` description
     /// string or the test function's identifier; both resolve and fingerprint;
-    /// a symbol-only anchor means the whole test). Optionally set `command` on a location to record how to run it
-    /// (e.g. `cargo test parse::roundtrip`) — recorded, never executed. A
+    /// a symbol-only anchor means the whole test). A
     /// separate dimension from `entries`: where a claim is implemented vs.
     /// which tests are attached to it. Empty `locations` clears.
     #[serde(default)]

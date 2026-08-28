@@ -761,7 +761,6 @@ mod tests {
             symbol: Some("f".into()),
             line: Some(10),
             end_line: Some(20),
-            command: None,
         }
     }
 

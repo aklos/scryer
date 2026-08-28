@@ -1469,7 +1469,6 @@ mod tests {
                 symbol: None,
                 line: None,
                 end_line: None,
-                command: None,
             }],
         );
         write_planned_at(&r, &planned).unwrap();

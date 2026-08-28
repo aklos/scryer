@@ -196,6 +196,57 @@ export interface ClaimTestStatus {
   recordedAt: number;
 }
 
+/** One claim's recorded PROBE result, re-verified against the working tree.
+ *  A separate axis from the verdict: `probes` deliberate breaks were made in
+ *  the claim's span, and `survived` of them slipped past the attached test.
+ *  Claims nobody has probed are ABSENT from the feed rather than zeroed —
+ *  unprobed must never render the same as probed-clean. */
+export interface ClaimProbeStatus {
+  respId: string;
+  probes: number;
+  survived: number;
+  survivors: string[];
+  /** The code moved on since these probes ran — the result describes a past. */
+  stale: boolean;
+  recordedAt: number;
+}
+
+/** respId → probe result, for row lookups. */
+export function probeResultsOf(
+  statuses: ClaimProbeStatus[],
+): Record<string, ClaimProbeStatus> {
+  const out: Record<string, ClaimProbeStatus> = {};
+  for (const s of statuses) out[s.respId] = s;
+  return out;
+}
+
+/** The claim row's probe mark. `hollow` is the finding: a break survived, so a
+ *  test the verdict calls green does not actually hold its claim — and it
+ *  outranks everything because it contradicts the check sitting next to it.
+ *  `probed` is a POSITIVE but modest state: every break tried was caught, which
+ *  is a sample and not a proof. A stale result reads as `none` — it describes
+ *  code that has since changed, and showing it would vouch for work nobody
+ *  measured. */
+export function probeMark(
+  probe: ClaimProbeStatus | undefined,
+): "none" | "probed" | "hollow" {
+  if (!probe || probe.stale || probe.probes === 0) return "none";
+  return probe.survived > 0 ? "hollow" : "probed";
+}
+
+/** The probe half of the lane tooltip. Says "sampled, not proved" outright:
+ *  the mark's whole risk is being read as a stronger guarantee than one to
+ *  three breaks can support. */
+export function probeTitle(probe: ClaimProbeStatus | undefined): string {
+  const mark = probeMark(probe);
+  if (mark === "none" || !probe) return "";
+  if (mark === "hollow") {
+    const lines = probe.survivors.map((s) => `  • ${s}`).join("\n");
+    return `\nPROBE: ${probe.survived} of ${probe.probes} deliberate break(s) went UNCAUGHT — this test does not hold the claim:\n${lines}`;
+  }
+  return `\nPROBE: all ${probe.probes} deliberate break(s) were caught. A sample, not a proof.`;
+}
+
 /** respId → verdict, for row lookups. */
 export function testVerdictsOf(
   statuses: ClaimTestStatus[],
