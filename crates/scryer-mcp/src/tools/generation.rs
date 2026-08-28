@@ -147,8 +147,6 @@ fn blank_node(id: String, kind: Kind, name: String, parent_id: String) -> Node {
         responsibilities: Vec::new(),
         properties: Vec::new(),
         icon: None,
-        visual: None,
-        appearance: None,
         notes: None,
         position: None,
         directives: Vec::new(),
@@ -374,7 +372,6 @@ impl ScryerServer {
                     symbol.name.trim().to_string(),
                     component_id.clone(),
                 );
-                node.visual = symbol.visual;
                 node.properties = symbol
                     .properties
                     .iter()
@@ -667,7 +664,6 @@ mod tests {
                             "authenticates credentials".into(),
                         )],
                         properties: Vec::new(),
-                        visual: None,
                     }],
                 },
                 ProposedComponent {
@@ -686,7 +682,6 @@ mod tests {
                             label: "user_id".into(),
                             description: "identifies the account".into(),
                         }],
-                        visual: None,
                     }],
                 },
             ],

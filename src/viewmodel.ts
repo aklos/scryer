@@ -2,7 +2,7 @@
  * On-disk schema (v0.3) + derived view types.
  *
  * `ScryModel`, `Node`, `Link`, `Group`, `Responsibility`, `Source`,
- * `SchemaProperty`, `Kind`, `RenderState` mirror the Rust types in
+ * `SchemaProperty`, `Kind` mirror the Rust types in
  * `crates/scryer-core/src/lib.rs` exactly — what gets read from
  * `{project}/.scryer/model.scry` IS the in-memory model.
  */
@@ -94,19 +94,6 @@ export interface SourceLocation {
   command?: string;
 }
 
-// --- Appearance (the look of a UI component) ---------------------------------
-
-/** The render-artifact lifecycle of a visual component's look — its own axis,
- *  independent of the model→code plan diff. Mirrors the Rust `RenderState`. */
-export type RenderState = "proposed" | "implemented" | "changed";
-
-export interface Appearance {
-  status?: RenderState;
-  distPath?: string;
-  builtAt?: number;
-  sourceHash?: string;
-}
-
 // --- Nodes & links -----------------------------------------------------------
 
 export interface Node {
@@ -136,8 +123,6 @@ export interface Node {
   properties?: SchemaProperty[];
   /** Optional lucide-react icon name override (frontend-only). */
   icon?: string;
-  visual?: boolean;
-  appearance?: Appearance;
   /** User-authored freeform notes — self-context and traversal aids, distinct
    *  from `description` (what the node IS) and this node's `directives`.
    *  No spec/conformance role. Plain text. User-only: hidden from the agent's
@@ -253,9 +238,9 @@ export function isDataShape(node: {
 
 /**
  * A SYMBOL that carries no semantic content of its own: no responsibilities,
- * no properties, no rendered appearance, and not external. `empty` means the
- * node justifies nothing yet and must either gain a business responsibility
- * (or data shape / appearance) or be removed. Derived, never stored.
+ * no properties, and not external. `empty` means the node justifies nothing
+ * yet and must either gain a business responsibility (or data shape) or be
+ * removed. Derived, never stored.
  *
  * Scoped to symbols — components/containers/systems are structural and carry
  * their meaning through their children, so an own-responsibility-less parent is
@@ -265,8 +250,7 @@ export function isNodeEmpty(node: Node): boolean {
   if (node.kind !== "symbol" || node.external) return false;
   const hasContent =
     (node.responsibilities?.length ?? 0) > 0 ||
-    (node.properties?.length ?? 0) > 0 ||
-    !!node.appearance?.status;
+    (node.properties?.length ?? 0) > 0;
   return !hasContent;
 }
 

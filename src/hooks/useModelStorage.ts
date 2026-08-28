@@ -122,7 +122,6 @@ function nodeFieldDiffs(prev: ScryModel, a: Node, b: Node): FieldDiff[] {
     ["parent", parentName(prev, a.parentId), parentName(prev, b.parentId) ?? b.parentId],
     ["technology", a.technology, b.technology],
     ["description", a.description, b.description],
-    ["visual", !!a.visual, !!b.visual],
     ["properties", propsSummary(a), propsSummary(b)],
   ]);
 }
@@ -322,7 +321,6 @@ function nodeFingerprint(n: Node): string {
     n.parentId ?? null,
     n.technology ?? null,
     n.description ?? null,
-    !!n.visual,
     n.properties ?? [],
   ]);
 }

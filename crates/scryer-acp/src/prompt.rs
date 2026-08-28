@@ -128,7 +128,7 @@ CLUSTER components from cohesion + the dependency graph below: a component group
 
 ### Mandatory symbols
 
-Every component must contain at least one architecturally meaningful symbol. For each nested symbol, pass a scope-unique `key`, `name`, `sourceFile`, and `line`/`endLine` for the full definition straight from the context. A responsibility is a plain string (use the plain form by default; only attach `{{"statement", "line", "endLine"}}` when a precise sub-range genuinely adds value). Give `responsibilities` for behavior and `properties` for declared data fields; set `visual: true` on UI-rendering symbols. **Every symbol you emit MUST carry semantic content of its own: at least one business/process responsibility, or — for a data type — its declared `properties`. There is no empty symbol.** A definition with no business responsibility and no declared data shape — a trivial UI leaf (a `Chevron`, a `Logo`), a thin wrapper, a re-export, a private helper — does NOT earn a node: OMIT it and let its parent symbol's responsibility cover it. **An entry point folds UP, not away:** a top-level `main` (or any binary entry that only wires up and dispatches the program's work — parses args, selects a subcommand, starts the server) carries the BINARY's accountability at the COMPONENT's altitude, not a symbol's, EVEN WHEN it clearly does something. Put that one responsibility on the enclosing COMPONENT and emit NO `main` symbol; mint symbols beneath it only for helpers that hold their own distinct responsibility. When a definition has nothing of its own to say, the answer is to leave it out — NEVER to fabricate filler, and NEVER to emit it with empty responsibilities and properties. A definition earns a symbol when it carries architectural behavior, a declared data shape, or a cross-boundary role. Skip trivial wrappers, thin re-exports, getters/setters, and test stubs:
+Every component must contain at least one architecturally meaningful symbol. For each nested symbol, pass a scope-unique `key`, `name`, `sourceFile`, and `line`/`endLine` for the full definition straight from the context. A responsibility is a plain string (use the plain form by default; only attach `{{"statement", "line", "endLine"}}` when a precise sub-range genuinely adds value). Give `responsibilities` for behavior and `properties` for declared data fields. **Every symbol you emit MUST carry semantic content of its own: at least one business/process responsibility, or — for a data type — its declared `properties`. There is no empty symbol.** A definition with no business responsibility and no declared data shape — a trivial UI leaf (a `Chevron`, a `Logo`), a thin wrapper, a re-export, a private helper — does NOT earn a node: OMIT it and let its parent symbol's responsibility cover it. **An entry point folds UP, not away:** a top-level `main` (or any binary entry that only wires up and dispatches the program's work — parses args, selects a subcommand, starts the server) carries the BINARY's accountability at the COMPONENT's altitude, not a symbol's, EVEN WHEN it clearly does something. Put that one responsibility on the enclosing COMPONENT and emit NO `main` symbol; mint symbols beneath it only for helpers that hold their own distinct responsibility. When a definition has nothing of its own to say, the answer is to leave it out — NEVER to fabricate filler, and NEVER to emit it with empty responsibilities and properties. A definition earns a symbol when it carries architectural behavior, a declared data shape, or a cross-boundary role. Skip trivial wrappers, thin re-exports, getters/setters, and test stubs:
   - **Framework registration objects** (a CMS collection config, an ORM model, a settings/route object): descend INTO its `fields[]` array (the schema columns) and emit one property per entry there. Its `properties` are those DECLARED FIELDS — the record's columns — NEVER the sibling config wrapper keys (`slug`, `admin`, `hooks`, `access`, …), which are framework plumbing, not the record's data shape.
   - **Generated / mirror type files** (a `*-types` file, a `*.d.ts`, or any file that just re-declares a definition that already lives in real source): do NOT create a parallel symbol for it. Fold its fields into the source-of-truth symbol so each thing is modeled exactly once — never two sibling symbols for the same record.
   - **Classes/objects with internal helpers**: model the class as ONE symbol carrying its public operations as responsibilities; do NOT add private/internal helper methods (e.g. `_rpc`, `_get_uid`, `_execute`) as their own symbols. Only addressable, public definitions become symbols.
@@ -250,7 +250,7 @@ Call `flag_drift` for "{node_id}" with everything you found. If the code and the
     )
 }
 
-/// Prompt for rendering a visual component preview. The agent reads the
+/// Prompt for rendering a component preview. The agent reads the
 /// component source and writes `main.tsx` for the Vite render harness in
 /// `.scryer/preview/{nodeId}/` — the caller builds it afterward. The harness must
 /// wrap the component with whatever providers/context the codebase requires and
@@ -277,7 +277,7 @@ pub fn preview_fixture_prompt(
     };
 
     format!(
-        r#"The live preview of the visual component "{node_name}" (id {node_id}) in the project at {project_path} is rendered by a dev server that synthesizes placeholder props from the component's TypeScript types. With those placeholders the render came out **{render_status}** — the preview needs realistic data instead.
+        r#"The live preview of the component "{node_name}" (id {node_id}) in the project at {project_path} is rendered by a dev server that synthesizes placeholder props from the component's TypeScript types. With those placeholders the render came out **{render_status}** — the preview needs realistic data instead.
 {error_section}
 Generic synthesis can't invent interconnected domain data: a prop that is a graph (or any object) plus another prop that points INTO it (an id, a selection) can't be made consistent from types alone. You supply that domain knowledge ONCE, keyed by type, so every component that touches the type reuses it.
 
@@ -327,81 +327,6 @@ Write `.scryer/preview/fixtures/{node_id}.tsx` (DEFAULT EXPORT = a partial props
     )
 }
 
-/// Prompt for generating visual variations of a component (B6). The agent
-/// writes N self-contained variant modules; the always-running preview server
-/// serves each as a virtual entry instantly — there is no build step. Each
-/// variant imports the original component (or reimplements parts inline) and
-/// applies changes through wrappers, CSS overrides, or modified props — the
-/// project source is never modified.
-pub fn visual_variation_prompt(
-    project_path: &str,
-    node_id: &str,
-    node_name: &str,
-    source_file: &str,
-    source_lines: &str,
-    user_prompt: &str,
-    base_variant: &str,
-    variation_count: usize,
-) -> String {
-    let base_section = if base_variant.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "\n## Starting point (previously chosen variant — iterate on this)\n\n```tsx\n{base_variant}\n```\n"
-        )
-    };
-
-    let last_idx = variation_count - 1;
-
-    format!(
-        r#"You are generating {variation_count} visual variations of the component "{node_name}" (id {node_id}) in the project at {project_path}.
-
-## The component
-
-Source file: `{source_file}`
-
-```
-{source_lines}
-```
-{base_section}
-## The user's request
-
-{user_prompt}
-
-## Your task
-
-Create {variation_count} DISTINCT visual interpretations of the user's request. Each variation must be a genuinely different approach, not minor tweaks of the same idea.
-
-For EACH variation index 0 through {last_idx}, write ONE file `.scryer/preview/variations/{node_id}/{{n}}.tsx` that:
-
-- `export default` a self-contained React component taking NO props — it renders the varied version of "{node_name}" with realistic inline fixture data (lists get 3–5 plausible items, labels look real).
-- Imports everything from the project by ROOT-ABSOLUTE path (e.g. `import {{ {node_name} }} from "/{source_file}"`, `import {{ helper }} from "/src/lib/helper"`). NEVER use relative imports — the variant module lives outside `src/`.
-- Applies the requested change through one or more of:
-  - **CSS overrides** — a `<style>` element or inline styles on a wrapper
-  - **Wrapper components** — wrap the original to modify layout, spacing, or behavior
-  - **Modified props** — change props that affect appearance
-  - **Inline reimplementation** — for structural changes, reimplement the relevant parts inline while importing shared dependencies from the project
-- Does NOT import the project's global CSS — the preview server injects it automatically.
-- Does NOT call `createRoot` or render itself — just export the component.
-
-An always-running dev server picks each file up instantly; there is no build step and nothing else to write.
-
-### Variation guidelines
-
-- Each variation should be a genuinely different visual approach
-- Example — "make the header sticky": one uses CSS `position: sticky` with shadow, another `position: fixed` with backdrop-blur, a third adds a condensed mode on scroll
-- Example — "reduce padding": one goes minimal, another balanced with more whitespace on specific sides, a third uses asymmetric padding with tighter vertical
-- Make each variation complete and functional, not half-finished sketches
-- Preserve the component's functionality — only modify visual aspects
-
-### Rules
-
-- Do NOT modify any project source files
-- The ONLY files you write are the {variation_count} variant modules `.scryer/preview/variations/{node_id}/{{0..{last_idx}}}.tsx`
-"#
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,8 +359,6 @@ mod tests {
                 .unwrap_or_default(),
             properties: Vec::new(),
             icon: None,
-            visual: None,
-            appearance: None,
             notes: None,
             position: None,
             directives: Vec::new(),

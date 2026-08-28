@@ -135,8 +135,11 @@ export function DiagramView({
   onMoveNode,
   pendingIds,
   concernLens,
+  previewable,
 }: {
   model: ScryModel;
+  /** Symbol ids the preview sidecar can render — derived, drives the `visual` class. */
+  previewable: ReadonlySet<string>;
   /** Live plan diff — colors each node/dot by its change mark. */
   planDiff: ModelDiff;
   /** Committed layer — parents/endpoints for deleted elements in roll-ups. */
@@ -174,6 +177,7 @@ export function DiagramView({
         onMoveNode={onMoveNode}
         pendingIds={pendingIds}
         concernLens={concernLens}
+        previewable={previewable}
       />
     </ReactFlowProvider>
   );
@@ -191,8 +195,11 @@ function DiagramInner({
   onMoveNode,
   pendingIds,
   concernLens,
+  previewable,
 }: {
   model: ScryModel;
+  /** Symbol ids the preview sidecar can render — derived, drives the `visual` class. */
+  previewable: ReadonlySet<string>;
   planDiff: ModelDiff;
   committed: ScryModel | null;
   report: ModelHealthReport | null;
@@ -226,7 +233,7 @@ function DiagramInner({
   // is async; guard against a stale build landing after a newer one.
   useEffect(() => {
     let live = true;
-    void buildDiagramScene(model, focusId, report).then((s) => {
+    void buildDiagramScene(model, focusId, report, previewable).then((s) => {
       if (live) {
         setScene(s);
         if (refitOnScene.current) {
@@ -238,7 +245,7 @@ function DiagramInner({
     return () => {
       live = false;
     };
-  }, [model, focusId, report, fitView]);
+  }, [model, focusId, report, previewable, fitView]);
 
   // The canonical controlled-flow contract: every change RF emits is applied
   // back onto the node state. Position changes move the dragged card,

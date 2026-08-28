@@ -16,7 +16,6 @@ export interface Editor {
       description?: string;
       technology?: string;
       icon?: string;
-      visual?: boolean;
       responsibilities?: Responsibility[];
       properties?: SchemaProperty[];
       /** User-authored freeform notes (gutter). `""`/undefined clears it. */

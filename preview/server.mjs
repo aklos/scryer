@@ -87,7 +87,7 @@ async function startViteFor({ projectRoot, packageRoot, port, useWrapper }) {
       strictPort: false,
       host: "127.0.0.1",
       open: false,
-      // Fixtures/wrapper/variations live at {project}/.scryer/preview — when
+      // Fixtures and the wrapper live at {project}/.scryer/preview — when
       // the vite root is a sub-package they're served via /@fs/, which needs
       // the project root allowed.
       ...(packageRoot !== projectRoot

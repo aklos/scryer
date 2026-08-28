@@ -636,7 +636,7 @@ pub fn commit_element(
 
 /// The committed copy of a plan-only ANCESTOR folded as scaffolding by
 /// `commit_plan_only_ancestors`: the node's identity and structure — kind,
-/// parent, name, description, technology, external, directives, appearance —
+/// parent, name, description, technology, external, directives —
 /// WITHOUT its responsibilities or properties. Those stay in the plan as
 /// pending build work on a now-committed node (the ordinary incremental-add
 /// diff shape), so the committed layer keeps reflecting only what the code
@@ -1222,8 +1222,6 @@ mod tests {
             responsibilities: Vec::new(),
             properties: Vec::new(),
             icon: None,
-            visual: None,
-            appearance: None,
             notes: None,
             position: None,
             directives: Vec::new(),

@@ -130,16 +130,6 @@ function diffNodes(from: ScryModel, to: ScryModel, out: ModelDiff) {
     // Normalize undefined and false — both "not external" — so only a genuine
     // flip registers, never a serialization difference.
     reword(changes, "external", prev.external === true ? "true" : "false", n.external === true ? "true" : "false");
-    // A visual change is a planned change like any other: we don't diff the
-    // fixture contents (the accepted fixture is the basis), so any appearance
-    // delta surfaces as one reworded "appearance" claim pointing at the fixture.
-    if (JSON.stringify(prev.appearance ?? null) !== JSON.stringify(n.appearance ?? null))
-      changes.push({
-        type: "reworded",
-        field: "appearance",
-        from: prev.appearance?.distPath ?? "",
-        to: n.appearance?.distPath ?? "",
-      });
     if (changes.length) out.changes.push({ kind: "node", id, label: n.name, changes });
   }
   for (const [id, n] of fromBy)

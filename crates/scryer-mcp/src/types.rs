@@ -75,8 +75,8 @@ pub(crate) struct SearchModelRequest {
 pub(crate) struct QueryCondition {
     /// Queryable node field. One of:
     /// `kind`, `name`, `description`, `technology` (strings);
-    /// `external`, `visual`, `empty`, `vagrant` (booleans —
-    /// `empty` = a symbol with no responsibility/property/appearance, `vagrant` = carries a
+    /// `external`, `empty`, `vagrant` (booleans —
+    /// `empty` = a symbol with no responsibility/property, `vagrant` = carries a
     /// discovered-in-code responsibility awaiting review);
     /// `responsibilityCount`, `propertyCount`, `childCount` (numbers).
     pub field: String,
@@ -212,7 +212,7 @@ pub(crate) struct MarkImplementedRequest {
     pub node_id: Option<String>,
     /// Optional: specific responsibility ids to fold into the committed model (requires
     /// node_id). Omit (along with property_labels) to fold EVERYTHING outstanding on the
-    /// node — every planned responsibility and property, plus the appearance.
+    /// node — every planned responsibility and property.
     pub responsibility_ids: Option<Vec<String>>,
     /// Optional: specific property labels to fold (requires node_id) — the partial-fold
     /// counterpart of responsibility_ids for data fields, which are identified by label.
@@ -345,9 +345,6 @@ pub(crate) struct UpdateNodeItem {
     pub responsibilities: Option<Vec<Responsibility>>,
     /// Full replacement of field declarations for a data-shape symbol. Pass an empty array to clear.
     pub properties: Option<Vec<SchemaProperty>>,
-    /// true for a visual/UI component (React component, UI element). Enables
-    /// the preview rendering workflow on the node's page.
-    pub visual: Option<bool>,
     /// New parent node ID. Changes the node's parent (reparent operation).
     pub parent_id: Option<String>,
 }
@@ -774,10 +771,6 @@ pub(crate) struct SymbolItem {
     /// Field declarations when this symbol declares a data shape (struct/class/interface/type/config object). One per field.
     #[serde(default)]
     pub properties: Vec<PropertyInput>,
-    /// true for a visual/UI component (React component, UI element). Enables
-    /// the preview rendering workflow on the node's page.
-    #[serde(default)]
-    pub visual: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -822,8 +815,6 @@ pub(crate) struct ProposedSymbol {
     pub responsibilities: Vec<ResponsibilityInput>,
     #[serde(default)]
     pub properties: Vec<PropertyInput>,
-    #[serde(default)]
-    pub visual: Option<bool>,
 }
 
 /// An OPTIONAL cross-boundary relationship in a container proposal — used only

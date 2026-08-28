@@ -27,7 +27,7 @@ const ENTRY_PREFIX = "/@scryer-preview/entry.js";
  * `file`/`fixture` params and reported component paths stay PROJECT-relative
  * either way; only import URLs care about the package root: files inside it
  * import root-relative, files outside (the project-level .scryer/preview
- * fixtures, wrapper, variations) import via /@fs/.
+ * fixtures and wrapper) import via /@fs/.
  */
 export function scryerPreviewPlugin({ projectRoot, packageRoot = projectRoot, useWrapper = true }) {
   let analysis = null;
@@ -244,18 +244,16 @@ function detectGlobalCss(projectRoot) {
 // checkerboard backdrop, so the two stay decoupled.
 function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
   const fgFallback = componentDark ? "#f5f5f5" : "#111111";
-  // The component mounts into #root (entry contract unchanged); #root is nested
-  // in a transform layer (#stage) inside a clipped viewport (#canvas). The
+  // The component mounts into #root (entry contract unchanged); #root sits on
+  // the transformed stage (<body>) inside the clipped viewport (<html>). The
   // viewport paints a low-contrast transparency checkerboard so the component
   // reads as clearly separate from it. A small harness centers the component at
   // 100%; when it is larger than the pane you can zoom (cursor-anchored,
   // between fit and 100%) and pan (clamped so content keeps covering the pane —
   // no free-floating). Viewport-pinned components (position:fixed widgets) get
-  // viewport mode: #stage becomes a virtual 1280×800 screen dressed as a faux
+  // viewport mode: the stage becomes a virtual 1280×800 screen dressed as a faux
   // host page (browser bar + greeked content) that the component anchors to,
   // starting focused on the component itself with the page a zoom-out away.
-  // Variation thumbnails set pointer-events:none on the iframe element, so they
-  // get the static initial view only.
   // Two near-equal greys per theme — subtle texture, not a loud checker.
   const checkA = canvasDark ? "#202020" : "#dcdcdc";
   const checkB = canvasDark ? "#181818" : "#f1f1f1";
@@ -264,28 +262,35 @@ function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
   <head>
     <meta charset="utf-8" />
     <style>
-      html, body { margin: 0; height: 100%; }
-      html { color-scheme: ${componentDark ? "dark" : "light"}; }
-      body { color: var(--text, ${fgFallback}); overflow: hidden; }
-      #canvas {
-        position: fixed; inset: 0; overflow: hidden;
+      /* <html> is the clipped, checkerboard VIEWPORT and <body> the transformed
+         STAGE — not a nested div, so that a component which portals into
+         document.body (modals, toasts, dropdown menus) still lands INSIDE the
+         stage and the same fit / zoom / pan applies to it. */
+      html {
+        position: fixed; inset: 0; margin: 0; overflow: hidden;
+        color-scheme: ${componentDark ? "dark" : "light"};
         background-color: ${checkB};
         background-image: repeating-conic-gradient(${checkA} 0% 25%, ${checkB} 0% 50%);
         background-size: 16px 16px;
         cursor: default;
       }
-      #canvas.pannable { cursor: grab; }
-      #canvas.grabbing { cursor: grabbing; }
-      #stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; will-change: transform; }
+      html.pannable { cursor: grab; }
+      html.grabbing { cursor: grabbing; }
+      html.grabbing, html.grabbing * { user-select: none; -webkit-user-select: none; }
+      body {
+        position: absolute; top: 0; left: 0; margin: 0;
+        transform-origin: 0 0; will-change: transform;
+        color: var(--text, ${fgFallback});
+      }
       /* Viewport mode: the stage becomes a virtual screen the pinned component
          anchors to — dressed as a faux host page (browser bar + greeked
          content) so the backdrop reads as context, never as the component. */
-      #stage.viewport {
+      body.viewport {
         background: ${componentDark ? "#101216" : "#ffffff"};
         outline: 1px solid ${canvasDark ? "rgba(255,255,255,0.14)" : "rgba(17,17,17,0.18)"};
       }
       #page { position: absolute; inset: 0; display: none; pointer-events: none; }
-      #stage.viewport #page { display: flex; flex-direction: column; }
+      body.viewport #page { display: flex; flex-direction: column; }
       #page .bar {
         height: 44px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 16px;
         background: ${componentDark ? "#161a20" : "#f3f4f6"};
@@ -302,7 +307,7 @@ function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
     </style>
   </head>
   <body>
-    <div id="canvas"><div id="stage"><div id="page" aria-hidden="true">
+    <div id="page" aria-hidden="true">
       <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url"></span></div>
       <div class="body">
         <div class="blk" style="height:36px;width:42%"></div>
@@ -313,34 +318,65 @@ function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
         <div class="blk" style="height:14px;width:88%;margin-top:32px"></div>
         <div class="blk" style="height:14px;width:70%"></div>
       </div>
-    </div><div id="root"></div></div></div>
+    </div><div id="root"></div>
     <script type="module" src="${entrySrc}"></script>
     <script>
       (function () {
-        var canvas = document.getElementById("canvas");
-        var stage = document.getElementById("stage");
+        var canvas = document.documentElement;
+        var stage = document.body;
         var root = document.getElementById("root");
+        var page = document.getElementById("page");
+        // The elements the component put on stage: what it mounted into #root,
+        // plus anything it portalled straight onto the body.
+        function stagedKids() {
+          var out = [], i, k;
+          for (i = 0; i < root.children.length; i++) out.push(root.children[i]);
+          for (i = 0; i < stage.children.length; i++) {
+            k = stage.children[i];
+            if (k === root || k === page || k.tagName === "SCRIPT" || k.tagName === "STYLE") continue;
+            out.push(k);
+          }
+          return out;
+        }
         var FIT_PAD = 24;
         var scale = 1, tx = 0, ty = 0, touched = false;
 
         // Viewport mode — for components pinned to the viewport (position:
         // fixed widgets, overlays). Their #root measures 0×0, and the
-        // transformed #stage is their containing block, so they'd anchor to a
+        // transformed stage is their containing block, so they'd anchor to a
         // zero-sized box. Instead the containing-block quirk becomes the
-        // feature: #stage gets an explicit virtual screen, the component pins
+        // feature: the stage gets an explicit virtual screen, the component pins
         // to ITS corners, and the usual fit/zoom/pan math runs against that
         // rectangle — scaled to fit initially.
         var VW = 1280, VH = 800;
         var viewportMode = false;
 
+        // The content's painted extent in stage space (origin may be negative:
+        // a fixed-inset modal taller than the virtual screen spills above it).
+        // In viewport mode that is the virtual screen unioned with everything
+        // painted; otherwise #root's box. Re-measured on every reset, cached
+        // between — pan/zoom math runs per frame and must not walk the DOM.
+        var extent = { x: 0, y: 0, w: 0, h: 0 };
+        function measureExtent() {
+          if (!viewportMode) {
+            extent = { x: 0, y: 0, w: root.scrollWidth, h: root.scrollHeight };
+            return;
+          }
+          var bb = paintedBBox();
+          var x0 = 0, y0 = 0, x1 = VW, y1 = VH;
+          if (bb) {
+            x0 = Math.min(x0, bb.x); y0 = Math.min(y0, bb.y);
+            x1 = Math.max(x1, bb.x + bb.w); y1 = Math.max(y1, bb.y + bb.h);
+          }
+          extent = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+        }
         function dims() {
-          if (viewportMode) return { cw: canvas.clientWidth, ch: canvas.clientHeight, rw: VW, rh: VH };
-          return { cw: canvas.clientWidth, ch: canvas.clientHeight, rw: root.scrollWidth, rh: root.scrollHeight };
+          return { cw: canvas.clientWidth, ch: canvas.clientHeight, rw: extent.w, rh: extent.h };
         }
 
         function detectViewportMode() {
           if (viewportMode) return;
-          var kids = root.children, pinned = false, i;
+          var kids = stagedKids(), pinned = false, i;
           for (i = 0; i < kids.length && !pinned; i++) {
             if (getComputedStyle(kids[i]).position === "fixed") pinned = true;
           }
@@ -358,12 +394,20 @@ function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
           stage.style.height = VH + "px";
           if (!touched) reset();
         }
+        // Until viewport mode is known, each mutation re-runs detection; after
+        // that, mutations re-measure the painted extent (a modal that grows
+        // after mount) — #root stays 0×0 there, so the ResizeObserver is blind.
         var detectQueued = false;
         new MutationObserver(function () {
-          if (detectQueued || viewportMode) return;
+          if (detectQueued) return;
           detectQueued = true;
-          requestAnimationFrame(function () { detectQueued = false; detectViewportMode(); });
-        }).observe(root, { childList: true, subtree: true });
+          requestAnimationFrame(function () {
+            detectQueued = false;
+            if (!viewportMode) detectViewportMode();
+            else if (!touched) reset();
+            else { measureExtent(); clampPan(); apply(); }
+          });
+        }).observe(stage, { childList: true, subtree: true });
         // The component is larger than the pane at its natural size — the sole
         // case where zooming out (and panning) is meaningful.
         function overflowsNatural() {
@@ -383,32 +427,36 @@ function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
         }
         function center() {
           var d = dims();
-          tx = (d.cw - d.rw * scale) / 2;
-          ty = (d.ch - d.rh * scale) / 2;
+          tx = (d.cw - d.rw * scale) / 2 - extent.x * scale;
+          ty = (d.ch - d.rh * scale) / 2 - extent.y * scale;
         }
         function apply() {
           stage.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + scale + ")";
           canvas.classList.toggle("pannable", overflows());
         }
 
-        // Anti-float: panning may never open a gap between content and pane —
-        // a larger-than-pane axis clamps so content keeps covering the pane, a
-        // smaller one stays centred. At exact fit the range is zero, so the
-        // fitted view feels anchored rather than switched off.
+        // Keep the content reachable, never lost: on an axis where the painted
+        // extent is larger than the pane it may not pull an edge inside the
+        // pane (no void beside it); where it is smaller it may move freely but
+        // may not leave the pane. Measured on the EXTENT, so a modal that
+        // spills past the virtual screen can still be panned up to its top.
+        function clampAxis(pos, size, pane) {
+          return size >= pane ? Math.min(0, Math.max(pane - size, pos)) : Math.min(pane - size, Math.max(0, pos));
+        }
         function clampPan() {
           var d = dims(), w = d.rw * scale, h = d.rh * scale;
-          tx = w >= d.cw ? Math.min(0, Math.max(d.cw - w, tx)) : (d.cw - w) / 2;
-          ty = h >= d.ch ? Math.min(0, Math.max(d.ch - h, ty)) : (d.ch - h) / 2;
+          // Pane-space position of the extent's top-left corner.
+          var lx = tx + extent.x * scale, ly = ty + extent.y * scale;
+          tx = clampAxis(lx, w, d.cw) - extent.x * scale;
+          ty = clampAxis(ly, h, d.ch) - extent.y * scale;
         }
 
-        // Stage-space union of the rendered content — in viewport mode that is
-        // the pinned widget itself (fixed children don't grow #root, so the
-        // children are measured individually).
-        function contentBBox() {
+        // Stage-space union of a set of boxes (client rects → stage coords).
+        function unionBBox(els) {
           var sr = stage.getBoundingClientRect();
-          var kids = root.children, x0 = 1 / 0, y0 = 1 / 0, x1 = -1 / 0, y1 = -1 / 0, found = false;
-          for (var i = 0; i < kids.length; i++) {
-            var b = kids[i].getBoundingClientRect();
+          var x0 = 1 / 0, y0 = 1 / 0, x1 = -1 / 0, y1 = -1 / 0, found = false;
+          for (var i = 0; i < els.length; i++) {
+            var b = els[i].getBoundingClientRect();
             if (b.width < 2 || b.height < 2) continue;
             found = true;
             x0 = Math.min(x0, (b.left - sr.left) / scale);
@@ -418,6 +466,21 @@ function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
           }
           return found ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
         }
+        // The staged elements themselves — in viewport mode the pinned widget
+        // (fixed children don't grow #root, so they're measured individually).
+        function contentBBox() { return unionBBox(stagedKids()); }
+        // Everything painted: the staged elements AND their descendants. A
+        // fixed/inset-0 container reports the screen box while its
+        // centred child spills past both ends — only the descendants show that.
+        var PAINT_CAP = 4000;
+        function paintedBBox() {
+          var kids = stagedKids(), els = kids.slice();
+          for (var i = 0; i < kids.length && els.length < PAINT_CAP; i++) {
+            var all = kids[i].querySelectorAll("*");
+            for (var j = 0; j < all.length && els.length < PAINT_CAP; j++) els.push(all[j]);
+          }
+          return unionBBox(els);
+        }
 
         // Initial / on content resize (until the user takes over). Normal
         // components: 100%, centred — larger-than-pane ones start
@@ -425,6 +488,7 @@ function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
         // focus the widget itself — whole widget visible, as close to 100% as
         // that allows — with the host page around it one zoom-out away.
         function reset() {
+          measureExtent();
           if (viewportMode) {
             var d = dims(), bb = contentBBox();
             if (bb && bb.w > 4 && bb.h > 4) {
@@ -440,6 +504,7 @@ function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
             scale = 1;
             center();
           }
+          clampPan();
           apply();
         }
         var ro = new ResizeObserver(function () { if (!touched) reset(); });
@@ -468,7 +533,8 @@ function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
         // Drag: pan — only while the scaled content overflows the pane.
         var dragging = false, sx = 0, sy = 0;
         canvas.addEventListener("mousedown", function (e) {
-          if (!overflows()) return;
+          if (e.button !== 0 || !overflows()) return;
+          e.preventDefault(); // no text selection / native drag while panning
           dragging = true; touched = true; sx = e.clientX - tx; sy = e.clientY - ty;
           canvas.classList.add("grabbing");
         });
