@@ -103,6 +103,22 @@ pub fn write_model_at(r: &ModelRef, model: &ScryModel) -> Result<(), String> {
     // caller — a plan-derived model (fold, set_model) rides through this path.
     stamped.changes.clear();
     stamped.change_map.clear();
+    // Structural-invariant gate. This is the single committed-layer writer every
+    // commit / fold / set_model rides through, so refusing here is what keeps a
+    // silently-misbindable duplicate — most notably the same responsibility id
+    // on two hosts, left behind when a move added the claim to its new host but
+    // never removed the old copy — out of `model.scry`. Such a duplicate is
+    // invisible to the plan diff (its id-keyed index keeps only one copy), so
+    // once written the stale copy sits wrong indefinitely with nothing able to
+    // surface it. Fail loud at the seam instead, naming every violation.
+    let violations = crate::validate::structural_violations(&stamped);
+    if !violations.is_empty() {
+        return Err(format!(
+            "refusing to write committed model — structural invariant violation(s) that the \
+             plan diff cannot see and would leave wrong indefinitely:\n  - {}",
+            violations.join("\n  - ")
+        ));
+    }
     let json = serde_json::to_string_pretty(&stamped).map_err(|e| e.to_string())?;
     write_model_raw_at(r, &json)
 }
@@ -609,6 +625,35 @@ mod tests {
         assert!(!r.sync_path().exists(), "reconcile anchor removed");
         assert!(r.lock_path().exists(), "infra lock file is kept");
         drop(guard);
+    }
+
+    /// The committed-write seam refuses a model carrying a silently-misbindable
+    /// duplicate — here the same responsibility id on two hosts, the exact state
+    /// a botched move leaves behind (added to the new host, never removed from
+    /// the old). Persisting it would hide the stale copy from the plan diff
+    /// indefinitely, so the write must fail, name the violation, and touch
+    /// nothing on disk.
+    #[test]
+    fn write_model_rejects_a_cross_host_duplicate_responsibility() {
+        let (_dir, r) = temp_ref();
+        let mut m = one_resp_model("do the thing"); // node n1 carries resp r1
+        let mut n2 = one_resp_model("do the thing").nodes.remove(0);
+        n2.id = "n2".into(); // second host reusing responsibility id r1
+        m.nodes.push(n2);
+
+        let err = write_model_at(&r, &m).expect_err("duplicate resp id must be refused");
+        assert!(err.contains("globally unique"), "names the invariant: {err}");
+        assert!(err.contains("r1"), "names the colliding id: {err}");
+        assert!(!r.model_path().exists(), "nothing was persisted");
+    }
+
+    /// A structurally sound model still writes cleanly — the gate is invisible to
+    /// ordinary writes.
+    #[test]
+    fn write_model_accepts_a_clean_model() {
+        let (_dir, r) = temp_ref();
+        write_model_at(&r, &one_resp_model("do the thing")).expect("valid model writes");
+        assert!(r.model_path().exists());
     }
 
     /// A tag-only change never folds (`diff` ignores `concern`), so writing the
