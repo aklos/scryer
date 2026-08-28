@@ -3513,6 +3513,11 @@
           "id": "resp-202",
           "statement": "**Serve** the preview entry module and component list to the in-app preview iframe over a Vite dev server",
           "lastTouchedAt": 1784883905
+        },
+        {
+          "id": "resp-758",
+          "statement": "**When** an entry is requested, **generate** it for the framework the component list tagged the file with — React or Vue — sharing the render-verdict and fixture contract",
+          "lastTouchedAt": 1787905188
         }
       ]
     },
@@ -7852,8 +7857,8 @@
       "responsibilities": [
         {
           "id": "resp-484",
-          "statement": "Selects the bundled tree-sitter grammar per file extension and reports import-resolution coverage tier",
-          "lastTouchedAt": 1784884035
+          "statement": "Selects the bundled tree-sitter grammar per file extension — unwrapping Vue single-file components to their script — and reports import-resolution coverage tier",
+          "lastTouchedAt": 1787905188
         },
         {
           "id": "resp-485",
@@ -9332,6 +9337,11 @@
           "id": "resp-561",
           "statement": "Builds the prompt for authoring realistic shared or override fixture data when a deterministic component preview renders empty or crashes",
           "lastTouchedAt": 1784884036
+        },
+        {
+          "id": "resp-759",
+          "statement": "**When** the component is a Vue single-file component, **ask** for the fixture as a plain `.ts` props module rather than a React `.tsx` one",
+          "lastTouchedAt": 1787905188
         }
       ]
     },
@@ -12142,12 +12152,12 @@
       "name": "Preview Sidecar",
       "parentId": "node-1",
       "technology": "Node.js + Vite",
-      "description": "A standalone Node process the desktop app spawns per project, serving each discovered React component as an isolated live preview.",
+      "description": "A standalone Node process the desktop app spawns per project, serving each discovered web component (React, Vue) as an isolated live preview.",
       "responsibilities": [
         {
           "id": "resp-703",
-          "statement": "**Serve** an opened project's React components as standalone, live-reloading previews",
-          "lastTouchedAt": 1786089278
+          "statement": "**Serve** an opened project's web components — React exports and Vue single-file components — as standalone, live-reloading previews",
+          "lastTouchedAt": 1787905188
         },
         {
           "id": "resp-704",
@@ -12161,17 +12171,17 @@
       "kind": "component",
       "name": "Props Synthesis",
       "parentId": "node-664",
-      "description": "Discovers a project's exported React components through its own TypeScript install and synthesizes placeholder props from their prop types, drawing on shared fixtures where a type has one.",
+      "description": "Discovers a project's previewable components — React exports via its own TypeScript install, Vue SFCs by file — and synthesizes placeholder props from React prop types.",
       "responsibilities": [
         {
           "id": "resp-199",
-          "statement": "**Discover** every previewable component export in a project via TypeScript analysis",
-          "lastTouchedAt": 1786089943
+          "statement": "**Discover** every previewable component — React exports via TypeScript analysis, Vue single-file components by file — tagged with the framework that mounts it",
+          "lastTouchedAt": 1787905188
         },
         {
           "id": "resp-200",
-          "statement": "**Synthesize** placeholder props for a component's props type so it can render standalone",
-          "lastTouchedAt": 1786089943
+          "statement": "**Synthesize** placeholder props for a React component's props type so it can render standalone",
+          "lastTouchedAt": 1787905188
         }
       ]
     },
@@ -12490,6 +12500,60 @@
           "id": "resp-745",
           "statement": "**When** the window is resized by any means, **re-read** the maximized state so the restore/maximize glyph mirrors the real window",
           "lastTouchedAt": 1787902840
+        }
+      ]
+    },
+    {
+      "id": "node-682",
+      "kind": "symbol",
+      "name": "parse_vue_sfc",
+      "parentId": "node-439",
+      "responsibilities": [
+        {
+          "id": "resp-752",
+          "statement": "**When** a `.vue` single-file component is parsed, **mint** one definition named after the file spanning the whole file — the component is the unit, its blocks are not",
+          "lastTouchedAt": 1787905180
+        },
+        {
+          "id": "resp-753",
+          "statement": "**When** the SFC carries a `<script>` block, **parse** it with the TypeScript grammar for identifier and import references so the dependency graph sees the component's imports",
+          "lastTouchedAt": 1787905180
+        }
+      ]
+    },
+    {
+      "id": "node-683",
+      "kind": "symbol",
+      "name": "discoverVueComponents",
+      "parentId": "node-665",
+      "responsibilities": [
+        {
+          "id": "resp-754",
+          "statement": "**When** the package depends on `vue`, **enumerate** every `.vue` file outside excluded paths as a previewable default-export component named after its file",
+          "lastTouchedAt": 1787905180
+        }
+      ]
+    },
+    {
+      "id": "node-684",
+      "kind": "symbol",
+      "name": "vueEntryModule",
+      "parentId": "node-187",
+      "responsibilities": [
+        {
+          "id": "resp-755",
+          "statement": "**When** the requested file is a `.vue` component, **mount** it with Vue's `createApp` and report the same render verdict as the React entry",
+          "lastTouchedAt": 1787905180
+        },
+        {
+          "id": "resp-756",
+          "statement": "**When** mounting a Vue component, **synthesize** placeholder props at runtime from the compiled component's props definition — sample text, numbers, empty collections, no-op functions — and fill its default slot",
+          "lastTouchedAt": 1787905180
+        },
+        {
+          "id": "resp-757",
+          "statement": "**When** a per-node fixture module exists, **spread** its default export over the synthesized props",
+          "lastTouchedAt": 1787905180
         }
       ]
     }

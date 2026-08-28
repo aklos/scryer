@@ -7,8 +7,8 @@ project's own toolchain and plugins (the project's `vite.config` is reused).
 
 | file | role |
 | --- | --- |
-| `props.mjs` | B2 — discovers exported React components in `.tsx` files via the TS compiler API and synthesizes placeholder props from their prop types (literals for scalars, first member of literal unions, no-op callbacks, empty collections, recursive object shapes; optionals omitted except `children`). |
-| `plugin.mjs` | B3 — Vite plugin serving `GET /__preview?file=src/Foo.tsx&export=Foo` as a virtual entry: import component, apply synthesized props, auto-import the app's global CSS, render into `#root`. Plus `/__components.json` — discovered components + synthesized props. |
+| `props.mjs` | B2 — discovers exported React components in `.tsx` files via the TS compiler API and synthesizes placeholder props from their prop types (literals for scalars, first member of literal unions, no-op callbacks, empty collections, recursive object shapes; optionals omitted except `children`). Also lists every `.vue` single-file component (when the package depends on `vue`) as a default export named after its file, tagged `framework: "vue"` — its props are synthesized at mount time from the compiled component's `props` definition instead. |
+| `plugin.mjs` | B3 — Vite plugin serving `GET /__preview?file=src/Foo.tsx&export=Foo` as a virtual entry: import component, apply synthesized props, auto-import the app's global CSS, render into `#root`. The entry is generated per framework — React (`createRoot`) or Vue (`createApp`, required props filled from `Component.props`, default slot filled) — sharing the render-verdict and fixture contract. Plus `/__components.json` — discovered components + synthesized props. |
 | `server.mjs` | boots the shared dev server: `node preview/server.mjs [projectRoot] [--port N] [--no-wrapper]` |
 
 If `{project}/.scryer/preview/Wrapper.tsx` exists (B4 — the one agent-written

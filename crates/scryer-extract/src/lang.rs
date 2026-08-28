@@ -37,6 +37,15 @@ pub fn ext_of(path: &Path) -> Option<&str> {
     path.extension()?.to_str()
 }
 
+/// Every extension [`parse_file`] understands: the bundled grammars plus the
+/// one composite format handled without a grammar of its own — a Vue
+/// single-file component, whose `<script>` block is parsed as TypeScript.
+pub fn supports_ext(ext: &str) -> bool {
+    ext == VUE_EXT || language_for_ext(ext).is_some()
+}
+
+const VUE_EXT: &str = "vue";
+
 /// Import-resolution coverage tier of a source extension: `full` when the
 /// link audit sees the language's real declared imports (Rust paths, TS/JS
 /// imports + tsconfig aliases, Python module paths, Go module paths),
@@ -45,7 +54,9 @@ pub fn ext_of(path: &Path) -> Option<&str> {
 /// `None` for extensions with no grammar. Health reports this so the audit's
 /// verdict is calibrated instead of silently overstated.
 pub fn import_resolution_tier(ext: &str) -> Option<&'static str> {
-    language_for_ext(ext)?;
+    if !supports_ext(ext) {
+        return None;
+    }
     Some(match family_for_ext(ext) {
         Family::Rust | Family::TsLike | Family::Python | Family::Go => "full",
         Family::CLike | Family::Generic => "nameHeuristic",
@@ -65,7 +76,7 @@ enum Family {
 fn family_for_ext(ext: &str) -> Family {
     match ext {
         "rs" => Family::Rust,
-        "ts" | "mts" | "cts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" => Family::TsLike,
+        "ts" | "mts" | "cts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "vue" => Family::TsLike,
         "py" | "pyi" => Family::Python,
         "go" => Family::Go,
         "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => Family::CLike,
@@ -180,6 +191,9 @@ pub fn parse_file(path: &Path, source: &str) -> Option<FileParse> {
 /// repeated parser allocation while still switching grammars per file.
 pub fn parse_file_with(path: &Path, source: &str, parser: &mut Parser) -> Option<FileParse> {
     let ext = ext_of(path)?;
+    if ext == VUE_EXT {
+        return parse_vue_sfc(path, source, parser);
+    }
     let language = language_for_ext(ext)?;
     parser.set_language(&language).ok()?;
     let tree = parser.parse(source, None)?;
@@ -231,6 +245,91 @@ pub fn parse_file_with(path: &Path, source: &str, parser: &mut Parser) -> Option
         paths,
         imports,
     })
+}
+
+/// A Vue single-file component. The component is the unit — one definition
+/// named after the file (`user-card.vue` → `UserCard`) spanning the whole file;
+/// the `<template>`/`<style>` blocks never mint symbols of their own. Its
+/// `<script>` / `<script setup>` blocks are parsed with the TypeScript grammar
+/// for identifier and import references, so `import Foo from "./Foo.vue"`
+/// feeds the dependency graph like any other import. The script text is parsed
+/// IN PLACE — everything outside the blocks is blanked, not removed — so every
+/// reported line number is a line of the `.vue` file itself.
+fn parse_vue_sfc(path: &Path, source: &str, parser: &mut Parser) -> Option<FileParse> {
+    let name = vue_component_name(path)?;
+    let total_lines = source.lines().count().max(1) as u32;
+    let def = Def {
+        name,
+        start_line: 1,
+        end_line: total_lines,
+        fields: Vec::new(),
+        is_data_shape: false,
+    };
+
+    let script = vue_script_in_place(source);
+    let (mut idents, mut imports) = (Vec::new(), Vec::new());
+    if script.trim().is_empty() {
+        return Some(FileParse { defs: vec![def], test_blocks: Vec::new(), idents, paths: Vec::new(), imports });
+    }
+    parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).ok()?;
+    let tree = parser.parse(&script, None)?;
+    let root = tree.root_node();
+    let bytes = script.as_bytes();
+    collect_idents(root, bytes, &mut idents);
+    collect_ts_imports(root, bytes, &mut imports);
+    Some(FileParse { defs: vec![def], test_blocks: Vec::new(), idents, paths: Vec::new(), imports })
+}
+
+/// The SFC's component name: its file stem in PascalCase (`user-card` and
+/// `user_card` both → `UserCard`; `UserCard` stays), the name Vue itself
+/// resolves the file to and the one an SFC symbol carries in the model.
+fn vue_component_name(path: &Path) -> Option<String> {
+    let stem = path.file_stem()?.to_str()?;
+    let mut out = String::with_capacity(stem.len());
+    let mut upper = true;
+    for ch in stem.chars() {
+        if ch == '-' || ch == '_' || ch == '.' {
+            upper = true;
+            continue;
+        }
+        if upper {
+            out.extend(ch.to_uppercase());
+            upper = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// The concatenation of every `<script …>` block's content, positioned exactly
+/// where it sits in the file: text outside the blocks is replaced by spaces
+/// (newlines kept), so byte offsets shift but line numbers do not. Nested
+/// `<script>` inside a template string is not a concern — SFC blocks are
+/// top-level and a template's own `<script>` would be invalid Vue anyway.
+fn vue_script_in_place(source: &str) -> String {
+    let mut out: Vec<u8> = source
+        .bytes()
+        .map(|b| if b == b'\n' { b'\n' } else { b' ' })
+        .collect();
+    let lower = source.to_ascii_lowercase();
+    let mut cursor = 0;
+    while let Some(open_rel) = lower[cursor..].find("<script") {
+        let open = cursor + open_rel;
+        // The tag ends at the first `>` after `<script`; a `/>` self-closing
+        // tag (`<script src="…" />`) carries no inline content.
+        let Some(tag_end_rel) = lower[open..].find('>') else { break };
+        let content_start = open + tag_end_rel + 1;
+        let self_closing = lower[open..content_start].ends_with("/>");
+        let Some(close_rel) = lower[content_start..].find("</script") else { break };
+        let content_end = content_start + close_rel;
+        if !self_closing {
+            out[content_start..content_end].copy_from_slice(&source.as_bytes()[content_start..content_end]);
+        }
+        cursor = content_end + "</script".len();
+    }
+    // Lossless by construction: we only ever copy the original bytes back.
+    String::from_utf8(out).unwrap_or_default()
 }
 
 // --- shared helpers ---
@@ -1215,6 +1314,36 @@ mod tests {
 
     fn names(parse: &FileParse) -> Vec<&str> {
         parse.defs.iter().map(|d| d.name.as_str()).collect()
+    }
+
+    /// A `.vue` SFC is one definition named after its file, spanning the whole
+    /// file — its template and style blocks never mint symbols — while the
+    /// script block's imports and identifiers are read in place, so the lines
+    /// they report are lines of the `.vue` file.
+    #[test]
+    fn vue_sfc_is_one_component_named_after_its_file() {
+        let src = "<template>\n  <div>{{ title }}<Avatar :user=\"user\" /></div>\n</template>\n\n<script setup lang=\"ts\">\nimport Avatar from \"./Avatar.vue\";\nimport { formatName } from \"../lib/names\";\ndefineProps<{ title: string }>();\n</script>\n\n<style scoped>\n.x { color: red; }\n</style>\n";
+        let p = parse_file(Path::new("src/components/user-card.vue"), src).unwrap();
+        assert_eq!(names(&p), vec!["UserCard"]);
+        assert_eq!((p.defs[0].start_line, p.defs[0].end_line), (1, 13));
+        assert!(!p.defs[0].is_data_shape);
+        let mut specs: Vec<&str> = p.imports.iter().map(|i| i.spec.as_str()).collect();
+        specs.sort();
+        assert_eq!(specs, vec!["../lib/names", "./Avatar.vue"]);
+        // The import sits on line 6 of the .vue file, not line 1 of the script.
+        let avatar = p.imports.iter().find(|i| i.spec == "./Avatar.vue").unwrap();
+        assert_eq!(avatar.line, 6);
+        assert!(p.idents.iter().any(|i| i.name == "formatName"));
+        // Template-only words are not identifiers — the template is not code.
+        assert!(!p.idents.iter().any(|i| i.name == "template"));
+    }
+
+    /// No script block at all (a pure-template SFC) still yields the component.
+    #[test]
+    fn vue_sfc_without_script_still_yields_the_component() {
+        let p = parse_file(Path::new("Banner.vue"), "<template><p>hi</p></template>\n").unwrap();
+        assert_eq!(names(&p), vec!["Banner"]);
+        assert!(p.imports.is_empty() && p.idents.is_empty());
     }
 
     #[test]

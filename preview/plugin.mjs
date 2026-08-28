@@ -76,13 +76,18 @@ export function scryerPreviewPlugin({ projectRoot, packageRoot = projectRoot, us
       const comp = getAnalysis().components.find(
         (c) => c.file === file && c.exportName === exportName,
       );
+      const cssImports = globalCss.map((c) => `import ${JSON.stringify(c)};`).join("\n");
+      // Framework dispatch: the component list tagged the file with what mounts
+      // it. Both entries share the render-verdict and fixture contract.
+      if (comp?.framework === "vue" || file.endsWith(".vue")) {
+        return vueEntryModule({ file, fixture, cssImports, importUrl: projUrl(file) });
+      }
       const propsCode = comp?.propsCode ?? "{}";
       // Shared, type-keyed fixtures (B6) referenced by the synthesized props —
       // imported under the tokens props.mjs baked into propsCode.
       const refImports = (comp?.fixtureRefs ?? [])
         .map((r) => `import { ${r.export} as ${r.token} } from ${JSON.stringify(projUrl(".scryer/preview/fixtures/" + r.module))};`)
         .join("\n");
-      const cssImports = globalCss.map((c) => `import ${JSON.stringify(c)};`).join("\n");
       const wrapper = hasWrapper();
 
       return `
@@ -235,6 +240,84 @@ function detectGlobalCss(projectRoot) {
     return css;
   }
   return [];
+}
+
+/**
+ * The entry module for a Vue single-file component. Mounts it with the
+ * project's own `vue` (`createApp`), synthesizing placeholder props AT MOUNT
+ * TIME from the compiled component's normalized `props` definition — which
+ * Vue produces for `defineProps<{…}>()` and runtime prop objects alike, so no
+ * static analysis is needed — and filling its default slot so a wrapper isn't
+ * blank. Reports the same `scryer-render` verdict as the React entry; a
+ * per-node fixture (a `.ts` module default-exporting props) spreads over the
+ * synthesized ones exactly as for React. `Wrapper.tsx` is React-only and is
+ * not applied here.
+ */
+function vueEntryModule({ file, fixture, cssImports, importUrl }) {
+  return `
+${fixture ? `import __fixture from ${JSON.stringify(fixture)};` : ""}
+${cssImports}
+import { createApp, h } from "vue";
+import Component from ${JSON.stringify(importUrl)};
+
+const meta = { file: ${JSON.stringify(file)}, exportName: "default" };
+const __hasFixture = ${fixture ? "true" : "false"};
+function report(status, error) {
+  try { parent.postMessage({ type: "scryer-render", ...meta, status, error: error ?? null, hasFixture: __hasFixture }, "*"); } catch {}
+}
+const bodyBaseline = document.body.childElementCount;
+function scheduleOkCheck() {
+  requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => {
+    const root = document.getElementById("root");
+    const rendered = (root && root.childNodes.length > 0) || document.body.childElementCount > bodyBaseline;
+    report(rendered ? "ok" : "empty");
+  }, 120)));
+}
+
+// Placeholder props from Vue's normalized props definition: only REQUIRED
+// props are filled (optionals keep their defaults, as with React), typed by
+// the first declared constructor.
+function pretty(name) { return "Sample " + name.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase(); }
+function placeholder(name, ctor) {
+  if (ctor === String) return /(url|href|src)$/i.test(name) ? "https://example.com" : pretty(name);
+  if (ctor === Number) return 1;
+  if (ctor === Boolean) return false;
+  if (ctor === Array) return [];
+  if (ctor === Function) return () => {};
+  if (ctor === Date) return new Date(0);
+  if (ctor === Object) return {};
+  return pretty(name);
+}
+function synthVueProps(def) {
+  const out = {};
+  if (!def) return out;
+  const entries = Array.isArray(def) ? def.map((k) => [k, null]) : Object.entries(def);
+  for (const [name, opt] of entries) {
+    const o = opt && typeof opt === "object" && !Array.isArray(opt) ? opt : { type: opt };
+    if (!o.required || o.default !== undefined) continue;
+    const ctor = Array.isArray(o.type) ? o.type[0] : o.type;
+    out[name] = placeholder(name, ctor);
+  }
+  return out;
+}
+
+window.addEventListener("error", (e) => report("error", String(e.error?.stack ?? e.message)));
+window.addEventListener("unhandledrejection", (e) => report("error", "unhandled rejection: " + String(e.reason)));
+
+if (!Component) {
+  report("error", "no default export in " + meta.file);
+} else {
+  try {
+    const props = ${fixture ? "{ ...synthVueProps(Component.props), ...__fixture }" : "synthVueProps(Component.props)"};
+    const app = createApp({ render: () => h(Component, props, { default: () => "Sample children" }) });
+    app.config.errorHandler = (err) => report("error", String(err?.stack ?? err));
+    app.mount(document.getElementById("root"));
+    scheduleOkCheck();
+  } catch (err) {
+    report("error", String(err?.stack ?? err));
+  }
+}
+`;
 }
 
 // `componentDark` themes the previewed component (best-effort: a .dark class +

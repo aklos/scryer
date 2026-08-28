@@ -275,9 +275,18 @@ pub fn preview_fixture_prompt(
     } else {
         format!("\nRender error:\n\n```\n{render_error}\n```\n")
     };
+    // A Vue single-file component takes its fixture as a plain `.ts` props
+    // module — there is no JSX to build, and the shared module is `.ts` too.
+    let is_vue = source_file.ends_with(".vue");
+    let (fixture_ext, shared_module) = if is_vue { ("ts", "shared.ts") } else { ("tsx", "shared.tsx") };
+    let vue_note = if is_vue {
+        "\nThis is a Vue single-file component: its props are the `defineProps` / `props` declaration in its `<script>` block, and the server fills REQUIRED props from that declaration at mount time. Fixture modules for it are plain TypeScript (`.ts`) — export data objects, never JSX.\n"
+    } else {
+        ""
+    };
 
     format!(
-        r#"The live preview of the component "{node_name}" (id {node_id}) in the project at {project_path} is rendered by a dev server that synthesizes placeholder props from the component's TypeScript types. With those placeholders the render came out **{render_status}** — the preview needs realistic data instead.
+        r#"The live preview of the component "{node_name}" (id {node_id}) in the project at {project_path} is rendered by a dev server that synthesizes placeholder props from the component's TypeScript types.{vue_note} With those placeholders the render came out **{render_status}** — the preview needs realistic data instead.
 {error_section}
 Generic synthesis can't invent interconnected domain data: a prop that is a graph (or any object) plus another prop that points INTO it (an id, a selection) can't be made consistent from types alone. You supply that domain knowledge ONCE, keyed by type, so every component that touches the type reuses it.
 
@@ -296,8 +305,8 @@ The preview server reads `.scryer/preview/fixtures/manifest.json`. For any prop 
 ```json
 {{
   "byType": {{
-    "ScryModel": {{ "module": "shared.tsx", "export": "sampleModel" }},
-    "Node": {{ "module": "shared.tsx", "export": "sampleNode", "sourceFile": "src/viewmodel.ts" }}
+    "ScryModel": {{ "module": "{shared_module}", "export": "sampleModel" }},
+    "Node": {{ "module": "{shared_module}", "export": "sampleNode", "sourceFile": "src/viewmodel.ts" }}
   }}
 }}
 ```
@@ -307,15 +316,15 @@ The preview server reads `.scryer/preview/fixtures/manifest.json`. For any prop 
 ## Your task
 
 1. **Read the component's prop types** (follow the imports in the source above) to see which types its props are.
-2. **Read the existing `.scryer/preview/fixtures/manifest.json` and `shared.tsx` if they exist** — you are EXTENDING them, not overwriting. Reuse any type already covered; never duplicate an entry.
-3. For each domain type this component needs that is NOT already in the manifest, **add a named sample export** to `shared.tsx` and a `byType` entry to the manifest. Prefer extending `shared.tsx`; these samples are shared across the whole project.
+2. **Read the existing `.scryer/preview/fixtures/manifest.json` and `{shared_module}` if they exist** — you are EXTENDING them, not overwriting. Reuse any type already covered; never duplicate an entry.
+3. For each domain type this component needs that is NOT already in the manifest, **add a named sample export** to `{shared_module}` and a `byType` entry to the manifest. Prefer extending `{shared_module}`; these samples are shared across the whole project.
 4. **Make the samples mutually consistent**: ids that resolve, collection members and link/edge endpoints reference ids that exist in the sample, and any pointer-typed prop (a `selected`/`activeId`-style string) names a real element in the sample so the component renders a populated state, not an empty/not-found one.
 5. **Realistic data, not placeholders.** Lists get 3–5 plausible items; names/labels/timestamps look real. The goal is a preview that shows the component doing its job.
 6. **Seed controlled state to a POPULATED snapshot.** If the component's expand/select/open/active state is driven by props (an `expanded`/`openIds` set, a `selected` id, an `isOpen` flag) with companion callbacks (`onToggle`, `onSelect`), the synthesized empty set / false flag renders it collapsed-and-blank — functionally useless as a preview, even though it "rendered". The callbacks stay no-ops (the preview is a snapshot, not interactive), so the ONLY way the component shows its structure is to seed those state props open: an `expanded` set containing the sample's ids, a real `selected`, flags set so panels are visible. These props are usually generic-typed (`Set<string>`, `boolean`), so seed them in the per-node override below rather than the shared manifest.
 
 ### Per-node override (fallback + controlled state)
 
-Write `.scryer/preview/fixtures/{node_id}.tsx` (DEFAULT EXPORT = a partial props object for "{node_name}") when this component needs props the shared samples can't express — a particular selection, a special-case shape, or **controlled-state props seeded open per point 6**. The server spreads it OVER the shared/synthesized props, so include only the keys you override, and import the shared samples to keep ids consistent (e.g. `import {{ sampleModel }} from "/.scryer/preview/fixtures/shared.tsx"` then `expanded: new Set(sampleModel.nodes.map((n) => n.id))`). Keep domain DATA in the shared fixtures; use the override for this component's view state.
+Write `.scryer/preview/fixtures/{node_id}.{fixture_ext}` (DEFAULT EXPORT = a partial props object for "{node_name}") when this component needs props the shared samples can't express — a particular selection, a special-case shape, or **controlled-state props seeded open per point 6**. The server spreads it OVER the shared/synthesized props, so include only the keys you override, and import the shared samples to keep ids consistent (e.g. `import {{ sampleModel }} from "/.scryer/preview/fixtures/{shared_module}"` then `expanded: new Set(sampleModel.nodes.map((n) => n.id))`). Keep domain DATA in the shared fixtures; use the override for this component's view state.
 
 ### Rules
 
@@ -330,6 +339,23 @@ Write `.scryer/preview/fixtures/{node_id}.tsx` (DEFAULT EXPORT = a partial props
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Vue single-file component's fixture is a plain `.ts` props module,
+    /// shared samples live in `shared.ts`, and the prompt says so; a React
+    /// component keeps the `.tsx` contract untouched.
+    #[test]
+    fn fixture_prompt_asks_vue_components_for_plain_ts_modules() {
+        let vue = preview_fixture_prompt("/p", "node-1", "UserCard", "src/components/user-card.vue", "", "empty", "");
+        assert!(vue.contains(".scryer/preview/fixtures/node-1.ts`"), "vue fixture is .ts");
+        assert!(vue.contains("shared.ts\""), "shared module is .ts");
+        assert!(vue.contains("Vue single-file component"));
+        assert!(!vue.contains("node-1.tsx"));
+
+        let react = preview_fixture_prompt("/p", "node-2", "Card", "src/Card.tsx", "", "empty", "");
+        assert!(react.contains(".scryer/preview/fixtures/node-2.tsx`"));
+        assert!(react.contains("shared.tsx"));
+        assert!(!react.contains("Vue single-file component"));
+    }
     use scryer_core::{Kind, Responsibility, Source, SourceLocation};
 
     fn node(id: &str, kind: Kind, parent: Option<&str>, resp: Option<&str>) -> Node {

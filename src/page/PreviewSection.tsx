@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Loader2, Moon, Sun } from "lucide-react";
 import type { Node } from "../viewmodel";
-import type { PreviewComponentInfo, PreviewServerState } from "../hooks/usePreviewServer";
+import { fixturePathFor, type PreviewComponentInfo, type PreviewServerState } from "../hooks/usePreviewServer";
 import { useDarkMode } from "../hooks/useDarkMode";
 import { BTN_AGENT, BTN_ICON, AgentMark, PageSection } from "../pagekit";
 
@@ -27,7 +27,7 @@ function useNodePreview(node: Node, server: PreviewServerState, entry: PreviewCo
 
   const watched = { file: entry.file, exportName: entry.exportName };
   const iframeSrc = server.url
-    ? previewUrl(watched.file, watched.exportName, `.scryer/preview/fixtures/${node.id}.tsx`)
+    ? previewUrl(watched.file, watched.exportName, fixturePathFor(node.id, entry))
     : null;
 
   return { componentDark, setComponentDark, watched, iframeSrc };

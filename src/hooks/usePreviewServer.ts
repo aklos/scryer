@@ -14,6 +14,14 @@ export interface PreviewComponentInfo {
   exportName: string;
   displayName: string;
   warnings: string[];
+  /** What mounts it — the sidecar tags every entry; absent on older sidecars (React). */
+  framework?: "react" | "vue";
+}
+
+/** The per-node fixture module for a component: a React fixture is a `.tsx`
+ *  module (it may build JSX children); a Vue one is a plain `.ts` props module. */
+export function fixturePathFor(nodeId: string, entry: PreviewComponentInfo): string {
+  return `.scryer/preview/fixtures/${nodeId}.${entry.framework === "vue" ? "ts" : "tsx"}`;
 }
 
 export interface PreviewServerState {
