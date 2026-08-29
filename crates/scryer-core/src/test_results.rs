@@ -11,7 +11,7 @@
 //! stored file path as tie-breaker only — reports are rooted at the
 //! invocation directory, so paths never compare exactly.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
@@ -149,7 +149,7 @@ pub struct ReportMatch {
 /// per-claim outcomes. Name-first: a case matches an attachment when their
 /// normalized leaf names agree; the stored file path only breaks ties.
 pub fn match_report(
-    test_map: &HashMap<String, Vec<SourceLocation>>,
+    test_map: &BTreeMap<String, Vec<SourceLocation>>,
     cases: &[TestCase],
 ) -> ReportMatch {
     // Index attachments by normalized leaf name. One test may be attached to
@@ -318,8 +318,8 @@ fn hint_names_file(classname: &str, pattern: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn attach(entries: &[(&str, &str, Option<&str>)]) -> HashMap<String, Vec<SourceLocation>> {
-        let mut map: HashMap<String, Vec<SourceLocation>> = HashMap::new();
+    fn attach(entries: &[(&str, &str, Option<&str>)]) -> BTreeMap<String, Vec<SourceLocation>> {
+        let mut map: BTreeMap<String, Vec<SourceLocation>> = BTreeMap::new();
         for (resp, pattern, symbol) in entries {
             map.entry(resp.to_string())
                 .or_default()

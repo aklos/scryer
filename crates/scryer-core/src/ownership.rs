@@ -13,7 +13,7 @@
 //! specific glob anywhere in the model that also matches F.
 
 use crate::ScryModel;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A boundary glob's specificity: the length of its literal prefix before the
 /// first glob metacharacter. `**/*` → 0, `crates/core/**/*` → 11. The deepest
@@ -61,7 +61,7 @@ impl BoundaryOwnership {
     /// paths, not these) is skipped, so a dead broad glob can't double-claim files
     /// or inflate a coverage denominator.
     pub fn from_boundaries(
-        boundaries: &HashMap<String, Vec<crate::Source>>,
+        boundaries: &BTreeMap<String, Vec<crate::Source>>,
         live_nodes: &HashSet<&str>,
     ) -> Self {
         let nodes = boundaries

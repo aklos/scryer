@@ -232,7 +232,7 @@ pub fn retag(
 /// plan exactly as it leaves vagrants. Untagged elements ride any fold (the
 /// unfiled serial workflow), and an element always rides its own change.
 pub fn foreign_to_host(
-    map: &std::collections::HashMap<String, String>,
+    map: &std::collections::BTreeMap<String, String>,
     host_key: &str,
     elem_key: &str,
 ) -> bool {

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::changes;
 use crate::SCRY_VERSION;
@@ -330,8 +330,8 @@ pub struct ScryModel {
     /// discharges that responsibility — the conformance numerator), or **schema
     /// node id** → that type's declaration location. Agent-produced and
     /// regenerable; never hand-authored.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub source_map: HashMap<String, Vec<SourceLocation>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub source_map: BTreeMap<String, Vec<SourceLocation>>,
     /// Maps **responsibility id** → the locations of the tests attached to
     /// that claim. A separate dimension from `source_map` — where a claim is
     /// implemented vs. which tests are attached to it — and a claim may carry
@@ -339,13 +339,13 @@ pub struct ScryModel {
     /// never runs the tests and never judges what they prove. Follows
     /// `source_map`'s single-home layer rule: committed owns committed claims'
     /// entries, the draft holds only plan-added ones. Agent-produced.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub test_map: HashMap<String, Vec<SourceLocation>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub test_map: BTreeMap<String, Vec<SourceLocation>>,
     /// Maps **node id** → boundary globs: the region of code a node owns (the
     /// coverage denominator + extraction scope). A child's boundary should sit
     /// within its parent's. Agent-produced and regenerable; never hand-authored.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub boundaries: HashMap<String, Vec<Source>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub boundaries: BTreeMap<String, Vec<Source>>,
     /// The concern registry — one entry per concern slug used by any
     /// responsibility (see [`Responsibility::concern`]). Minted automatically
     /// on write ([`crate::concerns::register_concerns`]), curated by the user
@@ -361,8 +361,8 @@ pub struct ScryModel {
     /// change each pending plan entry belongs to. Untagged entries are the
     /// unfiled bucket (the zero-friction serial workflow). Plan-layer only,
     /// like `changes`; kept honest by [`changes::gc`].
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub change_map: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub change_map: BTreeMap<String, String>,
 }
 
 impl ScryModel {
@@ -372,12 +372,12 @@ impl ScryModel {
             nodes: Vec::new(),
             links: Vec::new(),
             groups: Vec::new(),
-            source_map: HashMap::new(),
-            test_map: HashMap::new(),
-            boundaries: HashMap::new(),
+            source_map: BTreeMap::new(),
+            test_map: BTreeMap::new(),
+            boundaries: BTreeMap::new(),
             concerns: Vec::new(),
             changes: Vec::new(),
-            change_map: HashMap::new(),
+            change_map: BTreeMap::new(),
         }
     }
 }
