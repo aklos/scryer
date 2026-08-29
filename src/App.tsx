@@ -9,10 +9,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { VariationState } from "./NodePage";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ToastProvider } from "./Toast";
-import { AgentFailureProvider, useAgentFailure } from "./AgentFailure";
+import { AgentFailureProvider } from "./AgentFailure";
 import { ModelTree } from "./ModelTree";
 import { TopBar, type WorkspaceView } from "./TopBar";
 import { DiagramView } from "./DiagramView";
@@ -36,6 +35,7 @@ import { useAgentLaunchGate } from "./AgentLaunchConfirm";
 import { useModelStorage } from "./hooks/useModelStorage";
 import { useModelBuild, type ModelBuild } from "./hooks/useModelBuild";
 import { useAgentSession } from "./hooks/useAgentSession";
+import { previewableNodeIds, usePreviewServer } from "./hooks/usePreviewServer";
 import { useModelHealth } from "./hooks/useModelHealth";
 import { useTestStatuses } from "./hooks/useTestStatuses";
 import {
@@ -44,6 +44,7 @@ import {
   addNode as addNodeHelper,
   addProperty,
   addResponsibility,
+  effectiveSourceMap,
   moveNode as moveNodeHelper,
   moveResponsibility as moveResponsibilityHelper,
   removeGroup as removeGroupHelper,
@@ -176,7 +177,16 @@ function Workspace({
   closeChange: (id: string) => Promise<void>;
 }) {
   const agent = useAgentSession();
-  const { report: reportFailure } = useAgentFailure();
+  // One preview sidecar per open project; node pages derive their Preview
+  // section from the exports it reports.
+  const preview = usePreviewServer(projectPath);
+  // Which symbols the sidecar can render — derived from its export list and
+  // each node's anchored source, never a stored flag. Drives the preview glyph
+  // in the tree, the diagram's `visual` class, and the node page icon.
+  const previewable = useMemo(() => {
+    const sourceMap = effectiveSourceMap(committed, model);
+    return previewableNodeIds(model.nodes, preview.components, (id) => sourceMap[id]?.[0]?.pattern);
+  }, [model, committed, preview.components]);
 
   // Per-node fills also own the file while running: suppress canvas write-back.
   useEffect(() => {
@@ -447,88 +457,6 @@ function Workspace({
     [agent, projectPath, modelRefStr, writing, launchGate],
   );
 
-  // --- visual variation planning ---
-
-  const [variationState, setVariationState] = useState<VariationState | null>(null);
-  const prevRunning = useRef(false);
-
-  useEffect(() => {
-    if (prevRunning.current && !agent.running && variationState?.status === "generating") {
-      // Only a COMPLETED run has tiles to show — promoting on any falling edge
-      // presented iframes that 404 after a failure. A failed/cancelled run
-      // closes the modal (the failure dialog has already told the user).
-      setVariationState((prev) =>
-        prev ? (agent.outcome === "completed" ? { ...prev, status: "ready" } : null) : null,
-      );
-    }
-    prevRunning.current = agent.running;
-  }, [agent.running, agent.outcome, variationState?.status]);
-
-  const onStartVariation = useCallback(
-    (nodeId: string, prompt: string, count?: number, baseVariationIdx?: number) => {
-      if (!projectPath || !modelRefStr || agent.running) return;
-      const n = count ?? 3;
-      const node = modelRef.current.nodes.find((nd) => nd.id === nodeId);
-      const name = node?.name ?? "component";
-      launchGate.request(
-        { action: `Generate ${n} visual variation${n === 1 ? "" : "s"} of “${name}”.` },
-        () => {
-          // Flip to "generating" only on confirm — cancelling the gate must not
-          // leave the modal stuck in a loading state.
-          setVariationState({ nodeId, prompt, status: "generating", count: n, selectedIdx: null });
-          agent.startVariation(projectPath, modelRefStr, nodeId, name, prompt, n, baseVariationIdx);
-        },
-      );
-    },
-    [agent, projectPath, modelRefStr, launchGate],
-  );
-
-  const [previewKey, setPreviewKey] = useState(0);
-
-  const onAcceptVariation = useCallback(
-    (nodeId: string, variationIdx: number) => {
-      if (!projectPath || !modelRefStr) return;
-      invoke("accept_visual_variation", {
-        cwd: projectPath, modelRef: modelRefStr, nodeId, variationIdx,
-      })
-        .then(() => {
-          setVariationState(null);
-          setPreviewKey((k) => k + 1);
-          void reloadFromDisk();
-        })
-        // A swallowed failure here closed nothing and changed nothing — the
-        // user kept clicking Accept into silence. Say what happened; the
-        // variation set stays up so they can retry or discard.
-        .catch((e) =>
-          reportFailure({
-            title: "Accepting the variation failed",
-            error: String(e),
-            consequence: "The component is unchanged — the variations are still here to retry or discard.",
-          }),
-        );
-    },
-    [projectPath, modelRefStr, reloadFromDisk, reportFailure],
-  );
-
-  const onDiscardVariations = useCallback(
-    (nodeId: string) => {
-      if (!projectPath) return;
-      invoke("discard_visual_variations", { cwd: projectPath, nodeId }).catch((e) =>
-        reportFailure({
-          title: "Discarding the variations failed",
-          error: String(e),
-          consequence: "Variation files may remain on disk under .scryer.",
-        }),
-      );
-      setVariationState(null);
-    },
-    [projectPath, reportFailure],
-  );
-
-  const onSelectVariation = useCallback((idx: number | null) => {
-    setVariationState((prev) => prev ? { ...prev, selectedIdx: idx } : null);
-  }, []);
-
   const editor = useMemo<Editor>(
     () => ({
       updateNode: (nodeId, patch) => updateModel((m) => updateNodeHelper(m, nodeId, patch)),
@@ -779,6 +707,7 @@ function Workspace({
       <div className="flex min-h-0 flex-1">
         <ModelTree
           model={model}
+          previewable={previewable}
           planDiff={planDiff}
           committed={committed}
           selected={selected}
@@ -799,6 +728,7 @@ function Workspace({
         {view === "diagram" ? (
           <DiagramView
             model={model}
+            previewable={previewable}
             planDiff={planDiff}
             committed={committed}
             report={healthReport}
@@ -846,7 +776,6 @@ function Workspace({
           )
         ) : selected ? (
           <NodePage
-            key={previewKey}
             model={model}
             committed={committed}
             selected={selected}
@@ -858,11 +787,7 @@ function Workspace({
             onSelectNode={selectNode}
             onSelectGroup={selectGroup}
             onFixture={projectPath && !writing ? onFixture : undefined}
-            variationState={variationState}
-            onStartVariation={!writing || variationState ? onStartVariation : undefined}
-            onAcceptVariation={onAcceptVariation}
-            onDiscardVariations={onDiscardVariations}
-            onSelectVariation={onSelectVariation}
+            preview={preview}
             changeLog={changeLog}
             history={history}
             driftScopes={driftScopes}

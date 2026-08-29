@@ -131,7 +131,7 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
         }
 
         // Empty symbol — carries no semantic content of its own: no
-        // responsibility, no declared data shape, no rendered appearance. Such a
+        // responsibility, no declared data shape. Such a
         // node justifies nothing on the diagram. This is a flag, not a hard
         // error: the agent must resolve each one by giving it a business
         // responsibility or removing it (folding it into the parent symbol that

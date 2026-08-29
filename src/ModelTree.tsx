@@ -122,8 +122,12 @@ export function ModelTree({
   completeness,
   concernLens,
   onSetConcernLens,
+  previewable,
 }: {
   model: ScryModel;
+  /** Symbol ids the preview sidecar can render — derived from its export list,
+   *  never stored on the node; drives the preview glyph. */
+  previewable: ReadonlySet<string>;
   /** Live `diff(committed, planned)` — drives the change-letter gutter. */
   planDiff: ModelDiff;
   /** The committed layer — parents for deleted elements (their D rolls up the
@@ -679,7 +683,7 @@ export function ModelTree({
     const node = row.node!;
     const isSel = selected?.kind === "node" && selected.id === node.id;
     const ramp = altitudeRamp(node);
-    const Icon = lookupIcon(node.icon) ?? kindIcon(node);
+    const Icon = lookupIcon(node.icon) ?? kindIcon(node, previewable.has(node.id));
     const active = activeNodeIds.has(node.id);
     const hiddenSyms =
       !filterActive && node.kind === "component" ? hiddenSymbolCount(node.id) : 0;

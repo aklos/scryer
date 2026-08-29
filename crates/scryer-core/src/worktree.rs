@@ -264,7 +264,7 @@ mod tests {
         assert!(slug_for(Path::new("/a/my proj")).starts_with("my-proj-"));
     }
 
-    /// resp-746: a non-repo is refused outright. The fallback a probe would
+    /// resp-763: a non-repo is refused outright. The fallback a probe would
     /// otherwise need — mutating the developer's own files — is the thing the
     /// worktree exists to prevent.
     #[test]
@@ -275,7 +275,7 @@ mod tests {
         assert!(err.contains("not a git repository"), "{err}");
     }
 
-    /// resp-744: the probe must see the code as it stands, so uncommitted
+    /// resp-761: the probe must see the code as it stands, so uncommitted
     /// edits and brand-new files both have to make the crossing.
     #[test]
     fn syncing_carries_uncommitted_and_untracked_work_across() {
@@ -291,7 +291,7 @@ mod tests {
         fs::remove_dir_all(&wt).ok();
     }
 
-    /// resp-743 and resp-745: the same worktree comes back, its ignored build
+    /// resp-760 and resp-762: the same worktree comes back, its ignored build
     /// output intact — that reuse is the whole reason a probe costs an
     /// incremental run — and the previous round's mutation does not.
     #[test]

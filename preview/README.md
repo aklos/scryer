@@ -7,14 +7,35 @@ project's own toolchain and plugins (the project's `vite.config` is reused).
 
 | file | role |
 | --- | --- |
-| `props.mjs` | B2 — discovers exported React components in `.tsx` files via the TS compiler API and synthesizes placeholder props from their prop types (literals for scalars, first member of literal unions, no-op callbacks, empty collections, recursive object shapes; optionals omitted except `children`). |
-| `plugin.mjs` | B3 — Vite plugin serving `GET /__preview?file=src/Foo.tsx&export=Foo` as a virtual entry: import component, apply synthesized props, auto-import the app's global CSS, render into `#root`. Plus `/__components.json` — discovered components + synthesized props. |
+| `props.mjs` | B2 — discovers exported React components in `.tsx` files via the TS compiler API and synthesizes placeholder props from their prop types (literals for scalars, first member of literal unions, no-op callbacks, empty collections, recursive object shapes; optionals omitted except `children`). Also lists every `.vue` single-file component (when the package depends on `vue`) as a default export named after its file, tagged `framework: "vue"` — its props are synthesized at mount time from the compiled component's `props` definition instead. |
+| `plugin.mjs` | B3 — Vite plugin serving `GET /__preview?file=src/Foo.tsx&export=Foo` as a virtual entry: import component, apply synthesized props, auto-import the app's global CSS, render into `#root`. The entry is generated per framework — React (`createRoot`) or Vue (`createApp`, required props filled from `Component.props`, default slot filled) — sharing the render-verdict and fixture contract. Plus `/__components.json` — discovered components + synthesized props. |
 | `server.mjs` | boots the shared dev server: `node preview/server.mjs [projectRoot] [--port N] [--no-wrapper]` |
 
 If `{project}/.scryer/preview/Wrapper.tsx` exists (B4 — the one agent-written
 provider fix per project), every entry wraps the component in it. For scryer
 itself the wrapper shims `__TAURI_INTERNALS__` so Tauri calls hang in loading
 states instead of crashing.
+
+## A project's own preview config
+
+`{project}/.scryer/preview/vite.config.*`, when present, is loaded **instead of
+the package's `vite.config.*`** (`previewConfigFile`). Reuse of the project's
+real config is the default because it is usually right, but not always: a
+framework plugin can own the whole app (remix, next) in a way that has nothing
+to do with rendering one component in isolation, and a monorepo root that
+resolves `vite` while its vite app lives in a sub-package has no usable config
+at that root at all. Such a project states just what previews need — path
+aliases, the css pipeline — next to its fixtures and wrapper, instead of
+carrying a preview-only file in its repo root. One preview config serves every
+package server.
+
+Dependency-optimizer caches live in `.scryer/preview/.vite/<package-slot>`
+(`previewCacheDir`), never the package's own `node_modules/.vite`: the project
+normally has its own dev server on the same root with a different config, and
+one shared cache means each server re-optimizes on the other's heels until the
+pages already open against the project's server fail with "504 Outdated
+Optimize Dep". Preview machinery is dot-prefixed inside `.scryer/preview/` so
+the content watcher (fixtures, wrapper, variations) ignores it.
 
 The agent enters only through two repair/creative paths, both served by the
 same running server with no build step:

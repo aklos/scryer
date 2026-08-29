@@ -141,40 +141,6 @@ pub struct SourceLocation {
     pub end_line: Option<u32>,
 }
 
-// --- Appearance (the look of a UI component) ---
-
-/// The render-artifact lifecycle of a visual component's look. Its own axis,
-/// independent of the model→code plan (the diff between committed and planned):
-/// `Proposed` when the look is planned, `Implemented` when synced from / built
-/// off the code, `Changed` when the code drifts from the modeled look.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum RenderState {
-    Proposed,
-    Implemented,
-    Changed,
-}
-
-/// What a UI component is accountable for in how it LOOKS — a contract alongside
-/// `responsibilities` (behavior) and `properties` (data). Carries the built
-/// render artifact (`dist_path` + `source_hash`) used to detect drift from the
-/// look, plus the render lifecycle [`RenderState`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Appearance {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<RenderState>,
-    /// Project-relative path to the built render output directory.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dist_path: Option<String>,
-    /// Unix seconds when the render was last built.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub built_at: Option<u64>,
-    /// Hash of the source at render time — used to detect drift from the look.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_hash: Option<String>,
-}
-
 // --- Nodes, links, groups ---
 
 /// A manual canvas placement — the node's center on its parent's map surface,
@@ -235,16 +201,6 @@ pub struct Node {
     /// passes the string through.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
-    /// Marks this node as a visual component (React component, UI element):
-    /// the flag that says "this node has a look the render tool can build."
-    /// Set by the agent during model generation or toggled by the user.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub visual: Option<bool>,
-    /// What the component is accountable for in how it LOOKS — a status-bearing
-    /// contract like a responsibility, but visual instead of textual. (Formerly
-    /// `preview`; the alias keeps older `.scry` files loading.)
-    #[serde(default, alias = "preview", skip_serializing_if = "Option::is_none")]
-    pub appearance: Option<Appearance>,
     /// User-authored freeform notes for this node — self-context, traversal
     /// aids, reminders to self. Distinct from `description` (what the node IS)
     /// and from this node's `directives` (HOW-constraints): notes carry
@@ -279,8 +235,7 @@ pub struct Node {
 }
 
 /// The `empty` flag — a SYMBOL that carries no semantic content of its own: no
-/// responsibilities, no properties, no rendered appearance, and not external.
-/// Derived, never stored. Mirrors `isNodeEmpty` in the frontend (`src/viewmodel.ts`)
+/// responsibilities, no properties, and not external. Derived, never stored. Mirrors `isNodeEmpty` in the frontend (`src/viewmodel.ts`)
 /// — keep the two in lockstep. Scoped to symbols: structural nodes
 /// (system/container/component) carry their meaning through their children, so a
 /// parent without its own responsibilities is not "empty" in this sense.
@@ -289,7 +244,6 @@ pub fn is_node_empty(node: &Node) -> bool {
         && node.external != Some(true)
         && node.responsibilities.is_empty()
         && node.properties.is_empty()
-        && node.appearance.as_ref().and_then(|a| a.status).is_none()
 }
 
 /// One ancestor's contribution to a node's inherited directives — the source
@@ -508,8 +462,6 @@ mod tests {
             responsibilities: Vec::new(),
             properties: Vec::new(),
             icon: None,
-            visual: None,
-            appearance: None,
             notes: None,
             position: None,
             directives: Vec::new(),
@@ -550,8 +502,8 @@ mod tests {
         assert_eq!(inh.iter().map(|i| i.node_id.as_str()).collect::<Vec<_>>(), vec!["mid", "root"]);
     }
 
-    /// A symbol with no responsibilities, properties, or rendered appearance —
-    /// and not external — is flagged empty. Any one of those, or being a
+    /// A symbol with no responsibilities or properties — and not external — is
+    /// flagged empty. Any one of those, or being a
     /// structural node, gives it content of its own.
     #[test]
     fn a_contentless_internal_symbol_is_empty() {
@@ -565,10 +517,6 @@ mod tests {
         assert!(!is_node_empty(&node(
             r#"{ "id": "n1", "kind": "symbol", "name": "S",
                  "properties": [{ "label": "phone" }] }"#
-        )));
-        assert!(!is_node_empty(&node(
-            r#"{ "id": "n1", "kind": "symbol", "name": "S",
-                 "appearance": { "status": "implemented" } }"#
         )));
         assert!(!is_node_empty(&node(
             r#"{ "id": "n1", "kind": "symbol", "name": "S", "external": true }"#

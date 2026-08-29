@@ -630,8 +630,6 @@ mod tests {
             }],
             properties: Vec::new(),
             icon: None,
-            visual: None,
-            appearance: None,
             notes: None,
             position: None,
             directives: Vec::new(),
@@ -868,7 +866,7 @@ mod tests {
 
     // --- probes ---
 
-    /// resp-748's core refusal: no attached test means there is no assertion
+    /// resp-765's core refusal: no attached test means there is no assertion
     /// to fail, so the question a probe asks cannot be asked.
     #[test]
     fn probing_a_claim_with_no_attached_test_is_refused() {
@@ -882,7 +880,7 @@ mod tests {
         assert!(err.contains("no attached test"), "{err}");
     }
 
-    /// resp-748: a probe reads "the test went red on a break", which says
+    /// resp-765: a probe reads "the test went red on a break", which says
     /// nothing unless the test was known green first.
     #[test]
     fn probing_without_a_recorded_verdict_is_refused() {
@@ -906,7 +904,7 @@ mod tests {
         assert!(err.contains("stale"), "{err}");
     }
 
-    /// resp-747's payload: the span to break, resolved the same way a
+    /// resp-764's payload: the span to break, resolved the same way a
     /// fingerprint resolves it, plus the tests to re-run.
     #[test]
     fn a_probe_target_names_the_span_and_the_tests() {
@@ -921,7 +919,7 @@ mod tests {
         assert_eq!(target.tests, vec!["src/m.spec.ts :: answers one"]);
     }
 
-    /// resp-751: probes-run and probes-survived are reported separately, and
+    /// resp-768: probes-run and probes-survived are reported separately, and
     /// a claim nobody probed is simply absent — never a clean one.
     #[test]
     fn probe_results_report_runs_and_survivors_and_omit_the_unprobed() {
@@ -939,7 +937,7 @@ mod tests {
         assert!(!statuses[0].stale);
     }
 
-    /// resp-750: a probe result is fingerprinted against the same anchors a
+    /// resp-767: a probe result is fingerprinted against the same anchors a
     /// verdict uses, so it ages the same way — it proved something about the
     /// code that was there, never about the code that replaced it.
     #[test]

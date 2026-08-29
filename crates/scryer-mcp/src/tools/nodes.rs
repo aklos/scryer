@@ -725,9 +725,6 @@ impl ScryerServer {
                 n.properties = v.clone();
                 n.properties.extend(kept);
             }
-            if let Some(v) = u.visual {
-                n.visual = if v { Some(true) } else { None };
-            }
             if let Some(v) = &u.parent_id {
                 if old_parent.as_deref() != Some(v.as_str()) {
                     // Canvas placements are per-surface coordinates — a
@@ -870,7 +867,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. This is THE build checkpoint, and it is one atomic statement with three parts: the fold ('I built this'), `anchors` ('here is where it lives'), and `tests` ('here is the test I attached to it') — pass all three in the SAME call rather than folding now and anchoring/attaching later. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, plus the appearance (the visual) — EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities, and/or `propertyLabels` to fold only those data fields (properties are identified by label). A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. In a DESIGN-FIRST model (never committed), folding a built leaf is refused while its ancestors are plan-only — pass `commit_ancestors: true` to fold the ancestor chain structure-only first: the ancestors' identity and boundaries land in committed while their unbuilt claims stay pending in the plan, so partial implementation reads honestly. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. Pass `anchors` (same shape as update_source_map `entries`) to anchor the folded claims to code IN THE SAME CALL — 'here's what I built and where it lives' as one atomic statement; an unanchored claim reads as scaffolding and carries no drift tripwire. Pass `tests` (same shape) to ATTACH each claim's test alongside — 'and this test exercises it' (`pattern` = test file, `symbol` = the test function). For a claim in a When/While/If form the test is EXPECTED, not opportunistic — and on a symbol host it is MANDATORY (rule 22): the claim names a concrete trigger/state/failure, so write the test that arranges it and asserts the response, and attach it here in the same call. A fold that leaves a testable claim with no test attached succeeds, but the response calls out each such claim and how to fix it; health counts them as `untested`. Ubiquitous claims stay a judgment call; absence is simply visible in health. Every node fold's response ends with a scoped POST-FLIGHT: what's still pending on that node, which of its committed claims lack anchors, and any validation warnings this fold introduced — act on those lines; you do not need a separate validate_model run after every fold. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. Pass `change` (standalone — a change id from `set_change`/`get_pending`) to fold an ENTIRE change: every plan entry tagged to it, in dependency order; when its last entry folds, the change closes and its rationale is recorded in the history log. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
+        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. This is THE build checkpoint, and it is one atomic statement with three parts: the fold ('I built this'), `anchors` ('here is where it lives'), and `tests` ('here is the test I attached to it') — pass all three in the SAME call rather than folding now and anchoring/attaching later. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities, and/or `propertyLabels` to fold only those data fields (properties are identified by label). A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. In a DESIGN-FIRST model (never committed), folding a built leaf is refused while its ancestors are plan-only — pass `commit_ancestors: true` to fold the ancestor chain structure-only first: the ancestors' identity and boundaries land in committed while their unbuilt claims stay pending in the plan, so partial implementation reads honestly. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. Pass `anchors` (same shape as update_source_map `entries`) to anchor the folded claims to code IN THE SAME CALL — 'here's what I built and where it lives' as one atomic statement; an unanchored claim reads as scaffolding and carries no drift tripwire. Pass `tests` (same shape) to ATTACH each claim's test alongside — 'and this test exercises it' (`pattern` = test file, `symbol` = the test function). For a claim in a When/While/If form the test is EXPECTED, not opportunistic — and on a symbol host it is MANDATORY (rule 22): the claim names a concrete trigger/state/failure, so write the test that arranges it and asserts the response, and attach it here in the same call. A fold that leaves a testable claim with no test attached succeeds, but the response calls out each such claim and how to fix it; health counts them as `untested`. Ubiquitous claims stay a judgment call; absence is simply visible in health. Every node fold's response ends with a scoped POST-FLIGHT: what's still pending on that node, which of its committed claims lack anchors, and any validation warnings this fold introduced — act on those lines; you do not need a separate validate_model run after every fold. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. Pass `change` (standalone — a change id from `set_change`/`get_pending`) to fold an ENTIRE change: every plan entry tagged to it, in dependency order; when its last entry folds, the change closes and its rationale is recorded in the history log. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
     )]
     fn mark_implemented(
         &self,
@@ -1133,7 +1130,7 @@ impl ScryerServer {
                         ));
                     }
                     // Whole node: commit the node, folding its whole planned state
-                    // (responsibilities, properties, appearance) into the model.
+                    // (responsibilities, properties) into the model.
                     false => {
                         if let Err(e) = scryer_core::commit_element(
                             &model_ref,
@@ -2067,7 +2064,7 @@ impl ScryerServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scryer_core::{Appearance, ModelRef, RenderState, Responsibility};
+    use scryer_core::{ModelRef, Responsibility};
 
     fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
         Node {
@@ -2083,8 +2080,6 @@ mod tests {
             responsibilities: Vec::new(),
             properties: Vec::new(),
             icon: None,
-            visual: None,
-            appearance: None,
             notes: None,
             position: None,
             directives: Vec::new(),
@@ -2575,7 +2570,7 @@ mod tests {
     }
 
     /// Whole-node: marking implemented folds the node's entire planned state
-    /// (responsibilities + appearance) into the committed model, and the plan
+    /// (responsibilities + properties) into the committed model, and the plan
     /// for that node clears.
     #[test]
     fn mark_implemented_commits_whole_node_from_plan() {
@@ -2587,16 +2582,10 @@ mod tests {
         m.nodes.push(node("node-1", Kind::Component, "ModelTree", None));
         scryer_core::write_model_at(&model_ref, &m).unwrap();
 
-        // Plan (draft): the node gains responsibilities and an appearance.
+        // Plan (draft): the node gains responsibilities.
         let mut planned = m.clone();
         planned.nodes[0].responsibilities =
             vec![resp("r-a"), resp("r-b")];
-        planned.nodes[0].appearance = Some(Appearance {
-            status: Some(RenderState::Proposed),
-            dist_path: None,
-            built_at: None,
-            source_hash: None,
-        });
         scryer_core::write_planned_at(&model_ref, &planned).unwrap();
 
         let server = ScryerServer::new();
@@ -2618,7 +2607,6 @@ mod tests {
         let m = scryer_core::read_model_at(&model_ref).unwrap();
         let n = &m.nodes[0];
         assert_eq!(n.responsibilities.len(), 2, "responsibilities committed");
-        assert!(n.appearance.is_some(), "appearance committed");
         assert!(
             scryer_core::plan_diff_at(&model_ref).unwrap().is_empty(),
             "plan clears after commit"
@@ -3064,7 +3052,6 @@ mod tests {
             external: None,
             responsibilities: None,
             properties: None,
-            visual: None,
         };
 
         // Re-parent the System under its own grandchild: a cycle.
@@ -3124,7 +3111,6 @@ mod tests {
                     name: None,
                     external: None,
                     properties: None,
-                    visual: None,
                     parent_id: None,
                 }],
             }))
@@ -3233,7 +3219,6 @@ mod tests {
             external: None,
             responsibilities: None,
             properties: None,
-            visual: None,
         };
         let attempt = |item: UpdateNodeItem| {
             server
@@ -3932,7 +3917,6 @@ mod tests {
                     external: None,
                     responsibilities: None,
                     properties: None,
-                    visual: None,
                     parent_id: None,
                 }],
             }))
@@ -3988,7 +3972,6 @@ mod tests {
                         resp("new"),
                     ]),
                     properties: None,
-                    visual: None,
                     parent_id: None,
                 }],
             }))
@@ -4042,7 +4025,6 @@ mod tests {
                     external: None,
                     responsibilities: Some(vec![resp("resp-1"), resp("resp-2")]),
                     properties: None,
-                    visual: None,
                     parent_id: None,
                 }],
             }))

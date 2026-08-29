@@ -368,25 +368,6 @@ fn diff_nodes(from: &ScryModel, to: &ScryModel, out: &mut ModelDiff) {
                     if prev.external == Some(true) { "true" } else { "false" },
                     if n.external == Some(true) { "true" } else { "false" },
                 );
-                // A visual change is a planned change like any other: the fixture
-                // is the basis, not a code diff, so we don't compare its contents —
-                // any appearance delta surfaces as one reworded "appearance" claim
-                // pointing at the accepted fixture, folded by `mark_implemented`.
-                if prev.appearance != n.appearance {
-                    changes.push(Change::Reworded {
-                        field: "appearance".into(),
-                        from: prev
-                            .appearance
-                            .as_ref()
-                            .and_then(|a| a.dist_path.clone())
-                            .unwrap_or_default(),
-                        to: n
-                            .appearance
-                            .as_ref()
-                            .and_then(|a| a.dist_path.clone())
-                            .unwrap_or_default(),
-                    });
-                }
                 if !changes.is_empty() {
                     out.changes.push(ElementChange {
                         kind: ElementKind::Node,
@@ -706,8 +687,6 @@ mod tests {
             responsibilities: Vec::new(),
             properties: Vec::new(),
             icon: None,
-            visual: None,
-            appearance: None,
             notes: None,
             position: None,
             directives: Vec::new(),
@@ -742,40 +721,6 @@ mod tests {
             .iter()
             .find(|c| c.id == id)
             .unwrap_or_else(|| panic!("no change for {id}"))
-    }
-
-    #[test]
-    fn appearance_change_surfaces_as_reworded_and_clears_on_fold() {
-        use crate::{Appearance, RenderState};
-        let mut from = ScryModel::new();
-        from.nodes.push(node("a", "A", None));
-
-        // The model wants a new look: the planned node gains an accepted fixture.
-        let mut to = ScryModel::new();
-        let mut a2 = node("a", "A", None);
-        a2.appearance = Some(Appearance {
-            status: Some(RenderState::Changed),
-            dist_path: Some(".scryer/preview/accepted/a.tsx".to_string()),
-            built_at: Some(1),
-            source_hash: None,
-        });
-        to.nodes.push(a2);
-
-        // Surfaces as one reworded "appearance" claim pointing at the fixture.
-        assert_eq!(
-            find(&diff(&from, &to), "a").changes,
-            vec![Change::Reworded {
-                field: "appearance".to_string(),
-                from: String::new(),
-                to: ".scryer/preview/accepted/a.tsx".to_string(),
-            }]
-        );
-
-        // Once committed catches up (mark_implemented folds it), the change clears.
-        assert!(
-            diff(&to, &to).changes.is_empty(),
-            "appearance clears once committed matches planned"
-        );
     }
 
     #[test]

@@ -3,14 +3,7 @@ import type { Editor } from "../editor";
 import type { ClaimProbeStatus, ClaimTestStatus, ModelHealthReport } from "../health";
 import type { ChangeRevision } from "../hooks/useModelStorage";
 import type { HistoryEvent } from "../history";
-
-export interface VariationState {
-  nodeId: string;
-  prompt: string;
-  status: "generating" | "ready";
-  count: number;
-  selectedIdx: number | null;
-}
+import type { PreviewServerState } from "../hooks/usePreviewServer";
 
 export type SpecialPage = "changes" | "review" | "dark" | "unmapped";
 
@@ -41,11 +34,9 @@ export interface PageProps {
   /** B5 repair path: agent writes realistic fixture props after a failed
    *  deterministic render. */
   onFixture?: (nodeId: string, renderStatus: string, renderError: string | null) => void;
-  variationState: VariationState | null;
-  onStartVariation?: (nodeId: string, prompt: string, count?: number, baseVariationIdx?: number) => void;
-  onAcceptVariation?: (nodeId: string, variationIdx: number) => void;
-  onDiscardVariations?: (nodeId: string) => void;
-  onSelectVariation?: (idx: number | null) => void;
+  /** The project's preview sidecar — whether a node gets a Preview section is
+   *  derived from the mountable exports it reports, never from the model. */
+  preview: PreviewServerState;
   /** Session-local journal of every edit (yours and the agent's), newest
    *  first — filtered per node to drive the History tab. */
   changeLog: readonly ChangeRevision[];

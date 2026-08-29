@@ -168,8 +168,6 @@ fn blank_node(id: String, kind: Kind, name: String, parent_id: Option<String>) -
         responsibilities: Vec::new(),
         properties: Vec::new(),
         icon: None,
-        visual: None,
-        appearance: None,
         notes: None,
         position: None,
         directives: Vec::new(),
@@ -691,7 +689,6 @@ impl ScryerServer {
                 );
             }
             node.responsibilities = resps;
-            node.visual = item.visual;
             model.nodes.push(node);
             minted.push(id);
         }
@@ -1503,7 +1500,6 @@ mod tests {
                         label: "token".into(),
                         description: "bearer token".into(),
                     }],
-                    visual: None,
                 }],
             }))
             .unwrap();
@@ -2211,7 +2207,6 @@ mod tests {
                     source_file: "src/x.rs".into(),
                     line: None,
                     end_line: None,
-                    visual: None,
                     responsibilities: vec![],
                     properties: vec![],
                 }],

@@ -266,7 +266,6 @@ fn resolve_field(n: &Node, field: &str, child_count: usize) -> Result<FieldVal, 
         "description" => FieldVal::Str(n.description.clone()),
         "technology" => FieldVal::Str(n.technology.clone()),
         "external" => FieldVal::Bool(n.external == Some(true)),
-        "visual" => FieldVal::Bool(n.visual == Some(true)),
         "empty" => FieldVal::Bool(scryer_core::is_node_empty(n)),
         "vagrant" => FieldVal::Bool(n.responsibilities.iter().any(|r| r.vagrant == Some(true))),
         "responsibilityCount" | "responsibilities" => {
@@ -277,8 +276,7 @@ fn resolve_field(n: &Node, field: &str, child_count: usize) -> Result<FieldVal, 
         other => {
             return Err(format!(
                 "Unknown query field '{}'. Valid: kind, name, description, technology, external, \
-                 visual, empty, vagrant, responsibilityCount, propertyCount, \
-                 childCount.",
+                 empty, vagrant, responsibilityCount, propertyCount, childCount.",
                 other
             ))
         }
@@ -1111,7 +1109,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "What model intent is NOT yet reflected in code — the model→code work outstanding. This is the PLAN diff: how the draft (`planned`) diverges from the committed `model`. Each entry names an element (node / responsibility / property / link / group) and what to do: `added` (implement new code), `reworded` (re-implement to the new spec), `moved` (move the code), `repointed` (re-point the relationship), `deleted` (remove the code) — with a breadcrumb path and, for responsibilities, source anchors. Implementing an entry and calling `mark_implemented` folds it from the plan into the committed model. A `reworded` claim on the `appearance` field is a planned VISUAL change — reconcile the component's code to the accepted fixture named in the entry's `appearanceInstruction`, not to a text spec. Entries tagged to a CHANGE (a named plan partition, see `set_change`) carry its id in `change`; `openChanges` lists every open change with its rationale, and passing `change` (an id, or \"unfiled\") filters the queue to one task — an agent told to implement one change need not wade through the rest. Call this to find what needs implementing or syncing to the codebase."
+        description = "What model intent is NOT yet reflected in code — the model→code work outstanding. This is the PLAN diff: how the draft (`planned`) diverges from the committed `model`. Each entry names an element (node / responsibility / property / link / group) and what to do: `added` (implement new code), `reworded` (re-implement to the new spec), `moved` (move the code), `repointed` (re-point the relationship), `deleted` (remove the code) — with a breadcrumb path and, for responsibilities, source anchors. Implementing an entry and calling `mark_implemented` folds it from the plan into the committed model. Entries tagged to a CHANGE (a named plan partition, see `set_change`) carry its id in `change`; `openChanges` lists every open change with its rationale, and passing `change` (an id, or \"unfiled\") filters the queue to one task — an agent told to implement one change need not wade through the rest. Call this to find what needs implementing or syncing to the codebase."
     )]
     pub(crate) fn get_pending(
         &self,
@@ -1243,20 +1241,6 @@ impl ScryerServer {
                 }
                 ElementKind::Link | ElementKind::Group => {}
             }
-            // A reworded "appearance" claim is a planned VISUAL change, not a text
-            // spec: the agent can't re-implement it from the wording, so point it
-            // at the accepted fixture to reconcile the component's code against.
-            if ch.kind == ElementKind::Node {
-                if let Some(Change::Reworded { to, .. }) = ch.changes.iter().find(
-                    |c| matches!(c, Change::Reworded { field, .. } if field == "appearance"),
-                ) {
-                    v["appearanceInstruction"] = serde_json::Value::String(format!(
-                        "This node's appearance has a planned change — the model wants a new look. \
-                         Reconcile the component's code to the accepted fixture at {to} \
-                         (the fixture is the basis; do not diff its contents), then mark_implemented."
-                    ));
-                }
-            }
             if let Some(cid) = tagged {
                 v["change"] = serde_json::Value::String(cid.clone());
             }
@@ -1345,7 +1329,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Run the structural validator over your WORKING model (the plan, with committed's code anchors overlaid) — so it sees the edits you just authored, which is what makes it a post-CLOSE gate. Returns a list of warnings: parent-kind mismatches, unknown link endpoints, group members at mixed levels, empty symbols (carrying no responsibility/property/appearance), source-map entries that reference unknown ids, and responsibility mappings whose line range covers the whole enclosing symbol (a range must be a proper subset — drop it to mean the whole definition). A clean run is a post-edit gate, not a lookup — to FIND nodes by shape on demand (e.g. every empty symbol) use `query_model`. Does NOT judge responsibility wording quality."
+        description = "Run the structural validator over your WORKING model (the plan, with committed's code anchors overlaid) — so it sees the edits you just authored, which is what makes it a post-CLOSE gate. Returns a list of warnings: parent-kind mismatches, unknown link endpoints, group members at mixed levels, empty symbols (carrying no responsibility/property), source-map entries that reference unknown ids, and responsibility mappings whose line range covers the whole enclosing symbol (a range must be a proper subset — drop it to mean the whole definition). A clean run is a post-edit gate, not a lookup — to FIND nodes by shape on demand (e.g. every empty symbol) use `query_model`. Does NOT judge responsibility wording quality."
     )]
     fn validate_model(
         &self,
@@ -1830,8 +1814,6 @@ mod tests {
             responsibilities: Vec::new(),
             properties: Vec::new(),
             icon: None,
-            visual: None,
-            appearance: None,
             notes: None,
             position: None,
             directives: Vec::new(),
@@ -2150,41 +2132,6 @@ mod tests {
         assert!(dump.contains("node-3")); // deletion surfaced
         // the untouched claim is not part of the plan
         assert!(!dump.contains("settles nightly"));
-    }
-
-    #[test]
-    fn get_pending_gives_appearance_change_a_fixture_instruction() {
-        let dir = tempfile::tempdir().unwrap();
-        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
-
-        let mut m = ScryModel::new();
-        m.nodes.push(node("node-1", Kind::Component, "Chart", None));
-        scryer_core::write_model_at(&model_ref, &m).unwrap();
-
-        // The model wants a new look: the planned node gains an accepted fixture.
-        let mut planned = m.clone();
-        planned.nodes[0].appearance = Some(scryer_core::Appearance {
-            status: Some(scryer_core::RenderState::Changed),
-            dist_path: Some(".scryer/preview/accepted/node-1.tsx".into()),
-            built_at: Some(1),
-            source_hash: None,
-        });
-        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
-
-        let server = ScryerServer::new();
-        let r = server
-            .get_pending(Parameters(GetPendingRequest {
-                change: None,
-                project: Some(dir.path().to_string_lossy().to_string()),
-            }))
-            .unwrap();
-        let dump = serde_json::to_string(&result_json(&r)).unwrap();
-
-        // The visual change surfaces with purpose-built guidance, not a bare
-        // reworded field — naming the fixture and the fold that closes the loop.
-        assert!(dump.contains("appearanceInstruction"));
-        assert!(dump.contains(".scryer/preview/accepted/node-1.tsx"));
-        assert!(dump.contains("mark_implemented"));
     }
 
     #[test]

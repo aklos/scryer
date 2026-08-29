@@ -356,8 +356,6 @@ mod tests {
             }],
             properties: Vec::new(),
             icon: None,
-            visual: None,
-            appearance: None,
             notes: None,
             position: None,
             directives: Vec::new(),
@@ -543,7 +541,7 @@ mod tests {
             .unwrap();
     }
 
-    /// resp-747: the probe answers with the span to break, its attached test
+    /// resp-764: the probe answers with the span to break, its attached test
     /// files, and the worktree to do it in — and the developer's own tree is
     /// not part of the transaction at all.
     #[test]
@@ -572,7 +570,7 @@ mod tests {
         std::fs::remove_dir_all(&wt).ok();
     }
 
-    /// resp-746: without git there is nowhere safe to break code, and the
+    /// resp-763: without git there is nowhere safe to break code, and the
     /// answer is a refusal rather than a fallback onto the developer's tree.
     #[test]
     fn probe_claim_refuses_a_project_that_is_not_a_git_repo() {
@@ -591,7 +589,7 @@ mod tests {
         assert!(text_of(&result).contains("not a git repository"), "{}", text_of(&result));
     }
 
-    /// resp-748: without a verdict there is nothing for a red test to mean.
+    /// resp-765: without a verdict there is nothing for a red test to mean.
     #[test]
     fn probe_claim_refuses_a_claim_with_no_verdict() {
         let (server, dir) = tested_project();
@@ -607,7 +605,7 @@ mod tests {
         assert!(text_of(&result).contains("no recorded verdict"), "{}", text_of(&result));
     }
 
-    /// resp-749 and resp-745: the mutation lands in the worktree, closing
+    /// resp-766 and resp-762: the mutation lands in the worktree, closing
     /// resets it, the finding is recorded, and the developer's own file was
     /// never a participant.
     #[test]
@@ -680,7 +678,7 @@ mod tests {
         assert!(text.contains("sample, not a"), "{text}");
     }
 
-    /// resp-755: a surviving break says a test the model calls green does not
+    /// resp-772: a surviving break says a test the model calls green does not
     /// hold its claim, so it rides the ambient header — while a claim nobody
     /// has probed stays silent, since that is nearly every claim and a
     /// standing count of it would be noise.
@@ -723,7 +721,7 @@ mod tests {
         std::fs::remove_dir_all(scryer_core::worktree::worktree_path(dir.path())).ok();
     }
 
-    /// resp-754: the churn of a probe — many edits, many test runs — must not
+    /// resp-771: the churn of a probe — many edits, many test runs — must not
     /// land in the context of the session that asked for it, so the tool tells
     /// the caller to hand the loop off rather than running it inline.
     #[test]

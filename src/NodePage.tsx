@@ -63,9 +63,9 @@ import { DetailRail } from "./page/DetailRail";
 import { plannedRespHosts, ResponsibilitiesSection } from "./page/ResponsibilitiesSection";
 import { PropertiesSection } from "./page/PropertiesSection";
 import { PreviewSection } from "./page/PreviewSection";
-import { AppearanceWorkspace } from "./page/AppearanceWorkspace";
+import { previewEntryFor } from "./hooks/usePreviewServer";
 
-export type { VariationState, SpecialPage, Selected } from "./page/types";
+export type { SpecialPage, Selected } from "./page/types";
 
 export function NodePage(props: PageProps) {
   const { model, selected } = props;
@@ -118,9 +118,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const openMenu = usePageMenu();
   const copyId = useCopyId();
   const [tab, setTab] = useState<"overview" | "history">("overview");
-  // Appearance takeover: the overview content row swaps for the visual-edit
-  // workspace. Leaving the tab leaves the mode.
-  const [editingAppearance, setEditingAppearance] = useState(false);
   // The header edits (name, technology) accumulate in this draft; the model is
   // written once, on Done — the same nothing-commits-until-Done contract as
   // every SectionEditor. Cancel (or navigating away) simply drops the draft.
@@ -152,7 +149,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
     [history, node.id],
   );
   const tag = typeTag(node);
-  const KindIcon = lookupIcon(node.icon) ?? kindIcon(node);
 
   const sourceMap = effectiveSourceMap(committed, model);
   const testMap = effectiveTestMap(committed, model);
@@ -164,10 +160,13 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const committedResps =
     committed?.nodes.find((n) => n.id === node.id)?.responsibilities ?? [];
   const definition = sourceMap[node.id] ?? [];
-  // The node's anchored source file, for matching its preview component.
+  // Preview-ability is derived, never stored: the section exists iff the
+  // sidecar reports a mountable export for the node's anchored source file.
   const previewSourceFile =
     sourceMap[node.id]?.[0]?.pattern ??
     node.responsibilities?.map((r) => sourceMap[r.id]?.[0]?.pattern).find(Boolean);
+  const previewEntry = previewEntryFor(node, props.preview.components, previewSourceFile);
+  const KindIcon = lookupIcon(node.icon) ?? kindIcon(node, previewEntry != null);
 
   // Leaf claims must read through to code; structural nodes discharge through
   // their subtree, so their claims are never "unmapped". Leafness spans the
@@ -429,40 +428,19 @@ function NodePageBody(props: PageProps & { node: Node }) {
         tabs={
           <PageTabs
             tab={tab}
-            onTab={(t) => {
-              setEditingAppearance(false);
-              setTab(t);
-            }}
+            onTab={setTab}
             historyCount={nodeEvents.length}
           />
         }
       />
 
-      <div
-        className={`min-h-0 flex-1 ${
-          editingAppearance && tab === "overview" ? "overflow-hidden" : "overflow-y-auto"
-        }`}
-      >
+      <div className="min-h-0 flex-1 overflow-y-auto">
         {tab === "history" ? (
           <div className={`${PAGE_COL} pb-[50px] pt-[18px]`}>
             <div className="max-w-[900px]">
               <NodeHistory events={nodeEvents} projectPath={projectPath} />
             </div>
           </div>
-        ) : editingAppearance && node.visual ? (
-          <AppearanceWorkspace
-            node={node}
-            projectPath={projectPath}
-            sourceFile={previewSourceFile}
-            variationState={
-              props.variationState?.nodeId === node.id ? props.variationState : null
-            }
-            onStartVariation={props.onStartVariation}
-            onAcceptVariation={props.onAcceptVariation}
-            onDiscardVariations={props.onDiscardVariations}
-            onSelectVariation={props.onSelectVariation}
-            onClose={() => setEditingAppearance(false)}
-          />
         ) : (
           <div className={`${PAGE_COL} flex gap-8 pb-[50px] pt-[18px]`}>
             <article
@@ -481,19 +459,12 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 onCommit={(v) => editor?.updateNode(node.id, { description: v || undefined })}
               />
 
-              {node.visual && (
+              {previewEntry && (
                 <PreviewSection
                   node={node}
-                  projectPath={projectPath}
-                  sourceFile={previewSourceFile}
+                  server={props.preview}
+                  entry={previewEntry}
                   onFixture={onFixture}
-                  variationsReady={
-                    props.variationState?.nodeId === node.id &&
-                    props.variationState.status === "ready"
-                  }
-                  onEditAppearance={
-                    props.onStartVariation ? () => setEditingAppearance(true) : undefined
-                  }
                 />
               )}
 

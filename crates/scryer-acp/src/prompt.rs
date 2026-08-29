@@ -128,7 +128,7 @@ CLUSTER components from cohesion + the dependency graph below: a component group
 
 ### Mandatory symbols
 
-Every component must contain at least one architecturally meaningful symbol. For each nested symbol, pass a scope-unique `key`, `name`, `sourceFile`, and `line`/`endLine` for the full definition straight from the context. A responsibility is a plain string (use the plain form by default; only attach `{{"statement", "line", "endLine"}}` when a precise sub-range genuinely adds value). Give `responsibilities` for behavior and `properties` for declared data fields; set `visual: true` on UI-rendering symbols. **Every symbol you emit MUST carry semantic content of its own: at least one business/process responsibility, or — for a data type — its declared `properties`. There is no empty symbol.** A definition with no business responsibility and no declared data shape — a trivial UI leaf (a `Chevron`, a `Logo`), a thin wrapper, a re-export, a private helper — does NOT earn a node: OMIT it and let its parent symbol's responsibility cover it. **An entry point folds UP, not away:** a top-level `main` (or any binary entry that only wires up and dispatches the program's work — parses args, selects a subcommand, starts the server) carries the BINARY's accountability at the COMPONENT's altitude, not a symbol's, EVEN WHEN it clearly does something. Put that one responsibility on the enclosing COMPONENT and emit NO `main` symbol; mint symbols beneath it only for helpers that hold their own distinct responsibility. When a definition has nothing of its own to say, the answer is to leave it out — NEVER to fabricate filler, and NEVER to emit it with empty responsibilities and properties. A definition earns a symbol when it carries architectural behavior, a declared data shape, or a cross-boundary role. Skip trivial wrappers, thin re-exports, getters/setters, and test stubs:
+Every component must contain at least one architecturally meaningful symbol. For each nested symbol, pass a scope-unique `key`, `name`, `sourceFile`, and `line`/`endLine` for the full definition straight from the context. A responsibility is a plain string (use the plain form by default; only attach `{{"statement", "line", "endLine"}}` when a precise sub-range genuinely adds value). Give `responsibilities` for behavior and `properties` for declared data fields. **Every symbol you emit MUST carry semantic content of its own: at least one business/process responsibility, or — for a data type — its declared `properties`. There is no empty symbol.** A definition with no business responsibility and no declared data shape — a trivial UI leaf (a `Chevron`, a `Logo`), a thin wrapper, a re-export, a private helper — does NOT earn a node: OMIT it and let its parent symbol's responsibility cover it. **An entry point folds UP, not away:** a top-level `main` (or any binary entry that only wires up and dispatches the program's work — parses args, selects a subcommand, starts the server) carries the BINARY's accountability at the COMPONENT's altitude, not a symbol's, EVEN WHEN it clearly does something. Put that one responsibility on the enclosing COMPONENT and emit NO `main` symbol; mint symbols beneath it only for helpers that hold their own distinct responsibility. When a definition has nothing of its own to say, the answer is to leave it out — NEVER to fabricate filler, and NEVER to emit it with empty responsibilities and properties. A definition earns a symbol when it carries architectural behavior, a declared data shape, or a cross-boundary role. Skip trivial wrappers, thin re-exports, getters/setters, and test stubs:
   - **Framework registration objects** (a CMS collection config, an ORM model, a settings/route object): descend INTO its `fields[]` array (the schema columns) and emit one property per entry there. Its `properties` are those DECLARED FIELDS — the record's columns — NEVER the sibling config wrapper keys (`slug`, `admin`, `hooks`, `access`, …), which are framework plumbing, not the record's data shape.
   - **Generated / mirror type files** (a `*-types` file, a `*.d.ts`, or any file that just re-declares a definition that already lives in real source): do NOT create a parallel symbol for it. Fold its fields into the source-of-truth symbol so each thing is modeled exactly once — never two sibling symbols for the same record.
   - **Classes/objects with internal helpers**: model the class as ONE symbol carrying its public operations as responsibilities; do NOT add private/internal helper methods (e.g. `_rpc`, `_get_uid`, `_execute`) as their own symbols. Only addressable, public definitions become symbols.
@@ -250,7 +250,7 @@ Call `flag_drift` for "{node_id}" with everything you found. If the code and the
     )
 }
 
-/// Prompt for rendering a visual component preview. The agent reads the
+/// Prompt for rendering a component preview. The agent reads the
 /// component source and writes `main.tsx` for the Vite render harness in
 /// `.scryer/preview/{nodeId}/` — the caller builds it afterward. The harness must
 /// wrap the component with whatever providers/context the codebase requires and
@@ -275,9 +275,18 @@ pub fn preview_fixture_prompt(
     } else {
         format!("\nRender error:\n\n```\n{render_error}\n```\n")
     };
+    // A Vue single-file component takes its fixture as a plain `.ts` props
+    // module — there is no JSX to build, and the shared module is `.ts` too.
+    let is_vue = source_file.ends_with(".vue");
+    let (fixture_ext, shared_module) = if is_vue { ("ts", "shared.ts") } else { ("tsx", "shared.tsx") };
+    let vue_note = if is_vue {
+        "\nThis is a Vue single-file component: its props are the `defineProps` / `props` declaration in its `<script>` block, and the server fills REQUIRED props from that declaration at mount time. Fixture modules for it are plain TypeScript (`.ts`) — export data objects, never JSX.\n"
+    } else {
+        ""
+    };
 
     format!(
-        r#"The live preview of the visual component "{node_name}" (id {node_id}) in the project at {project_path} is rendered by a dev server that synthesizes placeholder props from the component's TypeScript types. With those placeholders the render came out **{render_status}** — the preview needs realistic data instead.
+        r#"The live preview of the component "{node_name}" (id {node_id}) in the project at {project_path} is rendered by a dev server that synthesizes placeholder props from the component's TypeScript types.{vue_note} With those placeholders the render came out **{render_status}** — the preview needs realistic data instead.
 {error_section}
 Generic synthesis can't invent interconnected domain data: a prop that is a graph (or any object) plus another prop that points INTO it (an id, a selection) can't be made consistent from types alone. You supply that domain knowledge ONCE, keyed by type, so every component that touches the type reuses it.
 
@@ -296,8 +305,8 @@ The preview server reads `.scryer/preview/fixtures/manifest.json`. For any prop 
 ```json
 {{
   "byType": {{
-    "ScryModel": {{ "module": "shared.tsx", "export": "sampleModel" }},
-    "Node": {{ "module": "shared.tsx", "export": "sampleNode", "sourceFile": "src/viewmodel.ts" }}
+    "ScryModel": {{ "module": "{shared_module}", "export": "sampleModel" }},
+    "Node": {{ "module": "{shared_module}", "export": "sampleNode", "sourceFile": "src/viewmodel.ts" }}
   }}
 }}
 ```
@@ -307,15 +316,15 @@ The preview server reads `.scryer/preview/fixtures/manifest.json`. For any prop 
 ## Your task
 
 1. **Read the component's prop types** (follow the imports in the source above) to see which types its props are.
-2. **Read the existing `.scryer/preview/fixtures/manifest.json` and `shared.tsx` if they exist** — you are EXTENDING them, not overwriting. Reuse any type already covered; never duplicate an entry.
-3. For each domain type this component needs that is NOT already in the manifest, **add a named sample export** to `shared.tsx` and a `byType` entry to the manifest. Prefer extending `shared.tsx`; these samples are shared across the whole project.
+2. **Read the existing `.scryer/preview/fixtures/manifest.json` and `{shared_module}` if they exist** — you are EXTENDING them, not overwriting. Reuse any type already covered; never duplicate an entry.
+3. For each domain type this component needs that is NOT already in the manifest, **add a named sample export** to `{shared_module}` and a `byType` entry to the manifest. Prefer extending `{shared_module}`; these samples are shared across the whole project.
 4. **Make the samples mutually consistent**: ids that resolve, collection members and link/edge endpoints reference ids that exist in the sample, and any pointer-typed prop (a `selected`/`activeId`-style string) names a real element in the sample so the component renders a populated state, not an empty/not-found one.
 5. **Realistic data, not placeholders.** Lists get 3–5 plausible items; names/labels/timestamps look real. The goal is a preview that shows the component doing its job.
 6. **Seed controlled state to a POPULATED snapshot.** If the component's expand/select/open/active state is driven by props (an `expanded`/`openIds` set, a `selected` id, an `isOpen` flag) with companion callbacks (`onToggle`, `onSelect`), the synthesized empty set / false flag renders it collapsed-and-blank — functionally useless as a preview, even though it "rendered". The callbacks stay no-ops (the preview is a snapshot, not interactive), so the ONLY way the component shows its structure is to seed those state props open: an `expanded` set containing the sample's ids, a real `selected`, flags set so panels are visible. These props are usually generic-typed (`Set<string>`, `boolean`), so seed them in the per-node override below rather than the shared manifest.
 
 ### Per-node override (fallback + controlled state)
 
-Write `.scryer/preview/fixtures/{node_id}.tsx` (DEFAULT EXPORT = a partial props object for "{node_name}") when this component needs props the shared samples can't express — a particular selection, a special-case shape, or **controlled-state props seeded open per point 6**. The server spreads it OVER the shared/synthesized props, so include only the keys you override, and import the shared samples to keep ids consistent (e.g. `import {{ sampleModel }} from "/.scryer/preview/fixtures/shared.tsx"` then `expanded: new Set(sampleModel.nodes.map((n) => n.id))`). Keep domain DATA in the shared fixtures; use the override for this component's view state.
+Write `.scryer/preview/fixtures/{node_id}.{fixture_ext}` (DEFAULT EXPORT = a partial props object for "{node_name}") when this component needs props the shared samples can't express — a particular selection, a special-case shape, or **controlled-state props seeded open per point 6**. The server spreads it OVER the shared/synthesized props, so include only the keys you override, and import the shared samples to keep ids consistent (e.g. `import {{ sampleModel }} from "/.scryer/preview/fixtures/{shared_module}"` then `expanded: new Set(sampleModel.nodes.map((n) => n.id))`). Keep domain DATA in the shared fixtures; use the override for this component's view state.
 
 ### Rules
 
@@ -327,84 +336,26 @@ Write `.scryer/preview/fixtures/{node_id}.tsx` (DEFAULT EXPORT = a partial props
     )
 }
 
-/// Prompt for generating visual variations of a component (B6). The agent
-/// writes N self-contained variant modules; the always-running preview server
-/// serves each as a virtual entry instantly — there is no build step. Each
-/// variant imports the original component (or reimplements parts inline) and
-/// applies changes through wrappers, CSS overrides, or modified props — the
-/// project source is never modified.
-pub fn visual_variation_prompt(
-    project_path: &str,
-    node_id: &str,
-    node_name: &str,
-    source_file: &str,
-    source_lines: &str,
-    user_prompt: &str,
-    base_variant: &str,
-    variation_count: usize,
-) -> String {
-    let base_section = if base_variant.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "\n## Starting point (previously chosen variant — iterate on this)\n\n```tsx\n{base_variant}\n```\n"
-        )
-    };
-
-    let last_idx = variation_count - 1;
-
-    format!(
-        r#"You are generating {variation_count} visual variations of the component "{node_name}" (id {node_id}) in the project at {project_path}.
-
-## The component
-
-Source file: `{source_file}`
-
-```
-{source_lines}
-```
-{base_section}
-## The user's request
-
-{user_prompt}
-
-## Your task
-
-Create {variation_count} DISTINCT visual interpretations of the user's request. Each variation must be a genuinely different approach, not minor tweaks of the same idea.
-
-For EACH variation index 0 through {last_idx}, write ONE file `.scryer/preview/variations/{node_id}/{{n}}.tsx` that:
-
-- `export default` a self-contained React component taking NO props — it renders the varied version of "{node_name}" with realistic inline fixture data (lists get 3–5 plausible items, labels look real).
-- Imports everything from the project by ROOT-ABSOLUTE path (e.g. `import {{ {node_name} }} from "/{source_file}"`, `import {{ helper }} from "/src/lib/helper"`). NEVER use relative imports — the variant module lives outside `src/`.
-- Applies the requested change through one or more of:
-  - **CSS overrides** — a `<style>` element or inline styles on a wrapper
-  - **Wrapper components** — wrap the original to modify layout, spacing, or behavior
-  - **Modified props** — change props that affect appearance
-  - **Inline reimplementation** — for structural changes, reimplement the relevant parts inline while importing shared dependencies from the project
-- Does NOT import the project's global CSS — the preview server injects it automatically.
-- Does NOT call `createRoot` or render itself — just export the component.
-
-An always-running dev server picks each file up instantly; there is no build step and nothing else to write.
-
-### Variation guidelines
-
-- Each variation should be a genuinely different visual approach
-- Example — "make the header sticky": one uses CSS `position: sticky` with shadow, another `position: fixed` with backdrop-blur, a third adds a condensed mode on scroll
-- Example — "reduce padding": one goes minimal, another balanced with more whitespace on specific sides, a third uses asymmetric padding with tighter vertical
-- Make each variation complete and functional, not half-finished sketches
-- Preserve the component's functionality — only modify visual aspects
-
-### Rules
-
-- Do NOT modify any project source files
-- The ONLY files you write are the {variation_count} variant modules `.scryer/preview/variations/{node_id}/{{0..{last_idx}}}.tsx`
-"#
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Vue single-file component's fixture is a plain `.ts` props module,
+    /// shared samples live in `shared.ts`, and the prompt says so; a React
+    /// component keeps the `.tsx` contract untouched.
+    #[test]
+    fn fixture_prompt_asks_vue_components_for_plain_ts_modules() {
+        let vue = preview_fixture_prompt("/p", "node-1", "UserCard", "src/components/user-card.vue", "", "empty", "");
+        assert!(vue.contains(".scryer/preview/fixtures/node-1.ts`"), "vue fixture is .ts");
+        assert!(vue.contains("shared.ts\""), "shared module is .ts");
+        assert!(vue.contains("Vue single-file component"));
+        assert!(!vue.contains("node-1.tsx"));
+
+        let react = preview_fixture_prompt("/p", "node-2", "Card", "src/Card.tsx", "", "empty", "");
+        assert!(react.contains(".scryer/preview/fixtures/node-2.tsx`"));
+        assert!(react.contains("shared.tsx"));
+        assert!(!react.contains("Vue single-file component"));
+    }
     use scryer_core::{Kind, Responsibility, Source, SourceLocation};
 
     fn node(id: &str, kind: Kind, parent: Option<&str>, resp: Option<&str>) -> Node {
@@ -434,8 +385,6 @@ mod tests {
                 .unwrap_or_default(),
             properties: Vec::new(),
             icon: None,
-            visual: None,
-            appearance: None,
             notes: None,
             position: None,
             directives: Vec::new(),
