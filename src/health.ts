@@ -234,6 +234,28 @@ export function probeMark(
   return probe.survived > 0 ? "hollow" : "probed";
 }
 
+/** The ONE glyph the lane may show after the flask and count — and only when
+ *  there is something to look at. Passing is the resting state and gets NO
+ *  glyph: nearly every verdict on screen is green, and a mark that is
+ *  everywhere is a mark nobody reads (the tooltip still says passing vs.
+ *  never run). Glyphs are for what is wrong — `stale` and `failing` on the
+ *  verdict, `hollow` (red crosshair — a deliberate break went uncaught, the
+ *  finding) from a probe — plus the one earned positive, `probed` (green
+ *  double check: every deliberate break was caught; verified, as far as a
+ *  sample verifies). A stale or failing verdict keeps its
+ *  own glyph: the probe is fingerprinted on the same anchors, so it is stale
+ *  whenever the verdict is, and a currently-failing test is the louder fact. */
+export function testLaneGlyph(
+  verdict: ClaimTestStatus | undefined,
+  probe: ClaimProbeStatus | undefined,
+): "none" | "stale" | "failing" | "probed" | "hollow" {
+  const tone = testLaneTone(verdict);
+  if (tone === "quiet") return "none";
+  if (tone !== "passing") return tone;
+  const mark = probeMark(probe);
+  return mark === "none" ? "none" : mark;
+}
+
 /** The probe half of the lane tooltip. Says "sampled, not proved" outright:
  *  the mark's whole risk is being read as a stronger guarantee than one to
  *  three breaks can support. */

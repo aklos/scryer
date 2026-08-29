@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  Check,
+  CheckCheck,
   CircleDashed,
   CornerDownRight,
   Crosshair,
@@ -15,7 +15,7 @@ import { STANDARD_CONCERNS } from "../viewmodel";
 import { lookupIcon } from "../IconPicker";
 import type { Editor } from "../editor";
 import type { AnchorState, ClaimProbeStatus, ClaimTestStatus } from "../health";
-import { probeMark, probeTitle, testLaneTitle, testLaneTone } from "../health";
+import { probeTitle, testLaneGlyph, testLaneTitle, testLaneTone } from "../health";
 import { FLAG_COLORS } from "../statusColors";
 import {
   buildElementDiff,
@@ -709,15 +709,47 @@ function RespDiffRow({
       {tested &&
         (() => {
           const tone = testLaneTone(testVerdict ?? undefined);
-          const mark = probeMark(probeResult ?? undefined);
+          const glyph = testLaneGlyph(testVerdict ?? undefined, probeResult ?? undefined);
           const toneCls =
             tone === "failing"
               ? "text-red-600 dark:text-red-400"
               : tone === "stale"
                 ? "text-orange-600 dark:text-orange-400"
                 : "text-[var(--text-secondary)]";
-          const VerdictMark =
-            tone === "passing" ? Check : tone === "stale" ? RotateCw : tone === "failing" ? X : null;
+          // At most one glyph after the count, and only for something worth a
+          // look. Passing is assumed — nearly every verdict on screen is
+          // green, so any mark for it would be wallpaper — and the flask
+          // stays neutral; the tooltip is where "passing" vs "never run" is
+          // spelled out. Marks are for what is WRONG: stale, failing, or a
+          // probe survivor (red crosshair — a test the verdict calls green did
+          // NOT catch a deliberate break). The one positive mark is the green
+          // double check: probed, every deliberate break caught — verified,
+          // as far as a sample can verify. Nothing for a claim never probed
+          // or whose probe went stale: absence is "nobody measured this".
+          const Glyph =
+            glyph === "probed"
+              ? CheckCheck
+              : glyph === "hollow"
+                ? Crosshair
+                : glyph === "stale"
+                  ? RotateCw
+                  : glyph === "failing"
+                    ? X
+                    : null;
+          const glyphCls =
+            glyph === "probed"
+              ? "text-emerald-600 dark:text-emerald-400"
+              : glyph === "hollow"
+                ? "text-red-600 dark:text-red-400"
+                : "";
+          const glyphLabel =
+            glyph === "stale"
+              ? "Verdict stale — re-run"
+              : glyph === "failing"
+                ? "Tests failing"
+                : glyph === "probed"
+                  ? "Probed — every deliberate break was caught"
+                  : "A deliberate break went uncaught — this test does not hold the claim";
           return (
             <span
               className={`absolute right-1 top-[3px] flex items-center gap-px font-mono text-2xs ${toneCls}`}
@@ -728,43 +760,7 @@ function RespDiffRow({
             >
               <FlaskConical className="h-3 w-3" aria-label="Tests attached" />
               {testLocations.length}
-              {VerdictMark && (
-                <VerdictMark
-                  className={`ml-0.5 h-3 w-3 ${
-                    tone === "passing" ? "text-emerald-600 dark:text-emerald-400" : ""
-                  }`}
-                  aria-label={
-                    tone === "passing"
-                      ? "Tests passing"
-                      : tone === "stale"
-                        ? "Verdict stale — re-run"
-                        : "Tests failing"
-                  }
-                />
-              )}
-              {/* The probe mark — a THIRD fact, never folded into the verdict
-                  beside it. One glyph, two readings: the claim has been shot
-                  at, and the colour says whether anything got through. Green
-                  is deliberately modest (one to three breaks is a sample, not
-                  a proof), red is the finding — a test the check next to it
-                  calls passing did NOT catch a deliberate break. Nothing at
-                  all for a claim never probed, or one whose probe went stale,
-                  because an absent mark is the honest rendering of "nobody
-                  measured this". */}
-              {mark !== "none" && (
-                <Crosshair
-                  className={`ml-0.5 h-3 w-3 ${
-                    mark === "hollow"
-                      ? "text-red-600 dark:text-red-400"
-                      : "text-emerald-600 dark:text-emerald-400"
-                  }`}
-                  aria-label={
-                    mark === "hollow"
-                      ? "A deliberate break went uncaught — this test does not hold the claim"
-                      : "Probed — every deliberate break was caught"
-                  }
-                />
-              )}
+              {Glyph && <Glyph className={`ml-0.5 h-3 w-3 ${glyphCls}`} aria-label={glyphLabel} />}
             </span>
           );
         })()}

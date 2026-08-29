@@ -1,15 +1,17 @@
 /**
  * The claim row's test lane: tone and words for a recorded verdict
- * (`src/health.ts`). A current green verdict is its OWN tone (`passing`, the
- * lane's check mark) — quiet is reserved for the unmeasured, so "passing" and
- * "never run" can never read alike — and stale outranks failing, because a
- * red verdict the code moved past is outdated, not an alarm.
+ * (`src/health.ts`). A current green verdict is its OWN tone (`passing`) so
+ * the tooltip never conflates it with the unmeasured (`quiet`), but neither
+ * draws a glyph: passing is assumed, and marks after the count are for what
+ * is wrong — stale outranks failing, because a red verdict the code moved
+ * past is outdated, not an alarm — plus the one earned positive, probed.
  */
 import { describe, expect, it } from "vitest";
 import {
   probeMark,
   probeTitle,
   subtreeTestTone,
+  testLaneGlyph,
   testLaneTitle,
   testLaneTone,
   type ClaimTestStatus,
@@ -165,5 +167,37 @@ describe("probeTitle", () => {
 
   it("says nothing when there is nothing measured", () => {
     expect(probeTitle(undefined)).toBe("");
+  });
+});
+
+describe("testLaneGlyph", () => {
+  const probe = (over: Partial<ClaimProbeStatus>): ClaimProbeStatus => ({
+    respId: "r1",
+    probes: 2,
+    survived: 0,
+    survivors: [],
+    stale: false,
+    recordedAt: 0,
+    ...over,
+  });
+
+  it("gives passing no glyph — the resting state is not a mark", () => {
+    expect(testLaneGlyph(verdict({}), undefined)).toBe("none");
+    expect(testLaneGlyph(undefined, undefined)).toBe("none");
+  });
+
+  it("lets a probe result be the lane's one glyph, never a second icon beside a check", () => {
+    expect(testLaneGlyph(verdict({}), probe({}))).toBe("probed");
+    expect(testLaneGlyph(verdict({}), probe({ survived: 1, survivors: ["x"] }))).toBe("hollow");
+  });
+
+  it("keeps the verdict's own glyph when it is stale or failing, whatever the probe said", () => {
+    expect(testLaneGlyph(verdict({ stale: true }), probe({}))).toBe("stale");
+    expect(testLaneGlyph(verdict({ outcome: "failed" }), probe({ survived: 1 }))).toBe("failing");
+    expect(testLaneGlyph(undefined, probe({}))).toBe("none");
+  });
+
+  it("drops a stale probe back to no glyph", () => {
+    expect(testLaneGlyph(verdict({}), probe({ stale: true }))).toBe("none");
   });
 });

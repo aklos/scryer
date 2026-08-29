@@ -4574,13 +4574,13 @@
         },
         {
           "id": "resp-734",
-          "statement": "**When** a claim carries attached tests, **show** their count and, beside it, the recorded verdict as its own mark — a green check when the last run passed and still holds, amber when stale, red when failing, nothing at all when no run was recorded — and **mark** testable claims lacking a test with a non-flask nudge",
-          "lastTouchedAt": 1787473772
+          "statement": "**When** a claim carries attached tests, **show** their count and **add** a mark only for what is wrong — amber when the last verdict is stale, red when failing, nothing at all when passing or when no run was recorded — and **mark** testable claims lacking a test with a non-flask nudge",
+          "lastTouchedAt": 1787998667
         },
         {
           "id": "resp-774",
-          "statement": "**When** a claim carries a probe result, **mark** the lane beside its verdict — green when every deliberate break was caught, red when one survived — and **show** nothing for a claim never probed or whose probe went stale",
-          "lastTouchedAt": 1787898624
+          "statement": "**When** a claim carries a probe result, **make** it the lane's one mark — a green double check when every deliberate break was caught, a red crosshair when one survived — and **show** nothing for a claim never probed or whose probe went stale",
+          "lastTouchedAt": 1787998667
         }
       ]
     },
