@@ -5,7 +5,9 @@
  * UI renders it, never writes it.
  */
 
-import type { ScryModel, Link } from "./viewmodel";
+import type { ScryModel, Link, Node, Responsibility } from "./viewmodel";
+import { effectiveTestMap } from "./viewmodel";
+import { earsTestable } from "./markup";
 
 /** Health counters over one scope — a node's own content, or a whole subtree. */
 export interface HealthCounts {
@@ -615,4 +617,84 @@ export function pathsForLink(
       count: e.count,
     }))
     .sort((a, b) => b.count - a.count);
+}
+
+// --- test findings: what needs a look in the test dimension ----------------
+
+/** One claim the test dimension wants a look at, and why. `untested`: a
+ *  committed When/While/If claim on a code-backed host with no test attached
+ *  (the lane's ghost flask). `failing`: its current verdict is red. `hollow`:
+ *  its test let a deliberate break through — `survivors` says which. Passing
+ *  claims and stale verdicts are deliberately NOT findings: passing is the
+ *  resting state, and stale is a re-run away, which `get_test_radius` already
+ *  queues for the agent. */
+export interface TestFinding {
+  kind: "untested" | "failing" | "hollow";
+  node: Node;
+  resp: Responsibility;
+  survivors?: string[];
+}
+
+/** Per-node subtree tallies of {@link TestFinding}s — a node absent from the
+ *  map has NOTHING to look at below it, which is exactly what a lens needs to
+ *  know to leave the branch out. */
+export interface TestTally {
+  untested: number;
+  failing: number;
+  hollow: number;
+}
+
+/** Every claim the test dimension wants a look at, in model order. A claim
+ *  counts as committed when the committed layer holds its id — plan-added
+ *  claims get their test at the build checkpoint and never nag before it. */
+export function testFindings(
+  model: ScryModel,
+  committed: ScryModel | null,
+  verdicts: Record<string, ClaimTestStatus>,
+  probes: Record<string, ClaimProbeStatus>,
+): TestFinding[] {
+  const tests = effectiveTestMap(committed, model);
+  const committedIds = new Set<string>();
+  for (const n of committed?.nodes ?? [])
+    for (const r of n.responsibilities ?? []) committedIds.add(r.id);
+  const out: TestFinding[] = [];
+  for (const node of model.nodes) {
+    const codeBacked = !node.external && node.kind !== "person";
+    for (const resp of node.responsibilities ?? []) {
+      const attached = (tests[resp.id] ?? []).length > 0;
+      if (attached) {
+        // Verdict and probe are both fingerprinted on the same anchors, so a
+        // stale verdict means a stale probe — nothing to report either way.
+        if (testLaneTone(verdicts[resp.id]) === "failing") {
+          out.push({ kind: "failing", node, resp });
+        } else if (probeMark(probes[resp.id]) === "hollow") {
+          out.push({ kind: "hollow", node, resp, survivors: probes[resp.id].survivors });
+        }
+      } else if (codeBacked && committedIds.has(resp.id) && earsTestable(resp.statement)) {
+        out.push({ kind: "untested", node, resp });
+      }
+    }
+  }
+  return out;
+}
+
+/** Roll findings up the tree: every ancestor of a finding's host (host
+ *  included) gets the count. Nodes with nothing below them stay absent. */
+export function rollupTestFindings(
+  model: Pick<ScryModel, "nodes">,
+  findings: TestFinding[],
+): Map<string, TestTally> {
+  const parent = new Map<string, string | undefined>();
+  for (const n of model.nodes) parent.set(n.id, n.parentId);
+  const out = new Map<string, TestTally>();
+  for (const f of findings) {
+    let id: string | undefined = f.node.id;
+    while (id) {
+      const t = out.get(id) ?? { untested: 0, failing: 0, hollow: 0 };
+      t[f.kind] += 1;
+      out.set(id, t);
+      id = parent.get(id);
+    }
+  }
+  return out;
 }

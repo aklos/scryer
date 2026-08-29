@@ -9,8 +9,8 @@
  */
 
 import { useRef, useState } from "react";
-import { Braces, ChevronRight, Loader2, Pencil, Plus } from "lucide-react";
-import type { Completeness } from "./health";
+import { Braces, ChevronRight, Crosshair, FlaskConical, Loader2, Pencil, Plus, X } from "lucide-react";
+import type { Completeness, TestTally } from "./health";
 import { CompletenessPie } from "./CompletenessPie";
 import type { ScryModel, Node, Group, Kind } from "./viewmodel";
 import { childKindFor, concernCounts, normalizeConcernSlug } from "./viewmodel";
@@ -97,6 +97,44 @@ const ICON_COLOR = "text-[var(--text-muted)]";
 //   container     → structure     (medium,  --text-secondary)
 //   component/symbol → the leaves (regular, --text-secondary — same value,
 //                                  separated from container by weight only)
+/** The Tests-lens readout on a row: its subtree's findings, worst first. A
+ *  red crosshair for breaks a test let through (the finding that contradicts
+ *  a green verdict), a red X for failing tests, a ghost flask for testable
+ *  claims with no test. Each carries its count; a kind at zero is absent. */
+function TestTallyChips({ tally }: { tally: TestTally }) {
+  return (
+    <span className="flex shrink-0 items-center gap-1 font-mono text-2xs tabular-nums">
+      {tally.hollow > 0 && (
+        <span
+          className="flex items-center gap-px text-red-600 dark:text-red-400"
+          title={`${tally.hollow} test${tally.hollow === 1 ? "" : "s"} in this subtree let a deliberate break through`}
+        >
+          <Crosshair className="h-3 w-3" />
+          {tally.hollow}
+        </span>
+      )}
+      {tally.failing > 0 && (
+        <span
+          className="flex items-center gap-px text-red-600 dark:text-red-400"
+          title={`${tally.failing} failing test${tally.failing === 1 ? "" : "s"} in this subtree`}
+        >
+          <X className="h-3 w-3" />
+          {tally.failing}
+        </span>
+      )}
+      {tally.untested > 0 && (
+        <span
+          className="flex items-center gap-px text-[var(--text-ghost)]"
+          title={`${tally.untested} testable claim${tally.untested === 1 ? "" : "s"} in this subtree with no test attached`}
+        >
+          <FlaskConical className="h-3 w-3" />
+          {tally.untested}
+        </span>
+      )}
+    </span>
+  );
+}
+
 // `color` is applied only when the row isn't selected (selection drives its own
 // foreground); `weight` applies always.
 function altitudeRamp(node: Node): { weight: string; color: string } {
@@ -123,6 +161,7 @@ export function ModelTree({
   concernLens,
   onSetConcernLens,
   previewable,
+  testTally,
 }: {
   model: ScryModel;
   /** Symbol ids the preview sidecar can render — derived from its export list,
@@ -152,6 +191,10 @@ export function ModelTree({
    *  concern lives nowhere here" is exactly what the lens exists to show. */
   concernLens?: string | null;
   onSetConcernLens?: (slug: string | null) => void;
+  /** Subtree tallies of test findings (untested / failing / uncaught break),
+   *  keyed by node id — from {@link rollupTestFindings}. Absent = nothing to
+   *  look at below. Drives the Tests lens. */
+  testTally?: ReadonlyMap<string, TestTally>;
 }) {
   const [width, setWidth] = useState(() => {
     const saved = Number(localStorage.getItem("scryer:treeWidth"));
@@ -203,12 +246,13 @@ export function ModelTree({
 
   // --- filter + lenses --------------------------------------------------------
   // Type-to-filter narrows by name; the lenses narrow by mark: "changes" (the
-  // plan — A/M/D/R, the model→code work queue) and "drift" (Q/X — model↔code
-  // mismatch awaiting a verdict). A branch stays visible when anything below it
-  // matches; matching auto-expands.
+  // plan — A/M/D/R, the model→code work queue), "drift" (Q/X — model↔code
+  // mismatch awaiting a verdict), and "tests" (claims the test dimension wants
+  // a look at — untested, failing, or a break the test let through). A branch
+  // stays visible when anything below it matches; matching auto-expands.
 
   const [filter, setFilter] = useState("");
-  const [lens, setLens] = useState<"all" | "changes" | "drift">("all");
+  const [lens, setLens] = useState<"all" | "changes" | "drift" | "tests">("all");
   // Inline rename of the ACTIVE concern (the pencil next to the lens picker).
   const [renamingConcern, setRenamingConcern] = useState(false);
 
@@ -263,7 +307,9 @@ export function ModelTree({
       lens === "all" ||
       (lens === "changes"
         ? hasPlan(id) || rolledOf.get(id)?.plan != null
-        : hasDrift(id) || rolledOf.get(id)?.drift != null);
+        : lens === "drift"
+          ? hasDrift(id) || rolledOf.get(id)?.drift != null
+          : testTally?.has(id) === true);
     const matchSelf = (n: Node) =>
       (q === "" || (n.name || "").toLowerCase().includes(q)) && lensMatch(n.id);
     const set = new Set<string>();
@@ -810,6 +856,9 @@ export function ModelTree({
             {concernTally.get(node.id)}
           </span>
         )}
+        {lens === "tests" && testTally?.get(node.id) && (
+          <TestTallyChips tally={testTally.get(node.id)!} />
+        )}
         {active && (
           <Loader2 className="h-3 w-3 shrink-0 animate-spin text-violet-500 dark:text-violet-400" />
         )}
@@ -975,6 +1024,7 @@ export function ModelTree({
               { id: "all", label: "All" },
               { id: "changes", label: "Changes" },
               { id: "drift", label: "Drift" },
+              { id: "tests", label: "Tests" },
             ] as const
           ).map((opt) => (
             <button
@@ -985,7 +1035,9 @@ export function ModelTree({
                   ? "Lens: the plan — added / modified / deleted / relocated since the committed model"
                   : opt.id === "drift"
                     ? "Lens: drift — undescribed (Q) or stale (X) claims where code and model disagree"
-                    : "Show the whole model"
+                    : opt.id === "tests"
+                      ? "Lens: tests — claims with no test attached, failing tests, and tests that let a deliberate break through"
+                      : "Show the whole model"
               }
               onClick={() => setLens(opt.id)}
               className={`flex flex-1 items-center justify-center gap-1.5 py-1 text-xs transition-colors ${
@@ -1087,7 +1139,9 @@ export function ModelTree({
               ? "No matches."
               : lens === "changes"
                 ? "No pending changes — the plan matches the committed model."
-                : "No drift — the model and code agree."}
+                : lens === "drift"
+                  ? "No drift — the model and code agree."
+                  : "Nothing to look at — every testable claim has a test, and none is failing or hollow."}
           </div>
         ) : (
           rows.map((row) => (row.kind === "node" ? renderNode(row) : renderGroup(row)))

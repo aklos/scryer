@@ -4243,6 +4243,11 @@
           "id": "resp-749",
           "statement": "**Mark** each symbol row the preview sidecar can render with the preview glyph, derived from its export list rather than stored on the node",
           "lastTouchedAt": 1787904134
+        },
+        {
+          "id": "resp-777",
+          "statement": "**While** the Tests lens is on, **show** only branches with a test finding below them, each row carrying its subtree's counts — untested claims, failing tests, uncaught breaks — so the reader drills down along the marks instead of opening nodes at random",
+          "lastTouchedAt": 1787998826
         }
       ]
     },
@@ -4844,6 +4849,11 @@
           "id": "resp-285",
           "statement": "**Present** every vagrant/stale claim, empty symbol, and disconnected node awaiting a human verdict",
           "lastTouchedAt": 1784883905
+        },
+        {
+          "id": "resp-779",
+          "statement": "**Present** tests not holding — failing verdicts and uncaught breaks, each with what survived — and the untested claims, as claim rows that open on their page",
+          "lastTouchedAt": 1787998826
         }
       ]
     },
@@ -4857,6 +4867,11 @@
           "id": "resp-286",
           "statement": "**Gather** everything awaiting a human verdict into one index shared by the page and the status-bar counter",
           "lastTouchedAt": 1784883905
+        },
+        {
+          "id": "resp-778",
+          "statement": "**When** a test is failing or let a deliberate break through, **count** it among the items to review; untested claims ride the index as a standing list without inflating that count",
+          "lastTouchedAt": 1787998826
         }
       ]
     },
@@ -5482,6 +5497,16 @@
           "id": "resp-315",
           "statement": "**Expand** a declared or implied connection into the leaf code paths that back it",
           "lastTouchedAt": 1784883905
+        },
+        {
+          "id": "resp-775",
+          "statement": "**When** asked what needs a look in the test dimension, **list** each committed testable claim with no test attached, each claim whose current verdict is failing, and each claim whose test let a deliberate break through — stale verdicts and passing claims excluded",
+          "lastTouchedAt": 1787998826
+        },
+        {
+          "id": "resp-776",
+          "statement": "**When** the tree asks, **roll** those findings up per node over its subtree, so a branch carries the count of what sits below it and a clean branch carries nothing",
+          "lastTouchedAt": 1787998826
         }
       ]
     },
