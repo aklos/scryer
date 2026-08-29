@@ -31,10 +31,6 @@ export interface AgentSession {
     cwd: string, modelRef: string, nodeId: string, nodeName: string,
     renderStatus: string, renderError: string | null,
   ) => void;
-  startVariation: (
-    cwd: string, modelRef: string, nodeId: string, nodeName: string,
-    prompt: string, variationCount?: number, baseVariationIdx?: number,
-  ) => void;
   cancel: () => void;
 }
 
@@ -143,17 +139,6 @@ export function useAgentSession(): AgentSession {
     [startSession],
   );
 
-  const startVariation = useCallback(
-    (cwd: string, modelRef: string, nodeId: string, nodeName: string, prompt: string, variationCount?: number, baseVariationIdx?: number) => {
-      startSession(
-        "start_visual_variation_session",
-        `Variations for ${nodeName || "component"}`,
-        { cwd, modelRef, nodeId, prompt, variationCount: variationCount ?? null, baseVariationIdx: baseVariationIdx ?? null },
-      );
-    },
-    [startSession],
-  );
-
   const cancel = useCallback(async () => {
     try {
       await invoke("cancel_agent_session");
@@ -162,5 +147,5 @@ export function useAgentSession(): AgentSession {
     }
   }, []);
 
-  return { running, label, lastTool, activity, outcome, startFixture, startVariation, cancel };
+  return { running, label, lastTool, activity, outcome, startFixture, cancel };
 }

@@ -57,6 +57,7 @@ pub const SOURCE_EXTS: &[&str] = &[
     "rs", // Rust
     "ts", "mts", "cts", "tsx", // TypeScript
     "js", "jsx", "mjs", "cjs", // JavaScript
+    "vue", // Vue single-file components (script parsed as TypeScript)
     "py", "pyi", // Python
     "go", // Go
     "java", // Java

@@ -1,7 +1,7 @@
 /**
  * Agent-run failure modal.
  *
- * Any agent run (model build, drift check, per-node fill, visual variations) can
+ * Any agent run (model build, drift check, per-node fill, preview fixtures) can
  * die mid-flight — most often an auth (401) or network error from the underlying
  * AI agent. A toast is too easy to miss for something that aborted real work, so
  * a failure surfaces here as a blocking modal that states two things plainly:

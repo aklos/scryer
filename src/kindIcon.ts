@@ -15,14 +15,16 @@ import type { Node } from "./viewmodel";
 import { isDataShape } from "./viewmodel";
 
 /** The minimal node shape these helpers read. */
-type IconNode = Pick<Node, "kind" | "external" | "technology" | "properties" | "responsibilities" | "visual">;
+type IconNode = Pick<Node, "kind" | "external" | "technology" | "properties" | "responsibilities">;
 
-/** The kind silhouette for a node. Person → bust, external → cloud, data-shape
- *  symbol → database, code symbol → braces, else the C4 box family by altitude. */
-export function kindIcon(node: IconNode): ComponentType<LucideProps> {
+/** The kind silhouette for a node. Person → bust, external → cloud, previewable
+ *  symbol → eye, data-shape symbol → database, code symbol → braces, else the
+ *  C4 box family by altitude. `previewable` is DERIVED by the caller from the
+ *  preview sidecar's export list — it is never a fact stored on the node. */
+export function kindIcon(node: IconNode, previewable = false): ComponentType<LucideProps> {
   if (node.kind === "person") return User;          // an actor — human, regardless of external
   if (node.external) return Cloud;                  // the world: a third-party service
-  if (node.visual) return Eye;                     // a visual/UI component with preview
+  if (previewable) return Eye;                      // a component the sidecar can render
   if (isDataShape(node)) return Database;           // a symbol that defines a data shape
   if (node.kind === "symbol") return Code;          // code-level leaf
   switch (node.kind) {

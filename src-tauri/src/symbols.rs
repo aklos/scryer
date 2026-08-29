@@ -50,6 +50,21 @@ pub fn resolve(
     line_hint: Option<u32>,
 ) -> Option<(u32, u32)> {
     let ext = path.extension()?.to_str()?;
+    // A Vue single-file component is one symbol — the file itself, named after
+    // it (mirrors `parse_vue_sfc` in scryer-extract): its extent is the whole
+    // file. Any other symbol name is not addressable in an SFC.
+    if ext == "vue" {
+        let stem = path.file_stem()?.to_str()?;
+        let pascal: String = stem
+            .split(['-', '_', '.'])
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                let mut c = s.chars();
+                c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+            })
+            .collect();
+        return (pascal == symbol).then(|| (1, source.lines().count().max(1) as u32));
+    }
     let language = language_for_ext(ext)?;
 
     let mut parser = Parser::new();

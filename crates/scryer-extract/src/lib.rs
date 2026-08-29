@@ -129,10 +129,7 @@ pub fn extract_context_with_stats(
         // Gate: only files with a bundled grammar. A per-scope context that must
         // enumerate *every* file (configs, plain modules) would relax this — a
         // payload-completeness question deferred until the orchestrator needs it.
-        if lang::ext_of(path)
-            .and_then(lang::language_for_ext)
-            .is_none()
-        {
+        if !lang::ext_of(path).is_some_and(lang::supports_ext) {
             continue;
         }
         let Ok(rel) = path.strip_prefix(project) else {
@@ -240,14 +237,14 @@ mod tests {
         assert!(is_product_code("src/collections/Users.ts"));
     }
 
-    /// `scan::SOURCE_EXTS` mirrors the grammar registry: every extension the
+    /// `scan::SOURCE_EXTS` mirrors the parser registry: every extension the
     /// shared product-code gate accepts must actually parse here.
     #[test]
     fn source_exts_stay_in_lockstep_with_grammars() {
         for ext in scryer_core::scan::SOURCE_EXTS {
             assert!(
-                lang::language_for_ext(ext).is_some(),
-                "scan::SOURCE_EXTS lists '{ext}' but lang.rs has no grammar for it"
+                lang::supports_ext(ext),
+                "scan::SOURCE_EXTS lists '{ext}' but lang.rs cannot parse it"
             );
         }
     }

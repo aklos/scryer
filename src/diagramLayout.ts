@@ -23,7 +23,8 @@ import type { ModelHealthReport } from "./health";
 export type DiagramMode = "arch" | "code";
 
 /** How a code-tier symbol reads at a glance — the three things a symbol can be
- *  (mirrors `kindIcon`/`typeTag`): a data shape (`model`), a UI piece (`visual`),
+ *  (mirrors `kindIcon`/`typeTag`): a data shape (`model`), a component the
+ *  preview sidecar can render (`visual`, derived — never stored on the node),
  *  or plain `code`. Drives the muted class line under each dot. */
 export type SymbolClass = "code" | "model" | "visual";
 
@@ -129,6 +130,7 @@ export async function buildDiagramScene(
   model: ScryModel,
   focusId: string | null,
   report: ModelHealthReport | null,
+  previewable: ReadonlySet<string> = new Set(),
 ): Promise<DiagramScene> {
   const byId = new Map(model.nodes.map((n) => [n.id, n]));
   const childCounts = new Map<string, number>();
@@ -257,7 +259,7 @@ export async function buildDiagramScene(
       childCount: childCounts.get(n.id) ?? 0,
       degree: degree.get(n.id) ?? 0,
       reference,
-      symbolClass: n.visual ? "visual" : isDataShape(n) ? "model" : "code",
+      symbolClass: previewable.has(n.id) ? "visual" : isDataShape(n) ? "model" : "code",
     };
   };
 

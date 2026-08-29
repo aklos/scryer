@@ -49,8 +49,8 @@
         },
         {
           "id": "resp-16",
-          "statement": "**Render** live previews of visual components through the preview workspace.",
-          "lastTouchedAt": 1784883634
+          "statement": "**Render** a live preview for any node whose anchored source the preview sidecar can mount — derived from code, never asserted by the model.",
+          "lastTouchedAt": 1787903576
         },
         {
           "id": "resp-17",
@@ -2298,11 +2298,6 @@
           "label": "properties",
           "description": "Field declarations when the symbol is a data shape.",
           "lastTouchedAt": 1784883763
-        },
-        {
-          "label": "visual",
-          "description": "True for a UI-rendering symbol.",
-          "lastTouchedAt": 1784883763
         }
       ]
     },
@@ -2462,11 +2457,6 @@
         {
           "label": "properties",
           "description": "Declared fields when the symbol is a data shape.",
-          "lastTouchedAt": 1784883763
-        },
-        {
-          "label": "visual",
-          "description": "True for a UI-rendering symbol.",
           "lastTouchedAt": 1784883763
         }
       ]
@@ -3523,6 +3513,11 @@
           "id": "resp-202",
           "statement": "**Serve** the preview entry module and component list to the in-app preview iframe over a Vite dev server",
           "lastTouchedAt": 1784883905
+        },
+        {
+          "id": "resp-758",
+          "statement": "**When** an entry is requested, **generate** it for the framework the component list tagged the file with — React or Vue — sharing the render-verdict and fixture contract",
+          "lastTouchedAt": 1787905188
         }
       ]
     },
@@ -3536,6 +3531,16 @@
           "id": "resp-203",
           "statement": "**Assemble** the preview iframe's HTML shell — theming, checkerboard backdrop, and zoom/pan harness",
           "lastTouchedAt": 1784883905
+        },
+        {
+          "id": "resp-750",
+          "statement": "**When** a component portals into the document body, **keep** it inside the transformed stage so fit, zoom, and pan still apply to it",
+          "lastTouchedAt": 1787904134
+        },
+        {
+          "id": "resp-751",
+          "statement": "**While** panning, **keep** the rendered content reachable and never lost — measured as its full painted extent even where it overflows the virtual screen, a larger-than-pane axis may not pull an edge inside the pane and a smaller one may not leave it — with text selection suppressed for the drag",
+          "lastTouchedAt": 1787904770
         }
       ]
     },
@@ -3690,6 +3695,11 @@
           "id": "resp-216",
           "statement": "**Host** project navigation, view toggle, search, and settings entry points in the app's top bar",
           "lastTouchedAt": 1784883905
+        },
+        {
+          "id": "resp-743",
+          "statement": "**Act** as the frameless window's titlebar — every non-interactive region drags the window and the window controls sit at its right edge",
+          "lastTouchedAt": 1787902832
         }
       ]
     },
@@ -4186,6 +4196,11 @@
           "id": "resp-242",
           "statement": "**Present** recent projects and the generate/start-blank choice for a project with no model yet",
           "lastTouchedAt": 1784883905
+        },
+        {
+          "id": "resp-747",
+          "statement": "**Before** a project is open, **carry** a drag strip and window controls so the frameless window can be moved and closed from the picker",
+          "lastTouchedAt": 1787902825
         }
       ]
     },
@@ -4218,6 +4233,11 @@
           "id": "resp-245",
           "statement": "**Navigate** the model's node/group hierarchy, showing each row's rolled-up plan and drift mark",
           "lastTouchedAt": 1784883905
+        },
+        {
+          "id": "resp-749",
+          "statement": "**Mark** each symbol row the preview sidecar can render with the preview glyph, derived from its export list rather than stored on the node",
+          "lastTouchedAt": 1787904134
         }
       ]
     },
@@ -4534,8 +4554,8 @@
       "responsibilities": [
         {
           "id": "resp-261",
-          "statement": "**Render** a node's whole article — lede, responsibilities, properties, connections, preview, appearance — as a diff against committed",
-          "lastTouchedAt": 1786957067
+          "statement": "**Render** a node's whole article — lede, responsibilities, properties, connections, preview — as a diff against committed",
+          "lastTouchedAt": 1787900087
         },
         {
           "id": "resp-262",
@@ -4577,6 +4597,11 @@
           "id": "resp-265",
           "statement": "**Compose** a node's full wiki article from its description, claims, properties, connections, and history sections",
           "lastTouchedAt": 1784883905
+        },
+        {
+          "id": "resp-748",
+          "statement": "**When** the preview sidecar reports an export named exactly as the symbol, **show** the Preview section; otherwise omit it — a same-file export under another name never counts",
+          "lastTouchedAt": 1787904134
         }
       ]
     },
@@ -4705,21 +4730,8 @@
       "responsibilities": [
         {
           "id": "resp-275",
-          "statement": "**Render** a visual node's live component preview from the project's preview server",
-          "lastTouchedAt": 1784883905
-        }
-      ]
-    },
-    {
-      "id": "node-258",
-      "kind": "symbol",
-      "name": "AppearanceWorkspace",
-      "parentId": "node-245",
-      "responsibilities": [
-        {
-          "id": "resp-276",
-          "statement": "**Generate** and stage AI-produced visual variations of a component, accepting or discarding them",
-          "lastTouchedAt": 1784883905
+          "statement": "**Render** a node's matched component export as a live preview from the project's preview server",
+          "lastTouchedAt": 1787903576
         }
       ]
     },
@@ -5200,11 +5212,6 @@
           "lastTouchedAt": 1784883905
         },
         {
-          "label": "visual",
-          "description": "",
-          "lastTouchedAt": 1784883905
-        },
-        {
           "label": "notes",
           "description": "",
           "lastTouchedAt": 1784883905
@@ -5439,8 +5446,8 @@
       "responsibilities": [
         {
           "id": "resp-312",
-          "statement": "**Flag** a symbol that carries no responsibilities, properties, or rendered appearance as empty",
-          "lastTouchedAt": 1784883905
+          "statement": "**Flag** a symbol that carries no responsibilities or properties as empty",
+          "lastTouchedAt": 1787900087
         }
       ]
     },
@@ -6005,6 +6012,11 @@
           "id": "resp-346",
           "statement": "**Catch** a rendering error anywhere beneath it and show a fallback instead of a blank app",
           "lastTouchedAt": 1784883905
+        },
+        {
+          "id": "resp-746",
+          "statement": "**When** a crash unmounts the top bar, **carry** its own drag strip and window controls so the window stays movable and closable",
+          "lastTouchedAt": 1787902789
         }
       ]
     },
@@ -6895,9 +6907,9 @@
     {
       "id": "node-379",
       "kind": "component",
-      "name": "Live Preview & Visual Variations",
+      "name": "Live Preview",
       "parentId": "node-9",
-      "description": "Runs the deterministic preview dev server and agent sessions that author fixtures and visual variations.",
+      "description": "Runs the deterministic preview dev server and the agent session that authors preview fixtures.",
       "responsibilities": [
         {
           "id": "resp-413",
@@ -6906,13 +6918,8 @@
         },
         {
           "id": "resp-414",
-          "statement": "Launches agent sessions that author realistic fixture data or visual variations for a component",
-          "lastTouchedAt": 1784883930
-        },
-        {
-          "id": "resp-415",
-          "statement": "Persists an accepted visual variation as the node's design-intent appearance",
-          "lastTouchedAt": 1784883930
+          "statement": "Launches agent sessions that author realistic fixture data for a component",
+          "lastTouchedAt": 1787899859
         },
         {
           "id": "resp-416",
@@ -6961,45 +6968,6 @@
         {
           "id": "resp-420",
           "statement": "**When** a deterministic render comes out empty or crashes, **launch** an agent that authors realistic fixture data for the component",
-          "lastTouchedAt": 1784883930
-        }
-      ]
-    },
-    {
-      "id": "node-383",
-      "kind": "symbol",
-      "name": "start_visual_variation_session",
-      "parentId": "node-379",
-      "responsibilities": [
-        {
-          "id": "resp-421",
-          "statement": "**When** variations are requested, **launch** an agent that writes N self-contained variant modules the preview server serves instantly",
-          "lastTouchedAt": 1784883930
-        }
-      ]
-    },
-    {
-      "id": "node-384",
-      "kind": "symbol",
-      "name": "accept_visual_variation",
-      "parentId": "node-379",
-      "responsibilities": [
-        {
-          "id": "resp-422",
-          "statement": "**When** a variation is accepted, **persist** it as the node's appearance and stamp it onto the plan as pending design intent",
-          "lastTouchedAt": 1784883930
-        }
-      ]
-    },
-    {
-      "id": "node-385",
-      "kind": "symbol",
-      "name": "discard_visual_variations",
-      "parentId": "node-379",
-      "responsibilities": [
-        {
-          "id": "resp-423",
-          "statement": "**When** variations are discarded, **remove** the node's variation files",
           "lastTouchedAt": 1784883930
         }
       ]
@@ -7889,8 +7857,8 @@
       "responsibilities": [
         {
           "id": "resp-484",
-          "statement": "Selects the bundled tree-sitter grammar per file extension and reports import-resolution coverage tier",
-          "lastTouchedAt": 1784884035
+          "statement": "Selects the bundled tree-sitter grammar per file extension — unwrapping Vue single-file components to their script — and reports import-resolution coverage tier",
+          "lastTouchedAt": 1787905188
         },
         {
           "id": "resp-485",
@@ -9275,7 +9243,7 @@
       "kind": "component",
       "name": "Prompt Templates",
       "parentId": "node-3",
-      "description": "Authors the LLM prompts driving the auto-context build and its maintenance flows: seeding enrichment, per-container fill, repair, drift detection, preview and variation generation.",
+      "description": "Authors the LLM prompts driving the auto-context build and its maintenance flows: seeding enrichment, per-container fill, repair, drift detection, and preview fixture generation.",
       "responsibilities": [
         {
           "id": "resp-553",
@@ -9289,8 +9257,8 @@
         },
         {
           "id": "resp-555",
-          "statement": "Authors prompts for generating realistic preview fixtures and visual component variations",
-          "lastTouchedAt": 1784884036
+          "statement": "Authors the prompt for generating realistic preview fixtures",
+          "lastTouchedAt": 1787899866
         }
       ]
     },
@@ -9369,19 +9337,11 @@
           "id": "resp-561",
           "statement": "Builds the prompt for authoring realistic shared or override fixture data when a deterministic component preview renders empty or crashes",
           "lastTouchedAt": 1784884036
-        }
-      ]
-    },
-    {
-      "id": "node-512",
-      "kind": "symbol",
-      "name": "visual_variation_prompt",
-      "parentId": "node-505",
-      "responsibilities": [
+        },
         {
-          "id": "resp-562",
-          "statement": "Builds the prompt for generating several distinct visual variations of a component",
-          "lastTouchedAt": 1784884036
+          "id": "resp-759",
+          "statement": "**When** the component is a Vue single-file component, **ask** for the fixture as a plain `.ts` props module rather than a React `.tsx` one",
+          "lastTouchedAt": 1787905188
         }
       ]
     },
@@ -9766,16 +9726,6 @@
           "lastTouchedAt": 1784884312
         },
         {
-          "label": "visual",
-          "description": "",
-          "lastTouchedAt": 1784884312
-        },
-        {
-          "label": "appearance",
-          "description": "",
-          "lastTouchedAt": 1784884312
-        },
-        {
           "label": "notes",
           "description": "",
           "lastTouchedAt": 1784884312
@@ -9800,8 +9750,8 @@
       "responsibilities": [
         {
           "id": "resp-578",
-          "statement": "**If** a symbol carries no responsibilities, properties, or rendered appearance and is not external, **then** flag it as empty",
-          "lastTouchedAt": 1784884312
+          "statement": "**If** a symbol carries no responsibilities or properties and is not external, **then** flag it as empty",
+          "lastTouchedAt": 1787899859
         }
       ]
     },
@@ -12202,12 +12152,12 @@
       "name": "Preview Sidecar",
       "parentId": "node-1",
       "technology": "Node.js + Vite",
-      "description": "A standalone Node process the desktop app spawns per project, serving each discovered React component as an isolated live preview.",
+      "description": "A standalone Node process the desktop app spawns per project, serving each discovered web component (React, Vue) as an isolated live preview.",
       "responsibilities": [
         {
           "id": "resp-703",
-          "statement": "**Serve** an opened project's React components as standalone, live-reloading previews",
-          "lastTouchedAt": 1786089278
+          "statement": "**Serve** an opened project's web components — React exports and Vue single-file components — as standalone, live-reloading previews",
+          "lastTouchedAt": 1787905188
         },
         {
           "id": "resp-704",
@@ -12221,17 +12171,17 @@
       "kind": "component",
       "name": "Props Synthesis",
       "parentId": "node-664",
-      "description": "Discovers a project's exported React components through its own TypeScript install and synthesizes placeholder props from their prop types, drawing on shared fixtures where a type has one.",
+      "description": "Discovers a project's previewable components — React exports via its own TypeScript install, Vue SFCs by file — and synthesizes placeholder props from React prop types.",
       "responsibilities": [
         {
           "id": "resp-199",
-          "statement": "**Discover** every previewable component export in a project via TypeScript analysis",
-          "lastTouchedAt": 1786089943
+          "statement": "**Discover** every previewable component — React exports via TypeScript analysis, Vue single-file components by file — tagged with the framework that mounts it",
+          "lastTouchedAt": 1787905188
         },
         {
           "id": "resp-200",
-          "statement": "**Synthesize** placeholder props for a component's props type so it can render standalone",
-          "lastTouchedAt": 1786089943
+          "statement": "**Synthesize** placeholder props for a React component's props type so it can render standalone",
+          "lastTouchedAt": 1787905188
         }
       ]
     },
@@ -12531,6 +12481,79 @@
           "id": "resp-742",
           "statement": "**Never** sweep pre-existing reports on open — a report written before watching began is evidence about older code and must not be recorded against the current tree",
           "lastTouchedAt": 1786957842
+        }
+      ]
+    },
+    {
+      "id": "node-681",
+      "kind": "symbol",
+      "name": "WindowControls",
+      "parentId": "node-197",
+      "description": "Minimize / maximize / close controls for the frameless window.",
+      "responsibilities": [
+        {
+          "id": "resp-744",
+          "statement": "**Minimize**, **maximize/restore**, and **close** the frameless window from in-app controls",
+          "lastTouchedAt": 1787902839
+        },
+        {
+          "id": "resp-745",
+          "statement": "**When** the window is resized by any means, **re-read** the maximized state so the restore/maximize glyph mirrors the real window",
+          "lastTouchedAt": 1787902840
+        }
+      ]
+    },
+    {
+      "id": "node-682",
+      "kind": "symbol",
+      "name": "parse_vue_sfc",
+      "parentId": "node-439",
+      "responsibilities": [
+        {
+          "id": "resp-752",
+          "statement": "**When** a `.vue` single-file component is parsed, **mint** one definition named after the file spanning the whole file — the component is the unit, its blocks are not",
+          "lastTouchedAt": 1787905180
+        },
+        {
+          "id": "resp-753",
+          "statement": "**When** the SFC carries a `<script>` block, **parse** it with the TypeScript grammar for identifier and import references so the dependency graph sees the component's imports",
+          "lastTouchedAt": 1787905180
+        }
+      ]
+    },
+    {
+      "id": "node-683",
+      "kind": "symbol",
+      "name": "discoverVueComponents",
+      "parentId": "node-665",
+      "responsibilities": [
+        {
+          "id": "resp-754",
+          "statement": "**When** the package depends on `vue`, **enumerate** every `.vue` file outside excluded paths as a previewable default-export component named after its file",
+          "lastTouchedAt": 1787905180
+        }
+      ]
+    },
+    {
+      "id": "node-684",
+      "kind": "symbol",
+      "name": "vueEntryModule",
+      "parentId": "node-187",
+      "responsibilities": [
+        {
+          "id": "resp-755",
+          "statement": "**When** the requested file is a `.vue` component, **mount** it with Vue's `createApp` and report the same render verdict as the React entry",
+          "lastTouchedAt": 1787905180
+        },
+        {
+          "id": "resp-756",
+          "statement": "**When** mounting a Vue component, **synthesize** placeholder props at runtime from the compiled component's props definition — sample text, numbers, empty collections, no-op functions — and fill its default slot",
+          "lastTouchedAt": 1787905180
+        },
+        {
+          "id": "resp-757",
+          "statement": "**When** a per-node fixture module exists, **spread** its default export over the synthesized props",
+          "lastTouchedAt": 1787905180
         }
       ]
     }
@@ -13767,12 +13790,6 @@
       "label": ""
     },
     {
-      "id": "link-node-247-node-258",
-      "src": "node-247",
-      "dst": "node-258",
-      "label": ""
-    },
-    {
       "id": "link-node-247-node-251",
       "src": "node-247",
       "dst": "node-251",
@@ -14591,18 +14608,6 @@
     {
       "id": "link-node-382-node-387",
       "src": "node-382",
-      "dst": "node-387",
-      "label": ""
-    },
-    {
-      "id": "link-node-383-node-380",
-      "src": "node-383",
-      "dst": "node-380",
-      "label": ""
-    },
-    {
-      "id": "link-node-383-node-387",
-      "src": "node-383",
       "dst": "node-387",
       "label": ""
     },
