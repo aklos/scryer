@@ -28,39 +28,38 @@ use scryer_core::{
 };
 use std::collections::HashMap;
 
-/// Mints sequential `resp-N` ids across a single tool call, seeded past every
-/// existing responsibility id (on nodes AND groups, so it can't collide with a
-/// group-owned id).
+/// Mints `resp-…` ids across a single tool call, clear of every existing
+/// responsibility id (on nodes AND groups, so it can't collide with a
+/// group-owned id) and of every id minted earlier in the same call.
 struct RespMinter {
-    next: u64,
+    taken: std::collections::HashSet<String>,
 }
 
 impl RespMinter {
     fn new(model: &ScryModel) -> Self {
-        let max = model
-            .nodes
-            .iter()
-            .flat_map(|n| n.responsibilities.iter())
-            .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
-            .filter_map(|r| r.id.strip_prefix("resp-").and_then(|s| s.parse::<u64>().ok()))
-            .max()
-            .unwrap_or(0);
-        Self { next: max + 1 }
+        let mut me = Self { taken: std::collections::HashSet::new() };
+        me.absorb(model);
+        me
     }
 
-    /// Raise the counter past every responsibility id in `other` (the committed
-    /// model) too, so minting against the plan can't re-issue an id the plan
-    /// deleted but committed still holds (audit #3).
+    /// Reserve every responsibility id in `other` (the committed model) too, so
+    /// minting against the plan can't re-issue an id the plan deleted but
+    /// committed still holds (audit #3).
     fn absorb(&mut self, other: &ScryModel) {
-        let max = other
+        for r in other
             .nodes
             .iter()
             .flat_map(|n| n.responsibilities.iter())
             .chain(other.groups.iter().flat_map(|g| g.responsibilities.iter()))
-            .filter_map(|r| r.id.strip_prefix("resp-").and_then(|s| s.parse::<u64>().ok()))
-            .max()
-            .unwrap_or(0);
-        self.next = self.next.max(max + 1);
+        {
+            self.taken.insert(r.id.clone());
+        }
+    }
+
+    fn mint(&mut self) -> String {
+        let id = scryer_core::mint_id_from("resp", self.taken.iter().map(String::as_str));
+        self.taken.insert(id.clone());
+        id
     }
 
     /// Build `implemented` responsibilities from statement inputs, skipping blanks.
@@ -69,8 +68,7 @@ impl RespMinter {
             .iter()
             .filter(|s| !s.statement().trim().is_empty())
             .map(|s| {
-                let id = format!("resp-{}", self.next);
-                self.next += 1;
+                let id = self.mint();
                 Responsibility {
                     concern: s.concern().map(Into::into),
                     id,
@@ -95,8 +93,7 @@ impl RespMinter {
             .iter()
             .filter(|i| !i.statement().trim().is_empty())
             .map(|i| {
-                let id = format!("resp-{}", self.next);
-                self.next += 1;
+                let id = self.mint();
                 let resp = Responsibility {
                     concern: i.concern().map(Into::into),
                     id,
@@ -1219,6 +1216,18 @@ mod tests {
     }
 
     /// The planned (draft) layer — where the authoring tools now write.
+    /// The minted id of the planned node called `name` — ids are random now,
+    /// so tests look nodes up by name instead of predicting the number.
+    fn planned_id(dir: &tempfile::TempDir, name: &str) -> String {
+        read_plan(dir)
+            .nodes
+            .iter()
+            .find(|n| n.name == name)
+            .unwrap_or_else(|| panic!("no planned node named {name}"))
+            .id
+            .clone()
+    }
+
     fn read_plan(dir: &tempfile::TempDir) -> ScryModel {
         scryer_core::read_planned_at(&ModelRef::ProjectLocal(dir.path().to_path_buf())).unwrap()
     }
@@ -1288,11 +1297,11 @@ mod tests {
 
         let plan = read_plan(&dir);
         let new = plan.nodes.iter().find(|n| n.name == "New").unwrap();
-        assert_eq!(new.id, "node-3", "node id must clear the committed max, not reuse plan-deleted node-2");
-        assert_eq!(
-            new.responsibilities[0].id, "resp-3",
-            "responsibility id must clear the committed max, not reuse plan-deleted resp-2"
-        );
+        assert!(scryer_core::is_minted_id(&new.id, "node"), "{}", new.id);
+        assert_ne!(new.id, "node-2", "must not reuse the plan-deleted node-2 still live in committed");
+        let rid = &new.responsibilities[0].id;
+        assert!(scryer_core::is_minted_id(rid, "resp"), "{rid}");
+        assert_ne!(rid, "resp-2", "must not reuse the plan-deleted resp-2 still live in committed");
     }
 
     /// Accept + warn on field shape: a paragraph-length `technology` (the card
@@ -2156,8 +2165,9 @@ mod tests {
             .find_map(|c| c.as_text().map(|t| t.text.clone()))
             .unwrap();
         assert!(text.contains("\"next\""), "carries the follow-through: {text}");
+        let api = planned_id(&dir, "API");
         assert!(
-            text.contains("mark_implemented node-2"),
+            text.contains(&format!("mark_implemented {api}")),
             "names the fold call for the minted id: {text}"
         );
         assert!(
@@ -2191,7 +2201,7 @@ mod tests {
             .add_component(Parameters(AddComponentRequest {
                 project: Some(project.clone()),
                 items: vec![ComponentItem {
-                    parent_id: "node-2".into(),
+                    parent_id: planned_id(&dir, "API"),
                     name: "Auth".into(),
                     description: None,
                     responsibilities: vec![],
@@ -2202,7 +2212,7 @@ mod tests {
             .add_symbol(Parameters(AddSymbolRequest {
                 project: Some(project),
                 items: vec![SymbolItem {
-                    parent_id: "node-3".into(),
+                    parent_id: planned_id(&dir, "Auth"),
                     name: "helper".into(),
                     source_file: "src/x.rs".into(),
                     line: None,
@@ -2249,12 +2259,13 @@ mod tests {
         };
         let first = call();
         let text = serde_json::to_string(&first.content).unwrap();
-        assert!(text.contains("node-2"), "{text}");
+        let api = planned_id(&dir, "API");
+        assert!(text.contains(&api), "{text}");
 
         let second = call();
         let text = serde_json::to_string(&second.content).unwrap();
         assert!(
-            text.contains("reused") && text.contains("node-2"),
+            text.contains("reused") && text.contains(&api),
             "the retry returns the existing node: {text}"
         );
         let plan = read_plan(&dir);

@@ -1063,16 +1063,15 @@ mod tests {
             .unwrap();
 
         let planned = scryer_core::read_planned_at(&model_ref).unwrap();
-        assert_eq!(
-            planned.groups[0].responsibilities[0].id, "resp-4",
-            "minted past the node-owned resp-3"
-        );
+        let minted = planned.groups[0].responsibilities[0].id.clone();
+        assert!(scryer_core::is_minted_id(&minted, "resp"), "{minted}");
+        assert_ne!(minted, "resp-3", "must not collide with the node-owned resp-3");
         let text = res
             .content
             .iter()
             .find_map(|c| c.as_text().map(|t| t.text.clone()))
             .unwrap();
-        assert!(text.contains("group-1: 'new' → resp-4"), "reports the re-mint: {text}");
+        assert!(text.contains(&format!("group-1: 'new' → {minted}")), "reports the re-mint: {text}");
     }
 
     /// set_groups (raw Group JSON) gets the same guard: invented ids are
@@ -1105,12 +1104,14 @@ mod tests {
             .unwrap();
 
         let planned = scryer_core::read_planned_at(&model_ref).unwrap();
-        assert_eq!(planned.groups[0].responsibilities[0].id, "resp-2");
+        let minted = planned.groups[0].responsibilities[0].id.clone();
+        assert!(scryer_core::is_minted_id(&minted, "resp"), "{minted}");
+        assert_ne!(minted, "resp-1");
         let text = res
             .content
             .iter()
             .find_map(|c| c.as_text().map(|t| t.text.clone()))
             .unwrap();
-        assert!(text.contains("group-1: 'new' → resp-2"), "reports the re-mint: {text}");
+        assert!(text.contains(&format!("group-1: 'new' → {minted}")), "reports the re-mint: {text}");
     }
 }

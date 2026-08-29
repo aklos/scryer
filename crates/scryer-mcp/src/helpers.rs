@@ -268,7 +268,7 @@ pub(crate) fn read_fail(layer: &str, model_ref: &ModelRef, e: &str) -> String {
 
 /// True when `id` is a server-minted responsibility id (`resp-N`).
 fn is_minted_resp_id(id: &str) -> bool {
-    id.strip_prefix("resp-").is_some_and(|s| s.parse::<u64>().is_ok())
+    scryer_core::is_minted_id(id, "resp")
 }
 
 /// Re-mints caller-supplied responsibility ids in raw-write payloads.
@@ -302,7 +302,6 @@ fn is_minted_resp_id(id: &str) -> bool {
 /// committed still holds it — and `enforce_readonly_directives` would staple
 /// the dead claim's user directives onto the unrelated new one.
 pub(crate) struct RespIdReminter {
-    next: u64,
     /// Every responsibility id the floor layers already hold → the host ids it
     /// lives on. An incoming id found here is an existing claim being echoed
     /// (never an invention) — and the hosts say whether it is being echoed
@@ -337,7 +336,6 @@ impl RespIdReminter {
 
     fn build(floors: &[&ScryModel], guard_host: bool) -> Self {
         let mut me = Self {
-            next: 1,
             known: std::collections::HashMap::new(),
             used: std::collections::HashSet::new(),
             guard_host,
@@ -366,16 +364,14 @@ impl RespIdReminter {
         me
     }
 
-    /// Raise the counter past every minted-format id in `resps`. Run this over
-    /// the WHOLE payload before the first `remint` call: a payload may carry a
-    /// hand-written `resp-N` above the model's own maximum, and minting below
-    /// it would collide inside the very write that's being repaired.
+    /// Reserve every id in `resps` so nothing minted later in this write can
+    /// collide with it. Run this over the WHOLE payload before the first
+    /// `remint` call: a payload may carry a hand-written id that a fresh draw
+    /// would otherwise be free to repeat inside the very write being repaired.
     pub(crate) fn absorb<'a>(&mut self, resps: impl Iterator<Item = &'a Responsibility>) {
-        let max = resps
-            .filter_map(|r| r.id.strip_prefix("resp-").and_then(|s| s.parse::<u64>().ok()))
-            .max()
-            .unwrap_or(0);
-        self.next = self.next.max(max + 1);
+        for r in resps {
+            self.known.entry(r.id.clone()).or_default();
+        }
     }
 
     /// Re-mint every id in `resps` that cannot safely stand — invented,
@@ -389,7 +385,9 @@ impl RespIdReminter {
         resps: impl Iterator<Item = &'a mut Responsibility>,
     ) {
         for r in resps {
-            let homes = self.known.get(&r.id);
+            // Ids `absorb` reserved without a host are not "known claims" —
+            // only an id with at least one real home is an echo of one.
+            let homes = self.known.get(&r.id).filter(|h| !h.is_empty());
             let reason = if self.used.contains(&r.id) {
                 Some("repeated in this write")
             } else if homes.is_some_and(|h| self.guard_host && !h.contains(host)) {
@@ -405,8 +403,10 @@ impl RespIdReminter {
                 self.used.insert(r.id.clone());
                 continue;
             };
-            let fresh = format!("resp-{}", self.next);
-            self.next += 1;
+            let fresh = scryer_core::mint_id_from(
+                "resp",
+                self.known.keys().map(String::as_str).chain(self.used.iter().map(String::as_str)),
+            );
             self.minted.push(format!("{host}: '{}' → {fresh} ({reason})", r.id));
             self.used.insert(fresh.clone());
             r.id = fresh;
@@ -457,16 +457,13 @@ pub(crate) fn remint_colliding_node_ids(
         .flat_map(|m| m.nodes.iter().map(|n| n.id.as_str()))
         .filter(|id| !replaced.contains(*id))
         .collect();
-    // Mint past every id either layer has seen AND every id this payload
+    // Mint clear of every id either layer has seen AND every id this payload
     // carries, so a fresh id can't collide with a sibling later in the batch.
-    let mut next = floors
+    let mut reserved: HashSet<String> = floors
         .iter()
-        .flat_map(|m| m.nodes.iter().map(|n| n.id.as_str()))
-        .chain(nodes.iter().map(|n| n.id.as_str()))
-        .filter_map(|id| id.strip_prefix("node-")?.parse::<u64>().ok())
-        .max()
-        .unwrap_or(0)
-        + 1;
+        .flat_map(|m| m.nodes.iter().map(|n| n.id.clone()))
+        .chain(nodes.iter().map(|n| n.id.clone()))
+        .collect();
 
     let mut renamed: HashMap<String, String> = HashMap::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -479,8 +476,8 @@ pub(crate) fn remint_colliding_node_ids(
         } else {
             continue;
         };
-        let fresh = format!("node-{next}");
-        next += 1;
+        let fresh = scryer_core::mint_id_from("node", reserved.iter().map(String::as_str));
+        reserved.insert(fresh.clone());
         report.push(format!("'{}' → {fresh} ({reason})", n.id));
         // Only a first-seen collision can be repointed; a duplicate's
         // references are ambiguous, so they are left pointing at the twin.

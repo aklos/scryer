@@ -3562,6 +3562,24 @@ mod tests {
         );
     }
 
+    /// The change id a `set_change` response opened — "Opened chg-…".
+    fn opened(r: &CallToolResult) -> String {
+        let text = tool_text(r);
+        let rest = text.split("Opened ").nth(1).unwrap_or_else(|| panic!("no 'Opened' in: {text}"));
+        rest.split(|c: char| c.is_whitespace() || c == '(' || c == ',' || c == '.').next().unwrap().to_string()
+    }
+
+    /// The minted id (and first claim id) of the planned node called `name`.
+    fn planned_named(model_ref: &ModelRef, name: &str) -> (String, Option<String>) {
+        let planned = scryer_core::read_planned_at(model_ref).unwrap();
+        let n = planned
+            .nodes
+            .iter()
+            .find(|n| n.name == name)
+            .unwrap_or_else(|| panic!("no planned node named {name}"));
+        (n.id.clone(), n.responsibilities.first().map(|r| r.id.clone()))
+    }
+
     fn tool_text(r: &CallToolResult) -> String {
         r.content.iter().find_map(|c| c.as_text().map(|t| t.text.clone())).unwrap()
     }
@@ -3593,7 +3611,8 @@ mod tests {
                 to: None,
             }))
             .unwrap();
-        assert!(tool_text(&r).contains("Opened chg-1"), "{}", tool_text(&r));
+        assert!(tool_text(&r).contains("Opened chg-"), "{}", tool_text(&r));
+        let chg = opened(&r);
 
         // An authoring write in this session tags what it changed.
         server
@@ -3607,9 +3626,11 @@ mod tests {
                 }],
             }))
             .unwrap();
+        let (rl, rl_resp) = planned_named(&model_ref, "RateLimiter");
+        let rl_resp = rl_resp.unwrap();
         let planned = scryer_core::read_planned_at(&model_ref).unwrap();
-        assert_eq!(planned.change_map.get("node:node-3").map(String::as_str), Some("chg-1"));
-        assert_eq!(planned.change_map.get("resp:resp-1").map(String::as_str), Some("chg-1"));
+        assert_eq!(planned.change_map.get(&format!("node:{rl}")).map(String::as_str), Some(chg.as_str()));
+        assert_eq!(planned.change_map.get(&format!("resp:{rl_resp}")).map(String::as_str), Some(chg.as_str()));
 
         // get_pending groups by change and filters to one.
         let r = server
@@ -3619,10 +3640,10 @@ mod tests {
             }))
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&tool_text(&r)).unwrap();
-        assert_eq!(v["currentChange"], "chg-1");
-        assert_eq!(v["openChanges"][0]["id"], "chg-1");
+        assert_eq!(v["currentChange"], chg.as_str());
+        assert_eq!(v["openChanges"][0]["id"], chg.as_str());
         assert_eq!(v["openChanges"][0]["rationale"], "give the API rate limiting");
-        assert!(v["changes"].as_array().unwrap().iter().all(|c| c["change"] == "chg-1"));
+        assert!(v["changes"].as_array().unwrap().iter().all(|c| c["change"] == chg.as_str()));
         let r = server
             .get_pending(Parameters(GetPendingRequest {
                 project: Some(project.clone()),
@@ -3638,14 +3659,14 @@ mod tests {
             .set_change(Parameters(SetChangeRequest {
                 project: Some(project.clone()),
                 rationale: None,
-                change_id: Some("chg-1".into()),
+                change_id: Some(chg.clone()),
                 clear: None,
                 close: None,
                 retag: None,
                 to: None,
             }))
             .unwrap();
-        assert!(tool_text(&r).contains("Resumed chg-1"), "{}", tool_text(&r));
+        assert!(tool_text(&r).contains(&format!("Resumed {chg}")), "{}", tool_text(&r));
 
         // …and folds the whole change in one call.
         let r = session2
@@ -3659,15 +3680,15 @@ mod tests {
                 commit_ancestors: None,
                 anchors: None,
                 tests: None,
-                change: Some("chg-1".into()),
+                change: Some(chg.clone()),
             }))
             .unwrap();
         let text = tool_text(&r);
-        assert!(text.contains("Folded change chg-1"), "{text}");
+        assert!(text.contains(&format!("Folded change {chg}")), "{text}");
         assert!(text.contains("fully folded and closed"), "{text}");
 
         let committed = scryer_core::read_model_at(&model_ref).unwrap();
-        assert!(committed.nodes.iter().any(|n| n.id == "node-3"));
+        assert!(committed.nodes.iter().any(|n| n.id == rl));
         let planned = scryer_core::read_planned_at(&model_ref).unwrap();
         assert!(planned.changes.is_empty() && planned.change_map.is_empty());
 
@@ -3677,13 +3698,13 @@ mod tests {
             .iter()
             .find(|e| e.kind == scryer_core::history::EventKind::Change)
             .expect("a change-closed event");
-        assert_eq!(close.change_id.as_deref(), Some("chg-1"));
+        assert_eq!(close.change_id.as_deref(), Some(chg.as_str()));
         assert_eq!(close.rows[0].text, "give the API rate limiting");
         let impl_ev = history
             .iter()
             .find(|e| e.kind == EventKind::Impl)
             .expect("an impl event");
-        assert_eq!(impl_ev.change_id.as_deref(), Some("chg-1"));
+        assert_eq!(impl_ev.change_id.as_deref(), Some(chg.as_str()));
     }
 
     /// `set_change {retag}` re-files work that already exists: a node id moves
@@ -3714,7 +3735,7 @@ mod tests {
                 }))
                 .unwrap()
         };
-        open("give the API rate limiting");
+        let chg1 = opened(&open("give the API rate limiting"));
         // Written while chg-1 is selected — this is the mis-filing.
         server
             .add_component(Parameters(AddComponentRequest {
@@ -3727,7 +3748,9 @@ mod tests {
                 }],
             }))
             .unwrap();
-        open("the change it actually belongs to");
+        let chg2 = opened(&open("the change it actually belongs to"));
+        let (rl, rl_resp) = planned_named(&model_ref, "RateLimiter");
+        let rl_resp = rl_resp.unwrap();
 
         let r = server
             .set_change(Parameters(SetChangeRequest {
@@ -3736,20 +3759,20 @@ mod tests {
                 change_id: None,
                 clear: None,
                 close: None,
-                retag: Some(vec!["node-3".into(), "node-99".into()]),
-                to: Some("chg-2".into()),
+                retag: Some(vec![rl.clone(), "node-99".into()]),
+                to: Some(chg2.clone()),
             }))
             .unwrap();
         let text = tool_text(&r);
-        assert!(text.contains("Moved 2 entries to chg-2"), "{text}");
-        assert!(text.contains("node:node-3 (was chg-1)"), "{text}");
-        assert!(text.contains("resp:resp-1 (was chg-1)"), "{text}");
+        assert!(text.contains(&format!("Moved 2 entries to {chg2}")), "{text}");
+        assert!(text.contains(&format!("node:{rl} (was {chg1})")), "{text}");
+        assert!(text.contains(&format!("resp:{rl_resp} (was {chg1})")), "{text}");
         assert!(text.contains("No pending work under: node-99"), "{text}");
 
         // The carrier AND its claim moved together — the unit get_pending shows.
         let planned = scryer_core::read_planned_at(&model_ref).unwrap();
-        assert_eq!(planned.change_map.get("node:node-3").map(String::as_str), Some("chg-2"));
-        assert_eq!(planned.change_map.get("resp:resp-1").map(String::as_str), Some("chg-2"));
+        assert_eq!(planned.change_map.get(&format!("node:{rl}")).map(String::as_str), Some(chg2.as_str()));
+        assert_eq!(planned.change_map.get(&format!("resp:{rl_resp}")).map(String::as_str), Some(chg2.as_str()));
 
         // Detaching sends them back to the unfiled bucket.
         let r = server
@@ -3759,7 +3782,7 @@ mod tests {
                 change_id: None,
                 clear: None,
                 close: None,
-                retag: Some(vec!["chg-2".into()]),
+                retag: Some(vec![chg2.clone()]),
                 to: Some("unfiled".into()),
             }))
             .unwrap();
@@ -3783,17 +3806,19 @@ mod tests {
 
         // chg-1 gets real work; chg-2 is opened and never written to.
         let server = ScryerServer::new();
-        server
-            .set_change(Parameters(SetChangeRequest {
-                project: Some(project.clone()),
-                rationale: Some("rate limiting".into()),
-                change_id: None,
-                clear: None,
-                close: None,
-                retag: None,
-                to: None,
-            }))
-            .unwrap();
+        let chg1 = opened(
+            &server
+                .set_change(Parameters(SetChangeRequest {
+                    project: Some(project.clone()),
+                    rationale: Some("rate limiting".into()),
+                    change_id: None,
+                    clear: None,
+                    close: None,
+                    retag: None,
+                    to: None,
+                }))
+                .unwrap(),
+        );
         server
             .add_component(Parameters(AddComponentRequest {
                 project: Some(project.clone()),
@@ -3805,17 +3830,19 @@ mod tests {
                 }],
             }))
             .unwrap();
-        server
-            .set_change(Parameters(SetChangeRequest {
-                project: Some(project.clone()),
-                rationale: Some("opened then orphaned".into()),
-                change_id: None,
-                clear: None,
-                close: None,
-                retag: None,
-                to: None,
-            }))
-            .unwrap();
+        let chg2 = opened(
+            &server
+                .set_change(Parameters(SetChangeRequest {
+                    project: Some(project.clone()),
+                    rationale: Some("opened then orphaned".into()),
+                    change_id: None,
+                    clear: None,
+                    close: None,
+                    retag: None,
+                    to: None,
+                }))
+                .unwrap(),
+        );
         let close = |id: &str| {
             server.set_change(Parameters(SetChangeRequest {
                 project: Some(project.clone()),
@@ -3829,17 +3856,17 @@ mod tests {
         };
 
         // A change with tagged entries refuses to close by hand.
-        let r = close("chg-1").unwrap();
+        let r = close(&chg1).unwrap();
         assert_eq!(r.is_error, Some(true));
         assert!(tool_text(&r).contains("still has 1 tagged entry"), "{}", tool_text(&r));
 
         // The stranded one closes, and the session (which selected it on
         // open) detaches.
-        let r = close("chg-2").unwrap();
-        assert!(tool_text(&r).contains("Closed chg-2"), "{}", tool_text(&r));
+        let r = close(&chg2).unwrap();
+        assert!(tool_text(&r).contains(&format!("Closed {chg2}")), "{}", tool_text(&r));
         let planned = scryer_core::read_planned_at(&model_ref).unwrap();
         assert_eq!(planned.changes.len(), 1);
-        assert_eq!(planned.changes[0].id, "chg-1");
+        assert_eq!(planned.changes[0].id, chg1);
         assert!(server.session_change(&model_ref).is_none(), "selection detached");
 
         let history = scryer_core::history::read_history(&model_ref);
@@ -3847,7 +3874,7 @@ mod tests {
             .iter()
             .find(|e| e.kind == scryer_core::history::EventKind::Change)
             .expect("a change-closed event");
-        assert_eq!(ev.change_id.as_deref(), Some("chg-2"));
+        assert_eq!(ev.change_id.as_deref(), Some(chg2.as_str()));
         assert_eq!(ev.driver, "abandoned");
         assert_eq!(ev.rows[0].text, "opened then orphaned");
 
@@ -3870,17 +3897,19 @@ mod tests {
         scryer_core::write_model_at(&model_ref, &m).unwrap();
 
         let session1 = ScryerServer::new();
-        session1
-            .set_change(Parameters(SetChangeRequest {
-                project: Some(project.clone()),
-                rationale: Some("rate limiting".into()),
-                change_id: None,
-                clear: None,
-                close: None,
-                retag: None,
-                to: None,
-            }))
-            .unwrap();
+        let chg1 = opened(
+            &session1
+                .set_change(Parameters(SetChangeRequest {
+                    project: Some(project.clone()),
+                    rationale: Some("rate limiting".into()),
+                    change_id: None,
+                    clear: None,
+                    close: None,
+                    retag: None,
+                    to: None,
+                }))
+                .unwrap(),
+        );
         session1
             .add_component(Parameters(AddComponentRequest {
                 project: Some(project.clone()),
@@ -3893,23 +3922,26 @@ mod tests {
             }))
             .unwrap();
 
+        let (rl, _) = planned_named(&model_ref, "RateLimiter");
         let session2 = ScryerServer::new();
-        session2
-            .set_change(Parameters(SetChangeRequest {
-                project: Some(project.clone()),
-                rationale: Some("rename things".into()),
-                change_id: None,
-                clear: None,
-                close: None,
-                retag: None,
-                to: None,
-            }))
-            .unwrap();
+        let chg2 = opened(
+            &session2
+                .set_change(Parameters(SetChangeRequest {
+                    project: Some(project.clone()),
+                    rationale: Some("rename things".into()),
+                    change_id: None,
+                    clear: None,
+                    close: None,
+                    retag: None,
+                    to: None,
+                }))
+                .unwrap(),
+        );
         let r = session2
             .update_nodes(Parameters(UpdateNodeRequest {
                 project: Some(project.clone()),
                 nodes: vec![UpdateNodeItem {
-                    node_id: "node-3".into(),
+                    node_id: rl.clone(),
                     name: Some("Throttler".into()),
                     kind: None,
                     description: None,
@@ -3923,13 +3955,13 @@ mod tests {
             .unwrap();
         let text = tool_text(&r);
         assert!(
-            text.contains("conflict: node:node-3 was tagged by chg-1 (\"rate limiting\")"),
+            text.contains(&format!("conflict: node:{rl} was tagged by {chg1} (\"rate limiting\")")),
             "{text}"
         );
         let planned = scryer_core::read_planned_at(&model_ref).unwrap();
         assert_eq!(
-            planned.change_map.get("node:node-3").map(String::as_str),
-            Some("chg-2"),
+            planned.change_map.get(&format!("node:{rl}")).map(String::as_str),
+            Some(chg2.as_str()),
             "last writer wins the tag"
         );
     }
@@ -3985,9 +4017,15 @@ mod tests {
             .collect();
         // resp-1 and the hand-written resp-9 keep their identity; both 'new's
         // mint PAST resp-9 (payload floor) — not past resp-2 alone.
-        assert_eq!(ids, vec!["resp-1", "resp-10", "resp-9", "resp-11"], "{ids:?}");
+        assert_eq!(ids.len(), 4, "{ids:?}");
+        assert_eq!((ids[0], ids[2]), ("resp-1", "resp-9"), "real ids keep their identity: {ids:?}");
+        for fresh in [ids[1], ids[3]] {
+            assert!(scryer_core::is_minted_id(fresh, "resp"), "{fresh}");
+            assert!(!["resp-1", "resp-2", "resp-9"].contains(&fresh), "{ids:?}");
+        }
+        assert_ne!(ids[1], ids[3], "two 'new's take two ids: {ids:?}");
         let text = tool_text(&r);
-        assert!(text.contains("node-1: 'new' → resp-10"), "reports the re-mint: {text}");
+        assert!(text.contains(&format!("node-1: 'new' → {}", ids[1])), "reports the re-mint: {text}");
     }
 
     /// The stale-snapshot collision: an agent working from an old read picks a
@@ -4042,11 +4080,14 @@ mod tests {
                 .map(|r| r.id.clone())
                 .collect()
         };
-        assert_eq!(on("node-1"), vec!["resp-1", "resp-3"], "the colliding id was re-minted");
+        let n1 = on("node-1");
+        assert_eq!(n1[0], "resp-1");
+        let fresh = n1[1].clone();
+        assert!(scryer_core::is_minted_id(&fresh, "resp") && fresh != "resp-2", "the colliding id was re-minted: {n1:?}");
         assert_eq!(on("node-2"), vec!["resp-2"], "the real resp-2 is untouched");
         let text = tool_text(&r);
         assert!(
-            text.contains("node-1: 'resp-2' → resp-3 (that id belongs to a claim on another node)"),
+            text.contains(&format!("node-1: 'resp-2' → {fresh} (that id belongs to a claim on another node)")),
             "the report names the collision and the new id: {text}"
         );
     }
@@ -4095,18 +4136,19 @@ mod tests {
             "no duplicate id landed"
         );
         let router = planned.nodes.iter().find(|n| n.name == "Router").unwrap();
-        assert_eq!(router.id, "node-5", "the collision took a fresh id");
+        let fresh = router.id.clone();
+        assert!(scryer_core::is_minted_id(&fresh, "node") && fresh != "node-3", "the collision took a fresh id: {fresh}");
         let auth = planned.nodes.iter().find(|n| n.name == "Auth").unwrap();
         assert_eq!(
             auth.parent_id.as_deref(),
-            Some("node-5"),
+            Some(fresh.as_str()),
             "the child's parent followed the rename"
         );
         let link = planned.links.iter().find(|l| l.id == "link-1").unwrap();
-        assert_eq!(link.dst, "node-5", "the link endpoint followed the rename");
+        assert_eq!(link.dst, fresh, "the link endpoint followed the rename");
         let text = tool_text(&r);
         assert!(
-            text.contains("'node-3' → node-5 (that id belongs to a node outside this subtree)"),
+            text.contains(&format!("'node-3' → {fresh} (that id belongs to a node outside this subtree)")),
             "the report names the collision: {text}"
         );
     }
@@ -4142,15 +4184,17 @@ mod tests {
 
         let committed = scryer_core::read_model_at(&model_ref).unwrap();
         let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        let minted = committed.nodes.iter().find(|n| n.id == "node-2").unwrap().responsibilities[0].id.clone();
+        assert!(scryer_core::is_minted_id(&minted, "resp"), "{minted}");
         for layer in [&committed, &planned] {
             let api = layer.nodes.iter().find(|n| n.id == "node-2").unwrap();
-            assert_eq!(api.responsibilities[0].id, "resp-1", "minted, and the same in both layers");
+            assert_eq!(api.responsibilities[0].id, minted, "minted, and the same in both layers");
         }
         assert!(
             scryer_core::diff::diff(&committed, &planned).is_empty(),
             "no phantom reword between layers"
         );
-        assert!(tool_text(&r).contains("node-2: 'new' → resp-1"));
+        assert!(tool_text(&r).contains(&format!("node-2: 'new' → {minted}")));
     }
 
     /// set_model replaces the whole model, but its re-mint floor still includes
@@ -4187,9 +4231,8 @@ mod tests {
             .unwrap();
 
         let committed = scryer_core::read_model_at(&model_ref).unwrap();
-        assert_eq!(
-            committed.nodes[0].responsibilities[0].id, "resp-6",
-            "minted past the dropped resp-5, not from the payload's own floor"
-        );
+        let minted = &committed.nodes[0].responsibilities[0].id;
+        assert!(scryer_core::is_minted_id(minted, "resp"), "{minted}");
+        assert_ne!(minted, "resp-5", "must not reuse the dropped resp-5 still live in the outgoing layers");
     }
 }
