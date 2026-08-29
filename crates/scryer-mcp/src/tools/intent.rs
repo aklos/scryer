@@ -672,7 +672,6 @@ impl ScryerServer {
                             symbol: Some(item.name.clone()),
                             line,
                             end_line,
-                            command: None,
                         }],
                     );
                     r
@@ -686,7 +685,6 @@ impl ScryerServer {
                         symbol: Some(item.name.clone()),
                         line: item.line,
                         end_line: item.end_line,
-                        command: None,
                     }],
                 );
             }
@@ -839,7 +837,6 @@ impl ScryerServer {
                     symbol: item.symbol.clone(),
                     line: item.line,
                     end_line: item.end_line,
-                    command: None,
                 }],
             );
         }

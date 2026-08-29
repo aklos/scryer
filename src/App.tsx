@@ -38,6 +38,7 @@ import { useAgentSession } from "./hooks/useAgentSession";
 import { previewableNodeIds, usePreviewServer } from "./hooks/usePreviewServer";
 import { useModelHealth } from "./hooks/useModelHealth";
 import { useTestStatuses } from "./hooks/useTestStatuses";
+import { rollupTestFindings, testFindings } from "./health";
 import {
   addGroup as addGroupHelper,
   addLink as addLinkHelper,
@@ -218,7 +219,7 @@ function Workspace({
 
   // Claim test verdicts: cheap, refreshed live when the on-disk cache changes
   // (an agent ingesting a report mid-session) — not only on the busy edge.
-  const { verdicts: testVerdicts } = useTestStatuses(projectPath, writing);
+  const { verdicts: testVerdicts, probes: probeResults } = useTestStatuses(projectPath, writing);
 
   // Cheap, agent-free nudge: which scopes have code changes since the last
   // reconcile. Refreshes on open, when ANY writer finishes (builds and
@@ -685,7 +686,17 @@ function Workspace({
 
   // The status-bar counters, shared with the special pages so the number and
   // the list can never disagree.
-  const reviewIndex = buildReviewIndex(model, healthReport, driftScopes, newNodeIds, newRespIds);
+  const reviewIndex = buildReviewIndex(model, healthReport, driftScopes, newNodeIds, newRespIds, {
+    committed,
+    verdicts: testVerdicts,
+    probes: probeResults,
+  });
+  // The tree's Tests lens: the same findings the review page lists, rolled
+  // up per subtree so a branch reads as "N below" and a clean one as nothing.
+  const testTally = rollupTestFindings(
+    model,
+    testFindings(model, committed, testVerdicts, probeResults),
+  );
   const plan = planCounts(planDiff, model, committed);
 
   return (
@@ -724,6 +735,7 @@ function Workspace({
           completeness={healthReport?.completeness}
           concernLens={concernLens}
           onSetConcernLens={setConcernLens}
+          testTally={testTally}
         />
         {view === "diagram" ? (
           <DiagramView
@@ -763,6 +775,9 @@ function Workspace({
           ) : (
             <NeedsReviewPage
               model={model}
+              committed={committed}
+              testVerdicts={testVerdicts}
+              probeResults={probeResults}
               report={healthReport}
               driftScopes={driftScopes}
               newNodeIds={newNodeIds}
@@ -781,6 +796,7 @@ function Workspace({
             selected={selected}
             report={healthReport}
             testVerdicts={testVerdicts}
+            probeResults={probeResults}
             projectPath={projectPath}
             editor={pageEditor}
             onSelectNode={selectNode}

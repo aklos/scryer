@@ -14,6 +14,7 @@ import { NeedsReviewPage } from "../src/SpecialPages";
 import { Powerline } from "../src/Powerline";
 import { buildReviewIndex } from "../src/SpecialPages";
 import { EMPTY_DIFF } from "../src/planDiff";
+import { planCounts } from "../src/changeMarks";
 import type { AgentSession } from "../src/hooks/useAgentSession";
 import type { ModelBuild } from "../src/hooks/useModelBuild";
 import type { ResolvedLaunch } from "../src/SettingsPanel";
@@ -81,6 +82,9 @@ const Diagram = () => (
 
 const NodeBody = () => (
   <NodePage
+    testVerdicts={{}}
+    probeResults={{}}
+    preview={{ status: "error", url: null, components: null, error: null }}
     model={paymentsModel}
     committed={committedModel}
     selected={{ kind: "node", id: "ledger" }}
@@ -117,6 +121,7 @@ const PowerlineBody = () => {
         model={driftModel}
         agent={agentSession}
         build={modelBuild}
+        plan={planCounts(EMPTY_DIFF, driftModel, null)}
         reviewIndex={reviewIndex}
         health={healthReport}
         launch={launch}

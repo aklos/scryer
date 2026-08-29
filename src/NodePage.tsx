@@ -480,6 +480,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   testMap={testMap}
                   testStates={testStates}
                   testVerdicts={props.testVerdicts}
+                  probeResults={props.probeResults}
                   projectPath={projectPath}
                   leafHost={leafHost}
                   codeBackedHost={!node.external && node.kind !== "person"}

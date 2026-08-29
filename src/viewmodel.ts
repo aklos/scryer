@@ -91,7 +91,6 @@ export interface SourceLocation {
   symbol?: string;
   line?: number;
   endLine?: number;
-  command?: string;
 }
 
 // --- Nodes & links -----------------------------------------------------------

@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { Check, GitCompare } from "lucide-react";
+import { Check, Crosshair, GitCompare, X } from "lucide-react";
 import { ConfirmPopover } from "../ConfirmPopover";
 import type { ScryModel, Node, Responsibility, SchemaProperty, DriftScope } from "../viewmodel";
 import { isNodeEmpty } from "../viewmodel";
 import type { Editor } from "../editor";
-import type { ModelHealthReport } from "../health";
-import { ANCHOR_STATE_LABEL, collapseAnchors } from "../health";
+import type { ClaimProbeStatus, ClaimTestStatus, ModelHealthReport, TestFinding } from "../health";
+import { ANCHOR_STATE_LABEL, collapseAnchors, testFindings } from "../health";
 import { kindIcon } from "../kindIcon";
 import { respElementId, propElementId } from "../SourceSection";
 import { BTN, BTN_AGENT, BTN_DANGER, BTN_GO, jumpTo, LINK, PageSection, WikiLink, WordDiffText } from "../pagekit";
@@ -27,10 +27,13 @@ export function ClaimRow({
   claim,
   onSelectNode,
   actions,
+  detail,
 }: {
   claim: ClaimRef;
   onSelectNode: (id: string) => void;
   actions?: React.ReactNode;
+  /** Extra lines under the host link — e.g. what a probe found. */
+  detail?: React.ReactNode;
 }) {
   const goToClaim = () => {
     onSelectNode(claim.node.id);
@@ -69,6 +72,7 @@ export function ClaimRow({
             </span>
           </div>
         )}
+        {detail}
       </div>
       {actions}
     </li>
@@ -138,6 +142,13 @@ export interface ReviewIndex {
   /** Architecture nodes wired to no relationship link — edgeless on the canvas
    *  (from the health report; symbols exempt). */
   disconnected: Node[];
+  /** Tests not holding: a current failing verdict, or a probe that found a
+   *  break the test did not catch. Counted in `total` — each is wrong now. */
+  testsNotHolding: TestFinding[];
+  /** Committed testable claims with no test attached. Listed, but NOT in
+   *  `total`: a standing gap to close, not a verdict awaiting a human, and
+   *  it would swamp the counter on any model built before rule 22. */
+  untested: TestFinding[];
   total: number;
 }
 
@@ -149,6 +160,11 @@ export function buildReviewIndex(
   driftScopes: DriftScope[],
   newNodeIds: ReadonlySet<string>,
   newRespIds: ReadonlySet<string>,
+  tests: {
+    committed: ScryModel | null;
+    verdicts: Record<string, ClaimTestStatus>;
+    probes: Record<string, ClaimProbeStatus>;
+  } = { committed: null, verdicts: {}, probes: {} },
 ): ReviewIndex {
   const vagrant: ClaimRef[] = [];
   const vagrantProps: PropRef[] = [];
@@ -180,7 +196,11 @@ export function buildReviewIndex(
   const disconnected = model.nodes.filter(
     (n) => disconnectedIds.has(n.id) && !staleNodeIds.has(n.id),
   );
+  const findings = testFindings(model, tests.committed, tests.verdicts, tests.probes);
+  const testsNotHolding = findings.filter((f) => f.kind !== "untested");
+  const untested = findings.filter((f) => f.kind === "untested");
   const total =
+    testsNotHolding.length +
     vagrant.length +
     vagrantProps.length +
     stale.length +
@@ -192,7 +212,7 @@ export function buildReviewIndex(
     disconnected.length +
     driftScopes.length +
     collapseAnchors(report?.anchors ?? []).length;
-  return { vagrant, vagrantProps, stale, staleProps, staleNodes, emptySymbols, unseenNodes, unseenClaims, disconnected, total };
+  return { vagrant, vagrantProps, stale, staleProps, staleNodes, emptySymbols, unseenNodes, unseenClaims, disconnected, testsNotHolding, untested, total };
 }
 
 export function NeedsReviewPage({
@@ -201,6 +221,9 @@ export function NeedsReviewPage({
   driftScopes,
   newNodeIds,
   newRespIds,
+  committed = null,
+  testVerdicts = {},
+  probeResults = {},
   editor,
   onSelectNode,
   onCheckDrift,
@@ -209,6 +232,9 @@ export function NeedsReviewPage({
 }: {
   model: ScryModel;
   report: ModelHealthReport | null;
+  committed?: ScryModel | null;
+  testVerdicts?: Record<string, ClaimTestStatus>;
+  probeResults?: Record<string, ClaimProbeStatus>;
   driftScopes: DriftScope[];
   newNodeIds: ReadonlySet<string>;
   newRespIds: ReadonlySet<string>;
@@ -218,7 +244,11 @@ export function NeedsReviewPage({
   onDismissDrift?: () => void;
   onClearAllNew: () => void;
 }) {
-  const idx = buildReviewIndex(model, report, driftScopes, newNodeIds, newRespIds);
+  const idx = buildReviewIndex(model, report, driftScopes, newNodeIds, newRespIds, {
+    committed,
+    verdicts: testVerdicts,
+    probes: probeResults,
+  });
   const anchors = collapseAnchors(report?.anchors ?? []);
 
   // Dropping a stale claim deletes an authored responsibility (and its anchors),
@@ -240,15 +270,59 @@ export function NeedsReviewPage({
         }
       />
       <SpecialBody>
-        {idx.total === 0 ? (
+        {idx.total === 0 && (
           <div className="flex flex-col items-center gap-3 px-6 py-16">
             <Check className="h-6 w-6 text-emerald-500 dark:text-emerald-400" />
             <p className="text-xs text-[var(--text-muted)]">
               Nothing needs review — the model is current with the code.
             </p>
           </div>
-        ) : (
+        )}
+        {idx.total > 0 && (
           <>
+            {idx.testsNotHolding.length > 0 && (
+              <PageSection title="Tests not holding" count={idx.testsNotHolding.length}>
+                <p className="mb-2 text-2xs text-[var(--text-muted)]">
+                  A failing test, or a test that stayed green while its claim's code was
+                  deliberately broken. Either way the claim is not held — fix the code, or
+                  strengthen the test and re-run for a fresh verdict.
+                </p>
+                <ul className="flex flex-col">
+                  {idx.testsNotHolding.map((f) => (
+                    <ClaimRow
+                      key={f.resp.id}
+                      claim={f}
+                      onSelectNode={onSelectNode}
+                      actions={
+                        <span className="flex shrink-0 items-center gap-1 pt-0.5 font-mono text-2xs text-red-600 dark:text-red-400">
+                          {f.kind === "failing" ? (
+                            <>
+                              <X className="h-3 w-3" /> failing
+                            </>
+                          ) : (
+                            <>
+                              <Crosshair className="h-3 w-3" /> {f.survivors?.length ?? 0} uncaught
+                            </>
+                          )}
+                        </span>
+                      }
+                      detail={
+                        f.kind === "hollow" && f.survivors && f.survivors.length > 0 ? (
+                          <ul className="mt-0.5 flex flex-col gap-px text-2xs text-[var(--text-muted)]">
+                            {f.survivors.map((sv, i) => (
+                              <li key={i} className="truncate" title={sv}>
+                                • {sv}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : undefined
+                      }
+                    />
+                  ))}
+                </ul>
+              </PageSection>
+            )}
+
             {(idx.unseenNodes.length > 0 || idx.unseenClaims.length > 0) && (
               <PageSection
                 title="Unreviewed agent changes"
@@ -634,6 +708,20 @@ export function NeedsReviewPage({
               </PageSection>
             )}
           </>
+        )}
+        {idx.untested.length > 0 && (
+          <PageSection title="Untested claims" count={idx.untested.length}>
+            <p className="mb-2 text-2xs text-[var(--text-muted)]">
+              Committed When/While/If claims with no test attached — each names a trigger to
+              arrange and a response to assert, so the test is already specified. Not counted
+              above: a standing gap to close, not a verdict to give.
+            </p>
+            <ul className="flex flex-col">
+              {idx.untested.map((f) => (
+                <ClaimRow key={f.resp.id} claim={f} onSelectNode={onSelectNode} />
+              ))}
+            </ul>
+          </PageSection>
         )}
       </SpecialBody>
       {confirmDrop && (

@@ -402,11 +402,11 @@ mod tests {
         model.nodes.push(node("node-5", Kind::Container, Some("node-1"), Some("resp-2")));
         model.source_map.insert(
             "resp-1".into(),
-            vec![SourceLocation { pattern: "a.rs".into(), symbol: None, line: None, end_line: None, command: None }],
+            vec![SourceLocation { pattern: "a.rs".into(), symbol: None, line: None, end_line: None }],
         );
         model.source_map.insert(
             "resp-2".into(),
-            vec![SourceLocation { pattern: "b.rs".into(), symbol: None, line: None, end_line: None, command: None }],
+            vec![SourceLocation { pattern: "b.rs".into(), symbol: None, line: None, end_line: None }],
         );
         model
             .boundaries

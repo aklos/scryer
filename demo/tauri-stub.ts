@@ -48,6 +48,12 @@ export async function invoke<T = unknown>(cmd: string, args?: unknown): Promise<
 export function getCurrentWindow() {
   return {
     setTheme: async () => {},
+    // Window-chrome buttons in the TopBar: nothing to drive in a browser tab.
+    isMaximized: async () => false,
+    onResized: async (_cb: () => void) => () => {},
+    minimize: async () => {},
+    toggleMaximize: async () => {},
+    close: async () => {},
   };
 }
 

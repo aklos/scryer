@@ -29,6 +29,7 @@ import {
 } from "../../src/SpecialPages";
 import { Powerline } from "../../src/Powerline";
 import { planDiff } from "../../src/planDiff";
+import { planCounts } from "../../src/changeMarks";
 import type { ScryModel, DriftScope } from "../../src/viewmodel";
 import type { ModelHealthReport } from "../../src/health";
 import type { ModelBuild } from "../../src/hooks/useModelBuild";
@@ -37,6 +38,8 @@ import type { ChangeRevision } from "../../src/hooks/useModelStorage";
 import type { ResolvedLaunch } from "../../src/SettingsPanel";
 
 const EMPTY_IDS: ReadonlySet<string> = new Set();
+// No preview sidecar in the harness: nothing is previewable, the page shows no frame.
+const NO_PREVIEW = { status: "error", url: null, components: null, error: null } as const;
 const noop = () => {};
 
 
@@ -174,6 +177,7 @@ export function WorkspaceShell({
           onToggle={toggle}
           editor={undefined}
           activeNodeIds={build.active ? build.activeNodeIds : EMPTY_IDS}
+          previewable={EMPTY_IDS}
           activeLevel={view === "diagram" ? diagramFocus : undefined}
         />
         {view === "diagram" ? (
@@ -215,6 +219,9 @@ export function WorkspaceShell({
           )
         ) : selected?.kind === "node" || selected?.kind === "group" ? (
           <NodePage
+            testVerdicts={{}}
+            probeResults={{}}
+            preview={NO_PREVIEW}
             model={model}
             committed={committed}
             selected={selected}
@@ -240,6 +247,7 @@ export function WorkspaceShell({
         model={model}
         agent={agent}
         build={build}
+        plan={planCounts(diff, model, committed)}
         reviewIndex={reviewIndex}
         health={health}
         launch={DEMO_LAUNCH}

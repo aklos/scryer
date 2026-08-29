@@ -5,7 +5,9 @@
  * UI renders it, never writes it.
  */
 
-import type { ScryModel, Link } from "./viewmodel";
+import type { ScryModel, Link, Node, Responsibility } from "./viewmodel";
+import { effectiveTestMap } from "./viewmodel";
+import { earsTestable } from "./markup";
 
 /** Health counters over one scope — a node's own content, or a whole subtree. */
 export interface HealthCounts {
@@ -194,6 +196,79 @@ export interface ClaimTestStatus {
   stale: boolean;
   /** Unix seconds when the report was ingested. */
   recordedAt: number;
+}
+
+/** One claim's recorded PROBE result, re-verified against the working tree.
+ *  A separate axis from the verdict: `probes` deliberate breaks were made in
+ *  the claim's span, and `survived` of them slipped past the attached test.
+ *  Claims nobody has probed are ABSENT from the feed rather than zeroed —
+ *  unprobed must never render the same as probed-clean. */
+export interface ClaimProbeStatus {
+  respId: string;
+  probes: number;
+  survived: number;
+  survivors: string[];
+  /** The code moved on since these probes ran — the result describes a past. */
+  stale: boolean;
+  recordedAt: number;
+}
+
+/** respId → probe result, for row lookups. */
+export function probeResultsOf(
+  statuses: ClaimProbeStatus[],
+): Record<string, ClaimProbeStatus> {
+  const out: Record<string, ClaimProbeStatus> = {};
+  for (const s of statuses) out[s.respId] = s;
+  return out;
+}
+
+/** The claim row's probe mark. `hollow` is the finding: a break survived, so a
+ *  test the verdict calls green does not actually hold its claim — and it
+ *  outranks everything because it contradicts the check sitting next to it.
+ *  `probed` is a POSITIVE but modest state: every break tried was caught, which
+ *  is a sample and not a proof. A stale result reads as `none` — it describes
+ *  code that has since changed, and showing it would vouch for work nobody
+ *  measured. */
+export function probeMark(
+  probe: ClaimProbeStatus | undefined,
+): "none" | "probed" | "hollow" {
+  if (!probe || probe.stale || probe.probes === 0) return "none";
+  return probe.survived > 0 ? "hollow" : "probed";
+}
+
+/** The ONE glyph the lane may show after the flask and count — and only when
+ *  there is something to look at. Passing is the resting state and gets NO
+ *  glyph: nearly every verdict on screen is green, and a mark that is
+ *  everywhere is a mark nobody reads (the tooltip still says passing vs.
+ *  never run). Glyphs are for what is wrong — `stale` and `failing` on the
+ *  verdict, `hollow` (red crosshair — a deliberate break went uncaught, the
+ *  finding) from a probe — plus the one earned positive, `probed` (green
+ *  double check: every deliberate break was caught; verified, as far as a
+ *  sample verifies). A stale or failing verdict keeps its
+ *  own glyph: the probe is fingerprinted on the same anchors, so it is stale
+ *  whenever the verdict is, and a currently-failing test is the louder fact. */
+export function testLaneGlyph(
+  verdict: ClaimTestStatus | undefined,
+  probe: ClaimProbeStatus | undefined,
+): "none" | "stale" | "failing" | "probed" | "hollow" {
+  const tone = testLaneTone(verdict);
+  if (tone === "quiet") return "none";
+  if (tone !== "passing") return tone;
+  const mark = probeMark(probe);
+  return mark === "none" ? "none" : mark;
+}
+
+/** The probe half of the lane tooltip. Says "sampled, not proved" outright:
+ *  the mark's whole risk is being read as a stronger guarantee than one to
+ *  three breaks can support. */
+export function probeTitle(probe: ClaimProbeStatus | undefined): string {
+  const mark = probeMark(probe);
+  if (mark === "none" || !probe) return "";
+  if (mark === "hollow") {
+    const lines = probe.survivors.map((s) => `  • ${s}`).join("\n");
+    return `\nPROBE: ${probe.survived} of ${probe.probes} deliberate break(s) went UNCAUGHT — this test does not hold the claim:\n${lines}`;
+  }
+  return `\nPROBE: all ${probe.probes} deliberate break(s) were caught. A sample, not a proof.`;
 }
 
 /** respId → verdict, for row lookups. */
@@ -542,4 +617,84 @@ export function pathsForLink(
       count: e.count,
     }))
     .sort((a, b) => b.count - a.count);
+}
+
+// --- test findings: what needs a look in the test dimension ----------------
+
+/** One claim the test dimension wants a look at, and why. `untested`: a
+ *  committed When/While/If claim on a code-backed host with no test attached
+ *  (the lane's ghost flask). `failing`: its current verdict is red. `hollow`:
+ *  its test let a deliberate break through — `survivors` says which. Passing
+ *  claims and stale verdicts are deliberately NOT findings: passing is the
+ *  resting state, and stale is a re-run away, which `get_test_radius` already
+ *  queues for the agent. */
+export interface TestFinding {
+  kind: "untested" | "failing" | "hollow";
+  node: Node;
+  resp: Responsibility;
+  survivors?: string[];
+}
+
+/** Per-node subtree tallies of {@link TestFinding}s — a node absent from the
+ *  map has NOTHING to look at below it, which is exactly what a lens needs to
+ *  know to leave the branch out. */
+export interface TestTally {
+  untested: number;
+  failing: number;
+  hollow: number;
+}
+
+/** Every claim the test dimension wants a look at, in model order. A claim
+ *  counts as committed when the committed layer holds its id — plan-added
+ *  claims get their test at the build checkpoint and never nag before it. */
+export function testFindings(
+  model: ScryModel,
+  committed: ScryModel | null,
+  verdicts: Record<string, ClaimTestStatus>,
+  probes: Record<string, ClaimProbeStatus>,
+): TestFinding[] {
+  const tests = effectiveTestMap(committed, model);
+  const committedIds = new Set<string>();
+  for (const n of committed?.nodes ?? [])
+    for (const r of n.responsibilities ?? []) committedIds.add(r.id);
+  const out: TestFinding[] = [];
+  for (const node of model.nodes) {
+    const codeBacked = !node.external && node.kind !== "person";
+    for (const resp of node.responsibilities ?? []) {
+      const attached = (tests[resp.id] ?? []).length > 0;
+      if (attached) {
+        // Verdict and probe are both fingerprinted on the same anchors, so a
+        // stale verdict means a stale probe — nothing to report either way.
+        if (testLaneTone(verdicts[resp.id]) === "failing") {
+          out.push({ kind: "failing", node, resp });
+        } else if (probeMark(probes[resp.id]) === "hollow") {
+          out.push({ kind: "hollow", node, resp, survivors: probes[resp.id].survivors });
+        }
+      } else if (codeBacked && committedIds.has(resp.id) && earsTestable(resp.statement)) {
+        out.push({ kind: "untested", node, resp });
+      }
+    }
+  }
+  return out;
+}
+
+/** Roll findings up the tree: every ancestor of a finding's host (host
+ *  included) gets the count. Nodes with nothing below them stay absent. */
+export function rollupTestFindings(
+  model: Pick<ScryModel, "nodes">,
+  findings: TestFinding[],
+): Map<string, TestTally> {
+  const parent = new Map<string, string | undefined>();
+  for (const n of model.nodes) parent.set(n.id, n.parentId);
+  const out = new Map<string, TestTally>();
+  for (const f of findings) {
+    let id: string | undefined = f.node.id;
+    while (id) {
+      const t = out.get(id) ?? { untested: 0, failing: 0, hollow: 0 };
+      t[f.kind] += 1;
+      out.set(id, t);
+      id = parent.get(id);
+    }
+  }
+  return out;
 }

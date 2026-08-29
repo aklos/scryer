@@ -888,7 +888,6 @@ mod tests {
                 symbol: Some(anchor_symbol.into()),
                 line: Some(line),
                 end_line: Some(end),
-                command: None,
             }],
         );
         m
@@ -965,7 +964,6 @@ mod tests {
                 symbol: Some("alphaSpec".into()),
                 line: None,
                 end_line: None,
-                command: None,
             }],
         );
         scryer_core::write_model_at(&r, &m).unwrap();
@@ -1006,7 +1004,6 @@ mod tests {
                 symbol: Some("rejects an unsigned webhook".into()),
                 line: None,
                 end_line: None,
-                command: None,
             }],
         );
         scryer_core::write_model_at(&r, &m).unwrap();
@@ -1048,7 +1045,6 @@ mod tests {
                 symbol: None,
                 line: None,
                 end_line: None,
-                command: None,
             }],
         );
         scryer_core::write_model_at(&r, &m).unwrap();
@@ -1316,7 +1312,6 @@ mod tests {
                 symbol: Some("phantom".into()),
                 line: None,
                 end_line: None,
-                command: None,
             }],
         );
         scryer_core::write_model_at(&r, &m).unwrap();
@@ -1355,7 +1350,6 @@ mod tests {
                 symbol: Some("beta".into()),
                 line: Some(5),
                 end_line: Some(7),
-                command: None,
             }],
         );
         m

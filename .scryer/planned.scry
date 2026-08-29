@@ -953,6 +953,11 @@
           "id": "resp-81",
           "statement": "Computes the ambient plan/drift/anchor/test-verdict status counts and one-line header carried on every write response, mentioning test state only when a verdict is failing or stale.",
           "lastTouchedAt": 1786527236
+        },
+        {
+          "id": "resp-772",
+          "statement": "**If** a probe found a survivor, **say** so in the ambient header — a green test that misses a deliberate break is a finding, not a statistic — while a claim merely never probed stays silent there",
+          "lastTouchedAt": 1787898372
         }
       ]
     },
@@ -4238,6 +4243,11 @@
           "id": "resp-749",
           "statement": "**Mark** each symbol row the preview sidecar can render with the preview glyph, derived from its export list rather than stored on the node",
           "lastTouchedAt": 1787904134
+        },
+        {
+          "id": "resp-777",
+          "statement": "**While** the Tests lens is on, **show** only branches with a test finding below them, each row carrying its subtree's counts — untested claims, failing tests, uncaught breaks — so the reader drills down along the marks instead of opening nodes at random",
+          "lastTouchedAt": 1787998826
         }
       ]
     },
@@ -4569,8 +4579,13 @@
         },
         {
           "id": "resp-734",
-          "statement": "**When** a claim carries attached tests, **show** their count and, beside it, the recorded verdict as its own mark — a green check when the last run passed and still holds, amber when stale, red when failing, nothing at all when no run was recorded — and **mark** testable claims lacking a test with a non-flask nudge",
-          "lastTouchedAt": 1787473772
+          "statement": "**When** a claim carries attached tests, **show** their count and **add** a mark only for what is wrong — amber when the last verdict is stale, red when failing, nothing at all when passing or when no run was recorded — and **mark** testable claims lacking a test with a non-flask nudge",
+          "lastTouchedAt": 1787998667
+        },
+        {
+          "id": "resp-774",
+          "statement": "**When** a claim carries a probe result, **make** it the lane's one mark — a green double check when every deliberate break was caught, a red crosshair when one survived — and **show** nothing for a claim never probed or whose probe went stale",
+          "lastTouchedAt": 1787998667
         }
       ]
     },
@@ -4834,6 +4849,11 @@
           "id": "resp-285",
           "statement": "**Present** every vagrant/stale claim, empty symbol, and disconnected node awaiting a human verdict",
           "lastTouchedAt": 1784883905
+        },
+        {
+          "id": "resp-779",
+          "statement": "**Present** tests not holding — failing verdicts and uncaught breaks, each with what survived — and the untested claims, as claim rows that open on their page",
+          "lastTouchedAt": 1787998826
         }
       ]
     },
@@ -4847,6 +4867,11 @@
           "id": "resp-286",
           "statement": "**Gather** everything awaiting a human verdict into one index shared by the page and the status-bar counter",
           "lastTouchedAt": 1784883905
+        },
+        {
+          "id": "resp-778",
+          "statement": "**When** a test is failing or let a deliberate break through, **count** it among the items to review; untested claims ride the index as a standing list without inflating that count",
+          "lastTouchedAt": 1787998826
         }
       ]
     },
@@ -5472,6 +5497,16 @@
           "id": "resp-315",
           "statement": "**Expand** a declared or implied connection into the leaf code paths that back it",
           "lastTouchedAt": 1784883905
+        },
+        {
+          "id": "resp-775",
+          "statement": "**When** asked what needs a look in the test dimension, **list** each committed testable claim with no test attached, each claim whose current verdict is failing, and each claim whose test let a deliberate break through — stale verdicts and passing claims excluded",
+          "lastTouchedAt": 1787998826
+        },
+        {
+          "id": "resp-776",
+          "statement": "**When** the tree asks, **roll** those findings up per node over its subtree, so a branch carries the count of what sits below it and a clean branch carries nothing",
+          "lastTouchedAt": 1787998826
         }
       ]
     },
@@ -6811,6 +6846,11 @@
           "id": "resp-732",
           "statement": "**When** the canvas asks, **serve** each claim's recorded test verdict and staleness, re-verified against the working tree",
           "lastTouchedAt": 1786957053
+        },
+        {
+          "id": "resp-773",
+          "statement": "**When** the canvas asks, **serve** each claim's probe result — breaks tried and breaks survived — omitting the claims nobody probed rather than reporting them as clean",
+          "lastTouchedAt": 1787898624
         }
       ]
     },
@@ -12276,6 +12316,16 @@
           "id": "resp-716",
           "statement": "**When** a JUnit report arrives, **ingest** it end to end: parse, match against the model, and record per-claim outcomes in one call",
           "lastTouchedAt": 1786525877
+        },
+        {
+          "id": "resp-767",
+          "statement": "**When** a probe outcome is recorded, **fingerprint** it against the same implementation and test anchors a verdict uses, so an edit to either reads it as stale",
+          "lastTouchedAt": 1787824320
+        },
+        {
+          "id": "resp-768",
+          "statement": "**When** probe results are read, **report** how many probes ran and how many survived, never collapsing an unprobed claim into a clean one",
+          "lastTouchedAt": 1787824320
         }
       ]
     },
@@ -12346,8 +12396,8 @@
       "responsibilities": [
         {
           "id": "resp-723",
-          "statement": "**When** the radius is computed, **include** every test-attached claim whose verdict is missing or stale, grouped per test file with the recorded run commands so each file is one invocation",
-          "lastTouchedAt": 1786526717
+          "statement": "**When** the radius is computed, **include** every test-attached claim whose verdict is missing or stale, grouped per test file so each file is one invocation",
+          "lastTouchedAt": 1787896786
         },
         {
           "id": "resp-724",
@@ -12372,6 +12422,26 @@
           "id": "resp-726",
           "statement": "**When** asked what to run, **answer** with exactly the test files whose claims hold missing or stale verdicts, never the whole suite",
           "lastTouchedAt": 1786526725
+        },
+        {
+          "id": "resp-764",
+          "statement": "**When** an agent asks to probe a claim, **answer** with the synced worktree path, the span to break, and the attached test files to run there",
+          "lastTouchedAt": 1787897929
+        },
+        {
+          "id": "resp-765",
+          "statement": "**If** the claim has no attached test, or its verdict is missing or stale, **refuse** the probe and name which — breaking code behind an unverified test settles nothing",
+          "lastTouchedAt": 1787824320
+        },
+        {
+          "id": "resp-766",
+          "statement": "**When** a probe ends, **record** each mutant's outcome and **answer** with what survived",
+          "lastTouchedAt": 1787897929
+        },
+        {
+          "id": "resp-771",
+          "statement": "**When** a probe opens, **direct** the caller to delegate the mutate-run-revert loop to a subagent, so its churn never enters the session that asked for it",
+          "lastTouchedAt": 1787897929
         }
       ]
     },
@@ -12406,8 +12476,8 @@
       "responsibilities": [
         {
           "id": "resp-730",
-          "statement": "**When** called, **return** the blast radius grouped per test file — claims, counts, and recorded run commands — plus a current-verdict summary of passing, failing, and stale claims",
-          "lastTouchedAt": 1786526736
+          "statement": "**When** called, **return** the blast radius grouped per test file — claims and counts — plus a current-verdict summary of passing, failing, and stale claims",
+          "lastTouchedAt": 1787896786
         }
       ]
     },
@@ -12554,6 +12624,35 @@
           "id": "resp-757",
           "statement": "**When** a per-node fixture module exists, **spread** its default export over the synthesized props",
           "lastTouchedAt": 1787905180
+        }
+      ]
+    },
+    {
+      "id": "node-685",
+      "kind": "component",
+      "name": "Probe Worktree",
+      "parentId": "node-4",
+      "description": "The isolated git worktree a falsification probe mutates — reused so its build cache survives, synced to the developer's working tree so the probe breaks the code as it actually stands.",
+      "responsibilities": [
+        {
+          "id": "resp-760",
+          "statement": "Provides one reused git worktree per project, so a probe's build cache survives between rounds and each mutant costs an incremental run rather than a cold checkout",
+          "lastTouchedAt": 1787897929
+        },
+        {
+          "id": "resp-761",
+          "statement": "**When** a probe opens, **sync** the worktree to the developer's working tree — committed state plus uncommitted and untracked edits — so the probe breaks the code as it actually stands, not as it was last committed",
+          "lastTouchedAt": 1787897929
+        },
+        {
+          "id": "resp-762",
+          "statement": "**When** a probe ends, **reset** the worktree so no mutation survives into the next round",
+          "lastTouchedAt": 1787897929
+        },
+        {
+          "id": "resp-763",
+          "statement": "**If** the project is not a git repository, **refuse** the probe rather than falling back to mutating the developer's own working tree",
+          "lastTouchedAt": 1787897929
         }
       ]
     }
@@ -16194,6 +16293,36 @@
       "src": "node-187",
       "dst": "node-665",
       "label": "synthesizes props via"
+    },
+    {
+      "id": "link-node-577-node-685",
+      "src": "node-577",
+      "dst": "node-685",
+      "label": "consults open probes"
+    },
+    {
+      "id": "link-node-666-node-523",
+      "src": "node-666",
+      "dst": "node-523",
+      "label": "reads source locations"
+    },
+    {
+      "id": "link-node-669-node-435",
+      "src": "node-669",
+      "dst": "node-435",
+      "label": "lists project files"
+    },
+    {
+      "id": "link-node-674-node-53",
+      "src": "node-674",
+      "dst": "node-53",
+      "label": "reports loop state"
+    },
+    {
+      "id": "link-node-389-node-680",
+      "src": "node-389",
+      "dst": "node-680",
+      "label": "watches report dirs"
     }
   ],
   "groups": [

@@ -1,12 +1,21 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, CircleDashed, CornerDownRight, FlaskConical, RotateCw, Tag, X } from "lucide-react";
+import {
+  CheckCheck,
+  CircleDashed,
+  CornerDownRight,
+  Crosshair,
+  FlaskConical,
+  RotateCw,
+  Tag,
+  X,
+} from "lucide-react";
 import type { ConcernDef, ScryModel, Responsibility, SourceLocation } from "../viewmodel";
 import { STANDARD_CONCERNS } from "../viewmodel";
 import { lookupIcon } from "../IconPicker";
 import type { Editor } from "../editor";
-import type { AnchorState, ClaimTestStatus } from "../health";
-import { testLaneTitle, testLaneTone } from "../health";
+import type { AnchorState, ClaimProbeStatus, ClaimTestStatus } from "../health";
+import { probeTitle, testLaneGlyph, testLaneTitle, testLaneTone } from "../health";
 import { FLAG_COLORS } from "../statusColors";
 import {
   buildElementDiff,
@@ -148,6 +157,7 @@ export function ResponsibilitiesSection({
   testMap,
   testStates,
   testVerdicts,
+  probeResults,
   projectPath,
   leafHost,
   codeBackedHost,
@@ -176,6 +186,8 @@ export function ResponsibilitiesSection({
   /** respId → recorded test verdict (with re-verified staleness), from the
    *  `get_test_statuses` feed. Colors the test lane. */
   testVerdicts: Record<string, ClaimTestStatus>;
+  /** respId → probe result; absent for a claim nobody has probed. */
+  probeResults: Record<string, ClaimProbeStatus>;
   projectPath: string | null;
   /** Whether claims here must anchor to source (leaf node). Structural hosts
    *  discharge through their subtree and never flag "unmapped". */
@@ -243,6 +255,7 @@ export function ResponsibilitiesSection({
               testLocations={testMap[row.resp.id] ?? []}
               testState={testStates[row.resp.id] ?? null}
               testVerdict={testVerdicts[row.resp.id] ?? null}
+              probeResult={probeResults[row.resp.id] ?? null}
               projectPath={projectPath}
               leafHost={leafHost}
               codeBackedHost={codeBackedHost}
@@ -433,6 +446,7 @@ function RespDiffRow({
   testLocations,
   testState,
   testVerdict,
+  probeResult,
   projectPath,
   leafHost,
   codeBackedHost,
@@ -451,6 +465,8 @@ function RespDiffRow({
   testState: AnchorState | null;
   /** The claim's recorded test verdict, or null when no run was ingested. */
   testVerdict: ClaimTestStatus | null;
+  /** The claim's recorded probe result, or null when nobody probed it. */
+  probeResult: ClaimProbeStatus | null;
   projectPath: string | null;
   leafHost: boolean;
   /** See {@link ResponsibilitiesSection}: gates "untested", structural hosts included. */
@@ -693,35 +709,58 @@ function RespDiffRow({
       {tested &&
         (() => {
           const tone = testLaneTone(testVerdict ?? undefined);
+          const glyph = testLaneGlyph(testVerdict ?? undefined, probeResult ?? undefined);
           const toneCls =
             tone === "failing"
               ? "text-red-600 dark:text-red-400"
               : tone === "stale"
                 ? "text-orange-600 dark:text-orange-400"
                 : "text-[var(--text-secondary)]";
-          const VerdictMark =
-            tone === "passing" ? Check : tone === "stale" ? RotateCw : tone === "failing" ? X : null;
+          // At most one glyph after the count, and only for something worth a
+          // look. Passing is assumed — nearly every verdict on screen is
+          // green, so any mark for it would be wallpaper — and the flask
+          // stays neutral; the tooltip is where "passing" vs "never run" is
+          // spelled out. Marks are for what is WRONG: stale, failing, or a
+          // probe survivor (red crosshair — a test the verdict calls green did
+          // NOT catch a deliberate break). The one positive mark is the green
+          // double check: probed, every deliberate break caught — verified,
+          // as far as a sample can verify. Nothing for a claim never probed
+          // or whose probe went stale: absence is "nobody measured this".
+          const Glyph =
+            glyph === "probed"
+              ? CheckCheck
+              : glyph === "hollow"
+                ? Crosshair
+                : glyph === "stale"
+                  ? RotateCw
+                  : glyph === "failing"
+                    ? X
+                    : null;
+          const glyphCls =
+            glyph === "probed"
+              ? "text-emerald-600 dark:text-emerald-400"
+              : glyph === "hollow"
+                ? "text-red-600 dark:text-red-400"
+                : "";
+          const glyphLabel =
+            glyph === "stale"
+              ? "Verdict stale — re-run"
+              : glyph === "failing"
+                ? "Tests failing"
+                : glyph === "probed"
+                  ? "Probed — every deliberate break was caught"
+                  : "A deliberate break went uncaught — this test does not hold the claim";
           return (
             <span
               className={`absolute right-1 top-[3px] flex items-center gap-px font-mono text-2xs ${toneCls}`}
-              title={testLaneTitle(testLocations.length, testVerdict ?? undefined)}
+              title={
+                testLaneTitle(testLocations.length, testVerdict ?? undefined) +
+                probeTitle(probeResult ?? undefined)
+              }
             >
               <FlaskConical className="h-3 w-3" aria-label="Tests attached" />
               {testLocations.length}
-              {VerdictMark && (
-                <VerdictMark
-                  className={`ml-0.5 h-3 w-3 ${
-                    tone === "passing" ? "text-emerald-600 dark:text-emerald-400" : ""
-                  }`}
-                  aria-label={
-                    tone === "passing"
-                      ? "Tests passing"
-                      : tone === "stale"
-                        ? "Verdict stale — re-run"
-                        : "Tests failing"
-                  }
-                />
-              )}
+              {Glyph && <Glyph className={`ml-0.5 h-3 w-3 ${glyphCls}`} aria-label={glyphLabel} />}
             </span>
           );
         })()}

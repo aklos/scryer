@@ -131,6 +131,23 @@ pub(crate) async fn get_test_statuses(
     .map_err(|e| format!("test-status task failed: {e}"))?
 }
 
+/// Per-claim PROBE results — how many deliberate breaks a claim's attached
+/// test was asked to catch, and how many it missed. A separate axis from the
+/// verdict: a claim can be green and still have a survivor, which is exactly
+/// the state worth seeing. Claims nobody has probed are absent rather than
+/// zeroed, so unprobed never renders as clean.
+#[tauri::command]
+pub(crate) async fn get_probe_statuses(
+    cwd: String,
+) -> Result<Vec<scryer_extract::test_status::ClaimProbeStatus>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+        scryer_extract::test_status::probe_statuses(&model_ref)
+    })
+    .await
+    .map_err(|e| format!("probe-status task failed: {e}"))?
+}
+
 /// Dismiss the current drift nudge without running a semantic check: advance the
 /// reconcile anchor to now (the same write `start_drift_check` does on
 /// completion). The user is asserting "I've looked, these changes are fine" —

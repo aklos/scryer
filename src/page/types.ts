@@ -1,6 +1,6 @@
 import type { ScryModel, DriftScope } from "../viewmodel";
 import type { Editor } from "../editor";
-import type { ClaimTestStatus, ModelHealthReport } from "../health";
+import type { ClaimProbeStatus, ClaimTestStatus, ModelHealthReport } from "../health";
 import type { ChangeRevision } from "../hooks/useModelStorage";
 import type { HistoryEvent } from "../history";
 import type { PreviewServerState } from "../hooks/usePreviewServer";
@@ -25,6 +25,8 @@ export interface PageProps {
   /** respId → recorded test verdict (re-verified staleness), from the
    *  `get_test_statuses` feed. Empty until a report has been ingested. */
   testVerdicts: Record<string, ClaimTestStatus>;
+  /** respId → probe result. Absent means never probed, never "clean". */
+  probeResults: Record<string, ClaimProbeStatus>;
   projectPath: string | null;
   editor: Editor | undefined;
   onSelectNode: (id: string) => void;
