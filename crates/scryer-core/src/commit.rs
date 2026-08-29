@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::model::{Group, Node, Responsibility, SchemaProperty, ScryModel};
 use crate::model_ref::ModelRef;
@@ -98,7 +98,7 @@ fn clean_committed_resp(mut resp: Responsibility) -> Responsibility {
 /// than the node get the same stay-behind treatment as vagrants: they are
 /// another task's pending work, and this fold is not their verdict
 /// (`change_map` is the plan's ledger — see [`changes::foreign_to_host`]).
-fn committed_node_copy(n: &Node, change_map: &HashMap<String, String>) -> Node {
+fn committed_node_copy(n: &Node, change_map: &BTreeMap<String, String>) -> Node {
     use diff::ElementKind as EK;
     let host_key = changes::element_key(EK::Node, None, &n.id);
     let mut copy = n.clone();
@@ -145,7 +145,7 @@ fn committed_node_copy(n: &Node, change_map: &HashMap<String, String>) -> Node {
 /// un-adjudicated `vagrant` claims (they stay in the plan awaiting a verdict),
 /// drop claims tagged to a different change (another task's pending work), and
 /// clear `stale`/`stale_proposal` on everything that folds. Audit #5 / item A.
-fn committed_group_copy(g: &Group, change_map: &HashMap<String, String>) -> Group {
+fn committed_group_copy(g: &Group, change_map: &BTreeMap<String, String>) -> Group {
     use diff::ElementKind as EK;
     let host_key = changes::element_key(EK::Group, None, &g.id);
     let mut copy = g.clone();
@@ -644,7 +644,7 @@ pub fn commit_element(
 fn structure_only_copy(n: &Node) -> Node {
     // The claim/property filtering inside committed_node_copy is moot here —
     // everything it kept is cleared — so no change map is consulted.
-    let mut copy = committed_node_copy(n, &HashMap::new());
+    let mut copy = committed_node_copy(n, &BTreeMap::new());
     copy.responsibilities.clear();
     copy.properties.clear();
     copy

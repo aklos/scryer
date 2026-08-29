@@ -10064,6 +10064,11 @@
           "id": "resp-588",
           "statement": "Persists the committed model atomically and strips any change-ledger state, which lives only in the plan",
           "lastTouchedAt": 1784884312
+        },
+        {
+          "id": "resp-59xhcf",
+          "statement": "**When** a model is written, **serialize** its id-keyed maps in sorted key order, so an unchanged model round-trips byte-identical and a commit's diff shows only what actually changed",
+          "lastTouchedAt": 1788001976
         }
       ]
     },

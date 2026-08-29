@@ -795,6 +795,57 @@ mod tests {
         );
     }
 
+    /// The maps keyed by id (sourceMap, testMap, boundaries, changeMap) used
+    /// to be HashMaps, whose iteration order is randomly seeded per instance —
+    /// so every write reshuffled thousands of lines, every model merge
+    /// conflicted, and a commit's real change to the model was invisible in
+    /// its diff. An unchanged model must round-trip byte-identical.
+    #[test]
+    fn an_unchanged_model_round_trips_byte_identical() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        for i in 0..40 {
+            let id = format!("node-{i}");
+            m.nodes.push(Node {
+                id: id.clone(),
+                kind: Kind::Component,
+                name: format!("n{i}"),
+                vagrant: None,
+                stale: None,
+                parent_id: None,
+                external: None,
+                technology: None,
+                description: None,
+                responsibilities: Vec::new(),
+                properties: Vec::new(),
+                icon: None,
+                notes: None,
+                position: None,
+                directives: Vec::new(),
+            });
+            m.source_map.insert(
+                format!("resp-{i}"),
+                vec![SourceLocation { pattern: format!("src/{i}.rs"), symbol: None, line: None, end_line: None }],
+            );
+            m.test_map.insert(
+                format!("resp-{i}"),
+                vec![SourceLocation { pattern: format!("tests/{i}.rs"), symbol: None, line: None, end_line: None }],
+            );
+            m.boundaries.insert(id, vec![Source { pattern: format!("src/{i}/**/*"), comment: None }]);
+        }
+        write_model_at(&r, &m).unwrap();
+        let first = std::fs::read_to_string(r.model_path()).unwrap();
+        // A fresh deserialize + serialize is exactly what every writer does.
+        let again = read_model_at(&r).unwrap();
+        write_model_at(&r, &again).unwrap();
+        let second = std::fs::read_to_string(r.model_path()).unwrap();
+        assert_eq!(first, second, "the file must not reshuffle when nothing changed");
+        assert!(
+            first.find("\"node-1\"").unwrap() < first.find("\"node-2\"").unwrap(),
+            "keys are written in sorted order"
+        );
+    }
+
     /// Concurrent read-modify-write under the lock never loses an update: N
     /// writers each add one node, and all N land with unique ids — exactly the
     /// parallel-agent-writes case that clobbered without the lock (two writers

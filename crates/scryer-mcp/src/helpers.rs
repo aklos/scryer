@@ -747,7 +747,7 @@ impl RespAnchorDim {
     fn map_of<'m>(
         &self,
         m: &'m mut ScryModel,
-    ) -> &'m mut std::collections::HashMap<String, Vec<scryer_core::SourceLocation>> {
+    ) -> &'m mut std::collections::BTreeMap<String, Vec<scryer_core::SourceLocation>> {
         match self {
             RespAnchorDim::Source => &mut m.source_map,
             RespAnchorDim::Test => &mut m.test_map,
