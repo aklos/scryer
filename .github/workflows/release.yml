@@ -1,77 +1,80 @@
 name: Release
 
+# Releases the current main snapshot. The patch number counts merges: it is
+# the previous release's patch plus the number of first-parent commits on
+# main since that tag (its own "Bump version" commits excluded). The version
+# fields are rewritten, committed, tagged, and the tag is built.
+#
+# Tags pushed with GITHUB_TOKEN do not trigger other workflows, so the build
+# is invoked here as a reusable workflow rather than relying on its tag trigger.
+
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
+concurrency:
+  group: version
+  cancel-in-progress: false
+
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-          - platform: windows-latest
-            target: x86_64-pc-windows-msvc
-          - platform: macos-latest
-            target: aarch64-apple-darwin
-          - platform: macos-latest
-            target: x86_64-apple-darwin
-
-    runs-on: ${{ matrix.platform }}
-
+  tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          ref: main
+          fetch-depth: 0
 
-      # No version pin here — the action reads package.json's packageManager
-      # field, so contributors and CI resolve the same pnpm.
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
+      - name: Compute the version
+        id: version
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - name: Install frontend dependencies
-        run: pnpm install
-
-      - name: Build MCP sidecar
-        shell: bash
-        run: |
-          cargo build --release -p scryer-mcp --target ${{ matrix.target }}
-          mkdir -p src-tauri/binaries
-          src="target/${{ matrix.target }}/release/scryer-mcp"
-          dst="src-tauri/binaries/scryer-mcp-${{ matrix.target }}"
-          if [[ "${{ matrix.target }}" == *windows* ]]; then
-            cp "${src}.exe" "${dst}.exe"
-          else
-            cp "$src" "$dst"
+          current=$(node -p "require('./package.json').version")
+          IFS=. read -r major minor _ <<< "$current"
+          latest=$(git tag --list "v$major.$minor.*" --sort=-v:refname | head -n1)
+          if [[ -z "$latest" ]]; then
+            echo "::error::no v$major.$minor.* tag to count from; run the Bump workflow first"
+            exit 1
           fi
+          IFS=. read -r _ _ latest_patch <<< "${latest#v}"
+          merges=$(git rev-list --first-parent --count \
+            --invert-grep --grep='^Bump version to' "$latest..HEAD")
+          if [[ "$(git rev-parse "$latest")" == "$(git rev-parse HEAD)" ]]; then
+            # main is exactly the tag (e.g. right after a Bump): build it as-is.
+            echo "main is already tagged as $latest; building that"
+            echo "retag=false" >> "$GITHUB_OUTPUT"
+            echo "tag=$latest" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          target="$major.$minor.$((latest_patch + merges))"
+          echo "$latest + $merges merge(s) -> v$target"
+          echo "retag=true" >> "$GITHUB_OUTPUT"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "tag=v$target" >> "$GITHUB_OUTPUT"
 
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'scryer ${{ github.ref_name }}'
-          releaseBody: ''
-          releaseDraft: true
-          prerelease: false
-          args: --target ${{ matrix.target }}
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.version.outputs.retag == 'true'
+
+      # bump-version.sh updates Cargo.lock offline; give it the index and crates.
+      - run: cargo fetch
+        if: steps.version.outputs.retag == 'true'
+
+      - name: Rewrite version fields, commit and tag
+        if: steps.version.outputs.retag == 'true'
+        run: |
+          target='${{ steps.version.outputs.target }}'
+          scripts/bump-version.sh "$target"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -am "Bump version to $target"
+          git tag "v$target"
+          git push origin main "v$target"
+
+  build:
+    needs: tag
+    uses: ./.github/workflows/build.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}

@@ -40,7 +40,7 @@ echo "  updated tauri.conf.json"
 echo "  updated Cargo.lock"
 
 echo ""
-echo "Bumped to v$VERSION. Now run:"
+echo "Bumped to v$VERSION. In CI this is done by the Bump/Release workflows; by hand:"
 echo "  git add -A && git commit -m 'Bump version to $VERSION'"
 echo "  git tag v$VERSION"
 echo "  git push && git push --tags"

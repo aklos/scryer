@@ -1,0 +1,56 @@
+name: Bump minor/major
+
+# Starts a new X.Y line: rewrites every version field to X.Y.0, commits to
+# main and tags vX.Y.0. No build — that is what the Release workflow is for,
+# and the patch number counts merges from this tag onward.
+
+on:
+  workflow_dispatch:
+    inputs:
+      part:
+        description: Which part to increment
+        required: true
+        type: choice
+        options: [minor, major]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: version
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Compute the new version
+        id: version
+        run: |
+          current=$(node -p "require('./package.json').version")
+          IFS=. read -r major minor _ <<< "$current"
+          case "${{ inputs.part }}" in
+            major) target="$((major + 1)).0.0" ;;
+            minor) target="$major.$((minor + 1)).0" ;;
+          esac
+          echo "$current -> $target"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # bump-version.sh updates Cargo.lock offline; give it the index and crates.
+      - run: cargo fetch
+
+      - name: Rewrite version fields, commit and tag
+        run: |
+          target='${{ steps.version.outputs.target }}'
+          scripts/bump-version.sh "$target"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -am "Bump version to $target"
+          git tag "v$target"
+          git push origin main "v$target"
