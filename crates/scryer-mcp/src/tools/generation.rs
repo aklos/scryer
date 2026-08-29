@@ -25,87 +25,51 @@ fn err(msg: impl Into<String>) -> CallToolResult {
 }
 
 struct IdMinter {
-    next_node: u64,
-    next_resp: u64,
-    next_group: u64,
+    /// Every node, responsibility, and group id this minter must stay clear
+    /// of — both layers plus everything it has minted so far.
+    taken: HashSet<String>,
 }
 
 impl IdMinter {
     fn new(model: &scryer_core::ScryModel) -> Self {
-        let next_node = model
-            .nodes
-            .iter()
-            .filter_map(|n| n.id.strip_prefix("node-")?.parse::<u64>().ok())
-            .max()
-            .unwrap_or(0)
-            + 1;
-        let next_resp = model
-            .nodes
-            .iter()
-            .flat_map(|n| n.responsibilities.iter())
-            .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
-            .filter_map(|r| r.id.strip_prefix("resp-")?.parse::<u64>().ok())
-            .max()
-            .unwrap_or(0)
-            + 1;
-        let next_group = model
-            .groups
-            .iter()
-            .filter_map(|g| g.id.strip_prefix("group-")?.parse::<u64>().ok())
-            .max()
-            .unwrap_or(0)
-            + 1;
-        Self {
-            next_node,
-            next_resp,
-            next_group,
+        let mut me = Self { taken: HashSet::new() };
+        me.absorb(model);
+        me
+    }
+
+    /// Reserve every id in `other` too. Used to mint against the UNION of the
+    /// committed model and the planned draft: a container commit reads the
+    /// committed layer, but a concurrent system-level session may have minted
+    /// ids into the planned draft that aren't in committed yet. Seeding from
+    /// one layer alone could re-mint those ids and collide when this commit's
+    /// subtree is mirrored into planned.
+    fn absorb(&mut self, other: &scryer_core::ScryModel) {
+        for n in &other.nodes {
+            self.taken.insert(n.id.clone());
+            for r in &n.responsibilities {
+                self.taken.insert(r.id.clone());
+            }
+        }
+        for g in &other.groups {
+            self.taken.insert(g.id.clone());
+            for r in &g.responsibilities {
+                self.taken.insert(r.id.clone());
+            }
         }
     }
 
-    /// Bump every counter so it also clears the max id present in `other`. Used
-    /// to mint against the UNION of the committed model and the planned draft: a
-    /// container commit reads the committed layer, but a concurrent system-level
-    /// session may have minted ids into the planned draft that aren't in
-    /// committed yet. Seeding from one layer alone would re-mint those ids and
-    /// collide when this commit's subtree is mirrored into planned.
-    fn absorb(&mut self, other: &scryer_core::ScryModel) {
-        let node_max = other
-            .nodes
-            .iter()
-            .filter_map(|n| n.id.strip_prefix("node-")?.parse::<u64>().ok())
-            .max()
-            .unwrap_or(0)
-            + 1;
-        self.next_node = self.next_node.max(node_max);
-        let resp_max = other
-            .nodes
-            .iter()
-            .flat_map(|n| n.responsibilities.iter())
-            .chain(other.groups.iter().flat_map(|g| g.responsibilities.iter()))
-            .filter_map(|r| r.id.strip_prefix("resp-")?.parse::<u64>().ok())
-            .max()
-            .unwrap_or(0)
-            + 1;
-        self.next_resp = self.next_resp.max(resp_max);
-        let group_max = other
-            .groups
-            .iter()
-            .filter_map(|g| g.id.strip_prefix("group-")?.parse::<u64>().ok())
-            .max()
-            .unwrap_or(0)
-            + 1;
-        self.next_group = self.next_group.max(group_max);
-    }
-
-    fn node(&mut self) -> String {
-        let id = format!("node-{}", self.next_node);
-        self.next_node += 1;
+    fn mint(&mut self, prefix: &str) -> String {
+        let id = scryer_core::mint_id_from(prefix, self.taken.iter().map(String::as_str));
+        self.taken.insert(id.clone());
         id
     }
 
+    fn node(&mut self) -> String {
+        self.mint("node")
+    }
+
     fn resp(&mut self, statement: &str, concern: Option<&str>) -> Responsibility {
-        let id = format!("resp-{}", self.next_resp);
-        self.next_resp += 1;
+        let id = self.mint("resp");
         Responsibility {
             concern: concern.map(Into::into),
             id,
@@ -127,9 +91,7 @@ impl IdMinter {
     }
 
     fn group(&mut self) -> String {
-        let id = format!("group-{}", self.next_group);
-        self.next_group += 1;
-        id
+        self.mint("group")
     }
 }
 

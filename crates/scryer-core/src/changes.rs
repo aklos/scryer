@@ -94,15 +94,14 @@ pub fn parse_key(key: &str) -> Option<(ElementKind, Option<String>, String)> {
 /// has seen, registry or map, so a re-open never collides with a tag left by
 /// a closed twin) and register it. The caller persists the plan.
 pub fn open_change(model: &mut ScryModel, rationale: &str, now: u64) -> String {
-    let max = model
-        .changes
-        .iter()
-        .map(|c| c.id.as_str())
-        .chain(model.change_map.values().map(|s| s.as_str()))
-        .filter_map(|id| id.strip_prefix("chg-")?.parse::<u64>().ok())
-        .max()
-        .unwrap_or(0);
-    let id = format!("chg-{}", max + 1);
+    let id = crate::ids::mint_id_from(
+        "chg",
+        model
+            .changes
+            .iter()
+            .map(|c| c.id.as_str())
+            .chain(model.change_map.values().map(|s| s.as_str())),
+    );
     model.changes.push(ChangeMeta {
         id: id.clone(),
         rationale: rationale.trim().to_string(),
@@ -557,15 +556,18 @@ mod tests {
     }
 
     #[test]
-    fn open_change_mints_past_every_seen_id() {
+    fn open_change_mints_a_fresh_id_every_time() {
         let mut m = ScryModel::new();
         let a = open_change(&mut m, "  first task  ", 100);
-        assert_eq!(a, "chg-1");
+        assert!(crate::ids::is_minted_id(&a, "chg"), "{a}");
         assert_eq!(m.changes[0].rationale, "first task");
-        // A tag left by a closed change still advances the mint.
+        // A tag left by a closed change is still an id the mint must avoid;
+        // and no two opens ever agree, however identical the snapshot.
         m.change_map.insert("node:n1".into(), "chg-7".into());
         let b = open_change(&mut m, "second", 200);
-        assert_eq!(b, "chg-8");
+        assert!(crate::ids::is_minted_id(&b, "chg"), "{b}");
+        assert_ne!(b, a);
+        assert_ne!(b, "chg-7");
         assert_eq!(m.changes.len(), 2);
     }
 

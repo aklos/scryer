@@ -660,14 +660,30 @@ export function updateGroup(
 
 // --- ID generation -----------------------------------------------------------
 
-function nextNumericId(prefix: string, existing: Iterable<string>): string {
-  let max = 0;
-  for (const id of existing) {
-    if (!id.startsWith(prefix + "-")) continue;
-    const n = parseInt(id.slice(prefix.length + 1), 10);
-    if (!Number.isNaN(n) && n > max) max = n;
+// Ids are `<prefix>-<6 random chars>` — the backend's `mint_id` twin. They
+// used to be `<prefix>-<max+1>`, which two branches or sessions minting
+// against the same snapshot are guaranteed to repeat. A random draw checked
+// against every id in sight makes parallel minting safe with no coordination.
+// Older sequential ids stay valid: an id is only ever compared for equality.
+const ID_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
+const ID_SUFFIX_LEN = 6;
+
+function drawSuffix(): string {
+  const bytes = new Uint8Array(ID_SUFFIX_LEN);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) crypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  let out = "";
+  for (const b of bytes) out += ID_ALPHABET[b & 31];
+  return out;
+}
+
+/** Mint `<prefix>-<suffix>`, redrawing until it is in none of `existing`. */
+export function mintId(prefix: string, existing: Iterable<string>): string {
+  const taken = new Set(existing);
+  for (;;) {
+    const id = `${prefix}-${drawSuffix()}`;
+    if (!taken.has(id)) return id;
   }
-  return `${prefix}-${max + 1}`;
 }
 
 // Minting must clear BOTH layers, like the backend's IdMinter: the plan alone
@@ -675,14 +691,14 @@ function nextNumericId(prefix: string, existing: Iterable<string>): string {
 // pending deletion into a reword that overwrites the old committed element on
 // fold. `committed` is optional only for the brief window before it loads.
 export function nextNodeId(model: ScryModel, committed?: ScryModel | null): string {
-  return nextNumericId("node", [
+  return mintId("node", [
     ...model.nodes.map((n) => n.id),
     ...(committed?.nodes ?? []).map((n) => n.id),
   ]);
 }
 
 export function nextGroupId(model: ScryModel, committed?: ScryModel | null): string {
-  return nextNumericId("group", [
+  return mintId("group", [
     ...model.groups.map((g) => g.id),
     ...(committed?.groups ?? []).map((g) => g.id),
   ]);
@@ -702,11 +718,11 @@ export function nextResponsibilityId(
     for (const n of m.nodes) for (const r of n.responsibilities ?? []) ids.push(r.id);
     for (const g of m.groups) for (const r of g.responsibilities ?? []) ids.push(r.id);
   }
-  return nextNumericId("resp", ids);
+  return mintId("resp", ids);
 }
 
 export function nextLinkId(model: ScryModel, committed?: ScryModel | null): string {
-  return nextNumericId("link", [
+  return mintId("link", [
     ...model.links.map((l) => l.id),
     ...(committed?.links ?? []).map((l) => l.id),
   ]);

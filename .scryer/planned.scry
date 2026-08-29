@@ -5393,8 +5393,8 @@
       "responsibilities": [
         {
           "id": "resp-305",
-          "statement": "**Add** a new node under a parent, minting an id unique across both plan and committed layers",
-          "lastTouchedAt": 1784883905
+          "statement": "**Add** a new node under a parent, minting a random id unknown to both plan and committed layers",
+          "lastTouchedAt": 1788000585
         }
       ]
     },
@@ -9582,6 +9582,11 @@
           "id": "resp-577",
           "statement": "Mints ids that stay collision-safe across the committed and plan layers",
           "lastTouchedAt": 1784884312
+        },
+        {
+          "id": "resp-780",
+          "statement": "**When** an id is minted, **draw** a random suffix rather than the next number, rejecting any the plan or committed layer already holds, so two branches or sessions minting in parallel can never produce the same id",
+          "lastTouchedAt": 1788000585
         }
       ]
     },
@@ -9955,8 +9960,8 @@
       "responsibilities": [
         {
           "id": "resp-580",
-          "statement": "Mints the next node id past both the plan and committed layers so a plan-deleted id is never reissued",
-          "lastTouchedAt": 1784884312
+          "statement": "Mints a fresh node id unknown to both the plan and committed layers so a plan-deleted id is never reissued",
+          "lastTouchedAt": 1788000585
         }
       ]
     },
@@ -9968,8 +9973,8 @@
       "responsibilities": [
         {
           "id": "resp-581",
-          "statement": "Mints the next group id past both the plan and committed layers",
-          "lastTouchedAt": 1784884312
+          "statement": "Mints a fresh group id unknown to both the plan and committed layers",
+          "lastTouchedAt": 1788000585
         }
       ]
     },
@@ -10378,8 +10383,8 @@
       "responsibilities": [
         {
           "id": "resp-603",
-          "statement": "Opens a new change, minting an id past every id the plan has ever seen so a reopened change can never collide",
-          "lastTouchedAt": 1784884312
+          "statement": "Opens a new change, minting an id unknown to every change the plan has ever seen so a reopened change can never collide",
+          "lastTouchedAt": 1788000585
         }
       ]
     },
