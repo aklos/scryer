@@ -364,6 +364,103 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
     warnings
 }
 
+/// The subset of model problems that are *structural invariant violations*: an
+/// id that downstream code treats as unique actually names two things, so an
+/// id-keyed lookup silently binds to whichever host the model lists first
+/// (`find_responsibility`, `commit.rs`) and the plan diff's id-keyed index
+/// (`diff::index_responsibilities` / `indexResponsibilities`) keeps only one
+/// copy per id, dropping the other without a trace.
+///
+/// Unlike the advisory findings [`validate`] also returns (length caps,
+/// disconnected nodes, link legality — all legitimate transient states), these
+/// are never a valid *committed* state. A duplicate that reaches `model.scry` is
+/// invisible to the plan diff: `from` and `to` both collapse to a single copy,
+/// they compare equal, no change is emitted, and the stale wrong copy sits
+/// committed indefinitely. [`crate::write_model_at`] gates every committed write
+/// on this returning empty, so the committed layer can never hold one.
+///
+/// Returns stable, de-duplicated messages (empty ⇒ no violation).
+pub fn structural_violations(model: &ScryModel) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+
+    // Duplicate node / link / group ids — each is an identity every by-id lookup
+    // and every diff index assumes is unique.
+    let mut seen_nodes: HashSet<&str> = HashSet::new();
+    for n in &model.nodes {
+        if !seen_nodes.insert(n.id.as_str()) {
+            out.push(format!("Duplicate node id: {}", n.id));
+        }
+    }
+    let mut seen_links: HashSet<&str> = HashSet::new();
+    for l in &model.links {
+        if !seen_links.insert(l.id.as_str()) {
+            out.push(format!("Duplicate link id: {}", l.id));
+        }
+    }
+    let mut seen_groups: HashSet<&str> = HashSet::new();
+    for g in &model.groups {
+        if !seen_groups.insert(g.id.as_str()) {
+            out.push(format!("Duplicate group id: {}", g.id));
+        }
+    }
+
+    // A property is keyed by (owner node, label); a repeated label on one node
+    // collapses in the diff's property index just as a responsibility id does.
+    for n in &model.nodes {
+        let mut seen: HashSet<&str> = HashSet::new();
+        for p in &n.properties {
+            if !seen.insert(p.label.as_str()) {
+                out.push(format!(
+                    "Duplicate property label '{}' on node {}",
+                    p.label, n.id
+                ));
+            }
+        }
+    }
+
+    // Responsibility ids must be globally unique across every node AND group.
+    // Both a repeat on one host and the same id living on two hosts are
+    // silent-misbind states, so report each. (This mirrors the invariant
+    // [`validate`] reports as an advisory; here it is the gating subset.)
+    let mut resp_hosts: HashMap<&str, Vec<&str>> = HashMap::new();
+    for n in &model.nodes {
+        let mut per_host: HashSet<&str> = HashSet::new();
+        for r in &n.responsibilities {
+            if !per_host.insert(r.id.as_str()) {
+                out.push(format!("Duplicate responsibility id '{}' on node {}", r.id, n.id));
+            }
+            resp_hosts.entry(r.id.as_str()).or_default().push(n.id.as_str());
+        }
+    }
+    for g in &model.groups {
+        let mut per_host: HashSet<&str> = HashSet::new();
+        for r in &g.responsibilities {
+            if !per_host.insert(r.id.as_str()) {
+                out.push(format!("Duplicate responsibility id '{}' on group {}", r.id, g.id));
+            }
+            resp_hosts.entry(r.id.as_str()).or_default().push(g.id.as_str());
+        }
+    }
+    for (rid, hosts) in &resp_hosts {
+        let mut distinct: Vec<&str> =
+            hosts.iter().copied().collect::<HashSet<&str>>().into_iter().collect();
+        if distinct.len() > 1 {
+            distinct.sort_unstable();
+            out.push(format!(
+                "Responsibility id '{}' is used on multiple hosts ({}) — responsibility ids must be globally unique",
+                rid,
+                distinct.join(", ")
+            ));
+        }
+    }
+
+    // HashMap iteration is nondeterministic; sort + de-dup for a stable message.
+    out.sort();
+    let mut seen: HashSet<String> = HashSet::new();
+    out.retain(|w| seen.insert(w.clone()));
+    out
+}
+
 /// Per-level connectivity (the C4 "same level of abstraction" rule). Each C4
 /// diagram is one level: the system context shows persons + systems; a system's
 /// container view shows its containers plus reference nodes linked into it; a
@@ -915,6 +1012,53 @@ mod resp_id_tests {
             w.contains("node-1") && w.contains("node-2") && w.contains("grp-1"),
             "names every host: {w}"
         );
+    }
+
+    /// The gating subset (`structural_violations`) catches the same-id-two-hosts
+    /// collision AND plain duplicate node ids — the silent-misbind states the
+    /// committed-write seam must refuse — while staying silent on advisories.
+    #[test]
+    fn structural_violations_flags_silent_misbind_states() {
+        use super::structural_violations;
+        let mut m = ScryModel::new();
+        m.nodes.push(node(serde_json::json!({
+            "id": "node-1", "kind": "system", "name": "Acme",
+            "responsibilities": [{ "id": "resp-1", "statement": "a" }]
+        })));
+        // A second, DISTINCT host reusing the responsibility id — the move that
+        // never cleaned up the old copy.
+        m.nodes.push(node(serde_json::json!({
+            "id": "node-2", "kind": "container", "name": "API", "parentId": "node-1",
+            "responsibilities": [{ "id": "resp-1", "statement": "b" }]
+        })));
+        // A third node reusing node-2's id — a plain duplicate node identity.
+        m.nodes.push(node(serde_json::json!({
+            "id": "node-2", "kind": "container", "name": "Dup", "parentId": "node-1",
+        })));
+        let v = structural_violations(&m);
+        assert!(v.iter().any(|w| w.contains("Duplicate node id: node-2")), "{v:?}");
+        assert!(
+            v.iter().any(|w| w.contains("globally unique") && w.contains("resp-1")),
+            "{v:?}"
+        );
+    }
+
+    /// A structurally sound model yields no gating violation — the seam only
+    /// bites genuine invariant breaks, never ordinary (or advisory-flawed)
+    /// content, so it can guard every committed write without false positives.
+    #[test]
+    fn structural_violations_empty_for_a_clean_model() {
+        use super::structural_violations;
+        let mut m = ScryModel::new();
+        m.nodes.push(node(serde_json::json!({
+            "id": "node-1", "kind": "system", "name": "Acme",
+            "responsibilities": [{ "id": "resp-1", "statement": "a" }]
+        })));
+        m.nodes.push(node(serde_json::json!({
+            "id": "node-2", "kind": "container", "name": "API", "parentId": "node-1",
+            "responsibilities": [{ "id": "resp-2", "statement": "b" }]
+        })));
+        assert!(structural_violations(&m).is_empty(), "{:?}", structural_violations(&m));
     }
 
     /// Responsibility ids that are unique across hosts raise no collision warning.
