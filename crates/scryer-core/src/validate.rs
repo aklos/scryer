@@ -470,9 +470,10 @@ pub fn structural_violations(model: &ScryModel) -> Vec<String> {
     out
 }
 
-/// The horizontal axis: every non-external container declares a style, every
-/// component under a styled container carries one of that style's layers, and
-/// every link between styled nodes says what kind of link it is. Membership is
+/// The horizontal axis: a container MAY declare a style; under a styled
+/// container every component carries one of that style's layers, a layer
+/// under an unstyled container is meaningless, and every link between styled
+/// nodes says what kind of link it is. Membership is
 /// checked here so a typo never reaches the matrix; legality of the pairs is
 /// [`link_violation`]'s job.
 pub fn check_styles(model: &ScryModel, styles: &Styles) -> Vec<String> {
@@ -485,17 +486,16 @@ pub fn check_styles(model: &ScryModel, styles: &Styles) -> Vec<String> {
                 if n.external == Some(true) {
                     continue;
                 }
-                match n.style.as_deref() {
-                    None => warnings.push(format!(
-                        "Container {} (\"{}\") has no style — every container declares one \
-                         ({style_names}); set it with update_nodes {{style}}",
-                        n.id, n.name
-                    )),
-                    Some(s) if styles.get(s).is_none() => warnings.push(format!(
-                        "Container {} (\"{}\") has unknown style '{}' — known styles: {style_names}",
-                        n.id, n.name, s
-                    )),
-                    _ => {}
+                // No style is a legitimate state: the code has no
+                // recognisable shape yet, and the model says so by staying
+                // silent. Only a style that names nothing is wrong.
+                if let Some(s) = n.style.as_deref() {
+                    if styles.get(s).is_none() {
+                        warnings.push(format!(
+                            "Container {} (\"{}\") has unknown style '{}' — known styles: {style_names}",
+                            n.id, n.name, s
+                        ));
+                    }
                 }
                 if n.layer.is_some() {
                     warnings.push(format!(
@@ -513,9 +513,14 @@ pub fn check_styles(model: &ScryModel, styles: &Styles) -> Vec<String> {
                         ));
                     }
                 }
-                // Without a governing style the container warning above already
-                // says what to fix; a second line per component adds nothing.
                 let Some(def) = style::governing_style(model, &n.id).and_then(|s| styles.get(s)) else {
+                    if n.layer.is_some() {
+                        warnings.push(format!(
+                            "Component {} (\"{}\") carries layer '{}' but no ancestor declares a style — \
+                             a layer means nothing without one; drop it or style the container",
+                            n.id, n.name, n.layer.as_deref().unwrap_or("")
+                        ));
+                    }
                     continue;
                 };
                 let layer_names = def.layer_names().join(", ");
@@ -1295,7 +1300,7 @@ mod style_tests {
     /// or a layer outside its style's list — each is one warning naming the fix.
     #[test]
     fn style_and_layer_membership_are_flagged() {
-        let m = model(vec![
+        let mut m = model(vec![
             serde_json::json!({ "id": "sys", "kind": "system", "name": "S" }),
             serde_json::json!({ "id": "c1", "kind": "container", "name": "Bare", "parentId": "sys" }),
             serde_json::json!({ "id": "c2", "kind": "container", "name": "Odd", "parentId": "sys", "style": "onion" }),
@@ -1307,13 +1312,17 @@ mod style_tests {
         ]);
         let w = validate(&m);
         let hit = |needle: &str| w.iter().any(|x| x.contains(needle));
-        assert!(hit("Container c1 (\"Bare\") has no style"), "{w:?}");
+        assert!(!hit("Bare"), "an unstyled container is a legitimate state: {w:?}");
         assert!(hit("Container c2 (\"Odd\") has unknown style 'onion'"), "{w:?}");
         assert!(hit("Component k1 (\"NoLayer\") has no layer"), "{w:?}");
         assert!(hit("Component k2 (\"BadLayer\") has layer 'pages', which is not in style 'hexagonal'"), "{w:?}");
         assert!(!hit("Fine"), "a member layer is silent: {w:?}");
-        // Under an unstyled container the container line is the whole story.
+        // Under an unstyled container a layerless component is fine…
         assert!(!hit("Unchecked"), "{w:?}");
+        // …and a layered one is the odd one out.
+        m.nodes.iter_mut().find(|n| n.id == "k4").unwrap().layer = Some("core".into());
+        let w = validate(&m);
+        assert!(w.iter().any(|x| x.contains("Unchecked") && x.contains("no ancestor declares a style")), "{w:?}");
     }
 
     /// External containers own no code and need no style; style on a symbol or

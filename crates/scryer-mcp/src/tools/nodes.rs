@@ -726,7 +726,7 @@ impl ScryerServer {
                     .clone()
                     .or_else(|| old_parent.clone())
                     .unwrap_or_default();
-                if let Err(e) = scryer_core::style::check_layer(&model, &styles, &parent, v) {
+                if let Err(e) = scryer_core::style::check_layer(&model, &styles, &parent, Some(v)) {
                     return Ok(CallToolResult::error(vec![Content::text(e)]));
                 }
             }
@@ -4228,7 +4228,7 @@ mod tests {
             .add_component(Parameters(AddComponentRequest {
                 project: Some(project.clone()),
                 items: vec![ComponentItem {
-                    layer: "core".into(),
+                    layer: Some("core".into()),
                     parent_id: "node-2".into(),
                     name: "RateLimiter".into(),
                     description: None,
@@ -4344,7 +4344,7 @@ mod tests {
             .add_component(Parameters(AddComponentRequest {
                 project: Some(project.clone()),
                 items: vec![ComponentItem {
-                    layer: "core".into(),
+                    layer: Some("core".into()),
                     parent_id: "node-2".into(),
                     name: "RateLimiter".into(),
                     description: None,
@@ -4415,7 +4415,7 @@ mod tests {
             .add_component(Parameters(AddComponentRequest {
                 project: Some(project.clone()),
                 items: vec![ComponentItem {
-                    layer: "core".into(),
+                    layer: Some("core".into()),
                     parent_id: "node-2".into(),
                     name: "RateLimiter".into(),
                     description: None,
@@ -4494,7 +4494,7 @@ mod tests {
             .add_component(Parameters(AddComponentRequest {
                 project: Some(project.clone()),
                 items: vec![ComponentItem {
-                    layer: "core".into(),
+                    layer: Some("core".into()),
                     parent_id: "node-2".into(),
                     name: "RateLimiter".into(),
                     description: None,

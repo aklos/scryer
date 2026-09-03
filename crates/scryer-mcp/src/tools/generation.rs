@@ -369,7 +369,7 @@ impl ScryerServer {
                     &view,
                     &styles,
                     &req.container_id,
-                    &component.layer,
+                    component.layer.as_deref(),
                 ) {
                     return Ok(err(format!("Component '{}': {e}", component.key.trim())));
                 }
@@ -407,7 +407,7 @@ impl ScryerServer {
                 req.container_id.clone(),
             );
             node.description = component.description.clone();
-            node.layer = Some(component.layer.trim().to_string());
+            node.layer = component.layer.as_deref().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string);
             node.responsibilities = minter.responsibilities(&component.responsibilities);
             model.nodes.push(node);
 
@@ -733,7 +733,7 @@ mod tests {
             container_id,
             components: vec![
                 ProposedComponent {
-                    layer: "core".into(),
+                    layer: Some("core".into()),
                     key: "auth".into(),
                     name: "Authentication".into(),
                     description: None,
@@ -751,7 +751,7 @@ mod tests {
                     }],
                 },
                 ProposedComponent {
-                    layer: "core".into(),
+                    layer: Some("core".into()),
                     key: "sessions".into(),
                     name: "Sessions".into(),
                     description: None,

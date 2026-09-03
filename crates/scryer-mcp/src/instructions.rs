@@ -20,7 +20,9 @@ change is open, and the rationale outlives the work in the history log. [[change
 2. ORIENT — `orient {task, files}` for a coding task; `get_health` then `read_model` for a \
 model-building one. Honor every directive it returns. [[loop-orient]]\n\
 3. PLAN — author the change into the model before writing code. Only changes that alter what the \
-model claims need plan entries; the change stays open either way. [[loop-plan]] [[proportionality]]\n\
+model claims need plan entries; the change stays open either way. A container declares a `style` \
+only when its code actually has that shape; never guess one. [[loop-plan]] [[proportionality]] \
+[[styles]]\n\
 4. SIGN-OFF — tell the user what you planned and get their go-ahead; record it with \
 `sign_off`. [[loop-sign-off]]\n\
 5. BUILD — implement claim by claim, each testable (When/While/If) claim with its test in the \

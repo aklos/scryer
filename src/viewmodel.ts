@@ -115,14 +115,15 @@ export interface Node {
   technology?: string;
   /** 1–2 sentence prose about what this node is. */
   description?: string;
-  /** The architectural style governing this node's subtree — REQUIRED on
-   *  every container ("hexagonal" | "feature-sliced" | "core-shell" |
-   *  "pipeline" | a project style). A component may override its
-   *  container's. Mirrors Rust `Node.style`. */
+  /** The architectural style this node's code actually follows
+   *  ("hexagonal" | "feature-sliced" | "core-shell" | "pipeline" | a project
+   *  style), declared on a container (a component may override). Absent
+   *  when the code has no recognisable shape — that absence is the signal.
+   *  Mirrors Rust `Node.style`. */
   style?: string;
   /** The layer this component plays inside its governing style — a fixed
-   *  tag from the style's layer list, REQUIRED on components; symbols
-   *  inherit it. Mirrors Rust `Node.layer`. */
+   *  tag from the style's layer list, required under a styled container and
+   *  absent otherwise; symbols inherit it. Mirrors Rust `Node.layer`. */
   layer?: string;
   /** Drift adoption marker: this node was MINTED by a drift check to home
    *  code-discovered behaviour no existing node described — it lives in the PLAN

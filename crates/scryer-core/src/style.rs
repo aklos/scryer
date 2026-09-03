@@ -483,13 +483,16 @@ pub fn scaffold_manifest(
 }
 
 /// Is `layer` a legal tag for a component under `parent_id`? The answer names
-/// what to fix: an unstyled container, an unknown style, or a layer outside
-/// the style's list. Shared by every write path that sets a layer.
+/// what to fix: a layer under an unstyled container, an unknown style, or a
+/// layer outside the style's list. An unstyled container takes no layer and
+/// needs none — a codebase without a style is described as it is, and a
+/// refactoring pass decides what style it should take. Shared by every write
+/// path that sets a layer.
 pub fn check_layer(
     model: &ScryModel,
     styles: &Styles,
     parent_id: &str,
-    layer: &str,
+    layer: Option<&str>,
 ) -> Result<(), String> {
     let parent_name = model
         .nodes
@@ -497,12 +500,17 @@ pub fn check_layer(
         .find(|n| n.id == parent_id)
         .map(|n| n.name.as_str())
         .unwrap_or(parent_id);
+    let layer = layer.map(str::trim).filter(|l| !l.is_empty());
     let Some(style_name) = governing_style(model, parent_id) else {
-        return Err(format!(
-            "Container '{parent_name}' has no style, so no layer can be checked — set one first \
-             (update_nodes {{style}}; known styles: {})",
-            styles.names().join(", ")
-        ));
+        return match layer {
+            None => Ok(()),
+            Some(l) => Err(format!(
+                "Container '{parent_name}' has no style, so layer '{l}' means nothing — leave the \
+                 layer off, or give the container a style first (update_nodes {{style}}; known \
+                 styles: {})",
+                styles.names().join(", ")
+            )),
+        };
     };
     let Some(def) = styles.get(style_name) else {
         return Err(format!(
@@ -510,13 +518,12 @@ pub fn check_layer(
             styles.names().join(", ")
         ));
     };
-    let layer = layer.trim();
-    if layer.is_empty() {
+    let Some(layer) = layer else {
         return Err(format!(
             "Components under '{parent_name}' ({style_name}) need a layer — one of: {}",
             def.layer_names().join(", ")
         ));
-    }
+    };
     if !def.has_layer(layer) {
         return Err(format!(
             "Layer '{layer}' is not in style '{style_name}' — one of: {}",

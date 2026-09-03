@@ -462,8 +462,8 @@ pub(crate) struct ContainerItem {
     /// What it IS as software, a short badge (e.g. PostgreSQL 16).
     pub technology: Option<String>,
     pub description: Option<String>,
-    /// The architectural style governing this container's components — REQUIRED (there is no `none`; an external container may pass any style, it is ignored). One of `hexagonal` (services, backends, library cores), `feature-sliced` (SPAs, docs and static sites), `core-shell` (CLIs, small libraries, scripts), `pipeline` (ETL, dbt), or a project style under `.scryer/styles/`. Every component added under it must carry one of the style's layers.
-    pub style: String,
+    /// The architectural style this container's code ACTUALLY follows — one of `hexagonal` (services, backends, library cores), `feature-sliced` (SPAs, docs and static sites), `core-shell` (CLIs, small libraries, scripts), `pipeline` (ETL, dbt), or a project style under `.scryer/styles/`. OMIT it when the code has no recognisable shape: an unstyled container is a faithful description, and deciding what style it should take is a refactoring decision, never a modeling guess. Once set, every component under it carries one of the style's layers.
+    pub style: Option<String>,
     /// true for an external/third-party container.
     #[serde(default)]
     pub external: bool,
@@ -484,8 +484,8 @@ pub(crate) struct AddContainerRequest {
 pub(crate) struct ComponentItem {
     pub parent_id: String,
     pub name: String,
-    /// The layer this component plays in its container's style — REQUIRED, one of the style's layer names (hexagonal: presentation | infrastructure | application | domain; feature-sliced: app | pages | widgets | features | entities | shared; core-shell: shell | core; pipeline: source | staging | intermediate | marts). Rejected if the container has no style or the layer is not in its list.
-    pub layer: String,
+    /// The layer this component plays in its container's style — REQUIRED when the container has a style, one of its layer names (hexagonal: presentation | infrastructure | application | domain; feature-sliced: app | pages | widgets | features | entities | shared; core-shell: shell | core; pipeline: source | staging | intermediate | marts); OMIT under an unstyled container. Rejected when it is not in the style's list.
+    pub layer: Option<String>,
     pub description: Option<String>,
     /// Responsibility statements, each a plain string or `{statement, concern?}`.
     #[serde(default)]
@@ -642,8 +642,8 @@ pub(crate) struct AddSymbolRequest {
 pub(crate) struct ProposedComponent {
     pub key: String,
     pub name: String,
-    /// The layer this component plays in the container's style — REQUIRED, one of the style's layer names. The whole proposal is rejected if the container has no style or a layer is not in its list.
-    pub layer: String,
+    /// The layer this component plays in the container's style — REQUIRED when the container has a style (one of its layer names), OMITTED when it has none. The whole proposal is rejected when a layer is not in the style's list.
+    pub layer: Option<String>,
     pub description: Option<String>,
     /// Responsibilities at the component's C4 altitude — each a plain string or `{statement, concern?}`.
     #[serde(default)]
