@@ -14,6 +14,7 @@ pub mod rules;
 pub mod scan;
 pub mod seed;
 pub mod style;
+pub mod style_health;
 pub mod test_results;
 pub mod validate;
 

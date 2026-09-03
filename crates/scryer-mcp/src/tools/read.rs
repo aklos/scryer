@@ -1488,10 +1488,13 @@ impl ScryerServer {
     #[tool(
         description = "The model's deterministic observability report. Headline: `tested` / `testable` / \
          `untested` claim counts; then per node rollups, vagrant/stale flags, anchor coverage and \
-         state, link audit, `completeness`, `coverage` and `silentAnchors`. `node_id` scopes to \
+         state, link audit, `style` (code-time conformance to each container's declared style: \
+         `layer_violation`, `isolation_violation`, `external_violation`, `misplaced`, each with the \
+         file and the fix), `completeness`, `coverage` and `silentAnchors`. `node_id` scopes to \
          one subtree with per-child summaries; omit for the whole-model summary. Use it to decide \
-         WHERE work is needed before reading subtrees.\n\
-         Rules: health-reading, completeness-layered, loop-orient"
+         WHERE work is needed before reading subtrees.
+\
+         Rules: health-reading, completeness-layered, loop-orient, styles"
     )]
     fn get_health(
         &self,
@@ -1629,8 +1632,22 @@ impl ScryerServer {
 
         // The import graph is cached by builds / the app's health refresh; when
         // absent the link audit is simply omitted rather than guessed.
-        let derived = scryer_core::build_edges::read_build_edges(&model_ref.build_edges_path())
-            .map(|edges| scryer_core::build_edges::derive_graph(&model, &edges));
+        let edges = scryer_core::build_edges::read_build_edges(&model_ref.build_edges_path());
+        let derived = edges
+            .as_ref()
+            .map(|edges| scryer_core::build_edges::derive_graph(&model, edges));
+        // Code-time style conformance over the same resolved edges: imports the
+        // matrix forbids, sibling isolation, banned packages, files on the wrong
+        // layer's path. Absent with the cache, like the link audit.
+        let style_report = edges.as_ref().zip(derived.as_ref()).map(|(edges, graph)| {
+            scryer_core::style_health::check_code(
+                &model,
+                &styles_for(&model_ref),
+                graph,
+                &edges.external_imports,
+                Some(&files),
+            )
+        });
 
         let counts_json = |c: &scryer_core::health::HealthCounts| {
             serde_json::to_value(c).unwrap_or_default()
@@ -1787,6 +1804,7 @@ impl ScryerServer {
                     "subtree": nh.map(|h| counts_json(&h.subtree)),
                     "completeness": comp_json(&node.id),
                     "children": children,
+                    "style": style_report.as_ref().map(|r| r.scoped(&subtree_ids)),
                     "anchors": drift_here,
                     "links": links_here,
                     "unmodeled": unmodeled_here,
@@ -1883,6 +1901,14 @@ impl ScryerServer {
                     "reanchored": anchor_check.reanchored,
                     "assertedOnlyLinks": asserted_only,
                     "unmodeled": derived.as_ref().map(|g| &g.unmodeled),
+                    "style": style_report.as_ref().map(|r| serde_json::json!({
+                        "layerViolations": r.layer_violations,
+                        "isolationViolations": r.isolation_violations,
+                        "externalViolations": r.external_violations,
+                        "misplaced": r.misplaced,
+                        "sample": r.violations.iter().take(10).map(|v| &v.detail).collect::<Vec<_>>(),
+                        "note": "code-time style conformance from the build's import graph — per-violation detail is node-scoped (get_health {nodeId}); every line is a real import or file to fix, never a judgment call",
+                    })),
                     "broadBoundaries": broad_boundaries(None),
                     "disconnected": health.disconnected.iter().map(|id| {
                         let name = model.nodes.iter().find(|n| &n.id == id).map(|n| n.name.clone()).unwrap_or_default();

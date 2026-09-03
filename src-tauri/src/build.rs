@@ -390,6 +390,15 @@ pub(crate) async fn start_model_build(
                 dst: e.dst.clone(),
             })
             .collect(),
+    
+        external_imports: ctx
+            .external_imports
+            .iter()
+            .map(|i| scryer_core::build_edges::ExternalImport {
+                file: i.file.clone(),
+                package: i.package.clone(),
+            })
+            .collect(),
     };
     if let Err(e) = scryer_core::build_edges::write_build_edges(project, &build_edges) {
         eprintln!("[build] could not cache dependency graph: {e}");

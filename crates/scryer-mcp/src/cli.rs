@@ -184,6 +184,44 @@ pub(crate) fn check_report(
     warnings.extend(scryer_extract::anchors::whole_symbol_warnings(&working, project));
     failures.extend(warnings.into_iter().map(|w| format!("validator: {w}")));
 
+    // 1b) Code-time style conformance. The check owns its own extraction so
+    //    CI needs no cached dependency graph; the cache is refreshed as a
+    //    side effect for the MCP tools. Every violation is a real import or
+    //    file, so every one gates.
+    match scryer_extract::extract_context_with_stats(project) {
+        Ok((ctx, _)) => {
+            let edges = scryer_core::build_edges::BuildEdges {
+                symbol_edges: ctx
+                    .symbol_edges
+                    .iter()
+                    .map(|e| scryer_core::build_edges::CachedEdge { src: e.src.clone(), dst: e.dst.clone() })
+                    .collect(),
+                external_imports: ctx
+                    .external_imports
+                    .iter()
+                    .map(|i| scryer_core::build_edges::ExternalImport {
+                        file: i.file.clone(),
+                        package: i.package.clone(),
+                    })
+                    .collect(),
+            };
+            let _ = scryer_core::build_edges::write_build_edges(project, &edges);
+            let derived = scryer_core::build_edges::derive_graph(&working, &edges);
+            let files = scryer_extract::list_project_files(project);
+            let report = scryer_core::style_health::check_code(
+                &working,
+                &scryer_core::style::Styles::load(project),
+                &derived,
+                &edges.external_imports,
+                Some(&files),
+            );
+            for v in &report.violations {
+                failures.push(format!("style: {}", v.detail));
+            }
+        }
+        Err(e) => notes.push(format!("style conformance unverified — extraction failed: {e}")),
+    }
+
     // 2) Anchor fingerprints, when a committed baseline exists. Changed spans
     //    are drift (unreconciled churn), not breakage — they gate only under
     //    --fail-on-drift. Broken/missing spans always gate: the model points
@@ -468,10 +506,11 @@ pub(crate) fn status_line(c: &StatusCounts) -> String {
     let pending = pending_phrase(c);
     // Test verdicts only when red or stale — verified-green stays silent.
     let tests = crate::helpers::tests_phrase(c);
+    let style = crate::helpers::style_phrase(c);
     match &c.baseline {
-        None => format!("scryer: {pending} · no reconcile anchor yet{tests}{changes}"),
+        None => format!("scryer: {pending} · no reconcile anchor yet{tests}{style}{changes}"),
         Some(b) => format!(
-            "scryer: {pending} · {} drift scope(s) · anchors: {} broken, {} changed{tests}{changes}",
+            "scryer: {pending} · {} drift scope(s) · anchors: {} broken, {} changed{tests}{style}{changes}",
             b.drift_scopes, b.anchors_broken, b.anchors_changed
         ),
     }

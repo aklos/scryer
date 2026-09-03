@@ -43,6 +43,8 @@ pub struct ProjectContext {
     pub symbol_edges: Vec<Edge>,
     /// File→file dependency edges (keyed by `rel_path`), sorted.
     pub file_edges: Vec<Edge>,
+    /// Imports of packages outside the repository, sorted. See [`ExternalImport`].
+    pub external_imports: Vec<ExternalImport>,
     /// Non-serialized lookup indexes used to build container slices without
     /// rescanning the whole project graph for every agent job.
     #[serde(skip)]
@@ -127,6 +129,18 @@ pub struct SymbolContext {
 pub struct Edge {
     pub src: String,
     pub dst: String,
+}
+
+/// One import of something OUTSIDE the repository: a file and the package it
+/// names. TS/JS: the bare package (`react`, `@acme/ui`); Python: the top-level
+/// module (`django`); Go: the full import path (`net/http`); Rust: the crate
+/// (`tokio`). Rust heads are lexical — a call-site path whose head is a local
+/// module can land here too — so consumers match these against a known list
+/// (a style's banned packages), never treat them as a dependency inventory.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ExternalImport {
+    pub file: String,
+    pub package: String,
 }
 
 fn symbol_key(rel_path: &str, name: &str, start_line: u32) -> String {
@@ -279,7 +293,8 @@ pub fn build_context(
         });
     }
 
-    let (symbol_edges, file_edges) = build_edges(files, &recs, containers, ts_aliases);
+    let (symbol_edges, file_edges, external_imports) =
+        build_edges(files, &recs, containers, ts_aliases);
 
     let mut context = ProjectContext {
         project_name: project_name.to_string(),
@@ -287,6 +302,7 @@ pub fn build_context(
         files: file_ctxs,
         symbol_edges,
         file_edges,
+        external_imports,
         index: ContextIndex::default(),
     };
     context.index = build_index(&context);
@@ -408,7 +424,7 @@ fn build_edges(
     recs: &[SymRec],
     containers: &[Container],
     ts_aliases: &[TsAliases],
-) -> (Vec<Edge>, Vec<Edge>) {
+) -> (Vec<Edge>, Vec<Edge>, Vec<ExternalImport>) {
     let mut ranges_by_file: HashMap<&str, Vec<(u32, u32, &str)>> = HashMap::new();
     let mut container_of_file: HashMap<&str, &str> = HashMap::new();
     let mut file_names: HashMap<&str, HashMap<&str, Vec<&str>>> = HashMap::new();
@@ -503,6 +519,7 @@ fn build_edges(
 
     let mut sym_edges: HashSet<(String, String)> = HashSet::new();
     let mut file_edges: HashSet<(String, String)> = HashSet::new();
+    let mut externals: BTreeSet<(String, String)> = BTreeSet::new();
 
     for f in files {
         let file = f.rel_path.as_str();
@@ -542,6 +559,8 @@ fn build_edges(
                     for n in &imp.names {
                         go_pkg_dirs.insert(n.local.as_str(), dir.clone());
                     }
+                } else {
+                    externals.insert((file.to_string(), imp.spec.clone()));
                 }
                 for n in &imp.names {
                     imported_locals.insert(n.local.as_str(), None);
@@ -562,6 +581,12 @@ fn build_edges(
                     &inventory,
                     &package_dirs,
                 );
+                if target_file.is_none() && module_base.is_none() && !imp.spec.starts_with('.') {
+                    let top = imp.spec.split('.').next().unwrap_or("");
+                    if !top.is_empty() {
+                        externals.insert((file.to_string(), top.to_string()));
+                    }
+                }
             } else if imp.spec.starts_with('.') {
                 target_file = resolve_relative(file, &imp.spec)
                     .and_then(|base| find_module_file(&base, &inventory));
@@ -580,7 +605,11 @@ fn build_edges(
                             target_dir = Some(dir);
                             target_file = find_package_file(dir, subpath, &inventory);
                         }
-                        None => {} // external package: consume locals, no edges
+                        None => {
+                            // External package: consume locals, no edges —
+                            // but remember the package for the style bans.
+                            externals.insert((file.to_string(), pkg.to_string()));
+                        }
                     }
                 }
             }
@@ -740,7 +769,12 @@ fn build_edges(
                 continue;
             }
             let Some(&dst_dir) = crate_to_dir.get(head) else {
-                continue; // head names an external crate or nothing we model
+                // The head names an external crate or nothing we model. A
+                // crate name is snake_case; a type head (`Foo::new`) is not.
+                if head.chars().next().is_some_and(|c| c.is_ascii_lowercase()) {
+                    externals.insert((file.to_string(), head.to_string()));
+                }
+                continue;
             };
             if Some(dst_dir) == container_dir {
                 continue; // same container — already covered above
@@ -784,7 +818,11 @@ fn build_edges(
         }
     }
 
-    (sorted_edges(sym_edges), sorted_edges(file_edges))
+    let externals = externals
+        .into_iter()
+        .map(|(file, package)| ExternalImport { file, package })
+        .collect();
+    (sorted_edges(sym_edges), sorted_edges(file_edges), externals)
 }
 
 /// The module name a Rust file contributes: its stem, except `mod.rs`/`lib.rs`/

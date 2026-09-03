@@ -98,9 +98,45 @@ export interface DerivedEdge {
 export interface ResolvedEdge {
   srcNode: string;
   srcSymbol: string;
+  /** Project-relative file the source symbol lives in. */
+  srcFile: string;
   dstNode: string;
   dstSymbol: string;
+  /** Project-relative file the target symbol lives in. */
+  dstFile: string;
   count: number;
+}
+
+export type StyleViolationKind =
+  | "layer_violation"
+  | "isolation_violation"
+  | "external_violation"
+  | "misplaced";
+
+/** One code-time style violation: a real import or file that breaks the
+ *  container's declared style. Mirrors Rust `StyleViolation`. */
+export interface StyleViolation {
+  kind: StyleViolationKind;
+  /** The component charged: the importer, or the owner of the file. */
+  node: string;
+  /** The other component involved, for the edge-shaped kinds. */
+  other?: string;
+  /** The file the fix happens in. */
+  file: string;
+  /** The container whose style was applied. */
+  container: string;
+  /** One line a reader can act on. */
+  detail: string;
+}
+
+/** Code-time conformance to each container's declared style. Mirrors Rust
+ *  `StyleReport`. */
+export interface StyleReport {
+  violations: StyleViolation[];
+  layerViolations: number;
+  isolationViolations: number;
+  externalViolations: number;
+  misplaced: number;
 }
 
 export interface DerivedGraph {
@@ -157,6 +193,8 @@ export interface ModelHealthReport {
   /** Anchors silently healed this pass (symbol moved, content unchanged). */
   reanchored: number;
   derived: DerivedGraph;
+  /** Code-time style conformance over the same resolved import graph. */
+  style: StyleReport;
 }
 
 export const ANCHOR_STATE_LABEL: Record<AnchorState, string> = {

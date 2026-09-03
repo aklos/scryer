@@ -380,10 +380,10 @@ pub fn hexagonal() -> StyleDef {
         external_bans: [("domain".to_string(), strs(IO_PACKAGES))].into_iter().collect(),
         path: PathConvention {
             dirs: dirs(&[
-                ("presentation", &["presentation", "api", "http", "cli", "ui"]),
+                ("presentation", &["presentation", "controllers", "handlers", "api", "cli", "ui"]),
                 ("infrastructure", &["infrastructure", "infra", "adapters"]),
-                ("application", &["application", "app", "usecases", "use-cases"]),
-                ("domain", &["domain", "core", "model"]),
+                ("application", &["application", "usecases", "use-cases", "use_cases"]),
+                ("domain", &["domain"]),
             ]),
             markers: dirs(&[
                 ("presentation", &[".controller.", ".handler.", ".route."]),
@@ -455,7 +455,7 @@ pub fn core_shell() -> StyleDef {
         path: PathConvention {
             dirs: dirs(&[
                 ("shell", &["shell", "bin", "cli", "commands"]),
-                ("core", &["core", "lib"]),
+                ("core", &["core"]),
             ]),
             markers: dirs(&[("shell", &["main.rs"]), ("core", &["lib.rs"])]),
         },

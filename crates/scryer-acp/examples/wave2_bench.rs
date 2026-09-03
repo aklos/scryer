@@ -62,6 +62,7 @@ async fn main() {
     // Deterministic context + the dependency-graph cache the MCP commit reads.
     let ctx = scryer_extract::extract_context(project_path).expect("extraction");
     let edges = scryer_core::build_edges::BuildEdges {
+        external_imports: Vec::new(),
         symbol_edges: ctx
             .symbol_edges
             .iter()

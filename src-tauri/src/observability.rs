@@ -49,6 +49,9 @@ pub(crate) struct ModelHealthReport {
     /// Anchors silently healed this pass (symbol moved, content unchanged).
     reanchored: usize,
     derived: scryer_core::build_edges::DerivedGraph,
+    /// Code-time conformance to each container's declared style, over the
+    /// same resolved import graph as `derived`.
+    style: scryer_core::style_health::StyleReport,
 }
 
 #[tauri::command]
@@ -76,6 +79,15 @@ pub(crate) async fn get_model_health(cwd: String) -> Result<ModelHealthReport, S
                     dst: e.dst.clone(),
                 })
                 .collect(),
+        
+            external_imports: ctx
+                .external_imports
+                .iter()
+                .map(|i| scryer_core::build_edges::ExternalImport {
+                    file: i.file.clone(),
+                    package: i.package.clone(),
+                })
+                .collect(),
         };
         // Keep the cross-process cache fresh for the MCP commit tool. Best-effort.
         let _ = scryer_core::build_edges::write_build_edges(project, &edges);
@@ -100,12 +112,21 @@ pub(crate) async fn get_model_health(cwd: String) -> Result<ModelHealthReport, S
         let completeness =
             scryer_core::health::resolve_completeness(&model, &planned, &all_files, &dead);
 
+        let derived = scryer_core::build_edges::derive_graph(&model, &edges);
+        let style = scryer_core::style_health::check_code(
+            &model,
+            &scryer_core::style::Styles::load(project),
+            &derived,
+            &edges.external_imports,
+            Some(&all_files),
+        );
         Ok(ModelHealthReport {
             health: scryer_core::health::compute_health(&model, Some(&planned), Some(&files)),
             completeness,
             anchors: check.observations,
             reanchored: check.reanchored,
-            derived: scryer_core::build_edges::derive_graph(&model, &edges),
+            derived,
+            style,
         })
     })
     .await

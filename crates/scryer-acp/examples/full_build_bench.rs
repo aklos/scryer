@@ -93,6 +93,7 @@ async fn main() {
     // Deterministic context + dependency-graph cache (as the app does).
     let ctx = scryer_extract::extract_context(project_path).expect("extraction");
     let edges = scryer_core::build_edges::BuildEdges {
+        external_imports: Vec::new(),
         symbol_edges: ctx
             .symbol_edges
             .iter()

@@ -645,6 +645,10 @@ pub(crate) struct StatusCounts {
     /// population is nearly everything, and a standing nag for it would be
     /// noise the reader learns to skip. Findings speak; absence does not.
     pub probe_survivors: usize,
+    /// Code-time style violations (imports the layer matrix forbids, banned
+    /// packages, misplaced files) from the last build's dependency cache; 0
+    /// when no cache exists.
+    pub style_violations: usize,
 }
 
 pub(crate) struct BaselineCounts {
@@ -701,6 +705,20 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
         .into_iter()
         .filter(|p| !p.stale && p.survived > 0)
         .count();
+    // Cached-graph only (no file walk): cheap enough for every response.
+    let style_violations = scryer_core::build_edges::read_build_edges(&model_ref.build_edges_path())
+        .map(|edges| {
+            let derived = scryer_core::build_edges::derive_graph(&committed, &edges);
+            scryer_core::style_health::check_code(
+                &committed,
+                &Styles::load(model_ref.project_path()),
+                &derived,
+                &edges.external_imports,
+                None,
+            )
+            .total()
+        })
+        .unwrap_or(0);
     if !model_ref.sync_path().exists() {
         return Some(StatusCounts {
             pending,
@@ -710,6 +728,7 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
             baseline: None,
             tests,
             probe_survivors,
+            style_violations,
         });
     }
     let sync = scryer_core::read_sync_state(model_ref);
@@ -734,7 +753,18 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
         }),
         tests,
         probe_survivors,
+        style_violations,
     })
+}
+
+/// The header/statusline fragment for style violations — empty at zero, since
+/// conformance is the norm and only the exceptions are work.
+pub(crate) fn style_phrase(c: &StatusCounts) -> String {
+    match c.style_violations {
+        0 => String::new(),
+        1 => " · style: 1 violation".to_string(),
+        n => format!(" · style: {n} violations"),
+    }
 }
 
 /// The header/statusline fragment for recorded test verdicts — empty unless
@@ -784,14 +814,15 @@ pub(crate) fn status_header(model_ref: &ModelRef) -> Option<String> {
     let tests = tests_phrase(&c);
     // A surviving break is a finding about a test the model calls green.
     let probes = probes_phrase(&c);
+    let style = style_phrase(&c);
     Some(match c.baseline {
         // Never reconciled: drift/anchors have no baseline to report against.
         None => format!(
-            "plan: {} pending · untested: {} · drift: no reconcile anchor yet{tests}{probes}{changes}",
+            "plan: {} pending · untested: {} · drift: no reconcile anchor yet{tests}{probes}{style}{changes}",
             c.pending, c.untested
         ),
         Some(b) => format!(
-            "plan: {} pending · untested: {} · drift: {} scope(s) · anchors: {} changed, {} broken{tests}{probes}{changes}",
+            "plan: {} pending · untested: {} · drift: {} scope(s) · anchors: {} changed, {} broken{tests}{probes}{style}{changes}",
             c.pending, c.untested, b.drift_scopes, b.anchors_changed, b.anchors_broken
         ),
     })

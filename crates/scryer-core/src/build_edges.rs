@@ -19,6 +19,15 @@ pub struct CachedEdge {
     pub dst: String,
 }
 
+/// One import of a package outside the repository: the importing file and the
+/// package name as the language spells it. Matched against a style's banned
+/// packages; not a dependency inventory (see the extractor's `ExternalImport`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalImport {
+    pub file: String,
+    pub package: String,
+}
+
 /// The whole-project dependency graph for one build.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,6 +35,9 @@ pub struct BuildEdges {
     /// Symbol→symbol edges, keyed by `path#name@startLine`.
     #[serde(default)]
     pub symbol_edges: Vec<CachedEdge>,
+    /// Imports of packages outside the repository, per file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_imports: Vec<ExternalImport>,
 }
 
 impl BuildEdges {
@@ -100,8 +112,12 @@ pub struct LinkAudit {
 pub struct ResolvedEdge {
     pub src_node: String,
     pub src_symbol: String,
+    /// Project-relative file the source symbol lives in.
+    pub src_file: String,
     pub dst_node: String,
     pub dst_symbol: String,
+    /// Project-relative file the target symbol lives in.
+    pub dst_file: String,
     pub count: u32,
 }
 
@@ -243,7 +259,7 @@ pub fn derive_graph(model: &ScryModel, edges: &BuildEdges) -> DerivedGraph {
     let mut pair_counts: BTreeMap<(&str, &str), u32> = BTreeMap::new();
     // Leaf edges, resolved to (node, symbol) on both ends, deduped — the
     // per-symbol detail behind the aggregate counts. See `ResolvedEdge`.
-    let mut resolved: BTreeMap<(&str, &str, &str, &str), u32> = BTreeMap::new();
+    let mut resolved: BTreeMap<(&str, &str, &str, &str, &str, &str), u32> = BTreeMap::new();
     for edge in &edges.symbol_edges {
         let (Some(src), Some(dst)) = (resolve(&edge.src), resolve(&edge.dst)) else {
             continue;
@@ -258,9 +274,9 @@ pub fn derive_graph(model: &ScryModel, edges: &BuildEdges) -> DerivedGraph {
         // Record the leaf edge unless one endpoint contains the other (then it
         // is internal to a subtree, not a connection between two of them).
         if !src_set.contains(dst) && !dst_set.contains(src) {
-            let s_sym = BuildEdges::split_symbol_key(&edge.src).map_or("", |(_, n)| n);
-            let d_sym = BuildEdges::split_symbol_key(&edge.dst).map_or("", |(_, n)| n);
-            *resolved.entry((src, dst, s_sym, d_sym)).or_insert(0) += 1;
+            let (s_file, s_sym) = BuildEdges::split_symbol_key(&edge.src).unwrap_or(("", ""));
+            let (d_file, d_sym) = BuildEdges::split_symbol_key(&edge.dst).unwrap_or(("", ""));
+            *resolved.entry((src, dst, s_sym, d_sym, s_file, d_file)).or_insert(0) += 1;
         }
         for &a in &src_chain {
             if dst_set.contains(a) {
@@ -316,11 +332,13 @@ pub fn derive_graph(model: &ScryModel, edges: &BuildEdges) -> DerivedGraph {
 
     let resolved_edges: Vec<ResolvedEdge> = resolved
         .iter()
-        .map(|((sn, dn, ss, ds), count)| ResolvedEdge {
+        .map(|((sn, dn, ss, ds, sf, df), count)| ResolvedEdge {
             src_node: (*sn).to_string(),
             src_symbol: (*ss).to_string(),
+            src_file: (*sf).to_string(),
             dst_node: (*dn).to_string(),
             dst_symbol: (*ds).to_string(),
+            dst_file: (*df).to_string(),
             count: *count,
         })
         .collect();
@@ -408,6 +426,7 @@ mod tests {
         });
 
         let edges = BuildEdges {
+            external_imports: Vec::new(),
             symbol_edges: vec![
                 CachedEdge {
                     src: "a/src/x.ts#useThing@1".into(),
@@ -474,6 +493,7 @@ mod tests {
         );
 
         let edges = BuildEdges {
+            external_imports: Vec::new(),
             symbol_edges: vec![
                 // Cross-container: counts via file-owner fallback.
                 CachedEdge { src: "a/m.ts#f@1".into(), dst: "b/n.ts#g@1".into() },
@@ -506,6 +526,7 @@ mod tests {
         m.boundaries.insert("c2".into(), vec![Source { pattern: "b/**/*".into(), comment: None }]);
 
         let edges = BuildEdges {
+            external_imports: Vec::new(),
             // Both endpoints are also matched by c0's `**/*`; the specific owners
             // must win, yielding a real c1->c2 edge rather than c0->c0 (self).
             symbol_edges: vec![CachedEdge {
@@ -562,6 +583,7 @@ mod tests {
         anchor(&mut m, "symb", "src/b.ts", "doB");
 
         let edges = BuildEdges {
+            external_imports: Vec::new(),
             symbol_edges: vec![CachedEdge {
                 src: "src/a.ts#doA@1".into(),
                 dst: "src/b.ts#doB@9".into(),
