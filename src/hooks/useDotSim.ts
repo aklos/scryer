@@ -57,6 +57,7 @@ export function useDotSim(
   const live =
     scene !== null &&
     scene.mode === "code" &&
+    scene.regions === undefined &&
     scene.nodes.length > 1 &&
     scene.nodes.length <= LIVE_DOT_MAX;
 

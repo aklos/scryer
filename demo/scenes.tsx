@@ -106,6 +106,19 @@ const StyledRows = () => (
   />
 );
 
+const CodeLevel = () => (
+  <DiagramView
+    model={paymentsModel}
+    planDiff={EMPTY_DIFF}
+    committed={null}
+    report={healthReport}
+    focusId="ledger-post"
+    selectedId={null}
+    onFocus={noop}
+    onSelectNode={noop}
+  />
+);
+
 const NodeBody = () => (
   <NodePage
     testVerdicts={{}}
@@ -241,6 +254,15 @@ export const timeline: Scene[] = [
     render: () => (
       <Treated headline="A frontend drawn as its layers.">
         <StyledRows />
+      </Treated>
+    ),
+  },
+  {
+    id: "code-level",
+    duration: 9000,
+    render: () => (
+      <Treated headline="A component read top-down.">
+        <CodeLevel />
       </Treated>
     ),
   },

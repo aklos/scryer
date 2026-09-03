@@ -119,6 +119,16 @@ const componentNodes: Node[] = [
     description: "Serialized transactional writes." },
   { id: "ledger-bus", kind: "component", name: "Event Publisher", parentId: "ledger", layer: "infrastructure",
     description: "Publishes ledger events to the bus." },
+  // Symbols inside Post Entry, for the code-level scene.
+  { id: "sym-post", kind: "symbol", name: "post_entry", parentId: "ledger-post",
+    responsibilities: [{ id: "r-sym-1", statement: "**When** a payment is captured, **record** a balanced entry" }] },
+  { id: "sym-balance", kind: "symbol", name: "check_balance", parentId: "ledger-post",
+    responsibilities: [{ id: "r-sym-2", statement: "**If** a posting would go negative, **then** refuse it" }] },
+  { id: "sym-entry", kind: "symbol", name: "Entry", parentId: "ledger-post",
+    properties: [{ label: "debit" }, { label: "credit" }] },
+  { id: "sym-split", kind: "symbol", name: "split_lines", parentId: "ledger-post" },
+  { id: "sym_round", kind: "symbol", name: "round_minor", parentId: "ledger-post" },
+  { id: "sym-fmt", kind: "symbol", name: "fmt_amount", parentId: "ledger-post" },
   // Merchant Dashboard — feature-sliced.
   { id: "dash-app", kind: "component", name: "App Shell", parentId: "dashboard", layer: "app" },
   { id: "dash-payouts", kind: "component", name: "Payouts Page", parentId: "dashboard", layer: "pages" },
@@ -158,6 +168,15 @@ const links: Link[] = [
   { id: "l-lg-5", src: "ledger-store", dst: "ledger-post", label: "", kind: "implements" },
   { id: "l-lg-6", src: "ledger-bus", dst: "ledger-escrow", label: "", kind: "implements" },
   { id: "l-lg-7", src: "ledger-escrow", dst: "ledger-post", label: "releases via", kind: "uses" },
+
+  // Post Entry symbols
+  { id: "l-sy-1", src: "sym-post", dst: "sym-balance", label: "", kind: "calls" },
+  { id: "l-sy-2", src: "sym-post", dst: "sym-entry", label: "", kind: "depends" },
+  { id: "l-sy-3", src: "sym-post", dst: "sym-split", label: "", kind: "calls" },
+  { id: "l-sy-4", src: "sym-balance", dst: "sym-entry", label: "", kind: "depends" },
+  { id: "l-sy-5", src: "sym-split", dst: "sym_round", label: "", kind: "calls" },
+  { id: "l-sy-6", src: "sym-balance", dst: "sym_round", label: "", kind: "calls" },
+  { id: "l-sy-7", src: "sym-split", dst: "sym-fmt", label: "", kind: "calls" },
 
   // Dashboard components (feature-sliced)
   { id: "l-db-1", src: "dash-app", dst: "dash-payouts", label: "", kind: "calls" },
@@ -362,6 +381,11 @@ export const healthReport: ModelHealthReport = {
         dstNode: "ledger-http", dstSymbol: "PostPayment", dstFile: "ledger/src/presentation/grpc.rs", count: 3 },
       { srcNode: "ledger-store", srcSymbol: "PgStore", srcFile: "ledger/src/infrastructure/pg.rs",
         dstNode: "payments-db", dstSymbol: "", dstFile: "db/schema.sql", count: 5 },
+      // Into Post Entry from the API and out to the domain model.
+      { srcNode: "ledger-http", srcSymbol: "PostPayment", srcFile: "ledger/src/presentation/grpc.rs",
+        dstNode: "sym-post", dstSymbol: "post_entry", dstFile: "ledger/src/application/post.rs", count: 2 },
+      { srcNode: "sym-balance", srcSymbol: "check_balance", srcFile: "ledger/src/application/post.rs",
+        dstNode: "ledger-model", dstSymbol: "Account", dstFile: "ledger/src/domain/account.rs", count: 3 },
     ],
   },
   style: { violations: [], layerViolations: 0, isolationViolations: 0, externalViolations: 0, misplaced: 0 },

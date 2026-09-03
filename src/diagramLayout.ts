@@ -15,8 +15,6 @@
  *     lines would be noise and relationships read better as a constellation.
  */
 
-import Graph from "graphology";
-import forceAtlas2 from "graphology-layout-forceatlas2";
 import { layoutGraph } from "./layout/planar";
 import type { EdgePair } from "./layout/planar";
 import type { ScryModel, Kind } from "./viewmodel";
@@ -24,6 +22,7 @@ import { isDataShape } from "./viewmodel";
 import type { ModelHealthReport } from "./health";
 import { governingStyleDef, layerOf, styleTable, type Drawing, type StyleDef } from "./styles";
 import { classifyStyledEdge, styledLayout, type LayerRegion } from "./layout/styled";
+import { depthLayout } from "./layout/depth";
 
 export type DiagramMode = "arch" | "styled" | "code";
 
@@ -63,8 +62,19 @@ export interface DiagramNode {
   /** The layer this node plays in its governing style (components; symbols
    *  inherit). Drives the card's layer tag and the styled layout. */
   layer?: string;
+  /** Carries responsibilities or a data shape of its own. A symbol without
+   *  any reads hollow on the code tier — a hub nobody has described. */
+  hasClaims: boolean;
+  /** A styled container's miniature: its components as dots in their layer
+   *  positions, with the layer regions — the real shape of its inside. */
+  thumbnail?: Thumbnail;
   x: number;
   y: number;
+}
+
+export interface Thumbnail {
+  regions: LayerRegion[];
+  dots: { x: number; y: number }[];
 }
 
 export interface DiagramEdge {
@@ -102,6 +112,9 @@ export interface DiagramScene {
   edges: DiagramEdge[];
   /** Present in `styled` mode. */
   styled?: StyledScene;
+  /** Regions drawn behind the nodes: a style's layers, or the code tier's
+   *  depth bands. Absent on the free planar tiers. */
+  regions?: LayerRegion[];
 }
 
 // Grid cell size for the planar box layout (matches the canvas on `main`).
@@ -114,7 +127,6 @@ const CELL_H = 180;
 export const CARD_W = 180;
 export const CARD_H = 160;
 
-// ForceAtlas2 tuning for the code tier lives with the layout (`fa2Settings`).
 
 // Relative dot sizing: the most depended-upon symbol fills MAX_DOT, a leaf sits
 // at MIN_DOT, scaled against the graph's own busiest hub (not an absolute count)
@@ -222,6 +234,27 @@ export async function buildDiagramScene(
     return cur ? cur.id : nodeId;
   };
 
+  // A styled container's miniature — its own components laid out in its own
+  // drawing, shrunk. Computed here (cheap: a handful of containers per level)
+  // so the card can draw the real shape instead of a generic glyph.
+  const thumbnailFor = (id: string): Thumbnail | undefined => {
+    const n = byId.get(id);
+    if (!n || n.kind !== "container" || !n.style) return undefined;
+    const def = styles.get(n.style);
+    if (!def) return undefined;
+    const comps = model.nodes.filter((c) => c.kind === "component" && c.parentId === id);
+    if (comps.length === 0) return undefined;
+    const compOf = new Map<string, string>();
+    for (const c of comps) compOf.set(c.id, c.id);
+    for (const s of model.nodes) if (s.kind === "symbol" && s.parentId && compOf.has(s.parentId)) compOf.set(s.id, s.parentId);
+    const inner = model.links
+      .filter((l) => compOf.has(l.src) && compOf.has(l.dst))
+      .map((l) => ({ source: compOf.get(l.src)!, target: compOf.get(l.dst)! }))
+      .filter((e) => e.source !== e.target);
+    const laid = styledLayout(def, comps.map((c) => ({ id: c.id, layer: c.layer })), [], inner);
+    return { regions: laid.regions, dots: comps.map((c) => laid.centers.get(c.id) ?? { x: 0, y: 0 }) };
+  };
+
   const ghostIds = new Set<string>();
   const edgeMap = new Map<string, DiagramEdge>();
   const addEdge = (
@@ -300,6 +333,8 @@ export async function buildDiagramScene(
       symbolClass: previewable.has(n.id) ? "visual" : isDataShape(n) ? "model" : "code",
       style: n.style,
       layer: layerOf(model, n.id),
+      hasClaims: (n.responsibilities?.length ?? 0) > 0 || (n.properties?.length ?? 0) > 0,
+      thumbnail: thumbnailFor(n.id),
     };
   };
 
@@ -343,12 +378,18 @@ export async function buildDiagramScene(
   );
 
   let styled: StyledScene | undefined;
+  let regions: LayerRegion[] | undefined;
   let positions: Map<string, { x: number; y: number }>;
   if (mode === "code") {
-    positions = dotLayout(
-      layoutIds.map((id) => ({ id, name: byId.get(id)!.name, size: sizeById.get(id)! })),
+    // Symbols by call depth from the component's surface — importance in
+    // position — instead of a free constellation.
+    const laid = depthLayout(
+      children.map((c) => ({ id: c.id, size: sizeById.get(c.id)!, labelW: estLabelWidth(c.name) })),
+      ghosts,
       edges,
     );
+    positions = laid.centers;
+    regions = laid.regions;
   } else if (mode === "styled" && styleDef) {
     const members = children.map((c) => ({ id: c.id, layer: c.layer }));
     const laid = styledLayout(styleDef, members, ghosts, edges);
@@ -357,6 +398,7 @@ export async function buildDiagramScene(
     );
     for (const [id, at] of pinnedPos) positions.set(id, at);
     styled = { name: styleDef.name, drawing: styleDef.drawing, regions: laid.regions };
+    regions = laid.regions;
     // The drawing already says these — hide them until a selection asks.
     const layerById = new Map(children.map((c) => [c.id, c.layer] as const));
     const ringDrawing = styleDef.drawing === "rings" || styleDef.drawing === "hexagon";
@@ -391,7 +433,7 @@ export async function buildDiagramScene(
     };
   });
 
-  return { mode, focusId, nodes, edges, styled };
+  return { mode, focusId, nodes, edges, styled, regions };
 }
 
 // ── Architecture tiers: planar boxes ────────────────────────────────────────
@@ -482,38 +524,7 @@ async function archLayout(
   return px;
 }
 
-// ── Code tier: force-directed dot graph ─────────────────────────────────────
-
-interface DotDescriptor {
-  id: string;
-  name: string;
-  size: number; // rendered dot diameter (px)
-}
-
-// ForceAtlas2 settings, ported from gitnexus's code-graph layout (`useSigma.ts`):
-// a free constellation where repulsion scales with node degree (hubs claim room)
-// and `outboundAttractionDistribution` divides a hub's edge pull across its
-// spokes so they fan out instead of collapsing onto it. Tiered by node count.
-// The small tier diverges from gitnexus (lower gravity, higher scalingRatio):
-// sigma hides most labels so it can pack tight, but we draw every label, so the
-// constellation needs more room.
-function fa2Settings(nodeCount: number) {
-  const small = nodeCount < 500;
-  const medium = nodeCount >= 500 && nodeCount < 2000;
-  const large = nodeCount >= 2000 && nodeCount < 10000;
-  return {
-    gravity: small ? 0.4 : medium ? 0.5 : large ? 0.3 : 0.15,
-    scalingRatio: small ? 50 : medium ? 30 : large ? 60 : 100,
-    slowDown: small ? 1 : medium ? 2 : large ? 3 : 5,
-    barnesHutOptimize: nodeCount > 200,
-    barnesHutTheta: large ? 0.8 : 0.6,
-    strongGravityMode: false,
-    outboundAttractionDistribution: true,
-    linLogMode: false,
-    adjustSizes: true,
-    edgeWeightInfluence: 1,
-  };
-}
+// ── Card separation (shared by the planar tiers) ────────────────────────────
 
 // Breathing room (px) left between rendered rows by the final separation pass.
 const LABEL_PAD = 24;
@@ -575,79 +586,4 @@ function relaxLabelBoxes(
     }
     if (!moved) break;
   }
-}
-
-/**
- * Force-directed layout for the symbol tier — gitnexus's code-graph algorithm:
- * ForceAtlas2 settled into a constellation (no dependency ranking, no axis
- * clamps — the graph finds its own equilibrium and hubs push their spokes out),
- * then a separation pass that gives every dot + label room.
- *
- * The cleanup is ours, not sigma's: sigma hides colliding labels, so a tight
- * pack is fine there. We draw every label, so we resolve the actual rendered
- * rows (`relaxLabelBoxes`) and run a more spread-out FA2 (`fa2Settings`). Runs
- * synchronously to a settled state.
- */
-function dotLayout(
-  descriptors: DotDescriptor[],
-  edges: DiagramEdge[],
-): Map<string, { x: number; y: number }> {
-  const out = new Map<string, { x: number; y: number }>();
-  const n = descriptors.length;
-  if (n === 0) return out;
-  if (n === 1) {
-    out.set(descriptors[0].id, { x: 0, y: 0 });
-    return out;
-  }
-
-  // Stacked box per node (disc on top, label block centered beneath). Width is
-  // the wider of the disc and the label; height is the disc plus the label
-  // block. Half the larger dimension is the radius FA2 uses to pre-spread; the
-  // full box is what the final pass separates.
-  const boxes = new Map<string, Box>(
-    descriptors.map((d) => [
-      d.id,
-      {
-        w: Math.max(d.size, estLabelWidth(d.name)),
-        h: d.size + DISC_LABEL_GAP + LABEL_BLOCK_H,
-      },
-    ]),
-  );
-
-  // Seed on a circle so no two nodes share coordinates — ForceAtlas2 divides by
-  // inter-node distance, so coincident nodes produce NaN. Radius scales with the
-  // node count so the sim starts roughly spread rather than piled at the origin.
-  const graph = new Graph({ type: "directed" });
-  const seedR = 40 + n * 12;
-  descriptors.forEach((d, i) => {
-    const a = (2 * Math.PI * i) / n;
-    const b = boxes.get(d.id)!;
-    graph.addNode(d.id, {
-      x: seedR * Math.cos(a),
-      y: seedR * Math.sin(a),
-      size: Math.max(b.w, b.h) / 2,
-    });
-  });
-  for (const e of edges) {
-    if (!graph.hasNode(e.source) || !graph.hasNode(e.target)) continue;
-    if (e.source === e.target || graph.hasDirectedEdge(e.source, e.target)) continue;
-    graph.addDirectedEdge(e.source, e.target);
-  }
-
-  const settings = { ...forceAtlas2.inferSettings(graph), ...fa2Settings(n) };
-  // ForceAtlas2 needs many iterations to settle into a smooth shape — small
-  // graphs were under-converging (and reading as randomly placed) at the old
-  // ~n*25. Give them a high fixed budget; bound it for large levels so the
-  // synchronous layout never janks.
-  forceAtlas2.assign(graph, {
-    iterations: n <= 150 ? 2500 : n <= 600 ? 1200 : 600,
-    settings,
-  });
-  graph.forEachNode((id, attrs) =>
-    out.set(id, { x: attrs.x as number, y: attrs.y as number }),
-  );
-
-  // Give every dot + label room (FA2 only keeps the discs apart).
-  relaxLabelBoxes(out, boxes, LABEL_PAD, 500);
-  return out;
 }

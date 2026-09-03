@@ -47,13 +47,33 @@ export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
         <svg width={b.w} height={b.h} viewBox={`${b.x} ${b.y} ${b.w} ${b.h}`} className="overflow-visible">
           {regions.map((r, i) => {
             const label = r.layer.toUpperCase();
-            const common = {
-              fill: "var(--surface-tint)",
-              fillOpacity: 0.35,
-              stroke: "var(--border)",
-              strokeWidth: 1,
-              strokeDasharray: "4 4",
-            };
+            // A ghost band is open: no fill, a dotted edge — the world beyond
+            // this level, not a layer of it.
+            const common = r.ghost
+              ? { fill: "none", stroke: "var(--border-subtle)", strokeWidth: 1, strokeDasharray: "2 6" }
+              : {
+                  fill: "var(--surface-tint)",
+                  fillOpacity: 0.35,
+                  stroke: "var(--border)",
+                  strokeWidth: 1,
+                  strokeDasharray: "4 4",
+                };
+            // The layer's one line rides beside its name, muted: the map
+            // explains its own vocabulary where the reader is looking.
+            const caption = r.caption ? (
+              <tspan fill="var(--text-ghost)" fontWeight={400} letterSpacing={0.2} opacity={0.8}>
+                {"  ·  "}{r.caption}
+              </tspan>
+            ) : null;
+            // Ring and hex labels sit at a vertex with a card close by, so
+            // their caption takes a short second line instead of running on.
+            const short = r.caption && r.caption.length > 56 ? r.caption.slice(0, 54).trimEnd() + "…" : r.caption;
+            const captionBelow = (x: number, y: number, anchor: "middle" | "start") =>
+              short ? (
+                <text x={x} y={y + 13} textAnchor={anchor} fontSize={9} fill="var(--text-ghost)" opacity={0.75}>
+                  {short}
+                </text>
+              ) : null;
             if (r.shape === "rect") {
               return (
                 <g key={i}>
@@ -67,6 +87,7 @@ export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
                     fontWeight={600}
                   >
                     {label}
+                    {caption}
                   </text>
                 </g>
               );
@@ -86,6 +107,7 @@ export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
                   >
                     {label}
                   </text>
+                  {captionBelow(r.cx, r.cy - r.r + 16, "middle")}
                 </g>
               );
             }
@@ -104,6 +126,11 @@ export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
                 >
                   {label}
                 </text>
+                {captionBelow(
+                  r.cx + r.r * Math.cos((-2 * Math.PI) / 3) * 0.72,
+                  r.cy + r.r * Math.sin((-2 * Math.PI) / 3) * 0.72 + 4,
+                  "middle",
+                )}
               </g>
             );
           })}

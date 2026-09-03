@@ -36,10 +36,19 @@ export interface StyledEdge {
 
 /** A layer's region behind the cards. Rects for rows/columns and the hex
  *  sides, rings for the concentric drawings, `hex` for the hexagon itself. */
+interface RegionMeta {
+  /** The label: a layer name, or a band caption like "called from". */
+  layer: string;
+  /** The layer's one-line description, drawn beside the label so the map
+   *  explains its own vocabulary in place. */
+  caption?: string;
+  /** A band of ghosts (nodes living outside this level) — drawn open. */
+  ghost?: boolean;
+}
 export type LayerRegion =
-  | { layer: string; shape: "rect"; x: number; y: number; w: number; h: number }
-  | { layer: string; shape: "ring"; cx: number; cy: number; r: number }
-  | { layer: string; shape: "hex"; cx: number; cy: number; r: number };
+  | (RegionMeta & { shape: "rect"; x: number; y: number; w: number; h: number })
+  | (RegionMeta & { shape: "ring"; cx: number; cy: number; r: number })
+  | (RegionMeta & { shape: "hex"; cx: number; cy: number; r: number });
 
 export interface StyledLayout {
   /** Card CENTERS (the caller converts to React Flow's top-left). */
@@ -63,7 +72,7 @@ const LABEL_ROOM = 22;
 /** Barycenter ordering: order each band by the mean position of the neighbours
  *  in already-placed bands, sweeping down then up a few times. Ties keep the
  *  incoming (name-stable) order so the result is deterministic. */
-function orderBands(bands: string[][], edges: StyledEdge[]): string[][] {
+export function orderBands(bands: string[][], edges: StyledEdge[]): string[][] {
   const adj = new Map<string, string[]>();
   for (const e of edges) {
     if (e.source === e.target) continue;
@@ -159,7 +168,7 @@ function bandsLayout(
   const centers = new Map<string, { x: number; y: number }>();
   const regions: LayerRegion[] = [];
   let bandIndex = 0;
-  const place = (ids: string[], layer: string | null) => {
+  const place = (ids: string[], layer: string | null, ghost = false) => {
     const w = (ids.length - 1) * PITCH_X;
     const start = (span - w) / 2;
     ids.forEach((id, i) => {
@@ -172,18 +181,19 @@ function bandsLayout(
       const full = span + CARD_W + 2 * PAD;
       const y0 = bandIndex * PITCH_Y - CARD_H / 2 - PAD - LABEL_ROOM;
       const thick = CARD_H + 2 * PAD + LABEL_ROOM;
+      const caption = def.layers.find((l) => l.name === layer)?.description;
       regions.push(
         transpose
-          ? { layer, shape: "rect", x: y0, y: x0, w: thick, h: full }
-          : { layer, shape: "rect", x: x0, y: y0, w: full, h: thick },
+          ? { layer, caption, ghost, shape: "rect", x: y0, y: x0, w: thick, h: full }
+          : { layer, caption, ghost, shape: "rect", x: x0, y: y0, w: full, h: thick },
       );
     }
     bandIndex++;
   };
   let k = 0;
-  if (inGhosts.length) place(ordered[k++], null);
+  if (inGhosts.length) place(ordered[k++], "called from", true);
   for (const b of layered) place(ordered[k++], b.layer === "?" ? "unlayered" : b.layer);
-  if (outGhosts.length) place(ordered[k++], null);
+  if (outGhosts.length) place(ordered[k++], "depends on", true);
   return { centers, regions };
 }
 
@@ -257,18 +267,19 @@ function ringsLayout(def: StyleDef, members: StyledMember[], ghosts: string[], e
   let r = 0;
   if (inner) {
     r = packCenter(inner.ids, centers) + PAD;
-    regions.push({ layer: inner.layer === "?" ? "unlayered" : inner.layer, shape: "ring", cx: 0, cy: 0, r });
+    regions.push({ layer: inner.layer === "?" ? "unlayered" : inner.layer, caption: describe(def, inner.layer), shape: "ring", cx: 0, cy: 0, r });
   }
   for (let i = bands.length - 2; i >= 0; i--) {
     const b = bands[i];
     const ordered = orderByAngle(b.ids, edges, centers);
     const used = ringPlace(ordered, r + PAD + CARD_H / 2 + 10, -Math.PI / 2, centers);
     r = used + CARD_H / 2 + PAD;
-    regions.push({ layer: b.layer === "?" ? "unlayered" : b.layer, shape: "ring", cx: 0, cy: 0, r });
+    regions.push({ layer: b.layer === "?" ? "unlayered" : b.layer, caption: describe(def, b.layer), shape: "ring", cx: 0, cy: 0, r });
   }
   if (ghosts.length) {
     const ordered = orderByAngle(ghosts, edges, centers);
-    ringPlace(ordered, r + PAD + CARD_H / 2 + 20, -Math.PI / 2 + 0.3, centers);
+    const used = ringPlace(ordered, r + PAD + CARD_H / 2 + 20, -Math.PI / 2 + 0.3, centers);
+    regions.push({ layer: "outside", caption: "what this container talks to", ghost: true, shape: "ring", cx: 0, cy: 0, r: used + CARD_H / 2 + PAD });
   }
   // Innermost region first so the renderer paints outer rings underneath.
   regions.reverse();
@@ -295,14 +306,14 @@ function hexagonLayout(def: StyleDef, members: StyledMember[], ghosts: string[],
   // Centre + ring.
   const coreIds = ids(core);
   let r = packCenter(coreIds, centers) + PAD;
-  regions.push({ layer: core, shape: "hex", cx: 0, cy: 0, r });
+  regions.push({ layer: core, caption: describe(def, core), shape: "hex", cx: 0, cy: 0, r });
   const ringIds = orderByAngle(ids(ring), edges, centers);
   const ringR = ringPlace(ringIds, r + PAD + CARD_H / 2 + 10, -Math.PI / 2, centers);
   r = ringR + CARD_H / 2 + PAD;
-  regions.push({ layer: ring, shape: "hex", cx: 0, cy: 0, r });
+  regions.push({ layer: ring, caption: describe(def, ring), shape: "hex", cx: 0, cy: 0, r });
 
   // Side columns, ordered to sit level with the ring cards they touch.
-  const column = (colIds: string[], x: number, layer: string | null) => {
+  const column = (colIds: string[], x: number, layer: string | null, ghost = false) => {
     if (colIds.length === 0) return;
     const key = new Map<string, number>();
     colIds.forEach((id, i) => {
@@ -320,6 +331,8 @@ function hexagonLayout(def: StyleDef, members: StyledMember[], ghosts: string[],
     if (layer !== null) {
       regions.push({
         layer,
+        caption: ghost ? undefined : describe(def, layer),
+        ghost,
         shape: "rect",
         x: x - CARD_W / 2 - PAD,
         y: -h / 2 - CARD_H / 2 - PAD - LABEL_ROOM,
@@ -346,10 +359,16 @@ function hexagonLayout(def: StyleDef, members: StyledMember[], ghosts: string[],
   const memberIds = new Set(members.map((m) => m.id));
   const sides = ghostSides(ghosts, memberIds, edges);
   const ghostX = sideX + CARD_W + PAD * 2;
-  column(ghosts.filter((g) => sides.get(g) === "in"), -ghostX, null);
-  column(ghosts.filter((g) => sides.get(g) === "out"), ghostX, null);
+  const inG = ghosts.filter((g) => sides.get(g) === "in");
+  const outG = ghosts.filter((g) => sides.get(g) === "out");
+  column(inG, -ghostX, inG.length ? "driven by" : null, true);
+  column(outG, ghostX, outG.length ? "drives" : null, true);
 
   return { centers, regions };
+}
+
+function describe(def: StyleDef, layer: string): string | undefined {
+  return def.layers.find((l) => l.name === layer)?.description;
 }
 
 // ── entry ───────────────────────────────────────────────────────────────────

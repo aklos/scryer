@@ -79,6 +79,48 @@ function isExpandable(kind: DiagramNode["kind"]): boolean {
   return kind === "system" || kind === "container" || kind === "component";
 }
 
+/** A styled container's real shape in miniature: its layer regions and its
+ *  components as dots where the style puts them. Replaces the generic glyph
+ *  once the container has components. */
+function Thumbnail({ t }: { t: NonNullable<DiagramNode["thumbnail"]> }) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const grow = (x: number, y: number) => {
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+  };
+  for (const r of t.regions) {
+    if (r.shape === "rect") { grow(r.x, r.y); grow(r.x + r.w, r.y + r.h); }
+    else { grow(r.cx - r.r, r.cy - r.r); grow(r.cx + r.r, r.cy + r.r); }
+  }
+  for (const d of t.dots) grow(d.x - 90, d.y - 80), grow(d.x + 90, d.y + 80);
+  if (!Number.isFinite(x0)) return null;
+  const w = x1 - x0 || 1, h = y1 - y0 || 1;
+  const W = 52, H = 36;
+  const s = Math.min(W / w, H / h);
+  const ox = (W - w * s) / 2 - x0 * s, oy = (H - h * s) / 2 - y0 * s;
+  const hex = (cx: number, cy: number, r: number) =>
+    Array.from({ length: 6 }, (_, i) => {
+      const a = (Math.PI / 3) * i;
+      return `${(ox + (cx + r * Math.cos(a)) * s).toFixed(1)},${(oy + (cy + r * Math.sin(a)) * s).toFixed(1)}`;
+    }).join(" ");
+  const stroke = { fill: "var(--surface-tint)", fillOpacity: 0.5, stroke: "var(--text-ghost)", strokeWidth: 0.8 };
+  return (
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="overflow-visible" aria-hidden>
+      {t.regions.map((r, i) =>
+        r.shape === "rect" ? (
+          <rect key={i} x={ox + r.x * s} y={oy + r.y * s} width={r.w * s} height={r.h * s} rx={1.5} {...stroke} />
+        ) : r.shape === "ring" ? (
+          <circle key={i} cx={ox + r.cx * s} cy={oy + r.cy * s} r={r.r * s} {...stroke} />
+        ) : (
+          <polygon key={i} points={hex(r.cx, r.cy, r.r)} {...stroke} />
+        ),
+      )}
+      {t.dots.map((d, i) => (
+        <circle key={i} cx={ox + d.x * s} cy={oy + d.y * s} r={1.8} fill="var(--text-tertiary)" />
+      ))}
+    </svg>
+  );
+}
+
 /** Drill request — DiagramView listens and descends a level. */
 function requestExpand(nodeId: string) {
   window.dispatchEvent(new CustomEvent("diagram-expand", { detail: { nodeId } }));
@@ -217,13 +259,14 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
           </div>
         )}
 
-        {/* Style miniature, top-left: what shape this container's inside takes. */}
+        {/* Style miniature, top-left: the real shape of this container's
+            inside once it has components, the style's glyph until then. */}
         {node.style && !isGhost && (
           <div
             className="pointer-events-auto absolute left-2 top-1.5 z-10 flex items-center gap-1 text-[9px] tracking-wider text-[var(--text-tertiary)]"
             title={`style: ${node.style}`}
           >
-            <StyleGlyph style={node.style} />
+            {node.thumbnail ? <Thumbnail t={node.thumbnail} /> : <StyleGlyph style={node.style} />}
           </div>
         )}
 

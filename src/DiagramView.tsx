@@ -74,14 +74,21 @@ function DotNode({ data }: NodeProps<RFDot>) {
   const dia = node.dotSize;
   // A ghost (lives elsewhere) reads hollow: an outlined ring, no fill. The dash
   // is reserved for true externals, so an external ghost is hollow + dashed, an
-  // internal ghost hollow + solid.
+  // internal ghost hollow + solid. A symbol with NO claims is hollow too — a
+  // big hollow dot is a hub nobody has described, the find worth making.
+  const undescribed = !ghost && !node.hasClaims;
   const discClass = ghost
     ? `border ${node.external ? "border-dashed" : ""} border-[var(--text-muted)] bg-transparent`
-    : meta
-      ? `bg-current ${meta.color}`
-      : "bg-[var(--text-ghost)]";
-  // Subgraph highlight: faded when a selection elsewhere doesn't touch this dot.
-  const dimClass = data.dimmed ? "opacity-20" : ghost ? "opacity-70" : "";
+    : undescribed
+      ? `border-2 ${meta ? `border-current ${meta.color}` : "border-[var(--text-ghost)]"} bg-transparent`
+      : meta
+        ? `bg-current ${meta.color}`
+        : "bg-[var(--text-ghost)]";
+  // Subgraph highlight: faded when a selection elsewhere doesn't touch this
+  // dot. Leaves (undescribed, one caller at most) rest faded so the important
+  // dots carry the level.
+  const leaf = undescribed && node.degree <= 1;
+  const dimClass = data.dimmed ? "opacity-20" : ghost ? "opacity-70" : leaf ? "opacity-45" : "";
   return (
     <div className={`flex flex-col items-center transition-opacity ${dimClass}`}>
       <span
@@ -617,7 +624,7 @@ function DiagramInner({
               color="var(--border-subtle)"
               className="!bg-[var(--surface-canvas)]"
             />
-            {scene?.styled && <StyleRegions regions={scene.styled.regions} />}
+            {scene?.regions && <StyleRegions regions={scene.regions} />}
             <Controls showInteractive={false} className="!shadow-none">
               {archDraggable && (
                 <ControlButton
