@@ -24,7 +24,8 @@ model claims need plan entries; the change stays open either way. [[loop-plan]] 
 4. SIGN-OFF — tell the user what you planned and get their go-ahead; record it with \
 `sign_off`. [[loop-sign-off]]\n\
 5. BUILD — implement claim by claim, each testable (When/While/If) claim with its test in the \
-project's own suite. [[loop-build]]\n\
+project's own suite. Placement is given, not chosen: `scaffold {node_id}` and `orient {files}` \
+name each planned component's directory, layer and allowed imports. [[loop-build]] [[styles]]\n\
 6. CLOSE — `mark_implemented` with `anchors` and `tests` in the same call; the fold is gated on a \
 passing verdict, so run the tests with a JUnit reporter and `ingest_test_report` first. Then \
 `get_test_radius`, `flag_drift`, `reconcile_drift`. A change that filed nothing closes with \

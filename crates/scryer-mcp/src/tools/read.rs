@@ -656,11 +656,11 @@ impl ScryerServer {
     #[tool(
         description = "The front door for a CODING task: pass the `task` in a few words and/or the \
          project-relative `files` it touches. Returns, scoped to that: per file the governing \
-         node chain, anchored claims (`untested` flagged) and binding directives; per task the \
+         node chain and its `placement` (layer, allowed imports, directory — obey it), anchored claims (`untested` flagged) and binding directives; per task the \
          best-matching nodes; pending entries and drift scopes inside the scope; matching rule \
          slugs; a `phase` verdict; and the loop `state` line. Replaces the get_health / \
          search_model / read_model dance for coding sessions.\n\
-         Rules: orient-phases, loop-orient, directives-binding"
+         Rules: orient-phases, loop-orient, directives-binding, styles"
     )]
     fn orient(
         &self,
@@ -722,6 +722,7 @@ impl ScryerServer {
                         "claims": report.result.claims,
                         "ownDirectives": report.result.own_directives,
                         "inheritedDirectives": report.result.inherited_directives,
+                        "placement": report.placement.as_ref().map(|p| p.line()),
                     });
                     strip_fields_compact(&mut v);
                     files_out.push(v);

@@ -172,6 +172,10 @@ pub struct LocateReport {
     pub path: Option<String>,
     /// Plan entries (committed→planned diff) touching the located elements.
     pub pending: Vec<crate::diff::ElementChange>,
+    /// The file's layer, what it may import, and where its layer lives —
+    /// from the finest owner's governing style. Absent for unstyled code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placement: Option<crate::style::Placement>,
 }
 
 /// Resolve `file` against the project's WORKING view (plan + committed anchors)
@@ -218,7 +222,15 @@ pub fn locate_at(
             .join(" / ")
     });
 
-    Ok(LocateReport { result, path, pending })
+    let styles = crate::style::Styles::load(r.project_path());
+    let placement = result
+        .owner_chain
+        .first()
+        .map(|o| o.id.as_str())
+        .or_else(|| result.boundary_owner.as_ref().map(|b| b.id.as_str()))
+        .and_then(|id| crate::style::placement(&working, &styles, r.project_path(), id));
+
+    Ok(LocateReport { result, path, pending, placement })
 }
 
 fn owner_link(model: &ScryModel, id: &str) -> Option<OwnerLink> {

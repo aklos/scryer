@@ -169,16 +169,6 @@ impl<'a> FileIndex<'a> {
     }
 }
 
-/// The container's boundary directory, so a path convention is read relative
-/// to the container (`api/` as a container root is not a presentation dir).
-fn container_prefix(model: &ScryModel, container: &str) -> Option<String> {
-    let sources = model.boundaries.get(container)?;
-    let pattern = &sources.first()?.pattern;
-    let cut = pattern.find(|c: char| c == '*' || c == '?' || c == '{').unwrap_or(pattern.len());
-    let prefix = pattern[..cut].trim_end_matches('/');
-    (!prefix.is_empty()).then(|| format!("{prefix}/"))
-}
-
 fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
@@ -332,7 +322,7 @@ pub fn check_code(
         let Some(layer) = comp.layer.as_deref() else { continue };
         let Some(def) = governing(comp_id) else { continue };
         let Some(container) = style::container_of(model, comp_id) else { continue };
-        let prefix = container_prefix(model, &container.id);
+        let prefix = style::container_prefix(model, &container.id);
         for file in comp_files {
             let rel = prefix
                 .as_deref()

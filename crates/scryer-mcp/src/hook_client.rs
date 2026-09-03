@@ -429,7 +429,8 @@ fn render_overlay(overlay: &serde_json::Value) -> Option<String> {
             }
         }
     }
-    if claims.is_empty() && directives.is_empty() && pending.is_empty() {
+    let placement = overlay.get("placement").filter(|p| p.is_object());
+    if claims.is_empty() && directives.is_empty() && pending.is_empty() && placement.is_none() {
         return None;
     }
 
@@ -438,6 +439,21 @@ fn render_overlay(overlay: &serde_json::Value) -> Option<String> {
     match overlay["path"].as_str() {
         Some(p) => out.push_str(&format!("[scryer] {file} — {p}\n")),
         None => out.push_str(&format!("[scryer] {file}\n")),
+    }
+    // The style's answer for this file, one line: its layer, what it may
+    // import, where its layer lives. The table itself never appears.
+    if let Some(p) = placement {
+        let may: Vec<&str> = p["mayImport"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).collect();
+        let mut line = format!(
+            "layer: {} · may import: {}",
+            p["layer"].as_str().unwrap_or("?"),
+            if may.is_empty() { "nothing".to_string() } else { may.join(", ") }
+        );
+        if let Some(d) = p["dir"].as_str() {
+            line.push_str(&format!(" · path: {d}"));
+        }
+        out.push_str(&line);
+        out.push('\n');
     }
     if !claims.is_empty() {
         out.push_str("The model claims this file:\n");

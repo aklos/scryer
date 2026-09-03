@@ -281,6 +281,202 @@ pub fn container_of<'a>(model: &'a ScryModel, node_id: &str) -> Option<&'a Node>
     None
 }
 
+/// The one line an agent needs about the file at hand: its layer, what that
+/// layer may import, and where files of that layer live. Computed, never
+/// stored; the style table itself is never put in front of the agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Placement {
+    pub style: String,
+    pub layer: String,
+    /// Layers this layer may depend on.
+    pub may_import: Vec<String>,
+    /// Project-relative directory the convention puts this layer in, when the
+    /// container's boundary and the style's convention give one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
+}
+
+impl Placement {
+    /// `layer: application · may import: application, domain · path: crates/x/src/application/`
+    pub fn line(&self) -> String {
+        let mut s = format!(
+            "layer: {} · may import: {}",
+            self.layer,
+            if self.may_import.is_empty() { "nothing".to_string() } else { self.may_import.join(", ") }
+        );
+        if let Some(d) = &self.dir {
+            s.push_str(&format!(" · path: {d}"));
+        }
+        s
+    }
+}
+
+/// The container's boundary directory (`crates/x/` for `crates/x/**/*`), so
+/// a path convention is read and written relative to the container.
+pub fn container_prefix(model: &ScryModel, container: &str) -> Option<String> {
+    let sources = model.boundaries.get(container)?;
+    let pattern = &sources.first()?.pattern;
+    let cut = pattern.find(|c: char| c == '*' || c == '?' || c == '{').unwrap_or(pattern.len());
+    let prefix = pattern[..cut].trim_end_matches('/');
+    (!prefix.is_empty()).then(|| format!("{prefix}/"))
+}
+
+/// Where files of `node_id`'s layer belong: the container's boundary prefix
+/// (plus `src/` when the project has one there — the Rust and most TS
+/// layouts), then the layer's directory. `None` without a boundary or a
+/// convention.
+pub fn expected_dir(model: &ScryModel, def: &StyleDef, project: &Path, node_id: &str) -> Option<String> {
+    let layer = layer_of(model, node_id)?;
+    let dir = def.layer_dir(layer)?;
+    let container = container_of(model, node_id)?;
+    let prefix = container_prefix(model, &container.id)?;
+    let with_src = format!("{prefix}src/");
+    let base = if project.join(&with_src).is_dir() { with_src } else { prefix };
+    Some(format!("{base}{dir}/"))
+}
+
+/// The placement line for `node_id` (a component or symbol), or `None` when
+/// it has no layer or its style is unknown.
+pub fn placement(model: &ScryModel, styles: &Styles, project: &Path, node_id: &str) -> Option<Placement> {
+    let layer = layer_of(model, node_id)?;
+    let def = styles.get(governing_style(model, node_id)?)?;
+    Some(Placement {
+        style: def.name.clone(),
+        layer: layer.to_string(),
+        may_import: def.allowed(layer).to_vec(),
+        dir: expected_dir(model, def, project, node_id),
+    })
+}
+
+/// One symbol a scaffold asks the agent to define.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ScaffoldSymbol {
+    pub node_id: String,
+    pub name: String,
+    /// `type` when the symbol declares a data shape, else `behavior`.
+    pub kind: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub responsibilities: Vec<String>,
+    /// `label: description` per declared field.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub properties: Vec<String>,
+    /// Already anchored somewhere — define it only if it is not there.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub anchored: bool,
+}
+
+/// The language-neutral skeleton for one component: where its file(s) go,
+/// which layer it is, what it may import, and the symbols to define. The
+/// agent materialises it in the project's own language and idiom; scryer
+/// never renders code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ScaffoldManifest {
+    pub node_id: String,
+    pub name: String,
+    pub style: String,
+    pub layer: String,
+    /// Directory the layer's files belong in (project-relative), when the
+    /// convention gives one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
+    /// Suggested file stem (snake_case of the name); add the language's extension.
+    pub basename: String,
+    /// The only layers this file may import from.
+    pub may_import: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub responsibilities: Vec<String>,
+    pub symbols: Vec<ScaffoldSymbol>,
+    /// Files the model already anchors into this component.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub existing_files: Vec<String>,
+}
+
+fn snake_case(name: &str) -> String {
+    let mut out = String::new();
+    let mut prev_lower = false;
+    for c in name.chars() {
+        if c.is_alphanumeric() {
+            if c.is_uppercase() && prev_lower {
+                out.push('_');
+            }
+            out.extend(c.to_lowercase());
+            prev_lower = c.is_lowercase() || c.is_numeric();
+        } else if !out.ends_with('_') && !out.is_empty() {
+            out.push('_');
+            prev_lower = false;
+        }
+    }
+    out.trim_end_matches('_').to_string()
+}
+
+fn strip_markup(s: &str) -> String {
+    s.replace("**", "")
+}
+
+/// The manifest for one component (`None` when the node is not a component,
+/// has no layer, or its style is unknown).
+pub fn scaffold_manifest(
+    model: &ScryModel,
+    styles: &Styles,
+    project: &Path,
+    component_id: &str,
+) -> Option<ScaffoldManifest> {
+    let comp = model.nodes.iter().find(|n| n.id == component_id && n.kind == Kind::Component)?;
+    let place = placement(model, styles, project, component_id)?;
+    let anchored = |id: &str| model.source_map.get(id).is_some_and(|v| !v.is_empty());
+    let symbols = model
+        .nodes
+        .iter()
+        .filter(|n| n.kind == Kind::Symbol && n.parent_id.as_deref() == Some(component_id))
+        .map(|n| ScaffoldSymbol {
+            node_id: n.id.clone(),
+            name: n.name.clone(),
+            kind: if n.properties.is_empty() { "behavior".into() } else { "type".into() },
+            responsibilities: n.responsibilities.iter().map(|r| strip_markup(&r.statement)).collect(),
+            properties: n
+                .properties
+                .iter()
+                .map(|p| if p.description.is_empty() { p.label.clone() } else { format!("{}: {}", p.label, p.description) })
+                .collect(),
+            anchored: anchored(&n.id) || n.responsibilities.iter().any(|r| anchored(&r.id)),
+        })
+        .collect();
+    let mut existing: Vec<String> = Vec::new();
+    let mut push_files = |id: &str| {
+        if let Some(locs) = model.source_map.get(id) {
+            for l in locs {
+                if !existing.contains(&l.pattern) {
+                    existing.push(l.pattern.clone());
+                }
+            }
+        }
+    };
+    for r in &comp.responsibilities {
+        push_files(&r.id);
+    }
+    for n in model.nodes.iter().filter(|n| n.parent_id.as_deref() == Some(component_id)) {
+        push_files(&n.id);
+        for r in &n.responsibilities {
+            push_files(&r.id);
+        }
+    }
+    Some(ScaffoldManifest {
+        node_id: comp.id.clone(),
+        name: comp.name.clone(),
+        style: place.style,
+        layer: place.layer,
+        dir: place.dir,
+        basename: snake_case(&comp.name),
+        may_import: place.may_import,
+        responsibilities: comp.responsibilities.iter().map(|r| strip_markup(&r.statement)).collect(),
+        symbols,
+        existing_files: existing,
+    })
+}
+
 /// Is `layer` a legal tag for a component under `parent_id`? The answer names
 /// what to fix: an unstyled container, an unknown style, or a layer outside
 /// the style's list. Shared by every write path that sets a layer.
@@ -553,6 +749,44 @@ mod tests {
         let c = core_shell();
         assert_eq!(c.layer_of_path("src/main.rs"), Some("shell"));
         assert_eq!(c.layer_of_path("src/lib.rs"), Some("core"));
+    }
+
+    #[test]
+    fn placement_and_scaffold_read_the_style_and_the_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("svc/src")).unwrap();
+        let mut m = ScryModel::default();
+        let mut c = node("svc", Kind::Container, Some("s"));
+        c.style = Some("hexagonal".into());
+        let mut comp = node("k", Kind::Component, Some("svc"));
+        comp.layer = Some("application".into());
+        comp.name = "Checkout Flow".into();
+        comp.responsibilities = vec![serde_json::from_value(
+            serde_json::json!({ "id": "r1", "statement": "**When** paid, **record** it" }),
+        )
+        .unwrap()];
+        let mut sym = node("y", Kind::Symbol, Some("k"));
+        sym.name = "Order".into();
+        sym.properties = vec![serde_json::from_value(serde_json::json!({ "label": "id", "description": "order id" })).unwrap()];
+        m.nodes = vec![node("s", Kind::System, None), c, comp, sym];
+        m.boundaries.insert("svc".into(), vec![crate::Source { pattern: "svc/**/*".into(), comment: None }]);
+
+        let styles = Styles::builtin();
+        let p = placement(&m, &styles, dir.path(), "y").unwrap();
+        assert_eq!(p.layer, "application");
+        assert_eq!(p.may_import, vec!["application", "domain"]);
+        assert_eq!(p.dir.as_deref(), Some("svc/src/application/"), "src/ exists, so it is used");
+        assert_eq!(p.line(), "layer: application · may import: application, domain · path: svc/src/application/");
+        assert!(placement(&m, &styles, dir.path(), "svc").is_none());
+
+        let sc = scaffold_manifest(&m, &styles, dir.path(), "k").unwrap();
+        assert_eq!(sc.basename, "checkout_flow");
+        assert_eq!(sc.responsibilities, vec!["When paid, record it"]);
+        assert_eq!(sc.symbols.len(), 1);
+        assert_eq!(sc.symbols[0].kind, "type");
+        assert_eq!(sc.symbols[0].properties, vec!["id: order id"]);
+        assert!(!sc.symbols[0].anchored);
+        assert!(scaffold_manifest(&m, &styles, dir.path(), "svc").is_none());
     }
 
     #[test]

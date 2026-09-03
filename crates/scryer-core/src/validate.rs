@@ -686,7 +686,7 @@ fn check_unreached(model: &ScryModel, styles: &Styles) -> Vec<String> {
 /// Minimum component count before the file-listing signature is trusted.
 const FILE_LISTING_MIN_COMPONENTS: usize = 4;
 
-/// Rule 5's checkable proxy. Cohesion is not computable, but "one component
+/// Rule 7's checkable proxy. Cohesion is not computable, but "one component
 /// per file" has a signature that is: every anchored component in a container
 /// maps to exactly one file, and no file is shared between two of them. That
 /// is a directory listing wearing component names, not a decomposition.
@@ -729,7 +729,7 @@ fn check_file_listing(model: &ScryModel) -> Vec<String> {
         if one_each && distinct.len() == anchored.len() {
             warnings.push(format!(
                 "Container {} (\"{}\") reads as a file listing, not a decomposition: all {} anchored \
-                 components map to exactly one file each and no file is shared. Rule 5: cluster \
+                 components map to exactly one file each and no file is shared. Rule 7: cluster \
                  components from cohesion and the dependency graph, several files per component",
                 container.id,
                 container.name,

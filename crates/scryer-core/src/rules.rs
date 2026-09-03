@@ -413,6 +413,19 @@ One obligation is NEVER waived, because it is cheap only in the moment: if you c
         tags: &["descope", "delete", "delete_nodes", "remove", "boilerplate", "entry-point"],
         body: r#"`delete_nodes` is a forward modeling intent: the CODE the nodes model should go away. Descendants, connected links, and source-map entries go with them, and the deletion shows as pending until you remove the code and fold it with `mark_implemented`. `descope` is the model-only correction: the code is fine and stays untouched, it just shouldn't be modeled (an entry-point `main`, a trivial wrapper, generated boilerplate). Each target's own responsibilities relocate up to its parent component, keeping their anchors, so the parent still covers that code and no darkness appears; the node and its descendants are then removed from BOTH layers at once, so nothing enters the pending queue. Reach for `descope` when the model over-claims relative to code reality, `delete_nodes` when the code itself should go."#,
     },
+    Rule {
+        id: 52,
+        slug: "styles",
+        title: "Every container declares a style; every component carries one of its layers",
+        tags: &[
+            "style", "layer", "hexagonal", "feature-sliced", "core-shell", "pipeline",
+            "architecture", "import", "dependency", "placement", "path", "domain",
+            "application", "infrastructure", "presentation",
+        ],
+        body: r#"A style is the model's horizontal axis — the fixed vocabulary that says what KIND of thing a container is and what ROLE each component plays inside it, the way EARS fixes a claim's shape and a concern fixes a slug's meaning. Pick the style when you add the container: `hexagonal` for services, backends and library cores (layers presentation, infrastructure, application, domain); `feature-sliced` for SPAs, docs and static sites (app, pages, widgets, features, entities, shared); `core-shell` for CLIs, small libraries and script repos (shell, core); `pipeline` for ETL and dbt work (source, staging, intermediate, marts). There is no unstyled container. Give every component its layer when you add it — the tools reject a layer outside the style's list. Symbols inherit their component's layer.
+The style is enforced, not advised: `add_links` rejects a link the layer matrix forbids (in hexagonal: domain depends on nothing outside domain; application on domain; infrastructure on application and domain; presentation on application; never presentation ↔ infrastructure), a same-layer link between two components must be `kind: uses`, and a link entering a container from outside lands on its inbound layer (presentation or application; app or pages; shell). Health then checks the CODE the same way from the real import graph — a domain file importing an infrastructure file, a banned package (domain importing React or sqlx), a file sitting on another layer's path — and every such line is a real import or file to fix, never a judgment call.
+Placement is not yours to choose: `orient` and the read overlay give one line per file — its layer, what it may import, the directory its layer lives in. Put new files there. `scaffold` returns the manifest for a planned node (path, layer, symbols to define, layers it may import); materialise it in the project's own language and idiom, then anchor. Whether a component is REALLY domain or application stays your judgment: domain is the business model and its rules with no I/O and no framework; application is the use cases and the ports they expose; infrastructure is the adapters the application drives; presentation is what drives the application."#,
+    },
 ];
 
 /// The full ruleset as one numbered block — for AI-review prompts and any

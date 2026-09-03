@@ -493,6 +493,13 @@ pub(crate) struct ComponentItem {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ScaffoldRequest {
+    pub project: Option<String>,
+    /// A component (one manifest) or a container (one manifest per component under it).
+    pub node_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct AddComponentRequest {
     pub project: Option<String>,
     pub items: Vec<ComponentItem>,

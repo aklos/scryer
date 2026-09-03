@@ -210,6 +210,72 @@ fn validate_request(req: &CommitContainerModelRequest) -> Result<(), String> {
 #[tool_router(router = tool_router_generation, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
+        description = "The skeleton for a PLANNED component (or every component under a container) as \
+         data, never code: the directory its layer lives in, the layer, the only layers it may \
+         import, the symbols to define with their claims and fields, and the files already \
+         anchored there. Materialise it in the project's own language and idiom, then implement, \
+         anchor and attach tests (mark_implemented). Health flags a file outside the directory as \
+         `misplaced` and an import outside the allowed layers as a `layer_violation`.\n\
+         Rules: styles, loop-build"
+    )]
+    fn scaffold(
+        &self,
+        Parameters(req): Parameters<ScaffoldRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let committed = match scryer_core::read_model_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => return Ok(err(read_fail("model", &model_ref, &e))),
+        };
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap_or_else(|_| committed.clone());
+        let model = scryer_core::working_view(&committed, &planned);
+        let Some(node) = model.nodes.iter().find(|n| n.id == req.node_id) else {
+            return Ok(err(format!("Node '{}' not found", req.node_id)));
+        };
+        let targets: Vec<&str> = match node.kind {
+            Kind::Component => vec![node.id.as_str()],
+            Kind::Container => model
+                .nodes
+                .iter()
+                .filter(|n| n.kind == Kind::Component && n.parent_id.as_deref() == Some(node.id.as_str()))
+                .map(|n| n.id.as_str())
+                .collect(),
+            _ => {
+                return Ok(err(format!(
+                    "'{}' is a {} — scaffold takes a component or a container",
+                    node.name,
+                    kind_str(&node.kind)
+                )))
+            }
+        };
+        let styles = styles_for(&model_ref);
+        let mut manifests = Vec::new();
+        let mut skipped = Vec::new();
+        for id in targets {
+            match scryer_core::style::scaffold_manifest(&model, &styles, model_ref.project_path(), id) {
+                Some(m) => manifests.push(m),
+                None => skipped.push(id.to_string()),
+            }
+        }
+        if manifests.is_empty() {
+            return Ok(err(format!(
+                "Nothing to scaffold under '{}' — components need a layer and their container a style \
+                 (update_nodes {{style}} / {{layer}}); {} component(s) lack one",
+                node.name,
+                skipped.len()
+            )));
+        }
+        let payload = serde_json::json!({
+            "manifests": manifests,
+            "skipped": skipped,
+            "note": "Define each symbol in a file under `dir` (add the language's extension to `basename`); import only from `mayImport` layers; then mark_implemented with anchors and tests.",
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".into()),
+        )]))
+    }
+
+    #[tool(
         description = "GENERATION primitive: fill the complete component + symbol model for ONE existing \
          container in a single write. Components and symbols use request-local `key`s; the server \
          mints ids, wires code-level links from the dependency graph, validates, and writes both \
@@ -606,9 +672,23 @@ impl ScryerServer {
             );
         }
 
+        // Where each component's files belong by the style's convention, so
+        // the agent never chooses a directory.
+        let expected_dirs: serde_json::Map<String, serde_json::Value> = {
+            let styles = styles_for(&model_ref);
+            minted_components
+                .iter()
+                .filter_map(|id| {
+                    scryer_core::style::placement(&model, &styles, model_ref.project_path(), id)
+                        .and_then(|p| p.dir)
+                        .map(|d| (id.clone(), serde_json::Value::String(d)))
+                })
+                .collect()
+        };
         let payload = serde_json::json!({
             "containerId": req.container_id,
             "componentIds": minted_components,
+            "expectedDirs": expected_dirs,
             "components": req.components.len(),
             "symbols": minted_symbols,
             "links": req.links.len().saturating_sub(dropped_links.len()),
