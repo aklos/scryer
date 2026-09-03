@@ -90,9 +90,10 @@ export interface DiagramEdge {
   /** Styled mode: the drawing already says this (a step into the innermost
    *  layer, an adapter onto its port) — hidden until one end is selected. */
   implied: boolean;
-  /** Styled rings: both ends sit on one ring, so the chord would cut through
-   *  the centre — bow it outward, away from `(cx, cy)`, by `amount` px. */
-  bow?: { cx: number; cy: number; amount: number };
+  /** Styled mode: both ends sit on one ring or band, so the straight chord
+   *  would cut through what lies between — bow it away from `(cx, cy)`, the
+   *  curve's middle displaced `offset` px from the chord's midpoint. */
+  bow?: { cx: number; cy: number; offset: number };
   /** Styled mode: the layer matrix forbids this dependency — drawn red. */
   violation?: boolean;
 }
@@ -388,7 +389,14 @@ export async function buildDiagramScene(
       ghosts,
       edges,
     );
-    positions = laid.centers;
+    // The layout gives disc CENTRES; the dot node's origin is the disc's
+    // top-left, so each dot shifts by its own radius or big dots drift.
+    positions = new Map(
+      [...laid.centers].map(([id, c]) => {
+        const r = (sizeById.get(id) ?? MIN_DOT) / 2;
+        return [id, { x: c.x - r, y: c.y - r }];
+      }),
+    );
     regions = laid.regions;
   } else if (mode === "styled" && styleDef) {
     const members = children.map((c) => ({ id: c.id, layer: c.layer }));
@@ -404,18 +412,29 @@ export async function buildDiagramScene(
     const ringDrawing = styleDef.drawing === "rings" || styleDef.drawing === "hexagon";
     const innermost = styleDef.layers[styleDef.layers.length - 1]?.name;
     for (const e of edges) {
-      if (!layerById.has(e.source) || !layerById.has(e.target)) continue;
+      const sourceGhost = ghostIds.has(e.source), targetGhost = ghostIds.has(e.target);
       const sl = layerById.get(e.source), tl = layerById.get(e.target);
-      const verdict = classifyStyledEdge(styleDef, sl, tl);
+      const verdict = classifyStyledEdge(styleDef, sl, tl, { sourceGhost, targetGhost });
       e.implied = verdict === "implied";
       e.violation = verdict === "violation";
-      // A same-ring chord would cross the centre: bow it outward instead.
-      if (ringDrawing && sl && sl === tl && sl !== innermost) {
-        // Bow out to the ring itself, so the curve rides the ring the two
-        // cards sit on instead of crossing the layers inside it.
+      if (sourceGhost || targetGhost) continue;
+      // A same-layer chord crosses whatever sits between its ends — the
+      // centre on a ring, the neighbouring cards on a band. Bow it clear:
+      // out to the ring itself, or above the band (left of the column).
+      if (sl && sl === tl) {
         const sc = laid.centers.get(e.source), tc = laid.centers.get(e.target);
-        const ring = sc && tc ? (Math.hypot(sc.x, sc.y) + Math.hypot(tc.x, tc.y)) / 2 : 200;
-        e.bow = { cx: 0, cy: 0, amount: ring };
+        if (!sc || !tc) continue;
+        const mid = { x: (sc.x + tc.x) / 2, y: (sc.y + tc.y) / 2 };
+        if (ringDrawing && sl !== innermost) {
+          const ring = (Math.hypot(sc.x, sc.y) + Math.hypot(tc.x, tc.y)) / 2;
+          e.bow = { cx: 0, cy: 0, offset: Math.max(40, ring - Math.hypot(mid.x, mid.y)) };
+        } else if (!ringDrawing && Math.abs(styleDef.drawing === "columns" ? sc.y - tc.y : sc.x - tc.x) > CARD_W * 1.2) {
+          // Only when a card can sit between the ends (further apart than one pitch).
+          e.bow =
+            styleDef.drawing === "columns"
+              ? { cx: mid.x + 1e6, cy: mid.y, offset: CARD_W * 0.7 }
+              : { cx: mid.x, cy: mid.y + 1e6, offset: CARD_H * 0.75 };
+        }
       }
     }
   } else {

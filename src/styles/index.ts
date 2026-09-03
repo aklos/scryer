@@ -35,6 +35,8 @@ export interface StyleDef {
   isolation: Isolation;
   /** Layers a cross-container link may land on, outermost first. */
   inbound: string[];
+  /** Layers that may reach out of the container (the driven side). */
+  outbound?: string[];
   publicSurface: string[];
   externalBans?: Record<string, string[]>;
   path: { dirs?: Record<string, string[]>; markers?: Record<string, string[]> };

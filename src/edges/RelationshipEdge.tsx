@@ -34,7 +34,7 @@ export interface EdgeData extends Record<string, unknown> {
   parallel?: boolean;
   /** Bow the edge outward from a centre (styled rings: a same-ring chord
    *  would otherwise cut through the layers inside). */
-  bow?: { cx: number; cy: number; amount: number };
+  bow?: { cx: number; cy: number; offset: number };
   /** The style's layer matrix forbids this dependency — drawn red so the map
    *  exposes the code's disorder instead of tidying it away. */
   violation?: boolean;
@@ -100,9 +100,9 @@ export function RelationshipEdge({
       vx = -uy; vy = ux; vl = 1;
     }
     // A quadratic's midpoint sits halfway to its control point, so doubling
-    // puts the curve's middle exactly `amount` px from the centre.
-    cxp = mx + (vx / vl) * data.bow.amount * 2;
-    cyp = my + (vy / vl) * data.bow.amount * 2;
+    // displaces the curve's middle exactly `offset` px from the chord.
+    cxp = mx + (vx / vl) * data.bow.offset * 2;
+    cyp = my + (vy / vl) * data.bow.offset * 2;
   }
   const edgePath = data?.bow ? `M ${sx} ${sy} Q ${cxp} ${cyp} ${tx} ${ty}` : `M ${sx} ${sy} L ${tx} ${ty}`;
   // Hover handle sits at the lane midpoint (the curve's midpoint when bowed).

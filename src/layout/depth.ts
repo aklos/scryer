@@ -24,7 +24,10 @@ export interface DepthLayout {
   regions: LayerRegion[];
 }
 
-const ROW_PITCH = 120;
+const ROW_PITCH = 140;
+/** A band spans the disc and the two label lines beneath it. */
+const BAND_TOP = 44;
+const BAND_H = 118;
 const MIN_PITCH_X = 150;
 const BAND_PAD = 26;
 
@@ -115,9 +118,9 @@ export function depthLayout(members: DepthMember[], ghosts: string[], edges: Sty
         layer: caption,
         shape: "rect",
         x: -MIN_PITCH_X / 2 - BAND_PAD,
-        y: bi * ROW_PITCH - ROW_PITCH / 2,
+        y: bi * ROW_PITCH - BAND_TOP,
         w: span + MIN_PITCH_X + 2 * BAND_PAD,
-        h: ROW_PITCH,
+        h: BAND_H,
         ghost,
       });
     }

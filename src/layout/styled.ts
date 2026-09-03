@@ -404,8 +404,28 @@ export function classifyStyledEdge(
   def: StyleDef,
   sourceLayer: string | undefined,
   targetLayer: string | undefined,
+  /** Which end lives outside this container (a ghost). Traffic from outside
+   *  must enter on an inbound layer; traffic to the outside must leave from
+   *  an outbound (driven) layer. Both are implied when legal. */
+  ends: { sourceGhost?: boolean; targetGhost?: boolean } = {},
 ): "implied" | "violation" | "plain" {
-  if (!sourceLayer || !targetLayer || sourceLayer === targetLayer) return "plain";
+  if (ends.sourceGhost && ends.targetGhost) return "plain";
+  if (ends.sourceGhost) {
+    if (!targetLayer) return "plain";
+    return def.inbound.length === 0 || def.inbound.includes(targetLayer) ? "implied" : "violation";
+  }
+  if (ends.targetGhost) {
+    if (!sourceLayer) return "plain";
+    const out = def.outbound ?? [];
+    return out.length === 0 || out.includes(sourceLayer) ? "implied" : "violation";
+  }
+  if (!sourceLayer || !targetLayer) return "plain";
+  if (sourceLayer === targetLayer) {
+    // Siblings on a layer: normal traffic where the style allows it (the
+    // position says nothing about it, but drawing every one is a mesh), a
+    // violation where the style isolates slices.
+    return def.isolation === "strict" ? "violation" : "implied";
+  }
   const allowed = def.matrix[sourceLayer] ?? [];
   return allowed.includes(targetLayer) ? "implied" : "violation";
 }

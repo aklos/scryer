@@ -117,11 +117,19 @@ describe("classifyStyledEdge", () => {
     expect(classifyStyledEdge(hex, "presentation", "application")).toBe("implied");
     expect(classifyStyledEdge(fsd, "pages", "entities")).toBe("implied");
   });
-  it("a forbidden pair is a violation, a same-layer link is plain", () => {
+  it("a forbidden pair is a violation; same-layer is implied unless the style isolates", () => {
     expect(classifyStyledEdge(hex, "domain", "application")).toBe("violation");
     expect(classifyStyledEdge(hex, "presentation", "infrastructure")).toBe("violation");
     expect(classifyStyledEdge(fsd, "entities", "pages")).toBe("violation");
-    expect(classifyStyledEdge(hex, "application", "application")).toBe("plain");
+    expect(classifyStyledEdge(hex, "application", "application")).toBe("implied");
+    expect(classifyStyledEdge(fsd, "pages", "pages")).toBe("violation");
     expect(classifyStyledEdge(hex, undefined, "domain")).toBe("plain");
+  });
+  it("traffic across the container edge enters inbound and leaves outbound", () => {
+    expect(classifyStyledEdge(hex, undefined, "presentation", { sourceGhost: true })).toBe("implied");
+    expect(classifyStyledEdge(hex, undefined, "domain", { sourceGhost: true })).toBe("violation");
+    expect(classifyStyledEdge(hex, "infrastructure", undefined, { targetGhost: true })).toBe("implied");
+    expect(classifyStyledEdge(hex, "domain", undefined, { targetGhost: true })).toBe("violation");
+    expect(classifyStyledEdge(fsd, "shared", undefined, { targetGhost: true })).toBe("implied");
   });
 });

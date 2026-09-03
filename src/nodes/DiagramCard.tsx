@@ -45,6 +45,13 @@ function genState(pending?: boolean): "pending" | "live" | undefined {
   return pending === undefined ? undefined : pending ? "pending" : "live";
 }
 
+/** The C4 kind's accent hue — the conceptual anchor beside the silhouette. */
+const KIND_ACCENT: Partial<Record<DiagramNode["kind"], string>> = {
+  system: "bg-violet-400/70",
+  container: "bg-sky-400/70",
+  component: "bg-teal-400/70",
+};
+
 /** Card outline stroke per change mark — same palette as the tree gutter and
  *  the dots: A green, M/R amber (plan edits), D red, Q/X orange (drift),
  *  P violet (amended after sign-off). */
@@ -94,7 +101,7 @@ function Thumbnail({ t }: { t: NonNullable<DiagramNode["thumbnail"]> }) {
   for (const d of t.dots) grow(d.x - 90, d.y - 80), grow(d.x + 90, d.y + 80);
   if (!Number.isFinite(x0)) return null;
   const w = x1 - x0 || 1, h = y1 - y0 || 1;
-  const W = 52, H = 36;
+  const W = 48, H = 30;
   const s = Math.min(W / w, H / h);
   const ox = (W - w * s) / 2 - x0 * s, oy = (H - h * s) / 2 - y0 * s;
   const hex = (cx: number, cy: number, r: number) =>
@@ -259,15 +266,14 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
           </div>
         )}
 
-        {/* Style miniature, top-left: the real shape of this container's
-            inside once it has components, the style's glyph until then. */}
-        {node.style && !isGhost && (
+        {/* The C4 kind as the card's accent: a hue on the left edge, so the
+            level reads conceptually (system / container / component) while
+            the silhouette and thumbnail carry the visual anchor. */}
+        {!isGhost && KIND_ACCENT[node.kind] && (
           <div
-            className="pointer-events-auto absolute left-2 top-1.5 z-10 flex items-center gap-1 text-[9px] tracking-wider text-[var(--text-tertiary)]"
-            title={`style: ${node.style}`}
-          >
-            {node.thumbnail ? <Thumbnail t={node.thumbnail} /> : <StyleGlyph style={node.style} />}
-          </div>
+            className={`pointer-events-none absolute left-[3px] top-[18%] z-10 h-[64%] w-[3px] rounded-full ${KIND_ACCENT[node.kind]}`}
+            title={node.kind}
+          />
         )}
 
         {/* Direct-child count. */}
@@ -290,6 +296,17 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
                 card, so a paragraph-length technology or description can never
                 push the stack out of the shape (unclamped, the centered flex
                 overflowed BOTH ends — beheaded title, text under the icons). */}
+            {/* Style miniature above the name: the real shape of this
+                container's inside once it has components, the style's glyph
+                until then. In the flow, so it never sits on the hat. */}
+            {node.style && !isGhost && (
+              <div
+                className="mb-1 flex items-center justify-center text-[var(--text-tertiary)]"
+                title={`${node.style} — drill in to see its ${node.thumbnail ? "layers" : "shape"}`}
+              >
+                {node.thumbnail ? <Thumbnail t={node.thumbnail} /> : <StyleGlyph style={node.style} />}
+              </div>
+            )}
             {/* Layer tag: the fixed word that says what role this component
                 plays in its container's style. */}
             {node.layer && node.kind === "component" && (!data.styled || node.reference) && (

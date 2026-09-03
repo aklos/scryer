@@ -95,6 +95,11 @@ pub struct StyleDef {
     /// be reached by something (a use case nobody drives is dead).
     #[serde(default)]
     pub inbound: Vec<String>,
+    /// Layers that may reach OUT of the container (talk to other containers,
+    /// databases, external systems): the driven side. A dependency on the
+    /// outside from any other layer is a violation.
+    #[serde(default)]
+    pub outbound: Vec<String>,
     /// File basenames that count as a module's public entry point.
     #[serde(default)]
     pub public_surface: Vec<String>,
@@ -572,6 +577,7 @@ pub fn hexagonal() -> StyleDef {
         ]),
         isolation: Isolation::Inclusive,
         inbound: strs(&["presentation", "application"]),
+        outbound: strs(&["infrastructure"]),
         public_surface: strs(&["index.ts", "index.js", "mod.rs", "lib.rs", "__init__.py"]),
         external_bans: [("domain".to_string(), strs(IO_PACKAGES))].into_iter().collect(),
         path: PathConvention {
@@ -616,6 +622,7 @@ pub fn feature_sliced() -> StyleDef {
         ]),
         isolation: Isolation::Strict,
         inbound: strs(&["app", "pages"]),
+        outbound: strs(&["shared", "app"]),
         public_surface: strs(&["index.ts", "index.tsx", "index.js", "index.jsx"]),
         external_bans: BTreeMap::new(),
         path: PathConvention {
@@ -646,6 +653,7 @@ pub fn core_shell() -> StyleDef {
         matrix: matrix(&[("shell", &["shell", "core"]), ("core", &["core"])]),
         isolation: Isolation::Inclusive,
         inbound: strs(&["shell"]),
+        outbound: strs(&["shell"]),
         public_surface: strs(&["index.ts", "index.js", "mod.rs", "lib.rs", "__init__.py"]),
         external_bans: [("core".to_string(), strs(IO_PACKAGES))].into_iter().collect(),
         path: PathConvention {
@@ -678,6 +686,7 @@ pub fn pipeline() -> StyleDef {
         ]),
         isolation: Isolation::Inclusive,
         inbound: strs(&["marts"]),
+        outbound: strs(&["source"]),
         public_surface: Vec::new(),
         external_bans: BTreeMap::new(),
         path: PathConvention {
@@ -710,8 +719,8 @@ mod tests {
                     assert!(s.has_layer(to), "{}: '{from}' → '{to}' names no layer", s.name);
                 }
             }
-            for l in &s.inbound {
-                assert!(s.has_layer(l), "{}: inbound '{l}' is not a layer", s.name);
+            for l in s.inbound.iter().chain(&s.outbound) {
+                assert!(s.has_layer(l), "{}: inbound/outbound '{l}' is not a layer", s.name);
             }
             for (l, _) in &s.path.dirs {
                 assert!(s.has_layer(l), "{}: path dir key '{l}' is not a layer", s.name);

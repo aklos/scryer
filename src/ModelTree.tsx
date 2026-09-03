@@ -29,6 +29,28 @@ import {
 } from "./changeMarks";
 import { kindIcon } from "./kindIcon";
 import { StyleGlyph } from "./styles/StyleGlyph";
+import { styleTable } from "./styles";
+
+/** What a style or a layer IS, for the tree's tooltips — the built-in
+ *  table (custom styles fall back to their name). */
+const STYLE_TABLE = styleTable(null);
+function styleTip(style: string): string {
+  const def = STYLE_TABLE.get(style);
+  return def ? `${def.name} — ${def.description}` : style;
+}
+function layerTip(model: ScryModel, nodeId: string, layer: string): string {
+  const byId = new Map(model.nodes.map((n) => [n.id, n]));
+  let cur = byId.get(nodeId);
+  let style: string | undefined;
+  while (cur && !style) {
+    if (cur.style) style = cur.style;
+    cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+  }
+  const def = style ? STYLE_TABLE.get(style) : undefined;
+  const l = def?.layers.find((x) => x.name === layer);
+  const may = def?.matrix[layer]?.join(", ");
+  return l ? `${layer} — ${l.description}${may ? `\nmay import: ${may}` : ""}` : layer;
+}
 import { lookupIcon } from "./IconPicker";
 import { BTN, EYEBROW, NAME_MAX, sanitizeIdentifier } from "./pagekit";
 import { InlineText } from "./InlineText";
@@ -784,7 +806,7 @@ export function ModelTree({
         {/* A styled container's icon IS its style — the shape you will see
             when you drill in — unless the user picked an icon. */}
         {node.kind === "container" && node.style && !node.icon ? (
-          <span className={`ml-1.5 flex h-3.5 w-3.5 shrink-0 items-center ${ICON_COLOR}`} title={`style: ${node.style}`}>
+          <span className={`ml-1.5 flex h-3.5 w-3.5 shrink-0 items-center ${ICON_COLOR}`} title={styleTip(node.style)}>
             <StyleGlyph style={node.style} />
           </span>
         ) : (
@@ -839,7 +861,7 @@ export function ModelTree({
         {node.kind === "component" && node.layer && (
           <span
             className="ml-1.5 shrink-0 rounded border border-[var(--border-subtle)] px-1 text-[9px] uppercase tracking-wider text-[var(--text-ghost)]"
-            title={`layer: ${node.layer}`}
+            title={layerTip(model, node.id, node.layer)}
           >
             {node.layer.slice(0, 4)}
           </span>

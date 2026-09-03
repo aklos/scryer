@@ -38,6 +38,7 @@ function bounds(regions: LayerRegion[]): { x: number; y: number; w: number; h: n
 export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
   if (regions.length === 0) return null;
   const b = bounds(regions);
+  let hexSeen = 0;
   return (
     <ViewportPortal>
       <div
@@ -58,25 +59,45 @@ export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
                   strokeWidth: 1,
                   strokeDasharray: "4 4",
                 };
-            // The layer's one line rides beside its name, muted: the map
-            // explains its own vocabulary where the reader is looking.
-            const caption = r.caption ? (
-              <tspan fill="var(--text-ghost)" fontWeight={400} letterSpacing={0.2} opacity={0.8}>
-                {"  ·  "}{r.caption}
+            // The layer's one line rides beside its name, muted. Long lines
+            // show their first clause with a dotted underline — the cue that
+            // the full text is a hover away (an SVG <title>).
+            const full = r.caption ?? "";
+            const clause = full.split(/[:;—]/)[0].trim();
+            const short = full.length > 60 && clause.length < full.length ? clause : full.length > 60 ? full.slice(0, 57).trimEnd() + "…" : full;
+            const truncated = short !== full;
+            const caption = full ? (
+              <tspan
+                fill="var(--text-ghost)"
+                fontWeight={400}
+                letterSpacing={0.2}
+                opacity={0.8}
+                textDecoration={truncated ? "underline" : undefined}
+                style={truncated ? { textDecorationStyle: "dotted", textUnderlineOffset: 3 } : undefined}
+              >
+                {"  ·  "}{short}
               </tspan>
             ) : null;
-            // Ring and hex labels sit at a vertex with a card close by, so
-            // their caption takes a short second line instead of running on.
-            const short = r.caption && r.caption.length > 56 ? r.caption.slice(0, 54).trimEnd() + "…" : r.caption;
+            const tip = full ? <title>{`${r.layer}: ${full}`}</title> : null;
             const captionBelow = (x: number, y: number, anchor: "middle" | "start") =>
-              short ? (
-                <text x={x} y={y + 13} textAnchor={anchor} fontSize={9} fill="var(--text-ghost)" opacity={0.75}>
+              full ? (
+                <text
+                  x={x}
+                  y={y + 13}
+                  textAnchor={anchor}
+                  fontSize={9}
+                  fill="var(--text-ghost)"
+                  opacity={0.75}
+                  textDecoration={truncated ? "underline" : undefined}
+                  style={truncated ? { textDecorationStyle: "dotted", textUnderlineOffset: 3 } : undefined}
+                >
                   {short}
                 </text>
               ) : null;
             if (r.shape === "rect") {
               return (
-                <g key={i}>
+                <g key={i} className="pointer-events-auto">
+                  {tip}
                   <rect x={r.x} y={r.y} width={r.w} height={r.h} rx={12} {...common} />
                   <text
                     x={r.x + 14}
@@ -94,7 +115,8 @@ export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
             }
             if (r.shape === "ring") {
               return (
-                <g key={i}>
+                <g key={i} className="pointer-events-auto">
+                  {tip}
                   <circle cx={r.cx} cy={r.cy} r={r.r} {...common} />
                   <text
                     x={r.cx}
@@ -111,14 +133,20 @@ export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
                 </g>
               );
             }
+            // Hexagons: the ring cards sit on the top and bottom edges, so the
+            // innermost label goes to its bottom edge (below the centre card)
+            // and outer labels to the left vertex, reading inward.
+            const inner = hexSeen++ === 0;
+            const lx = inner ? r.cx : r.cx - r.r * 0.92;
+            const ly = inner ? r.cy + r.r * 0.866 - 20 : r.cy - 6;
             return (
-              <g key={i}>
+              <g key={i} className="pointer-events-auto">
+                {tip}
                 <polygon points={hexPoints(r.cx, r.cy, r.r)} {...common} strokeDasharray={undefined} />
-                {/* Upper-left vertex: the top edge is where the first ring card sits. */}
                 <text
-                  x={r.cx + r.r * Math.cos((-2 * Math.PI) / 3) * 0.72}
-                  y={r.cy + r.r * Math.sin((-2 * Math.PI) / 3) * 0.72 + 4}
-                  textAnchor="middle"
+                  x={lx}
+                  y={ly}
+                  textAnchor={inner ? "middle" : "start"}
                   fontSize={10}
                   letterSpacing={1.5}
                   fill="var(--text-ghost)"
@@ -126,11 +154,7 @@ export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
                 >
                   {label}
                 </text>
-                {captionBelow(
-                  r.cx + r.r * Math.cos((-2 * Math.PI) / 3) * 0.72,
-                  r.cy + r.r * Math.sin((-2 * Math.PI) / 3) * 0.72 + 4,
-                  "middle",
-                )}
+                {captionBelow(lx, ly, inner ? "middle" : "start")}
               </g>
             );
           })}
