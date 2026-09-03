@@ -1271,7 +1271,7 @@ fn is_valid_identifier(s: &str, allow_upper_start: bool) -> bool {
 
 #[cfg(test)]
 mod style_tests {
-    use super::check_styles;
+    use super::{check_conformance, check_styles};
     use crate::style::Styles;
     use crate::{Link, Node, ScryModel};
 
