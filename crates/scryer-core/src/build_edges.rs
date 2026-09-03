@@ -339,6 +339,8 @@ mod tests {
 
     fn node(id: &str, kind: Kind, parent: Option<&str>) -> Node {
         Node {
+            style: None,
+            layer: None,
             id: id.into(),
             kind,
             name: id.into(),
@@ -389,6 +391,7 @@ mod tests {
         anchor(&mut m, "syma2", "a/src/z.ts", "zed");
         anchor(&mut m, "symb", "b/src/y.ts", "thing");
         m.links.push(Link {
+            kind: None,
             id: "link-1".into(),
             src: "ca".into(),
             dst: "cb".into(),
@@ -396,6 +399,7 @@ mod tests {
             method: None,
         });
         m.links.push(Link {
+            kind: None,
             id: "link-2".into(),
             src: "cb".into(),
             dst: "ca".into(),
@@ -539,6 +543,7 @@ mod tests {
         m.nodes.push(sa);
         m.nodes.push(node("symb", Kind::Symbol, Some("sys")));
         m.links.push(Link {
+            kind: None,
             id: "link-1".into(),
             src: "syma".into(),
             dst: "symb".into(),

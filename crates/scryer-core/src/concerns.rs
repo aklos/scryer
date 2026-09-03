@@ -184,6 +184,8 @@ mod tests {
     fn model_with(resps: Vec<Responsibility>) -> ScryModel {
         let mut m = ScryModel::default();
         m.nodes.push(Node {
+            style: None,
+            layer: None,
             id: "n1".into(),
             kind: Kind::Component,
             name: "N".into(),

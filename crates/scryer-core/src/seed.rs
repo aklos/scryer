@@ -139,6 +139,7 @@ pub fn mint_initial_structure(
             if src != dst && !exists {
                 let id = next_link_id(model);
                 model.links.push(Link {
+                    kind: None,
                     id,
                     src: src.to_string(),
                     dst: dst.to_string(),

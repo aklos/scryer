@@ -898,6 +898,8 @@ mod tests {
     fn leaf_model(anchor_symbol: &str, file: &str, line: u32, end: u32) -> ScryModel {
         let mut m = ScryModel::new();
         m.nodes.push(Node {
+            style: None,
+            layer: None,
             id: "sym".into(),
             kind: Kind::Symbol,
             name: anchor_symbol.into(),

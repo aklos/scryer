@@ -713,6 +713,8 @@ mod tests {
         let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
         let mut m = ScryModel::new();
         m.nodes.push(Node {
+            style: None,
+            layer: None,
             id: "sym".into(),
             kind: Kind::Symbol,
             name: "alpha".into(),

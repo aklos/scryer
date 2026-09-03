@@ -675,6 +675,8 @@ mod tests {
 
     fn node(id: &str, name: &str, parent: Option<&str>) -> Node {
         Node {
+            style: None,
+            layer: None,
             id: id.to_string(),
             kind: Kind::Component,
             name: name.to_string(),
@@ -710,6 +712,7 @@ mod tests {
 
     fn link(id: &str, src: &str, dst: &str) -> Link {
         Link {
+            kind: None,
             id: id.to_string(),
             src: src.to_string(),
             dst: dst.to_string(),

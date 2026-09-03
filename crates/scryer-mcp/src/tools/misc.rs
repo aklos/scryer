@@ -911,6 +911,8 @@ mod tests {
 
     fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
         Node {
+            style: None,
+            layer: None,
             id: id.into(),
             kind,
             name: name.into(),

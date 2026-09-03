@@ -523,8 +523,10 @@ mod tests {
             Kind::Component => "component",
             Kind::Symbol => "symbol",
         };
+        // Every container declares a style; the fixtures use the smallest one.
+        let style = (kind == Kind::Container).then_some("core-shell");
         serde_json::from_value(serde_json::json!({
-            "id": id, "kind": kind_str, "name": name, "parentId": parent,
+            "id": id, "kind": kind_str, "name": name, "parentId": parent, "style": style,
         }))
         .unwrap()
     }
@@ -630,6 +632,7 @@ mod tests {
         let mut plan = m.clone();
         plan.nodes.push(node("worker", Kind::Container, "Worker", Some("sys")));
         plan.links.push(scryer_core::Link {
+            kind: None,
             id: "l-1".into(),
             src: "api".into(),
             dst: "worker".into(),

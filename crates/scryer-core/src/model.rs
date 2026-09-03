@@ -256,6 +256,21 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(skip)]
     pub directives: Vec<String>,
+    /// The architectural style governing this node's subtree — the horizontal
+    /// axis. REQUIRED on every container (validation flags a missing one; there
+    /// is no `none`). A component may set it to override its container's
+    /// style for its own subtree. Must name a style in [`crate::style::Styles`]
+    /// (`hexagonal`, `feature-sliced`, `core-shell`, `pipeline`, or a project
+    /// file under `.scryer/styles/`). Absent on person, system and symbol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+    /// The layer this component plays inside its governing style — a fixed
+    /// tag from the style's layer list, like a concern on a claim but REQUIRED.
+    /// Set on components only; symbols inherit it (see
+    /// [`crate::style::layer_of`]). The map, the link legality matrix and the
+    /// import checks all read from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<String>,
 }
 
 /// The `empty` flag — a SYMBOL that carries no semantic content of its own: no
@@ -309,6 +324,34 @@ pub fn inherited_directives(model: &ScryModel, node_id: &str) -> Vec<InheritedDi
     out
 }
 
+/// What a link between two styled nodes IS. Free-text `label` stays for the
+/// C4 prose a system or container diagram wants ("reads and writes the model
+/// via"); inside a styled container the kind is the meaning and the label is
+/// optional decoration.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum LinkKind {
+    /// An adapter realises a port: infrastructure → the application interface it fulfils.
+    Implements,
+    /// A synchronous call into another node's public surface.
+    Calls,
+    /// A same-layer sibling reached through its public surface.
+    Uses,
+    /// A dependency on a type or value (an import that is not a call).
+    Depends,
+}
+
+impl LinkKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LinkKind::Implements => "implements",
+            LinkKind::Calls => "calls",
+            LinkKind::Uses => "uses",
+            LinkKind::Depends => "depends",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Link {
     pub id: String,
@@ -318,6 +361,11 @@ pub struct Link {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
+    /// Required on any link whose endpoints both sit inside styled containers
+    /// (component or symbol level); validation flags a missing one. Optional
+    /// prose-only links remain legal at system and container level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<LinkKind>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -489,6 +537,8 @@ mod tests {
             notes: None,
             position: None,
             directives: Vec::new(),
+            style: None,
+            layer: None,
         }
     }
 

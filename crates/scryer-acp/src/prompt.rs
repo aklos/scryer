@@ -360,6 +360,8 @@ mod tests {
 
     fn node(id: &str, kind: Kind, parent: Option<&str>, resp: Option<&str>) -> Node {
         Node {
+            style: None,
+            layer: None,
             id: id.into(),
             kind,
             name: id.into(),

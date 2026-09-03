@@ -1,3 +1,4 @@
+use crate::style::{self, Styles};
 use crate::{Kind, ScryModel};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -42,8 +43,15 @@ pub fn node_field_warnings(n: &crate::Node) -> Vec<String> {
     warnings
 }
 
-/// Run structural validation. Returns a list of human-readable warnings.
+/// Run structural validation against the built-in styles only. Returns a
+/// list of human-readable warnings. Callers with a project path should prefer
+/// [`validate_with`] so custom styles under `.scryer/styles/` are honoured.
 pub fn validate(model: &ScryModel) -> Vec<String> {
+    validate_with(model, &Styles::builtin())
+}
+
+/// Run structural validation with the given style table.
+pub fn validate_with(model: &ScryModel, styles: &Styles) -> Vec<String> {
     let mut warnings: Vec<String> = Vec::new();
 
     let node_ids: HashSet<&str> = model.nodes.iter().map(|n| n.id.as_str()).collect();
@@ -355,6 +363,7 @@ pub fn validate(model: &ScryModel) -> Vec<String> {
     }
 
     warnings.extend(check_disconnected(model));
+    warnings.extend(check_styles(model, styles));
 
     // The same fact must never cost two lines: every duplicated warning teaches
     // the reader to skim, and a skimmed gate is no gate.
@@ -459,6 +468,109 @@ pub fn structural_violations(model: &ScryModel) -> Vec<String> {
     let mut seen: HashSet<String> = HashSet::new();
     out.retain(|w| seen.insert(w.clone()));
     out
+}
+
+/// The horizontal axis: every non-external container declares a style, every
+/// component under a styled container carries one of that style's layers, and
+/// every link between styled nodes says what kind of link it is. Membership is
+/// checked here so a typo never reaches the matrix; legality of the pairs is
+/// [`link_violation`]'s job.
+pub fn check_styles(model: &ScryModel, styles: &Styles) -> Vec<String> {
+    let mut warnings: Vec<String> = Vec::new();
+    let style_names = styles.names().join(", ");
+
+    for n in &model.nodes {
+        match n.kind {
+            Kind::Container => {
+                if n.external == Some(true) {
+                    continue;
+                }
+                match n.style.as_deref() {
+                    None => warnings.push(format!(
+                        "Container {} (\"{}\") has no style — every container declares one \
+                         ({style_names}); set it with update_nodes {{style}}",
+                        n.id, n.name
+                    )),
+                    Some(s) if styles.get(s).is_none() => warnings.push(format!(
+                        "Container {} (\"{}\") has unknown style '{}' — known styles: {style_names}",
+                        n.id, n.name, s
+                    )),
+                    _ => {}
+                }
+                if n.layer.is_some() {
+                    warnings.push(format!(
+                        "Container {} (\"{}\") carries a layer — layers belong on components only",
+                        n.id, n.name
+                    ));
+                }
+            }
+            Kind::Component => {
+                if let Some(s) = n.style.as_deref() {
+                    if styles.get(s).is_none() {
+                        warnings.push(format!(
+                            "Component {} (\"{}\") has unknown style '{}' — known styles: {style_names}",
+                            n.id, n.name, s
+                        ));
+                    }
+                }
+                // Without a governing style the container warning above already
+                // says what to fix; a second line per component adds nothing.
+                let Some(def) = style::governing_style(model, &n.id).and_then(|s| styles.get(s)) else {
+                    continue;
+                };
+                let layer_names = def.layer_names().join(", ");
+                match n.layer.as_deref() {
+                    None => warnings.push(format!(
+                        "Component {} (\"{}\") has no layer — its style '{}' needs one of: {layer_names}; \
+                         set it with update_nodes {{layer}}",
+                        n.id, n.name, def.name
+                    )),
+                    Some(l) if !def.has_layer(l) => warnings.push(format!(
+                        "Component {} (\"{}\") has layer '{}', which is not in style '{}' ({layer_names})",
+                        n.id, n.name, l, def.name
+                    )),
+                    _ => {}
+                }
+            }
+            Kind::Person | Kind::System | Kind::Symbol => {
+                if n.style.is_some() {
+                    warnings.push(format!(
+                        "{} {} (\"{}\") carries a style — styles belong on containers (or a component overriding its container)",
+                        kind_name(&n.kind), n.id, n.name
+                    ));
+                }
+                if n.layer.is_some() {
+                    warnings.push(format!(
+                        "{} {} (\"{}\") carries a layer — layers belong on components only; symbols inherit theirs",
+                        kind_name(&n.kind), n.id, n.name
+                    ));
+                }
+            }
+        }
+    }
+
+    // Links between two styled nodes (component or symbol level under a
+    // container that declares a style) carry a kind. Prose-only links stay
+    // legal at system and container level.
+    let styled = |id: &str| {
+        matches!(
+            model.nodes.iter().find(|n| n.id == id).map(|n| n.kind),
+            Some(Kind::Component | Kind::Symbol)
+        ) && style::governing_style(model, id).is_some()
+    };
+    for l in &model.links {
+        if l.kind.is_none() && styled(&l.src) && styled(&l.dst) {
+            warnings.push(format!(
+                "Link {} ({} → {}) has no kind — links inside a styled container say what they are: \
+                 implements | calls | uses | depends (update_links {{kind}})",
+                l.id,
+                name_of(model, &l.src),
+                name_of(model, &l.dst)
+            ));
+        }
+    }
+
+    warnings
 }
 
 /// Per-level connectivity (the C4 "same level of abstraction" rule). Each C4
@@ -968,6 +1080,100 @@ fn is_valid_identifier(s: &str, allow_upper_start: bool) -> bool {
         }
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+#[cfg(test)]
+mod style_tests {
+    use super::check_styles;
+    use crate::style::Styles;
+    use crate::{Link, Node, ScryModel};
+
+    fn validate(m: &ScryModel) -> Vec<String> {
+        check_styles(m, &Styles::builtin())
+    }
+
+    fn node(v: serde_json::Value) -> Node {
+        serde_json::from_value(v).unwrap()
+    }
+
+    fn model(nodes: Vec<serde_json::Value>) -> ScryModel {
+        let mut m = ScryModel::new();
+        m.nodes = nodes.into_iter().map(node).collect();
+        m
+    }
+
+    /// A container with no style, an unknown style, a component with no layer
+    /// or a layer outside its style's list — each is one warning naming the fix.
+    #[test]
+    fn style_and_layer_membership_are_flagged() {
+        let m = model(vec![
+            serde_json::json!({ "id": "sys", "kind": "system", "name": "S" }),
+            serde_json::json!({ "id": "c1", "kind": "container", "name": "Bare", "parentId": "sys" }),
+            serde_json::json!({ "id": "c2", "kind": "container", "name": "Odd", "parentId": "sys", "style": "onion" }),
+            serde_json::json!({ "id": "c3", "kind": "container", "name": "Hex", "parentId": "sys", "style": "hexagonal" }),
+            serde_json::json!({ "id": "k1", "kind": "component", "name": "NoLayer", "parentId": "c3" }),
+            serde_json::json!({ "id": "k2", "kind": "component", "name": "BadLayer", "parentId": "c3", "layer": "pages" }),
+            serde_json::json!({ "id": "k3", "kind": "component", "name": "Fine", "parentId": "c3", "layer": "domain" }),
+            serde_json::json!({ "id": "k4", "kind": "component", "name": "Unchecked", "parentId": "c1" }),
+        ]);
+        let w = validate(&m);
+        let hit = |needle: &str| w.iter().any(|x| x.contains(needle));
+        assert!(hit("Container c1 (\"Bare\") has no style"), "{w:?}");
+        assert!(hit("Container c2 (\"Odd\") has unknown style 'onion'"), "{w:?}");
+        assert!(hit("Component k1 (\"NoLayer\") has no layer"), "{w:?}");
+        assert!(hit("Component k2 (\"BadLayer\") has layer 'pages', which is not in style 'hexagonal'"), "{w:?}");
+        assert!(!hit("Fine"), "a member layer is silent: {w:?}");
+        // Under an unstyled container the container line is the whole story.
+        assert!(!hit("Unchecked"), "{w:?}");
+    }
+
+    /// External containers own no code and need no style; style on a symbol or
+    /// layer on a container is misplaced.
+    #[test]
+    fn misplaced_tags_and_external_containers() {
+        let m = model(vec![
+            serde_json::json!({ "id": "sys", "kind": "system", "name": "S" }),
+            serde_json::json!({ "id": "ext", "kind": "container", "name": "Stripe", "parentId": "sys", "external": true }),
+            serde_json::json!({ "id": "c", "kind": "container", "name": "App", "parentId": "sys", "style": "core-shell", "layer": "core" }),
+            serde_json::json!({ "id": "k", "kind": "component", "name": "K", "parentId": "c", "layer": "core" }),
+            serde_json::json!({ "id": "y", "kind": "symbol", "name": "y", "parentId": "k", "layer": "core",
+                                 "responsibilities": [{ "id": "r1", "statement": "does x" }] }),
+        ]);
+        let w = validate(&m);
+        assert!(!w.iter().any(|x| x.contains("Stripe")), "{w:?}");
+        assert!(w.iter().any(|x| x.contains("Container c (\"App\") carries a layer")), "{w:?}");
+        assert!(w.iter().any(|x| x.contains("symbol y (\"y\") carries a layer")), "{w:?}");
+    }
+
+    /// Inside a styled container every link says what it is; a container-level
+    /// prose link does not have to.
+    #[test]
+    fn links_between_styled_nodes_need_a_kind() {
+        let mut m = model(vec![
+            serde_json::json!({ "id": "sys", "kind": "system", "name": "S" }),
+            serde_json::json!({ "id": "c", "kind": "container", "name": "App", "parentId": "sys", "style": "core-shell" }),
+            serde_json::json!({ "id": "d", "kind": "container", "name": "Db", "parentId": "sys", "style": "core-shell" }),
+            serde_json::json!({ "id": "k1", "kind": "component", "name": "Cli", "parentId": "c", "layer": "shell" }),
+            serde_json::json!({ "id": "k2", "kind": "component", "name": "Engine", "parentId": "c", "layer": "core" }),
+        ]);
+        let link = |id: &str, src: &str, dst: &str, kind| Link {
+            id: id.into(),
+            src: src.into(),
+            dst: dst.into(),
+            label: "uses".into(),
+            method: None,
+            kind,
+        };
+        m.links = vec![
+            link("l1", "c", "d", None),
+            link("l2", "k1", "k2", None),
+            link("l3", "k2", "k1", Some(crate::LinkKind::Calls)),
+        ];
+        let w = validate(&m);
+        assert!(w.iter().any(|x| x.contains("Link l2 (Cli → Engine) has no kind")), "{w:?}");
+        assert!(!w.iter().any(|x| x.contains("Link l1")), "{w:?}");
+        assert!(!w.iter().any(|x| x.contains("Link l3") && x.contains("kind")), "{w:?}");
+    }
 }
 
 #[cfg(test)]

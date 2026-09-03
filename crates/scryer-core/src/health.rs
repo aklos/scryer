@@ -722,6 +722,8 @@ mod tests {
 
     fn node(id: &str, kind: Kind, parent: Option<&str>) -> Node {
         Node {
+            style: None,
+            layer: None,
             id: id.into(),
             kind,
             name: id.into(),
@@ -1207,6 +1209,7 @@ mod tests {
         m.nodes.push(node("worker", Kind::Container, Some("sys"))); // wired to nothing
         m.nodes.push(node("fn", Kind::Symbol, Some("api"))); // symbol: exempt
         m.links.push(crate::Link {
+            kind: None,
             id: "l1".into(),
             src: "sys".into(),
             dst: "api".into(),

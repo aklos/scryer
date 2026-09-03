@@ -398,6 +398,8 @@ mod tests {
 
     fn node(id: &str, name: &str, kind: Kind) -> Node {
         Node {
+            style: None,
+            layer: None,
             id: id.into(),
             kind,
             name: name.into(),

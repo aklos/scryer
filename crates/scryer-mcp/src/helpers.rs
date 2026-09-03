@@ -1,7 +1,13 @@
 use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
 use scryer_core::history::{append_event, EventRow, HistoryEvent};
+use scryer_core::style::Styles;
 use scryer_core::{Kind, ModelLock, ModelRef, Node, Responsibility, ScryModel};
+
+/// The style table for a project: built-ins plus `.scryer/styles/*.json`.
+pub(crate) fn styles_for(model_ref: &ModelRef) -> Styles {
+    Styles::load(model_ref.project_path())
+}
 use std::collections::HashMap;
 
 /// Acquire the exclusive model write lock, or return an error result to surface

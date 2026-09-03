@@ -1113,6 +1113,7 @@ mod tests {
         let mut planned = read_planned_at(&r).unwrap();
         planned.nodes.push(mk_node("b", "B", None));
         planned.links.push(Link {
+            kind: None,
             id: "link-a-b".into(),
             src: "a".into(),
             dst: "b".into(),
@@ -1289,6 +1290,8 @@ mod tests {
 
     fn mk_node(id: &str, name: &str, parent: Option<&str>) -> Node {
         Node {
+            style: None,
+            layer: None,
             id: id.into(),
             kind: Kind::Component,
             name: name.into(),
@@ -1384,6 +1387,7 @@ mod tests {
         m.nodes.push(c);
         m.nodes.push(mk_node("keep", "Keep", None));
         m.links.push(Link {
+            kind: None,
             id: "l1".into(),
             src: "c".into(),
             dst: "keep".into(),
@@ -1770,6 +1774,7 @@ mod tests {
         planned.nodes.push(mk_node("a", "A", None));
         planned.nodes.push(mk_node("b", "B", None));
         planned.links.push(Link {
+            kind: None,
             id: "l1".into(),
             src: "a".into(),
             dst: "b".into(),

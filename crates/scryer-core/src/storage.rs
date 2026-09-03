@@ -530,6 +530,8 @@ mod tests {
     fn one_resp_model(statement: &str) -> ScryModel {
         let mut m = ScryModel::new();
         m.nodes.push(Node {
+            style: None,
+            layer: None,
             id: "n1".into(),
             kind: Kind::Component,
             name: "C".into(),
@@ -854,6 +856,8 @@ mod tests {
         for i in 0..40 {
             let id = format!("node-{i}");
             m.nodes.push(Node {
+                style: None,
+                layer: None,
                 id: id.clone(),
                 kind: Kind::Component,
                 name: format!("n{i}"),
@@ -911,6 +915,8 @@ mod tests {
                     let mut m = read_model_at(&r).unwrap();
                     let id = next_node_id(&m);
                     let node = Node {
+                        style: None,
+                        layer: None,
                         id,
                         kind: Kind::System,
                         name: format!("n{i}"),
@@ -947,6 +953,8 @@ mod tests {
         let (_dir, r) = temp_ref();
         let mut m = ScryModel::new();
         m.nodes.push(Node {
+            style: None,
+            layer: None,
             id: "n1".into(),
             kind: Kind::System,
             name: "Auth".into(),
@@ -972,6 +980,8 @@ mod tests {
         ensure_planned_at(&r).unwrap();
         let mut planned = read_planned_at(&r).unwrap();
         planned.nodes.push(Node {
+            style: None,
+            layer: None,
             id: "n2".into(),
             kind: Kind::System,
             name: "Billing".into(),
@@ -998,6 +1008,8 @@ mod tests {
 
     fn mk_node(id: &str, name: &str, parent: Option<&str>) -> Node {
         Node {
+            style: None,
+            layer: None,
             id: id.into(),
             kind: Kind::Component,
             name: name.into(),

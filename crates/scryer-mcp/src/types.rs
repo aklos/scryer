@@ -263,6 +263,10 @@ pub(crate) struct UpdateNodeItem {
     pub technology: Option<String>,
     /// Pass false to clear the external marking.
     pub external: Option<bool>,
+    /// Architectural style (containers; a component may override its container's). Must name a known style; empty string clears.
+    pub style: Option<String>,
+    /// Layer tag (components only), one of the governing style's layer names; empty string clears.
+    pub layer: Option<String>,
     /// Full replacement of responsibilities; empty clears. Vagrant claims survive omission.
     pub responsibilities: Option<Vec<Responsibility>>,
     /// Full replacement of a data-shape symbol's fields; empty clears.
@@ -328,6 +332,8 @@ pub(crate) struct AddLinkItem {
     pub label: String,
     /// Method/protocol annotation, e.g. REST/JSON.
     pub method: Option<String>,
+    /// What the link IS — required when both endpoints sit inside styled containers (component/symbol level): `implements` (adapter → the port it realises), `calls` (into another node's public surface), `uses` (a same-layer sibling through its public surface), `depends` (a type/value import). Optional for system- and container-level prose links.
+    pub kind: Option<scryer_core::LinkKind>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -341,6 +347,8 @@ pub(crate) struct UpdateLinkItem {
     pub link_id: String,
     pub label: Option<String>,
     pub method: Option<String>,
+    /// Link kind: implements | calls | uses | depends.
+    pub kind: Option<scryer_core::LinkKind>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -454,6 +462,8 @@ pub(crate) struct ContainerItem {
     /// What it IS as software, a short badge (e.g. PostgreSQL 16).
     pub technology: Option<String>,
     pub description: Option<String>,
+    /// The architectural style governing this container's components — REQUIRED (there is no `none`; an external container may pass any style, it is ignored). One of `hexagonal` (services, backends, library cores), `feature-sliced` (SPAs, docs and static sites), `core-shell` (CLIs, small libraries, scripts), `pipeline` (ETL, dbt), or a project style under `.scryer/styles/`. Every component added under it must carry one of the style's layers.
+    pub style: String,
     /// true for an external/third-party container.
     #[serde(default)]
     pub external: bool,
@@ -474,6 +484,8 @@ pub(crate) struct AddContainerRequest {
 pub(crate) struct ComponentItem {
     pub parent_id: String,
     pub name: String,
+    /// The layer this component plays in its container's style — REQUIRED, one of the style's layer names (hexagonal: presentation | infrastructure | application | domain; feature-sliced: app | pages | widgets | features | entities | shared; core-shell: shell | core; pipeline: source | staging | intermediate | marts). Rejected if the container has no style or the layer is not in its list.
+    pub layer: String,
     pub description: Option<String>,
     /// Responsibility statements, each a plain string or `{statement, concern?}`.
     #[serde(default)]
@@ -623,6 +635,8 @@ pub(crate) struct AddSymbolRequest {
 pub(crate) struct ProposedComponent {
     pub key: String,
     pub name: String,
+    /// The layer this component plays in the container's style — REQUIRED, one of the style's layer names. The whole proposal is rejected if the container has no style or a layer is not in its list.
+    pub layer: String,
     pub description: Option<String>,
     /// Responsibilities at the component's C4 altitude — each a plain string or `{statement, concern?}`.
     #[serde(default)]
@@ -651,6 +665,8 @@ pub(crate) struct ProposedLink {
     pub dst: String,
     pub label: String,
     pub method: Option<String>,
+    /// Link kind: implements | calls | uses | depends.
+    pub kind: Option<scryer_core::LinkKind>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

@@ -85,6 +85,7 @@ impl ScryerServer {
                 dst: item.dst.clone(),
                 label: item.label.clone(),
                 method: item.method.clone(),
+                kind: item.kind,
             };
             model.links.push(link);
             added.push(id);
@@ -178,6 +179,9 @@ impl ScryerServer {
                 // Empty string = CLEAR — method could be set but never removed.
                 l.method = if v.is_empty() { None } else { Some(v.clone()) };
             }
+            if let Some(v) = u.kind {
+                l.kind = Some(v);
+            }
             updated += 1;
         }
 
@@ -257,6 +261,8 @@ mod tests {
 
     fn node(id: &str, name: &str) -> Node {
         Node {
+            style: None,
+            layer: None,
             id: id.into(),
             kind: Kind::Container,
             name: name.into(),
@@ -295,12 +301,14 @@ mod tests {
                 project: Some(project.clone()),
                 links: vec![
                     AddLinkItem {
+                        kind: None,
                         src: "a".into(),
                         dst: "b".into(),
                         label: "reads from".into(),
                         method: Some("REST".into()),
                     },
                     AddLinkItem {
+                        kind: None,
                         src: "a".into(),
                         dst: "b".into(),
                         label: "streams events to".into(),
@@ -321,6 +329,7 @@ mod tests {
             .update_links(Parameters(UpdateLinkRequest {
                 project: Some(project),
                 links: vec![UpdateLinkItem {
+                    kind: None,
                     link_id: first.clone(),
                     label: None,
                     method: Some(String::new()),
@@ -352,6 +361,7 @@ mod tests {
                 .add_links(Parameters(AddLinkRequest {
                     project: Some(project.clone()),
                     links: vec![AddLinkItem {
+                        kind: None,
                         src: "a".into(),
                         dst: "b".into(),
                         label: label.into(),

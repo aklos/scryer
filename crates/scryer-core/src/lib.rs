@@ -13,6 +13,7 @@ pub mod worktree;
 pub mod rules;
 pub mod scan;
 pub mod seed;
+pub mod style;
 pub mod test_results;
 pub mod validate;
 

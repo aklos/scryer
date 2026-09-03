@@ -1451,7 +1451,7 @@ impl ScryerServer {
         let blocking = validate::structural_violations(&model);
         let blocking_set: std::collections::HashSet<&str> =
             blocking.iter().map(String::as_str).collect();
-        let mut advisory = validate::validate(&model);
+        let mut advisory = validate::validate_with(&model, &styles_for(&model_ref));
         advisory.retain(|w| !blocking_set.contains(w.as_str()));
         advisory.extend(validate::validate_coverage(&model, model_ref.project_path()));
         advisory.extend(scryer_extract::anchors::whole_symbol_warnings(
@@ -1912,6 +1912,8 @@ mod tests {
 
     fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
         Node {
+            style: None,
+            layer: None,
             id: id.into(),
             kind,
             name: name.into(),
