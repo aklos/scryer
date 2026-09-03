@@ -508,9 +508,19 @@ impl ScryerServer {
                 if src == dst || !seen_pairs.insert((src.clone(), dst.clone())) {
                     continue;
                 }
-                // A code-derived import edge is a dependency by construction.
+                // A code-derived import edge is a dependency by construction; a
+                // same-layer sibling reached this way is a `uses` (its public
+                // surface is what the import touched).
+                let kind = if src_comp != dst_comp
+                    && scryer_core::style::layer_of(&model, &src_comp)
+                        == scryer_core::style::layer_of(&model, &dst_comp)
+                {
+                    scryer_core::LinkKind::Uses
+                } else {
+                    scryer_core::LinkKind::Depends
+                };
                 model.links.push(Link {
-                    kind: Some(scryer_core::LinkKind::Depends),
+                    kind: Some(kind),
                     id: scryer_core::make_link_id(&src, &dst),
                     src,
                     dst,
@@ -682,21 +692,21 @@ mod tests {
             ],
             links: vec![
                 ProposedLink {
-                    kind: Some(scryer_core::LinkKind::Calls),
+                    kind: Some(scryer_core::LinkKind::Uses),
                     src: "auth".into(),
                     dst: "sessions".into(),
                     label: "creates".into(),
                     method: None,
                 },
                 ProposedLink {
-                    kind: Some(scryer_core::LinkKind::Calls),
+                    kind: Some(scryer_core::LinkKind::Uses),
                     src: "auth.login".into(),
                     dst: "sessions".into(),
                     label: "creates".into(),
                     method: None,
                 },
                 ProposedLink {
-                    kind: Some(scryer_core::LinkKind::Calls),
+                    kind: Some(scryer_core::LinkKind::Uses),
                     src: "sessions.session".into(),
                     dst: "auth".into(),
                     label: "is created by".into(),
@@ -858,7 +868,7 @@ mod tests {
         // A symbol linking to a sibling symbol under a DIFFERENT component, with
         // no authorizing component link — structurally illegal.
         req.links = vec![ProposedLink {
-            kind: Some(scryer_core::LinkKind::Calls),
+            kind: Some(scryer_core::LinkKind::Uses),
             src: "auth.login".into(),
             dst: "sessions.session".into(),
             label: "calls".into(),

@@ -1,5 +1,5 @@
 use crate::style::{self, Styles};
-use crate::{Kind, ScryModel};
+use crate::{Kind, LinkKind, ScryModel};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -568,8 +568,175 @@ pub fn check_styles(model: &ScryModel, styles: &Styles) -> Vec<String> {
                 name_of(model, &l.dst)
             ));
         }
+        if let Some(v) = style_link_violation(model, styles, &l.src, &l.dst, l.kind) {
+            warnings.push(format!("Link {}: {v}", l.id));
+        }
     }
 
+    warnings.extend(check_unreached(model, styles));
+    warnings.extend(check_file_listing(model));
+    warnings
+}
+
+/// Check a (prospective or existing) link against its style's legality
+/// matrix. `None` when legal or when the style says nothing about the pair.
+///
+/// Inside one container the `(layer(src), layer(dst))` pair must be in the
+/// matrix, and a same-layer link between two different components must be
+/// `kind: uses` (a sibling reached through its public surface). A link that
+/// enters a styled container from outside must land on one of its inbound
+/// layers (hex: presentation or application; FSD: app or pages; core-shell:
+/// shell), never deeper. Symbols carry their component's layer.
+pub fn style_link_violation(
+    model: &ScryModel,
+    styles: &Styles,
+    src: &str,
+    dst: &str,
+    kind: Option<LinkKind>,
+) -> Option<String> {
+    let src_c = style::container_of(model, src)?;
+    let dst_c = style::container_of(model, dst)?;
+    let dst_layer = style::layer_of(model, dst)?;
+    let def = styles.get(style::governing_style(model, dst)?)?;
+    let src_name = name_of(model, src);
+    let dst_name = name_of(model, dst);
+
+    if src_c.id != dst_c.id {
+        // Entering from outside: land on an inbound layer.
+        if def.is_inbound(dst_layer) || def.inbound.is_empty() {
+            return None;
+        }
+        return Some(format!(
+            "'{src_name}' enters container '{}' ({}) at '{dst_name}', which is on layer \
+             '{dst_layer}' — links from outside land on {}; link to a node on that layer \
+             (or to the container itself) instead",
+            dst_c.name,
+            def.name,
+            def.inbound.join(" or ")
+        ));
+    }
+
+    let src_layer = style::layer_of(model, src)?;
+    // The importer's style governs; a component overriding its container's
+    // style is checked by its own table.
+    let def = styles.get(style::governing_style(model, src)?)?;
+    if !def.may_depend(src_layer, dst_layer) {
+        let allowed = def.allowed(src_layer);
+        return Some(format!(
+            "'{src_name}' ({src_layer}) → '{dst_name}' ({dst_layer}) is illegal in style '{}': \
+             {src_layer} may depend on {}",
+            def.name,
+            if allowed.is_empty() { "nothing".to_string() } else { allowed.join(", ") }
+        ));
+    }
+    let src_comp = style::layer_component(model, src)?;
+    let dst_comp = style::layer_component(model, dst)?;
+    if src_layer == dst_layer && src_comp.id != dst_comp.id && kind != Some(LinkKind::Uses) {
+        return Some(format!(
+            "'{src_name}' → '{dst_name}' joins two {src_layer} components — a same-layer link \
+             reaches a sibling through its public surface and is `kind: uses`",
+        ));
+    }
+    None
+}
+
+/// A component on an inbound layer other than the outermost (hex:
+/// application; FSD: pages) that nothing links INTO is a use case nobody
+/// drives. Reached means: any link whose dst is the component or one of its
+/// symbols, from anywhere — a presentation sibling, another container, a
+/// person.
+fn check_unreached(model: &ScryModel, styles: &Styles) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let by_id: HashMap<&str, &crate::Node> = model.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let reached: HashSet<&str> = model
+        .links
+        .iter()
+        .filter_map(|l| {
+            let d = by_id.get(l.dst.as_str())?;
+            Some(match d.kind {
+                Kind::Symbol => d.parent_id.as_deref().unwrap_or(d.id.as_str()),
+                _ => d.id.as_str(),
+            })
+        })
+        .collect();
+    for n in &model.nodes {
+        if n.kind != Kind::Component {
+            continue;
+        }
+        let (Some(layer), Some(def)) = (
+            n.layer.as_deref(),
+            style::governing_style(model, &n.id).and_then(|s| styles.get(s)),
+        ) else {
+            continue;
+        };
+        let inner_inbound = def.inbound.iter().skip(1).any(|l| l == layer);
+        if inner_inbound && !reached.contains(n.id.as_str()) {
+            let Some(container) = style::container_of(model, &n.id) else { continue };
+            warnings.push(format!(
+                "Component {} (\"{}\", {layer}) in '{}' has nothing linking into it — \
+                 {layer} components are driven by {} or by a link from outside the container; \
+                 add the link or fold the component away",
+                n.id, n.name, container.name, def.inbound[0]
+            ));
+        }
+    }
+    warnings
+}
+
+/// Minimum component count before the file-listing signature is trusted.
+const FILE_LISTING_MIN_COMPONENTS: usize = 4;
+
+/// Rule 5's checkable proxy. Cohesion is not computable, but "one component
+/// per file" has a signature that is: every anchored component in a container
+/// maps to exactly one file, and no file is shared between two of them. That
+/// is a directory listing wearing component names, not a decomposition.
+fn check_file_listing(model: &ScryModel) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let by_id: HashMap<&str, &crate::Node> = model.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    // component id → files its claims (own + symbols') anchor into.
+    let mut files: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for n in &model.nodes {
+        let comp = match n.kind {
+            Kind::Component => n.id.as_str(),
+            Kind::Symbol => match n.parent_id.as_deref().and_then(|p| by_id.get(p)) {
+                Some(p) if p.kind == Kind::Component => p.id.as_str(),
+                _ => continue,
+            },
+            _ => continue,
+        };
+        let entry = files.entry(comp).or_default();
+        for r in &n.responsibilities {
+            if let Some(locs) = model.source_map.get(&r.id) {
+                entry.extend(locs.iter().map(|l| l.pattern.as_str()));
+            }
+        }
+        if let Some(locs) = model.source_map.get(&n.id) {
+            entry.extend(locs.iter().map(|l| l.pattern.as_str()));
+        }
+    }
+    for container in model.nodes.iter().filter(|n| n.kind == Kind::Container) {
+        let anchored: Vec<(&str, &HashSet<&str>)> = model
+            .nodes
+            .iter()
+            .filter(|n| n.kind == Kind::Component && n.parent_id.as_deref() == Some(container.id.as_str()))
+            .filter_map(|n| files.get(n.id.as_str()).filter(|f| !f.is_empty()).map(|f| (n.id.as_str(), f)))
+            .collect();
+        if anchored.len() < FILE_LISTING_MIN_COMPONENTS {
+            continue;
+        }
+        let one_each = anchored.iter().all(|(_, f)| f.len() == 1);
+        let distinct: HashSet<&str> = anchored.iter().flat_map(|(_, f)| f.iter().copied()).collect();
+        if one_each && distinct.len() == anchored.len() {
+            warnings.push(format!(
+                "Container {} (\"{}\") reads as a file listing, not a decomposition: all {} anchored \
+                 components map to exactly one file each and no file is shared. Rule 5: cluster \
+                 components from cohesion and the dependency graph, several files per component",
+                container.id,
+                container.name,
+                anchored.len()
+            ));
+        }
+    }
     warnings
 }
 
@@ -1143,6 +1310,124 @@ mod style_tests {
         assert!(!w.iter().any(|x| x.contains("Stripe")), "{w:?}");
         assert!(w.iter().any(|x| x.contains("Container c (\"App\") carries a layer")), "{w:?}");
         assert!(w.iter().any(|x| x.contains("symbol y (\"y\") carries a layer")), "{w:?}");
+    }
+
+    fn hex_model() -> ScryModel {
+        model(vec![
+            serde_json::json!({ "id": "sys", "kind": "system", "name": "S" }),
+            serde_json::json!({ "id": "svc", "kind": "container", "name": "Svc", "parentId": "sys", "style": "hexagonal" }),
+            serde_json::json!({ "id": "ui", "kind": "container", "name": "Ui", "parentId": "sys", "style": "feature-sliced" }),
+            serde_json::json!({ "id": "pres", "kind": "component", "name": "Http", "parentId": "svc", "layer": "presentation" }),
+            serde_json::json!({ "id": "app", "kind": "component", "name": "Checkout", "parentId": "svc", "layer": "application" }),
+            serde_json::json!({ "id": "app2", "kind": "component", "name": "Refunds", "parentId": "svc", "layer": "application" }),
+            serde_json::json!({ "id": "dom", "kind": "component", "name": "Orders", "parentId": "svc", "layer": "domain" }),
+            serde_json::json!({ "id": "infra", "kind": "component", "name": "Postgres", "parentId": "svc", "layer": "infrastructure" }),
+            serde_json::json!({ "id": "dom_sym", "kind": "symbol", "name": "Order", "parentId": "dom",
+                                 "responsibilities": [{ "id": "r1", "statement": "holds lines" }] }),
+            serde_json::json!({ "id": "shell", "kind": "component", "name": "Shell", "parentId": "ui", "layer": "app" }),
+            serde_json::json!({ "id": "page", "kind": "component", "name": "CheckoutPage", "parentId": "ui", "layer": "pages" }),
+        ])
+    }
+
+    fn violation(m: &ScryModel, src: &str, dst: &str, kind: Option<crate::LinkKind>) -> Option<String> {
+        super::style_link_violation(m, &Styles::builtin(), src, dst, kind)
+    }
+
+    /// The matrix decides: downward pairs pass, upward and sibling-edge pairs
+    /// are named with the layers the source may depend on.
+    #[test]
+    fn style_matrix_rejects_illegal_layer_pairs() {
+        use crate::LinkKind::*;
+        let m = hex_model();
+        assert_eq!(violation(&m, "pres", "app", Some(Calls)), None);
+        assert_eq!(violation(&m, "app", "dom", Some(Depends)), None);
+        assert_eq!(violation(&m, "infra", "app", Some(Implements)), None);
+        assert_eq!(violation(&m, "app", "dom_sym", Some(Depends)), None, "symbols carry their component's layer");
+        let v = violation(&m, "dom", "app", Some(Calls)).unwrap();
+        assert!(v.contains("'Orders' (domain) → 'Checkout' (application) is illegal in style 'hexagonal'"), "{v}");
+        assert!(v.contains("domain may depend on domain"), "{v}");
+        let v = violation(&m, "pres", "infra", Some(Calls)).unwrap();
+        assert!(v.contains("presentation may depend on presentation, application"), "{v}");
+        let v = violation(&m, "pres", "dom", Some(Depends)).unwrap();
+        assert!(v.contains("is illegal"), "{v}");
+    }
+
+    /// Two components on one layer join only through `uses`; within one
+    /// component (symbol → symbol) any kind goes.
+    #[test]
+    fn same_layer_sibling_links_are_uses() {
+        use crate::LinkKind::*;
+        let m = hex_model();
+        assert_eq!(violation(&m, "app", "app2", Some(Uses)), None);
+        let v = violation(&m, "app", "app2", Some(Calls)).unwrap();
+        assert!(v.contains("joins two application components") && v.contains("`kind: uses`"), "{v}");
+        assert_eq!(violation(&m, "dom", "dom_sym", Some(Depends)), None);
+    }
+
+    /// A link from another container lands on an inbound layer — never on the
+    /// domain — and a link to the container itself is always fine.
+    #[test]
+    fn links_from_outside_land_on_inbound_layers() {
+        use crate::LinkKind::*;
+        let m = hex_model();
+        assert_eq!(violation(&m, "page", "app", Some(Calls)), None);
+        assert_eq!(violation(&m, "page", "pres", Some(Calls)), None);
+        assert_eq!(violation(&m, "page", "svc", Some(Calls)), None);
+        let v = violation(&m, "page", "dom", Some(Calls)).unwrap();
+        assert!(v.contains("enters container 'Svc' (hexagonal) at 'Orders'"), "{v}");
+        assert!(v.contains("land on presentation or application"), "{v}");
+        let v = violation(&m, "ui", "infra", Some(Calls)).unwrap();
+        assert!(v.contains("layer 'infrastructure'"), "{v}");
+    }
+
+    /// An application component nothing links into is dead; one driven by a
+    /// presentation sibling or from outside is not. Presentation itself is the
+    /// outermost inbound layer and is never asked to be reached.
+    #[test]
+    fn unreached_inner_inbound_components_are_flagged() {
+        let mut m = hex_model();
+        let link = |id: &str, src: &str, dst: &str| Link {
+            id: id.into(), src: src.into(), dst: dst.into(),
+            label: String::new(), method: None, kind: Some(crate::LinkKind::Calls),
+        };
+        m.links = vec![link("l1", "pres", "app"), link("l2", "page", "svc"), link("l0", "shell", "page")];
+        let w = validate(&m);
+        assert!(w.iter().any(|x| x.contains("Component app2 (\"Refunds\", application) in 'Svc' has nothing linking into it")), "{w:?}");
+        assert!(!w.iter().any(|x| x.contains("Checkout") && x.contains("nothing linking")), "{w:?}");
+        assert!(!w.iter().any(|x| x.contains("Http") && x.contains("nothing linking")), "{w:?}");
+        // Reached from outside the container counts too.
+        m.links.push(link("l3", "page", "app2"));
+        let w = validate(&m);
+        assert!(!w.iter().any(|x| x.contains("nothing linking")), "{w:?}");
+    }
+
+    /// Rule 5's proxy: four or more anchored components, one file each, no file
+    /// shared → a file listing. A shared file or a two-file component breaks the
+    /// signature.
+    #[test]
+    fn one_file_per_component_reads_as_a_file_listing() {
+        let mut m = model(vec![
+            serde_json::json!({ "id": "sys", "kind": "system", "name": "S" }),
+            serde_json::json!({ "id": "c", "kind": "container", "name": "Core", "parentId": "sys", "style": "core-shell" }),
+        ]);
+        for i in 0..4 {
+            m.nodes.push(node(serde_json::json!({
+                "id": format!("k{i}"), "kind": "component", "name": format!("K{i}"), "parentId": "c", "layer": "core",
+                "responsibilities": [{ "id": format!("r{i}"), "statement": "does x" }]
+            })));
+            m.source_map.insert(
+                format!("r{i}"),
+                vec![serde_json::from_value(serde_json::json!({ "pattern": format!("src/k{i}.rs") })).unwrap()],
+            );
+        }
+        let w = validate(&m);
+        assert!(w.iter().any(|x| x.contains("Container c (\"Core\") reads as a file listing") && x.contains("all 4 anchored")), "{w:?}");
+
+        // One component spanning two files is a real cut → silent.
+        m.source_map.get_mut("r0").unwrap().push(
+            serde_json::from_value(serde_json::json!({ "pattern": "src/k0_extra.rs" })).unwrap(),
+        );
+        assert!(!validate(&m).iter().any(|x| x.contains("file listing")));
     }
 
     /// Inside a styled container every link says what it is; a container-level

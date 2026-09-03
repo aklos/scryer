@@ -90,7 +90,9 @@ pub struct StyleDef {
     /// imports are legal). Missing key = may depend on nothing.
     pub matrix: BTreeMap<String, Vec<String>>,
     pub isolation: Isolation,
-    /// Layers a cross-container link may land on when it enters this container.
+    /// Layers a cross-container link may land on when it enters this container,
+    /// outermost first. Components on every inbound layer but the first must
+    /// be reached by something (a use case nobody drives is dead).
     #[serde(default)]
     pub inbound: Vec<String>,
     /// File basenames that count as a module's public entry point.
@@ -373,7 +375,7 @@ pub fn hexagonal() -> StyleDef {
             ("presentation", &["presentation", "application"]),
         ]),
         isolation: Isolation::Inclusive,
-        inbound: strs(&["application", "presentation"]),
+        inbound: strs(&["presentation", "application"]),
         public_surface: strs(&["index.ts", "index.js", "mod.rs", "lib.rs", "__init__.py"]),
         external_bans: [("domain".to_string(), strs(IO_PACKAGES))].into_iter().collect(),
         path: PathConvention {

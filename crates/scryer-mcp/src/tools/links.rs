@@ -14,9 +14,12 @@ impl ScryerServer {
     #[tool(
         description = "Add links between nodes; direction is initiator (src) → provider (dst). Endpoints must \
          be siblings, or the deeper node's parent must already link to the other node — otherwise \
-         the batch is rejected with guidance, so order parent-level links first. Also rejects \
-         missing endpoints, self-loops, and ancestor↔descendant links. Returns the link ids.\n\
-         Rules: links-same-level, one-link, mentions-imply-links"
+         the batch is rejected with guidance, so order parent-level links first. Inside a styled \
+         container the link must also be legal in the style's layer matrix and every \
+         component/symbol-level link carries a `kind`. Also rejects missing endpoints, self-loops, \
+         and ancestor↔descendant links. Returns the link ids.
+\
+         Rules: links-same-level, one-link, mentions-imply-links, styles"
     )]
     fn add_links(
         &self,
@@ -95,12 +98,20 @@ impl ScryerServer {
         // so a batch may add a parent-level link and the child-level link that
         // depends on it together (order within the batch doesn't matter). Any
         // illegal link rejects the whole batch — nothing is written.
+        // Two gates, same batch semantics: the C4 same-level rule, then the
+        // style's legality matrix (layer pair, same-layer kind, inbound landing).
+        let styles = styles_for(&model_ref);
         let violations: Vec<String> = req
             .links
             .iter()
             .filter_map(|item| {
                 scryer_core::validate::link_violation(&model, &item.src, &item.dst)
                     .map(|v| scryer_core::validate::describe_violation(&model, &item.src, &item.dst, &v))
+                    .or_else(|| {
+                        scryer_core::validate::style_link_violation(
+                            &model, &styles, &item.src, &item.dst, item.kind,
+                        )
+                    })
             })
             .collect();
         if !violations.is_empty() {
@@ -279,6 +290,65 @@ mod tests {
             position: None,
             directives: Vec::new(),
         }
+    }
+
+    /// A link the style's matrix forbids never lands, and the rejection names
+    /// the layers involved; a legal batch with kinds goes through.
+    #[test]
+    fn add_links_rejects_style_matrix_violations() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        let mut sys = node("sys", "Sys");
+        sys.kind = Kind::System;
+        let mut svc = node("svc", "Svc");
+        svc.parent_id = Some("sys".into());
+        svc.style = Some("hexagonal".into());
+        let comp = |id: &str, name: &str, layer: &str| {
+            let mut n = node(id, name);
+            n.kind = Kind::Component;
+            n.parent_id = Some("svc".into());
+            n.layer = Some(layer.into());
+            n
+        };
+        m.nodes.extend([sys, svc, comp("dom", "Orders", "domain"), comp("app", "Checkout", "application")]);
+        scryer_core::write_planned_at(&model_ref, &m).unwrap();
+        let server = ScryerServer::new();
+        let project = dir.path().to_string_lossy().to_string();
+
+        let r = server
+            .add_links(Parameters(AddLinkRequest {
+                project: Some(project.clone()),
+                links: vec![AddLinkItem {
+                    kind: Some(scryer_core::LinkKind::Calls),
+                    src: "dom".into(),
+                    dst: "app".into(),
+                    label: "calls".into(),
+                    method: None,
+                }],
+            }))
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let text = r.content.iter().find_map(|c| c.as_text().map(|t| t.text.clone())).unwrap();
+        assert!(text.contains("(domain) → 'Checkout' (application) is illegal"), "{text}");
+        assert!(scryer_core::read_planned_at(&model_ref).unwrap().links.is_empty(), "nothing written");
+
+        let r = server
+            .add_links(Parameters(AddLinkRequest {
+                project: Some(project),
+                links: vec![AddLinkItem {
+                    kind: Some(scryer_core::LinkKind::Depends),
+                    src: "app".into(),
+                    dst: "dom".into(),
+                    label: String::new(),
+                    method: None,
+                }],
+            }))
+            .unwrap();
+        assert_ne!(r.is_error, Some(true));
+        let links = scryer_core::read_planned_at(&model_ref).unwrap().links;
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].kind, Some(scryer_core::LinkKind::Depends));
     }
 
     /// Parallel edges (same endpoints, different labels) mint DISTINCT ids —
