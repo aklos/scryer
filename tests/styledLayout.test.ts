@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { builtinStyles } from "../src/styles";
-import { isImpliedEdge, styledLayout, CARD_W } from "../src/layout/styled";
+import { classifyStyledEdge, styledLayout, CARD_W } from "../src/layout/styled";
 
 const style = (name: string) => builtinStyles.find((s) => s.name === name)!;
 
@@ -108,18 +108,20 @@ describe("styledLayout", () => {
   });
 });
 
-describe("isImpliedEdge", () => {
+describe("classifyStyledEdge", () => {
   const hex = style("hexagonal");
   const fsd = style("feature-sliced");
-  it("hides steps into the innermost layer and adapters onto ports", () => {
-    expect(isImpliedEdge(hex, "application", "domain", "depends")).toBe(true);
-    expect(isImpliedEdge(hex, "infrastructure", "application", "implements")).toBe(true);
-    expect(isImpliedEdge(fsd, "pages", "widgets", "calls")).toBe(true); // adjacent step on rows
+  it("a legal cross-layer dependency is implied by the drawing", () => {
+    expect(classifyStyledEdge(hex, "application", "domain")).toBe("implied");
+    expect(classifyStyledEdge(hex, "infrastructure", "application")).toBe("implied");
+    expect(classifyStyledEdge(hex, "presentation", "application")).toBe("implied");
+    expect(classifyStyledEdge(fsd, "pages", "entities")).toBe("implied");
   });
-  it("keeps same-layer links, illegal pairs and long jumps visible", () => {
-    expect(isImpliedEdge(hex, "application", "application", "uses")).toBe(false);
-    expect(isImpliedEdge(hex, "domain", "application", "calls")).toBe(false);
-    expect(isImpliedEdge(hex, "presentation", "application", "calls")).toBe(false);
-    expect(isImpliedEdge(fsd, "pages", "entities", "calls")).toBe(false);
+  it("a forbidden pair is a violation, a same-layer link is plain", () => {
+    expect(classifyStyledEdge(hex, "domain", "application")).toBe("violation");
+    expect(classifyStyledEdge(hex, "presentation", "infrastructure")).toBe("violation");
+    expect(classifyStyledEdge(fsd, "entities", "pages")).toBe("violation");
+    expect(classifyStyledEdge(hex, "application", "application")).toBe("plain");
+    expect(classifyStyledEdge(hex, undefined, "domain")).toBe("plain");
   });
 });

@@ -568,13 +568,28 @@ pub fn check_styles(model: &ScryModel, styles: &Styles) -> Vec<String> {
                 name_of(model, &l.dst)
             ));
         }
+    }
+
+    warnings
+}
+
+/// Conformance findings: the declared model held against its styles. These
+/// describe the CODE as it is (a domain that really does import storage, a
+/// container that really is one file per component), so they are never a
+/// modeling error to repair — a generated model must describe a badly
+/// organised codebase faithfully. They surface in health and `check`, not in
+/// [`validate`], and the fix is in the code, followed by re-modeling.
+pub fn check_conformance(model: &ScryModel, styles: &Styles) -> Vec<String> {
+    let mut warnings: Vec<String> = Vec::new();
+    for l in &model.links {
         if let Some(v) = style_link_violation(model, styles, &l.src, &l.dst, l.kind) {
             warnings.push(format!("Link {}: {v}", l.id));
         }
     }
-
     warnings.extend(check_unreached(model, styles));
     warnings.extend(check_file_listing(model));
+    let mut seen: HashSet<String> = HashSet::new();
+    warnings.retain(|w| seen.insert(w.clone()));
     warnings
 }
 
@@ -1256,7 +1271,9 @@ mod style_tests {
     use crate::{Link, Node, ScryModel};
 
     fn validate(m: &ScryModel) -> Vec<String> {
-        check_styles(m, &Styles::builtin())
+        let mut w = check_styles(m, &Styles::builtin());
+        w.extend(check_conformance(m, &Styles::builtin()));
+        w
     }
 
     fn node(v: serde_json::Value) -> Node {

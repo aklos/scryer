@@ -373,26 +373,30 @@ export function styledLayout(
   }
 }
 
-/** Is an edge between two members "implied" by the drawing — its position
- *  already says it, so the renderer hides it until one end is selected?
- *  Anything into the innermost layer, an adjacent-layer step inward on a
- *  banded drawing, and an adapter onto its port (`implements`). Same-layer
- *  links and anything the matrix forbids are never implied — those are the
- *  lines worth seeing. */
+/** How an edge between two members reads against the style:
+ *  - `implied`: a legal cross-layer dependency — the drawing already says it
+ *    (inner layers sit where legal imports point), so the renderer hides it
+ *    until one end is selected;
+ *  - `violation`: a cross-layer dependency the matrix forbids — drawn, and
+ *    drawn red, because it is the one thing the map exists to expose;
+ *  - `plain`: a same-layer link (a `uses` between siblings) — drawn as usual.
+ */
+export function classifyStyledEdge(
+  def: StyleDef,
+  sourceLayer: string | undefined,
+  targetLayer: string | undefined,
+): "implied" | "violation" | "plain" {
+  if (!sourceLayer || !targetLayer || sourceLayer === targetLayer) return "plain";
+  const allowed = def.matrix[sourceLayer] ?? [];
+  return allowed.includes(targetLayer) ? "implied" : "violation";
+}
+
+/** @deprecated use {@link classifyStyledEdge} */
 export function isImpliedEdge(
   def: StyleDef,
   sourceLayer: string | undefined,
   targetLayer: string | undefined,
-  kind: string | undefined,
+  _kind: string | undefined,
 ): boolean {
-  if (!sourceLayer || !targetLayer || sourceLayer === targetLayer) return false;
-  const allowed = def.matrix[sourceLayer] ?? [];
-  if (!allowed.includes(targetLayer)) return false;
-  if (kind === "implements") return true;
-  const order = def.layers.map((l) => l.name);
-  const si = order.indexOf(sourceLayer);
-  const ti = order.indexOf(targetLayer);
-  if (ti === order.length - 1) return true;
-  if ((def.drawing === "rows" || def.drawing === "columns") && ti === si + 1) return true;
-  return false;
+  return classifyStyledEdge(def, sourceLayer, targetLayer) === "implied";
 }

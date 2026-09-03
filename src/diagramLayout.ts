@@ -23,7 +23,7 @@ import type { ScryModel, Kind } from "./viewmodel";
 import { isDataShape } from "./viewmodel";
 import type { ModelHealthReport } from "./health";
 import { governingStyleDef, layerOf, styleTable, type Drawing, type StyleDef } from "./styles";
-import { isImpliedEdge, styledLayout, type LayerRegion } from "./layout/styled";
+import { classifyStyledEdge, styledLayout, type LayerRegion } from "./layout/styled";
 
 export type DiagramMode = "arch" | "styled" | "code";
 
@@ -83,6 +83,8 @@ export interface DiagramEdge {
   /** Styled rings: both ends sit on one ring, so the chord would cut through
    *  the centre — bow it outward, away from `(cx, cy)`, by `amount` px. */
   bow?: { cx: number; cy: number; amount: number };
+  /** Styled mode: the layer matrix forbids this dependency — drawn red. */
+  violation?: boolean;
 }
 
 /** The drawing behind a styled level: which style, and the region per layer. */
@@ -362,7 +364,9 @@ export async function buildDiagramScene(
     for (const e of edges) {
       if (!layerById.has(e.source) || !layerById.has(e.target)) continue;
       const sl = layerById.get(e.source), tl = layerById.get(e.target);
-      e.implied = isImpliedEdge(styleDef, sl, tl, e.kind);
+      const verdict = classifyStyledEdge(styleDef, sl, tl);
+      e.implied = verdict === "implied";
+      e.violation = verdict === "violation";
       // A same-ring chord would cross the centre: bow it outward instead.
       if (ringDrawing && sl && sl === tl && sl !== innermost) {
         // Bow out to the ring itself, so the curve rides the ring the two

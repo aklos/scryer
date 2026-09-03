@@ -1452,7 +1452,8 @@ impl ScryerServer {
         let blocking = validate::structural_violations(&model);
         let blocking_set: std::collections::HashSet<&str> =
             blocking.iter().map(String::as_str).collect();
-        let mut advisory = validate::validate_with(&model, &styles_for(&model_ref));
+        let styles = styles_for(&model_ref);
+        let mut advisory = validate::validate_with(&model, &styles);
         advisory.retain(|w| !blocking_set.contains(w.as_str()));
         advisory.extend(validate::validate_coverage(&model, model_ref.project_path()));
         advisory.extend(scryer_extract::anchors::whole_symbol_warnings(
@@ -1460,12 +1461,15 @@ impl ScryerServer {
             model_ref.project_path(),
         ));
 
-        if blocking.is_empty() && advisory.is_empty() {
-            return Ok(CallToolResult::success(vec![Content::text(
-                "Model is structurally clean.",
-            )]));
-        }
-        let mut msg = format!("Model '{}':", model_ref);
+        // Conformance is reported apart from validity: it describes the code,
+        // not a modeling mistake, and the fix is in the code.
+        let conformance = validate::check_conformance(&model, &styles);
+
+        let mut msg = if blocking.is_empty() && advisory.is_empty() {
+            "Model is structurally clean.".to_string()
+        } else {
+            format!("Model '{}':", model_ref)
+        };
         if !blocking.is_empty() {
             msg.push_str(&format!(
                 "\n\n{} BLOCKING invariant violation(s) — a commit of this model will be REFUSED \
@@ -1480,6 +1484,17 @@ impl ScryerServer {
         if !advisory.is_empty() {
             msg.push_str(&format!("\n\n{} advisory warning(s):", advisory.len()));
             for w in &advisory {
+                msg.push_str(&format!("\n- {}", w));
+            }
+        }
+        if !conformance.is_empty() {
+            msg.push_str(&format!(
+                "\n\nStyle conformance — {} finding(s). These describe the code as it is \
+                 (the model is right to record them); fix them in the CODE, then re-model. \
+                 Never rewire links or re-layer components just to silence them:",
+                conformance.len()
+            ));
+            for w in &conformance {
                 msg.push_str(&format!("\n- {}", w));
             }
         }

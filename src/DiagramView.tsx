@@ -369,6 +369,7 @@ function DiagramInner({
               (concernLit !== null && !concernLit.has(n.id)),
             pending: pendingIds?.has(n.id),
             completeness: report?.completeness[n.id],
+            styled: scene.mode === "styled",
           },
         };
       }) as Array<RFCard | RFDot>;
@@ -444,6 +445,7 @@ function DiagramInner({
         targetHandle: scene.mode === "code" ? "c" : h?.targetHandle,
         data: {
           bow: e.bow,
+          violation: e.violation,
           label: ghostEdge ? undefined : e.label || undefined,
           method: ghostEdge ? undefined : e.method,
           dot: scene.mode === "code",

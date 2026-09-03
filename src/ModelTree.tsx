@@ -28,6 +28,7 @@ import {
   rollupMarks,
 } from "./changeMarks";
 import { kindIcon } from "./kindIcon";
+import { StyleGlyph } from "./styles/StyleGlyph";
 import { lookupIcon } from "./IconPicker";
 import { BTN, EYEBROW, NAME_MAX, sanitizeIdentifier } from "./pagekit";
 import { InlineText } from "./InlineText";
@@ -780,7 +781,15 @@ export function ModelTree({
           onHover={(h) => setHoverRail((cur) => (h ? node.id : cur === node.id ? null : cur))}
           onClick={() => onToggle(node.id)}
         />
-        <Icon className={`ml-1.5 h-3.5 w-3.5 shrink-0 ${ICON_COLOR}`} />
+        {/* A styled container's icon IS its style — the shape you will see
+            when you drill in — unless the user picked an icon. */}
+        {node.kind === "container" && node.style && !node.icon ? (
+          <span className={`ml-1.5 flex h-3.5 w-3.5 shrink-0 items-center ${ICON_COLOR}`} title={`style: ${node.style}`}>
+            <StyleGlyph style={node.style} />
+          </span>
+        ) : (
+          <Icon className={`ml-1.5 h-3.5 w-3.5 shrink-0 ${ICON_COLOR}`} />
+        )}
         <span className={`min-w-0 flex-1 truncate text-sm ${ramp.weight} ${isSel ? "" : ramp.color}`}>
           {renaming === node.id && editor ? (
             <InlineText

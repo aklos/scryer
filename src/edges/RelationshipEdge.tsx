@@ -35,6 +35,9 @@ export interface EdgeData extends Record<string, unknown> {
   /** Bow the edge outward from a centre (styled rings: a same-ring chord
    *  would otherwise cut through the layers inside). */
   bow?: { cx: number; cy: number; amount: number };
+  /** The style's layer matrix forbids this dependency — drawn red so the map
+   *  exposes the code's disorder instead of tidying it away. */
+  violation?: boolean;
 }
 
 /** Gap between a dot's rim and where the line/arrow starts, so it kisses the
@@ -60,7 +63,7 @@ export function RelationshipEdge({
   const label = data?.label;
   const method = data?.method;
   // Neutral chrome — the diff/change-mark palette is carried by the nodes.
-  const baseColor = getThemedHex("slate", "400");
+  const baseColor = data?.violation ? getThemedHex("red", "500") : getThemedHex("slate", "400");
   const selColor =
     getComputedStyle(document.documentElement).getPropertyValue("--selection-color").trim() ||
     "#18181b";
@@ -136,7 +139,8 @@ export function RelationshipEdge({
 
   // Subgraph highlight: edges touching the selection stay lit, the rest fade.
   // Dot-tier edges sit fainter at rest so the constellation reads as nodes, not lines.
-  const edgeOpacity = selected || data?.highlighted ? 1 : data?.dimmed ? 0.18 : isDot ? 0.5 : 0.7;
+  const edgeOpacity =
+    selected || data?.highlighted ? 1 : data?.dimmed ? 0.18 : data?.violation ? 0.95 : isDot ? 0.5 : 0.7;
 
   return (
     <>

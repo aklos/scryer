@@ -183,6 +183,11 @@ pub(crate) fn check_report(
     warnings.extend(scryer_core::validate::validate_coverage(&working, project));
     warnings.extend(scryer_extract::anchors::whole_symbol_warnings(&working, project));
     failures.extend(warnings.into_iter().map(|w| format!("validator: {w}")));
+    failures.extend(
+        scryer_core::validate::check_conformance(&working, &scryer_core::style::Styles::load(project))
+            .into_iter()
+            .map(|w| format!("conformance: {w}")),
+    );
 
     // 1b) Code-time style conformance. The check owns its own extraction so
     //    CI needs no cached dependency graph; the cache is refreshed as a
