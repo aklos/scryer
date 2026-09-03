@@ -15,6 +15,7 @@ import { useLaunchSettings } from "./hooks/useLaunchSettings";
 import { useMcpSetup } from "./hooks/useMcpSetup";
 import { McpSetupPrompt } from "./McpSetupPrompt";
 import { useAgentLaunchGate } from "./AgentLaunchConfirm";
+import { AGENT_LABEL, SettingsPanel } from "./SettingsPanel";
 import { WindowControls } from "./TopBar";
 
 type Phase = "picker" | "needs-model";
@@ -28,7 +29,8 @@ export function ProjectPicker({
 }) {
   const [phase, setPhase] = useState<Phase>("picker");
   const launchSettings = useLaunchSettings();
-  const launchGate = useAgentLaunchGate(launchSettings);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const launchGate = useAgentLaunchGate(launchSettings, () => setSettingsOpen(true));
   // Offer MCP wiring on the same screen where the model store is created, so a
   // fresh project gets set up in one sitting. The `.mcp.json` etc. are written
   // independently of `.scryer/`, so this works whether they enable before or
@@ -96,9 +98,19 @@ export function ProjectPicker({
 
   if (phase === "needs-model" && storage.projectPath) {
     const folder = storage.projectPath.split(/[/\\]/).filter(Boolean).pop();
+    const launch = launchSettings.launch;
     return (
       <>
       {launchGate.modal}
+      {settingsOpen && (
+        <SettingsPanel
+          projectPath={storage.projectPath}
+          onClose={() => {
+            setSettingsOpen(false);
+            launchSettings.reload();
+          }}
+        />
+      )}
       <Centered>
         <div className="flex flex-col items-center gap-6 max-w-md w-full text-center">
           <div className="flex flex-col items-center gap-1.5">
@@ -122,11 +134,31 @@ export function ProjectPicker({
                 Generate from codebase
               </button>
               <p className="px-1 text-xs leading-relaxed text-[var(--text-muted)]">
-                Runs an in-depth agent pass over your whole codebase using your
-                configured AI agent &mdash; this can take a while and use significant
-                tokens (mind the model you&rsquo;ve set if you pay per token). You can
-                cancel it any time mid-run.
+                Runs an in-depth agent pass over your whole codebase &mdash; this can take a
+                while and use significant tokens. You can cancel it any time mid-run.
               </p>
+              {/* The launch this button will make, and the way to change it —
+                  the one place a fresh project can be configured before the
+                  costliest run there is. */}
+              <button
+                type="button"
+                className="flex items-center justify-center gap-1.5 px-1 text-2xs text-[var(--text-tertiary)] hover:text-[var(--text)]"
+                onClick={() => setSettingsOpen(true)}
+                title="Agent settings"
+              >
+                {launch.agent ? (
+                  <span>
+                    <span className="text-[var(--text-secondary)]">{AGENT_LABEL[launch.agent]}</span>
+                    {" · "}
+                    {launch.model || "default model"}
+                    {" · "}
+                    {launch.effort} effort
+                  </span>
+                ) : (
+                  <span>No agent detected</span>
+                )}
+                <span className="underline decoration-dotted underline-offset-2">change</span>
+              </button>
             </div>
             <button
               type="button"

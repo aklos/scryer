@@ -201,30 +201,51 @@ export function SettingsPanel({
             </p>
           </Field>
 
-          <AgentSettingsGroup
-            title="Claude Code"
-            efforts={CLAUDE_EFFORT}
-            models={CLAUDE_MODELS}
-            value={settings.claude}
-            onChange={(claude) => setSettings((s) => ({ ...s, claude }))}
-          />
-
-          <AgentSettingsGroup
-            title="Codex"
-            efforts={CODEX_EFFORT}
-            models={CODEX_MODELS}
-            value={settings.codex}
-            onChange={(codex) => setSettings((s) => ({ ...s, codex }))}
-          />
-
-          <AgentSettingsGroup
-            title="Copilot CLI"
-            efforts={COPILOT_EFFORT}
-            models={COPILOT_MODELS}
-            customNote="Copilot ignores a model name it doesn't recognise instead of reporting it, so a typo here runs on its default model rather than failing. Check the spelling against `copilot help config`."
-            value={settings.copilot}
-            onChange={(copilot) => setSettings((s) => ({ ...s, copilot }))}
-          />
+          {/* Only the agent that will actually run gets its model + effort
+              group — the other two are noise until they are picked. "Auto"
+              shows the resolved one and says so. */}
+          {(() => {
+            const shown: LaunchAgent | null =
+              settings.agent === "auto" ? resolvedAgent : settings.agent;
+            if (!shown) return null;
+            const note = settings.agent === "auto" ? " (auto-selected)" : "";
+            switch (shown) {
+              case "claudeCode":
+                return (
+                  <AgentSettingsGroup
+                    key="claudeCode"
+                    title={`Claude Code${note}`}
+                    efforts={CLAUDE_EFFORT}
+                    models={CLAUDE_MODELS}
+                    value={settings.claude}
+                    onChange={(claude) => setSettings((s) => ({ ...s, claude }))}
+                  />
+                );
+              case "codex":
+                return (
+                  <AgentSettingsGroup
+                    key="codex"
+                    title={`Codex${note}`}
+                    efforts={CODEX_EFFORT}
+                    models={CODEX_MODELS}
+                    value={settings.codex}
+                    onChange={(codex) => setSettings((s) => ({ ...s, codex }))}
+                  />
+                );
+              case "copilot":
+                return (
+                  <AgentSettingsGroup
+                    key="copilot"
+                    title={`Copilot CLI${note}`}
+                    efforts={COPILOT_EFFORT}
+                    models={COPILOT_MODELS}
+                    customNote="Copilot ignores a model name it doesn't recognise instead of reporting it, so a typo here runs on its default model rather than failing. Check the spelling against `copilot help config`."
+                    value={settings.copilot}
+                    onChange={(copilot) => setSettings((s) => ({ ...s, copilot }))}
+                  />
+                );
+            }
+          })()}
 
           {projectPath &&
             (mcpSetup.tools.claude || mcpSetup.tools.codex || mcpSetup.tools.copilot) && (

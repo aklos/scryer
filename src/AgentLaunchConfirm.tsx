@@ -33,7 +33,12 @@ export interface AgentLaunchGate {
 /** Wraps the four agent-spawning UI actions in the confirm gate. Holds the one
  *  pending request and renders the modal for it; "don't ask again" clears the
  *  setting so future launches fire straight through. */
-export function useAgentLaunchGate(settings: LaunchSettings): AgentLaunchGate {
+export function useAgentLaunchGate(
+  settings: LaunchSettings,
+  /** Opens the subagent settings — the dialog offers it beside the resolved
+   *  launch so the model and effort can be changed before a costly run. */
+  onOpenSettings?: () => void,
+): AgentLaunchGate {
   const { launch, confirmLaunch, clearConfirm } = settings;
   const [pending, setPending] = useState<{ request: AgentLaunchRequest; run: () => void } | null>(
     null,
@@ -54,6 +59,7 @@ export function useAgentLaunchGate(settings: LaunchSettings): AgentLaunchGate {
     <AgentLaunchConfirm
       launch={launch}
       request={pending.request}
+      onOpenSettings={onOpenSettings}
       onCancel={() => setPending(null)}
       onConfirm={(dontAskAgain) => {
         if (dontAskAgain) void clearConfirm();
@@ -71,9 +77,12 @@ export function AgentLaunchConfirm({
   request,
   onConfirm,
   onCancel,
+  onOpenSettings,
 }: {
   launch: ResolvedLaunch;
   request: AgentLaunchRequest;
+  /** When given, the dialog offers a "Change…" beside the resolved launch. */
+  onOpenSettings?: () => void;
   /** Proceed. `dontAskAgain` true means the user wants the gate cleared. */
   onConfirm: (dontAskAgain: boolean) => void;
   onCancel: () => void;
@@ -130,8 +139,25 @@ export function AgentLaunchConfirm({
           <p className="text-xs leading-relaxed text-[var(--text-muted)]">
             {request.detail ? `${request.detail} ` : ""}
             This uses your configured AI agent and can take a while and use significant tokens —
-            mind the model you&rsquo;ve set if you pay per token. You can change it in subagent
-            settings, and cancel any run mid-flight.
+            mind the model you&rsquo;ve set if you pay per token.{" "}
+            {onOpenSettings ? (
+              <>
+                You can{" "}
+                <button
+                  type="button"
+                  className="underline decoration-dotted underline-offset-2 hover:text-[var(--text)]"
+                  onClick={() => {
+                    onCancel();
+                    onOpenSettings();
+                  }}
+                >
+                  change the agent, model or effort
+                </button>{" "}
+                first, and cancel any run mid-flight.
+              </>
+            ) : (
+              <>You can change it in subagent settings, and cancel any run mid-flight.</>
+            )}
           </p>
 
           <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--text-secondary)] select-none">
