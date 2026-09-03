@@ -59,41 +59,16 @@ export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
                   strokeWidth: 1,
                   strokeDasharray: "4 4",
                 };
-            // The layer's one line rides beside its name, muted. Long lines
-            // show their first clause with a dotted underline — the cue that
-            // the full text is a hover away (an SVG <title>).
+            // The layer's description lives in the tooltip only; the ⓘ after
+            // the label is the cue that there is one.
             const full = r.caption ?? "";
-            const clause = full.split(/[:;—]/)[0].trim();
-            const short = full.length > 60 && clause.length < full.length ? clause : full.length > 60 ? full.slice(0, 57).trimEnd() + "…" : full;
-            const truncated = short !== full;
             const caption = full ? (
-              <tspan
-                fill="var(--text-ghost)"
-                fontWeight={400}
-                letterSpacing={0.2}
-                opacity={0.8}
-                textDecoration={truncated ? "underline" : undefined}
-                style={truncated ? { textDecorationStyle: "dotted", textUnderlineOffset: 3 } : undefined}
-              >
-                {"  ·  "}{short}
+              <tspan fill="var(--text-ghost)" fontWeight={400} letterSpacing={0} opacity={0.7} fontSize={11}>
+                {"  ⓘ"}
               </tspan>
             ) : null;
             const tip = full ? <title>{`${r.layer}: ${full}`}</title> : null;
-            const captionBelow = (x: number, y: number, anchor: "middle" | "start") =>
-              full ? (
-                <text
-                  x={x}
-                  y={y + 13}
-                  textAnchor={anchor}
-                  fontSize={9}
-                  fill="var(--text-ghost)"
-                  opacity={0.75}
-                  textDecoration={truncated ? "underline" : undefined}
-                  style={truncated ? { textDecorationStyle: "dotted", textUnderlineOffset: 3 } : undefined}
-                >
-                  {short}
-                </text>
-              ) : null;
+            const captionBelow = (_x: number, _y: number, _anchor: "middle" | "start") => null;
             if (r.shape === "rect") {
               return (
                 <g key={i} className="pointer-events-auto">
@@ -128,6 +103,7 @@ export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
                     fontWeight={600}
                   >
                     {label}
+                    {caption}
                   </text>
                   {captionBelow(r.cx, r.cy - r.r + 16, "middle")}
                 </g>
@@ -153,6 +129,7 @@ export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
                   fontWeight={600}
                 >
                   {label}
+                  {caption}
                 </text>
                 {captionBelow(lx, ly, inner ? "middle" : "start")}
               </g>

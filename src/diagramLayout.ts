@@ -94,8 +94,9 @@ export interface DiagramEdge {
    *  would cut through what lies between — bow it away from `(cx, cy)`, the
    *  curve's middle displaced `offset` px from the chord's midpoint. */
   bow?: { cx: number; cy: number; offset: number };
-  /** Styled mode: the layer matrix forbids this dependency — drawn red. */
-  violation?: boolean;
+  /** Styled mode: the layer matrix forbids this dependency — drawn red,
+   *  with this reason on hover and beside the line when selected. */
+  violation?: string;
 }
 
 /** The drawing behind a styled level: which style, and the region per layer. */
@@ -418,7 +419,7 @@ export async function buildDiagramScene(
       const key = `${s}\0${t}`;
       const existing = edgeMap.get(key);
       if (existing) {
-        existing.violation = true;
+        existing.violation = v.detail;
         existing.implied = false;
         continue;
       }
@@ -431,7 +432,7 @@ export async function buildDiagramScene(
         kind: undefined,
         nonPlanar: false,
         implied: false,
-        violation: true,
+        violation: v.detail,
       };
       edgeMap.set(key, e);
       edges.push(e);
@@ -447,7 +448,10 @@ export async function buildDiagramScene(
       // A code-time violation stays a violation whatever the declared link says.
       if (e.id.startsWith("violation:")) continue;
       e.implied = verdict === "implied";
-      e.violation = verdict === "violation";
+      e.violation =
+        verdict === "violation"
+          ? violationReason(styleDef, byId.get(e.source)?.name ?? e.source, sl, byId.get(e.target)?.name ?? e.target, tl, sourceGhost, targetGhost)
+          : undefined;
       if (sourceGhost || targetGhost) continue;
       // A same-layer chord crosses whatever sits between its ends — the
       // centre on a ring, the neighbouring cards on a band. Bow it clear:
@@ -484,6 +488,30 @@ export async function buildDiagramScene(
   });
 
   return { mode, focusId, nodes, edges, styled, regions };
+}
+
+/** One line saying why a styled edge is red — the rule it breaks, in the
+ *  style's own words, so the map never shows a red line without a reason. */
+function violationReason(
+  def: StyleDef,
+  source: string,
+  sl: string | undefined,
+  target: string,
+  tl: string | undefined,
+  sourceGhost: boolean,
+  targetGhost: boolean,
+): string {
+  if (sourceGhost && tl) {
+    return `${source} (outside) reaches ${target} on the ${tl} layer — in ${def.name}, traffic from outside enters through ${def.inbound.join(" or ")}`;
+  }
+  if (targetGhost && sl) {
+    return `${source} (${sl}) reaches out of the container to ${target} — in ${def.name}, only ${(def.outbound ?? []).join(" or ") || "no layer"} talks to the outside`;
+  }
+  if (sl && tl && sl === tl) {
+    return `${source} depends on ${target}, a sibling on the ${sl} layer — ${def.name} keeps slices on a layer isolated`;
+  }
+  const allowed = sl ? def.matrix[sl] ?? [] : [];
+  return `${source} (${sl}) depends on ${target} (${tl}) — in ${def.name}, ${sl} may depend on ${allowed.length ? allowed.join(", ") : "nothing"}`;
 }
 
 // ── Architecture tiers: planar boxes ────────────────────────────────────────

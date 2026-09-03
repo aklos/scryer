@@ -45,13 +45,6 @@ function genState(pending?: boolean): "pending" | "live" | undefined {
   return pending === undefined ? undefined : pending ? "pending" : "live";
 }
 
-/** The C4 kind's accent hue — the conceptual anchor beside the silhouette. */
-const KIND_ACCENT: Partial<Record<DiagramNode["kind"], string>> = {
-  system: "bg-violet-400/70",
-  container: "bg-sky-400/70",
-  component: "bg-teal-400/70",
-};
-
 /** Card outline stroke per change mark — same palette as the tree gutter and
  *  the dots: A green, M/R amber (plan edits), D red, Q/X orange (drift),
  *  P violet (amended after sign-off). */
@@ -264,16 +257,6 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
               &#8599;
             </button>
           </div>
-        )}
-
-        {/* The C4 kind as the card's accent: a hue on the left edge, so the
-            level reads conceptually (system / container / component) while
-            the silhouette and thumbnail carry the visual anchor. */}
-        {!isGhost && KIND_ACCENT[node.kind] && (
-          <div
-            className={`pointer-events-none absolute left-[3px] top-[18%] z-10 h-[64%] w-[3px] rounded-full ${KIND_ACCENT[node.kind]}`}
-            title={node.kind}
-          />
         )}
 
         {/* Direct-child count. */}

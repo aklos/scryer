@@ -36,8 +36,9 @@ export interface EdgeData extends Record<string, unknown> {
    *  would otherwise cut through the layers inside). */
   bow?: { cx: number; cy: number; offset: number };
   /** The style's layer matrix forbids this dependency — drawn red so the map
-   *  exposes the code's disorder instead of tidying it away. */
-  violation?: boolean;
+   *  exposes the code's disorder instead of tidying it away. The string is
+   *  the reason, shown on hover and beside the line when selected. */
+  violation?: string;
 }
 
 /** Gap between a dot's rim and where the line/arrow starts, so it kisses the
@@ -151,8 +152,11 @@ export function RelationshipEdge({
           />
         </clipPath>
       </defs>
-      {/* Wider invisible hit area for easier clicking. */}
-      <path d={edgePath} fill="none" stroke="transparent" strokeWidth={20} className="react-flow__edge-interaction" />
+      {/* Wider invisible hit area for easier clicking — and the hover tooltip
+          carrying a violation's reason. */}
+      <path d={edgePath} fill="none" stroke="transparent" strokeWidth={20} className="react-flow__edge-interaction">
+        {data?.violation && <title>{data.violation}</title>}
+      </path>
       <g opacity={edgeOpacity}>
         <g clipPath={`url(#${clipId})`}>
           <BaseEdge
@@ -172,6 +176,21 @@ export function RelationshipEdge({
       </g>
       {/* Midpoint dot — visible on edge hover. */}
       <circle cx={labelX} cy={labelY} r={4} fill={edgeColor} className="edge-handle-dot" />
+      {data?.violation && (selected || data?.highlighted) && (
+        <EdgeLabelRenderer>
+          <div
+            style={{
+              position: "absolute",
+              transform: `translate(-50%, -50%) translate(${labelDivX}px,${labelDivY}px)`,
+              zIndex: 2,
+              pointerEvents: "all",
+            }}
+            className="max-w-[260px] rounded border border-red-500/40 bg-[var(--surface)] px-2 py-1 text-[10px] leading-snug text-[var(--text)]"
+          >
+            {data.violation}
+          </div>
+        </EdgeLabelRenderer>
+      )}
       {(label || method) && (!isDot || selected || data?.highlighted) && (
         <EdgeLabelRenderer>
           <div
