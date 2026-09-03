@@ -443,6 +443,7 @@ function DiagramInner({
         sourceHandle: scene.mode === "code" ? "c" : h?.sourceHandle,
         targetHandle: scene.mode === "code" ? "c" : h?.targetHandle,
         data: {
+          bow: e.bow,
           label: ghostEdge ? undefined : e.label || undefined,
           method: ghostEdge ? undefined : e.method,
           dot: scene.mode === "code",

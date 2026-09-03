@@ -80,6 +80,32 @@ const Diagram = () => (
   />
 );
 
+const StyledHex = () => (
+  <DiagramView
+    model={paymentsModel}
+    planDiff={EMPTY_DIFF}
+    committed={null}
+    report={healthReport}
+    focusId="ledger"
+    selectedId={null}
+    onFocus={noop}
+    onSelectNode={noop}
+  />
+);
+
+const StyledRows = () => (
+  <DiagramView
+    model={paymentsModel}
+    planDiff={EMPTY_DIFF}
+    committed={null}
+    report={healthReport}
+    focusId="dashboard"
+    selectedId={null}
+    onFocus={noop}
+    onSelectNode={noop}
+  />
+);
+
 const NodeBody = () => (
   <NodePage
     testVerdicts={{}}
@@ -197,6 +223,24 @@ export const timeline: Scene[] = [
     render: () => (
       <Treated headline="The whole architecture, at a glance.">
         <Diagram />
+      </Treated>
+    ),
+  },
+  {
+    id: "styled-hex",
+    duration: 9000,
+    render: () => (
+      <Treated headline="A service drawn as the hexagon it is.">
+        <StyledHex />
+      </Treated>
+    ),
+  },
+  {
+    id: "styled-rows",
+    duration: 9000,
+    render: () => (
+      <Treated headline="A frontend drawn as its layers.">
+        <StyledRows />
       </Treated>
     ),
   },

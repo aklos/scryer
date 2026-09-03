@@ -8,7 +8,6 @@
 import { ViewportPortal } from "@xyflow/react";
 import type { LayerRegion } from "./layout/styled";
 
-const HEX_LABEL_INSET = 10;
 
 function hexPoints(cx: number, cy: number, r: number): string {
   // Flat-topped hexagon, circumradius r.
@@ -93,9 +92,10 @@ export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
             return (
               <g key={i}>
                 <polygon points={hexPoints(r.cx, r.cy, r.r)} {...common} strokeDasharray={undefined} />
+                {/* Upper-left vertex: the top edge is where the first ring card sits. */}
                 <text
-                  x={r.cx}
-                  y={r.cy - (r.r * Math.sin(Math.PI / 3)) + 16 - HEX_LABEL_INSET + 10}
+                  x={r.cx + r.r * Math.cos((-2 * Math.PI) / 3) * 0.72}
+                  y={r.cy + r.r * Math.sin((-2 * Math.PI) / 3) * 0.72 + 4}
                   textAnchor="middle"
                   fontSize={10}
                   letterSpacing={1.5}

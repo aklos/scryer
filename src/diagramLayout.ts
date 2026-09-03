@@ -80,6 +80,9 @@ export interface DiagramEdge {
   /** Styled mode: the drawing already says this (a step into the innermost
    *  layer, an adapter onto its port) — hidden until one end is selected. */
   implied: boolean;
+  /** Styled rings: both ends sit on one ring, so the chord would cut through
+   *  the centre — bow it outward, away from `(cx, cy)`, by `amount` px. */
+  bow?: { cx: number; cy: number; amount: number };
 }
 
 /** The drawing behind a styled level: which style, and the region per layer. */
@@ -354,9 +357,20 @@ export async function buildDiagramScene(
     styled = { name: styleDef.name, drawing: styleDef.drawing, regions: laid.regions };
     // The drawing already says these — hide them until a selection asks.
     const layerById = new Map(children.map((c) => [c.id, c.layer] as const));
+    const ringDrawing = styleDef.drawing === "rings" || styleDef.drawing === "hexagon";
+    const innermost = styleDef.layers[styleDef.layers.length - 1]?.name;
     for (const e of edges) {
       if (!layerById.has(e.source) || !layerById.has(e.target)) continue;
-      e.implied = isImpliedEdge(styleDef, layerById.get(e.source), layerById.get(e.target), e.kind);
+      const sl = layerById.get(e.source), tl = layerById.get(e.target);
+      e.implied = isImpliedEdge(styleDef, sl, tl, e.kind);
+      // A same-ring chord would cross the centre: bow it outward instead.
+      if (ringDrawing && sl && sl === tl && sl !== innermost) {
+        // Bow out to the ring itself, so the curve rides the ring the two
+        // cards sit on instead of crossing the layers inside it.
+        const sc = laid.centers.get(e.source), tc = laid.centers.get(e.target);
+        const ring = sc && tc ? (Math.hypot(sc.x, sc.y) + Math.hypot(tc.x, tc.y)) / 2 : 200;
+        e.bow = { cx: 0, cy: 0, amount: ring };
+      }
     }
   } else {
     positions = await archLayout(layoutIds, edges, pinnedPos);

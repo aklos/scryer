@@ -35,17 +35,17 @@ const contextNodes: Node[] = [
 const containerNodes: Node[] = [
   {
     id: "dashboard", kind: "container", name: "Merchant Dashboard", parentId: "aperture",
-    technology: "React", visual: true,
+    technology: "React", visual: true, style: "feature-sliced",
     description: "Where merchants watch payouts, disputes, and live volume.",
   },
   {
     id: "api-gateway", kind: "container", name: "API Gateway", parentId: "aperture",
-    technology: "Envoy",
+    technology: "Envoy", style: "core-shell",
     description: "The single front door — authenticates and routes every request.",
   },
   {
     id: "auth", kind: "container", name: "Auth Service", parentId: "aperture",
-    technology: "Go",
+    technology: "Go", style: "core-shell",
     description: "Issues and verifies API keys and merchant session tokens.",
     responsibilities: [
       { id: "r-auth-1", statement: "**Verify** every request carries a valid, unexpired credential",
@@ -57,7 +57,7 @@ const containerNodes: Node[] = [
   },
   {
     id: "ledger", kind: "container", name: "Ledger Service", parentId: "aperture",
-    technology: "Rust",
+    technology: "Rust", style: "hexagonal",
     description: "The double-entry source of truth for every movement of money.",
     responsibilities: [
       { id: "r-ledger-1", statement: "**When** a payment is authorized or captured, **record** it as a balanced double-entry" },
@@ -69,7 +69,7 @@ const containerNodes: Node[] = [
   },
   {
     id: "fraud", kind: "container", name: "Fraud Engine", parentId: "aperture",
-    technology: "Python",
+    technology: "Python", style: "pipeline",
     description: "Scores each payment for risk before the ledger commits it.",
     responsibilities: [
       { id: "r-fraud-1", statement: "**Score** every payment for risk within the authorization window" },
@@ -78,7 +78,7 @@ const containerNodes: Node[] = [
   },
   {
     id: "webhooks", kind: "container", name: "Webhook Dispatcher", parentId: "aperture",
-    technology: "Go",
+    technology: "Go", style: "core-shell",
     description: "Delivers payment events to merchant endpoints, with retries.",
     responsibilities: [
       { id: "r-wh-1", statement: "**Deliver** each payment event to the merchant's endpoint at least once" },
@@ -103,6 +103,34 @@ const containerNodes: Node[] = [
   },
 ];
 
+// --- Component tier: inside two styled containers ----------------------------
+
+const componentNodes: Node[] = [
+  // Ledger Service — hexagonal.
+  { id: "ledger-http", kind: "component", name: "Payments API", parentId: "ledger", layer: "presentation",
+    description: "gRPC surface the gateway calls." },
+  { id: "ledger-post", kind: "component", name: "Post Entry", parentId: "ledger", layer: "application",
+    description: "Records an authorized or captured payment as a balanced entry." },
+  { id: "ledger-escrow", kind: "component", name: "Escrow", parentId: "ledger", layer: "application",
+    description: "Holds captured funds until settlement confirms." },
+  { id: "ledger-model", kind: "component", name: "Ledger Model", parentId: "ledger", layer: "domain",
+    description: "Accounts, postings and the balance rules." },
+  { id: "ledger-store", kind: "component", name: "Postgres Store", parentId: "ledger", layer: "infrastructure",
+    description: "Serialized transactional writes." },
+  { id: "ledger-bus", kind: "component", name: "Event Publisher", parentId: "ledger", layer: "infrastructure",
+    description: "Publishes ledger events to the bus." },
+  // Merchant Dashboard — feature-sliced.
+  { id: "dash-app", kind: "component", name: "App Shell", parentId: "dashboard", layer: "app" },
+  { id: "dash-payouts", kind: "component", name: "Payouts Page", parentId: "dashboard", layer: "pages" },
+  { id: "dash-disputes", kind: "component", name: "Disputes Page", parentId: "dashboard", layer: "pages" },
+  { id: "dash-chart", kind: "component", name: "Volume Chart", parentId: "dashboard", layer: "widgets" },
+  { id: "dash-export", kind: "component", name: "Export CSV", parentId: "dashboard", layer: "features" },
+  { id: "dash-merchant", kind: "component", name: "Merchant", parentId: "dashboard", layer: "entities" },
+  { id: "dash-payout", kind: "component", name: "Payout", parentId: "dashboard", layer: "entities" },
+  { id: "dash-ui", kind: "component", name: "UI Kit", parentId: "dashboard", layer: "shared" },
+  { id: "dash-api", kind: "component", name: "API Client", parentId: "dashboard", layer: "shared" },
+];
+
 // --- Links -------------------------------------------------------------------
 
 const links: Link[] = [
@@ -121,12 +149,32 @@ const links: Link[] = [
   { id: "l-6", src: "ledger", dst: "event-bus", label: "Publishes events" },
   { id: "l-7", src: "event-bus", dst: "webhooks", label: "Delivers" },
   { id: "l-8", src: "event-bus", dst: "notifications", label: "Delivers" },
+
+  // Ledger components (hexagonal)
+  { id: "l-lg-1", src: "ledger-http", dst: "ledger-post", label: "", kind: "calls" },
+  { id: "l-lg-2", src: "ledger-http", dst: "ledger-escrow", label: "", kind: "calls" },
+  { id: "l-lg-3", src: "ledger-post", dst: "ledger-model", label: "", kind: "depends" },
+  { id: "l-lg-4", src: "ledger-escrow", dst: "ledger-model", label: "", kind: "depends" },
+  { id: "l-lg-5", src: "ledger-store", dst: "ledger-post", label: "", kind: "implements" },
+  { id: "l-lg-6", src: "ledger-bus", dst: "ledger-escrow", label: "", kind: "implements" },
+  { id: "l-lg-7", src: "ledger-escrow", dst: "ledger-post", label: "releases via", kind: "uses" },
+
+  // Dashboard components (feature-sliced)
+  { id: "l-db-1", src: "dash-app", dst: "dash-payouts", label: "", kind: "calls" },
+  { id: "l-db-2", src: "dash-app", dst: "dash-disputes", label: "", kind: "calls" },
+  { id: "l-db-3", src: "dash-payouts", dst: "dash-chart", label: "", kind: "calls" },
+  { id: "l-db-4", src: "dash-disputes", dst: "dash-export", label: "", kind: "calls" },
+  { id: "l-db-5", src: "dash-chart", dst: "dash-payout", label: "", kind: "depends" },
+  { id: "l-db-6", src: "dash-export", dst: "dash-payout", label: "", kind: "depends" },
+  { id: "l-db-7", src: "dash-payout", dst: "dash-api", label: "", kind: "depends" },
+  { id: "l-db-8", src: "dash-merchant", dst: "dash-ui", label: "", kind: "depends" },
+  { id: "l-db-9", src: "dash-payouts", dst: "dash-merchant", label: "", kind: "depends" },
 ];
 
 /** The fictional payments platform, shaped to the real on-disk model. */
 export const paymentsModel: ScryModel = {
   version: SCRY_VERSION,
-  nodes: [...contextNodes, ...containerNodes],
+  nodes: [...contextNodes, ...containerNodes, ...componentNodes],
   links,
   groups: [],
   // The concern registry — one entry per slug the claims above use (auto-minted
@@ -308,8 +356,15 @@ export const healthReport: ModelHealthReport = {
     // Sibling services the code connects but no declared link covers — the
     // diagram draws these as implied-connection ghosts.
     unmodeled: [{ src: "fraud", dst: "event-bus", count: 4 }],
-    resolvedEdges: [],
+    resolvedEdges: [
+      // The gateway's client drives the ledger's API; the store reaches the DB.
+      { srcNode: "api-gateway", srcSymbol: "submit_payment", srcFile: "gateway/routes.go",
+        dstNode: "ledger-http", dstSymbol: "PostPayment", dstFile: "ledger/src/presentation/grpc.rs", count: 3 },
+      { srcNode: "ledger-store", srcSymbol: "PgStore", srcFile: "ledger/src/infrastructure/pg.rs",
+        dstNode: "payments-db", dstSymbol: "", dstFile: "db/schema.sql", count: 5 },
+    ],
   },
+  style: { violations: [], layerViolations: 0, isolationViolations: 0, externalViolations: 0, misplaced: 0 },
 };
 
 /** The film's opening health: the model just born from the code, fully in sync —

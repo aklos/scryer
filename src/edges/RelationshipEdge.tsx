@@ -32,6 +32,9 @@ export interface EdgeData extends Record<string, unknown> {
   /** A reverse edge runs between the same two nodes — offset to a parallel lane
    *  so the two straight chords don't overlap. */
   parallel?: boolean;
+  /** Bow the edge outward from a centre (styled rings: a same-ring chord
+   *  would otherwise cut through the layers inside). */
+  bow?: { cx: number; cy: number; amount: number };
 }
 
 /** Gap between a dot's rim and where the line/arrow starts, so it kisses the
@@ -80,12 +83,28 @@ export function RelationshipEdge({
   const tx = targetX - ux * tInset + ox, ty = targetY - uy * tInset + oy;
 
   const isDot = !!data?.dot;
-  // Straight chord rim-to-rim — same edge as before (arrowhead, label, and the
-  // arch tier's animated dash all kept below), just no longer bowed.
-  const edgePath = `M ${sx} ${sy} L ${tx} ${ty}`;
-  // Hover handle sits at the lane midpoint.
-  const labelX = (sx + tx) / 2;
-  const labelY = (sy + ty) / 2;
+  // Straight chord rim-to-rim by default. A bowed edge (styled rings) is a
+  // quadratic curve whose control point sits past the chord's midpoint, away
+  // from the drawing's centre.
+  let cxp = (sx + tx) / 2, cyp = (sy + ty) / 2;
+  if (data?.bow) {
+    const mx = cxp, my = cyp;
+    let vx = mx - data.bow.cx, vy = my - data.bow.cy;
+    let vl = Math.hypot(vx, vy);
+    if (vl < 8) {
+      // Antipodal ends: the chord runs through the centre, so bow to the
+      // chord's right-hand side instead.
+      vx = -uy; vy = ux; vl = 1;
+    }
+    // A quadratic's midpoint sits halfway to its control point, so doubling
+    // puts the curve's middle exactly `amount` px from the centre.
+    cxp = mx + (vx / vl) * data.bow.amount * 2;
+    cyp = my + (vy / vl) * data.bow.amount * 2;
+  }
+  const edgePath = data?.bow ? `M ${sx} ${sy} Q ${cxp} ${cyp} ${tx} ${ty}` : `M ${sx} ${sy} L ${tx} ${ty}`;
+  // Hover handle sits at the lane midpoint (the curve's midpoint when bowed).
+  const labelX = data?.bow ? 0.25 * sx + 0.5 * cxp + 0.25 * tx : (sx + tx) / 2;
+  const labelY = data?.bow ? 0.25 * sy + 0.5 * cyp + 0.25 * ty : (sy + ty) / 2;
   // Parallel (reverse-pair) edges share one chord, so a midpoint pill can't be
   // told apart from its twin. Place each label by (a) sliding it along the chord
   // toward its own source — the pair lands at ~35%/65% and clears ALONG the line
@@ -98,7 +117,7 @@ export function RelationshipEdge({
     labelDivX = px + -uy * PARALLEL_LABEL_GAP;
     labelDivY = py + ux * PARALLEL_LABEL_GAP;
   }
-  const arrowAngle = Math.atan2(ty - sy, tx - sx);
+  const arrowAngle = data?.bow ? Math.atan2(ty - cyp, tx - cxp) : Math.atan2(ty - sy, tx - sx);
 
   // Arrowhead polygon from explicit geometry.
   const arrowSize = 8;
