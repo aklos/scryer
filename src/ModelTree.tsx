@@ -824,6 +824,17 @@ export function ModelTree({
             <Plus className="h-3 w-3" />
           </button>
         )}
+        {/* Layer tag: the fixed word that says what role a component plays in
+            its container's style — scannable down the tree like a concern
+            glyph across claims. */}
+        {node.kind === "component" && node.layer && (
+          <span
+            className="ml-1.5 shrink-0 rounded border border-[var(--border-subtle)] px-1 text-[9px] uppercase tracking-wider text-[var(--text-ghost)]"
+            title={`layer: ${node.layer}`}
+          >
+            {node.layer.slice(0, 4)}
+          </span>
+        )}
         {hiddenSyms > 0 && (
           <span
             className="shrink-0 font-mono text-2xs tabular-nums text-[var(--text-ghost)]"

@@ -64,6 +64,7 @@ import { plannedRespHosts, ResponsibilitiesSection } from "./page/Responsibiliti
 import { PropertiesSection } from "./page/PropertiesSection";
 import { PreviewSection } from "./page/PreviewSection";
 import { previewEntryFor } from "./hooks/usePreviewServer";
+import { allowedImports, governingStyleDef, layerOf, styleTable } from "./styles";
 
 export type { SpecialPage, Selected } from "./page/types";
 
@@ -274,6 +275,10 @@ function NodePageBody(props: PageProps & { node: Node }) {
       </>
     ) : null;
 
+  // The horizontal axis for the badges below.
+  const styleDef = governingStyleDef(model, node.id, styleTable(report ?? null));
+  const layer = layerOf(model, node.id);
+
   return (
     <div className="flex min-w-0 flex-1 flex-col">
       <PageHeader
@@ -308,6 +313,39 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   <span className="font-mono">{node.technology}</span>
                 </>
               )
+            )}
+            {/* Style and layer: the horizontal axis. A container names its
+                style; a component its layer, with the one line the reader
+                needs about it — what it may import. Symbols inherit. */}
+            {node.style && (
+              <>
+                <span className="text-[var(--text-ghost)]">·</span>
+                <span
+                  className="rounded border border-[var(--border-subtle)] px-1 text-[10px] tracking-wider"
+                  title={styleDef ? `${styleDef.name}: ${styleDef.description}` : `style: ${node.style}`}
+                >
+                  {node.style}
+                </span>
+              </>
+            )}
+            {layer && (
+              <>
+                <span className="text-[var(--text-ghost)]">·</span>
+                <span
+                  className="rounded border border-[var(--border-subtle)] px-1 text-[10px] uppercase tracking-wider"
+                  title={
+                    styleDef?.layers.find((l) => l.name === layer)?.description ??
+                    `layer: ${layer}`
+                  }
+                >
+                  {layer}
+                </span>
+                {styleDef && node.kind === "component" && (
+                  <span className="text-[var(--text-tertiary)]">
+                    may import {allowedImports(styleDef, layer).join(", ") || "nothing"}
+                  </span>
+                )}
+              </>
             )}
             {defFile && (
               <>
