@@ -702,9 +702,11 @@ fn check_unreached(model: &ScryModel, styles: &Styles) -> Vec<String> {
 const FILE_LISTING_MIN_COMPONENTS: usize = 4;
 
 /// Rule 7's checkable proxy. Cohesion is not computable, but "one component
-/// per file" has a signature that is: every anchored component in a container
-/// maps to exactly one file, and no file is shared between two of them. That
-/// is a directory listing wearing component names, not a decomposition.
+/// per file" has a signature that is: nearly every anchored component in a
+/// container maps to exactly one file, and nearly every file to one
+/// component. That is a directory listing wearing component names, not a
+/// decomposition. "Nearly" because one two-file component or one shared
+/// helper file must not launder a 23-file listing.
 fn check_file_listing(model: &ScryModel) -> Vec<String> {
     let mut warnings = Vec::new();
     let by_id: HashMap<&str, &crate::Node> = model.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
@@ -739,16 +741,19 @@ fn check_file_listing(model: &ScryModel) -> Vec<String> {
         if anchored.len() < FILE_LISTING_MIN_COMPONENTS {
             continue;
         }
-        let one_each = anchored.iter().all(|(_, f)| f.len() == 1);
+        let single = anchored.iter().filter(|(_, f)| f.len() == 1).count();
         let distinct: HashSet<&str> = anchored.iter().flat_map(|(_, f)| f.iter().copied()).collect();
-        if one_each && distinct.len() == anchored.len() {
+        let n = anchored.len();
+        if single * 5 >= n * 4 && distinct.len() * 5 >= n * 4 {
             warnings.push(format!(
-                "Container {} (\"{}\") reads as a file listing, not a decomposition: all {} anchored \
-                 components map to exactly one file each and no file is shared. Rule 7: cluster \
+                "Container {} (\"{}\") reads as a file listing, not a decomposition: {} of its {} anchored \
+                 components map to exactly one file each, over {} distinct files. Rule 7: cluster \
                  components from cohesion and the dependency graph, several files per component",
                 container.id,
                 container.name,
-                anchored.len()
+                single,
+                n,
+                distinct.len()
             ));
         }
     }
@@ -1438,9 +1443,9 @@ mod style_tests {
             );
         }
         let w = validate(&m);
-        assert!(w.iter().any(|x| x.contains("Container c (\"Core\") reads as a file listing") && x.contains("all 4 anchored")), "{w:?}");
+        assert!(w.iter().any(|x| x.contains("Container c (\"Core\") reads as a file listing") && x.contains("4 of its 4 anchored")), "{w:?}");
 
-        // One component spanning two files is a real cut → silent.
+        // One of four spanning two files (75%) is a real cut → silent.
         m.source_map.get_mut("r0").unwrap().push(
             serde_json::from_value(serde_json::json!({ "pattern": "src/k0_extra.rs" })).unwrap(),
         );

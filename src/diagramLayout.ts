@@ -407,6 +407,35 @@ export async function buildDiagramScene(
     for (const [id, at] of pinnedPos) positions.set(id, at);
     styled = { name: styleDef.name, drawing: styleDef.drawing, regions: laid.regions };
     regions = laid.regions;
+    // Code-time violations from the health report — real imports the layer
+    // matrix forbids — are drawn even when no link declares the pair. The
+    // map exists to expose exactly these; a declared-links-only view would
+    // read as compliance the code does not have.
+    for (const v of report?.style?.violations ?? []) {
+      if (!v.other) continue;
+      const s = liftToLevel(v.node), t = liftToLevel(v.other);
+      if (!s || !t || s === t) continue;
+      const key = `${s}\0${t}`;
+      const existing = edgeMap.get(key);
+      if (existing) {
+        existing.violation = true;
+        existing.implied = false;
+        continue;
+      }
+      const e: DiagramEdge = {
+        id: "violation:" + key,
+        source: s,
+        target: t,
+        label: "",
+        method: undefined,
+        kind: undefined,
+        nonPlanar: false,
+        implied: false,
+        violation: true,
+      };
+      edgeMap.set(key, e);
+      edges.push(e);
+    }
     // The drawing already says these — hide them until a selection asks.
     const layerById = new Map(children.map((c) => [c.id, c.layer] as const));
     const ringDrawing = styleDef.drawing === "rings" || styleDef.drawing === "hexagon";
@@ -415,6 +444,8 @@ export async function buildDiagramScene(
       const sourceGhost = ghostIds.has(e.source), targetGhost = ghostIds.has(e.target);
       const sl = layerById.get(e.source), tl = layerById.get(e.target);
       const verdict = classifyStyledEdge(styleDef, sl, tl, { sourceGhost, targetGhost });
+      // A code-time violation stays a violation whatever the declared link says.
+      if (e.id.startsWith("violation:")) continue;
       e.implied = verdict === "implied";
       e.violation = verdict === "violation";
       if (sourceGhost || targetGhost) continue;
