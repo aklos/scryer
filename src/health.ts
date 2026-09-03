@@ -78,6 +78,8 @@ export interface AnchorObservation {
 
 /** Evidence rating of one declared model link: how many import edges cross
  *  from the src subtree into the dst subtree. 0 = asserted-only. */
+import type { StyleDef } from "./styles";
+
 export interface LinkAudit {
   linkId: string;
   edgeCount: number;
@@ -195,6 +197,8 @@ export interface ModelHealthReport {
   derived: DerivedGraph;
   /** Code-time style conformance over the same resolved import graph. */
   style: StyleReport;
+  /** The project's style table (built-ins plus `.scryer/styles/*.json`). */
+  styles?: StyleDef[];
 }
 
 export const ANCHOR_STATE_LABEL: Record<AnchorState, string> = {

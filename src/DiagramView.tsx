@@ -47,6 +47,7 @@ import { CenterHandle } from "./nodes/NodeHandles";
 import { RelationshipEdge, type EdgeData } from "./edges/RelationshipEdge";
 import { buildDiagramScene, CARD_W, CARD_H, type DiagramScene, type DiagramNode } from "./diagramLayout";
 import { useDotSim } from "./hooks/useDotSim";
+import { StyleRegions } from "./StyleRegions";
 import type { ModelHealthReport } from "./health";
 
 type DotData = CardData;
@@ -328,7 +329,7 @@ function DiagramInner({
   // placement belongs to the surface where the node really lives. Code-tier
   // dots drag whenever the live sim is on: pure physics, nothing written, so
   // ghosts (and agent-run sessions) join in freely.
-  const archDraggable = scene?.mode === "arch" && !!onMoveNode;
+  const archDraggable = scene?.mode !== "code" && !!scene && !!onMoveNode;
 
   // (Re)build the node state from the scene and its presentation inputs. Two
   // regimes, told apart by whether the SCENE object changed since last run:
@@ -382,7 +383,7 @@ function DiagramInner({
     // to a face that now points away until the drop rebuilds the scene.
     const liveNode = new Map(rfNodes.map((n) => [n.id, n] as const));
     const handles =
-      scene.mode === "arch"
+      scene.mode !== "code"
         ? assignAllHandles(
             scene.nodes.map((n) => {
               const live = liveNode.get(n.id);
@@ -418,7 +419,13 @@ function DiagramInner({
       const k = e.source < e.target ? `${e.source}\0${e.target}` : `${e.target}\0${e.source}`;
       pairCount.set(k, (pairCount.get(k) ?? 0) + 1);
     }
-    return scene.edges.map((e) => {
+    // Styled mode: an edge the drawing already implies (a step into the
+    // innermost layer, an adapter onto its port) stays hidden until one of
+    // its ends is selected — what remains is short and worth reading.
+    const visible = scene.edges.filter(
+      (e) => !e.implied || e.source === selectedId || e.target === selectedId,
+    );
+    return visible.map((e) => {
       const h = handles?.get(e.id);
       const connected = highlight.active && (e.source === selectedId || e.target === selectedId);
       const ghostEdge = ghostIds.has(e.source) || ghostIds.has(e.target);
@@ -607,6 +614,7 @@ function DiagramInner({
               color="var(--border-subtle)"
               className="!bg-[var(--surface-canvas)]"
             />
+            {scene?.styled && <StyleRegions regions={scene.styled.regions} />}
             <Controls showInteractive={false} className="!shadow-none">
               {archDraggable && (
                 <ControlButton

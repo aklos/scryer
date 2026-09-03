@@ -6,8 +6,11 @@
  * One "scene" is one level: the children of a focus node (or the top-level
  * nodes when focus is null), the links lifted to that level, and a position
  * per node. The mode is chosen by the children's altitude:
- *   - architecture tiers (system/container/component) → planar box layout
+ *   - architecture tiers (system/container) → planar box layout
  *     (`layoutGraph`), the formal C4 boxes-and-lines.
+ *   - the component level of a styled container → the style's own drawing
+ *     (`styledLayout`): rows, columns, rings or Cockburn's hexagon, with each
+ *     card fixed to its layer's band and only the order within it free.
  *   - the code tier (symbols) → a force-directed dot graph, where boxes-and-
  *     lines would be noise and relationships read better as a constellation.
  */
@@ -19,8 +22,10 @@ import type { EdgePair } from "./layout/planar";
 import type { ScryModel, Kind } from "./viewmodel";
 import { isDataShape } from "./viewmodel";
 import type { ModelHealthReport } from "./health";
+import { governingStyleDef, layerOf, styleTable, type Drawing, type StyleDef } from "./styles";
+import { isImpliedEdge, styledLayout, type LayerRegion } from "./layout/styled";
 
-export type DiagramMode = "arch" | "code";
+export type DiagramMode = "arch" | "styled" | "code";
 
 /** How a code-tier symbol reads at a glance — the three things a symbol can be
  *  (mirrors `kindIcon`/`typeTag`): a data shape (`model`), a component the
@@ -52,6 +57,12 @@ export interface DiagramNode {
   reference: boolean;
   /** Code-tier classification — drives the muted class line under the dot. */
   symbolClass: SymbolClass;
+  /** The architectural style this node declares (containers; a component
+   *  overriding its container's). Drives the miniature glyph on the card. */
+  style?: string;
+  /** The layer this node plays in its governing style (components; symbols
+   *  inherit). Drives the card's layer tag and the styled layout. */
+  layer?: string;
   x: number;
   y: number;
 }
@@ -62,8 +73,20 @@ export interface DiagramEdge {
   target: string;
   label: string;
   method?: string;
+  /** What the link is, when declared (styled containers). */
+  kind?: string;
   /** Couldn't be embedded planar — the renderer routes it loosely. */
   nonPlanar: boolean;
+  /** Styled mode: the drawing already says this (a step into the innermost
+   *  layer, an adapter onto its port) — hidden until one end is selected. */
+  implied: boolean;
+}
+
+/** The drawing behind a styled level: which style, and the region per layer. */
+export interface StyledScene {
+  name: string;
+  drawing: Drawing;
+  regions: LayerRegion[];
 }
 
 export interface DiagramScene {
@@ -72,6 +95,8 @@ export interface DiagramScene {
   focusId: string | null;
   nodes: DiagramNode[];
   edges: DiagramEdge[];
+  /** Present in `styled` mode. */
+  styled?: StyledScene;
 }
 
 // Grid cell size for the planar box layout (matches the canvas on `main`).
@@ -131,6 +156,7 @@ export async function buildDiagramScene(
   focusId: string | null,
   report: ModelHealthReport | null,
   previewable: ReadonlySet<string> = new Set(),
+  styles: ReadonlyMap<string, StyleDef> = styleTable(report),
 ): Promise<DiagramScene> {
   const byId = new Map(model.nodes.map((n) => [n.id, n]));
   const childCounts = new Map<string, number>();
@@ -193,16 +219,23 @@ export async function buildDiagramScene(
 
   const ghostIds = new Set<string>();
   const edgeMap = new Map<string, DiagramEdge>();
-  const addEdge = (linkId: string, label: string, method: string | undefined, source: string, target: string) => {
+  const addEdge = (
+    linkId: string,
+    label: string,
+    method: string | undefined,
+    source: string,
+    target: string,
+    kind?: string,
+  ) => {
     if (source === target) return;
     const key = `${source}\0${target}`;
     if (edgeMap.has(key)) return;
-    edgeMap.set(key, { id: linkId, source, target, label, method, nonPlanar: false });
+    edgeMap.set(key, { id: linkId, source, target, label, method, kind, nonPlanar: false, implied: false });
   };
   for (const link of model.links) {
     const s = liftToLevel(link.src);
     const t = liftToLevel(link.dst);
-    if (s && t) addEdge(link.id, link.label ?? "", link.method, s, t);
+    if (s && t) addEdge(link.id, link.label ?? "", link.method, s, t, link.kind);
   }
 
   // Ghosts: the focus node's cross-boundary connections, read off the same code
@@ -260,13 +293,22 @@ export async function buildDiagramScene(
       degree: degree.get(n.id) ?? 0,
       reference,
       symbolClass: previewable.has(n.id) ? "visual" : isDataShape(n) ? "model" : "code",
+      style: n.style,
+      layer: layerOf(model, n.id),
     };
   };
 
+  // The component level of a styled container draws in its style's shape.
+  const styleDef =
+    focusId !== null && children.length > 0 && children.every((c) => c.kind === "component")
+      ? governingStyleDef(model, focusId, styles)
+      : undefined;
   const mode: DiagramMode =
     children.length > 0 && children.every((c) => c.kind === "symbol")
       ? "code"
-      : "arch";
+      : styleDef
+        ? "styled"
+        : "arch";
 
   if (children.length === 0) {
     return { mode, focusId, nodes: [], edges };
@@ -295,13 +337,30 @@ export async function buildDiagramScene(
       : [],
   );
 
-  const positions =
-    mode === "code"
-      ? dotLayout(
-          layoutIds.map((id) => ({ id, name: byId.get(id)!.name, size: sizeById.get(id)! })),
-          edges,
-        )
-      : await archLayout(layoutIds, edges, pinnedPos);
+  let styled: StyledScene | undefined;
+  let positions: Map<string, { x: number; y: number }>;
+  if (mode === "code") {
+    positions = dotLayout(
+      layoutIds.map((id) => ({ id, name: byId.get(id)!.name, size: sizeById.get(id)! })),
+      edges,
+    );
+  } else if (mode === "styled" && styleDef) {
+    const members = children.map((c) => ({ id: c.id, layer: c.layer }));
+    const laid = styledLayout(styleDef, members, ghosts, edges);
+    positions = new Map(
+      [...laid.centers].map(([id, c]) => [id, { x: c.x - CARD_W / 2, y: c.y - CARD_H / 2 }]),
+    );
+    for (const [id, at] of pinnedPos) positions.set(id, at);
+    styled = { name: styleDef.name, drawing: styleDef.drawing, regions: laid.regions };
+    // The drawing already says these — hide them until a selection asks.
+    const layerById = new Map(children.map((c) => [c.id, c.layer] as const));
+    for (const e of edges) {
+      if (!layerById.has(e.source) || !layerById.has(e.target)) continue;
+      e.implied = isImpliedEdge(styleDef, layerById.get(e.source), layerById.get(e.target), e.kind);
+    }
+  } else {
+    positions = await archLayout(layoutIds, edges, pinnedPos);
+  }
 
   const nodes: DiagramNode[] = layoutIds.map((id) => {
     const p = positions.get(id) ?? { x: 0, y: 0 };
@@ -314,7 +373,7 @@ export async function buildDiagramScene(
     };
   });
 
-  return { mode, focusId, nodes, edges };
+  return { mode, focusId, nodes, edges, styled };
 }
 
 // ── Architecture tiers: planar boxes ────────────────────────────────────────

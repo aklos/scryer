@@ -1,0 +1,407 @@
+[
+  {
+    "name": "core-shell",
+    "description": "CLIs, small libraries, config and script repos",
+    "layers": [
+      {
+        "name": "shell",
+        "description": "the imperative edge: I/O, arguments, wiring, side effects"
+      },
+      {
+        "name": "core",
+        "description": "pure logic with no I/O; everything the shell calls into"
+      }
+    ],
+    "matrix": {
+      "core": [
+        "core"
+      ],
+      "shell": [
+        "shell",
+        "core"
+      ]
+    },
+    "isolation": "inclusive",
+    "inbound": [
+      "shell"
+    ],
+    "publicSurface": [
+      "index.ts",
+      "index.js",
+      "mod.rs",
+      "lib.rs",
+      "__init__.py"
+    ],
+    "externalBans": {
+      "core": [
+        "react",
+        "react-dom",
+        "vue",
+        "svelte",
+        "@angular/core",
+        "next",
+        "astro",
+        "express",
+        "fastify",
+        "koa",
+        "hono",
+        "@nestjs/core",
+        "axum",
+        "actix-web",
+        "rocket",
+        "tokio",
+        "sqlx",
+        "diesel",
+        "reqwest",
+        "rusqlite",
+        "prisma",
+        "@prisma/client",
+        "typeorm",
+        "sequelize",
+        "mongoose",
+        "pg",
+        "mysql2",
+        "django",
+        "flask",
+        "fastapi",
+        "sqlalchemy",
+        "requests",
+        "httpx",
+        "net/http",
+        "database/sql",
+        "gorm.io/gorm"
+      ]
+    },
+    "path": {
+      "dirs": {
+        "core": [
+          "core"
+        ],
+        "shell": [
+          "shell",
+          "bin",
+          "cli",
+          "commands"
+        ]
+      },
+      "markers": {
+        "core": [
+          "lib.rs"
+        ],
+        "shell": [
+          "main.rs"
+        ]
+      }
+    },
+    "drawing": "rings"
+  },
+  {
+    "name": "feature-sliced",
+    "description": "SPAs, React/Vue/Svelte apps, docs and static sites",
+    "layers": [
+      {
+        "name": "app",
+        "description": "everything that makes the app run: routing, providers, global styles, config"
+      },
+      {
+        "name": "pages",
+        "description": "full pages or large parts of a page in nested routing"
+      },
+      {
+        "name": "widgets",
+        "description": "large self-contained chunks of functionality or UI"
+      },
+      {
+        "name": "features",
+        "description": "reused implementations of product features: actions users take"
+      },
+      {
+        "name": "entities",
+        "description": "business entities the project works with"
+      },
+      {
+        "name": "shared",
+        "description": "reusable functionality detached from the product: UI kit, utils, API client"
+      }
+    ],
+    "matrix": {
+      "app": [
+        "pages",
+        "widgets",
+        "features",
+        "entities",
+        "shared"
+      ],
+      "entities": [
+        "shared"
+      ],
+      "features": [
+        "entities",
+        "shared"
+      ],
+      "pages": [
+        "widgets",
+        "features",
+        "entities",
+        "shared"
+      ],
+      "shared": [
+        "shared"
+      ],
+      "widgets": [
+        "features",
+        "entities",
+        "shared"
+      ]
+    },
+    "isolation": "strict",
+    "inbound": [
+      "app",
+      "pages"
+    ],
+    "publicSurface": [
+      "index.ts",
+      "index.tsx",
+      "index.js",
+      "index.jsx"
+    ],
+    "path": {
+      "dirs": {
+        "app": [
+          "app"
+        ],
+        "entities": [
+          "entities"
+        ],
+        "features": [
+          "features"
+        ],
+        "pages": [
+          "pages"
+        ],
+        "shared": [
+          "shared"
+        ],
+        "widgets": [
+          "widgets"
+        ]
+      }
+    },
+    "drawing": "rows"
+  },
+  {
+    "name": "hexagonal",
+    "description": "services, backends, library cores",
+    "layers": [
+      {
+        "name": "presentation",
+        "description": "entry points that drive the application: handlers, controllers, CLI commands, UI"
+      },
+      {
+        "name": "infrastructure",
+        "description": "adapters the application drives: storage, network, filesystem, third parties"
+      },
+      {
+        "name": "application",
+        "description": "use cases and the ports they expose; orchestrates the domain"
+      },
+      {
+        "name": "domain",
+        "description": "the business model and its rules; pure, no I/O, no framework"
+      }
+    ],
+    "matrix": {
+      "application": [
+        "application",
+        "domain"
+      ],
+      "domain": [
+        "domain"
+      ],
+      "infrastructure": [
+        "infrastructure",
+        "application",
+        "domain"
+      ],
+      "presentation": [
+        "presentation",
+        "application"
+      ]
+    },
+    "isolation": "inclusive",
+    "inbound": [
+      "presentation",
+      "application"
+    ],
+    "publicSurface": [
+      "index.ts",
+      "index.js",
+      "mod.rs",
+      "lib.rs",
+      "__init__.py"
+    ],
+    "externalBans": {
+      "domain": [
+        "react",
+        "react-dom",
+        "vue",
+        "svelte",
+        "@angular/core",
+        "next",
+        "astro",
+        "express",
+        "fastify",
+        "koa",
+        "hono",
+        "@nestjs/core",
+        "axum",
+        "actix-web",
+        "rocket",
+        "tokio",
+        "sqlx",
+        "diesel",
+        "reqwest",
+        "rusqlite",
+        "prisma",
+        "@prisma/client",
+        "typeorm",
+        "sequelize",
+        "mongoose",
+        "pg",
+        "mysql2",
+        "django",
+        "flask",
+        "fastapi",
+        "sqlalchemy",
+        "requests",
+        "httpx",
+        "net/http",
+        "database/sql",
+        "gorm.io/gorm"
+      ]
+    },
+    "path": {
+      "dirs": {
+        "application": [
+          "application",
+          "usecases",
+          "use-cases",
+          "use_cases"
+        ],
+        "domain": [
+          "domain"
+        ],
+        "infrastructure": [
+          "infrastructure",
+          "infra",
+          "adapters"
+        ],
+        "presentation": [
+          "presentation",
+          "controllers",
+          "handlers",
+          "api",
+          "cli",
+          "ui"
+        ]
+      },
+      "markers": {
+        "application": [
+          ".use-case.",
+          ".usecase.",
+          ".port.",
+          ".service."
+        ],
+        "domain": [
+          ".entity.",
+          ".value.",
+          ".aggregate."
+        ],
+        "infrastructure": [
+          ".adapter.",
+          ".repository.",
+          ".client."
+        ],
+        "presentation": [
+          ".controller.",
+          ".handler.",
+          ".route."
+        ]
+      }
+    },
+    "drawing": "hexagon"
+  },
+  {
+    "name": "pipeline",
+    "description": "ETL, dbt, data work",
+    "layers": [
+      {
+        "name": "source",
+        "description": "raw inputs as they arrive; never transformed here"
+      },
+      {
+        "name": "staging",
+        "description": "one model per source, renamed and typed, nothing joined"
+      },
+      {
+        "name": "intermediate",
+        "description": "joins and reshaping between staging and marts"
+      },
+      {
+        "name": "marts",
+        "description": "the facts and dimensions consumers read"
+      }
+    ],
+    "matrix": {
+      "intermediate": [
+        "staging",
+        "intermediate"
+      ],
+      "marts": [
+        "intermediate",
+        "staging",
+        "marts"
+      ],
+      "source": [],
+      "staging": [
+        "source"
+      ]
+    },
+    "isolation": "inclusive",
+    "inbound": [
+      "marts"
+    ],
+    "publicSurface": [],
+    "path": {
+      "dirs": {
+        "intermediate": [
+          "intermediate"
+        ],
+        "marts": [
+          "marts"
+        ],
+        "source": [
+          "sources",
+          "source",
+          "raw"
+        ],
+        "staging": [
+          "staging"
+        ]
+      },
+      "markers": {
+        "intermediate": [
+          "int_"
+        ],
+        "marts": [
+          "fct_",
+          "dim_"
+        ],
+        "staging": [
+          "stg_"
+        ]
+      }
+    },
+    "drawing": "columns"
+  }
+]

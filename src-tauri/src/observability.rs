@@ -52,6 +52,9 @@ pub(crate) struct ModelHealthReport {
     /// Code-time conformance to each container's declared style, over the
     /// same resolved import graph as `derived`.
     style: scryer_core::style_health::StyleReport,
+    /// The project's style table (built-ins plus `.scryer/styles/*.json`), so
+    /// the diagram draws custom styles with their own layers.
+    styles: Vec<scryer_core::style::StyleDef>,
 }
 
 #[tauri::command]
@@ -113,13 +116,15 @@ pub(crate) async fn get_model_health(cwd: String) -> Result<ModelHealthReport, S
             scryer_core::health::resolve_completeness(&model, &planned, &all_files, &dead);
 
         let derived = scryer_core::build_edges::derive_graph(&model, &edges);
+        let styles = scryer_core::style::Styles::load(project);
         let style = scryer_core::style_health::check_code(
             &model,
-            &scryer_core::style::Styles::load(project),
+            &styles,
             &derived,
             &edges.external_imports,
             Some(&all_files),
         );
+        let styles: Vec<scryer_core::style::StyleDef> = styles.iter().cloned().collect();
         Ok(ModelHealthReport {
             health: scryer_core::health::compute_health(&model, Some(&planned), Some(&files)),
             completeness,
@@ -127,6 +132,7 @@ pub(crate) async fn get_model_health(cwd: String) -> Result<ModelHealthReport, S
             reanchored: check.reanchored,
             derived,
             style,
+            styles,
         })
     })
     .await

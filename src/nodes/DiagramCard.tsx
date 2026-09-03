@@ -8,6 +8,7 @@
  * reference nodes, and all drag-to-edit — editing lives in the tree and page.
  */
 
+import type { ReactElement } from "react";
 import type { NodeProps, Node as RFNode } from "@xyflow/react";
 import type { DiagramNode } from "../diagramLayout";
 import type { Mark } from "../changeMarks";
@@ -73,6 +74,53 @@ function CompletenessDot({ c }: { c: Completeness }) {
 
 function isExpandable(kind: DiagramNode["kind"]): boolean {
   return kind === "system" || kind === "container" || kind === "component";
+}
+
+/** The miniature of a style's drawing — a container's card shows what shape
+ *  its inside takes before anyone drills in: a hexagon, a stack of bands,
+ *  rings, or columns. */
+function StyleGlyph({ style }: { style: string }) {
+  const stroke = "var(--text-tertiary)";
+  const common = { fill: "none", stroke, strokeWidth: 1.4 };
+  let body: ReactElement;
+  switch (style) {
+    case "hexagonal":
+      body = <polygon points="7,1 12.2,4 12.2,10 7,13 1.8,10 1.8,4" {...common} />;
+      break;
+    case "feature-sliced":
+      body = (
+        <g {...common}>
+          <rect x="1.5" y="1.5" width="11" height="2.6" rx="0.8" />
+          <rect x="1.5" y="5.7" width="11" height="2.6" rx="0.8" />
+          <rect x="1.5" y="9.9" width="11" height="2.6" rx="0.8" />
+        </g>
+      );
+      break;
+    case "core-shell":
+      body = (
+        <g {...common}>
+          <circle cx="7" cy="7" r="5.8" />
+          <circle cx="7" cy="7" r="2.4" />
+        </g>
+      );
+      break;
+    case "pipeline":
+      body = (
+        <g {...common}>
+          <rect x="1.2" y="2" width="2.8" height="10" rx="0.8" />
+          <rect x="5.6" y="2" width="2.8" height="10" rx="0.8" />
+          <rect x="10" y="2" width="2.8" height="10" rx="0.8" />
+        </g>
+      );
+      break;
+    default:
+      body = <rect x="1.5" y="1.5" width="11" height="11" rx="2" {...common} />;
+  }
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" className="shrink-0 overflow-visible" aria-hidden>
+      {body}
+    </svg>
+  );
 }
 
 /** Drill request — DiagramView listens and descends a level. */
@@ -213,6 +261,16 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
           </div>
         )}
 
+        {/* Style miniature, top-left: what shape this container's inside takes. */}
+        {node.style && !isGhost && (
+          <div
+            className="pointer-events-auto absolute left-2 top-1.5 z-10 flex items-center gap-1 text-[9px] tracking-wider text-[var(--text-tertiary)]"
+            title={`style: ${node.style}`}
+          >
+            <StyleGlyph style={node.style} />
+          </div>
+        )}
+
         {/* Direct-child count. */}
         {expandable && node.childCount > 0 && (
           <div className="pointer-events-none absolute bottom-1.5 right-2.5 z-10 text-[11px] font-medium tabular-nums text-[var(--text-ghost)]">
@@ -233,6 +291,16 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
                 card, so a paragraph-length technology or description can never
                 push the stack out of the shape (unclamped, the centered flex
                 overflowed BOTH ends — beheaded title, text under the icons). */}
+            {/* Layer tag: the fixed word that says what role this component
+                plays in its container's style. */}
+            {node.layer && node.kind === "component" && (
+              <div
+                className="mb-1 text-center text-[9px] uppercase tracking-[0.15em] text-[var(--text-ghost)]"
+                title={`layer: ${node.layer}`}
+              >
+                {node.layer}
+              </div>
+            )}
             <div className="line-clamp-2 w-full break-words text-center text-sm font-semibold leading-tight">
               {node.name || "Untitled"}
             </div>
