@@ -175,6 +175,12 @@ pub(crate) fn gate(
             }
             let Some((EK::Responsibility, _, rid)) = changes::parse_key(&key) else { continue };
             let Some(snap) = snap else { continue };
+            // Folded, not dropped: the element stands in the plan exactly as
+            // approved and only lost its tag because an earlier fold carried
+            // it into committed. Nothing to restore.
+            if changes::entry_hash(planned, &key).is_some_and(|now| now.hash == snap.hash) {
+                continue;
+            }
             let (Some(stmt), Some(host)) = (snap.statement.clone(), snap.host.clone()) else {
                 continue;
             };

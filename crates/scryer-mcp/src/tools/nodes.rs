@@ -3973,6 +3973,35 @@ mod tests {
         assert!(r2.approved_statement.is_none());
     }
 
+    /// A signed-off claim that FOLDED is not a dropped one: a later fold of
+    /// the same change (say, after its withheld amendment got a verdict) must
+    /// not restore it as pending intent or say the agent proposed dropping it.
+    #[test]
+    fn a_second_fold_does_not_restore_what_the_first_one_folded() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let cid = signed_off_plan(&model_ref, None);
+        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        let mut extra = resp("resp-2");
+        extra.statement = "Also logs every token".into();
+        planned.nodes[0].responsibilities.push(extra);
+        scryer_core::changes::tag(&mut planned, &["resp:resp-2".to_string()], &cid);
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        // First fold: resp-1 folds, the post-sign-off addition is withheld.
+        let text = fold_change(&ScryerServer::new(), dir.path(), &cid);
+        assert!(committed_has(&model_ref, "resp-1"), "{text}");
+        assert!(text.contains("AWAITING VERDICT resp-2"), "{text}");
+
+        // Second fold: resp-1 is still committed and untouched, not "dropped".
+        let text = fold_change(&ScryerServer::new(), dir.path(), &cid);
+        assert!(!text.contains("RESTORED resp-1"), "{text}");
+        assert!(!text.contains("DROPPED resp-1"), "{text}");
+        assert!(committed_has(&model_ref, "resp-1"));
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert!(planned.change_map.get("resp:resp-1").is_none(), "no tag was re-minted");
+    }
+
     /// Retagging the concern is metadata, not intent — it never reads as an
     /// amendment, so the claim folds as signed off.
     #[test]
