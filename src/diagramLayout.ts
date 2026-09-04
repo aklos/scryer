@@ -17,7 +17,7 @@
 
 import { layoutGraph } from "./layout/planar";
 import type { EdgePair } from "./layout/planar";
-import type { ScryModel, Kind } from "./viewmodel";
+import type { Node, ScryModel, Kind } from "./viewmodel";
 import { isDataShape } from "./viewmodel";
 import type { ModelHealthReport } from "./health";
 import { governingStyleDef, layerOf, styleTable, type Drawing, type StyleDef } from "./styles";
@@ -68,8 +68,27 @@ export interface DiagramNode {
   /** A styled container's miniature: its components as dots in their layer
    *  positions, with the layer regions — the real shape of its inside. */
   thumbnail?: Thumbnail;
+  /** The conformance facts about this node — only what is deterministically
+   *  checkable from the model and the code. Drives the togglable overlay. */
+  conformance?: Conformance;
   x: number;
   y: number;
+}
+
+/** What the conformance overlay tints a node for. Every field is a fact, not
+ *  a judgment: a container either declares a style or it doesn't; a component
+ *  under a styled container either carries one of its layers or it doesn't;
+ *  an import either sits in the layer matrix or it doesn't. */
+export interface Conformance {
+  /** A container declaring no style — nothing inside it is checked. */
+  unstyled: boolean;
+  /** A component under a styled container with no layer, or one its style
+   *  has no row for — the matrix can't be applied to it. */
+  layerless: boolean;
+  /** The violations charged to this node (its inside included when it is a
+   *  container): the code-time report's, plus declared links the matrix
+   *  forbids. One line each, as the edge shows them. */
+  violations: string[];
 }
 
 export interface Thumbnail {
@@ -337,7 +356,28 @@ export async function buildDiagramScene(
       layer: layerOf(model, n.id),
       hasClaims: (n.responsibilities?.length ?? 0) > 0 || (n.properties?.length ?? 0) > 0,
       thumbnail: thumbnailFor(n.id),
+      conformance: reference ? undefined : conformanceOf(n),
     };
+  };
+
+  // Report violations charged to each node at this level: a violation inside
+  // a container lands on the container's card, so a mess lights up from the
+  // level above as well as from inside.
+  const reported = new Map<string, Set<string>>();
+  for (const v of report?.style?.violations ?? []) {
+    const at = liftToLevel(v.node);
+    if (!at) continue;
+    let set = reported.get(at);
+    if (!set) reported.set(at, (set = new Set()));
+    set.add(v.detail);
+  }
+  const conformanceOf = (n: Node): Conformance | undefined => {
+    const def = governingStyleDef(model, n.id, styles);
+    const unstyled = n.kind === "container" && !n.style;
+    const layerless =
+      n.kind === "component" && !!def && !def.layers.some((l) => l.name === layerOf(model, n.id));
+    const violations = [...(reported.get(n.id) ?? [])];
+    return unstyled || layerless || violations.length ? { unstyled, layerless, violations } : undefined;
   };
 
   // The component level of a styled container draws in its style's shape.
@@ -487,6 +527,17 @@ export async function buildDiagramScene(
     };
   });
 
+  // A declared link the matrix forbids counts against its source, next to the
+  // report's — one entry per distinct line, so a code-time violation that also
+  // has a declared link isn't counted twice.
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  for (const e of edges) {
+    if (!e.violation) continue;
+    const n = nodeById.get(e.source);
+    if (!n || n.reference) continue;
+    const c = (n.conformance ??= { unstyled: false, layerless: false, violations: [] });
+    if (!c.violations.includes(e.violation)) c.violations.push(e.violation);
+  }
   return { mode, focusId, nodes, edges, styled, regions };
 }
 

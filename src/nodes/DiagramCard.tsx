@@ -33,6 +33,9 @@ export interface CardData extends Record<string, unknown> {
   /** The level is drawn in a style: every card sits inside its layer's
    *  region, so the card's own layer tag would only repeat the region label. */
   styled?: boolean;
+  /** The conformance overlay is on: tint the card by its `conformance` facts
+   *  and show the badge that names them. */
+  overlay?: boolean;
 }
 export type RFCard = RFNode<CardData, "card">;
 
@@ -203,6 +206,37 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
   // External nodes keep their dashed outline but still show a change stroke —
   // an edited external dependency is exactly the change worth noticing.
   const markStroke = data.mark ? MARK_STROKE[data.mark] : null;
+  // Conformance overlay — facts only. Red: violations charged here. Amber: a
+  // component its style can't place (no layer). Grey dotted: a container
+  // declaring no style, so nothing inside is checked.
+  const conf = data.overlay && !isGhost ? node.conformance : undefined;
+  const tint = !conf
+    ? null
+    : conf.violations.length
+      ? {
+          fill: "fill-red-500/10 dark:fill-red-400/10",
+          stroke: "stroke-red-500/70 dark:stroke-red-400/60",
+          badge: "border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300",
+          label: `${conf.violations.length} violation${conf.violations.length === 1 ? "" : "s"}`,
+          tip: conf.violations.join("\n"),
+        }
+      : conf.layerless
+        ? {
+            fill: "fill-amber-500/10 dark:fill-amber-400/10",
+            stroke: "stroke-amber-500/70 dark:stroke-amber-400/60",
+            badge: "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+            label: "no layer",
+            tip: "This component sits in a styled container but carries none of its layers, so the layer matrix cannot be applied to it.",
+          }
+        : conf.unstyled
+          ? {
+              fill: null,
+              stroke: "stroke-[var(--text-ghost)]",
+              badge: "border-[var(--border)] bg-[var(--surface-tint)] text-[var(--text-muted)]",
+              label: "no style",
+              tip: "This container declares no architectural style, so nothing inside it is checked against a layer matrix.",
+            }
+          : null;
   // Completeness pie — hidden on ghosts (measured at the node's real home) and on
   // nodes with no anchorable primitives at all.
   const comp = isGhost ? undefined : data.completeness;
@@ -216,25 +250,40 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
           fillClass={
             isGhost
               ? "fill-transparent"
-              : isExternal
-                ? "fill-[var(--scryer-ext-bg)]"
-                : "fill-[var(--scryer-node-bg)]"
+              : tint?.fill
+                ? tint.fill
+                : isExternal
+                  ? "fill-[var(--scryer-ext-bg)]"
+                  : "fill-[var(--scryer-node-bg)]"
           }
           strokeClass={
             selected
               ? "stroke-[var(--text)]"
               : markStroke
                 ? markStroke
-                : isExternal || isGhost
-                  ? "stroke-[var(--scryer-outline-stroke)]"
-                  : "stroke-[var(--border)]"
+                : tint
+                  ? tint.stroke
+                  : isExternal || isGhost
+                    ? "stroke-[var(--scryer-outline-stroke)]"
+                    : "stroke-[var(--border)]"
           }
-          strokeWidth={selected ? 2.5 : markStroke ? 2 : 1}
+          strokeWidth={selected ? 2.5 : markStroke || (tint && tint.fill) ? 2 : 1}
           strokeDasharray={isExternal ? "6 3" : undefined}
           kind={node.kind}
           external={!!isExternal}
         />
         <NodeHandles />
+
+        {/* Conformance badge, top-left: names the fact; hover for the lines. */}
+        {tint && !data.pending && (
+          <div
+            title={tint.tip}
+            className={`absolute left-1.5 top-1.5 z-10 rounded border px-1 py-px text-[9px] font-medium leading-tight ${tint.badge}`}
+          >
+            {tint.label}
+            <span className="ml-0.5 opacity-70">ⓘ</span>
+          </div>
+        )}
 
         {/* Completeness pie, bottom-left. Hidden while the card is still
             generating so it doesn't flash on empty. */}

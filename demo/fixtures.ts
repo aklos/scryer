@@ -139,6 +139,8 @@ const componentNodes: Node[] = [
   { id: "dash-payout", kind: "component", name: "Payout", parentId: "dashboard", layer: "entities" },
   { id: "dash-ui", kind: "component", name: "UI Kit", parentId: "dashboard", layer: "shared" },
   { id: "dash-api", kind: "component", name: "API Client", parentId: "dashboard", layer: "shared" },
+  // Carries no layer: the code has a `utils/` grab-bag the style has no row for.
+  { id: "dash-utils", kind: "component", name: "Utils", parentId: "dashboard" },
 ];
 
 // --- Links -------------------------------------------------------------------
@@ -388,7 +390,26 @@ export const healthReport: ModelHealthReport = {
         dstNode: "ledger-model", dstSymbol: "Account", dstFile: "ledger/src/domain/account.rs", count: 3 },
     ],
   },
-  style: { violations: [], layerViolations: 0, isolationViolations: 0, externalViolations: 0, misplaced: 0 },
+  // One real reach-around the layer matrix forbids: the domain model reads
+  // the store directly. The map draws it red and tints both the component
+  // and, from the level above, the whole Ledger Service.
+  style: {
+    violations: [
+      {
+        kind: "layer_violation",
+        node: "ledger-model",
+        other: "ledger-store",
+        file: "ledger/src/domain/account.rs",
+        container: "ledger",
+        detail:
+          "Ledger Model (domain) imports Postgres Store (infrastructure) in ledger/src/domain/account.rs — in hexagonal, domain may depend on nothing",
+      },
+    ],
+    layerViolations: 1,
+    isolationViolations: 0,
+    externalViolations: 0,
+    misplaced: 0,
+  },
 };
 
 /** The film's opening health: the model just born from the code, fully in sync —
