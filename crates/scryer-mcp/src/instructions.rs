@@ -51,6 +51,9 @@ tools write the plan, and reads return it by default. [[model-layers]]\n\
 concern each. [[statement-ears]] [[scanning]] [[naming]] [[concerns]]\n\
 - A claim has a test attached or it doesn't; that binary is the model's primary signal, and the \
 `untested` count in every status line is your standing work. [[test-attachment]] [[test-verdicts]]\n\
+- `style: N violations` in a status line counts real imports and files that break a declared \
+style. Fixing them means moving code, never un-declaring the style, dropping a layer, or deleting \
+the link; a container with no style has nothing to fix until the user declares one. [[styles]]\n\
 \n\
 Every tool takes an optional `project` (absolute path) that defaults to the working directory. \
 Schema version is `0.3`.\n\

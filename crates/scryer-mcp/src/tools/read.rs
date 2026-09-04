@@ -1916,14 +1916,36 @@ impl ScryerServer {
                     "reanchored": anchor_check.reanchored,
                     "assertedOnlyLinks": asserted_only,
                     "unmodeled": derived.as_ref().map(|g| &g.unmodeled),
-                    "style": style_report.as_ref().map(|r| serde_json::json!({
-                        "layerViolations": r.layer_violations,
-                        "isolationViolations": r.isolation_violations,
-                        "externalViolations": r.external_violations,
-                        "misplaced": r.misplaced,
-                        "sample": r.violations.iter().take(10).map(|v| &v.detail).collect::<Vec<_>>(),
-                        "note": "code-time style conformance from the build's import graph — per-violation detail is node-scoped (get_health {nodeId}); every line is a real import or file to fix, never a judgment call",
-                    })),
+                    "style": match style_report.as_ref() {
+                        Some(r) => {
+                            // Per-container tally, so "fix the violations" knows
+                            // where to drill before it reads a single line.
+                            let mut per: std::collections::BTreeMap<&str, usize> = Default::default();
+                            for v in &r.violations {
+                                *per.entry(v.container.as_str()).or_default() += 1;
+                            }
+                            let by_container: Vec<_> = per
+                                .iter()
+                                .map(|(id, n)| {
+                                    let name = model.nodes.iter().find(|x| x.id == *id).map(|x| x.name.as_str()).unwrap_or("");
+                                    serde_json::json!({ "nodeId": id, "name": name, "violations": n })
+                                })
+                                .collect();
+                            serde_json::json!({
+                                "total": r.total(),
+                                "layerViolations": r.layer_violations,
+                                "isolationViolations": r.isolation_violations,
+                                "externalViolations": r.external_violations,
+                                "misplaced": r.misplaced,
+                                "byContainer": by_container,
+                                "sample": r.violations.iter().take(10).map(|v| &v.detail).collect::<Vec<_>>(),
+                                "note": "code-time style conformance from the build's import graph — the full list is node-scoped (get_health {nodeId} on a container); every line is a real import or file to fix, never a judgment call. Unstyled containers are not checked.",
+                            })
+                        }
+                        None => serde_json::json!({
+                            "note": "no import graph cached — run `scryer-mcp check` (or a build) first, then call again",
+                        }),
+                    },
                     "broadBoundaries": broad_boundaries(None),
                     "disconnected": health.disconnected.iter().map(|id| {
                         let name = model.nodes.iter().find(|n| &n.id == id).map(|n| n.name.clone()).unwrap_or_default();
