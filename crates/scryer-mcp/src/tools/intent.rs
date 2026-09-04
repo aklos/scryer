@@ -9,7 +9,7 @@
 //!
 //! These tools author into the PLANNED draft (`.scryer/planned.scry`); the
 //! committed model changes only when the work is implemented and folds in
-//! (`mark_implemented`). The bulk `set_model` / `set_node` tools are
+//! (`mark_implemented`). The bulk `replace_model` / `replace_subtree` tools are
 //! generation-pipeline primitives (whole-model and whole-subtree writes used
 //! during codebase→model generation); interactive editing uses the tools above.
 

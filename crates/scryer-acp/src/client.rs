@@ -169,7 +169,7 @@ mod tests {
         let (client, _rx) = client();
         let resp = client
             .request_permission(permission_request(
-                "mcp__scryer__set_node",
+                "mcp__scryer__replace_subtree",
                 &[("reject", "reject_once"), ("allow-once", "allow_once"), ("allow-always", "allow_always")],
             ))
             .await

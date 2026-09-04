@@ -56,7 +56,7 @@ impl BoundaryOwnership {
     /// owns plan-added ones — so completeness must see both).
     ///
     /// `live_nodes` are the ids of nodes that actually exist; a boundary keyed to
-    /// a node that no longer does (a `set_model` overwrite or a hand-edit that
+    /// a node that no longer does (a `replace_model` overwrite or a hand-edit that
     /// dropped the node but left its boundary — write-time GC catches the tool
     /// paths, not these) is skipped, so a dead broad glob can't double-claim files
     /// or inflate a coverage denominator.
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn a_boundary_without_a_live_node_is_ignored() {
-        // A broad glob left behind by a dropped node (a set_model overwrite or a
+        // A broad glob left behind by a dropped node (a replace_model overwrite or a
         // hand-edit that write-time GC never saw) must not claim files.
         let mut m = model_with_boundaries(&[("core", "crates/core/**/*")]);
         m.boundaries.insert(

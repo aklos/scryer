@@ -779,7 +779,7 @@ export function useModelStorage(): ModelStorage {
   }, [model]);
 
   // Open a new ledger change (mint + register in the plan, exactly like the
-  // agent's set_change) and make it the active one — subsequent canvas edits
+  // agent's open_change) and make it the active one — subsequent canvas edits
   // stamp themselves into it.
   // If the active change closes under us — its last entry folded by the agent,
   // or it was abandoned — detach rather than stamping edits into a change the
@@ -793,7 +793,7 @@ export function useModelStorage(): ModelStorage {
   }, [model, activeChange]);
 
   // Close an EMPTY (stranded) ledger change by hand — the canvas twin of the
-  // agent's `set_change {close}`. Goes through the backend rather than editing
+  // agent's `close_change`. Goes through the backend rather than editing
   // the in-memory registry so the "abandoned" history record lands; the plan
   // write comes back through the watcher, which refreshes the registry (and
   // the powerline's in-flight count) everywhere.

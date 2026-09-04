@@ -18,10 +18,10 @@ rules governs, or make a modeling judgment, fetch the rule: `get_rules {id: \"sl
 1. ORIENT — `orient {task, files}` for a coding task; `get_health` then `read_model` for a \
 model-building one. Honor every directive it returns. [[loop-orient]]\n\
 2. PLAN — author the change into the model before writing code; name your task with \
-`set_change {rationale}` when other work may share the plan. Only changes that alter what the \
+`open_change {rationale}` when other work may share the plan. Only changes that alter what the \
 model claims need this. [[loop-plan]] [[proportionality]]\n\
 3. SIGN-OFF — tell the user what you planned and get their go-ahead; record it with \
-`set_change {sign_off: true}`. [[loop-sign-off]]\n\
+`sign_off`. [[loop-sign-off]]\n\
 4. BUILD — implement claim by claim, each testable (When/While/If) claim with its test in the \
 project's own suite. [[loop-build]]\n\
 5. CLOSE — `mark_implemented` with `anchors` and `tests` in the same call; the fold is gated on a \

@@ -247,7 +247,7 @@ impl ScryerServer {
          / delete_group.\n\
          Rules: groups, generation-fill"
     )]
-    fn set_groups(
+    fn replace_groups(
         &self,
         Parameters(req): Parameters<SetGroupsRequest>,
     ) -> Result<CallToolResult, McpError> {
@@ -518,19 +518,18 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Select which CHANGE this session's plan writes belong to. `rationale` opens a new \
-         change; `change_id` resumes one; `clear` detaches; `close` closes an empty stranded \
-         change; `retag` + `to` moves pending work between changes; `sign_off: true` records the \
-         developer's approval of the plan, after which agent rewords and additions wait as \
-         amendments. No arguments: report the selection and open changes.\n\
-         Rules: change-ledger, sign-off, loop-plan, loop-sign-off"
+        description = "Open a NEW change from `rationale` (the task in one sentence, as the dev put it), or \
+         resume an open one with `change_id` (listed in get_pending's `openChanges`). This \
+         session's plan writes tag to it from here; `mark_implemented {change}` folds exactly its \
+         entries. Open one before any task beyond a one-line fix: plan writes are refused while no \
+         change is open.\n\
+         Rules: change-ledger, loop-plan"
     )]
-    pub(crate) fn set_change(
+    pub(crate) fn open_change(
         &self,
-        Parameters(req): Parameters<SetChangeRequest>,
+        Parameters(req): Parameters<OpenChangeRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
-
         let open_changes_line = |m: &scryer_core::ScryModel| -> String {
             if m.changes.is_empty() {
                 return "No open changes.".to_string();
@@ -549,212 +548,6 @@ impl ScryerServer {
             s
         };
 
-        // Retag: move work that ALREADY exists between changes. Distinct from
-        // every other verb here — it edits the ledger's filing, never the
-        // session's selection — so it runs first and returns on its own.
-        if let Some(targets) = req.retag.as_ref() {
-            let targets: Vec<String> = targets
-                .iter()
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty())
-                .collect();
-            if targets.is_empty() {
-                return Ok(CallToolResult::error(vec![Content::text(
-                    "retag needs at least one id — a node, group, responsibility, link, \
-                     or change id, or \"unfiled\"."
-                        .to_string(),
-                )]));
-            }
-            if req.rationale.is_some() || req.change_id.is_some() || req.close.is_some() {
-                return Ok(CallToolResult::error(vec![Content::text(
-                    "Pass retag alone — it moves existing work, it does not open, resume, \
-                     or close a change."
-                        .to_string(),
-                )]));
-            }
-            let _lock = match lock_or_err(&model_ref) {
-                Ok(l) => l,
-                Err(e) => return Ok(e),
-            };
-            let mut plan = match scryer_core::read_planned_seeded_at(&model_ref) {
-                Ok(p) => p,
-                Err(e) => {
-                    return Ok(CallToolResult::error(vec![Content::text(read_fail(
-                        "plan", &model_ref, &e,
-                    ))]));
-                }
-            };
-            let committed = scryer_core::read_model_at(&model_ref).unwrap_or_default();
-            // No `to` means "into what I'm working on" — the session's own
-            // change. With no selection either, there is nothing to infer.
-            let session = self.session_change(&model_ref);
-            let dest = match req.to.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                Some("unfiled") => None,
-                Some(cid) => Some(cid.to_string()),
-                None => match session {
-                    Some(c) => Some(c),
-                    None => {
-                        return Ok(CallToolResult::error(vec![Content::text(
-                            "Pass `to` (a change id, or \"unfiled\") — this session has no \
-                             current change to move the work into."
-                                .to_string(),
-                        )]));
-                    }
-                },
-            };
-            let outcome =
-                match scryer_core::changes::retag(&committed, &mut plan, &targets, dest.as_deref())
-                {
-                    Ok(o) => o,
-                    Err(e) => {
-                        return Ok(CallToolResult::error(vec![Content::text(format!(
-                            "{e}\n{}",
-                            open_changes_line(&plan)
-                        ))]));
-                    }
-                };
-            if !outcome.moved.is_empty() {
-                if let Err(e) = scryer_core::write_planned_at(&model_ref, &plan) {
-                    return Ok(CallToolResult::error(vec![Content::text(e)]));
-                }
-            }
-            let where_to = dest.as_deref().unwrap_or("unfiled");
-            let mut msg = format!(
-                "Moved {} entr{} to {where_to}.",
-                outcome.moved.len(),
-                if outcome.moved.len() == 1 { "y" } else { "ies" }
-            );
-            // Name what came from where: a re-file across three changes is
-            // exactly when the caller needs to see what it actually touched.
-            for (key, from) in &outcome.moved {
-                msg.push_str(&format!(
-                    "\n- {key} (was {})",
-                    from.as_deref().unwrap_or("unfiled")
-                ));
-            }
-            if !outcome.unmatched.is_empty() {
-                msg.push_str(&format!(
-                    "\nNo pending work under: {} — already folded, or never planned.",
-                    outcome.unmatched.join(", ")
-                ));
-            }
-            msg.push('\n');
-            msg.push_str(&open_changes_line(&plan));
-            drop(_lock);
-            if let Some(h) = status_header(&model_ref) {
-                msg.push_str(&format!("\n{h}"));
-            }
-            return Ok(CallToolResult::success(vec![Content::text(msg)]));
-        }
-
-        // Sign-off: stamp the change (named, or the session's) with a snapshot
-        // of its tagged entries. Anything the agent changes afterwards is
-        // classified against it (forward vagrancy).
-        if req.sign_off == Some(true) {
-            if req.rationale.is_some() || req.close.is_some() || req.clear == Some(true) {
-                return Ok(CallToolResult::error(vec![Content::text(
-                    "Pass sign_off with change_id (or alone for the session's current change) \
-                     — not with rationale, close, or clear."
-                        .to_string(),
-                )]));
-            }
-            let target = match req
-                .change_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .or_else(|| self.session_change(&model_ref))
-            {
-                Some(c) => c,
-                None => {
-                    return Ok(CallToolResult::error(vec![Content::text(
-                        "Nothing to sign off — pass change_id, or open/resume a change first."
-                            .to_string(),
-                    )]));
-                }
-            };
-            let _lock = match lock_or_err(&model_ref) {
-                Ok(l) => l,
-                Err(e) => return Ok(e),
-            };
-            let mut plan = match scryer_core::read_planned_seeded_at(&model_ref) {
-                Ok(p) => p,
-                Err(e) => {
-                    return Ok(CallToolResult::error(vec![Content::text(read_fail(
-                        "plan", &model_ref, &e,
-                    ))]));
-                }
-            };
-            let n = match scryer_core::changes::sign_off(
-                &mut plan,
-                &target,
-                scryer_core::drift::now_secs(),
-            ) {
-                Ok(n) => n,
-                Err(e) => {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "{e}\n{}",
-                        open_changes_line(&plan)
-                    ))]));
-                }
-            };
-            if let Err(e) = scryer_core::write_planned_at(&model_ref, &plan) {
-                return Ok(CallToolResult::error(vec![Content::text(e)]));
-            }
-            drop(_lock);
-            // The session keeps working on the change it just signed off.
-            self.set_session_change(Some((model_ref.project_path().to_path_buf(), target.clone())));
-            return Ok(CallToolResult::success(vec![Content::text(format!(
-                "Signed off {target} — {n} entr{} snapshotted as the developer's intent. From \
-                 here, a claim you reword or add under it is an amendment/addition: it lands \
-                 as vagrant for the developer's verdict at mark_implemented and does not fold. \
-                 If implementing shows a planned claim is wrong, reword it and fold the rest — \
-                 the reword waits.",
-                if n == 1 { "y" } else { "ies" }
-            ))]));
-        }
-
-        if req.clear == Some(true) {
-            self.set_session_change(None);
-            return Ok(CallToolResult::success(vec![Content::text(
-                "Detached — writes in this session now go unfiled.".to_string(),
-            )]));
-        }
-
-        // Close: drop an empty (stranded) change from the registry. Its
-        // "abandoned" record lands in history; a selection pointing at it
-        // detaches so subsequent writes don't resurrect the dead id.
-        if let Some(cid) = req.close.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-            if req.rationale.is_some() || req.change_id.is_some() {
-                return Ok(CallToolResult::error(vec![Content::text(
-                    "Pass close alone — not combined with rationale or change_id.".to_string(),
-                )]));
-            }
-            let _lock = match lock_or_err(&model_ref) {
-                Ok(l) => l,
-                Err(e) => return Ok(e),
-            };
-            let meta = match scryer_core::changes::close_change(&model_ref, cid) {
-                Ok(m) => m,
-                Err(e) => {
-                    let plan = scryer_core::read_planned_at(&model_ref).unwrap_or_default();
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "{e}\n{}",
-                        open_changes_line(&plan)
-                    ))]));
-                }
-            };
-            if self.session_change(&model_ref).as_deref() == Some(cid) {
-                self.set_session_change(None);
-            }
-            return Ok(CallToolResult::success(vec![Content::text(format!(
-                "Closed {cid} — \"{}\" (abandoned, no entries). The rationale is kept in \
-                 the history log.",
-                meta.rationale
-            ))]));
-        }
-
         match (
             req.rationale.as_deref().map(str::trim).filter(|s| !s.is_empty()),
             req.change_id.as_deref().map(str::trim).filter(|s| !s.is_empty()),
@@ -763,6 +556,18 @@ impl ScryerServer {
                 "Pass rationale (open a new change) OR change_id (resume one), not both."
                     .to_string(),
             )])),
+            (None, None) => {
+                let plan = scryer_core::read_planned_at(&model_ref).unwrap_or_default();
+                let current = match self.session_change(&model_ref) {
+                    Some(id) => format!("Current change: {id}."),
+                    None => "No current change — plan writes are refused until one is open."
+                        .to_string(),
+                };
+                Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Pass rationale (open a new change) or change_id (resume one).\n{current}\n{}",
+                    open_changes_line(&plan)
+                ))]))
+            }
             // Open: register the change in the plan under the lock, then point
             // the session at it.
             (Some(rationale), None) => {
@@ -827,19 +632,269 @@ impl ScryerServer {
                     if entries == 1 { "y" } else { "ies" }
                 ))]))
             }
-            // Report.
-            (None, None) => {
-                let plan = scryer_core::read_planned_at(&model_ref).unwrap_or_default();
-                let current = match self.session_change(&model_ref) {
-                    Some(id) => format!("Current change: {id}."),
-                    None => "No current change — writes go unfiled.".to_string(),
-                };
-                Ok(CallToolResult::success(vec![Content::text(format!(
-                    "{current}\n{}",
+        }
+    }
+
+    #[tool(
+        description = "Record the developer's go-ahead on a change (`change_id`, or the session's current one): \
+         snapshots its entries as the approved intent, so a claim you reword or add under it \
+         afterwards lands as an amendment for the developer's verdict instead of folding.\n\
+         Rules: sign-off, loop-sign-off, fold-after-sign-off"
+    )]
+    pub(crate) fn sign_off(
+        &self,
+        Parameters(req): Parameters<SignOffRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let open_changes_line = |m: &scryer_core::ScryModel| -> String {
+            if m.changes.is_empty() {
+                return "No open changes.".to_string();
+            }
+            let mut s = String::from("Open changes:");
+            for c in &m.changes {
+                let entries = m.change_map.values().filter(|v| *v == &c.id).count();
+                s.push_str(&format!(
+                    "\n  {} — \"{}\" ({} tagged entr{})",
+                    c.id,
+                    c.rationale,
+                    entries,
+                    if entries == 1 { "y" } else { "ies" }
+                ));
+            }
+            s
+        };
+
+        let target = match req
+            .change_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| self.session_change(&model_ref))
+        {
+            Some(c) => c,
+            None => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "Nothing to sign off — pass change_id, or open_change first.".to_string(),
+                )]));
+            }
+        };
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
+        let mut plan = match scryer_core::read_planned_seeded_at(&model_ref) {
+            Ok(p) => p,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(read_fail(
+                    "plan", &model_ref, &e,
+                ))]));
+            }
+        };
+        let n = match scryer_core::changes::sign_off(
+            &mut plan,
+            &target,
+            scryer_core::drift::now_secs(),
+        ) {
+            Ok(n) => n,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "{e}\n{}",
                     open_changes_line(&plan)
-                ))]))
+                ))]));
+            }
+        };
+        if let Err(e) = scryer_core::write_planned_at(&model_ref, &plan) {
+            return Ok(CallToolResult::error(vec![Content::text(e)]));
+        }
+        drop(_lock);
+        // The session keeps working on the change it just signed off.
+        self.set_session_change(Some((model_ref.project_path().to_path_buf(), target.clone())));
+        return Ok(CallToolResult::success(vec![Content::text(format!(
+            "Signed off {target} — {n} entr{} snapshotted as the developer's intent. From \
+             here, a claim you reword or add under it is an amendment/addition: it lands \
+             as vagrant for the developer's verdict at mark_implemented and does not fold. \
+             If implementing shows a planned claim is wrong, reword it and fold the rest — \
+             the reword waits.",
+            if n == 1 { "y" } else { "ies" }
+        ))]));
+    }
+
+    #[tool(
+        description = "Close an EMPTY open change by id, recording it as abandoned with its rationale in history. \
+         Refused while it has tagged entries: those close the change when they fold or are \
+         reverted. Use it to end a task that filed nothing in the plan.\n\
+         Rules: change-ledger"
+    )]
+    pub(crate) fn close_change(
+        &self,
+        Parameters(req): Parameters<CloseChangeRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let open_changes_line = |m: &scryer_core::ScryModel| -> String {
+            if m.changes.is_empty() {
+                return "No open changes.".to_string();
+            }
+            let mut s = String::from("Open changes:");
+            for c in &m.changes {
+                let entries = m.change_map.values().filter(|v| *v == &c.id).count();
+                s.push_str(&format!(
+                    "\n  {} — \"{}\" ({} tagged entr{})",
+                    c.id,
+                    c.rationale,
+                    entries,
+                    if entries == 1 { "y" } else { "ies" }
+                ));
+            }
+            s
+        };
+
+        let cid = req.change_id.trim();
+        if cid.is_empty() {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Pass change_id — the empty open change to close.".to_string(),
+            )]));
+        }
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
+        let meta = match scryer_core::changes::close_change(&model_ref, cid) {
+            Ok(m) => m,
+            Err(e) => {
+                let plan = scryer_core::read_planned_at(&model_ref).unwrap_or_default();
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "{e}\n{}",
+                    open_changes_line(&plan)
+                ))]));
+            }
+        };
+        if self.session_change(&model_ref).as_deref() == Some(cid) {
+            self.set_session_change(None);
+        }
+        return Ok(CallToolResult::success(vec![Content::text(format!(
+            "Closed {cid} — \"{}\" (abandoned, no entries). The rationale is kept in \
+             the history log.",
+            meta.rationale
+        ))]));
+    }
+
+    #[tool(
+        description = "Move pending work between changes without re-writing the spec. `ids` names nodes/groups \
+         (carrier plus everything pending under it), responsibilities/links, a change id \
+         (everything under it), or \"unfiled\"; `to` is the destination change id or \"unfiled\", \
+         default the session's change.\n\
+         Rules: change-ledger"
+    )]
+    pub(crate) fn refile(
+        &self,
+        Parameters(req): Parameters<RefileRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let open_changes_line = |m: &scryer_core::ScryModel| -> String {
+            if m.changes.is_empty() {
+                return "No open changes.".to_string();
+            }
+            let mut s = String::from("Open changes:");
+            for c in &m.changes {
+                let entries = m.change_map.values().filter(|v| *v == &c.id).count();
+                s.push_str(&format!(
+                    "\n  {} — \"{}\" ({} tagged entr{})",
+                    c.id,
+                    c.rationale,
+                    entries,
+                    if entries == 1 { "y" } else { "ies" }
+                ));
+            }
+            s
+        };
+
+        let targets: Vec<String> = req
+            .ids
+            .iter()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+        if targets.is_empty() {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "refile needs at least one id — a node, group, responsibility, link, \
+                 or change id, or \"unfiled\"."
+                    .to_string(),
+            )]));
+        }
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
+        let mut plan = match scryer_core::read_planned_seeded_at(&model_ref) {
+            Ok(p) => p,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(read_fail(
+                    "plan", &model_ref, &e,
+                ))]));
+            }
+        };
+        let committed = scryer_core::read_model_at(&model_ref).unwrap_or_default();
+        // No `to` means "into what I'm working on" — the session's own
+        // change. With no selection either, there is nothing to infer.
+        let session = self.session_change(&model_ref);
+        let dest = match req.to.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some("unfiled") => None,
+            Some(cid) => Some(cid.to_string()),
+            None => match session {
+                Some(c) => Some(c),
+                None => {
+                    return Ok(CallToolResult::error(vec![Content::text(
+                        "Pass `to` (a change id, or \"unfiled\") — this session has no \
+                         current change to move the work into."
+                            .to_string(),
+                    )]));
+                }
+            },
+        };
+        let outcome =
+            match scryer_core::changes::retag(&committed, &mut plan, &targets, dest.as_deref())
+            {
+                Ok(o) => o,
+                Err(e) => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "{e}\n{}",
+                        open_changes_line(&plan)
+                    ))]));
+                }
+            };
+        if !outcome.moved.is_empty() {
+            if let Err(e) = scryer_core::write_planned_at(&model_ref, &plan) {
+                return Ok(CallToolResult::error(vec![Content::text(e)]));
             }
         }
+        let where_to = dest.as_deref().unwrap_or("unfiled");
+        let mut msg = format!(
+            "Moved {} entr{} to {where_to}.",
+            outcome.moved.len(),
+            if outcome.moved.len() == 1 { "y" } else { "ies" }
+        );
+        // Name what came from where: a re-file across three changes is
+        // exactly when the caller needs to see what it actually touched.
+        for (key, from) in &outcome.moved {
+            msg.push_str(&format!(
+                "\n- {key} (was {})",
+                from.as_deref().unwrap_or("unfiled")
+            ));
+        }
+        if !outcome.unmatched.is_empty() {
+            msg.push_str(&format!(
+                "\nNo pending work under: {} — already folded, or never planned.",
+                outcome.unmatched.join(", ")
+            ));
+        }
+        msg.push('\n');
+        msg.push_str(&open_changes_line(&plan));
+        drop(_lock);
+        if let Some(h) = status_header(&model_ref) {
+            msg.push_str(&format!("\n{h}"));
+        }
+        return Ok(CallToolResult::success(vec![Content::text(msg)]));
     }
 }
 
@@ -1160,7 +1215,7 @@ mod tests {
         assert!(text.contains(&format!("group-1: 'new' → {minted}")), "reports the re-mint: {text}");
     }
 
-    /// set_groups (raw Group JSON) gets the same guard: invented ids are
+    /// replace_groups (raw Group JSON) gets the same guard: invented ids are
     /// re-minted before the groups land in the plan.
     #[test]
     fn set_groups_remints_caller_invented_responsibility_ids() {
@@ -1183,7 +1238,7 @@ mod tests {
         }]);
         let server = ScryerServer::new();
         let res = server
-            .set_groups(Parameters(SetGroupsRequest {
+            .replace_groups(Parameters(SetGroupsRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
                 data: data.to_string(),
             }))

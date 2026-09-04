@@ -17,7 +17,7 @@ pub struct ScryerServer {
     /// The tool list as advertised: the router's tools with their input
     /// schemas slimmed once at construction (see [`slim_schema`]).
     tools: Vec<Tool>,
-    /// The change this SESSION is writing into (set via `set_change`), scoped
+    /// The change this SESSION is writing into (set via `open_change`), scoped
     /// to the project it was opened in. Deliberately in-memory only: the
     /// ledger itself (registry + tags) is persisted in the plan, but "which
     /// change am I writing to" is a per-session pointer — a fresh session sees
@@ -259,7 +259,7 @@ mod rule_wiring {
         );
         let descs = descriptions();
         let total: usize = descs.iter().map(|(_, d)| d.len()).sum();
-        assert!(total <= 15_000, "descriptions total {total} chars (budget 15000)");
+        assert!(total <= 16_000, "descriptions total {total} chars (budget 16000)");
         for (name, d) in &descs {
             assert!(d.len() <= 800, "{name} description is {} chars (max 800)", d.len());
         }

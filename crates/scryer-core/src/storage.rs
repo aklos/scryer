@@ -100,11 +100,11 @@ pub fn write_model_at(r: &ModelRef, model: &ScryModel) -> Result<(), String> {
     crate::concerns::register_concerns(&mut stamped);
     // Change state lives and dies with the DRAFT (see `crate::changes`); the
     // committed layer never carries it. Strip here rather than trust every
-    // caller — a plan-derived model (fold, set_model) rides through this path.
+    // caller — a plan-derived model (fold, replace_model) rides through this path.
     stamped.changes.clear();
     stamped.change_map.clear();
     // Structural-invariant gate. This is the single committed-layer writer every
-    // commit / fold / set_model rides through, so refusing here is what keeps a
+    // commit / fold / replace_model rides through, so refusing here is what keeps a
     // silently-misbindable duplicate — most notably the same responsibility id
     // on two hosts, left behind when a move added the claim to its new host but
     // never removed the old copy — out of `model.scry`. Such a duplicate is
@@ -374,7 +374,7 @@ pub fn ensure_planned_at(r: &ModelRef) -> Result<(), String> {
 
 /// Drop the draft's `source_map`/`boundaries` entries that are value-identical
 /// to committed's — shadow copies minted before plan seeding existed (or by
-/// `set_model`, which writes both layers whole). Strictly safe: the working
+/// `replace_model`, which writes both layers whole). Strictly safe: the working
 /// view falls back to committed's identical copy, so nothing any reader sees
 /// changes. Entries whose values DIVERGE are left alone — those are either
 /// genuine plan-added anchors or a real conflict to surface, never silently

@@ -1299,7 +1299,7 @@ impl ScryerServer {
         }
 
         // The open-change registry rides every pending read: a fresh session
-        // resumes a change from here (set_change {change_id}) instead of doing
+        // resumes a change from here (open_change {change_id}) instead of doing
         // archaeology on the flat queue.
         let open_changes: Vec<serde_json::Value> = planned
             .changes

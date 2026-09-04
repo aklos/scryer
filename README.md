@@ -47,7 +47,7 @@ Works with <b>Claude Code</b>, <b>Codex</b> and <b>GitHub Copilot CLI</b> out of
 - **Model tree** — An IDE-style explorer for defining the model: create, rename, move, group, and delete nodes. Groups are folders. Rolled-up plan and drift marks show per row, so you see the model's health at a glance.
 - **Responsibilities & directives** — Each node states what it's responsible for (responsibilities) and, optionally, how the agent should implement it (directives, e.g. "authenticate with JWTs"). Responsibilities are language-independent and survive a rewrite. Claims are written in [EARS](https://alistairmavin.com/ears/) grammar — condition first ("When a save fails, …"), verb-led response last — so a testable claim already names the trigger to arrange and the response to assert, and the editor lints statements live as you write them.
 - **Test backing** — Attaching a test is part of implementing a claim, not a follow-up chore. Every claim row carries a test lane: a flask means a test is attached, a ghost outline means testable but bare, and health counts `untested` claims so the gap stays visible. Scryer never runs your tests, but it tracks their verdicts: after a run, the agent hands over the runner's JUnit report and each attached test's pass/fail lands on its claim, fingerprinted so a later edit to the code or the test flips it to stale. Passing is assumed and shows nothing; the lane marks only what's wrong — stale or failing. To find the gaps without opening nodes one by one, the model tree's **Tests** lens keeps only branches with something to look at — untested claims, failing tests, uncaught breaks — with per-subtree counts, and Needs Review lists the same claims as rows that open on their page. `get_test_radius` then names exactly the test files that need re-running — never the whole suite.
-- **Falsification probes** — A green test says it passes; it doesn't say it would notice a break. `probe_claim` lets the agent deliberately break a claim's code in an isolated git worktree (synced to your working tree, never touching it), run the attached test, and expect red. A break that survives is the finding: the test doesn't hold the claim. The claim row's lane shows it as its one mark — a double check when every break was caught (a sample, not a proof), a red crosshair when one slipped through — and nothing for claims nobody has probed.
+- **Falsification probes** — A green test says it passes; it doesn't say it would notice a break. `open_probe` lets the agent deliberately break a claim's code in an isolated git worktree (synced to your working tree, never touching it), run the attached test, and expect red. A break that survives is the finding: the test doesn't hold the claim. The claim row's lane shows it as its one mark — a double check when every break was caught (a sample, not a proof), a red crosshair when one slipped through — and nothing for claims nobody has probed.
 - **Concerns** — A cross-cutting third axis over responsibilities: tag claims with a concern slug (`auth`, `persistence`, `idempotency`, …) and scan the model through a concern lens in the tree and on the map. Core domain flow stays untagged.
 - **The plan** — Scryer holds a committed model (what the code satisfies) and a planned draft (what you and the agent edit). Their difference is the plan: the model→code work queue, shown as add/move/delete/reword marks until the agent implements them and they fold into the committed model. Parallel workstreams can be filed as named changes, each folding and closing on its own.
 - **Live component previews** — React components and Vue single-file components render deterministically through a per-project Vite dev server, with no agent and no per-component build. Which nodes get a preview is derived from what the server can mount — never a flag stored on the model.
@@ -83,7 +83,7 @@ Scryer keeps two layers on disk in `.scryer/`:
 
 The difference between them is the **plan**: the outstanding model→code work. When you add a responsibility or a node, it shows in the plan as an `added` mark in the tree. When the agent writes the code, `mark_implemented` folds that work into the committed model. Drift works the other way: when code changes, the agent reconciles undescribed behavior back into the model.
 
-Plan work can be filed into **named changes**: a session opens a change with `set_change {rationale}` and its plan writes tag to it automatically, so parallel sessions (or you, on the canvas) stay separable. When a change's last entry folds in, it closes and its rationale lands in the history log.
+Plan work can be filed into **named changes**: a session opens a change with `open_change {rationale}` and its plan writes tag to it automatically, so parallel sessions (or you, on the canvas) stay separable. When a change's last entry folds in, it closes and its rationale lands in the history log.
 
 This is how the model stays ahead of the code: intent is captured as a plan before the code exists, and the committed model only ever reflects what's actually been built.
 
@@ -171,7 +171,7 @@ For Claude Code, you can also auto-approve Scryer's tools so the agent doesn't p
 - `validate_model` — check the model against C4 rules.
 
 **Authoring (writes the plan):**
-- `set_change` — open (or resume) a named change so this session's plan writes tag to it, keeping parallel workstreams separable.
+- `open_change` / `sign_off` / `close_change` / `refile` — open (or resume) a named change so this session's plan writes tag to it, record the developer's go-ahead, close an empty one, or move pending work between changes.
 - `add_person` / `add_system` / `add_container` / `add_component` / `add_symbol` — mint nodes from plain responsibility statements.
 - `add_group` / `update_group` / `delete_group` — group sibling nodes (a secondary packaging axis).
 - `add_links` / `update_links` / `delete_links` — typed relationships between nodes.
@@ -180,14 +180,14 @@ For Claude Code, you can also auto-approve Scryer's tools so the agent doesn't p
 **Testing:**
 - `ingest_test_report` — point it at the JUnit XML a runner just wrote; every attached test's result is recorded against its claim, fingerprint-keyed so a later edit to the implementation or the test reads as stale.
 - `get_test_radius` — which test files actually need running: exactly those behind claims with a missing or stale verdict, never the whole suite.
-- `probe_claim` / `end_probe` — open a falsification probe on a claim (an isolated worktree, the span to break, the tests to run there), then record how many deliberate breaks were tried and which ones the test failed to catch.
+- `open_probe` / `close_probe` — open a falsification probe on a claim (an isolated worktree, the span to break, the tests to run there), then record how many deliberate breaks were tried and which ones the test failed to catch.
 
 **Building & reconciliation:**
 - `fill_container` — fill in a whole container's subtree at once when extracting from existing code (generation pipeline).
 - `mark_implemented` — fold implemented work from the plan into the committed model, anchoring claims and linking their tests in the same call.
 - `flag_drift` / `reconcile_drift` — record undescribed behavior or stale claims, then advance the drift anchor.
 - `update_nodes` / `delete_nodes` / `descope` / `move_nodes` / `move_responsibilities` — interactive edits and refinement (`descope` drops a node from the model while leaving its code in place).
-- `set_model` / `set_node` / `set_groups` — generation-pipeline primitives for whole-model / whole-subtree / bulk-group writes.
+- `replace_model` / `replace_subtree` / `replace_groups` — generation-pipeline primitives for whole-model / whole-subtree / bulk-group writes.
 
 ## Drift detection & sync
 

@@ -241,7 +241,7 @@ impl ScryerServer {
                 .unwrap_or(false);
             if in_plan {
                 return Ok(err(format!(
-                    "Container '{}' exists in the plan but not the committed model — fill_container generates against committed (it describes code that exists). Commit it first (mark_implemented) or seed the skeleton with set_node/set_model, which write both layers.",
+                    "Container '{}' exists in the plan but not the committed model — fill_container generates against committed (it describes code that exists). Commit it first (mark_implemented) or seed the skeleton with replace_subtree/replace_model, which write both layers.",
                     req.container_id
                 )));
             }

@@ -56,7 +56,7 @@ fn subtree_ids(model: &ScryModel, node_id: &str) -> HashSet<String> {
     ids
 }
 
-fn replace_subtree(
+fn splice_subtree(
     model: &mut ScryModel,
     node_id: &str,
     nodes: &[Node],
@@ -502,7 +502,7 @@ impl ScryerServer {
          interactive editing use the typed add_*/update_*/move_* tools.\n\
          Rules: generation-fill, model-layers"
     )]
-    fn set_model(
+    fn replace_model(
         &self,
         Parameters(req): Parameters<SetModelRequest>,
     ) -> Result<CallToolResult, McpError> {
@@ -1900,7 +1900,7 @@ impl ScryerServer {
          interactive editing use the typed tools.\n\
          Rules: generation-fill, model-layers"
     )]
-    fn set_node(
+    fn replace_subtree(
         &self,
         Parameters(req): Parameters<SetNodeRequest>,
     ) -> Result<CallToolResult, McpError> {
@@ -1969,12 +1969,12 @@ impl ScryerServer {
         // Apply the subtree replacement to the plan. The dropped-link report
         // comes from the plan layer — always applied (node existence checked
         // above) and the authoritative surface the caller edits.
-        let (_, dropped_links) = replace_subtree(&mut model, &req.node_id, &payload.nodes, &payload.links);
+        let (_, dropped_links) = splice_subtree(&mut model, &req.node_id, &payload.nodes, &payload.links);
         enforce_readonly_directives(&mut model, &prior);
         restore_node_positions(&mut model, &[&prior]);
 
         // Generation reverse-engineers code that ALREADY EXISTS, so the same
-        // subtree must land in the committed model too (mirroring set_model /
+        // subtree must land in the committed model too (mirroring replace_model /
         // fill_container) — otherwise the plan diff reports the whole built
         // subtree as `added` work forever. Only when `node_id` is committed (the
         // generation skeleton); if it lives only in the plan this stays a
@@ -1982,7 +1982,7 @@ impl ScryerServer {
         // plan write so a `None` here just means "plan-only".
         let committed = scryer_core::read_model_at(&model_ref).ok().and_then(|mut c| {
             let cprior = c.clone();
-            let (applied, _) = replace_subtree(&mut c, &req.node_id, &payload.nodes, &payload.links);
+            let (applied, _) = splice_subtree(&mut c, &req.node_id, &payload.nodes, &payload.links);
             applied.then(|| {
                 enforce_readonly_directives(&mut c, &cprior);
                 // Plan-first prior order: the plan layer is where the canvas
@@ -2611,7 +2611,7 @@ mod tests {
             {"id":"sys2","kind":"system","name":"S2","position":{"x":1.0,"y":2.0}}
         ],"links":[]}"#;
         server
-            .set_model(Parameters(SetModelRequest {
+            .replace_model(Parameters(SetModelRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
                 data: data.into(),
             }))
@@ -2667,7 +2667,7 @@ mod tests {
         assert!(stayed.position.is_some(), "same-parent move keeps the placement");
     }
 
-    /// set_node is a generation primitive describing code that ALREADY exists, so
+    /// replace_subtree is a generation primitive describing code that ALREADY exists, so
     /// the subtree it attaches must land in BOTH layers — otherwise `get_pending`
     /// reports the whole built subtree as `added` work forever (the phantom
     /// queue). After the write, committed == planned, so the plan diff is empty.
@@ -2676,7 +2676,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
 
-        // Generation skeleton: a system, mirrored into both layers (as set_model
+        // Generation skeleton: a system, mirrored into both layers (as replace_model
         // leaves them).
         let mut m = ScryModel::new();
         m.nodes.push(node("node-1", Kind::System, "Acme", None));
@@ -2693,7 +2693,7 @@ mod tests {
         });
         let server = ScryerServer::new();
         server
-            .set_node(Parameters(SetNodeRequest {
+            .replace_subtree(Parameters(SetNodeRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
                 node_id: "node-1".into(),
                 data: payload.to_string(),
@@ -2714,7 +2714,7 @@ mod tests {
     }
 
     /// A payload link whose endpoint is not in the resulting subtree is dropped
-    /// (it would dangle) — but never silently: set_node reports each drop with a
+    /// (it would dangle) — but never silently: replace_subtree reports each drop with a
     /// reason so a mis-keyed link is visible, not lost.
     #[test]
     fn set_node_reports_dropped_links_with_unknown_endpoints() {
@@ -2740,7 +2740,7 @@ mod tests {
         });
         let server = ScryerServer::new();
         let result = server
-            .set_node(Parameters(SetNodeRequest {
+            .replace_subtree(Parameters(SetNodeRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
                 node_id: "node-1".into(),
                 data: payload.to_string(),
@@ -4098,7 +4098,7 @@ mod tests {
         );
     }
 
-    /// The change id a `set_change` response opened — "Opened chg-…".
+    /// The change id an `open_change` response opened — "Opened chg-…".
     fn opened(r: &CallToolResult) -> String {
         let text = tool_text(r);
         let rest = text.split("Opened ").nth(1).unwrap_or_else(|| panic!("no 'Opened' in: {text}"));
@@ -4120,7 +4120,7 @@ mod tests {
         r.content.iter().find_map(|c| c.as_text().map(|t| t.text.clone())).unwrap()
     }
 
-    /// The ledger loop end to end: `set_change` opens a named change, an
+    /// The ledger loop end to end: `open_change` opens a named change, an
     /// authoring write tags to it automatically, `get_pending` groups and
     /// filters by it, a second session resumes it by id, and
     /// `mark_implemented {change}` folds exactly its entries — closing the
@@ -4137,15 +4137,10 @@ mod tests {
 
         let server = ScryerServer::new();
         let r = server
-            .set_change(Parameters(SetChangeRequest {
+            .open_change(Parameters(OpenChangeRequest {
                 project: Some(project.clone()),
                 rationale: Some("give the API rate limiting".into()),
                 change_id: None,
-                clear: None,
-                close: None,
-                retag: None,
-                sign_off: None,
-                to: None,
             }))
             .unwrap();
         assert!(tool_text(&r).contains("Opened chg-"), "{}", tool_text(&r));
@@ -4193,15 +4188,10 @@ mod tests {
         // A FRESH session (new server) resumes the change by id…
         let session2 = ScryerServer::new();
         let r = session2
-            .set_change(Parameters(SetChangeRequest {
+            .open_change(Parameters(OpenChangeRequest {
                 project: Some(project.clone()),
                 rationale: None,
                 change_id: Some(chg.clone()),
-                clear: None,
-                close: None,
-                retag: None,
-                sign_off: None,
-                to: None,
             }))
             .unwrap();
         assert!(tool_text(&r).contains(&format!("Resumed {chg}")), "{}", tool_text(&r));
@@ -4246,12 +4236,12 @@ mod tests {
         assert_eq!(impl_ev.change_id.as_deref(), Some(chg.as_str()));
     }
 
-    /// `set_change {retag}` re-files work that already exists: a node id moves
+    /// `refile` moves work that already exists: a node id moves
     /// the carrier and everything pending under it, so an agent that filed a
     /// task under the wrong change repairs the ledger instead of re-writing
     /// the spec. The response names what moved and what matched nothing.
     #[test]
-    fn set_change_retag_moves_pending_work_between_changes() {
+    fn refile_moves_pending_work_between_changes() {
         let dir = tempfile::tempdir().unwrap();
         let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
         let project = dir.path().to_string_lossy().to_string();
@@ -4263,16 +4253,11 @@ mod tests {
         let server = ScryerServer::new();
         let open = |rationale: &str| {
             server
-                .set_change(Parameters(SetChangeRequest {
-                    project: Some(project.clone()),
-                    rationale: Some(rationale.into()),
-                    change_id: None,
-                    clear: None,
-                    close: None,
-                    retag: None,
-                    sign_off: None,
-                    to: None,
-                }))
+                .open_change(Parameters(OpenChangeRequest {
+                project: Some(project.clone()),
+                rationale: Some(rationale.into()),
+                change_id: None,
+            }))
                 .unwrap()
         };
         let chg1 = opened(&open("give the API rate limiting"));
@@ -4293,14 +4278,9 @@ mod tests {
         let rl_resp = rl_resp.unwrap();
 
         let r = server
-            .set_change(Parameters(SetChangeRequest {
+            .refile(Parameters(RefileRequest {
                 project: Some(project.clone()),
-                rationale: None,
-                change_id: None,
-                clear: None,
-                close: None,
-                retag: Some(vec![rl.clone(), "node-99".into()]),
-                sign_off: None,
+                ids: vec![rl.clone(), "node-99".into()],
                 to: Some(chg2.clone()),
             }))
             .unwrap();
@@ -4317,14 +4297,9 @@ mod tests {
 
         // Detaching sends them back to the unfiled bucket.
         let r = server
-            .set_change(Parameters(SetChangeRequest {
+            .refile(Parameters(RefileRequest {
                 project: Some(project.clone()),
-                rationale: None,
-                change_id: None,
-                clear: None,
-                close: None,
-                retag: Some(vec![chg2.clone()]),
-                sign_off: None,
+                ids: vec![chg2.clone()],
                 to: Some("unfiled".into()),
             }))
             .unwrap();
@@ -4333,11 +4308,11 @@ mod tests {
         assert!(planned.change_map.is_empty(), "{:?}", planned.change_map);
     }
 
-    /// `set_change {close}` is the escape hatch for a stranded empty ledger:
+    /// `close_change` is the escape hatch for a stranded empty ledger:
     /// it refuses while the change has tagged entries, closes it once empty,
     /// and detaches a session selection pointing at the closed id.
     #[test]
-    fn set_change_close_discards_a_stranded_empty_ledger() {
+    fn close_change_discards_a_stranded_empty_ledger() {
         let dir = tempfile::tempdir().unwrap();
         let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
         let project = dir.path().to_string_lossy().to_string();
@@ -4350,16 +4325,11 @@ mod tests {
         let server = ScryerServer::new();
         let chg1 = opened(
             &server
-                .set_change(Parameters(SetChangeRequest {
-                    project: Some(project.clone()),
-                    rationale: Some("rate limiting".into()),
-                    change_id: None,
-                    clear: None,
-                    close: None,
-                    retag: None,
-                    sign_off: None,
-                    to: None,
-                }))
+                .open_change(Parameters(OpenChangeRequest {
+                project: Some(project.clone()),
+                rationale: Some("rate limiting".into()),
+                change_id: None,
+            }))
                 .unwrap(),
         );
         server
@@ -4375,28 +4345,17 @@ mod tests {
             .unwrap();
         let chg2 = opened(
             &server
-                .set_change(Parameters(SetChangeRequest {
-                    project: Some(project.clone()),
-                    rationale: Some("opened then orphaned".into()),
-                    change_id: None,
-                    clear: None,
-                    close: None,
-                    retag: None,
-                    sign_off: None,
-                    to: None,
-                }))
+                .open_change(Parameters(OpenChangeRequest {
+                project: Some(project.clone()),
+                rationale: Some("opened then orphaned".into()),
+                change_id: None,
+            }))
                 .unwrap(),
         );
         let close = |id: &str| {
-            server.set_change(Parameters(SetChangeRequest {
+            server.close_change(Parameters(CloseChangeRequest {
                 project: Some(project.clone()),
-                rationale: None,
-                change_id: None,
-                clear: None,
-                close: Some(id.into()),
-                retag: None,
-                sign_off: None,
-                to: None,
+                change_id: id.into(),
             }))
         };
 
@@ -4444,16 +4403,11 @@ mod tests {
         let session1 = ScryerServer::new();
         let chg1 = opened(
             &session1
-                .set_change(Parameters(SetChangeRequest {
-                    project: Some(project.clone()),
-                    rationale: Some("rate limiting".into()),
-                    change_id: None,
-                    clear: None,
-                    close: None,
-                    retag: None,
-                    sign_off: None,
-                    to: None,
-                }))
+                .open_change(Parameters(OpenChangeRequest {
+                project: Some(project.clone()),
+                rationale: Some("rate limiting".into()),
+                change_id: None,
+            }))
                 .unwrap(),
         );
         session1
@@ -4472,16 +4426,11 @@ mod tests {
         let session2 = ScryerServer::new();
         let chg2 = opened(
             &session2
-                .set_change(Parameters(SetChangeRequest {
-                    project: Some(project.clone()),
-                    rationale: Some("rename things".into()),
-                    change_id: None,
-                    clear: None,
-                    close: None,
-                    retag: None,
-                    sign_off: None,
-                    to: None,
-                }))
+                .open_change(Parameters(OpenChangeRequest {
+                project: Some(project.clone()),
+                rationale: Some("rename things".into()),
+                change_id: None,
+            }))
                 .unwrap(),
         );
         let r = session2
@@ -4667,7 +4616,7 @@ mod tests {
         });
         let server = ScryerServer::new();
         let r = server
-            .set_node(Parameters(SetNodeRequest {
+            .replace_subtree(Parameters(SetNodeRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
                 node_id: "node-2".into(),
                 data: payload.to_string(),
@@ -4700,7 +4649,7 @@ mod tests {
         );
     }
 
-    /// set_node writes the same subtree into BOTH layers, so a re-minted id
+    /// replace_subtree writes the same subtree into BOTH layers, so a re-minted id
     /// must land identically in each — otherwise the plan diff reports a
     /// phantom reword.
     #[test]
@@ -4722,7 +4671,7 @@ mod tests {
         });
         let server = ScryerServer::new();
         let r = server
-            .set_node(Parameters(SetNodeRequest {
+            .replace_subtree(Parameters(SetNodeRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
                 node_id: "node-1".into(),
                 data: payload.to_string(),
@@ -4744,7 +4693,7 @@ mod tests {
         assert!(tool_text(&r).contains(&format!("node-2: 'new' → {minted}")));
     }
 
-    /// set_model replaces the whole model, but its re-mint floor still includes
+    /// replace_model replaces the whole model, but its re-mint floor still includes
     /// the OUTGOING layers: re-issuing an id the payload dropped would let
     /// enforce_readonly_directives staple the dead claim's user directives onto
     /// an unrelated new one.
@@ -4771,7 +4720,7 @@ mod tests {
         });
         let server = ScryerServer::new();
         server
-            .set_model(Parameters(SetModelRequest {
+            .replace_model(Parameters(SetModelRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
                 data: payload.to_string(),
             }))
@@ -4783,7 +4732,7 @@ mod tests {
         assert_ne!(minted, "resp-5", "must not reuse the dropped resp-5 still live in the outgoing layers");
     }
 
-    /// `set_change {sign_off}` snapshots the session's change; a plan write
+    /// `sign_off` snapshots the session's change; a plan write
     /// that rewords a signed-off claim afterwards succeeds but is reported as
     /// an AMENDMENT (and an added claim as an ADDITION) in the tool response.
     #[test]
@@ -4795,19 +4744,12 @@ mod tests {
         scryer_core::write_model_at(&model_ref, &m).unwrap();
         let project = Some(dir.path().to_string_lossy().to_string());
         let server = ScryerServer::new();
-        let set_change = |req: SetChangeRequest| tool_text(&server.set_change(Parameters(req)).unwrap());
-        let blank = || SetChangeRequest {
-            project: project.clone(),
-            rationale: None,
-            change_id: None,
-            clear: None,
-            close: None,
-            retag: None,
-            sign_off: None,
-            to: None,
-        };
         let r = server
-            .set_change(Parameters(SetChangeRequest { rationale: Some("verify tokens".into()), ..blank() }))
+            .open_change(Parameters(OpenChangeRequest {
+                project: project.clone(),
+                rationale: Some("verify tokens".into()),
+                change_id: None,
+            }))
             .unwrap();
         let cid = opened(&r);
         let write = |stmt: &str, extra: Option<&str>| {
@@ -4828,7 +4770,11 @@ mod tests {
         };
         write("Verifies the approved thing", None);
 
-        let text = set_change(SetChangeRequest { sign_off: Some(true), ..blank() });
+        let text = tool_text(
+            &server
+                .sign_off(Parameters(SignOffRequest { project: project.clone(), change_id: None }))
+                .unwrap(),
+        );
         assert!(text.contains(&format!("Signed off {cid}")), "{text}");
         assert!(text.contains("1 entry snapshotted"), "{text}");
         let planned = scryer_core::read_planned_at(&model_ref).unwrap();

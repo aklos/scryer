@@ -83,21 +83,34 @@ pub(crate) struct GetPendingRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct SetChangeRequest {
+pub(crate) struct OpenChangeRequest {
     pub project: Option<String>,
     /// Open a NEW change: the task in one sentence, as the dev put it.
     pub rationale: Option<String>,
-    /// Resume an EXISTING open change by id.
+    /// Resume an EXISTING open change by id instead.
     pub change_id: Option<String>,
-    /// Detach from the current change; later writes go unfiled.
-    pub clear: Option<bool>,
-    /// Close an EMPTY open change by id; refused while it has tagged entries.
-    pub close: Option<String>,
-    /// Bare ids of pending work to MOVE into `to`: node/group (carrier + everything under it), responsibility/link, a chg-N id, or "unfiled".
-    pub retag: Option<Vec<String>>,
-    /// Record the developer's approval: snapshot the change's entries as intent; later agent rewords/additions become amendments.
-    pub sign_off: Option<bool>,
-    /// Destination for `retag`: a change id or "unfiled"; defaults to the session's change.
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct SignOffRequest {
+    pub project: Option<String>,
+    /// The change to sign off; defaults to the session's current one.
+    pub change_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct CloseChangeRequest {
+    pub project: Option<String>,
+    /// The EMPTY open change to close; refused while it has tagged entries.
+    pub change_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct RefileRequest {
+    pub project: Option<String>,
+    /// Bare ids of pending work to MOVE: node/group (carrier + everything under it), responsibility/link, a change id, or "unfiled".
+    pub ids: Vec<String>,
+    /// Destination: a change id or "unfiled"; defaults to the session's change.
     pub to: Option<String>,
 }
 

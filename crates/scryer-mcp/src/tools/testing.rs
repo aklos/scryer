@@ -189,11 +189,11 @@ impl ScryerServer {
         description = "Open a falsification probe on one claim: would its attached test FAIL if the code \
          stopped honouring it? Syncs an isolated git worktree and returns its path, the claim, \
          the exact span to break, and the test files. DELEGATE THIS TO A SUBAGENT on a cheap \
-         model; close with end_probe. Refused without an attached test and a current passing \
+         model; close with close_probe. Refused without an attached test and a current passing \
          verdict, or outside a git repo.\n\
          Rules: probe-loop"
     )]
-    fn probe_claim(
+    fn open_probe(
         &self,
         Parameters(req): Parameters<ProbeClaimRequest>,
     ) -> Result<CallToolResult, McpError> {
@@ -234,8 +234,8 @@ impl ScryerServer {
         msg.push_str(
             "\nMake ONE breaking edit inside the span, run those tests in the worktree, expect \
              them to FAIL. A test that still passes is a survivor — record what you changed. \
-             Up to 3 breaks, stop at the first survivor, then end_probe. No need to revert: \
-             end_probe resets the worktree.",
+             Up to 3 breaks, stop at the first survivor, then close_probe. No need to revert: \
+             close_probe resets the worktree.",
         );
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
@@ -243,10 +243,10 @@ impl ScryerServer {
     #[tool(
         description = "Close a probe: resets the probe worktree whatever happened and records the round against \
          the claim. Pass `probes` (breaks tried) and `survivors` (one line per break the test did \
-         NOT catch). Call after every probe_claim, including when a probe went wrong.\n\
+         NOT catch). Call after every open_probe, including when a probe went wrong.\n\
          Rules: probe-loop"
     )]
-    fn end_probe(
+    fn close_probe(
         &self,
         Parameters(req): Parameters<EndProbeRequest>,
     ) -> Result<CallToolResult, McpError> {
@@ -569,7 +569,7 @@ mod tests {
         ingest(&server, &dir);
 
         let result = server
-            .probe_claim(Parameters(ProbeClaimRequest {
+            .open_probe(Parameters(ProbeClaimRequest {
                 project: project_arg(&dir),
                 resp_id: "r1".into(),
             }))
@@ -598,7 +598,7 @@ mod tests {
         std::fs::remove_dir_all(dir.path().join(".git")).unwrap();
 
         let result = server
-            .probe_claim(Parameters(ProbeClaimRequest {
+            .open_probe(Parameters(ProbeClaimRequest {
                 project: project_arg(&dir),
                 resp_id: "r1".into(),
             }))
@@ -614,7 +614,7 @@ mod tests {
         let (server, dir) = tested_project();
 
         let result = server
-            .probe_claim(Parameters(ProbeClaimRequest {
+            .open_probe(Parameters(ProbeClaimRequest {
                 project: project_arg(&dir),
                 resp_id: "r1".into(),
             }))
@@ -632,7 +632,7 @@ mod tests {
         let (server, dir) = tested_project();
         ingest(&server, &dir);
         server
-            .probe_claim(Parameters(ProbeClaimRequest {
+            .open_probe(Parameters(ProbeClaimRequest {
                 project: project_arg(&dir),
                 resp_id: "r1".into(),
             }))
@@ -644,7 +644,7 @@ mod tests {
             .unwrap();
 
         let result = server
-            .end_probe(Parameters(EndProbeRequest {
+            .close_probe(Parameters(EndProbeRequest {
                 project: project_arg(&dir),
                 resp_id: "r1".into(),
                 probes: 3,
@@ -677,14 +677,14 @@ mod tests {
         let (server, dir) = tested_project();
         ingest(&server, &dir);
         server
-            .probe_claim(Parameters(ProbeClaimRequest {
+            .open_probe(Parameters(ProbeClaimRequest {
                 project: project_arg(&dir),
                 resp_id: "r1".into(),
             }))
             .unwrap();
 
         let result = server
-            .end_probe(Parameters(EndProbeRequest {
+            .close_probe(Parameters(EndProbeRequest {
                 project: project_arg(&dir),
                 resp_id: "r1".into(),
                 probes: 3,
@@ -713,13 +713,13 @@ mod tests {
 
         let probe = |survivors: Vec<String>| {
             server
-                .probe_claim(Parameters(ProbeClaimRequest {
+                .open_probe(Parameters(ProbeClaimRequest {
                     project: project_arg(&dir),
                     resp_id: "r1".into(),
                 }))
                 .unwrap();
             server
-                .end_probe(Parameters(EndProbeRequest {
+                .close_probe(Parameters(EndProbeRequest {
                     project: project_arg(&dir),
                     resp_id: "r1".into(),
                     probes: 2,
@@ -748,8 +748,8 @@ mod tests {
         let desc = ScryerServer::tool_router_testing()
             .list_all()
             .into_iter()
-            .find(|t| t.name == "probe_claim")
-            .expect("probe_claim is registered")
+            .find(|t| t.name == "open_probe")
+            .expect("open_probe is registered")
             .description
             .clone()
             .unwrap_or_default()

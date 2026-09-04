@@ -164,7 +164,7 @@ pub(crate) fn breadcrumb(model: &ScryModel, node_id: &str) -> String {
 /// This lets the AI create, edit, and move responsibilities and nodes while
 /// leaving directives entirely under the user's control. (The interactive
 /// patch path can't reach them — they're `schemars(skip)` — but the whole-node
-/// generation primitives `set_model`/`set_node` rebuild nodes from JSON and
+/// generation primitives `replace_model`/`replace_subtree` rebuild nodes from JSON and
 /// would otherwise drop them.) Not applied to `move_responsibilities`, which
 /// preserves directives across a deliberate responsibility-id rename — nor to
 /// `set_directives`, the one deliberate write path, reserved for edits the
@@ -205,7 +205,7 @@ pub(crate) fn enforce_readonly_directives(model: &mut ScryModel, prior: &ScryMod
 /// Canvas placements (`Node::position`) are user-authored and read-only to the
 /// AI, exactly like directives — the typed patch tools can't reach them
 /// (`schemars(skip)`), but the whole-node generation primitives
-/// `set_model`/`set_node` rebuild nodes from JSON and would otherwise drop
+/// `replace_model`/`replace_subtree` rebuild nodes from JSON and would otherwise drop
 /// them. Force each node's position back to whatever the FIRST prior model
 /// containing that node held; nodes new to every prior get none (the AI never
 /// places nodes — auto-layout does). Priors are ordered most-authoritative
@@ -273,8 +273,8 @@ fn is_minted_resp_id(id: &str) -> bool {
 
 /// Re-mints caller-supplied responsibility ids in raw-write payloads.
 ///
-/// The raw-write tools (`update_nodes`, `update_group`, `set_node`,
-/// `set_groups`, `set_model`) accept full `Responsibility` structs, so a
+/// The raw-write tools (`update_nodes`, `update_group`, `replace_subtree`,
+/// `replace_groups`, `replace_model`) accept full `Responsibility` structs, so a
 /// caller that doesn't know the next free id invents one ("new", "", "temp")
 /// — and every lookup in the system (`find_responsibility`, source_map, fold)
 /// keys on that id being globally unique. Three ways a payload id fails that,
@@ -320,14 +320,14 @@ pub(crate) struct RespIdReminter {
 
 impl RespIdReminter {
     /// For the patch-shaped writers (`update_nodes`, `update_group`,
-    /// `set_groups`), where a claim cannot change host: moving one is
+    /// `replace_groups`), where a claim cannot change host: moving one is
     /// `move_responsibilities`' job, so an id arriving on a foreign host is a
     /// collision.
     pub(crate) fn new(floors: &[&ScryModel]) -> Self {
         Self::build(floors, true)
     }
 
-    /// For the whole-payload writers (`set_model`, `set_node`), which restate
+    /// For the whole-payload writers (`replace_model`, `replace_subtree`), which restate
     /// an entire model or subtree and may legitimately carry a claim to a new
     /// host. Duplicate and invented ids are still re-minted.
     pub(crate) fn for_replacement(floors: &[&ScryModel]) -> Self {
