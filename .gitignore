@@ -56,3 +56,6 @@ vite.config.d.ts
 # Test run artifacts — the JUnit reports scryer ingests for claim verdicts.
 test-results/
 
+
+# Local plan notes — kept on disk, never committed
+plans/
