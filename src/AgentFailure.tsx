@@ -88,7 +88,7 @@ function AgentFailureModal({
           {/* The raw error from the agent — wraps and scrolls so a long stack or
               provider message can't blow out the modal. */}
           <div className="max-h-[180px] overflow-auto overscroll-contain rounded-md border border-[var(--border)] bg-[var(--surface-inset)] px-3 py-2">
-            <p className="font-mono text-2xs leading-relaxed break-words whitespace-pre-wrap text-[var(--text-secondary)]">
+            <p className="font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-[var(--text-secondary)]">
               {failure.error}
             </p>
           </div>

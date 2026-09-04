@@ -800,12 +800,9 @@ export function useModelStorage(): ModelStorage {
   const closeChange = useCallback(async (id: string) => {
     const ref = modelRefRef.current;
     if (!ref) return;
-    try {
-      await invoke("close_change", { refStr: ref, changeId: id });
-    } catch {
-      /* refused (entries landed meanwhile, or already closed) — the reload
-         keeps the row honest either way */
-    }
+    // A refusal (entries landed meanwhile, or already closed) propagates so
+    // the page can say why; the reload keeps the row honest either way.
+    await invoke("close_change", { refStr: ref, changeId: id });
   }, []);
 
   const signOffChange = useCallback(async (id: string) => {

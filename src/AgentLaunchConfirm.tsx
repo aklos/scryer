@@ -127,7 +127,7 @@ export function AgentLaunchConfirm({
             )}
           </div>
 
-          <p className="text-2xs leading-relaxed text-[var(--text-muted)]">
+          <p className="text-xs leading-relaxed text-[var(--text-muted)]">
             {request.detail ? `${request.detail} ` : ""}
             This uses your configured AI agent and can take a while and use significant tokens —
             mind the model you&rsquo;ve set if you pay per token. You can change it in subagent

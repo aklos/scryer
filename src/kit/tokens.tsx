@@ -75,7 +75,7 @@ export function EmptyFlag({ className = "" }: { className?: string }) {
   return (
     <span
       title={EMPTY_HINT}
-      className={`inline-flex shrink-0 items-center rounded-full border border-dashed border-orange-400/70 bg-orange-500/5 px-2 py-px text-2xs font-medium text-orange-700 dark:text-orange-300 ${className}`}
+      className={`inline-flex shrink-0 items-center rounded-full border border-dashed border-orange-400/70 bg-orange-500/5 px-2.5 py-0.5 text-2xs font-medium text-orange-700 dark:text-orange-300 ${className}`}
     >
       empty
     </span>
@@ -103,7 +103,7 @@ export const EYEBROW = `${EYEBROW_BASE} text-[var(--text-tertiary)]`;
 /** One button system for the page (the mockup's `.btn`): bordered, sentence
  *  case, color = role. Set off the mono content in its own lane. */
 const BTN_BASE =
-  "pointer-events-auto inline-flex items-center gap-1 rounded border px-2.5 py-0.5 text-2xs transition-colors whitespace-nowrap";
+  "pointer-events-auto inline-flex items-center gap-1.5 rounded-md border px-3 py-1 text-xs font-medium leading-tight transition-colors whitespace-nowrap";
 export const BTN = `${BTN_BASE} border-[var(--border-strong)] bg-[var(--surface-hover)] text-[var(--text-secondary)] hover:bg-[var(--surface-active)] hover:text-[var(--text)]`;
 export const BTN_GO = `${BTN_BASE} border-emerald-500/45 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-400`;
 export const BTN_DANGER = `${BTN_BASE} border-red-500/45 bg-red-500/10 text-red-700 hover:bg-red-500/20 dark:text-red-400`;

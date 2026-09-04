@@ -100,7 +100,7 @@ export function PageHeader({
     // article and rail all hang on the same grid at any window width.
     <header className="shrink-0 border-b border-[var(--border)] pt-[13px]">
       <div className={PAGE_COL}>
-      <div className="flex min-h-[15px] items-center gap-1 font-mono text-2xs text-[var(--text-tertiary)]">
+      <div className="flex min-h-[15px] items-center gap-1 font-mono text-xs text-[var(--text-tertiary)]">
         {crumbs}
         <span className="flex-1" />
         {actions}
@@ -276,7 +276,7 @@ export function NodeHistory({
               >
                 {meta.label}
               </span>
-              <span className="text-2xs text-[var(--text-muted)]">
+              <span className="text-xs text-[var(--text-muted)]">
                 <AgentMark /> {ev.by} · {ev.driver}
               </span>
             </div>

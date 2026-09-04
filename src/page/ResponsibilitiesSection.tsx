@@ -602,7 +602,7 @@ function RespDiffRow({
             reserved for the no-cost accept; rebuilding is neutral (it files
             work); drop is red (it deletes from the model). */}
         {resp.stale && editor && (
-          <div className={`mt-1.5 flex flex-wrap items-center gap-2 text-2xs ${DRIFT_RULE}`}>
+          <div className={`mt-1.5 flex flex-wrap items-center gap-2 text-xs ${DRIFT_RULE}`}>
             {resp.staleProposal ? (
               <>
                 <span className={DRIFT_HINT}>Drift proposes:</span>
@@ -684,7 +684,7 @@ function RespDiffRow({
             there under the same id, so there's nothing to restore — a Restore
             here would re-add the id and duplicate it across two hosts. */}
         {relocated && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-2xs text-[var(--text-tertiary)]">
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-[var(--text-tertiary)]">
             <span>Moved to {row.movedTo} in the plan.</span>
           </div>
         )}
@@ -1078,7 +1078,7 @@ function ResponsibilityEditRow({
         </div>
 
         {lints.length > 0 && (
-          <div className="mt-0.5 flex flex-col gap-px text-2xs leading-snug text-[var(--text-tertiary)]">
+          <div className="mt-0.5 flex flex-col gap-px text-xs leading-snug text-[var(--text-tertiary)]">
             {lints.map((l) => (
               <div key={l.code}>
                 <span className="text-[var(--text-ghost)]">“{l.excerpt}”</span> {l.message}

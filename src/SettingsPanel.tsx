@@ -194,7 +194,7 @@ export function SettingsPanel({
               value={settings.agent}
               onChange={(agent) => setSettings((s) => ({ ...s, agent }))}
             />
-            <p className="text-2xs text-[var(--text-muted)]">
+            <p className="text-xs text-[var(--text-muted)]">
               {resolvedAgent
                 ? `Fills will use ${AGENT_LABEL[resolvedAgent]}.`
                 : "No agent detected — install Claude Code, Codex or Copilot CLI."}
@@ -229,7 +229,7 @@ export function SettingsPanel({
           {projectPath &&
             (mcpSetup.tools.claude || mcpSetup.tools.codex || mcpSetup.tools.copilot) && (
             <Field label="Session hooks (this project)">
-              <p className="text-2xs leading-relaxed text-[var(--text-muted)]">
+              <p className="text-xs leading-relaxed text-[var(--text-muted)]">
                 Let agent sessions see the model as they work: the status line on start, each
                 file's claims and directives as they work in it, and a one-time close check for
                 touched claims. Hooks are inert while Scryer is closed — installed per tool,
@@ -262,7 +262,7 @@ export function SettingsPanel({
                     busy={mcpSetup.busy}
                     onInstall={() => void mcpSetup.enableHooks("copilot")}
                   />
-                  <p className="text-2xs leading-relaxed text-[var(--text-muted)]">
+                  <p className="text-xs leading-relaxed text-[var(--text-muted)]">
                     Copilot loads a project's hooks — and its MCP servers — only in a folder
                     you've trusted, and asks the first time you open one. Until you do, it stays
                     silent about both.
@@ -274,7 +274,7 @@ export function SettingsPanel({
 
           {projectPath && mcpSetup.tools.claude && (
             <Field label="Status line (this project)">
-              <p className="text-2xs leading-relaxed text-[var(--text-muted)]">
+              <p className="text-xs leading-relaxed text-[var(--text-muted)]">
                 Show the model's status — pending, drift, anchor health — in Claude Code's status
                 line. Unlike the session hooks, it keeps reporting while Scryer is closed: the
                 command reads the model straight off disk.
@@ -343,7 +343,7 @@ function HooksRow({
         </span>
       ) : (
         <span className="flex items-center gap-2">
-          <span className="font-mono text-2xs text-[var(--text-muted)]">{target}</span>
+          <span className="font-mono text-xs text-[var(--text-muted)]">{target}</span>
           <button type="button" className={BTN} disabled={busy} onClick={onInstall}>
             {busy ? "Installing…" : "Install"}
           </button>
@@ -377,12 +377,12 @@ function StatuslineRow({
           <Check className="h-3 w-3" /> Installed
         </span>
       ) : foreign ? (
-        <span className="text-2xs text-[var(--text-muted)]">
+        <span className="text-xs text-[var(--text-muted)]">
           A status line is already configured — left untouched.
         </span>
       ) : (
         <span className="flex items-center gap-2">
-          <span className="font-mono text-2xs text-[var(--text-muted)]">{target}</span>
+          <span className="font-mono text-xs text-[var(--text-muted)]">{target}</span>
           <button type="button" className={BTN} disabled={busy} onClick={onInstall}>
             {busy ? "Installing…" : "Install"}
           </button>
@@ -493,7 +493,7 @@ function ModelPicker({
             onChange={(e) => onChange(e.target.value)}
           />
           {customNote && (
-            <p className="text-2xs leading-relaxed text-[var(--text-muted)]">{customNote}</p>
+            <p className="text-xs leading-relaxed text-[var(--text-muted)]">{customNote}</p>
           )}
         </>
       )}

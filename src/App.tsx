@@ -309,15 +309,26 @@ function Workspace({
     localStorage.setItem("scryer:view", v);
     setView(v);
   }, []);
-  // Flip wiki↔diagram in one step (the Ctrl+Space shortcut). Functional update
-  // so it reads the current view without the keydown handler closing over it.
-  const toggleView = useCallback(() => {
-    setView((v) => {
-      const next: WorkspaceView = v === "diagram" ? "wiki" : "diagram";
-      localStorage.setItem("scryer:view", next);
-      return next;
-    });
-  }, []);
+  // The inbox is a wiki page, but the top bar shows it as its own destination,
+  // so "Wiki" must land on a real page — the last one open before the inbox,
+  // or the top node — never straight back into the inbox.
+  const inboxOpen = view === "wiki" && selected?.kind === "special" && selected.id === "inbox";
+  const lastWikiRef = useRef<Selected | null>(null);
+  useEffect(() => {
+    if (!(selected?.kind === "special" && selected.id === "inbox")) lastWikiRef.current = selected;
+  }, [selected]);
+  const showView = useCallback(
+    (v: WorkspaceView) => {
+      setWorkspaceView(v);
+      if (v === "wiki" && inboxOpen) {
+        const top = model.nodes.find((n) => !n.parentId);
+        setSelected(lastWikiRef.current ?? (top ? { kind: "node", id: top.id } : null));
+      }
+    },
+    [setWorkspaceView, inboxOpen, model.nodes],
+  );
+  // Flip wiki↔diagram in one step (the Ctrl+Space shortcut).
+  const toggleView = useCallback(() => showView(view === "diagram" ? "wiki" : "diagram"), [showView, view]);
   const [diagramFocus, setDiagramFocus] = useState<string | null>(null);
 
   // The concern lens — the cross-cutting third axis ("where does auth live?").
@@ -727,14 +738,14 @@ function Workspace({
       <TopBar
         projectPath={projectPath}
         view={view}
-        onSetView={setWorkspaceView}
+        onSetView={showView}
         onOpenProject={(p) => void openProject(p)}
         onCloseProject={closeProject}
         onOpenSearch={() => setSearchOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
         inboxUnread={inbox.unread}
         inboxLive={inbox.live}
-        inboxOpen={view === "wiki" && selected?.kind === "special" && selected.id === "inbox"}
+        inboxOpen={inboxOpen}
         onOpenInbox={() => openSpecial("inbox")}
       />
       <div className="flex min-h-0 flex-1">

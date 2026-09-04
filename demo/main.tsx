@@ -16,6 +16,7 @@ import "@fontsource-variable/space-grotesk";
 import "./fonts.css";
 import { applyTheme, loadTheme } from "../src/theme";
 import { sceneById } from "./scenes";
+import { stills } from "./stills";
 import { Runner } from "./runner";
 import { Stage } from "./engine/Stage";
 import { comprehendScene } from "./engine/scenes/comprehend";
@@ -83,6 +84,7 @@ function DemoStage() {
   if (h === "film") return <Stage scene={filmScene} />;
   if (h === "shell") return <ShellDemo />;
   if (h === "terminal") return <TerminalPreview />;
+  if (stills[h]) return <>{stills[h]()}</>;
   return <>{sceneById(h).render()}</>;
 }
 

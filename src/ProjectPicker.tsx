@@ -106,7 +106,7 @@ export function ProjectPicker({
               No model in this project yet
             </h2>
             <p className="text-sm font-medium text-[var(--text-secondary)]">{folder}</p>
-            <p className="max-w-md truncate font-mono text-2xs text-[var(--text-muted)]" title={storage.projectPath}>
+            <p className="max-w-md truncate font-mono text-xs text-[var(--text-muted)]" title={storage.projectPath}>
               {storage.projectPath}
             </p>
           </div>
@@ -121,7 +121,7 @@ export function ProjectPicker({
                 <AgentMark />
                 Generate from codebase
               </button>
-              <p className="px-1 text-2xs leading-relaxed text-[var(--text-muted)]">
+              <p className="px-1 text-xs leading-relaxed text-[var(--text-muted)]">
                 Runs an in-depth agent pass over your whole codebase using your
                 configured AI agent &mdash; this can take a while and use significant
                 tokens (mind the model you&rsquo;ve set if you pay per token). You can
@@ -135,7 +135,7 @@ export function ProjectPicker({
             >
               Start blank
             </button>
-            <p className="px-1 text-2xs leading-relaxed text-[var(--text-muted)]">
+            <p className="px-1 text-xs leading-relaxed text-[var(--text-muted)]">
               Either option creates a <code className="font-mono">.scryer/</code> folder &mdash; your
               model store &mdash; in this project.
             </p>
@@ -208,7 +208,7 @@ export function ProjectPicker({
                       <span className="block truncate text-sm font-medium text-[var(--text)]">
                         {name}
                       </span>
-                      <span className="block truncate font-mono text-2xs text-[var(--text-muted)]">
+                      <span className="block truncate font-mono text-xs text-[var(--text-muted)]">
                         {path}
                       </span>
                     </button>

@@ -134,68 +134,59 @@ export function TopBar({
       </button>
 
       <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center justify-end">
-        {/* Wiki / Map view toggle — a primary nav surface onto the same model
-            and selection. Ctrl+Space flips it. One joined control: single
-            border, hairline dividers, the active cell filled. */}
+        {/* Wiki / Map / Inbox — three destinations, one joined control, exactly
+            one lit. The inbox is a wiki page underneath, but to the user it is
+            its own place: lighting Wiki too read as two selections, and Wiki
+            then "went back" to the inbox. Its cell carries the unread badge;
+            while a hook session is live the badge pulses. */}
         <div className="ml-2 flex items-stretch overflow-hidden rounded-md border border-[var(--border)] divide-x divide-[var(--border)]">
           {([
-            { id: "wiki", label: "Wiki", Icon: FileText },
-            { id: "diagram", label: "Map", Icon: Network },
-          ] as const).map(({ id, label, Icon }) => (
-            <button
-              key={id}
-              type="button"
-              data-cam={`view-${id}`}
-              title={`${label} view (Ctrl+Space to switch)`}
-              aria-pressed={view === id}
-              onClick={() => onSetView(id)}
-              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium transition-colors ${
-                view === id
-                  ? "bg-[var(--surface-active)] text-[var(--text)]"
-                  : "text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
-              }`}
-            >
-              <Icon className="h-3.5 w-3.5" />
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {/* The inbox — the in-session verdict queue. Unread count as a badge;
-            while a hook session is live the badge pulses (the queue is being
-            fed right now), otherwise it is the same queue at rest. */}
-        {onOpenInbox && (
-          <button
-            type="button"
-            data-cam="inbox"
-            onClick={onOpenInbox}
-            aria-pressed={inboxOpen}
-            title={
-              inboxUnread > 0
-                ? `Inbox — ${inboxUnread} unread item${inboxUnread === 1 ? "" : "s"} awaiting your verdict${inboxLive ? " (session live)" : ""}`
-                : `Inbox — nothing unread${inboxLive ? " (session live)" : ""}`
-            }
-            className={`relative ml-1.5 flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors ${
-              inboxOpen
-                ? "border-[var(--border)] bg-[var(--surface-active)] text-[var(--text)]"
-                : "border-transparent text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
-            }`}
-          >
-            <Inbox className="h-3.5 w-3.5" />
-            <span className="hidden md:inline">Inbox</span>
-            {inboxUnread > 0 && (
-              <span
-                className={`inline-flex min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-2xs font-semibold tabular-nums ${
-                  inboxLive
-                    ? "animate-pulse bg-violet-600 text-white dark:bg-violet-500"
-                    : "bg-orange-600 text-white dark:bg-orange-500"
+            { id: "wiki", label: "Wiki", Icon: FileText, title: "Wiki view (Ctrl+Space to switch)" },
+            { id: "diagram", label: "Map", Icon: Network, title: "Map view (Ctrl+Space to switch)" },
+            ...(onOpenInbox
+              ? [{
+                  id: "inbox",
+                  label: "Inbox",
+                  Icon: Inbox,
+                  title:
+                    inboxUnread > 0
+                      ? `Inbox — ${inboxUnread} unread item${inboxUnread === 1 ? "" : "s"} awaiting your verdict${inboxLive ? " (session live)" : ""}`
+                      : `Inbox — nothing unread${inboxLive ? " (session live)" : ""}`,
+                }]
+              : []),
+          ] as const).map(({ id, label, Icon, title }) => {
+            const lit = inboxOpen ? id === "inbox" : id === view;
+            return (
+              <button
+                key={id}
+                type="button"
+                data-cam={id === "inbox" ? "inbox" : `view-${id}`}
+                title={title}
+                aria-pressed={lit}
+                onClick={() => (id === "inbox" ? onOpenInbox?.() : onSetView(id as WorkspaceView))}
+                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium transition-colors ${
+                  lit
+                    ? "bg-[var(--surface-active)] text-[var(--text)]"
+                    : "text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
                 }`}
               >
-                {inboxUnread > 99 ? "99+" : inboxUnread}
-              </span>
-            )}
-          </button>
-        )}
+                <Icon className="h-3.5 w-3.5" />
+                {label}
+                {id === "inbox" && inboxUnread > 0 && (
+                  <span
+                    className={`inline-flex min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-2xs font-semibold tabular-nums ${
+                      inboxLive
+                        ? "animate-pulse bg-violet-600 text-white dark:bg-violet-500"
+                        : "bg-orange-600 text-white dark:bg-orange-500"
+                    }`}
+                  >
+                    {inboxUnread > 99 ? "99+" : inboxUnread}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
 
         <ThemeToggle />
         <WindowControls />

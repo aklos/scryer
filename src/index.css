@@ -24,20 +24,24 @@
 }
 
 /* — Type scale —
-   The UI uses exactly five sizes; everything maps onto this scale.
-     text-2xs  11px  micro labels, eyebrows, status tags, anchors
-     text-xs   12px  secondary/meta content, buttons, meta rows
-     text-sm   13px  primary content: tree rows, statements, descriptions
-     text-base 15px  section titles
-     text-xl   22px  page title */
+   The UI uses exactly five sizes; everything maps onto this scale. The micro
+   size is for LABELS ONLY (eyebrows, pills, gutter counters) — never for
+   sentences, meta rows, file paths, or buttons; those are text-xs or up.
+     text-2xs  12px  eyebrows, pills, gutter counters
+     text-xs   13px  meta rows, buttons, file paths, hints
+     text-sm   14px  primary content: tree rows, statements, descriptions
+     text-base 16px  section titles
+     text-xl   24px  page title */
 @theme {
-  --text-2xs: 0.6875rem;
+  --text-2xs: 0.75rem;
   --text-2xs--line-height: 1.4;
-  --text-sm: 0.8125rem;
-  --text-sm--line-height: 1.45;
-  --text-base: 0.9375rem;
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.45;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.5;
+  --text-base: 1rem;
   --text-base--line-height: 1.4;
-  --text-xl: 1.375rem;
+  --text-xl: 1.5rem;
   --text-xl--line-height: 1.2;
 }
 
@@ -213,7 +217,7 @@
   flex-shrink: 0;
   position: relative;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
+  font-size: 12px;
   background: var(--surface-canvas);
   /* Hairline seat above the bar. A box-shadow, NOT a border: the chevron
      triangles are fixed 13px+13px border constructions filling the 26px

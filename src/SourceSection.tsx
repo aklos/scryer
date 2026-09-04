@@ -147,7 +147,7 @@ function SourceLine({
     };
   }, [anchored, deleted, projectPath, loc.pattern, loc.symbol, loc.line]);
   return (
-    <div className="font-mono text-2xs leading-relaxed text-[var(--text-muted)]">
+    <div className="font-mono text-xs leading-relaxed text-[var(--text-muted)]">
       <button
         type="button"
         data-cam="resp-source"
@@ -319,7 +319,7 @@ function TestLine({
         : `${noun} — click to peek\n${detail}`;
 
   return (
-    <div className="font-mono text-2xs leading-relaxed text-[var(--text-muted)]">
+    <div className="font-mono text-xs leading-relaxed text-[var(--text-muted)]">
       <button
         type="button"
         data-cam="resp-test"

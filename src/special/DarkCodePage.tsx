@@ -40,7 +40,7 @@ export function DarkCodePage({
           </div>
         ) : (
           <>
-            <p className="mb-4 mt-1 text-2xs text-[var(--text-muted)]">
+            <p className="mb-4 mt-1 text-xs text-[var(--text-muted)]">
               These files sit inside a node's boundary, but no claim in its subtree anchors to
               them — the lens can't see them. Most will be boilerplate (generated code, config,
               glue); scan for anything load-bearing the model is missing.
@@ -64,7 +64,7 @@ export function DarkCodePage({
                       {g.files.map((f) => (
                         <li
                           key={f}
-                          className="truncate font-mono text-2xs text-[var(--text-muted)]"
+                          className="truncate font-mono text-xs text-[var(--text-muted)]"
                         >
                           {f}
                         </li>

@@ -100,13 +100,13 @@ export function PreviewSection({
             {report == null && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--surface-canvas)]">
                 <Loader2 className="h-5 w-5 animate-spin text-[var(--text-muted)]" />
-                <span className="font-mono text-2xs text-[var(--text-muted)]">Loading preview…</span>
+                <span className="font-mono text-xs text-[var(--text-muted)]">Loading preview…</span>
               </div>
             )}
           </div>
           {(needsRepair || noFixture) && onFixture && (
             <div className="flex items-center gap-3 self-start">
-              <span className="font-mono text-2xs text-[var(--text-muted)]">
+              <span className="font-mono text-xs text-[var(--text-muted)]">
                 {report!.status === "empty"
                   ? "Rendered empty with placeholder props."
                   : report!.status === "error"

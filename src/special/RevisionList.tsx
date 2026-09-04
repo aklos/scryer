@@ -67,7 +67,7 @@ function RevisionItems({
                 </span>
               )}
               {showContext && it.context && (
-                <span className="shrink-0 text-2xs text-[var(--text-muted)]">
+                <span className="shrink-0 text-xs text-[var(--text-muted)]">
                   on {it.context}
                 </span>
               )}
@@ -75,7 +75,7 @@ function RevisionItems({
             {it.fields && it.fields.length > 0 && (
               <ul className="mt-0.5 flex flex-col gap-px pl-1">
                 {it.fields.map((f) => (
-                  <li key={f.field} className="text-2xs leading-relaxed">
+                  <li key={f.field} className="text-xs leading-relaxed">
                     <span className="text-[var(--text-muted)]">{f.field}: </span>
                     {/* Same rule as the label: a statement field carries its
                         markers into the before → after, and renders them. */}
@@ -117,7 +117,7 @@ export function RevisionList({
           key={`${rev.at}-${i}`}
           className="border-b border-[var(--border-subtle)] py-3 last:border-b-0"
         >
-          <div className="mb-1.5 flex items-center gap-2 font-mono text-2xs tabular-nums text-[var(--text-muted)]">
+          <div className="mb-1.5 flex items-center gap-2 font-mono text-xs tabular-nums text-[var(--text-muted)]">
             {timeLabel(rev.at)}
             {/* Attribution — violet is the agent's hue (the color contract in
                 kit/tokens: AgentMark, the powerline's agent segment). */}

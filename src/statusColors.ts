@@ -9,7 +9,7 @@
  *  ring + tinted text), never as bare colored words, so state always reads as
  *  a badge distinct from body text. */
 export const PILL_BASE =
-  "inline-flex items-center gap-1 rounded-full px-2 py-px text-2xs font-medium ring-1 ring-inset";
+  "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-2xs font-medium leading-tight ring-1 ring-inset whitespace-nowrap";
 
 /** Observation-flag hues — the second axis. Both drift flags share the orange
  *  "review" hue (vagrant = undescribed code, stale = regressed claim); the mark

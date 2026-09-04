@@ -54,7 +54,7 @@ export function ClaimRow({
             "Untitled responsibility"
           )}
         </button>
-        <span className="text-2xs text-[var(--text-muted)]">
+        <span className="text-xs text-[var(--text-muted)]">
           on{" "}
           <button
             type="button"
@@ -65,7 +65,7 @@ export function ClaimRow({
           </button>
         </span>
         {claim.resp.staleProposal && (
-          <div className={`mt-0.5 text-2xs ${DRIFT_RULE}`}>
+          <div className={`mt-0.5 text-xs ${DRIFT_RULE}`}>
             <span className={DRIFT_HINT}>drift proposes:</span>{" "}
             <span className="font-mono text-sm text-[var(--text-secondary)]">
               <WordDiffText from={stripMarkup(claim.resp.statement)} to={stripMarkup(claim.resp.staleProposal)} />
@@ -119,7 +119,7 @@ export function RewordEditor({
         rows={2}
         className="w-full resize-y rounded border border-[var(--border-strong)] bg-[var(--surface)] px-2 py-1 font-mono text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"
       />
-      <div className="flex items-center gap-2 text-2xs">
+      <div className="flex items-center gap-2 text-xs">
         <button type="button" onClick={save} className={BTN_GO} disabled={!text.trim()}>
           Save wording
         </button>
@@ -152,7 +152,7 @@ function AmendmentRow({
       claim={claim}
       onSelectNode={onSelectNode}
       detail={
-        <div className="mt-0.5 border-l-2 border-violet-500/30 pl-3 text-2xs dark:border-violet-400/30">
+        <div className="mt-0.5 border-l-2 border-violet-500/30 pl-3 text-xs dark:border-violet-400/30">
           {addition ? (
             <span className="italic text-violet-700/80 dark:text-violet-400/80">not in the signed-off plan</span>
           ) : (
@@ -182,7 +182,7 @@ function AmendmentRow({
       }
       actions={
         editor && (
-          <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
+          <span className="flex shrink-0 items-center gap-2 pt-0.5 text-xs">
             <button
               type="button"
               onClick={() => editor.adoptResponsibility(resp.id)}
@@ -257,7 +257,7 @@ function PropRow({
             <span className="text-[var(--text-muted)]"> — {pref.prop.description}</span>
           )}
         </button>
-        <span className="text-2xs text-[var(--text-muted)]">
+        <span className="text-xs text-[var(--text-muted)]">
           on{" "}
           <button
             type="button"
@@ -433,12 +433,7 @@ export function NeedsReviewPage({
         {idx.total > 0 && (
           <>
             {idx.testsNotHolding.length > 0 && (
-              <PageSection title="Tests not holding" count={idx.testsNotHolding.length}>
-                <p className="mb-2 text-2xs text-[var(--text-muted)]">
-                  A failing test, or a test that stayed green while its claim's code was
-                  deliberately broken. Either way the claim is not held — fix the code, or
-                  strengthen the test and re-run for a fresh verdict.
-                </p>
+              <PageSection title="Tests not holding" hint={"A failing test, or a test that stayed green while its claim's code was deliberately broken. Either way the claim is not held \u2014 fix the code, or strengthen the test and re-run for a fresh verdict."} count={idx.testsNotHolding.length}>
                 <ul className="flex flex-col">
                   {idx.testsNotHolding.map((f) => (
                     <ClaimRow
@@ -446,7 +441,7 @@ export function NeedsReviewPage({
                       claim={f}
                       onSelectNode={onSelectNode}
                       actions={
-                        <span className="flex shrink-0 items-center gap-1 pt-0.5 font-mono text-2xs text-red-600 dark:text-red-400">
+                        <span className="flex shrink-0 items-center gap-1 pt-0.5 font-mono text-xs text-red-600 dark:text-red-400">
                           {f.kind === "failing" ? (
                             <>
                               <X className="h-3 w-3" /> failing
@@ -460,7 +455,7 @@ export function NeedsReviewPage({
                       }
                       detail={
                         f.kind === "hollow" && f.survivors && f.survivors.length > 0 ? (
-                          <ul className="mt-0.5 flex flex-col gap-px text-2xs text-[var(--text-muted)]">
+                          <ul className="mt-0.5 flex flex-col gap-px text-xs text-[var(--text-muted)]">
                             {f.survivors.map((sv, i) => (
                               <li key={i} className="truncate" title={sv}>
                                 • {sv}
@@ -477,7 +472,7 @@ export function NeedsReviewPage({
 
             {(idx.unseenNodes.length > 0 || idx.unseenClaims.length > 0) && (
               <PageSection
-                title="Unreviewed agent changes"
+                title="Unreviewed agent changes" hint={"Landed from the agent and not yet looked at. Opening an item clears it; see Recent changes for the field-level diffs."}
                 count={idx.unseenNodes.length + idx.unseenClaims.length}
                 right={
                   <button
@@ -489,10 +484,6 @@ export function NeedsReviewPage({
                   </button>
                 }
               >
-                <p className="mb-2 text-2xs text-[var(--text-muted)]">
-                  Landed from the agent and not yet looked at. Opening an item clears it; see
-                  Recent changes for the field-level diffs.
-                </p>
                 <ul className="flex flex-col">
                   {idx.unseenNodes.map((n) => (
                     <li key={n.id} className="border-b border-[var(--border-subtle)] py-1 last:border-b-0">
@@ -511,12 +502,7 @@ export function NeedsReviewPage({
             )}
 
             {idx.amendments.length > 0 && (
-              <PageSection title="Changed after sign-off" count={idx.amendments.length}>
-                <p className="mb-2 text-2xs text-[var(--text-muted)]">
-                  The agent reworded or added these after you signed off their change. Each is a
-                  proposal, not intent: adopt it (it folds once built and verified), reject it
-                  (the approved text comes back and the work stays open), or reword it yourself.
-                </p>
+              <PageSection title="Changed after sign-off" hint={"The agent reworded or added these after you signed off their change. Each is a proposal, not intent: adopt it (it folds once built and verified), reject it (the approved text comes back and the work stays open), or reword it yourself."} count={idx.amendments.length}>
                 <ul className="flex flex-col">
                   {idx.amendments.map((ref) => (
                     <AmendmentRow key={ref.resp.id} claim={ref} onSelectNode={onSelectNode} editor={editor} />
@@ -527,13 +513,9 @@ export function NeedsReviewPage({
 
             {idx.vagrant.length + idx.vagrantProps.length > 0 && (
               <PageSection
-                title="Undescribed in code"
+                title="Undescribed in code" hint={"Found in the code with no claim or field describing it. Adopt into the contract, or reject to mark the code for deletion."}
                 count={idx.vagrant.length + idx.vagrantProps.length}
               >
-                <p className="mb-2 text-2xs text-[var(--text-muted)]">
-                  Found in the code with no claim or field describing it. Adopt into the contract,
-                  or reject to mark the code for deletion.
-                </p>
                 <ul className="flex flex-col">
                   {idx.vagrant.map((ref) => (
                     <ClaimRow
@@ -542,7 +524,7 @@ export function NeedsReviewPage({
                       onSelectNode={onSelectNode}
                       actions={
                         editor && (
-                          <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
+                          <span className="flex shrink-0 items-center gap-2 pt-0.5 text-xs">
                             <button
                               type="button"
                               onClick={() => editor.adoptResponsibility(ref.resp.id)}
@@ -569,7 +551,7 @@ export function NeedsReviewPage({
                       onSelectNode={onSelectNode}
                       actions={
                         editor && (
-                          <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
+                          <span className="flex shrink-0 items-center gap-2 pt-0.5 text-xs">
                             <button
                               type="button"
                               onClick={() => editor.adoptProperty(ref.node.id, ref.prop.label)}
@@ -595,15 +577,9 @@ export function NeedsReviewPage({
 
             {idx.stale.length + idx.staleProps.length > 0 && (
               <PageSection
-                title="Stale claims"
+                title="Stale claims" hint={"The model asserts these but the code no longer matches. Where drift proposes a reword, accept it to bring the claim in line with the code (no rebuild) \u2014 or keep the claim and rebuild the code. Where the behaviour vanished outright, drop the claim or rebuild the code."}
                 count={idx.stale.length + idx.staleProps.length}
               >
-                <p className="mb-2 text-2xs text-[var(--text-muted)]">
-                  The model asserts these but the code no longer matches. Where drift proposes a
-                  reword, accept it to bring the claim in line with the code (no rebuild) — or keep
-                  the claim and rebuild the code. Where the behaviour vanished outright, drop the
-                  claim or rebuild the code.
-                </p>
                 <ul className="flex flex-col">
                   {idx.stale.map((ref) => (
                     <ClaimRow
@@ -612,7 +588,7 @@ export function NeedsReviewPage({
                       onSelectNode={onSelectNode}
                       actions={
                         editor && (
-                          <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
+                          <span className="flex shrink-0 items-center gap-2 pt-0.5 text-xs">
                             {ref.resp.staleProposal && (
                               <button
                                 type="button"
@@ -661,7 +637,7 @@ export function NeedsReviewPage({
                       onSelectNode={onSelectNode}
                       actions={
                         editor && (
-                          <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
+                          <span className="flex shrink-0 items-center gap-2 pt-0.5 text-xs">
                             <button
                               type="button"
                               onClick={() => editor.reimplementProperty(ref.node.id, ref.prop.label)}
@@ -693,11 +669,7 @@ export function NeedsReviewPage({
             )}
 
             {idx.staleNodes.length > 0 && (
-              <PageSection title="Code removed" count={idx.staleNodes.length}>
-                <p className="mb-2 text-2xs text-[var(--text-muted)]">
-                  These nodes lost their backing code entirely (a deleted file or folder).
-                  Rebuild the whole subtree in code, or drop it from the model.
-                </p>
+              <PageSection title="Code removed" hint={"These nodes lost their backing code entirely (a deleted file or folder). Rebuild the whole subtree in code, or drop it from the model."} count={idx.staleNodes.length}>
                 <ul className="flex flex-col">
                   {idx.staleNodes.map((n) => (
                     <li
@@ -708,7 +680,7 @@ export function NeedsReviewPage({
                         <WikiLink name={n.name} Icon={kindIcon(n)} onClick={() => onSelectNode(n.id)} />
                       </div>
                       {editor && (
-                        <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
+                        <span className="flex shrink-0 items-center gap-2 pt-0.5 text-xs">
                           <button
                             type="button"
                             onClick={() => editor.reimplementNode(n.id)}
@@ -740,7 +712,7 @@ export function NeedsReviewPage({
 
             {driftScopes.length > 0 && (
               <PageSection
-                title="Possible drift"
+                title="Possible drift" hint={"Code under these nodes changed since the last reconcile. The drift check reads the changes and flags claims that stopped holding."}
                 count={driftScopes.length}
                 right={
                   <span className="flex items-center gap-2">
@@ -766,10 +738,6 @@ export function NeedsReviewPage({
                   </span>
                 }
               >
-                <p className="mb-2 text-2xs text-[var(--text-muted)]">
-                  Code under these nodes changed since the last reconcile. The drift check
-                  reads the changes and flags claims that stopped holding.
-                </p>
                 <ul className="flex flex-col">
                   {driftScopes.map((s) => (
                     <li
@@ -785,7 +753,7 @@ export function NeedsReviewPage({
                       </button>
                       <ul className="mt-0.5 flex flex-col gap-px">
                         {s.changedFiles.map((f) => (
-                          <li key={f} className="truncate font-mono text-2xs text-[var(--text-muted)]">
+                          <li key={f} className="truncate font-mono text-xs text-[var(--text-muted)]">
                             {f}
                           </li>
                         ))}
@@ -797,11 +765,7 @@ export function NeedsReviewPage({
             )}
 
             {anchors.length > 0 && (
-              <PageSection title="Out-of-date anchors" count={anchors.length}>
-                <p className="mb-2 text-2xs text-[var(--text-muted)]">
-                  The code under these source anchors changed since the model last reconciled
-                  against it — the mapped spans may have moved or gone.
-                </p>
+              <PageSection title="Out-of-date anchors" hint={"The code under these source anchors changed since the model last reconciled against it \u2014 the mapped spans may have moved or gone."} count={anchors.length}>
                 <ul className="flex flex-col">
                   {anchors.map((a) => (
                     <li
@@ -815,18 +779,18 @@ export function NeedsReviewPage({
                       >
                         {a.hostName}
                       </button>
-                      <span className="min-w-0 flex-1 truncate font-mono text-2xs text-[var(--text-muted)]">
+                      <span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--text-muted)]">
                         {a.symbol ?? a.file}
                       </span>
                       {a.key.startsWith("test:") && (
                         <span
-                          className="shrink-0 text-2xs text-[var(--text-muted)]"
+                          className="shrink-0 text-xs text-[var(--text-muted)]"
                           title="This is a claim's BACKING TEST, not its implementation — the test changed or vanished."
                         >
                           test
                         </span>
                       )}
-                      <span className="shrink-0 text-2xs text-orange-700 dark:text-orange-400">
+                      <span className="shrink-0 text-xs text-orange-700 dark:text-orange-400">
                         {ANCHOR_STATE_LABEL[a.state]}
                       </span>
                     </li>
@@ -836,11 +800,7 @@ export function NeedsReviewPage({
             )}
 
             {idx.emptySymbols.length > 0 && (
-              <PageSection title="Empty symbols" count={idx.emptySymbols.length}>
-                <p className="mb-2 text-2xs text-[var(--text-muted)]">
-                  Symbols carrying no semantic content. Give each a business responsibility or
-                  remove it.
-                </p>
+              <PageSection title="Empty symbols" hint={"Symbols carrying no semantic content. Give each a business responsibility or remove it."} count={idx.emptySymbols.length}>
                 <ul className="flex flex-col">
                   {idx.emptySymbols.map((n) => (
                     <li key={n.id} className="border-b border-[var(--border-subtle)] py-1 last:border-b-0">
@@ -856,11 +816,7 @@ export function NeedsReviewPage({
             )}
 
             {idx.disconnected.length > 0 && (
-              <PageSection title="Disconnected nodes" count={idx.disconnected.length}>
-                <p className="mb-2 text-2xs text-[var(--text-muted)]">
-                  No relationship links these to anything, so they float edgeless on the canvas.
-                  Wire each into the relationship it performs, or confirm it belongs on its own.
-                </p>
+              <PageSection title="Disconnected nodes" hint={"No relationship links these to anything, so they float edgeless on the canvas. Wire each into the relationship it performs, or confirm it belongs on its own."} count={idx.disconnected.length}>
                 <ul className="flex flex-col">
                   {idx.disconnected.map((n) => (
                     <li key={n.id} className="border-b border-[var(--border-subtle)] py-1 last:border-b-0">
@@ -877,12 +833,7 @@ export function NeedsReviewPage({
           </>
         )}
         {idx.untested.length > 0 && (
-          <PageSection title="Untested claims" count={idx.untested.length}>
-            <p className="mb-2 text-2xs text-[var(--text-muted)]">
-              Committed When/While/If claims with no test attached — each names a trigger to
-              arrange and a response to assert, so the test is already specified. Not counted
-              above: a standing gap to close, not a verdict to give.
-            </p>
+          <PageSection title="Untested claims" hint={"Committed When/While/If claims with no test attached \u2014 each names a trigger to arrange and a response to assert, so the test is already specified. Not counted above: a standing gap to close, not a verdict to give."} count={idx.untested.length}>
             <ul className="flex flex-col">
               {idx.untested.map((f) => (
                 <ClaimRow key={f.resp.id} claim={f} onSelectNode={onSelectNode} />

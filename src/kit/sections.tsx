@@ -23,6 +23,7 @@ export function PageSection({
   title,
   count,
   right,
+  hint,
   editable,
   editing,
   onToggleEdit,
@@ -31,6 +32,9 @@ export function PageSection({
   title: string;
   count?: number;
   right?: ReactNode;
+  /** What the section holds and what to do about it — shown on hover of the
+   *  heading, never as a paragraph under it. */
+  hint?: string;
   editable?: boolean;
   editing?: boolean;
   onToggleEdit?: () => void;
@@ -53,7 +57,7 @@ export function PageSection({
         }`}
       >
         <div className="mb-2 flex items-end justify-between gap-2 border-b border-[var(--border)] pb-[5px]">
-          <h2 className={EYEBROW}>
+          <h2 className={EYEBROW} title={hint}>
             {title}
             {count != null && count > 0 && (
               <span className="ml-1.5 font-mono text-2xs font-normal normal-case tracking-normal text-[var(--text-ghost)]">

@@ -17,7 +17,7 @@ export const CTL_DROW = `${CTL_BASE} group-hover/drow:visible`;
 // Header gauge chip — completeness / test-backing readouts on the type line.
 // Bordered mono chips: instruments, not prose.
 export const GAUGE_CHIP =
-  "flex shrink-0 items-center gap-1 rounded border border-[var(--border)] px-1.5 py-px font-mono text-2xs tabular-nums text-[var(--text-tertiary)]";
+  "flex shrink-0 items-center gap-1 rounded border border-[var(--border)] px-1.5 py-0.5 font-mono text-2xs tabular-nums text-[var(--text-tertiary)]";
 
 // Full-cell field highlight: dim on line hover; the focused field drops onto
 // the recessed field surface (Editable adds the accent ring + full-text lift).

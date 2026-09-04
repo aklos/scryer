@@ -27,6 +27,7 @@ import { ANCHOR_CALM, serializeEars, StatementText, stripMarkup } from "../marku
 import { BTN, BTN_DANGER, BTN_GO, jumpTo, LINK, WordDiffText } from "../pagekit";
 import { respElementId } from "../SourceSection";
 import { PILL_BASE } from "../statusColors";
+import { Select } from "../ui/Select";
 import type { ScryModel } from "../viewmodel";
 import { RewordEditor } from "./NeedsReviewPage";
 import { SpecialBody, SpecialHeader } from "./shell";
@@ -49,7 +50,7 @@ const TIER_META: Record<InboxTier, { label: string; cls: string }> = {
     cls: "bg-red-500/10 text-red-700 ring-red-500/25 dark:bg-red-400/10 dark:text-red-300 dark:ring-red-400/25",
   },
   amendment: {
-    label: "Changed after sign-off",
+    label: "Reworded after sign-off",
     cls: "bg-violet-500/10 text-violet-700 ring-violet-500/25 dark:bg-violet-400/10 dark:text-violet-300 dark:ring-violet-400/25",
   },
   vagrant: {
@@ -73,6 +74,17 @@ const TIER_META: Record<InboxTier, { label: string; cls: string }> = {
     cls: "bg-blue-500/10 text-blue-700 ring-blue-500/25 dark:bg-blue-400/10 dark:text-blue-300 dark:ring-blue-400/25",
   },
 };
+
+/** Kinds whose `title` says more than the tier pill already does — a survivor's
+ *  count, a refusal's reason, the session's touch. Every other title restates
+ *  the pill and is dropped. */
+const TITLED_KINDS = new Set<InboxCard["kind"]>(["survivor", "refused", "close-gate"]);
+
+/** The pill's text: the tier, narrowed by kind where the tier is ambiguous. */
+function pillLabel(card: InboxCard): string {
+  if (card.kind === "addition") return "Added after sign-off";
+  return TIER_META[card.tier].label;
+}
 
 function isEditableTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -224,51 +236,45 @@ export function InboxPage({
   const subtitle =
     cards.length === 0
       ? "Nothing needs your verdict."
-      : `${cards.length} item${cards.length === 1 ? "" : "s"} awaiting your verdict${pinnedChange ? ` in ${pinnedChange}` : ""} — j/k move · a/r/e adopt/reject/reword · Enter opens`;
+      : `${cards.length} item${cards.length === 1 ? "" : "s"} awaiting your verdict${pinnedChange ? ` in ${pinnedChange}` : ""}`;
+  const changeOptions = useMemo(
+    () => [{ value: "", label: "All changes" }, ...registry.map((c) => ({ value: c.id, label: `${c.id} · ${c.rationale}` }))],
+    [registry],
+  );
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
       <SpecialHeader title="Inbox" subtitle={subtitle} />
       <SpecialBody>
-        <div className="mb-3 flex items-center gap-2">
-          <span
-            className={`${PILL_BASE} ${
-              live
-                ? "bg-emerald-500/10 text-emerald-700 ring-emerald-500/25 dark:bg-emerald-400/10 dark:text-emerald-300 dark:ring-emerald-400/25"
-                : "bg-[var(--surface-hover)] text-[var(--text-muted)] ring-[var(--border)]"
-            }`}
-            title={live ? "A hook session touched code in the last ten minutes" : "No session is active — the queue is the same, just not live"}
-          >
-            <Radio className={`h-3 w-3 ${live ? "animate-pulse" : ""}`} />
-            {live ? "session live" : "no live session"}
-          </span>
+        <div className="mb-4 flex min-h-7 items-center gap-3">
+          {live && (
+            <span
+              className={`${PILL_BASE} bg-emerald-500/10 text-emerald-700 ring-emerald-500/25 dark:bg-emerald-400/10 dark:text-emerald-300 dark:ring-emerald-400/25`}
+              title="An agent session touched code in the last ten minutes"
+            >
+              <Radio className="h-3 w-3 animate-pulse" />
+              Agent active
+            </span>
+          )}
           {registry.length > 0 && (
-            <label className="ml-auto flex items-center gap-1.5 text-2xs text-[var(--text-muted)]">
-              change
-              <select
+            <div className="ml-auto flex w-72" title="Show only one open change">
+              <Select
+                options={changeOptions}
                 value={pinnedChange ?? ""}
-                onChange={(e) => setPinnedChange(e.target.value || null)}
-                className="rounded border border-[var(--border-strong)] bg-[var(--surface-hover)] px-1.5 py-0.5 text-2xs text-[var(--text-secondary)]"
-                title="Pin the stream to one open change"
-              >
-                <option value="">all changes</option>
-                {registry.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.id} — {c.rationale}
-                  </option>
-                ))}
-              </select>
-            </label>
+                onChange={(v) => setPinnedChange(v || null)}
+                active={!!pinnedChange}
+              />
+            </div>
           )}
         </div>
 
         {cards.length === 0 ? (
           <div className="flex flex-col items-center gap-3 px-6 py-16">
             <InboxIcon className="h-6 w-6 text-[var(--text-ghost)]" />
-            <p className="text-xs text-[var(--text-muted)]">Nothing needs your verdict.</p>
+            <p className="text-sm text-[var(--text-muted)]">Nothing needs your verdict.</p>
           </div>
         ) : (
-          <ul className="flex flex-col gap-2" data-inbox-list>
+          <ul className="flex flex-col gap-3" data-inbox-list>
             {cards.map((card, i) => (
               <Card
                 key={card.id}
@@ -292,6 +298,9 @@ export function InboxPage({
               />
             ))}
           </ul>
+        )}
+        {cards.length > 0 && (
+          <p className="mt-5 text-xs text-[var(--text-ghost)]">j/k move · a adopt · r reject · e reword · Enter opens</p>
         )}
       </SpecialBody>
       {confirmDrop && (
@@ -344,61 +353,42 @@ function Card({
       ref={ref}
       data-inbox-card={card.id}
       onMouseDown={onFocus}
-      className={`rounded-md border px-3 py-2.5 transition-colors ${
+      className={`rounded-lg border px-4 py-3 transition-colors ${
         focused
           ? "border-[var(--accent)] bg-[var(--surface-inset)]"
           : "border-[var(--border-subtle)] bg-[var(--surface)] hover:border-[var(--border)]"
       }`}
     >
-      {/* header: tier tag · breadcrumb (component first, symbol under) · rationale */}
-      <div className="flex flex-wrap items-center gap-2">
-        <span className={`${PILL_BASE} ${meta.cls}`}>{meta.label}</span>
-        {card.concern && card.tier === "concern" && (
-          <span className="font-mono text-2xs text-[var(--text-muted)]">#{card.concern}</span>
-        )}
-        <span className="flex min-w-0 items-baseline gap-1 text-2xs text-[var(--text-muted)]">
+      {/* rail: what kind of item, and where the claim lives. The change it
+          belongs to is the filter's job, not the card's. */}
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span className={`${PILL_BASE} ${meta.cls}`} title={card.title}>
+          {pillLabel(card)}
+          {card.concern && card.tier === "concern" && <span className="font-normal opacity-80">· {card.concern}</span>}
+        </span>
+        <span className="flex min-w-0 items-baseline gap-1 truncate text-xs text-[var(--text-muted)]" title={rationale && `Change: ${rationale}`}>
+          in
           <button type="button" onClick={onOpen} className={`truncate ${LINK}`}>
             {card.componentName || "Untitled"}
           </button>
           {card.symbolName && (
             <>
               <span className="text-[var(--text-ghost)]">›</span>
-              <span className="truncate font-mono">{card.symbolName}</span>
+              <span className="truncate">{card.symbolName}</span>
             </>
           )}
         </span>
-        {(rationale || card.changeId) && (
-          <span
-            className="ml-auto min-w-0 max-w-[50%] truncate text-2xs text-[var(--text-tertiary)]"
-            title={rationale}
-          >
-            {card.changeId && (
-              <span className="mr-1 rounded bg-[var(--surface-hover)] px-1 font-mono text-[var(--text-muted)]">
-                {card.changeId}
-              </span>
-            )}
-            {rationale}
-          </span>
-        )}
       </div>
 
-      {/* body: the claim in EARS markup, before/after when applicable */}
-      <div className="mt-1.5 text-2xs text-[var(--text-tertiary)]">{card.title}</div>
-      <div className="mt-0.5 font-mono text-sm leading-relaxed text-[var(--text-secondary)]">
+      {/* body: the claim in EARS markup — as a word diff when it changed */}
+      {TITLED_KINDS.has(card.kind) && (
+        <div className="mt-2 text-xs text-[var(--text-tertiary)]">{card.title}</div>
+      )}
+      <div className="mt-2 font-mono text-sm leading-relaxed text-[var(--text)]">
         {card.kind === "addition" ? (
-          <>
-            <div className="text-2xs italic text-[var(--text-muted)]">not in the signed-off plan</div>
-            <div className="text-[var(--text)]">
-              <StatementText text={card.after ?? card.statement ?? ""} anchor={ANCHOR_CALM} />
-            </div>
-          </>
+          <StatementText text={card.after ?? card.statement ?? ""} anchor={ANCHOR_CALM} />
         ) : card.before !== undefined && card.after !== undefined ? (
-          <>
-            <div className="text-2xs not-italic text-[var(--text-muted)]">
-              {card.kind === "amendment" ? "approved → amended" : card.kind === "stale" ? "claim → drift proposes" : "before → after"}
-            </div>
-            <WordDiffText from={stripMarkup(card.before)} to={stripMarkup(card.after)} />
-          </>
+          <WordDiffText from={stripMarkup(card.before)} to={stripMarkup(card.after)} />
         ) : card.statement ? (
           <StatementText text={card.statement} anchor={ANCHOR_CALM} />
         ) : (
@@ -411,7 +401,7 @@ function Card({
 
       {/* actions */}
       {rewording && card.respId ? (
-        <div className="mt-2">
+        <div className="mt-3">
           <RewordEditor
             initial={stripMarkup(card.after ?? card.statement ?? "")}
             onSave={(t) => onReword(serializeEars(t))}
@@ -420,7 +410,7 @@ function Card({
         </div>
       ) : (
         actions.length > 0 && (
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-2xs">
+          <div className="mt-3 flex flex-wrap items-center gap-2">
             {actions.map((a) => (
               <button
                 key={a.kind}
@@ -494,7 +484,7 @@ function EvidenceStrip({ card, onOpen }: { card: InboxCard; onOpen: () => void }
   if (ev.dependents && ev.dependents.length > 0) {
     items.push(
       <span key="deps" className="truncate text-[var(--text-muted)]" title={ev.dependents.join(", ")}>
-        blast radius: {ev.dependents.length} dependent{ev.dependents.length === 1 ? "" : "s"} — {ev.dependents.join(", ")}
+        {ev.dependents.length} dependent{ev.dependents.length === 1 ? "" : "s"}: {ev.dependents.join(", ")}
       </span>,
     );
   }
@@ -511,7 +501,7 @@ function EvidenceStrip({ card, onOpen }: { card: InboxCard; onOpen: () => void }
         {ev.closeGate.file}
         {ev.closeGate.symbol ? `:${ev.closeGate.symbol}` : ""}
         {ev.closeGate.state ? ` · ${ev.closeGate.state}` : ""}
-        <span className="ml-1 font-sans text-[var(--text-ghost)]">session {ev.closeGate.session.slice(0, 8)}</span>
+        <span className="ml-1.5 font-sans text-[var(--text-ghost)]">session {ev.closeGate.session.slice(0, 8)}</span>
       </span>,
     );
   }
@@ -519,10 +509,10 @@ function EvidenceStrip({ card, onOpen }: { card: InboxCard; onOpen: () => void }
   return (
     <>
       {items.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-2xs">{items}</div>
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">{items}</div>
       )}
       {ev.survivors && ev.survivors.length > 0 && (
-        <ul className="mt-1 flex flex-col gap-px text-2xs text-[var(--text-muted)]">
+        <ul className="mt-1 flex flex-col gap-px text-xs text-[var(--text-muted)]">
           {ev.survivors.map((s, i) => (
             <li key={i} className="truncate" title={s}>
               • {s}

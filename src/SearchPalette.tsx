@@ -303,14 +303,14 @@ export function SearchPalette({
                   <span className={`truncate text-sm ${hit.italic ? "italic" : ""}`}>
                     <Highlighted text={hit.name} q={q} />
                   </span>
-                  <span className="ml-auto shrink-0 text-2xs text-[var(--text-muted)]">
+                  <span className="ml-auto shrink-0 text-xs text-[var(--text-muted)]">
                     {hit.typeLabel}
                   </span>
                 </span>
                 {/* Content match: show which field hit and a snippet of it. The
                     name match needs no snippet — it's already highlighted above. */}
                 {hit.field && (
-                  <span className="flex gap-1.5 truncate pl-[22px] text-2xs text-[var(--text-muted)]">
+                  <span className="flex gap-1.5 truncate pl-[22px] text-xs text-[var(--text-muted)]">
                     <span className="shrink-0 font-medium uppercase tracking-[0.07em] text-[var(--text-tertiary)]">
                       {hit.field}
                     </span>
@@ -320,7 +320,7 @@ export function SearchPalette({
                   </span>
                 )}
                 {hit.path.length > 0 && (
-                  <span className="truncate pl-[22px] text-2xs text-[var(--text-muted)]">
+                  <span className="truncate pl-[22px] text-xs text-[var(--text-muted)]">
                     {hit.path.join(" › ")}
                   </span>
                 )}

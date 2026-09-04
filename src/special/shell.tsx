@@ -7,7 +7,7 @@ export function SpecialHeader({ title, subtitle }: { title: string; subtitle: st
     <header className="shrink-0 border-b border-[var(--border)] pb-3 pt-[18px]">
       <div className={PAGE_COL}>
         <h1 className="text-xl font-semibold leading-tight text-[var(--text)]">{title}</h1>
-        <div className="mt-[3px] text-xs text-[var(--text-tertiary)]">{subtitle}</div>
+        <div className="mt-1 text-sm text-[var(--text-tertiary)]">{subtitle}</div>
       </div>
     </header>
   );

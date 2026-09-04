@@ -92,7 +92,7 @@ export function UnmappedClaimsPage({
           </div>
         ) : (
           <>
-            <p className="mb-4 mt-1 text-2xs text-[var(--text-muted)]">
+            <p className="mb-4 mt-1 text-xs text-[var(--text-muted)]">
               These claims say code exists but anchor to nothing — they can't be read through to
               source. Have the agent re-map, or fix the claim. A claim already re-anchored in a
               pending plan clears once the work is folded into the committed model.

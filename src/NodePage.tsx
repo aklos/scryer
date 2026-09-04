@@ -242,7 +242,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
         {drift && (
           <div
             data-drift-banner
-            className="flex items-center gap-2 px-1 text-2xs text-[var(--text-muted)]"
+            className="flex items-center gap-2 px-1 text-xs text-[var(--text-muted)]"
           >
             <GitCompare className="h-3 w-3 shrink-0" />
             <span className="min-w-0 flex-1">
