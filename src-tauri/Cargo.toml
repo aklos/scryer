@@ -1,6 +1,6 @@
 [package]
 name = "scryer"
-version = "0.4.1"
+version = "0.4.12"
 description = "Visual architecture planning tool for AI-assisted software design"
 authors = ["Alexander Klos"]
 edition = "2021"

@@ -3559,7 +3559,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scryer"
-version = "0.4.1"
+version = "0.4.12"
 dependencies = [
  "dirs 6.0.0",
  "glob",
@@ -3594,7 +3594,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-acp"
-version = "0.4.1"
+version = "0.4.12"
 dependencies = [
  "agent-client-protocol",
  "async-trait",
@@ -3611,7 +3611,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-core"
-version = "0.4.1"
+version = "0.4.12"
 dependencies = [
  "dirs 5.0.1",
  "glob",
@@ -3625,7 +3625,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-extract"
-version = "0.4.1"
+version = "0.4.12"
 dependencies = [
  "glob",
  "ignore",
@@ -3651,7 +3651,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-mcp"
-version = "0.4.1"
+version = "0.4.12"
 dependencies = [
  "base64 0.22.1",
  "glob",
@@ -6201,7 +6201,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.4.1"
+version = "0.4.12"
 dependencies = [
  "scryer-core",
  "tempfile",
