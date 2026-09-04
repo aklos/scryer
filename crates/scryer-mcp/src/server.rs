@@ -74,3 +74,114 @@ impl ServerHandler for ScryerServer {
         std::future::ready(Ok(self.get_info()))
     }
 }
+
+#[cfg(test)]
+mod rule_wiring {
+    //! The tool surface is a rule GRAPH: the instructions are the root, each
+    //! tool description ends with a `Rules:` line, and rule bodies cite each
+    //! other as [[slug]]. These tests keep the graph closed (every citation
+    //! resolves), connected (every rule is reachable), and small (the
+    //! always-loaded surface stays inside its token budget).
+    use super::*;
+    use scryer_core::rules;
+
+    fn descriptions() -> Vec<(String, String)> {
+        ScryerServer::new()
+            .tool_router
+            .list_all()
+            .into_iter()
+            .map(|t| {
+                (
+                    t.name.to_string(),
+                    t.description.map(|d| d.to_string()).unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+
+    /// The slugs a description names on its trailing `Rules:` line.
+    fn rules_line(desc: &str) -> Option<Vec<&str>> {
+        let last = desc.lines().last()?;
+        let rest = last.strip_prefix("Rules: ")?;
+        Some(rest.split(',').map(str::trim).filter(|s| !s.is_empty()).collect())
+    }
+
+    fn cites_a_rule_number(text: &str) -> bool {
+        let lower = text.to_lowercase();
+        ["rule ", "rules "].iter().any(|k| {
+            lower
+                .match_indices(k)
+                .any(|(i, _)| lower[i + k.len()..].starts_with(|c: char| c.is_ascii_digit()))
+        })
+    }
+
+    #[test]
+    fn every_description_ends_with_a_rules_line_that_resolves() {
+        for (name, desc) in descriptions() {
+            let slugs = rules_line(&desc)
+                .unwrap_or_else(|| panic!("{name}: description has no trailing `Rules:` line"));
+            assert!(!slugs.is_empty(), "{name}: empty Rules line");
+            for s in slugs {
+                assert!(rules::get(s).is_some(), "{name} cites unknown rule slug `{s}`");
+            }
+        }
+        for s in rules::citations(INSTRUCTIONS) {
+            assert!(rules::get(s).is_some(), "instructions cite unknown [[{s}]]");
+        }
+    }
+
+    #[test]
+    fn every_rule_is_reachable_from_the_surface() {
+        let mut cited: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let descs = descriptions();
+        for (_, d) in &descs {
+            for s in rules_line(d).unwrap_or_default() {
+                cited.insert(rules::get(s).unwrap().slug);
+            }
+        }
+        for s in rules::citations(INSTRUCTIONS) {
+            cited.insert(rules::get(s).unwrap().slug);
+        }
+        for r in rules::RULES {
+            for s in rules::citations(r.body) {
+                cited.insert(rules::get(s).unwrap().slug);
+            }
+        }
+        let orphans: Vec<&str> = rules::RULES
+            .iter()
+            .map(|r| r.slug)
+            .filter(|s| !cited.contains(s))
+            .collect();
+        assert!(orphans.is_empty(), "rules nothing cites: {orphans:?}");
+    }
+
+    #[test]
+    fn nothing_on_the_surface_cites_a_rule_by_number() {
+        assert!(!cites_a_rule_number(INSTRUCTIONS), "instructions cite a rule number");
+        for (name, desc) in descriptions() {
+            assert!(!cites_a_rule_number(&desc), "{name} cites a rule number");
+        }
+        for r in rules::RULES {
+            assert!(!cites_a_rule_number(r.body), "rule {} cites a rule number", r.slug);
+        }
+        assert!(cites_a_rule_number("see rule 22"));
+        assert!(!cites_a_rule_number("the rule is"));
+    }
+
+    /// The always-loaded prose. Grows only by deliberate choice: raise the
+    /// numbers here in the same change that adds the text.
+    #[test]
+    fn instructions_and_descriptions_stay_within_budget() {
+        assert!(
+            INSTRUCTIONS.len() <= 4_200,
+            "instructions are {} chars (budget 4200, ~1k tokens)",
+            INSTRUCTIONS.len()
+        );
+        let descs = descriptions();
+        let total: usize = descs.iter().map(|(_, d)| d.len()).sum();
+        assert!(total <= 15_000, "descriptions total {total} chars (budget 15000)");
+        for (name, d) in &descs {
+            assert!(d.len() <= 800, "{name} description is {} chars (max 800)", d.len());
+        }
+    }
+}

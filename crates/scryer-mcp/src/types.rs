@@ -315,10 +315,11 @@ pub(crate) struct OrientRequest {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct GetRulesRequest {
-    /// Topic to look up — free text matched against each rule's title and tags
-    /// (e.g. "symbol", "group", "responsibility altitude", "links"). Returns the
-    /// matching rules in full. OMIT to get the compact index of every rule (id,
-    /// title, tags) to see what's available, then drill in by topic.
+    /// Rule slug(s) to fetch in full, comma-separated — the slugs a tool's
+    /// `Rules:` line names or another rule cites as [[slug]].
+    pub id: Option<String>,
+    /// Free-text topic (e.g. "symbol", "responsibility altitude") matched
+    /// against titles, tags, and slugs; returns the matching rules ranked.
     pub topic: Option<String>,
 }
 

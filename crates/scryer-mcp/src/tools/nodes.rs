@@ -496,7 +496,11 @@ fn surviving_ancestor(model: &ScryModel, id: &str, removed: &HashSet<String>) ->
 #[tool_router(router = tool_router_nodes, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "GENERATION-PIPELINE primitive — replace the ENTIRE model in one write (used during codebase→model generation to seed the system + container skeleton). Writes both the plan and the committed model. The JSON payload must include `version: \"0.3\"`, `nodes`, `links`, and optional `groups` and `sourceMap`. Validation warnings are returned but the write is committed regardless — fix the warnings in a follow-up call. For interactive editing, use the typed add_*/update_*/move_* tools instead."
+        description = "GENERATION primitive: replace the ENTIRE model in one write (seeding the system + \
+         container skeleton). Writes both layers. Payload: `version: \"0.3\"`, `nodes`, `links`, \
+         optional `groups` and `sourceMap`. Warnings are returned but the write commits. For \
+         interactive editing use the typed add_*/update_*/move_* tools.\n\
+         Rules: generation-fill, model-layers"
     )]
     fn set_model(
         &self,
@@ -575,7 +579,11 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Patch one or more existing nodes by id. Only fields present in each item are changed. Pass `responsibilities` or `properties` to replace the whole array (pass an empty array to clear). Code-side mapping (line-precise locations per responsibility, and boundary globs per node) is written separately via `update_source_map`."
+        description = "Patch one or more existing nodes by id. Only fields present in each item change. \
+         `responsibilities` / `properties` replace the whole array (empty clears). Code-side \
+         mapping is written separately via update_source_map.\n\
+         Rules: statement-ears, scanning, altitude, naming, technology, concerns, \
+         node-justification"
     )]
     fn update_nodes(
         &self,
@@ -814,7 +822,11 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Replace the directives on nodes or responsibilities — the ONE write path to directives, which every other tool leaves read-only. Directives are the USER's prescriptive HOW-constraints: call this ONLY when the user has explicitly asked, in this conversation, for directives to be written, edited, or deleted (e.g. a bulk reword they dictated) — never on your own initiative, and never to relax a constraint you find inconvenient while implementing. Each item names a `node_id` (node-level directives, binding that node's whole subtree) OR a `responsibility_id` (that claim's directives), plus `directives` as the FULL replacement array — an empty array clears. Writes the plan layer like other authoring tools; the change surfaces in the plan diff for the user to see."
+        description = "Replace the directives on nodes or responsibilities — the ONE write path to directives. \
+         Call it ONLY when the user explicitly asked, in this conversation, for directives to be \
+         written, edited, or deleted. Each item names `node_id` OR `responsibility_id` plus \
+         `directives` as the FULL replacement array (empty clears). Writes the plan layer.\n\
+         Rules: directives-binding"
     )]
     fn set_directives(
         &self,
@@ -889,7 +901,15 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. This is THE build checkpoint, and it is one atomic statement with three parts: the fold ('I built this'), `anchors` ('here is where it lives'), and `tests` ('here is the test I attached to it') — pass all three in the SAME call rather than folding now and anchoring/attaching later. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities, and/or `propertyLabels` to fold only those data fields (properties are identified by label). A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. In a DESIGN-FIRST model (never committed), folding a built leaf is refused while its ancestors are plan-only — pass `commit_ancestors: true` to fold the ancestor chain structure-only first: the ancestors' identity and boundaries land in committed while their unbuilt claims stay pending in the plan, so partial implementation reads honestly. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. Pass `anchors` (same shape as update_source_map `entries`) to anchor the folded claims to code IN THE SAME CALL — 'here's what I built and where it lives' as one atomic statement; an unanchored claim reads as scaffolding and carries no drift tripwire. Pass `tests` (same shape) to ATTACH each claim's test alongside — 'and this test exercises it' (`pattern` = test file, `symbol` = the test function). For a claim in a When/While/If form the test is EXPECTED, not opportunistic — and on a symbol host it is MANDATORY (rule 22): the claim names a concrete trigger/state/failure, so write the test that arranges it and asserts the response, and attach it here in the same call. THE FOLD IS GATED ON EVIDENCE: a testable claim on a code-backed host folds only with a test attached AND a current passing verdict (report ingested after the last edit to the implementation and the test); otherwise that claim STAYS IN THE PLAN and the response names the missing fact (no test / no verdict / stale / failing) and the test files to run — the order is write test → attach → run with a JUnit reporter → ingest_test_report → fold. Leaving a claim pending is an honest exit, not a failure; the rest of the fold proceeds. `force: true` folds anyway and records an `unverified` history event (never the default). Ubiquitous claims stay a judgment call and are not gated. SIGN-OFF: claims you reworded or added after the developer signed off their change land as vagrant (origin amendment/addition) for the developer's verdict; they do not fold. If implementing shows a planned claim is wrong, reword it and fold the rest — the reword waits. Every node fold's response ends with a scoped POST-FLIGHT: what's still pending on that node, which of its committed claims lack anchors, and any validation warnings this fold introduced — act on those lines; you do not need a separate validate_model run after every fold. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. Pass `change` (standalone — a change id from `set_change`/`get_pending`) to fold an ENTIRE change: every plan entry tagged to it, in dependency order; when its last entry folds, the change closes and its rationale is recorded in the history log. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
+        description = "Fold planned work into the committed model after you've written the code — THE build \
+         checkpoint. Pass `anchors` and `tests` in the SAME call. Scope: `node_id` (all its \
+         planned claims, or only `responsibilityIds` / `propertyLabels`), `link_ids` / \
+         `group_ids` (standalone link/group changes and every deletion), `commit_ancestors` \
+         (design-first model), or `change` (a whole change). Testable claims fold only with a \
+         passing verdict; `force: true` overrides and is recorded. Vagrant claims never fold. \
+         Ends with a scoped post-flight.\n\
+         Rules: fold-evidence-gate, fold-after-sign-off, fold-in-layers, fold-post-flight, \
+         test-attachment, anchor-completeness, descope-vs-delete"
     )]
     fn mark_implemented(
         &self,
@@ -1532,7 +1552,7 @@ impl ScryerServer {
             let mut lines: Vec<String> = Vec::new();
 
             // Tests-attached callout — the FIRST post-flight line, because it is
-            // the primary concern (rule 22): testable committed claims on this
+            // the primary concern (test-attachment): testable committed claims on this
             // node with no test attached. Same gate as health's `testable`
             // counter: person/external hosts never expect tests. Guidance, not a
             // gate — the fold has already succeeded.
@@ -1553,9 +1573,9 @@ impl ScryerServer {
                         .collect();
                     if !untested.is_empty() {
                         let strength = if node.kind == scryer_core::Kind::Symbol {
-                            "MANDATORY on a symbol host (rule 22)"
+                            "MANDATORY on a symbol host (see test-attachment)"
                         } else {
-                            "expected (rule 22)"
+                            "expected (see test-attachment)"
                         };
                         lines.push(format!(
                             "NO TEST ATTACHED to {} testable claim(s) on it ({}) — a test is {}. \
@@ -1716,7 +1736,12 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Re-parent nodes — move a node (and its whole subtree) to a different parent, e.g. a component to another container. Validated: the new parent must satisfy the kind hierarchy (system→container→component→symbol; omit newParentId only for top-level systems/persons), must not be external, and must not sit inside the moved node's own subtree. The node leaves any group at its old level (groups organize siblings). Links to former siblings may become invalid — run `validate_model` after structural moves."
+        description = "Re-parent nodes (with their subtrees) to a different parent. Validated against the kind \
+         hierarchy (system→container→component→symbol; omit `newParentId` only for top-level \
+         systems/persons), never into an external or the node's own subtree. The node leaves any \
+         group at its old level; links to former siblings may become invalid — run validate_model \
+         after structural moves.\n\
+         Rules: links-same-level, groups"
     )]
     fn move_nodes(
         &self,
@@ -1869,7 +1894,11 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "GENERATION-PIPELINE primitive — replace a node's whole subtree in one write (used during codebase→model generation to attach a container's structure to the seeded skeleton). Writes BOTH the plan and the committed model: the subtree describes code that already exists, so it lands as built, not as a pending \"implement this whole subtree\" queue in the plan diff. The data payload is JSON `{ \"nodes\": [...], \"links\": [...] }` where every node in `nodes` has a parent chain rooted at `node_id`. All existing descendants of `node_id` are removed before the new subtree is inserted. Links replace any link whose endpoints are inside the subtree; links connecting to nodes outside the subtree are also accepted. For interactive editing, use the typed add_*/update_*/move_* tools instead."
+        description = "GENERATION primitive: replace a node's whole subtree in one write. Writes both layers — \
+         the subtree describes code that already exists. `data` is `{nodes, links}` with every \
+         node's parent chain rooted at `node_id`; existing descendants are removed first. For \
+         interactive editing use the typed tools.\n\
+         Rules: generation-fill, model-layers"
     )]
     fn set_node(
         &self,
@@ -2008,7 +2037,10 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Delete one or more nodes because the CODE they model should go away — a forward modeling intent. Each node's descendants, connected links, and source-map entries are also removed. This stages real removal work in the plan: it shows up as pending until you delete the code and call `mark_implemented`. If instead the code is fine and you just shouldn't be MODELING it (an entry-point `main`, boilerplate), use `descope` — that's a code-untouched, model-only correction."
+        description = "Delete nodes because the CODE they model should go away — a forward intent that stays \
+         pending until the code is removed and folded. Descendants, links, and source-map entries \
+         go with them. If the code is fine and just shouldn't be modeled, use descope instead.\n\
+         Rules: descope-vs-delete"
     )]
     fn delete_nodes(
         &self,
@@ -2073,7 +2105,11 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Descope nodes: remove them from the MODEL because they shouldn't be modeled — the CODE is fine and stays untouched (e.g. an entry-point `main`, a trivial wrapper, generated boilerplate). Each target's own responsibilities relocate up to its parent component, keeping their source anchors, so the parent still covers that code and no darkness appears; the node and its descendants are then removed. This is a model-only correction — it writes BOTH the plan and the committed model at once, so there is NO code work to do and it never shows up in the pending work queue. Reach for this when the model over-claims relative to code reality. To instead remove the CODE itself, use `delete_nodes`, which stages real removal work."
+        description = "Remove nodes from the MODEL because they shouldn't be modeled — the code is fine and \
+         stays untouched. Their responsibilities relocate up to the parent component with their \
+         anchors; the nodes are removed from both layers at once, so no pending work appears. To \
+         remove the CODE itself, use delete_nodes.\n\
+         Rules: descope-vs-delete, node-justification"
     )]
     fn descope(
         &self,
@@ -2147,7 +2183,10 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Move responsibilities between nodes. A responsibility keeps its id and is reparented onto the destination node; the plan diff records the move (shown as `moved`). Vagrant responsibilities cannot be moved."
+        description = "Move responsibilities between nodes. Each keeps its id and is reparented onto the \
+         destination; the plan diff records it as `moved`. Vagrant responsibilities cannot be \
+         moved.\n\
+         Rules: altitude"
     )]
     fn move_responsibilities(
         &self,

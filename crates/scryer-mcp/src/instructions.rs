@@ -1,145 +1,52 @@
+/// Connect-time instructions — the ROOT rule. Always loaded, so it carries
+/// only the loop and the slugs of the rules that govern each step; the bodies
+/// live in `scryer_core::rules` and are fetched with `get_rules {id}` when the
+/// agent reaches that step. Every tool description ends with its own `Rules:`
+/// line the same way.
 pub(crate) const INSTRUCTIONS: &str = "\
 This project has a scryer architecture model alongside its code: a tree of what each part is \
-RESPONSIBLE for, mapped to the source that implements it, and to the TESTS attached to each claim. \
-It is the user's authored spec — what the system must do and why. It is NOT optional background. \
-While a model exists, you work through it: plan a change in the model FIRST, get the user's \
-sign-off, then write code — and its tests — to match. Do not start editing code for a behaviour \
-change without consulting the model, and update the model first when the change alters what it \
-claims (the Proportionality section below draws that line).\n\
+RESPONSIBLE for, mapped to the source that implements it and to the TESTS attached to each claim. \
+It is the user's authored spec, not optional background. While a model exists you work through it: \
+plan a change in the model FIRST, get the user's sign-off, then write code and tests to match.\n\
 \n\
-A claim either HAS tests attached or it DOESN'T, and that binary is the model's PRIMARY signal: an \
-attached test is the one artifact that attempts to hold the code to the claim's words, so \
-attaching tests as you implement is not a follow-up chore — it is part of implementing. Scryer \
-never RUNS tests itself, but it tracks their VERDICTS: after a run, `ingest_test_report {path}` \
-reads the runner's JUnit XML and records each attached test's result against its claim — one call \
-per report file — fingerprint-keyed so a later edit to the implementation or the test flips the \
-verdict to stale. `get_test_radius` answers \"what needs running\": exactly the test files whose \
-claims hold missing or stale verdicts, never the whole suite. The `untested` count in every status \
-line is your standing work signal; `tests: N failing/stale` joins it only when something needs \
-attention.\n\
+RULES ARE FETCHED, NOT ASSUMED. Every tool description ends with a `Rules:` line naming the slugs \
+that govern it, and a rule cites others by slug in double square brackets. Before you use a tool in a way one of those \
+rules governs, or make a modeling judgment, fetch the rule: `get_rules {id: \"slug-a,slug-b\"}` \
+(`get_rules {}` lists them all). Never infer the conventions from existing nodes.\n\
 \n\
 ## Every task that changes behaviour\n\
-1. ORIENT — figure out which phase you're in first. `get_health` reports how well the COMMITTED \
-model maps to code, so it is the right entry point only once code exists. If committed is empty (a \
-design-first model whose whole architecture lives in the plan, before anything is built), it has \
-nothing to report — `get_pending` and `read_model` show the authored plan; never read an empty \
-health report as \"nothing authored\". For a CODING task, start from `orient {task, files}` — one \
-call returns the governing nodes, their claims and binding directives, the scoped pending items and \
-drift, the matching modeling rules, and which phase you're in. `locate {file, symbol?}` is its \
-single-file sibling. The whole-model reads are for model-building sessions: lead with `get_health` \
-to see where work is needed, then `search_model` / `read_model` to load the \
-governing nodes, their responsibilities, and any binding `directives`. Directives are user-authored, \
-read-only HOW-constraints (\"must\"/\"never\" rules). They attach to a responsibility OR to a node, and \
-node-level directives CARRY DOWN: a node is bound by its own plus every ancestor's. `read_model` \
-returns the inherited set in `inheritedDirectives`; honor all of them, and never edit a directive \
-unless the user explicitly asks you to.\n\
-2. PLAN — author the intended change into the model BEFORE writing code: add/extend the nodes, \
-responsibilities, and links it implies, at the right altitude, with the intent tools (`add_person` / \
-`add_system` / `add_container` / `add_component` / `add_symbol`, `update_nodes`, `add_links`, …). \
-These write the PLAN — a draft on the user's canvas — not code. If the change conflicts with an \
-existing responsibility or directive, surface it; don't silently diverge. When other work may share \
-the plan (parallel sessions, a dev on the canvas), first name YOUR task: `set_change {rationale}` \
-opens a named change and your plan writes tag to it automatically, keeping workstreams separable — \
-resume a prior session's change with `set_change {change_id}` (listed in `get_pending`'s \
-`openChanges`). Quick serial edits can skip this and go unfiled.\n\
-3. SIGN-OFF — the plan is a proposal on the user's canvas; before building it, tell the user \
-what you planned and get their go-ahead. The user owns the spec — skip this only when they already \
-approved the change in this conversation or explicitly told you to run ahead. Record the go-ahead \
-with `set_change {sign_off: true}`: it snapshots the change as the approved intent, and from then \
-on a claim you reword or add under it lands as vagrant for the developer's verdict at the fold — it \
-does not fold.\n\
-4. BUILD — implement the code to that plan, responsibility by responsibility, WITH ITS TESTS: for \
-each testable (When/While/If) claim you implement, the statement already names the trigger, state, \
-or failure to arrange and the response to assert — write that test in the project's own suite as \
-part of the same work. On symbol-level claims the test is MANDATORY (rule 22); at higher altitudes \
-attach the kind of test that fits (component → integration, container → API/service, system → \
-end-to-end).\n\
-5. CLOSE — `mark_implemented` what you built (folds it from the plan into the committed model), \
-passing `anchors` so fold + anchor is one atomic call, and `flag_drift` anything the code does that \
-the plan didn't capture. THE FOLD IS GATED ON EVIDENCE: a testable (When/While/If) claim folds only \
-with a test attached AND a current passing verdict — so the order is write the test → attach it \
-(`update_source_map test_entries`) → run it with the JUnit reporter on → `ingest_test_report` → \
-fold. A claim without that evidence stays in the plan and the response names the missing fact and \
-the files to run; leaving it pending is an honest exit, not a loop to fight (`force: true` folds \
-anyway and is recorded as `unverified`). Claims you reworded or added after sign-off land as \
-vagrant for the developer's verdict; they do not fold — if implementing shows a planned claim is \
-wrong, reword it and fold the rest; the reword waits. Ubiquitous claims stay a judgment call; never \
-attach a test that doesn't genuinely exercise its claim just to clear the counter. The fold response ends with a scoped post-flight (what's still pending on \
-the node, unanchored claims, new warnings) — act on it; a separate `validate_model` run is for \
-structural sessions that touched many nodes, not for every fold. You need not finish a whole node \
-before committing: when you build \
-in layers, fold only the responsibilities you actually built (`mark_implemented` accepts \
-`responsibilityIds`) and leave the rest in the plan. Committing a structural node asserts only that \
-its boundary exists, never that its unbuilt descendants do — so commit the skeleton you built and let \
-the pending work roll up. A node whose subtree mixes built and unbuilt work shows an intermediate \
-completeness in `get_health` — anchored primitives over authored ones — the honest state for a \
-layered build, never a reason to withhold the skeleton (rules 18-19). Never anchor a claim you have \
-not implemented: anchoring is the build checkpoint, which is what makes the completeness figure \
-trustworthy. If you opened a change, `mark_implemented {change}` folds exactly its entries; when \
-the last one folds the change closes and its rationale is recorded in the history log. Then \
-VERIFY: `get_test_radius` names the test files your change invalidated (missing or stale \
-verdicts) — run exactly those with the runner's JUnit reporter on and `ingest_test_report` each \
-report file, so the claims' verdicts are current before you move on. Then reconcile and continue: \
-`reconcile_drift` advances the anchor once the scope is clean, and the next responsibility starts \
-the loop again at BUILD.\n\
+1. ORIENT — `orient {task, files}` for a coding task; `get_health` then `read_model` for a \
+model-building one. Honor every directive it returns. [[loop-orient]]\n\
+2. PLAN — author the change into the model before writing code; name your task with \
+`set_change {rationale}` when other work may share the plan. Only changes that alter what the \
+model claims need this. [[loop-plan]] [[proportionality]]\n\
+3. SIGN-OFF — tell the user what you planned and get their go-ahead; record it with \
+`set_change {sign_off: true}`. [[loop-sign-off]]\n\
+4. BUILD — implement claim by claim, each testable (When/While/If) claim with its test in the \
+project's own suite. [[loop-build]]\n\
+5. CLOSE — `mark_implemented` with `anchors` and `tests` in the same call; the fold is gated on a \
+passing verdict, so run the tests with a JUnit reporter and `ingest_test_report` first. Then \
+`get_test_radius`, `flag_drift`, `reconcile_drift`. [[loop-close]]\n\
 \n\
-If no model exists yet, build one first: `read_codebase` to see the codebase, then build top-down \
-(`fill_container` commits an existing container's subtree at once). Then work the loop above.\n\
-\n\
-## Proportionality — what earns a plan entry\n\
-Match the ceremony to the change; the full loop above is for changes that alter what the model \
-claims. NO plan entry is needed for: bugfixes that restore behaviour the model already claims, pure \
-refactors (moved-but-unchanged symbols re-anchor themselves), or docs/tests/chores. A plan entry IS \
-needed for: new, changed, or removed responsibilities; new nodes; changed links. For exploratory \
-spikes, spiking freely is legitimate — but before the result is kept, reconcile via `flag_drift` so \
-the model catches up; drift exists precisely so the code can lead when it must.\n\
-\n\
-One obligation is NEVER waived, because it is cheap only in the moment: if you changed the behaviour \
-of an anchored symbol, confirm or reword its claims BEFORE you finish, while the diff is still in \
-your context — `locate {file, symbol}` returns just those claims, a few lines to check. Deferred, \
-the same reconciliation costs a later session thousands of tokens to reconstruct.\n\
+If no model exists yet, build one first from the code. [[generation-fill]]\n\
 \n\
 ## How the model is stored\n\
-Two layers on disk: the committed `model` (the source of truth — what the code is believed to \
-satisfy) and the `planned` draft (what you and the canvas edit). Their difference is the PLAN — the \
-model→code work queue (`get_pending`). Authoring tools write the PLAN; the committed model changes \
-only when work is implemented and folds in (`mark_implemented`), or when you extract from code that \
-already exists. Reads return the PLAN layer by default, so what you read back reflects what you just \
-authored.\n\
-\n\
-## Drift — keep the model and code in sync\n\
-Drift is a code change the PLAN does not account for. That is why you plan first: code you change in \
-service of a pending plan item is expected churn and stays silent, but changing already-mapped code \
-with no plan item to explain it is flagged the moment you make it — the signal to either revert a \
-mistake or put the change in the plan. `get_drift` reports the scopes whose code changed since the \
-last reconcile; `read_model` them, compare, `flag_drift`, then `reconcile_drift` to advance the \
-anchor.\n\
+Two layers: the committed `model` (what the code is believed to satisfy) and the `planned` draft \
+(what you and the canvas edit). Their difference is the plan, the model→code work queue; authoring \
+tools write the plan, and reads return it by default. [[model-layers]]\n\
 \n\
 ## Binding constraints\n\
-- The modeling rules are AUTHORITATIVE. Before any modeling judgment — what earns a symbol, how to \
-pitch a responsibility's altitude, when a group is right, how links propagate — call \
-`get_rules{topic}` and follow it. Never infer the conventions from existing nodes.\n\
-- The user owns intent. The model is the user's spec; you are the editor. Translating the change \
-the user asked for into the model deltas it implies — the nodes, responsibilities, and links that \
-express it — is your job; do it without asking. Inventing scope BEYOND the request is not: don't \
-add elements the code merely suggests, and if implementing reveals a higher-level boundary is \
-wrong, surface the question rather than silently restructuring.\n\
-- The codebase is evidence, not source of truth. Elicit responsibilities the system already holds; \
-don't transcribe the file tree into nodes. A good responsibility survives a rewrite in another \
-language (\"authenticate requests\"); a bad one (\"uses jsonwebtoken@9\") will not.\n\
-- When a description or responsibility names another node, declare the structural link the mention \
-implies — the prose mention and the structural link are distinct; declare both.\n\
-- Write to be scanned, and name for a newcomer. A node name is plain domain vocabulary — no \
-codenames, abbreviations, or cleverness. A responsibility is ONE terse verb-led clause: no mechanism \
-words, no trailing \"so that…\" purpose clause. Statements speak EARS with the node as implicit \
-subject — condition first (\"When <trigger>, …\" / \"If <condition>, then …\"), response last — \
-with **bold** on the keywords and the response verb, and nothing else (rules 15, 17, 21).\n\
-- CONCERNS are the model's third axis: each responsibility may carry at most one `concern` slug \
-naming the cross-cutting accountability it serves (`auth`, `persistence`, `idempotency`, …), and \
-the model registers every slug in use — the lens the user scans by. Tag as you author \
-(`{statement, concern}` wherever statements go), reuse registry slugs before minting, and leave \
-core domain flow untagged. Rule 20 governs.\n\
+- The user owns intent; you are the editor. [[user-owns-intent]]\n\
+- The codebase is evidence, not the source of truth. [[codebase-as-evidence]]\n\
+- Directives are the user's binding HOW-constraints; read them, never write them unasked. \
+[[directives-binding]]\n\
+- Code you change with no plan item to explain it is drift; plan first so it stays silent. \
+[[drift-first]]\n\
+- Statements speak EARS, one terse verb-led clause, names in plain domain vocabulary, at most one \
+concern each. [[statement-ears]] [[scanning]] [[naming]] [[concerns]]\n\
+- A claim has a test attached or it doesn't; that binary is the model's primary signal, and the \
+`untested` count in every status line is your standing work. [[test-attachment]] [[test-verdicts]]\n\
 \n\
-Each tool's own description carries how to call it and when to prefer it over a sibling — pull it \
-when you reach for the tool. Schema version is `0.3`.\n\
+Every tool takes an optional `project` (absolute path) that defaults to the working directory. \
+Schema version is `0.3`.\n\
 ";

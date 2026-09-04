@@ -807,6 +807,23 @@
       "kind": "symbol",
       "name": "ScryerServer",
       "parentId": "node-47",
+      "responsibilities": [
+        {
+          "id": "resp-61f3yq",
+          "statement": "**Keeps** every rule reachable from the instructions, a tool description, or another rule",
+          "lastTouchedAt": 1788518421
+        },
+        {
+          "id": "resp-735ba4",
+          "statement": "**Keeps** the always-loaded instructions and tool descriptions inside a fixed character budget",
+          "lastTouchedAt": 1788518421
+        },
+        {
+          "id": "resp-ezr6t4",
+          "statement": "**Names** the rules governing each tool on a trailing Rules line of its description, every slug resolving to a rule",
+          "lastTouchedAt": 1788518421
+        }
+      ],
       "properties": [
         {
           "label": "tool_router",
@@ -1918,8 +1935,8 @@
       "responsibilities": [
         {
           "id": "resp-156",
-          "statement": "Bundles the governing nodes, claims, directives, scoped pending items, drift, matching modeling rules, and phase verdict for a task and/or set of files.",
-          "lastTouchedAt": 1784883763
+          "statement": "**Bundles** the governing nodes, claims, directives, scoped pending items, drift, matching rule slugs, and phase verdict for a task and/or set of files",
+          "lastTouchedAt": 1788518421
         }
       ]
     },
@@ -1970,8 +1987,13 @@
       "responsibilities": [
         {
           "id": "resp-160",
-          "statement": "Returns the modeling rules index, or the full text of rules matching a topic.",
-          "lastTouchedAt": 1784883763
+          "statement": "**Returns** the rules index, the full text of the rules named by slug, or the rules matching a topic",
+          "lastTouchedAt": 1788518421
+        },
+        {
+          "id": "resp-v3p14p",
+          "statement": "**If** a requested slug matches no rule, **then** return the resolved rules with the index appended",
+          "lastTouchedAt": 1788518421
         }
       ]
     },
@@ -10918,8 +10940,8 @@
       "responsibilities": [
         {
           "id": "resp-655",
-          "statement": "Ranks rules against a free-text topic by title/tag word match, falling back to body substring only when nothing else hits",
-          "lastTouchedAt": 1784884312
+          "statement": "**Ranks** rules against a free-text topic by title, tag, and slug word match, falling back to body substring only when nothing else hits",
+          "lastTouchedAt": 1788518421
         }
       ]
     },
@@ -10931,8 +10953,8 @@
       "responsibilities": [
         {
           "id": "resp-656",
-          "statement": "Renders a compact one-line-per-rule index for connect-time instructions",
-          "lastTouchedAt": 1784884312
+          "statement": "**Renders** a compact slug-keyed one-line-per-rule index for on-demand lookup",
+          "lastTouchedAt": 1788518421
         }
       ]
     },
@@ -12966,6 +12988,32 @@
           "id": "resp-dpr8pk",
           "statement": "**Order** cards by risk tier — contract changes, concern-tagged claims, survivors, amendments, vagrants, stale, failing, close-gate — then newest first",
           "lastTouchedAt": 1788501327
+        }
+      ]
+    },
+    {
+      "id": "node-81b7p2",
+      "kind": "symbol",
+      "name": "citations",
+      "parentId": "node-612",
+      "responsibilities": [
+        {
+          "id": "resp-ram7ds",
+          "statement": "**Extracts** every double-bracket slug citation from a body of text, in order",
+          "lastTouchedAt": 1788518420
+        }
+      ]
+    },
+    {
+      "id": "node-yfnbsa",
+      "kind": "symbol",
+      "name": "get",
+      "parentId": "node-612",
+      "responsibilities": [
+        {
+          "id": "resp-9a9f1n",
+          "statement": "**When** a rule is requested by slug or numeric id, **resolve** exactly that rule",
+          "lastTouchedAt": 1788518421
         }
       ]
     }
@@ -20103,6 +20151,12 @@
         "symbol": "structure_only_copy"
       }
     ],
+    "resp-61f3yq": [
+      {
+        "pattern": "crates/scryer-mcp/src/server.rs",
+        "symbol": "ScryerServer"
+      }
+    ],
     "resp-62": [
       {
         "pattern": "crates/scryer-mcp/src/hook_client.rs",
@@ -20763,6 +20817,12 @@
         "symbol": "useTestStatuses"
       }
     ],
+    "resp-735ba4": [
+      {
+        "pattern": "crates/scryer-mcp/src/server.rs",
+        "symbol": "ScryerServer"
+      }
+    ],
     "resp-736": [
       {
         "pattern": "src/SourceSection.tsx",
@@ -21358,6 +21418,12 @@
         "symbol": "apply_resp_anchor_entries"
       }
     ],
+    "resp-9a9f1n": [
+      {
+        "pattern": "crates/scryer-core/src/rules.rs",
+        "symbol": "get"
+      }
+    ],
     "resp-a44pxh": [
       {
         "pattern": "crates/scryer-core/src/changes.rs",
@@ -21382,6 +21448,12 @@
         "symbol": "buildInboxCards"
       }
     ],
+    "resp-ezr6t4": [
+      {
+        "pattern": "crates/scryer-mcp/src/server.rs",
+        "symbol": "ScryerServer"
+      }
+    ],
     "resp-h9rkbc": [
       {
         "pattern": "crates/scryer-extract/src/test_status.rs",
@@ -21398,6 +21470,12 @@
       {
         "pattern": "crates/scryer-core/src/changes.rs",
         "symbol": "classify_against_signoff"
+      }
+    ],
+    "resp-ram7ds": [
+      {
+        "pattern": "crates/scryer-core/src/rules.rs",
+        "symbol": "citations"
       }
     ],
     "resp-s34tcm": [
@@ -21417,6 +21495,12 @@
         "pattern": "src/special/InboxPage.tsx",
         "symbol": "InboxPage"
       }
+    ],
+    "resp-v3p14p": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "get_rules"
+      }
     ]
   },
   "testMap": {
@@ -21428,6 +21512,18 @@
       {
         "pattern": "crates/xtask/tests/cli.rs",
         "symbol": "validate_model_reads_and_validates_the_projects_model"
+      }
+    ],
+    "resp-156": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "orient_bundles_scope_pending_rules_and_phase"
+      }
+    ],
+    "resp-160": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "get_rules_by_id_returns_the_named_rules_and_flags_unknown_slugs"
       }
     ],
     "resp-1evmx9": [
@@ -22298,10 +22394,32 @@
         "symbol": "close_change_discards_only_empty_ledgers"
       }
     ],
+    "resp-61f3yq": [
+      {
+        "pattern": "crates/scryer-mcp/src/server.rs",
+        "symbol": "every_rule_is_reachable_from_the_surface"
+      }
+    ],
     "resp-652": [
       {
         "pattern": "crates/scryer-core/src/ownership.rs",
         "symbol": "broad_boundary_yields_files_to_nested_one"
+      }
+    ],
+    "resp-655": [
+      {
+        "pattern": "crates/scryer-core/src/rules.rs",
+        "symbol": "lookup_matches_slug_words"
+      },
+      {
+        "pattern": "crates/scryer-core/src/rules.rs",
+        "symbol": "lookup_resolves_topics_via_title_and_tags"
+      }
+    ],
+    "resp-656": [
+      {
+        "pattern": "crates/scryer-core/src/rules.rs",
+        "symbol": "index_lists_every_rule_full_renders_all"
       }
     ],
     "resp-659": [
@@ -22572,6 +22690,12 @@
       {
         "pattern": "tests/testLane.test.ts",
         "symbol": "gives passing no glyph — the resting state is not a mark"
+      }
+    ],
+    "resp-735ba4": [
+      {
+        "pattern": "crates/scryer-mcp/src/server.rs",
+        "symbol": "instructions_and_descriptions_stay_within_budget"
       }
     ],
     "resp-737": [
@@ -23008,6 +23132,12 @@
         "symbol": "a_firing_close_gate_is_reported_to_the_app"
       }
     ],
+    "resp-9a9f1n": [
+      {
+        "pattern": "crates/scryer-core/src/rules.rs",
+        "symbol": "slugs_are_unique_and_get_resolves_every_one"
+      }
+    ],
     "resp-a44pxh": [
       {
         "pattern": "crates/scryer-core/src/changes.rs",
@@ -23048,6 +23178,12 @@
         "symbol": "leaves untested claims out — they are a standing list, not a verdict"
       }
     ],
+    "resp-ezr6t4": [
+      {
+        "pattern": "crates/scryer-mcp/src/server.rs",
+        "symbol": "every_description_ends_with_a_rules_line_that_resolves"
+      }
+    ],
     "resp-h9rkbc": [
       {
         "pattern": "crates/scryer-extract/src/test_status.rs",
@@ -23070,6 +23206,12 @@
         "symbol": "sign_off_classifies_later_edits_against_the_snapshot"
       }
     ],
+    "resp-ram7ds": [
+      {
+        "pattern": "crates/scryer-core/src/rules.rs",
+        "symbol": "every_body_citation_resolves"
+      }
+    ],
     "resp-s34tcm": [
       {
         "pattern": "crates/scryer-core/src/changes.rs",
@@ -23080,6 +23222,12 @@
       {
         "pattern": "src-tauri/src/project.rs",
         "symbol": "canvas_sign_off_and_saves_keep_the_developer_as_the_author_of_intent"
+      }
+    ],
+    "resp-v3p14p": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "get_rules_by_id_returns_the_named_rules_and_flags_unknown_slugs"
       }
     ]
   },

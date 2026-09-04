@@ -94,7 +94,7 @@ fn overview_payload(model: &ScryModel) -> serde_json::Value {
         "linkCount": model.links.len(),
         "groupCount": model.groups.len(),
         // The concern registry — the model's cross-cutting vocabulary. Reuse
-        // these slugs when tagging responsibilities (rule 20).
+        // these slugs when tagging responsibilities (concerns rule).
         "concerns": model.concerns,
         "overview": outline_tree(model, false),
     })
@@ -371,7 +371,12 @@ fn normalize_project_rel(model_ref: &scryer_core::ModelRef, path: &str) -> Strin
 #[tool_router(router = tool_router_read, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "Read the architecture model. With NO `node`, returns the OVERVIEW: the whole tree down to components (symbols excluded) with responsibility/property counts — small and safe, the right first read. Pass a `node` id to read THAT node's full subtree: its descendants (including symbols), responsibilities, properties, links, `referencesForChildren` (the only nodes its children may link to), and the subtree's source map + boundaries. Drill into a component to see its symbols. If a requested subtree is too large to return whole, you get its direct-child skeleton plus guidance to drill further. Reads the PLAN by default — your editable draft, the same state the canvas shows, including your pending edits — so what you read back reflects what you just authored. Pass `layer: \"committed\"` only to inspect the source of truth the code currently satisfies."
+        description = "Read the model. With no `node`: the overview tree down to components with counts — the \
+         safe first read. With a `node` id: that node's full subtree (symbols, responsibilities, \
+         properties, links, `referencesForChildren`, `inheritedDirectives`, source map and \
+         boundaries); an oversized subtree returns its child skeleton plus guidance. Reads the \
+         PLAN by default; `layer: \"committed\"` reads what the code currently satisfies.\n\
+         Rules: model-layers, directives-binding"
     )]
     fn read_model(
         &self,
@@ -449,7 +454,11 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Search the model for nodes matching free text. Case-insensitive and fuzzy: space-separated terms must ALL match somewhere on the node (name, description, technology, responsibility statements, or property labels), where a term matches either as a substring or by close edit-distance similarity — so `authentication` finds `authenticate` and typos still hit. Results are ranked by match quality (exact substrings rank above fuzzy), each carrying a `score` and a per-field `match` of `exact` or `fuzzy`. Returns each hit's id, kind, breadcrumb path, score, and matched fields — so you can locate a concept in a large model and then `read_model {node}` into it. Optional `kind` filter. Top 50 hits by score."
+        description = "Search nodes by free text: space-separated terms must ALL match somewhere on the node \
+         (name, description, technology, statements, property labels), as substring or close \
+         edit-distance. Ranked, each hit with id, kind, breadcrumb, `score`, and matched fields. \
+         Optional `kind` filter; top 50. Then read_model `{node}` into a hit.\n\
+         Rules: loop-orient"
     )]
     fn search_model(
         &self,
@@ -539,7 +548,13 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Reverse lookup from code into the model — the tool to reach for when a task starts from a FILE ('fix the save race in useModelStorage.ts') rather than from the model. Given a project-relative `file` (and optional `symbol` to narrow to one definition), returns the intent governing that location in ONE call: every claim anchored there (with stale/vagrant flags; `tests` lists its attached tests, and `untested` marks a testable When/While/If claim with NO test attached — the gap rule 22 expects you to close while you are in this file; locating a TEST file returns the claims that test is attached to, marked `viaTest`), the owning node chain finest-first with its breadcrumb, the boundary owner of the code region, the BINDING directives (the claim's own, the finest node's, and everything inherited from its ancestors), any pending plan entries touching the located elements, and `scopeHealth` — the owning node's own + subtree coverage counts and completeness, so you see how well-modeled the surrounding scope is, not just what it intends. Reads the working view, so claims you just authored are visible. A file with no anchored claims still reports its boundary owner — the node whose intent governs the region. When you already know the file you're working in, one `locate` call replaces the search_model → read_model orientation dance."
+        description = "Reverse lookup from code into the model. Given a project-relative `file` (and optional \
+         `symbol`), returns in ONE call: the claims anchored there (with tests, `untested`, \
+         stale/vagrant flags; a test file returns the claims it is attached to), the owning node \
+         chain, the boundary owner, BINDING directives (own + inherited), pending entries \
+         touching those elements, and `scopeHealth`. Reads the working view. The single-file form \
+         of orient.\n\
+         Rules: orient-phases, directives-binding, test-attachment"
     )]
     fn locate(
         &self,
@@ -639,7 +654,13 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "One-call task-scoped orientation — start here when you have a TASK ('fix the save race in useModelStorage') instead of a model question; it replaces the get_health / get_rules / search_model / read_model dance. Pass the task in a few words and/or the project-relative files it touches. Returns, scoped to what you're about to do: per file the governing node chain, anchored claims (each flagged `untested` when it is in a testable When/While/If form with NO test attached — the gap you are expected to close as you work here, rule 22), and BINDING directives (own + inherited, same as `locate`); per task the best-matching model nodes with their responsibilities, an `untestedClaims` count when any of them lack tests, and inherited directives; the pending plan entries touching that scope (the work queue you may be executing); the drift scopes inside it (code changed since the last reconcile); up to 3 matching modeling rules IN FULL; a `phase` verdict — plan-execution (pending intent exists: implement it, tests included), reconcile (code changed outside the plan: compare and flag_drift), or free — and the whole-loop `state` line (its `untested` figure is the whole-model test gap). The whole-model tools (get_health, read_model, get_pending) remain for model-building sessions; orient is the front door for coding sessions."
+        description = "The front door for a CODING task: pass the `task` in a few words and/or the \
+         project-relative `files` it touches. Returns, scoped to that: per file the governing \
+         node chain, anchored claims (`untested` flagged) and binding directives; per task the \
+         best-matching nodes; pending entries and drift scopes inside the scope; matching rule \
+         slugs; a `phase` verdict; and the loop `state` line. Replaces the get_health / \
+         search_model / read_model dance for coding sessions.\n\
+         Rules: orient-phases, loop-orient, directives-binding"
     )]
     fn orient(
         &self,
@@ -887,12 +908,13 @@ impl ScryerServer {
         };
         let drift_total = drift_out.len();
 
-        // The 2-3 rules the task is about, in full — saves the get_rules trip.
+        // The 2-3 rules the task is about, by slug — the tool the agent reaches
+        // for next names the same slugs, so the bodies are fetched on demand.
         let rules_out: Vec<serde_json::Value> = match task {
             Some(t) => scryer_core::rules::lookup(t)
                 .iter()
                 .take(3)
-                .map(|r| serde_json::json!({ "id": r.id, "title": r.title, "body": r.body }))
+                .map(|r| serde_json::json!({ "id": r.slug, "title": r.title }))
                 .collect(),
             None => Vec::new(),
         };
@@ -922,7 +944,13 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Query the model for nodes matching field predicates — the on-demand, structural complement to the text-based `search_model`. Supply `where`: a list of `{field, op, value}` conditions that must ALL hold (AND). Fields and operators compose freely, so any node-shape question is expressible without a bespoke flag: empty symbols = `[{field:'kind',op:'eq',value:'symbol'},{field:'empty',op:'eq',value:true}]`; under-decomposed components = `[{field:'kind',op:'eq',value:'component'},{field:'childCount',op:'eq',value:0}]`; external systems = `[{field:'kind',op:'eq',value:'system'},{field:'external',op:'eq',value:true}]`. Scope to a subtree with `under`. Returns each node's id, kind, name, breadcrumb path, and responsibility/property counts. Use this to find nodes by SHAPE instead of reading the raw `.scry` file. Capped at 200 hits."
+        description = "Find nodes by SHAPE: `where` is a list of `{field, op, value}` conditions that must all \
+         hold, e.g. empty symbols \
+         `[{field:'kind',op:'eq',value:'symbol'},{field:'empty',op:'eq',value:true}]`, \
+         under-decomposed components via `childCount`, externals via `external`. Scope with \
+         `under`. Returns id, kind, name, breadcrumb, and responsibility/property counts; capped \
+         at 200. The structural complement to search_model.\n\
+         Rules: node-justification, symbols"
     )]
     fn query_model(
         &self,
@@ -1033,7 +1061,11 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "What code has CHANGED since the model was last reconciled — the code→model drift scope. Cheap and deterministic (file mtimes + git diff, no semantic judgment): returns the boundary-owning nodes whose code changed and the exact `changedFiles` under each, so you know where to re-examine. A changed file is NOT a verdict that the model drifted — it only means \"re-check this scope.\" The loop: for each scope, `read_model {node}` to load its claims, compare them against what the changed code now does, then call `flag_drift` to record undescribed behaviour (→ vagrant) and stale claims (→ `changed`). When you have examined every scope, call `reconcile_drift` to advance the anchor so the same changes don't resurface. A model with no reconcile anchor yet (e.g. just built through these tools) is seeded as in-sync as of now and reports clean — real drift surfaces once code changes after that."
+        description = "What code CHANGED since the last reconcile: the boundary-owning nodes whose code changed \
+         and the exact `changedFiles` under each. Cheap and deterministic; a changed file means \
+         \"re-check this scope\", not that the model drifted. Follow with read_model → flag_drift \
+         per scope, then reconcile_drift.\n\
+         Rules: drift-first, drift-directions"
     )]
     fn get_drift(
         &self,
@@ -1109,7 +1141,12 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "What model intent is NOT yet reflected in code — the model→code work outstanding. This is the PLAN diff: how the draft (`planned`) diverges from the committed `model`. Each entry names an element (node / responsibility / property / link / group) and what to do: `added` (implement new code), `reworded` (re-implement to the new spec), `moved` (move the code), `repointed` (re-point the relationship), `deleted` (remove the code) — with a breadcrumb path and, for responsibilities, source anchors. Implementing an entry and calling `mark_implemented` folds it from the plan into the committed model. Entries tagged to a CHANGE (a named plan partition, see `set_change`) carry its id in `change`; `openChanges` lists every open change with its rationale, and passing `change` (an id, or \"unfiled\") filters the queue to one task — an agent told to implement one change need not wade through the rest. Call this to find what needs implementing or syncing to the codebase."
+        description = "What model intent is NOT yet reflected in code: the plan diff. Each entry names an \
+         element and what to do (`added`, `reworded`, `moved`, `repointed`, `deleted`) with a \
+         breadcrumb and, for responsibilities, anchors. `openChanges` lists every open change; \
+         pass `change` (an id, or \"unfiled\") to filter to one task. Implementing an entry and \
+         calling mark_implemented folds it.\n\
+         Rules: model-layers, change-ledger"
     )]
     pub(crate) fn get_pending(
         &self,
@@ -1285,17 +1322,42 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "The authoritative, BINDING scryer modeling rules — the knowledge base that governs responsibilities, decomposition, symbols, groups, status, and link semantics. These rules decide every modeling judgment: consult them, never infer the conventions from existing nodes. With NO `topic`: the compact index (every rule's id, title, tags) — read it to see what's available. With a `topic` (e.g. \"symbol\", \"group\", \"responsibility altitude\"): the matching rules in full. Pull the relevant rule whenever you're deciding how to model something — what earns a symbol, how to pitch a responsibility, when a group is right."
+        description = "The authoritative, BINDING rules: modeling rules and the working loop. `id` — one slug, \
+         or several comma-separated — returns those rules in full: the way to fetch a slug named \
+         in a tool's `Rules:` line or cited as [[slug]] in another rule. `topic` (free text, e.g. \
+         \"symbol\", \"responsibility altitude\") returns the matching rules ranked. Neither: the \
+         compact index (slug, title, tags). Consult the rules before a modeling judgment; never \
+         infer conventions from existing nodes.\n\
+         Rules: user-owns-intent"
     )]
     fn get_rules(
         &self,
         Parameters(req): Parameters<GetRulesRequest>,
     ) -> Result<CallToolResult, McpError> {
         use scryer_core::rules;
+        if let Some(ids) = req.id.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            let mut hits = Vec::new();
+            let mut unknown = Vec::new();
+            for id in ids.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                match rules::get(id) {
+                    Some(r) => hits.push(r),
+                    None => unknown.push(id),
+                }
+            }
+            let mut body = rules::render(&hits);
+            if !unknown.is_empty() {
+                body.push_str(&format!(
+                    "\n\nNo rule has slug {} — pick from the index:\n\n{}",
+                    unknown.join(", "),
+                    rules::rules_index()
+                ));
+            }
+            return Ok(CallToolResult::success(vec![Content::text(body.trim().to_string())]));
+        }
         let body = match req.topic.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
             None => format!(
-                "Modeling rules (index). These are authoritative and binding — pull the full text of \
-                 any rule with get_rules{{topic}} before making the related modeling decision.\n\n{}",
+                "Rules (index). These are authoritative and binding — pull a rule's full text with \
+                 get_rules {{id}} before the decision it governs.\n\n{}",
                 rules::rules_index()
             ),
             Some(topic) => {
@@ -1315,7 +1377,11 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Annotated project directory tree — the codebase itself, not just its manifests: source files render (capped per directory so generated trees cannot drown the shape), with manifests ([manifest]), infrastructure configs ([infrastructure]), and environment templates ([environment]) called out. Use before modeling to identify deployable units, data stores, external integrations, and frameworks. Respects .gitignore and skips build output / dependency directories."
+        description = "Annotated project directory tree: source files (capped per directory), with manifests, \
+         infrastructure configs, and environment templates called out. Use before modeling to \
+         identify deployable units, data stores, external integrations, and frameworks. Respects \
+         .gitignore.\n\
+         Rules: generation-fill, codebase-as-evidence"
     )]
     fn read_codebase(
         &self,
@@ -1329,7 +1395,13 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Run the structural validator over your WORKING model (the plan, with committed's code anchors overlaid) — so it sees the edits you just authored, which is what makes it a post-CLOSE gate. Returns a list of warnings: parent-kind mismatches, unknown link endpoints, group members at mixed levels, empty symbols (carrying no responsibility/property), source-map entries that reference unknown ids, and responsibility mappings whose line range covers the whole enclosing symbol (a range must be a proper subset — drop it to mean the whole definition). A clean run is a post-edit gate, not a lookup — to FIND nodes by shape on demand (e.g. every empty symbol) use `query_model`. Findings come in two classes: BLOCKING invariant violations (an id the plan diff treats as unique actually names two things — a duplicate node/link/group id, or the same responsibility id on two hosts; a commit of the model is REFUSED until each clears, because the wrong copy would otherwise sit invisible to the diff forever) and advisory warnings (everything else). Does NOT judge responsibility wording quality."
+        description = "Run the structural validator over the WORKING model (plan with committed's anchors \
+         overlaid). BLOCKING findings: one id names two things (node, link, group, or a \
+         responsibility on two hosts); commits are refused until they clear. Advisory: parent-kind \
+         mismatches, unknown link endpoints, mixed-level groups, empty symbols, source-map entries \
+         on unknown ids, whole-symbol line ranges. A post-edit gate; to FIND by shape use \
+         query_model. Ignores wording.\n\
+         Rules: fold-post-flight, node-justification, links-same-level"
     )]
     fn validate_model(
         &self,
@@ -1400,7 +1472,12 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "The model's observability report — deterministic, no semantic judgment. THE HEADLINE NUMBERS ARE THE TEST COUNTS: `tested` (claims with a test ATTACHED), `testable` (claims in a When/While/If form on code-backed hosts — a concrete trigger/state/failure a test can arrange and assert, classified deterministically from the leading keyword), and `untested` (testable claims with NO test attached — rule 22's work queue; drive it to zero on the scopes you build). An attached test is the highest-trust signal the model carries, so read these first and treat everything below as supporting detail. `tested` is a separate dimension from anchoring, not gated on leafness (a structural claim carrying an integration test counts); anchor observations keyed `test:{id}` are that claim's attached test changing/breaking, not its implementation. Also per node: own + subtree rollups of responsibility/property counts, vagrant/stale flags, and anchor coverage (anchorable = any committed claim on LEAF nodes; claims on structural nodes are discharged through their subtree and are never 'unmapped'). Plus anchor state from the git-free fingerprint check — `changed` (the anchored span's content differs from what the model last saw), `broken` (the symbol is gone), `fileMissing` — with moved-but-unchanged symbols silently re-anchored. The whole-model summary AGGREGATES anchors per container scope (`anchorSummary.byScope`: 'API: 31 changed, 5 broken'); the flat per-anchor list appears only on the node-scoped call. Also a declared-link audit against the extracted import graph (edge_count 0 = asserted-only; 'unmodeled' = sibling pairs the code connects but no link declares). Also per node: `completeness` — how much of the node's AUTHORED subtree (committed + planned) reads through to real code, so it is defined from greenfield onward. `pct` (0–100) is anchored primitives over authored ones, where a primitive is a node's boundary box (counted only when its glob owns a real file), a leaf responsibility, or a data shape (counted when its anchor resolves and is not broken/missing); a scaffolded container reads low but non-zero, greenfield reads 0. `pct` is ABSENT ('—', unmeasured) when the subtree has no leaf primitives (a bare box), so an undecomposed shell never reads 100%. Only anchor what you have implemented — that discipline is what makes the figure trustworthy. Pass node_id to scope to one subtree with per-child summaries; omit it for the whole-model summary. Use this to decide WHERE work is needed (unmapped claims, vagrant flags, dark links) before reading full subtrees. `broadBoundaries` flags node boundary globs with no directory prefix (e.g. `**/*`), which silently own every otherwise-unowned file. The whole-model summary also carries `coverage` — calibration of the deterministic layer itself: which languages' imports the link audit resolves FULLY vs by name-heuristic (a declared link between name-heuristic files can read asserted-only even when real), and `silentAnchors`, sourceMap anchors holding no fingerprint tripwire — drift can never fire for those, so treat their green as silence, not health."
+        description = "The model's deterministic observability report. Headline: `tested` / `testable` / \
+         `untested` claim counts; then per node rollups, vagrant/stale flags, anchor coverage and \
+         state, link audit, `completeness`, `coverage` and `silentAnchors`. `node_id` scopes to \
+         one subtree with per-child summaries; omit for the whole-model summary. Use it to decide \
+         WHERE work is needed before reading subtrees.\n\
+         Rules: health-reading, completeness-layered, loop-orient"
     )]
     fn get_health(
         &self,
@@ -1885,6 +1962,48 @@ mod tests {
         let content = serde_json::to_value(&r.content).unwrap();
         let text = content[0]["text"].as_str().expect("text content");
         serde_json::from_str(text).expect("text is JSON")
+    }
+
+    fn result_text(r: &CallToolResult) -> String {
+        let content = serde_json::to_value(&r.content).unwrap();
+        content[0]["text"].as_str().expect("text content").to_string()
+    }
+
+    /// `get_rules {id}` is the exact fetch behind a description's `Rules:`
+    /// line: the named rules in full, and an unknown slug degrades to the
+    /// index rather than an error, so a stale citation still steers.
+    #[test]
+    fn get_rules_by_id_returns_the_named_rules_and_flags_unknown_slugs() {
+        let server = ScryerServer::new();
+        let r = server
+            .get_rules(Parameters(GetRulesRequest {
+                id: Some("fold-post-flight, symbols".into()),
+                topic: None,
+            }))
+            .unwrap();
+        let text = result_text(&r);
+        assert!(text.starts_with("fold-post-flight — "), "{text}");
+        assert!(text.contains("\nsymbols — "), "second slug rendered: {text}");
+        assert!(!text.contains("No rule has slug"), "{text}");
+
+        let r = server
+            .get_rules(Parameters(GetRulesRequest {
+                id: Some("symbols,no-such-rule".into()),
+                topic: None,
+            }))
+            .unwrap();
+        let text = result_text(&r);
+        assert!(text.starts_with("symbols — "), "known slug still resolves: {text}");
+        assert!(text.contains("No rule has slug no-such-rule"), "{text}");
+        assert!(text.contains("statement-ears — "), "index appended: {text}");
+
+        // No arguments: the slug-keyed index, no bodies.
+        let r = server
+            .get_rules(Parameters(GetRulesRequest { id: None, topic: None }))
+            .unwrap();
+        let text = result_text(&r);
+        assert!(text.contains("symbols — Code level uses only"), "{text}");
+        assert!(!text.contains("A `symbol` is exactly one"), "index carries no bodies: {text}");
     }
 
     #[test]
@@ -2738,10 +2857,11 @@ mod tests {
         assert!(!pending.contains("\"web\""), "sibling work stays out: {pending}");
         assert_eq!(v["pendingTotal"], 1);
 
-        // Rules inline: "symbol" pulls rule 8 in full, capped at 3.
+        // Rules by slug: "symbol" names the symbols rule, capped at 3, no body.
         let rules = v["rules"].as_array().unwrap();
-        assert!(rules.iter().any(|r| r["id"] == 8), "rule 8 rides along: {rules:?}");
+        assert!(rules.iter().any(|r| r["id"] == "symbols"), "symbols rule rides along: {rules:?}");
         assert!(rules.len() <= 3);
+        assert!(rules.iter().all(|r| r.get("body").is_none()), "bodies are fetched on demand");
 
         // Phase: pending intent exists, no drift baseline → plan-execution.
         let phase = v["phase"].as_str().unwrap();

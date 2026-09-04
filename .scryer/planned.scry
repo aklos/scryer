@@ -884,6 +884,23 @@
       "kind": "symbol",
       "name": "ScryerServer",
       "parentId": "node-47",
+      "responsibilities": [
+        {
+          "id": "resp-ezr6t4",
+          "statement": "**Names** the rules governing each tool on a trailing Rules line of its description, every slug resolving to a rule",
+          "lastTouchedAt": 1788518336
+        },
+        {
+          "id": "resp-61f3yq",
+          "statement": "**Keeps** every rule reachable from the instructions, a tool description, or another rule",
+          "lastTouchedAt": 1788518336
+        },
+        {
+          "id": "resp-735ba4",
+          "statement": "**Keeps** the always-loaded instructions and tool descriptions inside a fixed character budget",
+          "lastTouchedAt": 1788518336
+        }
+      ],
       "properties": [
         {
           "label": "tool_router",
@@ -1995,8 +2012,8 @@
       "responsibilities": [
         {
           "id": "resp-156",
-          "statement": "Bundles the governing nodes, claims, directives, scoped pending items, drift, matching modeling rules, and phase verdict for a task and/or set of files.",
-          "lastTouchedAt": 1784883763
+          "statement": "**Bundles** the governing nodes, claims, directives, scoped pending items, drift, matching rule slugs, and phase verdict for a task and/or set of files",
+          "lastTouchedAt": 1788518336
         }
       ]
     },
@@ -2047,8 +2064,13 @@
       "responsibilities": [
         {
           "id": "resp-160",
-          "statement": "Returns the modeling rules index, or the full text of rules matching a topic.",
-          "lastTouchedAt": 1784883763
+          "statement": "**Returns** the rules index, the full text of the rules named by slug, or the rules matching a topic",
+          "lastTouchedAt": 1788518336
+        },
+        {
+          "id": "resp-v3p14p",
+          "statement": "**If** a requested slug matches no rule, **then** return the resolved rules with the index appended",
+          "lastTouchedAt": 1788518336
         }
       ]
     },
@@ -11540,8 +11562,8 @@
       "responsibilities": [
         {
           "id": "resp-655",
-          "statement": "Ranks rules against a free-text topic by title/tag word match, falling back to body substring only when nothing else hits",
-          "lastTouchedAt": 1784884312
+          "statement": "**Ranks** rules against a free-text topic by title, tag, and slug word match, falling back to body substring only when nothing else hits",
+          "lastTouchedAt": 1788518336
         }
       ]
     },
@@ -11553,8 +11575,8 @@
       "responsibilities": [
         {
           "id": "resp-656",
-          "statement": "Renders a compact one-line-per-rule index for connect-time instructions",
-          "lastTouchedAt": 1784884312
+          "statement": "**Renders** a compact slug-keyed one-line-per-rule index for on-demand lookup",
+          "lastTouchedAt": 1788518336
         }
       ]
     },
@@ -12973,6 +12995,32 @@
           "id": "resp-dpr8pk",
           "statement": "**Order** cards by risk tier — contract changes, concern-tagged claims, survivors, amendments, vagrants, stale, failing, close-gate — then newest first",
           "lastTouchedAt": 1788501139
+        }
+      ]
+    },
+    {
+      "id": "node-yfnbsa",
+      "kind": "symbol",
+      "name": "get",
+      "parentId": "node-612",
+      "responsibilities": [
+        {
+          "id": "resp-9a9f1n",
+          "statement": "**When** a rule is requested by slug or numeric id, **resolve** exactly that rule",
+          "lastTouchedAt": 1788518326
+        }
+      ]
+    },
+    {
+      "id": "node-81b7p2",
+      "kind": "symbol",
+      "name": "citations",
+      "parentId": "node-612",
+      "responsibilities": [
+        {
+          "id": "resp-ram7ds",
+          "statement": "**Extracts** every double-bracket slug citation from a body of text, in order",
+          "lastTouchedAt": 1788518326
         }
       ]
     }

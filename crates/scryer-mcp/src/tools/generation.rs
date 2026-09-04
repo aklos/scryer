@@ -208,7 +208,12 @@ fn validate_request(req: &CommitContainerModelRequest) -> Result<(), String> {
 #[tool_router(router = tool_router_generation, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "GENERATION-PIPELINE primitive — atomically fill in the complete component + symbol model for ONE existing container in a single write (the agent never assembles ids by hand). Used during codebase→model generation instead of separate add_component/add_symbol/add_group calls. Components and nested mandatory symbols use unique request-local `key` values; group memberKeys are local component keys. You do NOT author code-level links: the server wires component→component and symbol→symbol links automatically from the deterministic dependency graph. The optional `links` field is only for cross-boundary relationships (to an external/other-container node id) that the dependency graph can't infer; any link it can't place legally is dropped and reported, never fatal. The server validates the proposal, mints ids, resolves references, derives links, and performs one model write. Structural problems (missing symbols, duplicate keys) reject the whole proposal with a specific reason; fix exactly that and retry. Filling records structure and anchors only — it attaches no tests, so testable (When/While/If) claims land as `untested`. Immediately after a fill, attach the tests the codebase ALREADY has for those claims via update_source_map `test_entries` (`pattern` = test file, `symbol` = the test function); claims with no existing test stay honestly untested until one is written."
+        description = "GENERATION primitive: fill the complete component + symbol model for ONE existing \
+         container in a single write. Components and symbols use request-local `key`s; the server \
+         mints ids, wires code-level links from the dependency graph, validates, and writes both \
+         layers. Structural problems reject the whole proposal with a reason — fix that and \
+         retry. Attach existing tests right after (update_source_map `test_entries`).\n\
+         Rules: generation-fill, components, symbols, altitude, test-attachment"
     )]
     fn fill_container(
         &self,

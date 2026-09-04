@@ -12,7 +12,12 @@ use std::collections::HashSet;
 #[tool_router(router = tool_router_misc, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "Write the code-side mapping (agent-produced, regenerable): implementation anchors, ATTACHED TESTS, schema declarations, and boundaries. `entries` set source locations keyed by responsibility id — the conformance numerator (where reality discharges a responsibility). Each location is the SPECIFIC line range that does the work: `pattern` = file, `line`/`endLine` = the range, `symbol` = the enclosing definition (anchor + context). A line range must be a PROPER subset of its symbol — when one responsibility is the whole definition's work, omit `line`/`endLine` (a symbol-only anchor means the whole definition). Ranges that cover the whole symbol are normalized to symbol-only anchors and reported back. `test_entries` ATTACH TESTS to claims — keyed by responsibility id like `entries`, but pointing at the test that exercises the claim (`pattern` = test file, `symbol` = the test function; symbol-only means the whole test). A separate dimension: where a claim is implemented vs. which tests are attached to it. This is also the tool to attach a test AFTER a fold — the fix for an 'untested' callout. `schemas` set the declaration location of a schema-kind node (which has properties, not responsibilities) — keyed by node id, normally one location: `pattern` = file, `symbol` = the type name, `line`/`endLine` = the declaration range. `boundaries` set directory globs keyed by node id — the coverage denominator (the code region a node owns); use for containers/components, keeping a child's boundary within its parent's. Pass an empty `locations`/`sources` array to clear an entry."
+        description = "Write the code-side mapping: `entries` (implementation anchors keyed by responsibility \
+         id), `test_entries` (attached tests, same shape, `pattern` = test file and `symbol` = \
+         the test), `schemas` (schema declarations keyed by node id), `boundaries` (directory \
+         globs keyed by node id). An empty `locations`/`sources` array clears an entry. Also the \
+         tool to attach a test AFTER a fold.\n\
+         Rules: source-map, anchor-completeness, test-attachment"
     )]
     fn update_source_map(
         &self,
@@ -99,7 +104,7 @@ impl ScryerServer {
             None => HashSet::new(),
         };
 
-        // Rule 25 makes anchoring the BUILD checkpoint, so an entry keyed to a
+        // anchor-completeness makes anchoring the BUILD checkpoint, so an entry keyed to a
         // plan-added claim (not yet committed) is usually premature — the code
         // it points at may not exist. Warn, never reject: code-first flows
         // (adopting behaviour the codebase already has) legitimately anchor
@@ -201,7 +206,7 @@ impl ScryerServer {
         if !premature.is_empty() {
             msg.push_str(&format!(
                 "\n\nWARNING — anchoring PLAN-ADDED claim(s) not yet committed: {}. An anchor \
-                 records BUILT code and a test entry an EXISTING test (rules 25, 22); the build \
+                 records BUILT code and a test entry an EXISTING test (see anchor-completeness, test-attachment); the build \
                  checkpoint is `mark_implemented` (fold + `anchors` + `tests` in one call), and \
                  planned claims render WITHOUT their anchors until folded. If the code truly \
                  exists already (adopting behaviour the codebase has), keep the entry and fold \
@@ -236,7 +241,11 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "GENERATION-PIPELINE primitive — create or replace groups in bulk from raw `Group` JSON (used during codebase→model generation). Pass a single group object or an array of groups in `data`. Groups are organizational: at container level they represent deployment units, at component level they represent modules. Each group MUST list its `memberIds` and set `parentNodeId` to the node whose children those members are — parentNodeId anchors the group to that node's level so it renders inside that node's diagram (a memberless or parentNodeId-less group renders empty at the top level). Members must all be at the same C4 level. Groups can carry their own responsibilities. For interactive editing, use the typed `add_group` / `update_group` / `delete_group` instead."
+        description = "GENERATION primitive: create or replace groups in bulk from raw `Group` JSON (one object \
+         or an array in `data`). Each group lists `memberIds` (same C4 level) and `parentNodeId` \
+         (the node whose children they are). For interactive editing use add_group / update_group \
+         / delete_group.\n\
+         Rules: groups, generation-fill"
     )]
     fn set_groups(
         &self,
@@ -337,7 +346,10 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Patch an existing group by id — change its name, description, members, or responsibilities. Only fields present in each item are changed; omit a field to leave it. `memberIds`, if given, replaces the membership (2+ nodes, all children of the group's parent node — same C4 level). This is the typed counterpart to `add_group`/`delete_group` for EDITING a group without reassembling raw JSON."
+        description = "Patch an existing group by id: name, description, members, or responsibilities. Only \
+         fields present change; `memberIds` replaces the membership (2+ children of the group's \
+         parent).\n\
+         Rules: groups"
     )]
     fn update_group(
         &self,
@@ -453,7 +465,8 @@ impl ScryerServer {
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
-    #[tool(description = "Delete a group by id.")]
+    #[tool(description = "Delete a group by id. Fold the deletion with mark_implemented `group_ids`.\n\
+         Rules: fold-in-layers")]
     fn delete_group(
         &self,
         Parameters(req): Parameters<DeleteGroupRequest>,
@@ -505,7 +518,12 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Select which CHANGE this session's plan writes belong to — a named partition of the plan carrying the dev's rationale, so parallel workstreams stay separable and review/fold can work per task. Pass `rationale` (the task in one sentence, as the dev put it) to OPEN a new change, or `change_id` to RESUME an open one from a prior session (list them via get_pending's openChanges). After this, every plan write in this session is tagged to the change automatically; `mark_implemented {change}` folds exactly its entries, and the change closes when its last entry folds — the rationale survives in the history log. Pass `clear: true` to detach (writes go unfiled, today's serial behavior). Pass `close` (a change id) to close an EMPTY stranded change — one whose work ended up tagged elsewhere; refused while it has tagged entries, since a change normally closes itself when its last entry folds or reverts. Pass `retag` (bare ids) with `to` to MOVE work that is already pending into another change — a node/group id takes that carrier and everything pending under it, a responsibility/link id takes just that element, a `chg-N` id takes everything filed under it, and \"unfiled\" takes everything untagged; `to` accepts a change id or \"unfiled\", and defaults to this session's change. Use it when work landed in the wrong change or one task turns out to be two — never re-write elements just to re-file them. Pass `sign_off: true` (with `change_id`, or alone for the current change) once the developer has approved the plan: it snapshots the change's entries as intent, and from then on any claim the agent rewords or adds under it lands as vagrant for the developer's verdict at `mark_implemented` instead of folding. With no arguments, reports the current selection and the open changes. Use this at the start of a task when other work may share the plan; skip it for quick serial edits."
+        description = "Select which CHANGE this session's plan writes belong to. `rationale` opens a new \
+         change; `change_id` resumes one; `clear` detaches; `close` closes an empty stranded \
+         change; `retag` + `to` moves pending work between changes; `sign_off: true` records the \
+         developer's approval of the plan, after which agent rewords and additions wait as \
+         amendments. No arguments: report the selection and open changes.\n\
+         Rules: change-ledger, sign-off, loop-plan, loop-sign-off"
     )]
     pub(crate) fn set_change(
         &self,
@@ -920,7 +938,7 @@ mod tests {
 
     /// An anchor keyed to a plan-added (uncommitted) claim is written — code-
     /// first flows legitimately anchor early — but the response warns loudly:
-    /// anchoring is the build checkpoint (rule 25), and the UI hides a planned
+    /// anchoring is the build checkpoint (anchor-completeness), and the UI hides a planned
     /// claim's anchors until the fold. A committed claim's anchor stays quiet.
     #[test]
     fn anchoring_a_plan_added_claim_warns_but_writes() {

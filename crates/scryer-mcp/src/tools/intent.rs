@@ -230,14 +230,14 @@ fn commit(
         .flat_map(scryer_core::validate::node_field_warnings)
         .collect();
     warnings.extend(tag_warnings);
-    // Rule 8's gist rides the response the moment an empty symbol is minted —
+    // The symbols rule's gist rides the response the moment an empty symbol is minted —
     // the judgment call happens right here, not after a get_rules round-trip
     // the agent may skip.
     for id in minted {
         if let Some(n) = model.nodes.iter().find(|n| &n.id == id) {
             if n.kind == Kind::Symbol && scryer_core::is_node_empty(n) {
                 warnings.push(format!(
-                    "'{}' ({}) is EMPTY — rule 8: a symbol earns its place by carrying a \
+                    "'{}' ({}) is EMPTY — see the symbols rule: a symbol earns its place by carrying a \
                      responsibility or a declared data shape; a link alone does not justify \
                      it. Give it one, or fold it into its parent and remove it.",
                     n.name, id
@@ -291,7 +291,10 @@ fn commit(
 #[tool_router(router = tool_router_intent, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "Add one or more persons (real users / actors) at the top level. Pass plain responsibility statements — ids and status (implemented) are set for you. Persons link to the SYSTEM, not to its containers."
+        description = "Add one or more persons (real users / actors) at the top level. Plain responsibility \
+         statements; ids and status are set for you. Persons link to the SYSTEM, not to its \
+         containers.\n\
+         Rules: naming, links-same-level"
     )]
     fn add_person(
         &self,
@@ -336,7 +339,10 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Add one or more systems at the top level — the system you are modeling, or external third-party systems it depends on (set external=true). Persons and externals link to the system. Pass plain responsibility statements; ids and status are set for you."
+        description = "Add one or more systems at the top level: the system you are modeling, or external \
+         third-party systems it depends on (`external: true`). Persons and externals link to the \
+         system. Plain responsibility statements; ids and status are set for you.\n\
+         Rules: system-boundary, externals, naming, statement-ears"
     )]
     fn add_system(
         &self,
@@ -383,7 +389,11 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Add one or more containers under a system. `name` is the role; `technology` is what it IS as software. Pass `boundaryDir` (the container's directory from the codebase context) to set its boundary glob automatically. Responsibilities go at the container's own altitude — what it is accountable for, not what its components do. Statements accept a plain string or `{statement, concern?}` — tag cross-cutting concerns (rule 20); ids and status set for you. On altitude and runtime boundaries: get_rules{topic:'container altitude'}."
+        description = "Add one or more containers under a system. `name` is the role; `technology` is what it \
+         IS as software. `boundaryDir` sets the boundary glob. Responsibilities go at the \
+         container's own altitude; statements are a plain string or `{statement, concern?}`. Ids \
+         and status are set for you.\n\
+         Rules: containers, altitude, technology, statement-ears, concerns, naming"
     )]
     fn add_container(
         &self,
@@ -456,7 +466,10 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Add one or more components under a container. Give responsibilities at the component's own altitude — one accountability each, not what an individual symbol does. Statements accept a plain string or `{statement, concern?}` — tag cross-cutting concerns (rule 20); ids and status set for you. How to cluster components (cohesion + dependency graph, not one-per-file) and pitch altitude: get_rules{topic:'component'}."
+        description = "Add one or more components under a container. Responsibilities at the component's own \
+         altitude — one accountability each, not what an individual symbol does. Statements are a \
+         plain string or `{statement, concern?}`; ids and status are set for you.\n\
+         Rules: components, altitude, node-justification, statement-ears, concerns, naming"
     )]
     pub(crate) fn add_component(
         &self,
@@ -511,7 +524,11 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Group sibling nodes that ship or package together — a SECONDARY axis, never a substitute for decomposition. `parent_id` = the node whose children you're grouping (the system for a group of containers; a container for a group of components). `member_ids` = the sibling node ids to enclose (2+, all children of parent_id, same level). Optional responsibility statements describe the unit (e.g. 'deploys atomically'). The group id + layout are set for you. When a group is right vs. a missing parent node, and logical vs. architectural groups: get_rules{topic:'group'}."
+        description = "Group sibling nodes that ship or package together — a SECONDARY axis, never a substitute \
+         for decomposition. `parent_id` is the node whose children you're grouping; `member_ids` \
+         are 2+ of its children. Optional responsibility statements describe the unit. Id and \
+         layout are set for you.\n\
+         Rules: groups"
     )]
     fn add_group(
         &self,
@@ -609,7 +626,12 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Add one or more symbols (one addressable code definition each) under a component. Pass the `sourceFile` (and line/endLine for the full definition) from the codebase context; the source map is anchored to the file + symbol name for you — no separate update_source_map call. Each responsibility is a plain string or `{statement, line, endLine}` for the sub-range that does the work; give `properties` for a declared data shape. Ids and status set for you. Not every definition earns a symbol, and a data shape goes in `properties`, never in prose — read get_rules{topic:'symbol'} before adding."
+        description = "Add one or more symbols (one addressable code definition each) under a component. Pass \
+         `sourceFile` (and line/endLine) from the codebase; the source map is anchored to file + \
+         symbol name for you. Each responsibility is a plain string or `{statement, line, \
+         endLine}` for the sub-range that does the work; a declared data shape goes in \
+         `properties`, never in prose. Not every definition earns a symbol.\n\
+         Rules: symbols, node-justification, altitude, statement-ears, source-map"
     )]
     fn add_symbol(
         &self,
@@ -705,7 +727,15 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Record SEMANTIC drift for a node after comparing its code against its responsibilities — the model↔code reconcile, where each finding gets a DIRECTION. `undescribed` is the *take-code* direction: behaviours the code has that NO responsibility describes — each is proposed into the PLAN as a vagrant adoption (a code-discovered `added` claim), which the user adopts (commit — the code already exists) or rejects (mark the code for deletion); do NOT report code that changed but still satisfies an existing responsibility. Each undescribed finding is HOMED on a node: it routes automatically to the node that already owns its `symbol`/file (or set `nodeId` to force an existing node). When the model has NO node for the code, MINT the missing rungs in `newNodes` (a `key`, `kind`, `name`, and a parent via `parentId` on an existing node or `parentKey` on a shallower mint — list ancestors first) and point the finding at the leaf with `nodeKey`, so it lands at its true altitude instead of bubbling up to the reviewed container. `stale` is the *take-model* direction: existing responsibilities the model still asserts but whose code regressed — flagged `stale` so the user can give a verdict: re-implement (the model is right, the code is rebuilt) or drop (the behaviour was removed on purpose, so the claim leaves the model). When the behaviour did NOT vanish but DIVERGED — the code still does a related thing, just differently than the claim says — also set `proposedStatement` to the corrected wording that matches what the code now does; the user can then accept it (folding the new wording into the model with no rebuild, since the code already does it) instead of choosing re-implement/drop. Omit `proposedStatement` when the behaviour is truly gone. `staleNodes` is the node-level version of the same direction: when a deleted file or folder wipes out a whole modeled node — a symbol, a component, an entire container subtree — flag the NODE (by `nodeId`) instead of listing each of its claims; the verdict then applies to the whole subtree. Use `staleNodes` when the node's backing code is gone entirely, `stale` when only one of a still-present node's claims regressed. Properties have the SAME two directions as a data type's fields drift: a newly-declared struct field / interface member that no property describes is DATA, not behaviour — report it under `undescribedProperties` (its `label`, `sourceFile`, enclosing `symbol`, homed like `undescribed`) so it lands as a vagrant property, NEVER as a responsibility; and a property whose backing field was removed or materially changed goes under `staleProperties` (`nodeId` + `label`, since properties have no id). Call with empty arrays (or don't call) when the code and the model still agree."
+        description = "Record SEMANTIC drift for a node after comparing its code against its claims. \
+         `undescribed`: behaviour the code has that no claim describes (take-code; lands as a \
+         vagrant adoption, homed on a node or on rungs minted in `newNodes`). `stale`: claims \
+         whose code regressed (take-model; add `proposedStatement` when the behaviour diverged \
+         rather than vanished). `staleNodes` for nodes whose backing code is gone entirely; \
+         `undescribedProperties` / `staleProperties` for data fields. Empty arrays, or no call, \
+         when code and model agree.\n\
+         Rules: drift-directions, drift-homing, drift-properties, drift-stale-nodes, \
+         vagrant-stale"
     )]
     fn flag_drift(
         &self,
@@ -1156,7 +1186,10 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Advance the drift reconcile anchor to NOW after you have examined every scope `get_drift` reported (and recorded any findings with `flag_drift`). This stamps the model as reconciled against the current code state — file changes up to this point stop surfacing in `get_drift`, so only NEWER changes count next time. Call it to close a drift pass, or when `get_drift` is already clean and you simply want to re-baseline. Records the current git commit when the project is a repo. Caution: this asserts you have reviewed everything that changed — anything you skipped will not resurface."
+        description = "Advance the drift reconcile anchor to NOW, after you have examined every scope get_drift \
+         reported and recorded findings with flag_drift. Changes up to this point stop surfacing; \
+         anything you skipped will not resurface. Also re-baselines a clean model.\n\
+         Rules: drift-first"
     )]
     fn reconcile_drift(
         &self,
@@ -2182,7 +2215,7 @@ mod tests {
         );
     }
 
-    /// Minting an empty symbol (no claim, no data shape) puts rule 8's gist
+    /// Minting an empty symbol (no claim, no data shape) puts the symbols rule's gist
     /// straight into the write response — the judgment call happens here, not
     /// after a get_rules round-trip the agent may skip.
     #[test]
@@ -2234,7 +2267,7 @@ mod tests {
             .find_map(|c| c.as_text().map(|t| t.text.clone()))
             .unwrap();
         assert!(
-            text.contains("rule 8") && text.contains("EMPTY"),
+            text.contains("symbols rule") && text.contains("EMPTY"),
             "gist rides the response: {text}"
         );
     }

@@ -12,7 +12,11 @@ use std::collections::HashSet;
 #[tool_router(router = tool_router_links, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "Add one or more links between nodes. Direction is from initiator/requester (src) to provider/dependency (dst). Returns the assigned link IDs. Relationships connect nodes at the SAME C4 level: src and dst must be siblings (same parent), or the deeper node's parent must already link to the other node (so it shows as a reference on that surface) — otherwise the link is rejected with guidance. The whole batch is rejected if any link is illegal, so order parent-level links before the child-level links that depend on them. Also rejects missing endpoints, self-loops, and links between an ancestor and its descendant."
+        description = "Add links between nodes; direction is initiator (src) → provider (dst). Endpoints must \
+         be siblings, or the deeper node's parent must already link to the other node — otherwise \
+         the batch is rejected with guidance, so order parent-level links first. Also rejects \
+         missing endpoints, self-loops, and ancestor↔descendant links. Returns the link ids.\n\
+         Rules: links-same-level, one-link, mentions-imply-links"
     )]
     fn add_links(
         &self,
@@ -139,7 +143,9 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Patch one or more links by id. Only fields present are changed."
+        description = "Patch one or more links by id. Only fields present change; a re-pointed link must still \
+         be legal.\n\
+         Rules: links-same-level, one-link"
     )]
     fn update_links(
         &self,
@@ -196,7 +202,8 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Delete one or more links by id."
+        description = "Delete one or more links by id. Fold the deletion with mark_implemented `link_ids`.\n\
+         Rules: fold-in-layers"
     )]
     fn delete_links(
         &self,

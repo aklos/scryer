@@ -51,7 +51,12 @@ fn radius_lines(radius: &[RadiusFile]) -> String {
 #[tool_router(router = tool_router_testing, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "Report a finished test run: point this at the JUnit XML file the runner just wrote and every attached test's result is recorded against its claim — ONE call per report file, never per test. Verdicts are cached keyed by content fingerprints of the claim's implementation and attached tests, so a later edit to either automatically flips the verdict to stale (no watcher, nothing re-runs). The response says what the report settled (recorded, failing) and what it did not — unmatched cases (normal: attachment is curated, the suite is not), ambiguous names, attachments the report never mentioned (normal for a partial or single-runner run) — plus the remaining blast radius. Works with any runner that can emit JUnit XML: vitest/playwright `--reporter=junit`, pytest `--junitxml=`, jest-junit, cargo-nextest, gotestsum, surefire… Call it after every run, full suite or targeted."
+        description = "Report a finished test run: point at the JUnit XML file the runner wrote and every \
+         attached test's result is recorded against its claim — ONE call per report file. \
+         Verdicts are fingerprint-keyed, so a later edit to implementation or test flips them to \
+         stale. Reports what settled, what did not (unmatched, ambiguous, unmentioned), and the \
+         remaining radius. Call after every run.\n\
+         Rules: test-verdicts, test-attachment"
     )]
     fn ingest_test_report(
         &self,
@@ -144,7 +149,11 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Which tests actually NEED running, computed from the model — never the whole suite. Every test-attached claim whose verdict is missing or stale (its implementation or attached test changed since the last recorded run) contributes its test files; claims with current verdicts contribute nothing. Run exactly the listed files with the runner's JUnit reporter on, then report each result file with `ingest_test_report`. An empty radius means every test-attached claim holds a current verdict. Claims with NO attached test never appear here — that gap is health's `untested`. Also summarizes current verdicts (passing / failing / stale) so you see the claim-level test state without running anything."
+        description = "Which test files actually NEED running: those attached to claims whose verdict is \
+         missing or stale. Run exactly those with the JUnit reporter on, then ingest_test_report \
+         each result file. Empty means every attached claim holds a current verdict; claims with \
+         no test never appear (that is health's `untested`). Also summarizes current verdicts.\n\
+         Rules: test-verdicts"
     )]
     fn get_test_radius(
         &self,
@@ -177,7 +186,12 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Open a falsification probe on one claim: ask whether its attached test would actually FAIL if the code stopped honouring the claim. A green verdict says the test passes; it does not say the test would notice a defect, and a test that asserts nothing passes forever. This answers that. DELEGATE THIS TO A SUBAGENT on a cheap model — the mutate/run/revert loop is repetitive, produces a lot of test output, and none of it belongs in the context of the session that asked. Nothing happens in the developer's working tree: scryer syncs an isolated git worktree (their uncommitted work included) and returns ITS path, so every edit and every test run happens THERE. Returns the claim's statement, the worktree, the exact file and line span to break, and the attached test files — then make ONE deliberate breaking edit inside that span, run ONLY those test files, and expect RED. Green means the break survived: the test does not hold the claim, and that is the finding. Aim each break at what the claim actually SAYS (a When/If claim names a trigger and a response — attack those), not at whatever is easiest to break: deleting a function body proves only that something notices. Up to three distinct breaks, stopping early on the first survivor, then call `end_probe`. Refused when the claim has no attached test, when its verdict is missing, stale, or not passing, or when the project is not a git repository."
+        description = "Open a falsification probe on one claim: would its attached test FAIL if the code \
+         stopped honouring it? Syncs an isolated git worktree and returns its path, the claim, \
+         the exact span to break, and the test files. DELEGATE THIS TO A SUBAGENT on a cheap \
+         model; close with end_probe. Refused without an attached test and a current passing \
+         verdict, or outside a git repo.\n\
+         Rules: probe-loop"
     )]
     fn probe_claim(
         &self,
@@ -227,7 +241,10 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Close a probe: resets the probe worktree whatever happened, and records what the round found against the claim. Pass `probes` (how many deliberate breaks you tried) and `survivors` (one line per break the test did NOT catch, describing what you changed). No survivors means the test caught every break you tried — the claim reads as probed, NOT as proven: you sampled, you did not exhaust. Survivors are the real finding: the test does not hold the claim there, so strengthen it, re-run for a fresh verdict, and probe again. The result is fingerprint-keyed like a verdict, so editing the implementation or the test ages it to stale. Call this after every `probe_claim`, including when a probe went wrong."
+        description = "Close a probe: resets the probe worktree whatever happened and records the round against \
+         the claim. Pass `probes` (breaks tried) and `survivors` (one line per break the test did \
+         NOT catch). Call after every probe_claim, including when a probe went wrong.\n\
+         Rules: probe-loop"
     )]
     fn end_probe(
         &self,
