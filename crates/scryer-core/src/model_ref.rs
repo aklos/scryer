@@ -107,6 +107,14 @@ impl ModelRef {
         }
     }
 
+    /// The fold-refusal ledger — claims `mark_implemented` last declined to
+    /// fold and why (see `crate::refusals`). Regenerable, git-free.
+    pub fn fold_refusals_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".fold-refusals.json"),
+        }
+    }
+
     pub fn dir(&self) -> PathBuf {
         match self {
             ModelRef::ProjectLocal(path) => path.join(".scryer"),

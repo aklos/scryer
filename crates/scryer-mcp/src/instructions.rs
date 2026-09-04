@@ -53,13 +53,14 @@ attach the kind of test that fits (component → integration, container → API/
 end-to-end).\n\
 5. CLOSE — `mark_implemented` what you built (folds it from the plan into the committed model), \
 passing `anchors` so fold + anchor is one atomic call, and `flag_drift` anything the code does that \
-the plan didn't capture. ATTACH each claim's test with `tests` in the same call \
-(`pattern` = test file, `symbol` = the test function) — the claim then reads as tested in \
-health, and the test's fingerprint is watched like any anchor. For a claim in a When/While/If form \
-the test is EXPECTED — mandatory on symbol hosts (rule 22): the statement already names the \
-trigger/state/failure to arrange and the response to assert, so write that test as part of the \
-build and attach it here — health counts such claims without one as `untested`. Ubiquitous claims \
-stay a judgment call; never \
+the plan didn't capture. THE FOLD IS GATED ON EVIDENCE: a testable (When/While/If) claim folds only \
+with a test attached AND a current passing verdict — so the order is write the test → attach it \
+(`update_source_map test_entries`) → run it with the JUnit reporter on → `ingest_test_report` → \
+fold. A claim without that evidence stays in the plan and the response names the missing fact and \
+the files to run; leaving it pending is an honest exit, not a loop to fight (`force: true` folds \
+anyway and is recorded as `unverified`). Claims you reworded or added after sign-off land as \
+vagrant for the developer's verdict; they do not fold — if implementing shows a planned claim is \
+wrong, reword it and fold the rest; the reword waits. Ubiquitous claims stay a judgment call; never \
 attach a test that doesn't genuinely exercise its claim just to clear the counter. The fold response ends with a scoped post-flight (what's still pending on \
 the node, unanchored claims, new warnings) — act on it; a separate `validate_model` run is for \
 structural sessions that touched many nodes, not for every fold. You need not finish a whole node \

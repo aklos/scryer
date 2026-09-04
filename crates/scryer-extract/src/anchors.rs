@@ -338,19 +338,66 @@ pub fn whole_symbol_warnings(model: &ScryModel, project: &Path) -> Vec<String> {
 /// nothing to remember.
 pub fn write_baseline(r: &ModelRef) -> Result<usize, String> {
     let model = read_model_at(r)?;
-    let project = r.project_path();
+    let anchors = fingerprint_entries(&model, r.project_path(), None);
+    let count = anchors.len();
+    let json = serde_json::to_string(&AnchorBaseline { anchors }).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(r.dir()).map_err(|e| e.to_string())?;
+    std::fs::write(r.anchors_path(), json).map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
+/// Refresh the baseline for EXACTLY the given baseline keys (bare claim ids for
+/// implementation anchors, `test:{id}` for attached tests) and leave every
+/// other entry as it was. The fold calls this for what it just anchored, so a
+/// freshly implemented claim carries a drift tripwire from the moment it
+/// lands — without silently re-baselining (and so swallowing) unreconciled
+/// drift elsewhere in the model, which a full rewrite would. Creates the
+/// baseline if none exists yet. Returns the number of entries written for the
+/// keys.
+pub fn write_baseline_for(
+    r: &ModelRef,
+    keys: &std::collections::BTreeSet<String>,
+) -> Result<usize, String> {
+    if keys.is_empty() {
+        return Ok(0);
+    }
+    let model = read_model_at(r)?;
+    let fresh = fingerprint_entries(&model, r.project_path(), Some(keys));
+    let count = fresh.len();
+    let mut anchors: Vec<AnchorEntry> = read_baseline(r)
+        .map(|b| b.anchors)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|a| !keys.contains(&a.key))
+        .collect();
+    anchors.extend(fresh);
+    anchors.sort_by(|a, b| a.key.cmp(&b.key).then(a.file.cmp(&b.file)));
+    let json = serde_json::to_string(&AnchorBaseline { anchors }).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(r.dir()).map_err(|e| e.to_string())?;
+    std::fs::write(r.anchors_path(), json).map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
+/// Fingerprint the model's anchors against the working tree — every key, or
+/// only those in `only`. Both anchor dimensions share the baseline: source
+/// anchors under their bare key, test anchors (claim → attached test) under
+/// `test:{id}`.
+fn fingerprint_entries(
+    model: &ScryModel,
+    project: &Path,
+    only: Option<&std::collections::BTreeSet<String>>,
+) -> Vec<AnchorEntry> {
     let mut cache = FileCache::new();
     let mut anchors: Vec<AnchorEntry> = Vec::new();
     // Walked lazily — only when a glob anchor exists.
     let mut project_files: Option<std::collections::BTreeSet<String>> = None;
 
-    // Both anchor dimensions share the baseline: source anchors under their
-    // bare key, test anchors (claim → attached test) under `test:{id}`.
     let mut keyed: Vec<(String, &Vec<scryer_core::SourceLocation>)> = model
         .source_map
         .iter()
         .map(|(k, v)| (k.clone(), v))
         .chain(model.test_map.iter().map(|(k, v)| (scryer_core::test_key(k), v)))
+        .filter(|(k, _)| only.is_none_or(|set| set.contains(k)))
         .collect();
     keyed.sort_by(|a, b| a.0.cmp(&b.0));
     for (key, locs) in keyed {
@@ -406,12 +453,7 @@ pub fn write_baseline(r: &ModelRef) -> Result<usize, String> {
             }
         }
     }
-
-    let count = anchors.len();
-    let json = serde_json::to_string(&AnchorBaseline { anchors }).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(r.dir()).map_err(|e| e.to_string())?;
-    std::fs::write(r.anchors_path(), json).map_err(|e| e.to_string())?;
-    Ok(count)
+    anchors
 }
 
 fn read_baseline(r: &ModelRef) -> Option<AnchorBaseline> {
@@ -874,6 +916,8 @@ mod tests {
                 stale_proposal: None,
                 directives: Vec::new(),
                 last_touched_at: None,
+                vagrant_origin: None,
+                approved_statement: None,
             }],
             properties: Vec::new(),
             icon: None,
@@ -1304,6 +1348,8 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
+            vagrant_origin: None,
+            approved_statement: None,
         });
         m.source_map.insert(
             "r2".into(),
@@ -1342,6 +1388,8 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
+            vagrant_origin: None,
+            approved_statement: None,
         });
         m.source_map.insert(
             "r2".into(),
@@ -1428,5 +1476,49 @@ mod tests {
         assert_eq!(check.reanchored, 0, "no guess between two matches");
         assert_eq!(check.observations.len(), 1, "{:?}", check.observations);
         assert_eq!(check.observations[0].state, AnchorState::FileMissing);
+    }
+
+    /// `write_baseline_for` refreshes ONLY the named keys: an unrelated
+    /// anchor whose code has drifted keeps its old fingerprint (the drift is
+    /// not swallowed), while the named key's entry is rewritten — and a key
+    /// with no baseline yet simply gains one.
+    #[test]
+    fn write_baseline_for_touches_only_the_named_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/a.ts"), "export function alpha() {\n    return 1;\n}\n").unwrap();
+        std::fs::write(root.join("src/b.ts"), "export function beta() {\n    return 2;\n}\n").unwrap();
+        let r = ModelRef::ProjectLocal(root.to_path_buf());
+        let mut m: ScryModel = serde_json::from_value(serde_json::json!({
+            "version": scryer_core::SCRY_VERSION,
+            "nodes": [{ "id": "n1", "kind": "component", "name": "C", "responsibilities": [
+                { "id": "r1", "statement": "does a" }, { "id": "r2", "statement": "does b" }
+            ]}],
+            "links": [],
+        }))
+        .unwrap();
+        m.source_map.insert("r1".into(), vec![serde_json::from_value(serde_json::json!({ "pattern": "src/a.ts", "symbol": "alpha" })).unwrap()]);
+        m.source_map.insert("r2".into(), vec![serde_json::from_value(serde_json::json!({ "pattern": "src/b.ts", "symbol": "beta" })).unwrap()]);
+        scryer_core::write_model_at(&r, &m).unwrap();
+        assert_eq!(write_baseline(&r).unwrap(), 2);
+        let before = read_baseline(&r).unwrap();
+        let hash_of = |b: &AnchorBaseline, key: &str| b.anchors.iter().find(|a| a.key == key).map(|a| a.hash.clone());
+
+        // Both files change; only r1 is re-baselined.
+        std::fs::write(root.join("src/a.ts"), "export function alpha() {\n    return 10;\n}\n").unwrap();
+        std::fs::write(root.join("src/b.ts"), "export function beta() {\n    return 20;\n}\n").unwrap();
+        let keys: std::collections::BTreeSet<String> = ["r1".to_string()].into_iter().collect();
+        assert_eq!(write_baseline_for(&r, &keys).unwrap(), 1);
+        let after = read_baseline(&r).unwrap();
+        assert_ne!(hash_of(&after, "r1"), hash_of(&before, "r1"), "the named key is refreshed");
+        assert_eq!(hash_of(&after, "r2"), hash_of(&before, "r2"), "the other key's drift is kept");
+        assert_eq!(after.anchors.len(), 2);
+
+        // A key with no baseline entry yet gains one; an empty set is a no-op.
+        std::fs::remove_file(r.anchors_path()).unwrap();
+        assert_eq!(write_baseline_for(&r, &keys).unwrap(), 1);
+        assert_eq!(read_baseline(&r).unwrap().anchors.len(), 1);
+        assert_eq!(write_baseline_for(&r, &Default::default()).unwrap(), 0);
     }
 }

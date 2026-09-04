@@ -257,6 +257,14 @@ pub(crate) struct MarkImplementedRequest {
     /// stay pending in the plan. With responsibility_ids, the host node itself is also
     /// committed structure-only, so a partial implementation folds honestly.
     pub commit_ancestors: Option<bool>,
+    /// Optional: fold a testable claim EVEN WITHOUT a current passing verdict.
+    /// By default the fold refuses such a claim — it stays in the plan and the
+    /// response names the missing fact (no test attached / no verdict / stale /
+    /// failing) and the test files to run. `force: true` folds anyway and
+    /// records an `unverified` history event naming each bypassed claim, so the
+    /// bypass is visible in the log and on the claim row. Never the default;
+    /// use it only when the developer has said the claim ships unverified.
+    pub force: Option<bool>,
     /// Optional: anchor claims to code in the SAME call — "here's what I built and
     /// where it lives" as one atomic statement, instead of a separate
     /// update_source_map you can forget (an unanchored claim reads as scaffolding

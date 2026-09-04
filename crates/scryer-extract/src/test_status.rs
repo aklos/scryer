@@ -13,7 +13,7 @@
 
 use crate::anchors::{is_glob_pattern, resolve_span, span_hash, FileCache};
 use scryer_core::test_results::{parse_junit, match_report, ReportMatch, TestOutcome};
-use scryer_core::{read_model_at, test_key, ModelRef, ScryModel};
+use scryer_core::{read_model_at, read_planned_at, test_key, working_view, ModelRef, ScryModel};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -113,6 +113,20 @@ pub struct IngestSummary {
     pub report: ReportMatch,
 }
 
+/// The model every status read resolves against: the committed model with the
+/// PLAN's own claims and anchors overlaid (`working_view`). A claim that has not
+/// folded yet lives only in the plan — so do the test it attached and, often,
+/// its implementation anchor — and the verdict-gated fold needs its verdict to
+/// record and read BEFORE it folds. Committed alone would make every unfolded
+/// claim invisible here, and the gate could never be satisfied.
+fn working_model(r: &ModelRef) -> Result<ScryModel, String> {
+    let committed = read_model_at(r)?;
+    match read_planned_at(r) {
+        Ok(planned) => Ok(working_view(&committed, &planned)),
+        Err(_) => Ok(committed),
+    }
+}
+
 fn read_cache(r: &ModelRef) -> TestStatusCache {
     std::fs::read_to_string(r.test_results_path())
         .ok()
@@ -198,7 +212,7 @@ pub fn record_test_results(r: &ModelRef, report: &ReportMatch) -> Result<usize, 
     if report.claims.is_empty() {
         return Ok(0);
     }
-    let model = read_model_at(r)?;
+    let model = working_model(r)?;
     let project = r.project_path();
     let mut cache = read_cache(r);
     let mut files = FileCache::new();
@@ -288,7 +302,7 @@ pub fn test_statuses(r: &ModelRef) -> Result<Vec<ClaimTestStatus>, String> {
     if cache.results.is_empty() {
         return Ok(Vec::new());
     }
-    let model = read_model_at(r)?;
+    let model = working_model(r)?;
     let project = r.project_path();
     let live: BTreeSet<&str> = model
         .nodes
@@ -324,6 +338,96 @@ pub fn test_statuses(r: &ModelRef) -> Result<Vec<ClaimTestStatus>, String> {
     Ok(out)
 }
 
+/// What the model can say about one claim's test evidence — the fold's gate.
+/// Deterministic: a test is attached or it isn't, and its recorded verdict is
+/// current-and-passing or it isn't. `tests` names the attached test files so a
+/// refusal can say exactly what to run.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind", rename_all_fields = "camelCase")]
+pub enum Evidence {
+    /// No test attached at all.
+    NoTest,
+    /// A test is attached but no report has ever been ingested for it.
+    NoVerdict { tests: Vec<String> },
+    /// The recorded verdict's fingerprints no longer match the tree.
+    Stale { tests: Vec<String> },
+    /// The current verdict is not `Passed` (failed, errored, or skipped).
+    Failing { outcome: TestOutcome, tests: Vec<String> },
+    /// A test is attached and its verdict is current and passing.
+    Verified,
+}
+
+impl Evidence {
+    pub fn verified(&self) -> bool {
+        matches!(self, Evidence::Verified)
+    }
+
+    /// The missing fact, in the words a refusal uses.
+    pub fn reason(&self) -> String {
+        match self {
+            Evidence::NoTest => "no test attached".to_string(),
+            Evidence::NoVerdict { tests } => {
+                format!("no verdict recorded: run {} and ingest_test_report", tests.join(", "))
+            }
+            Evidence::Stale { tests } => {
+                format!("verdict stale: run {} and ingest_test_report", tests.join(", "))
+            }
+            Evidence::Failing { outcome, tests } => {
+                format!("verdict {outcome:?}: fix and re-run {}", tests.join(", "))
+            }
+            Evidence::Verified => "verified".to_string(),
+        }
+    }
+
+    /// The attached test files, when any.
+    pub fn tests(&self) -> &[String] {
+        match self {
+            Evidence::NoVerdict { tests }
+            | Evidence::Stale { tests }
+            | Evidence::Failing { tests, .. } => tests,
+            _ => &[],
+        }
+    }
+}
+
+/// The evidence behind each named claim, resolved against the working view
+/// (plan-layer attachments count — see [`working_model`]). Reads the cached
+/// verdicts once for the whole set. Unknown ids read as `NoTest`.
+pub fn claim_evidence(
+    r: &ModelRef,
+    resp_ids: &[String],
+) -> Result<BTreeMap<String, Evidence>, String> {
+    let model = working_model(r)?;
+    let verdicts = test_statuses(r)?;
+    let mut out = BTreeMap::new();
+    for id in resp_ids {
+        let tests: Vec<String> = model
+            .test_map
+            .get(id)
+            .map(|locs| {
+                let mut files: Vec<String> = locs.iter().map(|l| l.pattern.clone()).collect();
+                files.sort();
+                files.dedup();
+                files
+            })
+            .unwrap_or_default();
+        let ev = if tests.is_empty() {
+            Evidence::NoTest
+        } else {
+            match verdicts.iter().find(|s| &s.resp_id == id) {
+                None => Evidence::NoVerdict { tests },
+                Some(s) if s.stale => Evidence::Stale { tests },
+                Some(s) if s.outcome != TestOutcome::Passed => {
+                    Evidence::Failing { outcome: s.outcome, tests }
+                }
+                Some(_) => Evidence::Verified,
+            }
+        };
+        out.insert(id.clone(), ev);
+    }
+    Ok(out)
+}
+
 /// One test file the blast radius says to run, and why.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -343,7 +447,7 @@ pub struct RadiusFile {
 /// re-running, never the whole suite. (A claim with NO attached test never
 /// appears here — that gap is health's `untested`, not a radius entry.)
 pub fn test_blast_radius(r: &ModelRef) -> Result<Vec<RadiusFile>, String> {
-    let model = read_model_at(r)?;
+    let model = working_model(r)?;
     let verdicts = test_statuses(r)?;
     let stale_of: BTreeMap<&str, bool> =
         verdicts.iter().map(|s| (s.resp_id.as_str(), s.stale)).collect();
@@ -387,7 +491,7 @@ pub fn test_blast_radius(r: &ModelRef) -> Result<Vec<RadiusFile>, String> {
 /// match summary out — unmatched, ambiguous, and unseen included, so the
 /// caller can surface what the report did NOT settle alongside what it did.
 pub fn ingest_report(r: &ModelRef, xml: &str) -> Result<IngestSummary, String> {
-    let model = read_model_at(r)?;
+    let model = working_model(r)?;
     let cases = parse_junit(xml)?;
     let report = match_report(&model.test_map, &cases);
     let recorded = record_test_results(r, &report)?;
@@ -421,7 +525,7 @@ pub struct ProbeTarget {
 /// "the test went red", which only means something when you already know it
 /// was green.
 pub fn probe_target(r: &ModelRef, resp_id: &str) -> Result<ProbeTarget, String> {
-    let model = read_model_at(r)?;
+    let model = working_model(r)?;
     let statement = model
         .nodes
         .iter()
@@ -529,7 +633,7 @@ pub fn record_probe_result(
     probes: u32,
     survivors: Vec<String>,
 ) -> Result<(), String> {
-    let model = read_model_at(r)?;
+    let model = working_model(r)?;
     let project = r.project_path();
     let mut files = FileCache::new();
     let mut project_files: Option<BTreeSet<String>> = None;
@@ -558,7 +662,7 @@ pub fn probe_statuses(r: &ModelRef) -> Result<Vec<ClaimProbeStatus>, String> {
     if cache.probes.is_empty() {
         return Ok(Vec::new());
     }
-    let model = read_model_at(r)?;
+    let model = working_model(r)?;
     let project = r.project_path();
     let live: BTreeSet<&str> = model
         .nodes
@@ -627,6 +731,8 @@ mod tests {
                 stale_proposal: None,
                 directives: Vec::new(),
                 last_touched_at: None,
+                vagrant_origin: None,
+                approved_statement: None,
             }],
             properties: Vec::new(),
             icon: None,
@@ -832,6 +938,8 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
+            vagrant_origin: None,
+            approved_statement: None,
         });
         m.test_map.insert(
             "r2".into(),
@@ -989,4 +1097,72 @@ mod tests {
         assert!(!verdicts[0].stale);
     }
 
+    /// `claim_evidence` is the fold's gate in one call: no attachment, an
+    /// attachment with no verdict, a current passing verdict, and a verdict
+    /// the tree has since moved past each read as their own kind.
+    #[test]
+    fn claim_evidence_names_the_missing_fact() {
+        let (dir, r) = project();
+        let ids = vec!["r1".to_string(), "ghost".to_string()];
+        let ev = claim_evidence(&r, &ids).unwrap();
+        assert_eq!(ev["ghost"], Evidence::NoTest);
+        assert_eq!(ev["r1"], Evidence::NoVerdict { tests: vec!["src/m.spec.ts".into()] });
+        assert!(ev["r1"].reason().contains("src/m.spec.ts"), "{}", ev["r1"].reason());
+
+        ingest_report(&r, REPORT).unwrap();
+        let ev = claim_evidence(&r, &ids).unwrap();
+        assert_eq!(ev["r1"], Evidence::Verified);
+        assert!(ev["r1"].verified());
+
+        std::fs::write(dir.path().join("src/m.ts"), IMPL_TS.replace("1", "2")).unwrap();
+        let ev = claim_evidence(&r, &ids).unwrap();
+        assert_eq!(ev["r1"], Evidence::Stale { tests: vec!["src/m.spec.ts".into()] });
+    }
+
+    /// A claim that lives only in the PLAN — with its test attached there —
+    /// records and reads a verdict: statuses resolve through the working
+    /// view, so the verdict-gated fold can be satisfied before the fold.
+    #[test]
+    fn plan_layer_attachments_record_and_read_verdicts() {
+        let (dir, r) = project();
+        // The plan-only claim's test must exist so its anchor fingerprints.
+        std::fs::write(
+            dir.path().join("src/m.spec.ts"),
+            format!("{SPEC_TS}\ndescribe(\"beta\", () => {{\n  it(\"answers two\", () => {{\n    expect(2).toBe(2);\n  }});\n}});\n"),
+        )
+        .unwrap();
+        // Committed knows nothing about r2; the plan adds it with a test.
+        let committed = read_model_at(&r).unwrap();
+        let mut planned = committed.clone();
+        planned.nodes[0].responsibilities.push(Responsibility {
+            concern: None,
+            id: "r2".into(),
+            statement: "answers two".into(),
+            vagrant: None,
+            stale: None,
+            stale_proposal: None,
+            directives: Vec::new(),
+            last_touched_at: None,
+            vagrant_origin: None,
+            approved_statement: None,
+        });
+        planned.test_map.insert(
+            "r2".into(),
+            vec![SourceLocation {
+                pattern: "src/m.spec.ts".into(),
+                symbol: Some("answers two".into()),
+                line: None,
+                end_line: None,
+            }],
+        );
+        scryer_core::write_planned_at(&r, &planned).unwrap();
+
+        let report = r#"<testsuites><testsuite name="m"><testcase classname="src/m.spec.ts" name="answers two" time="0.001"/></testsuite></testsuites>"#;
+        let summary = ingest_report(&r, report).unwrap();
+        assert_eq!(summary.recorded, 1, "{:?}", summary.report);
+        let statuses = test_statuses(&r).unwrap();
+        let s = statuses.iter().find(|s| s.resp_id == "r2").expect("plan-only claim has a verdict");
+        assert!(!s.stale);
+        assert_eq!(claim_evidence(&r, &["r2".to_string()]).unwrap()["r2"], Evidence::Verified);
+    }
 }

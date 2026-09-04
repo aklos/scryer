@@ -1,3 +1,4 @@
+mod fold_gate;
 mod generation;
 mod intent;
 mod links;

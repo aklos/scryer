@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::model::{Group, Node, Responsibility, SchemaProperty, ScryModel};
 use crate::model_ref::ModelRef;
@@ -98,43 +98,76 @@ fn clean_committed_resp(mut resp: Responsibility) -> Responsibility {
 /// than the node get the same stay-behind treatment as vagrants: they are
 /// another task's pending work, and this fold is not their verdict
 /// (`change_map` is the plan's ledger — see [`changes::foreign_to_host`]).
-fn committed_node_copy(n: &Node, change_map: &BTreeMap<String, String>) -> Node {
+///
+/// `withhold` names claims this fold must NOT carry across even though they
+/// are neither vagrant nor foreign — the evidence gate's refusals (a testable
+/// claim without a current passing verdict). `prior` is the node's committed
+/// copy before the fold: every claim or property that stays behind in the
+/// plan (vagrant, foreign, withheld) keeps its COMMITTED ORIGINAL in place
+/// rather than vanishing from committed — a reworded-then-withheld claim is
+/// still what the code was last verified to do, and dropping it would turn a
+/// refusal into a silent deletion.
+fn committed_node_copy(
+    n: &Node,
+    change_map: &BTreeMap<String, String>,
+    prior: Option<&Node>,
+    withhold: &HashSet<String>,
+) -> Node {
     use diff::ElementKind as EK;
     let host_key = changes::element_key(EK::Node, None, &n.id);
     let mut copy = n.clone();
     copy.vagrant = None;
     copy.stale = None;
+    let folds_resp = |r: &Responsibility| {
+        r.vagrant != Some(true)
+            && !withhold.contains(&r.id)
+            && !changes::foreign_to_host(
+                change_map,
+                &host_key,
+                &changes::element_key(EK::Responsibility, None, &r.id),
+            )
+    };
+    let folds_prop = |p: &SchemaProperty| {
+        p.vagrant != Some(true)
+            && !changes::foreign_to_host(
+                change_map,
+                &host_key,
+                &changes::element_key(EK::Property, Some(&n.id), &p.label),
+            )
+    };
     copy.responsibilities = n
         .responsibilities
         .iter()
-        .filter(|r| {
-            r.vagrant != Some(true)
-                && !changes::foreign_to_host(
-                    change_map,
-                    &host_key,
-                    &changes::element_key(EK::Responsibility, None, &r.id),
-                )
-        })
+        .filter(|r| folds_resp(r))
         .cloned()
         .map(clean_committed_resp)
         .collect();
     copy.properties = n
         .properties
         .iter()
-        .filter(|p| {
-            p.vagrant != Some(true)
-                && !changes::foreign_to_host(
-                    change_map,
-                    &host_key,
-                    &changes::element_key(EK::Property, Some(&n.id), &p.label),
-                )
-        })
+        .filter(|p| folds_prop(p))
         .cloned()
         .map(|mut p| {
             p.stale = None;
             p
         })
         .collect();
+    if let Some(prior) = prior {
+        // Stay-behind elements that were already committed keep their
+        // committed original (the plan still carries the new version, so the
+        // entry stays pending). Elements the plan no longer has at all are a
+        // planned deletion and DO leave committed here.
+        for r in &prior.responsibilities {
+            if n.responsibilities.iter().any(|x| x.id == r.id && !folds_resp(x)) {
+                copy.responsibilities.push(r.clone());
+            }
+        }
+        for p in &prior.properties {
+            if n.properties.iter().any(|x| x.label == p.label && !folds_prop(x)) {
+                copy.properties.push(p.clone());
+            }
+        }
+    }
     copy
 }
 
@@ -145,24 +178,38 @@ fn committed_node_copy(n: &Node, change_map: &BTreeMap<String, String>) -> Node 
 /// un-adjudicated `vagrant` claims (they stay in the plan awaiting a verdict),
 /// drop claims tagged to a different change (another task's pending work), and
 /// clear `stale`/`stale_proposal` on everything that folds. Audit #5 / item A.
-fn committed_group_copy(g: &Group, change_map: &BTreeMap<String, String>) -> Group {
+fn committed_group_copy(
+    g: &Group,
+    change_map: &BTreeMap<String, String>,
+    prior: Option<&Group>,
+    withhold: &HashSet<String>,
+) -> Group {
     use diff::ElementKind as EK;
     let host_key = changes::element_key(EK::Group, None, &g.id);
     let mut copy = g.clone();
+    let folds = |r: &Responsibility| {
+        r.vagrant != Some(true)
+            && !withhold.contains(&r.id)
+            && !changes::foreign_to_host(
+                change_map,
+                &host_key,
+                &changes::element_key(EK::Responsibility, None, &r.id),
+            )
+    };
     copy.responsibilities = g
         .responsibilities
         .iter()
-        .filter(|r| {
-            r.vagrant != Some(true)
-                && !changes::foreign_to_host(
-                    change_map,
-                    &host_key,
-                    &changes::element_key(EK::Responsibility, None, &r.id),
-                )
-        })
+        .filter(|r| folds(r))
         .cloned()
         .map(clean_committed_resp)
         .collect();
+    if let Some(prior) = prior {
+        for r in &prior.responsibilities {
+            if g.responsibilities.iter().any(|x| x.id == r.id && !folds(x)) {
+                copy.responsibilities.push(r.clone());
+            }
+        }
+    }
     copy
 }
 
@@ -171,6 +218,22 @@ pub fn commit_element(
     kind: diff::ElementKind,
     owner_id: Option<&str>,
     id: &str,
+) -> Result<(), String> {
+    commit_element_withholding(r, kind, owner_id, id, &HashSet::new())
+}
+
+/// [`commit_element`] with a set of responsibility ids a whole-host fold must
+/// leave in the plan — the evidence gate's refusals. Withheld claims keep
+/// their committed original (if any), keep their plan-side anchors and
+/// markers, and stay pending; everything else on the host folds as usual. A
+/// scoped (single-responsibility) fold ignores the set: naming the claim IS
+/// the decision, and the caller gates before calling.
+pub fn commit_element_withholding(
+    r: &ModelRef,
+    kind: diff::ElementKind,
+    owner_id: Option<&str>,
+    id: &str,
+    withhold: &HashSet<String>,
 ) -> Result<(), String> {
     let mut model = read_model_at(r)?;
     // Seeded read: the fold's plan rewrite below persists the draft, and on a
@@ -203,8 +266,14 @@ pub fn commit_element(
                             ));
                         }
                     }
+                    let prior = model.nodes.iter().find(|p| p.id == *id).cloned();
                     model.nodes.retain(|n| n.id != id);
-                    model.nodes.push(committed_node_copy(n, &planned.change_map));
+                    model.nodes.push(committed_node_copy(
+                        n,
+                        &planned.change_map,
+                        prior.as_ref(),
+                        withhold,
+                    ));
                 }
                 None => {
                     // A DELETE fold. delete_nodes removed the node, its whole
@@ -270,6 +339,7 @@ pub fn commit_element(
                         g.responsibilities.iter().map(|r| r.id.clone()).collect();
                 }
             }
+            let prior_group = model.groups.iter().find(|g| g.id == id).cloned();
             model.groups.retain(|g| g.id != id);
             match planned.groups.iter().find(|g| g.id == id) {
                 Some(g) => {
@@ -301,7 +371,12 @@ pub fn commit_element(
                             ));
                         }
                     }
-                    model.groups.push(committed_group_copy(g, &planned.change_map));
+                    model.groups.push(committed_group_copy(
+                        g,
+                        &planned.change_map,
+                        prior_group.as_ref(),
+                        withhold,
+                    ));
                 }
                 None => purge_from_planned = true,
             }
@@ -417,6 +492,7 @@ pub fn commit_element(
                         .iter()
                         .filter(|r| {
                             r.vagrant != Some(true)
+                                && !withhold.contains(&r.id)
                                 && !changes::foreign_to_host(
                                     &planned.change_map,
                                     &host_key,
@@ -461,6 +537,7 @@ pub fn commit_element(
                 let host_key = changes::element_key(diff::ElementKind::Group, None, id);
                 for r in g.responsibilities.iter().filter(|r| {
                     r.vagrant != Some(true)
+                        && !withhold.contains(&r.id)
                         && !changes::foreign_to_host(
                             &planned.change_map,
                             &host_key,
@@ -508,6 +585,7 @@ pub fn commit_element(
                     plan_markers_cleared |= n.vagrant.take().is_some() | n.stale.take().is_some();
                     for x in n.responsibilities.iter_mut().filter(|x| {
                         x.vagrant != Some(true)
+                            && !withhold.contains(&x.id)
                             && !stays(
                                 &host_key,
                                 changes::element_key(
@@ -541,6 +619,7 @@ pub fn commit_element(
                 if let Some(g) = p.groups.iter_mut().find(|g| g.id == id) {
                     for x in g.responsibilities.iter_mut().filter(|x| {
                         x.vagrant != Some(true)
+                            && !withhold.contains(&x.id)
                             && !stays(
                                 &host_key,
                                 changes::element_key(
@@ -644,7 +723,7 @@ pub fn commit_element(
 fn structure_only_copy(n: &Node) -> Node {
     // The claim/property filtering inside committed_node_copy is moot here —
     // everything it kept is cleared — so no change map is consulted.
-    let mut copy = committed_node_copy(n, &BTreeMap::new());
+    let mut copy = committed_node_copy(n, &BTreeMap::new(), None, &HashSet::new());
     copy.responsibilities.clear();
     copy.properties.clear();
     copy
@@ -1238,6 +1317,8 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
+            vagrant_origin: None,
+            approved_statement: None,
         }
     }
 

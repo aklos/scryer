@@ -106,15 +106,17 @@ pub(crate) fn find_project(start: &Path) -> Option<PathBuf> {
 pub(crate) fn run_check(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut fail_on_drift = false;
     let mut fail_on_pending = false;
+    let mut fail_on_tests = true;
     let mut start: Option<PathBuf> = None;
     for a in args {
         match a.as_str() {
             "--fail-on-drift" => fail_on_drift = true,
             "--fail-on-pending" => fail_on_pending = true,
+            "--no-fail-on-tests" => fail_on_tests = false,
             _ if !a.starts_with('-') && start.is_none() => start = Some(PathBuf::from(a)),
             other => {
                 eprintln!(
-                    "unknown argument '{other}'\nusage: scryer-mcp check [--fail-on-drift] [--fail-on-pending] [path]"
+                    "unknown argument '{other}'\nusage: scryer-mcp check [--fail-on-drift] [--fail-on-pending] [--no-fail-on-tests] [path]"
                 );
                 std::process::exit(2);
             }
@@ -129,7 +131,7 @@ pub(crate) fn run_check(args: &[String]) -> Result<(), Box<dyn std::error::Error
         std::process::exit(2);
     };
     let r = scryer_core::ModelRef::ProjectLocal(project.clone());
-    let report = match check_report(&r, fail_on_drift, fail_on_pending) {
+    let report = match check_report(&r, fail_on_drift, fail_on_pending, fail_on_tests) {
         Ok(rep) => rep,
         Err(e) => {
             eprintln!("scryer check: {e}");
@@ -165,6 +167,7 @@ pub(crate) fn check_report(
     r: &scryer_core::ModelRef,
     fail_on_drift: bool,
     fail_on_pending: bool,
+    fail_on_tests: bool,
 ) -> Result<CheckReport, String> {
     use scryer_extract::anchors::AnchorState;
 
@@ -287,7 +290,77 @@ pub(crate) fn check_report(
         );
     }
 
-    // 5) Outstanding plan work.
+    // 5) Test evidence on COMMITTED claims — the gate the fold enforces,
+    //    re-checked in CI: a testable claim on a code-backed host with no test
+    //    attached, a failing/errored verdict, or a stale one (fingerprints no
+    //    longer match) fails by default. `--no-fail-on-tests` demotes them to
+    //    notes for repos adopting incrementally. No results cache at all is a
+    //    NOTE, never a pass — nothing has been verified.
+    {
+        let has_test = |id: &str| {
+            working.test_map.get(id).is_some_and(|l| !l.is_empty())
+        };
+        let mut untested: Vec<String> = Vec::new();
+        for n in &committed.nodes {
+            if n.kind == scryer_core::Kind::Person || n.external == Some(true) {
+                continue;
+            }
+            for resp in &n.responsibilities {
+                if scryer_core::ears::classify(&resp.statement).testable() && !has_test(&resp.id) {
+                    untested.push(format!("{} ({})", resp.id, n.name));
+                }
+            }
+        }
+        let mut failing: Vec<String> = Vec::new();
+        let mut stale: Vec<String> = Vec::new();
+        if r.test_results_path().exists() {
+            let committed_ids: std::collections::HashSet<&str> = committed
+                .nodes
+                .iter()
+                .flat_map(|n| n.responsibilities.iter())
+                .map(|resp| resp.id.as_str())
+                .collect();
+            for s in scryer_extract::test_status::test_statuses(r)? {
+                if !committed_ids.contains(s.resp_id.as_str()) {
+                    continue; // a plan-only claim's verdict is the fold's business
+                }
+                if s.stale {
+                    stale.push(s.resp_id.clone());
+                } else if s.outcome != scryer_core::test_results::TestOutcome::Passed {
+                    failing.push(format!("{} ({:?})", s.resp_id, s.outcome));
+                }
+            }
+        } else if !committed.test_map.is_empty() {
+            notes.push(
+                "test verdicts unverified — no results cache (.scryer/.test-results.json). Run the \
+                 attached tests with a JUnit reporter and ingest_test_report; commit the cache for \
+                 CI to check against."
+                    .into(),
+            );
+        }
+        let mut lines: Vec<(String, String)> = Vec::new();
+        for u in &untested {
+            lines.push(("untested".into(), format!("{u} — testable committed claim with no attached test")));
+        }
+        for f in &failing {
+            lines.push(("failing".into(), format!("{f} — current verdict is not passing")));
+        }
+        for s in &stale {
+            lines.push(("stale".into(), format!("{s} — verdict fingerprints no longer match the tree; re-run and ingest")));
+        }
+        if fail_on_tests {
+            failures.extend(lines.iter().map(|(k, l)| format!("{k}: {l}")));
+        } else if !lines.is_empty() {
+            notes.push(format!(
+                "{} untested, {} failing, {} stale claim(s) (not gating — --no-fail-on-tests)",
+                untested.len(),
+                failing.len(),
+                stale.len()
+            ));
+        }
+    }
+
+    // 6) Outstanding plan work.
     let pending = pending_changes(&committed, &planned);
     if !pending.is_empty() {
         if fail_on_pending {
@@ -545,7 +618,7 @@ mod tests {
         );
         scryer_core::write_model_at(&r, &m).unwrap();
 
-        let rep = check_report(&r, false, false).unwrap();
+        let rep = check_report(&r, false, false, true).unwrap();
         assert!(rep.failures.is_empty(), "clean model: {:?}", rep.failures);
         assert!(
             rep.notes.iter().any(|n| n.contains("no baseline")),
@@ -564,10 +637,10 @@ mod tests {
             method: None,
         });
         scryer_core::write_planned_at(&r, &plan).unwrap();
-        let rep = check_report(&r, false, false).unwrap();
+        let rep = check_report(&r, false, false, true).unwrap();
         assert!(rep.failures.is_empty(), "{:?}", rep.failures);
         assert!(rep.notes.iter().any(|n| n.contains("pending plan item")));
-        let rep = check_report(&r, false, true).unwrap();
+        let rep = check_report(&r, false, true, true).unwrap();
         assert!(
             rep.failures.iter().any(|f| f.starts_with("pending: node 'Worker'")),
             "{:?}",
@@ -603,7 +676,7 @@ mod tests {
         );
         scryer_core::write_model_at(&r, &m).unwrap();
 
-        let rep = check_report(&r, false, false).unwrap();
+        let rep = check_report(&r, false, false, true).unwrap();
         assert!(
             rep.failures
                 .iter()
@@ -638,7 +711,7 @@ mod tests {
 
         // No baseline: the existence sweep catches the deleted file.
         std::fs::remove_file(dir.path().join("src/auth.rs")).unwrap();
-        let rep = check_report(&r, false, false).unwrap();
+        let rep = check_report(&r, false, false, true).unwrap();
         let hits = rep.failures.iter().filter(|f| f.contains("src/auth.rs")).count();
         assert_eq!(hits, 1, "sweep reports the gone file once: {:?}", rep.failures);
 
@@ -646,7 +719,7 @@ mod tests {
         std::fs::write(dir.path().join("src/auth.rs"), "fn verify() {}\n").unwrap();
         scryer_extract::anchors::write_baseline(&r).unwrap();
         std::fs::remove_file(dir.path().join("src/auth.rs")).unwrap();
-        let rep = check_report(&r, false, false).unwrap();
+        let rep = check_report(&r, false, false, true).unwrap();
         let hits: Vec<&String> =
             rep.failures.iter().filter(|f| f.contains("src/auth.rs")).collect();
         assert_eq!(hits.len(), 1, "fingerprint + sweep must not double-report: {:?}", rep.failures);
@@ -667,7 +740,7 @@ mod tests {
         );
         scryer_core::write_model_at(&r, &m).unwrap();
 
-        let rep = check_report(&r, false, false).unwrap();
+        let rep = check_report(&r, false, false, true).unwrap();
         assert!(
             rep.failures.iter().any(|f| f.starts_with("validator:") && f.contains("ghost-id")),
             "{:?}",
@@ -762,5 +835,97 @@ mod tests {
             status_line(&c),
             "scryer: 0 pending · 0 drift scope(s) · anchors: 0 broken, 0 changed"
         );
+    }
+
+    /// The CI gate re-checks the fold's evidence rule on COMMITTED claims: a
+    /// testable claim with no attached test fails by default, demotes to a
+    /// note under --no-fail-on-tests, and a person/external host is exempt.
+    /// A missing results cache is a note, never a pass.
+    #[test]
+    fn check_fails_on_untested_committed_claims_unless_opted_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/auth.rs"), "fn verify() {}\n").unwrap();
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, "Acme", None));
+        let mut api = node("api", Kind::Container, "API", Some("sys"));
+        api.responsibilities = vec![
+            serde_json::from_value(serde_json::json!({ "id": "r-1", "statement": "**When** a request arrives, **verify** it" })).unwrap(),
+            serde_json::from_value(serde_json::json!({ "id": "r-2", "statement": "serves requests" })).unwrap(),
+        ];
+        m.nodes.push(api);
+        let mut dev = node("dev", Kind::Person, "Developer", None);
+        dev.responsibilities = vec![serde_json::from_value(
+            serde_json::json!({ "id": "r-p", "statement": "**When** a build finishes, **review** it" }),
+        )
+        .unwrap()];
+        m.nodes.push(dev);
+        m.source_map.insert(
+            "r-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/auth.rs" })).unwrap()],
+        );
+        scryer_core::write_model_at(&r, &m).unwrap();
+
+        let rep = check_report(&r, false, false, true).unwrap();
+        assert!(
+            rep.failures.iter().any(|f| f.starts_with("untested:") && f.contains("r-1")),
+            "{:?}",
+            rep.failures
+        );
+        assert!(!rep.failures.iter().any(|f| f.contains("r-2")), "ubiquitous claims are not gated");
+        assert!(!rep.failures.iter().any(|f| f.contains("r-p")), "a person never expects tests");
+
+        let rep = check_report(&r, false, false, false).unwrap();
+        assert!(rep.failures.iter().all(|f| !f.starts_with("untested:")), "{:?}", rep.failures);
+        assert!(rep.notes.iter().any(|n| n.contains("1 untested") && n.contains("--no-fail-on-tests")), "{:?}", rep.notes);
+
+        // Attach a test but never ingest a report: the cache is missing, so the
+        // gate says so instead of passing vacuously.
+        m.test_map.insert(
+            "r-1".into(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/auth.rs", "symbol": "verify" })).unwrap()],
+        );
+        scryer_core::write_model_at(&r, &m).unwrap();
+        let rep = check_report(&r, false, false, true).unwrap();
+        assert!(!rep.failures.iter().any(|f| f.starts_with("untested:")), "{:?}", rep.failures);
+        assert!(rep.notes.iter().any(|n| n.contains("no results cache")), "{:?}", rep.notes);
+    }
+
+    /// A recorded verdict the tree has since moved past fails as `stale`; a
+    /// red one fails as `failing`.
+    #[test]
+    fn check_fails_on_stale_and_failing_verdicts() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::create_dir_all(dir.path().join("tests")).unwrap();
+        std::fs::write(dir.path().join("src/auth.rs"), "fn verify() {\n    let ok = true;\n}\n").unwrap();
+        std::fs::write(dir.path().join("tests/auth.rs"), "#[test]\nfn verifies() {\n    assert!(true);\n}\n").unwrap();
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, "Acme", None));
+        let mut api = node("api", Kind::Container, "API", Some("sys"));
+        api.responsibilities = vec![serde_json::from_value(
+            serde_json::json!({ "id": "r-1", "statement": "**When** a request arrives, **verify** it" }),
+        )
+        .unwrap()];
+        m.nodes.push(api);
+        m.source_map.insert("r-1".into(), vec![serde_json::from_value(serde_json::json!({ "pattern": "src/auth.rs", "symbol": "verify" })).unwrap()]);
+        m.test_map.insert("r-1".into(), vec![serde_json::from_value(serde_json::json!({ "pattern": "tests/auth.rs", "symbol": "verifies" })).unwrap()]);
+        scryer_core::write_model_at(&r, &m).unwrap();
+
+        let pass = r#"<testsuites><testsuite name="a"><testcase classname="tests/auth.rs" name="verifies"/></testsuite></testsuites>"#;
+        scryer_extract::test_status::ingest_report(&r, pass).unwrap();
+        let rep = check_report(&r, false, false, true).unwrap();
+        assert!(rep.failures.is_empty(), "verified claim passes: {:?}", rep.failures);
+
+        std::fs::write(dir.path().join("src/auth.rs"), "fn verify() {\n    let ok = false;\n}\n").unwrap();
+        let rep = check_report(&r, false, false, true).unwrap();
+        assert!(rep.failures.iter().any(|f| f.starts_with("stale:") && f.contains("r-1")), "{:?}", rep.failures);
+
+        let fail = r#"<testsuites><testsuite name="a"><testcase classname="tests/auth.rs" name="verifies"><failure message="boom"/></testcase></testsuite></testsuites>"#;
+        scryer_extract::test_status::ingest_report(&r, fail).unwrap();
+        let rep = check_report(&r, false, false, true).unwrap();
+        assert!(rep.failures.iter().any(|f| f.starts_with("failing:") && f.contains("r-1")), "{:?}", rep.failures);
     }
 }

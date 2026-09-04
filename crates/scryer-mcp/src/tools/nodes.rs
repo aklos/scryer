@@ -11,6 +11,8 @@ use scryer_core::{Kind, Link, Node, ScryModel};
 use scryer_core::history::{EventKind, EventRow, HistoryEvent};
 use std::collections::{HashMap, HashSet};
 
+use super::fold_gate;
+
 /// Remove code-side mapping for a set of nodes about to be deleted: their
 /// boundary globs (keyed by node id) and the source-map locations of every
 /// responsibility they own (keyed by responsibility id). Call before the nodes
@@ -232,6 +234,7 @@ fn fold_change_by_id(
     before_stmts: &HashMap<String, String>,
     cid: &str,
     commit_ancestors: bool,
+    withhold: &HashSet<String>,
 ) -> Result<Vec<String>, CallToolResult> {
     use scryer_core::changes as ledger;
     use scryer_core::diff::ElementKind as EK;
@@ -339,16 +342,24 @@ fn fold_change_by_id(
     let mut folded_resps = 0usize;
     let mut folded_props = 0usize;
     for id in &resident_nodes {
-        if let Err(e) = scryer_core::commit_element(model_ref, EK::Node, None, id) {
+        if let Err(e) =
+            scryer_core::commit_element_withholding(model_ref, EK::Node, None, id, withhold)
+        {
             return Err(fail(ancestor_hint(e)));
         }
         if let Err(e) = scryer_core::commit_ready_dependents(model_ref, id) {
             return Err(fail(e));
         }
     }
+    let mut withheld_here = 0usize;
     for rid in &resps {
         // A whole-node fold above already carried this claim across.
         if host_of_resp(rid).is_some_and(|h| resident_nodes.contains(&h)) {
+            continue;
+        }
+        // The gates said no — it stays in the plan (and in the change).
+        if withhold.contains(rid) {
+            withheld_here += 1;
             continue;
         }
         if let Err(e) = scryer_core::commit_element(model_ref, EK::Responsibility, None, rid) {
@@ -434,6 +445,17 @@ fn fold_change_by_id(
     }
     if !deleted_nodes.is_empty() {
         parts.push(format!("{} deletion(s)", deleted_nodes.len()));
+    }
+    let withheld_total = withheld_here
+        + resps
+            .iter()
+            .filter(|rid| {
+                withhold.contains(*rid)
+                    && host_of_resp(rid).is_some_and(|h| resident_nodes.contains(&h))
+            })
+            .count();
+    if withheld_total > 0 {
+        parts.push(format!("{withheld_total} claim(s) withheld (see below)"));
     }
     let mut summary = format!(
         "Folded change {cid} (\"{}\"): {}.",
@@ -867,7 +889,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. This is THE build checkpoint, and it is one atomic statement with three parts: the fold ('I built this'), `anchors` ('here is where it lives'), and `tests` ('here is the test I attached to it') — pass all three in the SAME call rather than folding now and anchoring/attaching later. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities, and/or `propertyLabels` to fold only those data fields (properties are identified by label). A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. In a DESIGN-FIRST model (never committed), folding a built leaf is refused while its ancestors are plan-only — pass `commit_ancestors: true` to fold the ancestor chain structure-only first: the ancestors' identity and boundaries land in committed while their unbuilt claims stay pending in the plan, so partial implementation reads honestly. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. Pass `anchors` (same shape as update_source_map `entries`) to anchor the folded claims to code IN THE SAME CALL — 'here's what I built and where it lives' as one atomic statement; an unanchored claim reads as scaffolding and carries no drift tripwire. Pass `tests` (same shape) to ATTACH each claim's test alongside — 'and this test exercises it' (`pattern` = test file, `symbol` = the test function). For a claim in a When/While/If form the test is EXPECTED, not opportunistic — and on a symbol host it is MANDATORY (rule 22): the claim names a concrete trigger/state/failure, so write the test that arranges it and asserts the response, and attach it here in the same call. A fold that leaves a testable claim with no test attached succeeds, but the response calls out each such claim and how to fix it; health counts them as `untested`. Ubiquitous claims stay a judgment call; absence is simply visible in health. Every node fold's response ends with a scoped POST-FLIGHT: what's still pending on that node, which of its committed claims lack anchors, and any validation warnings this fold introduced — act on those lines; you do not need a separate validate_model run after every fold. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. Pass `change` (standalone — a change id from `set_change`/`get_pending`) to fold an ENTIRE change: every plan entry tagged to it, in dependency order; when its last entry folds, the change closes and its rationale is recorded in the history log. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
+        description = "Fold a node's outstanding planned work into the committed model after you've written the code — the counterpart to `get_pending`, which closes the loop. This is THE build checkpoint, and it is one atomic statement with three parts: the fold ('I built this'), `anchors` ('here is where it lives'), and `tests` ('here is the test I attached to it') — pass all three in the SAME call rather than folding now and anchoring/attaching later. Folding overwrites the committed claim with the clean planned copy, clearing the `stale` drift flag on anything it folds (re-implementation is the verdict that resolves it). With no `responsibilityIds`, folds every planned responsibility and property on the node, EXCEPT vagrant (code-discovered) claims and properties, which are left in the plan awaiting an explicit adopt/reject verdict and never bypass into the committed model. Pass `responsibilityIds` to fold only those responsibilities, and/or `propertyLabels` to fold only those data fields (properties are identified by label). A whole-node fold also pulls in the plan links touching this node once BOTH their endpoints are committed, and any group this node completes (every member committed). Standalone link/group changes — and EVERY link/group DELETION, which never rides a node fold — fold by their own ids instead: pass `link_ids` / `group_ids`, with or without a `node_id`. In a DESIGN-FIRST model (never committed), folding a built leaf is refused while its ancestors are plan-only — pass `commit_ancestors: true` to fold the ancestor chain structure-only first: the ancestors' identity and boundaries land in committed while their unbuilt claims stay pending in the plan, so partial implementation reads honestly. Call this when you finish implementing, so the plan clears and the model stops reporting the work as outstanding. Pass `anchors` (same shape as update_source_map `entries`) to anchor the folded claims to code IN THE SAME CALL — 'here's what I built and where it lives' as one atomic statement; an unanchored claim reads as scaffolding and carries no drift tripwire. Pass `tests` (same shape) to ATTACH each claim's test alongside — 'and this test exercises it' (`pattern` = test file, `symbol` = the test function). For a claim in a When/While/If form the test is EXPECTED, not opportunistic — and on a symbol host it is MANDATORY (rule 22): the claim names a concrete trigger/state/failure, so write the test that arranges it and asserts the response, and attach it here in the same call. THE FOLD IS GATED ON EVIDENCE: a testable claim on a code-backed host folds only with a test attached AND a current passing verdict (report ingested after the last edit to the implementation and the test); otherwise that claim STAYS IN THE PLAN and the response names the missing fact (no test / no verdict / stale / failing) and the test files to run — the order is write test → attach → run with a JUnit reporter → ingest_test_report → fold. Leaving a claim pending is an honest exit, not a failure; the rest of the fold proceeds. `force: true` folds anyway and records an `unverified` history event (never the default). Ubiquitous claims stay a judgment call and are not gated. SIGN-OFF: claims you reworded or added after the developer signed off their change land as vagrant (origin amendment/addition) for the developer's verdict; they do not fold. If implementing shows a planned claim is wrong, reword it and fold the rest — the reword waits. Every node fold's response ends with a scoped POST-FLIGHT: what's still pending on that node, which of its committed claims lack anchors, and any validation warnings this fold introduced — act on those lines; you do not need a separate validate_model run after every fold. If you DELETED a node in the plan (intending the code to go away) and have now removed that code, call this with the node id to fold the deletion into the committed model. Pass `change` (standalone — a change id from `set_change`/`get_pending`) to fold an ENTIRE change: every plan entry tagged to it, in dependency order; when its last entry folds, the change closes and its rationale is recorded in the history log. NOTE: this is for code you actually changed — to drop something from the model WITHOUT touching code, use `descope` instead."
     )]
     fn mark_implemented(
         &self,
@@ -982,6 +1004,81 @@ impl ScryerServer {
             }
         }
 
+        // ---- The gates: sign-off (forward vagrancy) and evidence. ------------
+        // Decide, BEFORE anything folds, which of the claims this call is about
+        // to commit must stay in the plan: post-sign-off amendments/additions
+        // (flagged vagrant for the developer's verdict) and testable claims
+        // without a current passing verdict (refused with the missing fact).
+        // The fold engine honours the withhold set; everything else proceeds.
+        let force = req.force == Some(true);
+        let now = scryer_core::drift::now_secs();
+        let tests_in_call: HashMap<String, Vec<String>> = req
+            .tests
+            .iter()
+            .flatten()
+            .map(|e| {
+                let mut files: Vec<String> =
+                    e.locations.iter().map(|l| l.pattern.clone()).collect();
+                files.sort();
+                files.dedup();
+                (e.responsibility_id.clone(), files)
+            })
+            .collect();
+        let committed_now = committed_before.clone().unwrap_or_default();
+        let candidates: Vec<String> = if let Some(cid) = req.change.as_deref() {
+            use scryer_core::changes as ledger;
+            use scryer_core::diff::ElementKind as EK;
+            let mut ids: Vec<String> = Vec::new();
+            for (k, v) in &planned.change_map {
+                if v != cid {
+                    continue;
+                }
+                match ledger::parse_key(k) {
+                    Some((EK::Responsibility, _, id)) => ids.push(id),
+                    Some((EK::Node, _, id)) => {
+                        ids.extend(fold_gate::pending_claims_on(&committed_now, &planned, &id))
+                    }
+                    _ => {}
+                }
+            }
+            ids.sort();
+            ids.dedup();
+            ids
+        } else if let Some(node_id) = req.node_id.as_deref() {
+            match req.responsibility_ids.as_ref() {
+                Some(ids) => ids.clone(),
+                None if req.property_labels.is_some() => Vec::new(),
+                None => fold_gate::pending_claims_on(&committed_now, &planned, node_id),
+            }
+        } else {
+            Vec::new()
+        };
+        let mut planned_gated = planned.clone();
+        let gate = match fold_gate::gate(
+            &model_ref,
+            &mut planned_gated,
+            &candidates,
+            &tests_in_call,
+            force,
+            now,
+        ) {
+            Ok(g) => g,
+            Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+        };
+        let planned = if gate.plan_dirty {
+            if let Err(e) = scryer_core::write_planned_at(&model_ref, &planned_gated) {
+                return Ok(CallToolResult::error(vec![Content::text(e)]));
+            }
+            planned_gated
+        } else {
+            planned
+        };
+        let folded_ids: Vec<String> = candidates
+            .iter()
+            .filter(|id| !gate.withhold.contains(*id))
+            .cloned()
+            .collect();
+
         let mut summaries: Vec<String> = Vec::new();
         // Set when a node-hosted fold ran — drives the history event below.
         let mut history_node: Option<String> = None;
@@ -997,6 +1094,7 @@ impl ScryerServer {
                 &before_stmts,
                 cid,
                 req.commit_ancestors == Some(true),
+                &gate.withhold,
             ) {
                 Ok(s) => summaries.extend(s),
                 Err(e) => return Ok(e),
@@ -1080,7 +1178,14 @@ impl ScryerServer {
                     // property labels. Their host node must already be committed
                     // (commit the whole node first otherwise).
                     true => {
-                        let ids = req.responsibility_ids.as_deref().unwrap_or(&[]);
+                        let ids: Vec<String> = req
+                            .responsibility_ids
+                            .iter()
+                            .flatten()
+                            .filter(|id| !gate.withhold.contains(*id))
+                            .cloned()
+                            .collect();
+                        let ids = &ids[..];
                         for id in ids {
                             if let Err(e) = scryer_core::commit_element(
                                 &model_ref,
@@ -1123,20 +1228,29 @@ impl ScryerServer {
                                 if labels.len() == 1 { "y" } else { "ies" }
                             ));
                         }
-                        summaries.push(format!(
-                            "Committed {} on '{}' into the model.",
-                            parts.join(" and "),
-                            node_id
-                        ));
+                        if parts.is_empty() {
+                            summaries.push(format!(
+                                "Nothing folded on '{}' — every named claim was withheld (see \
+                                 below).",
+                                node_id
+                            ));
+                        } else {
+                            summaries.push(format!(
+                                "Committed {} on '{}' into the model.",
+                                parts.join(" and "),
+                                node_id
+                            ));
+                        }
                     }
                     // Whole node: commit the node, folding its whole planned state
                     // (responsibilities, properties) into the model.
                     false => {
-                        if let Err(e) = scryer_core::commit_element(
+                        if let Err(e) = scryer_core::commit_element_withholding(
                             &model_ref,
                             ElementKind::Node,
                             None,
                             node_id,
+                            &gate.withhold,
                         ) {
                             return Ok(CallToolResult::error(vec![Content::text(
                                 ancestor_hint(e),
@@ -1265,6 +1379,72 @@ impl ScryerServer {
             }
         }
 
+        // Fingerprint baseline for what this fold landed: the folded claims'
+        // implementation and test keys, plus whatever the call anchored or
+        // attached. Scoped to those keys — a full rewrite would silently
+        // re-baseline (and swallow) unreconciled drift elsewhere. A freshly
+        // folded claim must never be silent (`silentAnchors`).
+        {
+            let mut keys = fold_gate::baseline_keys(&folded_ids);
+            for e in req.anchors.iter().flatten() {
+                keys.insert(e.responsibility_id.clone());
+            }
+            for e in req.tests.iter().flatten() {
+                keys.insert(scryer_core::test_key(&e.responsibility_id));
+            }
+            if let Err(e) = scryer_extract::anchors::write_baseline_for(&model_ref, &keys) {
+                summaries.push(format!("(baseline not refreshed: {e})"));
+            }
+        }
+        // The refusal ledger: record what stayed behind and why, clear what
+        // folded, and drop entries for claims no longer in the plan.
+        {
+            let _ = scryer_core::refusals::update_refusals(
+                &model_ref,
+                &gate.refusals,
+                &folded_ids,
+            );
+            if let Ok(p) = scryer_core::read_planned_at(&model_ref) {
+                let live: HashSet<String> = p
+                    .nodes
+                    .iter()
+                    .flat_map(|n| n.responsibilities.iter())
+                    .chain(p.groups.iter().flat_map(|g| g.responsibilities.iter()))
+                    .map(|r| r.id.clone())
+                    .collect();
+                scryer_core::refusals::prune_refusals(&model_ref, &live);
+            }
+        }
+        // A forced bypass of the evidence gate is visible in the log: one
+        // `unverified` event per host naming the claims that folded unproven.
+        if !gate.forced.is_empty() {
+            if let Ok(after) = scryer_core::read_model_at(&model_ref) {
+                let mut by_host: std::collections::BTreeMap<String, Vec<EventRow>> =
+                    Default::default();
+                for id in &gate.forced {
+                    let Some((host, r)) = after
+                        .nodes
+                        .iter()
+                        .flat_map(|n| n.responsibilities.iter().map(move |r| (n.id.as_str(), r)))
+                        .find(|(_, r)| &r.id == id)
+                    else {
+                        continue;
+                    };
+                    by_host
+                        .entry(host.to_string())
+                        .or_default()
+                        .push(resp_event_row("!", &after, r));
+                }
+                for (host, rows) in by_host {
+                    record_event(
+                        &model_ref,
+                        HistoryEvent::new(now, EventKind::Impl, &host, "unverified")
+                            .with_rows(rows),
+                    );
+                }
+            }
+        }
+
         let summary = summaries.join(" ");
 
         // Keep the legacy baseline snapshot in step with the committed model, and
@@ -1332,6 +1512,12 @@ impl ScryerServer {
         // consistency burden lives here, not in the agent's memory of which
         // follow-up tools it was supposed to call.
         let mut msg = summary;
+        if !gate.lines.is_empty() {
+            msg.push_str("\ngate:");
+            for l in &gate.lines {
+                msg.push_str(&format!("\n- {l}"));
+            }
+        }
         for n in &anchor_notes {
             msg.push_str(&format!(
                 "\nnormalized: {} — the range covered the whole symbol, so the \
@@ -2555,6 +2741,7 @@ mod tests {
                 responsibility_ids: None,
                 property_labels: None,
                 commit_ancestors: None,
+                force: None,
                 anchors: None,
                 tests: None,
                 change: None,
@@ -2598,6 +2785,7 @@ mod tests {
                 responsibility_ids: None,
                 property_labels: None,
                 commit_ancestors: None,
+                force: None,
                 anchors: None,
                 tests: None,
                 change: None,
@@ -2649,6 +2837,7 @@ mod tests {
                     responsibility_ids: None,
                     property_labels: None,
                     commit_ancestors,
+                    force: None,
                     link_ids: None,
                     group_ids: None,
                     anchors: None,
@@ -2707,6 +2896,7 @@ mod tests {
                 responsibility_ids: Some(vec!["r-1".into()]),
                 property_labels: None,
                 commit_ancestors: Some(true),
+                force: None,
                 anchors: None,
                 tests: None,
                 change: None,
@@ -2769,6 +2959,7 @@ mod tests {
                 responsibility_ids: None,
                 property_labels: None,
                 commit_ancestors: None,
+                force: None,
                 anchors: None,
                 tests: None,
                 change: None,
@@ -2823,6 +3014,7 @@ mod tests {
                     responsibility_ids: None,
                     property_labels: None,
                     commit_ancestors: None,
+                    force: None,
                 anchors: None,
                 tests: None,
                 change: None,
@@ -2897,6 +3089,7 @@ mod tests {
                 responsibility_ids: None,
                 property_labels: None,
                 commit_ancestors: None,
+                force: None,
                 anchors: None,
                 tests: None,
                 change: None,
@@ -2948,6 +3141,7 @@ mod tests {
                 responsibility_ids: Some(vec!["r-b".into()]),
                 property_labels: None,
                 commit_ancestors: None,
+                force: None,
                 anchors: None,
                 tests: None,
                 change: None,
@@ -3162,6 +3356,7 @@ mod tests {
                 link_ids: None,
                 group_ids: None,
                 commit_ancestors: None,
+                force: None,
                 anchors: None,
                 tests: None,
                 change: None,
@@ -3298,6 +3493,7 @@ mod tests {
                 link_ids: None,
                 group_ids: None,
                 commit_ancestors: None,
+                force: None,
                 anchors: Some(vec![anchor("resp-ghost")]),
                 tests: None,
                 change: None,
@@ -3320,6 +3516,7 @@ mod tests {
                 link_ids: None,
                 group_ids: None,
                 commit_ancestors: None,
+                force: None,
                 anchors: Some(vec![anchor("resp-1")]),
                 tests: None,
                 change: None,
@@ -3384,6 +3581,7 @@ mod tests {
                 link_ids: None,
                 group_ids: None,
                 commit_ancestors: None,
+                force: None,
                 anchors: None,
                 tests: Some(vec![test_entry("resp-ghost")]),
                 change: None,
@@ -3400,6 +3598,7 @@ mod tests {
                 link_ids: None,
                 group_ids: None,
                 commit_ancestors: None,
+                force: None,
                 anchors: None,
                 tests: Some(vec![test_entry("resp-1")]),
                 change: None,
@@ -3420,67 +3619,362 @@ mod tests {
         assert!(!planned.test_map.contains_key("resp-1"), "no shadow copy in the draft");
     }
 
-    /// Folding a testable (When/While/If) claim with no test attached
-    /// succeeds — the nudge is guidance, not a gate — but the post-flight
-    /// LEADS with a NO TEST ATTACHED callout naming the claim and the exact
-    /// fix, worded MANDATORY on a symbol host. Attaching the test in the same
-    /// call keeps the response quiet.
-    #[test]
-    fn fold_without_test_on_testable_claim_nudges_loudly() {
-        let dir = tempfile::tempdir().unwrap();
-        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        scryer_core::write_model_at(&model_ref, &ScryModel::new()).unwrap();
-        scryer_core::ensure_planned_at(&model_ref).unwrap();
-        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
+
+    /// A symbol host with one claim in the plan, the committed model empty.
+    fn plan_with_claim(model_ref: &ModelRef, statement: &str) {
+        scryer_core::write_model_at(model_ref, &ScryModel::new()).unwrap();
+        scryer_core::ensure_planned_at(model_ref).unwrap();
+        let mut planned = scryer_core::read_planned_at(model_ref).unwrap();
         let mut sym = node("vt", Kind::Symbol, "verify_token", None);
         let mut r1 = resp("resp-1");
-        r1.statement = "**If** the token is forged, **then** reject the request".into();
+        r1.statement = statement.into();
         sym.responsibilities.push(r1);
         planned.nodes.push(sym);
-        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+        scryer_core::write_planned_at(model_ref, &planned).unwrap();
+    }
 
+    fn fold_node(server: &ScryerServer, dir: &std::path::Path, node_id: &str, force: bool) -> String {
+        let r = server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(dir.to_string_lossy().to_string()),
+                node_id: Some(node_id.into()),
+                responsibility_ids: None,
+                property_labels: None,
+                link_ids: None,
+                group_ids: None,
+                commit_ancestors: None,
+                force: force.then_some(true),
+                anchors: None,
+                tests: None,
+                change: None,
+            }))
+            .unwrap();
+        assert!(!r.is_error.unwrap_or(false), "a refusal is never a tool error");
+        tool_text(&r)
+    }
+
+    /// Fold a whole change — how tagged work folds in practice (a whole-node
+    /// fold of an untagged host leaves tagged claims behind by design).
+    fn fold_change(server: &ScryerServer, dir: &std::path::Path, cid: &str) -> String {
+        let r = server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(dir.to_string_lossy().to_string()),
+                node_id: None,
+                responsibility_ids: None,
+                property_labels: None,
+                link_ids: None,
+                group_ids: None,
+                commit_ancestors: None,
+                force: None,
+                anchors: None,
+                tests: None,
+                change: Some(cid.into()),
+            }))
+            .unwrap();
+        assert!(!r.is_error.unwrap_or(false), "a refusal is never a tool error: {}", tool_text(&r));
+        tool_text(&r)
+    }
+
+    fn committed_has(model_ref: &ModelRef, resp_id: &str) -> bool {
+        scryer_core::read_model_at(model_ref)
+            .unwrap()
+            .nodes
+            .iter()
+            .flat_map(|n| n.responsibilities.iter())
+            .any(|r| r.id == resp_id)
+    }
+
+    fn planned_resp(model_ref: &ModelRef, resp_id: &str) -> Option<Responsibility> {
+        scryer_core::read_planned_at(model_ref)
+            .unwrap()
+            .nodes
+            .iter()
+            .flat_map(|n| n.responsibilities.iter())
+            .find(|r| r.id == resp_id)
+            .cloned()
+    }
+
+    /// The evidence gate: a testable (When/While/If) claim on a code-backed
+    /// host with NO test attached does not fold. It stays in the plan, the
+    /// response names the claim and the missing fact, and the refusal ledger
+    /// records it for the inbox.
+    #[test]
+    fn fold_refuses_a_testable_claim_without_a_test() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        plan_with_claim(&model_ref, "**If** the token is forged, **then** reject the request");
+
+        let text = fold_node(&ScryerServer::new(), dir.path(), "vt", false);
+        assert!(text.contains("REFUSED resp-1"), "{text}");
+        assert!(text.contains("no test attached"), "{text}");
+        assert!(!committed_has(&model_ref, "resp-1"), "the claim did not fold");
+        assert!(planned_resp(&model_ref, "resp-1").is_some(), "the claim stays in the plan");
+        let refusals = scryer_core::refusals::read_refusals(&model_ref);
+        assert_eq!(refusals.len(), 1);
+        assert_eq!(refusals[0].kind, "no-test");
+        // The host itself folded structure-wise — the rest of the fold proceeds.
+        assert!(scryer_core::read_model_at(&model_ref).unwrap().nodes.iter().any(|n| n.id == "vt"));
+    }
+
+    /// A test attached in the SAME call but never run is still refused: the
+    /// verdict comes from a run + ingest, and the refusal names the file.
+    #[test]
+    fn fold_refuses_a_claim_whose_attached_test_has_no_verdict() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        plan_with_claim(&model_ref, "**When** a token arrives, **verify** its signature");
         let server = ScryerServer::new();
-        let project = dir.path().to_string_lossy().to_string();
-        let fold = |tests: Option<Vec<SourceMapEntry>>| {
-            let r = server
-                .mark_implemented(Parameters(MarkImplementedRequest {
-                    project: Some(project.clone()),
-                    node_id: Some("vt".into()),
-                    responsibility_ids: None,
-                    property_labels: None,
-                    link_ids: None,
-                    group_ids: None,
-                    commit_ancestors: None,
-                    anchors: None,
-                    tests,
-                    change: None,
-                }))
-                .unwrap();
-            assert!(!r.is_error.unwrap_or(false), "the nudge never blocks the fold");
-            r.content
-                .iter()
-                .find_map(|c| c.as_text().map(|t| t.text.clone()))
-                .unwrap()
-        };
+        let r = server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(dir.path().to_string_lossy().to_string()),
+                node_id: Some("vt".into()),
+                responsibility_ids: None,
+                property_labels: None,
+                link_ids: None,
+                group_ids: None,
+                commit_ancestors: None,
+                force: None,
+                anchors: None,
+                tests: Some(vec![SourceMapEntry {
+                    responsibility_id: "resp-1".into(),
+                    locations: vec![serde_json::from_value(
+                        serde_json::json!({ "pattern": "tests/auth.rs", "symbol": "verifies" }),
+                    )
+                    .unwrap()],
+                }]),
+                change: None,
+            }))
+            .unwrap();
+        let text = tool_text(&r);
+        assert!(text.contains("REFUSED resp-1"), "{text}");
+        assert!(text.contains("no verdict recorded: run tests/auth.rs"), "{text}");
+        assert!(!committed_has(&model_ref, "resp-1"));
+        // The attachment still landed — on the plan copy, where the claim lives.
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert!(planned.test_map.contains_key("resp-1"), "test attached to the plan copy");
+        assert_eq!(scryer_core::refusals::read_refusals(&model_ref)[0].kind, "no-verdict");
+    }
 
-        let text = fold(None);
-        assert!(text.contains("NO TEST ATTACHED"), "{text}");
-        assert!(text.contains("resp-1"), "the callout names the claim: {text}");
-        assert!(text.contains("MANDATORY on a symbol host"), "{text}");
-        assert!(
-            text.contains("update_source_map"),
-            "the callout names the fix: {text}"
+    /// Ubiquitous claims are not gated: a test is a judgment call there, and
+    /// the fold stays advisory exactly as before.
+    #[test]
+    fn fold_leaves_ubiquitous_claims_ungated() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        plan_with_claim(&model_ref, "Verifies request signatures");
+        let text = fold_node(&ScryerServer::new(), dir.path(), "vt", false);
+        assert!(!text.contains("REFUSED"), "{text}");
+        assert!(committed_has(&model_ref, "resp-1"));
+        assert!(scryer_core::refusals::read_refusals(&model_ref).is_empty());
+    }
+
+    /// Seed a project whose claim is anchored, test-attached, and whose test
+    /// report has been ingested — the fully verified state.
+    fn verified_project(dir: &std::path::Path) -> ModelRef {
+        let model_ref = ModelRef::ProjectLocal(dir.to_path_buf());
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("tests")).unwrap();
+        std::fs::write(dir.join("src/auth.rs"), "fn verify_token() {\n    let ok = true;\n}\n").unwrap();
+        std::fs::write(dir.join("tests/auth.rs"), "#[test]\nfn forged_rejected() {\n    assert!(true);\n}\n").unwrap();
+        plan_with_claim(&model_ref, "**If** the token is forged, **then** reject the request");
+        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        planned.source_map.insert(
+            "resp-1".into(),
+            vec![serde_json::from_value(
+                serde_json::json!({ "pattern": "src/auth.rs", "symbol": "verify_token" }),
+            )
+            .unwrap()],
         );
-
-        // Attach the test (re-fold is a no-op fold plus the attachment).
-        let text = fold(Some(vec![SourceMapEntry {
-            responsibility_id: "resp-1".into(),
-            locations: vec![serde_json::from_value(
+        planned.test_map.insert(
+            "resp-1".into(),
+            vec![serde_json::from_value(
                 serde_json::json!({ "pattern": "tests/auth.rs", "symbol": "forged_rejected" }),
             )
             .unwrap()],
-        }]));
-        assert!(!text.contains("NO TEST ATTACHED"), "attached test quiets the nudge: {text}");
+        );
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+        let junit = r#"<testsuites><testsuite name="auth"><testcase classname="tests/auth.rs" name="forged_rejected" time="0.001"/></testsuite></testsuites>"#;
+        let summary = scryer_extract::test_status::ingest_report(&model_ref, junit).unwrap();
+        assert_eq!(summary.recorded, 1, "the plan-layer attachment matched: {:?}", summary.report);
+        model_ref
+    }
+
+    /// With a current passing verdict the claim folds, and the fold writes the
+    /// fingerprint baseline for exactly what it landed — the implementation
+    /// anchor and the test anchor — so the fresh claim is never silent.
+    #[test]
+    fn fold_accepts_a_verified_claim_and_writes_its_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = verified_project(dir.path());
+        let text = fold_node(&ScryerServer::new(), dir.path(), "vt", false);
+        assert!(!text.contains("REFUSED"), "{text}");
+        assert!(committed_has(&model_ref, "resp-1"));
+        let baseline = std::fs::read_to_string(model_ref.anchors_path()).unwrap();
+        assert!(baseline.contains("\"key\":\"resp-1\""), "impl anchor fingerprinted: {baseline}");
+        assert!(baseline.contains("\"key\":\"test:resp-1\""), "test anchor fingerprinted: {baseline}");
+        // The verdict still reads current after the fold moved the anchors to committed.
+        let statuses = scryer_extract::test_status::test_statuses(&model_ref).unwrap();
+        assert_eq!(statuses.len(), 1);
+        assert!(!statuses[0].stale, "fold must not age the verdict");
+    }
+
+    /// Editing the implementation after the report was ingested makes the
+    /// verdict stale, and a stale verdict refuses like a missing one — naming
+    /// the file to re-run.
+    #[test]
+    fn fold_refuses_a_claim_with_a_stale_verdict() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = verified_project(dir.path());
+        std::fs::write(
+            dir.path().join("src/auth.rs"),
+            "fn verify_token() {\n    let ok = false;\n}\n",
+        )
+        .unwrap();
+        let text = fold_node(&ScryerServer::new(), dir.path(), "vt", false);
+        assert!(text.contains("REFUSED resp-1"), "{text}");
+        assert!(text.contains("verdict stale: run tests/auth.rs"), "{text}");
+        assert!(!committed_has(&model_ref, "resp-1"));
+        assert_eq!(scryer_core::refusals::read_refusals(&model_ref)[0].kind, "stale");
+    }
+
+    /// `force: true` folds an unverified claim anyway — and leaves an
+    /// `unverified` history event naming it, so the bypass is on the record.
+    #[test]
+    fn force_folds_unverified_and_records_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        plan_with_claim(&model_ref, "**If** the token is forged, **then** reject the request");
+        let text = fold_node(&ScryerServer::new(), dir.path(), "vt", true);
+        assert!(text.contains("UNVERIFIED resp-1"), "{text}");
+        assert!(committed_has(&model_ref, "resp-1"));
+        let events = scryer_core::history::read_history(&model_ref);
+        assert!(
+            events.iter().any(|e| e.driver == "unverified" && e.node_id == "vt"),
+            "{events:?}"
+        );
+        assert!(scryer_core::refusals::read_refusals(&model_ref).is_empty());
+    }
+
+    /// A signed-off plan with one change, `resp-1` tagged to it. Ubiquitous
+    /// statement so the evidence gate stays out of the picture.
+    fn signed_off_plan(model_ref: &ModelRef, committed_statement: Option<&str>) -> String {
+        let mut committed = ScryModel::new();
+        let mut sym = node("vt", Kind::Symbol, "verify_token", None);
+        if let Some(stmt) = committed_statement {
+            let mut r1 = resp("resp-1");
+            r1.statement = stmt.into();
+            sym.responsibilities.push(r1);
+        }
+        committed.nodes.push(sym);
+        scryer_core::write_model_at(model_ref, &committed).unwrap();
+        scryer_core::ensure_planned_at(model_ref).unwrap();
+        let mut planned = scryer_core::read_planned_at(model_ref).unwrap();
+        let host = planned.nodes.iter_mut().find(|n| n.id == "vt").unwrap();
+        host.responsibilities.retain(|r| r.id != "resp-1");
+        let mut r1 = resp("resp-1");
+        r1.statement = "Verifies the approved thing".into();
+        host.responsibilities.push(r1);
+        let cid = scryer_core::changes::open_change(&mut planned, "verify tokens", 1);
+        scryer_core::changes::tag(&mut planned, &["resp:resp-1".to_string()], &cid);
+        scryer_core::changes::sign_off(&mut planned, &cid, 2).unwrap();
+        scryer_core::write_planned_at(model_ref, &planned).unwrap();
+        cid
+    }
+
+    /// Rewording a signed-off claim after sign-off: the fold does NOT commit
+    /// it. It becomes vagrant/amendment carrying the approved text, stays in
+    /// the plan, and — when it was already committed — committed keeps the
+    /// original instead of losing the claim.
+    #[test]
+    fn fold_withholds_a_post_signoff_amendment_and_keeps_the_committed_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let cid = signed_off_plan(&model_ref, Some("Verifies the old thing"));
+        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        planned.nodes[0].responsibilities[0].statement = "Verifies something else entirely".into();
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let text = fold_change(&ScryerServer::new(), dir.path(), &cid);
+        assert!(text.contains("AWAITING VERDICT resp-1"), "{text}");
+        assert!(text.contains("reworded after sign-off"), "{text}");
+        let r = planned_resp(&model_ref, "resp-1").unwrap();
+        assert_eq!(r.vagrant, Some(true));
+        assert_eq!(r.vagrant_origin.as_deref(), Some("amendment"));
+        assert_eq!(r.approved_statement.as_deref(), Some("Verifies the approved thing"));
+        assert_eq!(r.statement, "Verifies something else entirely");
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        let c = committed.nodes[0].responsibilities.iter().find(|r| r.id == "resp-1").unwrap();
+        assert_eq!(c.statement, "Verifies the old thing", "committed keeps the original");
+        assert_eq!(scryer_core::refusals::read_refusals(&model_ref)[0].kind, "amendment");
+    }
+
+    /// A claim the agent adds after sign-off is scope it invented: withheld as
+    /// vagrant/addition, while the signed-off claim beside it folds.
+    #[test]
+    fn fold_withholds_a_post_signoff_addition_but_folds_the_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let cid = signed_off_plan(&model_ref, None);
+        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        let mut extra = resp("resp-2");
+        extra.statement = "Also logs every token".into();
+        planned.nodes[0].responsibilities.push(extra);
+        scryer_core::changes::tag(&mut planned, &["resp:resp-2".to_string()], &cid);
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let text = fold_change(&ScryerServer::new(), dir.path(), &cid);
+        assert!(text.contains("AWAITING VERDICT resp-2"), "{text}");
+        assert!(text.contains("added after sign-off"), "{text}");
+        assert!(committed_has(&model_ref, "resp-1"), "the untouched intent folded");
+        assert!(!committed_has(&model_ref, "resp-2"), "the addition did not");
+        let r2 = planned_resp(&model_ref, "resp-2").unwrap();
+        assert_eq!(r2.vagrant_origin.as_deref(), Some("addition"));
+        assert!(r2.approved_statement.is_none());
+    }
+
+    /// Retagging the concern is metadata, not intent — it never reads as an
+    /// amendment, so the claim folds as signed off.
+    #[test]
+    fn a_cosmetic_edit_after_signoff_is_not_an_amendment() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let cid = signed_off_plan(&model_ref, None);
+        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        planned.nodes[0].responsibilities[0].concern = Some("auth".into());
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+        let text = fold_change(&ScryerServer::new(), dir.path(), &cid);
+        assert!(!text.contains("AWAITING VERDICT"), "{text}");
+        assert!(committed_has(&model_ref, "resp-1"));
+    }
+
+    /// A signed-off claim the agent dropped from the plan comes back as
+    /// pending intent at the fold, and the response says the agent proposed
+    /// dropping it.
+    #[test]
+    fn fold_restores_a_signed_off_claim_the_agent_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let cid = signed_off_plan(&model_ref, None);
+        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        let mut keep = resp("resp-3");
+        keep.statement = "Keeps this one".into();
+        planned.nodes[0].responsibilities.push(keep);
+        scryer_core::changes::tag(&mut planned, &["resp:resp-3".to_string()], &cid);
+        scryer_core::changes::sign_off(&mut planned, &cid, 3).unwrap();
+        // The agent drops resp-1 (its tag is GC'd by the write) and folds.
+        planned.nodes[0].responsibilities.retain(|r| r.id != "resp-1");
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+        assert!(planned_resp(&model_ref, "resp-1").is_none());
+
+        let text = fold_change(&ScryerServer::new(), dir.path(), &cid);
+        assert!(text.contains("RESTORED resp-1"), "{text}");
+        let r1 = planned_resp(&model_ref, "resp-1").expect("restored into the plan");
+        assert_eq!(r1.statement, "Verifies the approved thing");
+        assert!(!committed_has(&model_ref, "resp-1"), "restored as PENDING intent, not folded");
+        assert!(committed_has(&model_ref, "resp-3"), "the untouched claim folded");
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(planned.change_map.get("resp:resp-1").map(String::as_str), Some(cid.as_str()));
+        assert!(planned.changes.iter().any(|c| c.id == cid), "the change stays open on it");
     }
 
     /// The fold response carries a scoped post-flight: what's still pending on
@@ -3536,6 +4030,7 @@ mod tests {
                 link_ids: None,
                 group_ids: None,
                 commit_ancestors: None,
+                force: None,
                 anchors: None,
                 tests: None,
                 change: None,
@@ -3678,6 +4173,7 @@ mod tests {
                 link_ids: None,
                 group_ids: None,
                 commit_ancestors: None,
+                force: None,
                 anchors: None,
                 tests: None,
                 change: Some(chg.clone()),
