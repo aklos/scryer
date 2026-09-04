@@ -18,6 +18,7 @@ import {
   ChevronDown,
   Copy,
   FileText,
+  Inbox,
   Minus,
   Moon,
   Network,
@@ -43,6 +44,10 @@ export function TopBar({
   onCloseProject,
   onOpenSearch,
   onOpenSettings,
+  inboxUnread = 0,
+  inboxLive = false,
+  inboxOpen = false,
+  onOpenInbox,
 }: {
   projectPath: string | null;
   view: WorkspaceView;
@@ -51,6 +56,13 @@ export function TopBar({
   onCloseProject: () => void;
   onOpenSearch: () => void;
   onOpenSettings: () => void;
+  /** Cards in the inbox the developer has not seen. */
+  inboxUnread?: number;
+  /** A hook session is active — the badge pulses. */
+  inboxLive?: boolean;
+  /** The inbox page is the one showing — the entry reads pressed. */
+  inboxOpen?: boolean;
+  onOpenInbox?: () => void;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const projectName = projectPath?.split("/").filter(Boolean).pop() ?? "scryer";
@@ -148,6 +160,42 @@ export function TopBar({
             </button>
           ))}
         </div>
+
+        {/* The inbox — the in-session verdict queue. Unread count as a badge;
+            while a hook session is live the badge pulses (the queue is being
+            fed right now), otherwise it is the same queue at rest. */}
+        {onOpenInbox && (
+          <button
+            type="button"
+            data-cam="inbox"
+            onClick={onOpenInbox}
+            aria-pressed={inboxOpen}
+            title={
+              inboxUnread > 0
+                ? `Inbox — ${inboxUnread} unread item${inboxUnread === 1 ? "" : "s"} awaiting your verdict${inboxLive ? " (session live)" : ""}`
+                : `Inbox — nothing unread${inboxLive ? " (session live)" : ""}`
+            }
+            className={`relative ml-1.5 flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors ${
+              inboxOpen
+                ? "border-[var(--border)] bg-[var(--surface-active)] text-[var(--text)]"
+                : "border-transparent text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+            }`}
+          >
+            <Inbox className="h-3.5 w-3.5" />
+            <span className="hidden md:inline">Inbox</span>
+            {inboxUnread > 0 && (
+              <span
+                className={`inline-flex min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-2xs font-semibold tabular-nums ${
+                  inboxLive
+                    ? "animate-pulse bg-violet-600 text-white dark:bg-violet-500"
+                    : "bg-orange-600 text-white dark:bg-orange-500"
+                }`}
+              >
+                {inboxUnread > 99 ? "99+" : inboxUnread}
+              </span>
+            )}
+          </button>
+        )}
 
         <ThemeToggle />
         <WindowControls />

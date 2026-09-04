@@ -517,6 +517,18 @@
           "id": "resp-48",
           "statement": "Runs the CI gate's validator, anchor-existence sweep, and optional drift/pending checks against the working view of the model.",
           "lastTouchedAt": 1784883763
+        },
+        {
+          "id": "resp-903",
+          "statement": "**When** a committed testable claim has no attached test, a failing verdict, or a stale verdict, **fail** the check unless test gating is opted out",
+          "concern": "verification",
+          "lastTouchedAt": 1788498300
+        },
+        {
+          "id": "resp-904",
+          "statement": "**If** no test-results cache exists, then **note** that verdicts are unverified instead of passing silently",
+          "concern": "verification",
+          "lastTouchedAt": 1788498300
         }
       ]
     },
@@ -757,6 +769,11 @@
           "id": "resp-65",
           "statement": "On a file read (any supported harness), fetches and injects that file's governing model overlay; on an edit, records the file as touched.",
           "lastTouchedAt": 1786085551
+        },
+        {
+          "id": "resp-933",
+          "statement": "**When** the read event carries a session id, **pass** it on the overlay request so the server can dedupe per session",
+          "lastTouchedAt": 1788498420
         }
       ]
     },
@@ -783,6 +800,11 @@
           "id": "resp-67",
           "statement": "On Codex, injects the governing overlay for every file a pending patch names, just before the patch lands, capped to a handful of files.",
           "lastTouchedAt": 1784883763
+        },
+        {
+          "id": "resp-934",
+          "statement": "**When** the patch event carries a session id, **pass** it on each overlay request so the server can dedupe per session",
+          "lastTouchedAt": 1788498420
         }
       ]
     },
@@ -1133,6 +1155,12 @@
           "id": "resp-92",
           "statement": "Writes the plan and tags whatever this write changed to the session's current change, warning on cross-change collisions.",
           "lastTouchedAt": 1784883763
+        },
+        {
+          "id": "resp-911",
+          "statement": "**When** an agent write touches a signed-off change's entries, **report** each one that is now amended, added, or dropped against the sign-off snapshot",
+          "concern": "oversight",
+          "lastTouchedAt": 1788498394
         }
       ]
     },
@@ -1620,6 +1648,12 @@
           "id": "resp-683",
           "statement": "**When** `retag` names ids, **re-file** their pending work into the target change instead of the session's selection",
           "lastTouchedAt": 1786010084
+        },
+        {
+          "id": "resp-910",
+          "statement": "**When** `sign_off` is passed, **stamp** the change with a snapshot of its tagged entries so later agent edits read as amendments",
+          "concern": "oversight",
+          "lastTouchedAt": 1788498394
         }
       ]
     },
@@ -1740,6 +1774,18 @@
           "id": "resp-138",
           "statement": "Folds a node's, a change's, or specific claims'/properties'/links'/groups' outstanding plan work into the committed model, optionally anchoring and attaching tests atomically.",
           "lastTouchedAt": 1784883763
+        },
+        {
+          "id": "resp-901",
+          "statement": "**When** `force` is passed, **fold** an unverified claim anyway and **record** an `unverified` history event naming it",
+          "concern": "verification",
+          "lastTouchedAt": 1788498300
+        },
+        {
+          "id": "resp-902",
+          "statement": "**When** a fold lands claims with anchors or tests, **refresh** the fingerprint baseline for exactly those keys so a freshly folded claim is never silent",
+          "concern": "drift",
+          "lastTouchedAt": 1788498300
         }
       ]
     },
@@ -3705,6 +3751,12 @@
           "id": "resp-743",
           "statement": "**Act** as the frameless window's titlebar — every non-interactive region drags the window and the window controls sit at its right edge",
           "lastTouchedAt": 1787902832
+        },
+        {
+          "id": "resp-940",
+          "statement": "**Show** the inbox entry with its unread count, pulsing while a hook session is live",
+          "concern": "oversight",
+          "lastTouchedAt": 1788498444
         }
       ]
     },
@@ -4854,6 +4906,12 @@
           "id": "resp-779",
           "statement": "**Present** tests not holding — failing verdicts and uncaught breaks, each with what survived — and the untested claims, as claim rows that open on their page",
           "lastTouchedAt": 1787998826
+        },
+        {
+          "id": "resp-920",
+          "statement": "**Present** post-sign-off amendments as approved text beside amended text with adopt, reject, and reword actions",
+          "concern": "oversight",
+          "lastTouchedAt": 1788498394
         }
       ]
     },
@@ -4974,6 +5032,12 @@
           "id": "resp-294",
           "statement": "**Classify** a single element's plan mark from its own and its owned content's changes",
           "lastTouchedAt": 1784883905
+        },
+        {
+          "id": "resp-919",
+          "statement": "**When** a claim is vagrant by amendment or addition, **mark** it distinctly from a code-discovered vagrant so the tree separates what was asked for from what the agent changed",
+          "concern": "oversight",
+          "lastTouchedAt": 1788498394
         }
       ]
     },
@@ -6538,6 +6602,23 @@
           "id": "resp-702",
           "statement": "Enforces that the close gate fires only once per session: a repeat close for an already-gated session returns an empty payload without re-reading the model",
           "lastTouchedAt": 1786085482
+        },
+        {
+          "id": "resp-930",
+          "statement": "**When** an overlay request carries a session and its payload hashes the same as the last one served to that session for the file, **respond** with an empty overlay",
+          "concern": "context-economy",
+          "lastTouchedAt": 1788498420
+        },
+        {
+          "id": "resp-931",
+          "statement": "**When** an overlay request carries no session, **serve** the full overlay every time",
+          "lastTouchedAt": 1788498420
+        },
+        {
+          "id": "resp-941",
+          "statement": "**When** a close gate fires, **emit** its needs-reconcile items to the frontend as an event so the inbox shows them live",
+          "concern": "oversight",
+          "lastTouchedAt": 1788500702
         }
       ]
     },
@@ -6563,12 +6644,12 @@
         {
           "id": "resp-381",
           "statement": "**When** a session closes, **partition** touched files into needing reconcile, clean-modeled, and unmodeled",
-          "lastTouchedAt": 1784883930
+          "lastTouchedAt": 1788498466
         },
         {
           "id": "resp-382",
           "statement": "**When** an anchor has no baseline to fingerprint, **treat** it as needing reconcile rather than waving it through",
-          "lastTouchedAt": 1784883930
+          "lastTouchedAt": 1788498466
         }
       ]
     },
@@ -6582,6 +6663,11 @@
           "id": "resp-383",
           "statement": "**When** a touch is recorded or a session closes, **drop** touches older than the TTL so a resumed session doesn't re-gate on stale edits",
           "lastTouchedAt": 1784883930
+        },
+        {
+          "id": "resp-932",
+          "statement": "**When** pruning, **drop** remembered overlay hashes older than the TTL so a long session never grows the map without bound",
+          "lastTouchedAt": 1788498420
         }
       ]
     },
@@ -7144,6 +7230,12 @@
           "id": "resp-432",
           "statement": "**When** the canvas saves, **write** the planned layer under the model lock so it never races an agent's MCP write",
           "lastTouchedAt": 1784883930
+        },
+        {
+          "id": "resp-918",
+          "statement": "**When** the canvas saves, **re-stamp** every signed-off change's snapshot so developer edits never read as amendments",
+          "concern": "oversight",
+          "lastTouchedAt": 1788498394
         }
       ]
     },
@@ -7510,6 +7602,12 @@
           "id": "resp-458",
           "statement": "**When** the user adopts a code-discovered claim, **fold** it into the committed model since the code already satisfies it",
           "lastTouchedAt": 1784883930
+        },
+        {
+          "id": "resp-915",
+          "statement": "**When** the user adopts an amendment, **make** the amended text the intent, **record** the approved and amended statements in history, and **fold** it only if it is anchored and verified",
+          "concern": "oversight",
+          "lastTouchedAt": 1788498394
         }
       ]
     },
@@ -7523,6 +7621,12 @@
           "id": "resp-459",
           "statement": "**When** the user rejects a code-discovered claim, **fold** it into committed then remove it from the plan so it reads as a deletion to-do",
           "lastTouchedAt": 1784883930
+        },
+        {
+          "id": "resp-916",
+          "statement": "**When** the user rejects an amendment, **restore** the approved text to the plan and **keep** the entry pending",
+          "concern": "oversight",
+          "lastTouchedAt": 1788498394
         }
       ]
     },
@@ -7627,6 +7731,12 @@
           "id": "resp-467",
           "statement": "**When** the user accepts a reworded statement, **apply** it to both layers and clear the stale/proposal flags",
           "lastTouchedAt": 1784883930
+        },
+        {
+          "id": "resp-917",
+          "statement": "**When** the user rewords an amendment, **replace** both texts with the developer's in the plan and **keep** the entry pending",
+          "concern": "oversight",
+          "lastTouchedAt": 1788498394
         }
       ]
     },
@@ -10364,6 +10474,11 @@
           "label": "createdAt",
           "description": "",
           "lastTouchedAt": 1784884312
+        },
+        {
+          "label": "signedOff",
+          "description": "The sign-off snapshot: when it was stamped and, per tagged entry key, the content hash and approved statement the developer signed off on",
+          "lastTouchedAt": 1788498394
         }
       ]
     },
@@ -10505,6 +10620,11 @@
           "id": "resp-613",
           "statement": "Folds one plan element (node, link, responsibility, property, or group) into the committed model, handling add, update, move, and delete uniformly",
           "lastTouchedAt": 1784884312
+        },
+        {
+          "id": "resp-914",
+          "statement": "**When** a whole-host fold withholds a claim that is already committed, **keep** the committed original in place instead of dropping it",
+          "lastTouchedAt": 1788498394
         }
       ]
     },
@@ -12382,6 +12502,11 @@
           "id": "resp-731",
           "statement": "**When** none of a cached claim's anchor files changed since its record was taken, **skip** re-hashing it — a stat, not a parse, is the ambient-frequency cost",
           "lastTouchedAt": 1786527236
+        },
+        {
+          "id": "resp-905",
+          "statement": "**When** a claim's anchors or attached tests live only in the plan layer, **resolve** them through the working view so an unfolded claim's verdict still records and reads",
+          "lastTouchedAt": 1788498300
         }
       ]
     },
@@ -12663,6 +12788,191 @@
           "id": "resp-763",
           "statement": "**If** the project is not a git repository, **refuse** the probe rather than falling back to mutating the developer's own working tree",
           "lastTouchedAt": 1787897929
+        }
+      ]
+    },
+    {
+      "id": "node-h4dy86",
+      "kind": "symbol",
+      "name": "claim_evidence",
+      "parentId": "node-669",
+      "responsibilities": [
+        {
+          "id": "resp-h9rkbc",
+          "statement": "**When** asked about a set of claims, **report** for each whether a test is attached and whether its verdict is current and passing, naming the missing fact otherwise",
+          "concern": "verification",
+          "lastTouchedAt": 1788498302
+        }
+      ]
+    },
+    {
+      "id": "node-fsgctb",
+      "kind": "symbol",
+      "name": "write_baseline_for",
+      "parentId": "node-459",
+      "responsibilities": [
+        {
+          "id": "resp-3xf1p7",
+          "statement": "**When** given anchor keys, **rewrite** only those keys' fingerprints in the baseline and **keep** every other entry untouched",
+          "concern": "drift",
+          "lastTouchedAt": 1788498304
+        }
+      ]
+    },
+    {
+      "id": "node-nqr50k",
+      "kind": "symbol",
+      "name": "sign_off",
+      "parentId": "node-555",
+      "responsibilities": [
+        {
+          "id": "resp-a44pxh",
+          "statement": "**When** a change is signed off, **snapshot** every tagged entry's content hash and, for claims, the approved statement",
+          "concern": "oversight",
+          "lastTouchedAt": 1788498398
+        }
+      ]
+    },
+    {
+      "id": "node-hm3dk6",
+      "kind": "symbol",
+      "name": "classify_against_signoff",
+      "parentId": "node-555",
+      "responsibilities": [
+        {
+          "id": "resp-pcm2a4",
+          "statement": "**When** a signed-off change's entries are compared to their snapshot, **classify** each as untouched, amended, added, or dropped, ignoring concern tags, positions, and directives",
+          "concern": "oversight",
+          "lastTouchedAt": 1788498398
+        }
+      ]
+    },
+    {
+      "id": "node-vyksth",
+      "kind": "symbol",
+      "name": "entry_hash",
+      "parentId": "node-555",
+      "responsibilities": [
+        {
+          "id": "resp-s34tcm",
+          "statement": "**When** hashing a plan entry, **cover** only its truth-bearing fields so a cosmetic edit never changes the hash",
+          "lastTouchedAt": 1788498398
+        }
+      ]
+    },
+    {
+      "id": "node-y94ebp",
+      "kind": "symbol",
+      "name": "sign_off_change",
+      "parentId": "node-389",
+      "responsibilities": [
+        {
+          "id": "resp-tp1k7j",
+          "statement": "**When** the developer signs off a change from the canvas, **stamp** its snapshot under the model lock",
+          "concern": "oversight",
+          "lastTouchedAt": 1788498398
+        }
+      ]
+    },
+    {
+      "id": "node-6dsc1z",
+      "kind": "symbol",
+      "name": "InboxPage",
+      "parentId": "node-262",
+      "responsibilities": [
+        {
+          "id": "resp-v21z9m",
+          "statement": "**Render** the inbox as one stream of cards, each carrying the claim, its evidence, and the actions that resolve it",
+          "concern": "oversight",
+          "lastTouchedAt": 1788498440
+        },
+        {
+          "id": "resp-1evmx9",
+          "statement": "**When** j/k, a/r/e, or enter are pressed, **move** the focus, **resolve** the focused card, or **open** its node page",
+          "lastTouchedAt": 1788498440
+        }
+      ]
+    },
+    {
+      "id": "node-va26yz",
+      "kind": "symbol",
+      "name": "useInbox",
+      "parentId": "node-203",
+      "responsibilities": [
+        {
+          "id": "resp-kc1r12",
+          "statement": "**When** the model, test results, a hook touch, or a close-gate event arrives, **rebuild** the card list and its unread count",
+          "lastTouchedAt": 1788498440
+        }
+      ]
+    },
+    {
+      "id": "node-xf87g6",
+      "kind": "symbol",
+      "name": "read_fold_refusals",
+      "parentId": "node-389",
+      "responsibilities": [
+        {
+          "id": "resp-by5pbn",
+          "statement": "**When** the inbox asks, **return** the claims whose last fold was refused with the missing fact each was refused for",
+          "concern": "verification",
+          "lastTouchedAt": 1788498440
+        }
+      ]
+    },
+    {
+      "id": "node-a7nw7w",
+      "kind": "symbol",
+      "name": "gate",
+      "parentId": "node-97",
+      "responsibilities": [
+        {
+          "id": "resp-900",
+          "statement": "**When** a testable claim on a code-backed host is folded with no attached test or no current passing verdict, **leave** it in the plan and **report** the missing fact with the test files to run",
+          "concern": "verification",
+          "lastTouchedAt": 1788500702
+        },
+        {
+          "id": "resp-912",
+          "statement": "**When** a folded claim was reworded or added after its change's sign-off, **flag** it vagrant with its origin and approved text, **leave** it in the plan, and **report** it as awaiting the developer's verdict",
+          "concern": "oversight",
+          "lastTouchedAt": 1788500702
+        },
+        {
+          "id": "resp-913",
+          "statement": "**When** a signed-off claim was dropped from the plan, **restore** it as pending intent and **note** that the agent proposed dropping it",
+          "concern": "oversight",
+          "lastTouchedAt": 1788500702
+        }
+      ]
+    },
+    {
+      "id": "node-c32zyv",
+      "kind": "symbol",
+      "name": "buildInboxCards",
+      "parentId": "node-262",
+      "responsibilities": [
+        {
+          "id": "resp-heesjf",
+          "statement": "**When** a card is resolved by the developer or by the agent, **remove** it from the stream",
+          "concern": "oversight",
+          "lastTouchedAt": 1788501139
+        },
+        {
+          "id": "resp-2e7ps6",
+          "statement": "**When** the developer pins a change, **filter** the stream to that change's cards",
+          "lastTouchedAt": 1788501139
+        },
+        {
+          "id": "resp-ebjf2d",
+          "statement": "**Merge** amendments, vagrants, stale claims, probe survivors, failing verdicts, contract-level plan entries, refused folds, and close-gate items into one card list",
+          "concern": "oversight",
+          "lastTouchedAt": 1788501139
+        },
+        {
+          "id": "resp-dpr8pk",
+          "statement": "**Order** cards by risk tier — contract changes, concern-tagged claims, survivors, amendments, vagrants, stale, failing, close-gate — then newest first",
+          "lastTouchedAt": 1788501139
         }
       ]
     }
@@ -16374,5 +16684,37 @@
       ],
       "parentNodeId": "node-4"
     }
-  ]
+  ],
+  "sourceMap": {
+    "resp-kc1r12": [
+      {
+        "pattern": "src/hooks/useInbox.ts",
+        "symbol": "useInbox"
+      }
+    ]
+  },
+  "concerns": [
+    {
+      "slug": "context-economy"
+    },
+    {
+      "slug": "drift"
+    },
+    {
+      "slug": "oversight"
+    },
+    {
+      "slug": "verification"
+    }
+  ],
+  "changes": [
+    {
+      "id": "chg-j88eqf",
+      "rationale": "An in-session inbox: one live stream of cards for everything needing the developer's verdict, ordered by risk, with the resolving actions on each card",
+      "createdAt": 1788498428
+    }
+  ],
+  "changeMap": {
+    "resp:resp-kc1r12": "chg-j88eqf"
+  }
 }

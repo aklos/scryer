@@ -148,6 +148,7 @@ fn mint_token() -> String {
 pub fn start(
     project: &Path,
     on_touch: impl Fn(&Touch) + Send + Sync + 'static,
+    on_close_gate: impl Fn(&serde_json::Value) + Send + Sync + 'static,
 ) -> Result<HookServer, String> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| e.to_string())?;
     listener
@@ -175,6 +176,7 @@ pub fn start(
     let project = Arc::new(project.to_path_buf());
     let token = Arc::new(token);
     let on_touch = Arc::new(on_touch);
+    let on_close_gate = Arc::new(on_close_gate);
     let inflight = Arc::new(AtomicUsize::new(0));
 
     {
@@ -193,14 +195,29 @@ pub fn start(
                             let token = token.clone();
                             let touches = touches.clone();
                             let on_touch = on_touch.clone();
+                            let on_close_gate = on_close_gate.clone();
                             let guard = InflightGuard(inflight.clone());
                             std::thread::spawn(move || {
                                 let _guard = guard;
-                                handle_request(stream, &project, &token, &touches, on_touch.as_ref());
+                                handle_request(
+                                    stream,
+                                    &project,
+                                    &token,
+                                    &touches,
+                                    on_touch.as_ref(),
+                                    on_close_gate.as_ref(),
+                                );
                             });
                         } else {
                             inflight.fetch_sub(1, Ordering::SeqCst);
-                            handle_request(stream, &project, &token, &touches, on_touch.as_ref());
+                            handle_request(
+                                stream,
+                                &project,
+                                &token,
+                                &touches,
+                                on_touch.as_ref(),
+                                on_close_gate.as_ref(),
+                            );
                         }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -226,6 +243,7 @@ fn handle_request(
     token: &str,
     touches: &Arc<Mutex<SessionLog>>,
     on_touch: &(impl Fn(&Touch) + Send + 'static),
+    on_close_gate: &(impl Fn(&serde_json::Value) + Send + 'static),
 ) {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
 
@@ -394,7 +412,15 @@ fn handle_request(
                 .as_array()
                 .is_some_and(|n| !n.is_empty())
             {
-                touches.lock().unwrap().gated.push((now, session));
+                touches.lock().unwrap().gated.push((now, session.clone()));
+                // The gate's items are review work for the developer too: hand
+                // them to the app (the inbox shows them live) alongside the
+                // session that owes them.
+                let mut ev = payload.clone();
+                if let serde_json::Value::Object(map) = &mut ev {
+                    map.insert("session".into(), serde_json::json!(session));
+                }
+                on_close_gate(&ev);
             }
             respond(&mut stream, 200, &payload);
         }
@@ -731,7 +757,7 @@ mod tests {
         let counter = hits.clone();
         let server = start(dir.path(), move |_| {
             counter.fetch_add(1, Ordering::SeqCst);
-        })
+        }, |_| {})
         .unwrap();
         let disc: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(dir.path().join(".scryer/hook.json")).unwrap(),
@@ -883,7 +909,7 @@ mod tests {
         let counter = touched_events.clone();
         let server = start(dir.path(), move |_| {
             *counter.lock().unwrap() += 1;
-        })
+        }, |_| {})
         .unwrap();
 
         // Discovery file advertises the live endpoint.
@@ -1085,7 +1111,7 @@ mod tests {
         .unwrap();
         scryer_extract::anchors::write_baseline(&r).unwrap();
 
-        let server = start(root, |_| {}).unwrap();
+        let server = start(root, |_| {}, |_| {}).unwrap();
         let disc: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(root.join(".scryer/hook.json")).unwrap(),
         )
@@ -1178,7 +1204,7 @@ mod tests {
         );
         scryer_core::write_planned_at(&r, &plan).unwrap();
 
-        let server = start(root, |_| {}).unwrap();
+        let server = start(root, |_| {}, |_| {}).unwrap();
         let disc: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(root.join(".scryer/hook.json")).unwrap(),
         )
@@ -1194,5 +1220,40 @@ mod tests {
         assert_eq!(claim["statement"], "new plan claim");
         // The committed exact anchor's own file, untouched, must not be dragged in.
         assert!(v["cleanModeled"].as_array().unwrap().is_empty(), "{v}");
+    }
+
+    /// A close gate that fires is handed to the app as well: the callback
+    /// receives the gate payload with the session that owes it. A clean close
+    /// fires nothing.
+    #[test]
+    fn a_firing_close_gate_is_reported_to_the_app() {
+        let (dir, _) = temp_project();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/auth.rs"), "fn verify() { let ok = true; }\n").unwrap();
+        let r = ModelRef::ProjectLocal(root.to_path_buf());
+        scryer_core::write_sync_state(&r, &scryer_core::drift::SyncState::anchored_now(None)).unwrap();
+        scryer_extract::anchors::write_baseline(&r).unwrap();
+
+        let seen: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let server = start(root, |_| {}, move |v| sink.lock().unwrap().push(v.clone())).unwrap();
+        let disc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join(".scryer/hook.json")).unwrap()).unwrap();
+        let token = disc["token"].as_str().unwrap().to_string();
+        request(server.port, &token, "POST", "/touch", r#"{"session":"s9","file":"src/auth.rs"}"#);
+
+        // Clean close: nothing owed, nothing reported.
+        request(server.port, &token, "GET", "/close?session=s9", "");
+        assert!(seen.lock().unwrap().is_empty());
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(root.join("src/auth.rs"), "fn verify() { let ok = false; }\n").unwrap();
+        let (_, v) = request(server.port, &token, "GET", "/close?session=s9", "");
+        assert!(!v["needsReconcile"].as_array().unwrap().is_empty(), "{v}");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0]["session"], "s9");
+        assert_eq!(seen[0]["needsReconcile"][0]["claims"][0]["id"], "r-1");
     }
 }

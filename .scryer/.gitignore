@@ -7,3 +7,4 @@
 hook.json
 preview/
 build-logs/
+.fold-refusals.json

@@ -16,6 +16,9 @@
  *  - Unmapped claims: the same gap from the model's side — committed leaf claims
  *    that say code exists but anchor to nothing. The list behind the coverage
  *    percentage; its complement.
+ *  - Inbox: the in-session queue — every item awaiting the developer's verdict
+ *    (amendments, vagrants, stale, survivors, failing, contract rewords, refused
+ *    folds, close-gate items) as one live stream ordered by risk then recency.
  *
  * All are pages, not panels — reached from the status bar counters, left via
  * any link, exactly like Wikipedia's Special:RecentChanges and cleanup
@@ -28,3 +31,4 @@ export type { ReviewIndex } from "./special/NeedsReviewPage";
 export { buildReviewIndex, NeedsReviewPage } from "./special/NeedsReviewPage";
 export { DarkCodePage } from "./special/DarkCodePage";
 export { findUnmappedClaims, UnmappedClaimsPage } from "./special/UnmappedClaimsPage";
+export { InboxPage } from "./special/InboxPage";

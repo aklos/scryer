@@ -5,7 +5,7 @@ import type { ChangeRevision } from "../hooks/useModelStorage";
 import type { HistoryEvent } from "../history";
 import type { PreviewServerState } from "../hooks/usePreviewServer";
 
-export type SpecialPage = "changes" | "review" | "dark" | "unmapped";
+export type SpecialPage = "changes" | "review" | "dark" | "unmapped" | "inbox";
 
 export type Selected =
   | { kind: "node"; id: string }

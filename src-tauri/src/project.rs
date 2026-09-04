@@ -53,7 +53,13 @@ pub(crate) fn watch_project(
             let on_touch = move |t: &hooks::Touch| {
                 let _ = touch_handle.emit("hook-touch", t);
             };
-            match hooks::start(project_path, on_touch) {
+            // A close gate that fires is review work: the inbox shows its
+            // needs-reconcile items live as "hook-close-gate" events.
+            let gate_handle = app.clone();
+            let on_close_gate = move |payload: &serde_json::Value| {
+                let _ = gate_handle.emit("hook-close-gate", payload);
+            };
+            match hooks::start(project_path, on_touch, on_close_gate) {
                 Ok(server) => {
                     eprintln!("[hooks] session endpoint on 127.0.0.1:{}", server.port);
                     *hook = Some(server);

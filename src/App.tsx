@@ -20,6 +20,7 @@ import {
   buildReviewIndex,
   ChangesPage,
   DarkCodePage,
+  InboxPage,
   NeedsReviewPage,
   UnmappedClaimsPage,
 } from "./SpecialPages";
@@ -38,6 +39,7 @@ import { useAgentSession } from "./hooks/useAgentSession";
 import { previewableNodeIds, usePreviewServer } from "./hooks/usePreviewServer";
 import { useModelHealth } from "./hooks/useModelHealth";
 import { useTestStatuses } from "./hooks/useTestStatuses";
+import { useInbox } from "./hooks/useInbox";
 import { rollupTestFindings, testFindings } from "./health";
 import {
   addGroup as addGroupHelper,
@@ -126,6 +128,7 @@ function AppBody() {
       activeChange={storage.activeChange}
       setActiveChange={storage.setActiveChange}
       closeChange={storage.closeChange}
+      signOffChange={storage.signOffChange}
     />
   );
 }
@@ -153,6 +156,7 @@ function Workspace({
   activeChange,
   setActiveChange,
   closeChange,
+  signOffChange,
 }: {
   model: ScryModel;
   committed: ScryModel | null;
@@ -176,6 +180,7 @@ function Workspace({
   activeChange: string | null;
   setActiveChange: (id: string | null) => void;
   closeChange: (id: string) => Promise<void>;
+  signOffChange: (id: string) => Promise<void>;
 }) {
   const agent = useAgentSession();
   // One preview sidecar per open project; node pages derive their Preview
@@ -220,6 +225,19 @@ function Workspace({
   // Claim test verdicts: cheap, refreshed live when the on-disk cache changes
   // (an agent ingesting a report mid-session) — not only on the busy edge.
   const { verdicts: testVerdicts, probes: probeResults } = useTestStatuses(projectPath, writing);
+
+  // The in-session inbox: every item awaiting a verdict, merged from the
+  // sources above plus the fold-refusal ledger and the hook server's
+  // close-gate / touch events. The top bar shows its unread count.
+  const inbox = useInbox({
+    model,
+    committed,
+    planDiff,
+    verdicts: testVerdicts,
+    probes: probeResults,
+    projectPath,
+    modelRef: modelRefStr,
+  });
 
   // Cheap, agent-free nudge: which scopes have code changes since the last
   // reconcile. Refreshes on open, when ANY writer finishes (builds and
@@ -714,6 +732,10 @@ function Workspace({
         onCloseProject={closeProject}
         onOpenSearch={() => setSearchOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
+        inboxUnread={inbox.unread}
+        inboxLive={inbox.live}
+        inboxOpen={view === "wiki" && selected?.kind === "special" && selected.id === "inbox"}
+        onOpenInbox={() => openSpecial("inbox")}
       />
       <div className="flex min-h-0 flex-1">
         <ModelTree
@@ -762,6 +784,15 @@ function Workspace({
               activeChange={activeChange}
               onSetActiveChange={writing ? undefined : setActiveChange}
               onCloseChange={writing ? undefined : closeChange}
+              onSignOffChange={writing ? undefined : (id) => void signOffChange(id)}
+            />
+          ) : selected.id === "inbox" ? (
+            <InboxPage
+              model={model}
+              inbox={inbox}
+              editor={pageEditor}
+              onSelectNode={selectNode}
+              onSelectGroup={selectGroup}
             />
           ) : selected.id === "dark" ? (
             <DarkCodePage model={model} report={healthReport} onSelectNode={selectNode} />
