@@ -2,8 +2,10 @@
 //!
 //! While a project is open in the app, a tiny HTTP server on 127.0.0.1 answers
 //! the questions a coding-agent session hook asks: "what's the model's status?"
-//! (SessionStart), "what intent governs this file?" (post-Read overlay), "note
-//! that I touched this symbol" (post-Edit), and "what's unreconciled?" (Stop).
+//! (SessionStart), "what intent governs this file?" (post-Read overlay — served
+//! once per session and again only when its content changes, so re-reads don't
+//! re-inject an identical block), "note that I touched this symbol" (post-Edit),
+//! and "what's unreconciled?" (Stop).
 //! The server is advertised through `.scryer/hook.json` — hooks that find no
 //! live endpoint exit silently, so the whole hook surface is inert unless the
 //! app is running: opening Scryer IS the opt-in, closing it the opt-out.
@@ -55,14 +57,35 @@ struct SessionLog {
     /// that, but Copilot sends no such flag, so the promise has to be kept
     /// here, where the session is already known, rather than per harness.
     gated: Vec<(Instant, String)>,
+    /// The overlay each session last saw per file, as `(when, session, file,
+    /// FNV-1a hash of the payload)`. Agents re-read files constantly — offset
+    /// reads, re-reads after an edit, reads to confirm a change — and an
+    /// identical block injected every time costs context and teaches the model
+    /// to skim the channel. A repeat request whose payload hashes the same is
+    /// answered with an empty overlay; the hash is of the payload, not the
+    /// rendered text, so the overlay re-fires exactly when its content changed
+    /// (a reworded claim, a folded pending entry, a flagged anchor) and the
+    /// client stays a dumb renderer. Silence means "same as last time", never
+    /// "nothing here".
+    overlays: Vec<(Instant, String, String, u64)>,
 }
 
-/// Drop touches and close-gate marks older than [`TOUCH_TTL`].
+/// Drop touches, close-gate marks and overlay marks older than [`TOUCH_TTL`].
 fn prune_touches(log: &mut SessionLog, now: Instant) {
     log.touches
         .retain(|(at, _)| now.saturating_duration_since(*at) < TOUCH_TTL);
     log.gated
         .retain(|(at, _)| now.saturating_duration_since(*at) < TOUCH_TTL);
+    log.overlays
+        .retain(|(at, ..)| now.saturating_duration_since(*at) < TOUCH_TTL);
+}
+
+/// FNV-1a, 64-bit. Not cryptographic — it only has to tell "same payload as
+/// last time" from "different", and a collision costs one skipped overlay.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    bytes.iter().fold(OFFSET, |h, b| (h ^ u64::from(*b)).wrapping_mul(PRIME))
 }
 
 /// Managed Tauri state: the endpoint for the currently open project, if any.
@@ -284,6 +307,31 @@ fn handle_request(
                     if let serde_json::Value::Object(map) = &mut v {
                         map.insert("file".into(), serde_json::json!(file));
                     }
+                    // With a session named, dedupe: the same payload already
+                    // served to this session for this file is answered with an
+                    // overlay carrying no claims, directives or pending work,
+                    // which the client renders as nothing. No session (Copilot
+                    // sends none on some events) → always inject, no bookkeeping.
+                    let session = param("session").filter(|s| !s.is_empty());
+                    if let Some(session) = session {
+                        let hash = fnv1a64(&serde_json::to_vec(&v).unwrap_or_default());
+                        let now = Instant::now();
+                        let mut log = touches.lock().unwrap();
+                        prune_touches(&mut log, now);
+                        let seen = log
+                            .overlays
+                            .iter_mut()
+                            .find(|(_, s, f, _)| *s == session && *f == file);
+                        match seen {
+                            Some((_, _, _, prior)) if *prior == hash => {
+                                drop(log);
+                                respond(&mut stream, 200, &serde_json::json!({ "file": file }));
+                                return;
+                            }
+                            Some(entry) => *entry = (now, session, file, hash),
+                            None => log.overlays.push((now, session, file, hash)),
+                        }
+                    }
                     respond(&mut stream, 200, &v)
                 }
                 Err(e) => respond(&mut stream, 500, &serde_json::json!({ "error": e })),
@@ -355,7 +403,7 @@ fn handle_request(
             404,
             &serde_json::json!({
                 "error": format!("unknown route {method} {path}"),
-                "routes": ["GET /status", "GET /overlay?file=&symbol=", "POST /touch", "GET /close?session="],
+                "routes": ["GET /status", "GET /overlay?file=&symbol=&session=", "POST /touch", "GET /close?session="],
             }),
         ),
     }
@@ -737,12 +785,47 @@ mod tests {
         let mut log = SessionLog {
             touches: vec![(stale, touch("old.rs")), (fresh, touch("fresh.rs"))],
             gated: vec![(stale, "old-session".into()), (fresh, "live-session".into())],
+            overlays: Vec::new(),
         };
         prune_touches(&mut log, now);
         assert_eq!(log.touches.len(), 1);
         assert_eq!(log.touches[0].1.file, "fresh.rs");
         assert_eq!(log.gated.len(), 1);
         assert_eq!(log.gated[0].1, "live-session");
+    }
+
+    /// Overlay marks age out with the touches: a session resuming hours later
+    /// is a new run and gets the overlay again; fresh marks keep deduping.
+    #[test]
+    fn prune_drops_only_stale_overlay_marks() {
+        let now = Instant::now();
+        let stale = now.checked_sub(TOUCH_TTL + Duration::from_secs(60)).unwrap();
+        let fresh = now.checked_sub(Duration::from_secs(60)).unwrap();
+        let mut log = SessionLog {
+            touches: Vec::new(),
+            gated: Vec::new(),
+            overlays: vec![
+                (stale, "s1".into(), "old.rs".into(), 1),
+                (fresh, "s1".into(), "fresh.rs".into(), 2),
+                (stale, "s2".into(), "fresh.rs".into(), 3),
+            ],
+        };
+        prune_touches(&mut log, now);
+        assert_eq!(log.overlays.len(), 1);
+        assert_eq!(log.overlays[0].1, "s1");
+        assert_eq!(log.overlays[0].2, "fresh.rs");
+        assert_eq!(log.overlays[0].3, 2);
+    }
+
+    /// FNV-1a 64 against its published test vectors, and the property the
+    /// dedupe leans on: equal bytes hash equal, a one-byte change does not.
+    #[test]
+    fn fnv1a64_matches_reference_vectors() {
+        assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(fnv1a64(b"foobar"), 0x8594_4171_f739_67e8);
+        assert_eq!(fnv1a64(b"same"), fnv1a64(b"same"));
+        assert_ne!(fnv1a64(b"claim A"), fnv1a64(b"claim B"));
     }
 
     /// System > Container with a claim anchored in src/auth.rs.
@@ -865,6 +948,119 @@ mod tests {
                 || request(port, &token, "GET", "/status", "").0 == 0,
             "endpoint is inert after drop"
         );
+    }
+
+    /// The overlay request for `src/auth.rs`, optionally naming a session —
+    /// absolute path, percent-encoded the way the hook client sends it.
+    fn overlay_request(dir: &Path, port: u16, token: &str, session: Option<&str>) -> serde_json::Value {
+        let abs = format!("{}/src/auth.rs", dir.display()).replace('/', "%2F");
+        let target = match session {
+            Some(s) => format!("/overlay?file={abs}&session={s}"),
+            None => format!("/overlay?file={abs}"),
+        };
+        let (status, v) = request(port, token, "GET", &target, "");
+        assert_eq!(status, 200, "{v}");
+        v
+    }
+
+    fn start_with_token(dir: &Path) -> (HookServer, String) {
+        let server = start(dir, |_| {}, |_| {}).unwrap();
+        let disc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(".scryer/hook.json")).unwrap())
+                .unwrap();
+        (server, disc["token"].as_str().unwrap().to_string())
+    }
+
+    /// The overlay is served to a session once per file: an identical repeat
+    /// request gets an empty overlay (no claims, nothing for the client to
+    /// render), so a re-read does not re-inject the same block.
+    #[test]
+    fn overlay_repeats_for_a_session_are_answered_empty() {
+        let (dir, _) = temp_project();
+        let (server, token) = start_with_token(dir.path());
+
+        let first = overlay_request(dir.path(), server.port, &token, Some("s1"));
+        assert_eq!(first["claims"][0]["id"], "r-1", "{first}");
+        assert_eq!(first["file"], "src/auth.rs");
+
+        let again = overlay_request(dir.path(), server.port, &token, Some("s1"));
+        assert!(
+            again["claims"].as_array().map_or(true, Vec::is_empty),
+            "identical repeat must carry no claims: {again}"
+        );
+        assert!(again.get("ownDirectives").is_none() && again.get("pending").is_none(), "{again}");
+        assert_eq!(again["file"], "src/auth.rs", "the empty overlay still names the file");
+    }
+
+    /// Silence means "same as last time", never "nothing here": once the model
+    /// changes what it says about the file (a reworded claim), the same
+    /// session's next request for that file gets the overlay again.
+    #[test]
+    fn overlay_refires_for_a_session_when_the_payload_changes() {
+        let (dir, _) = temp_project();
+        let (server, token) = start_with_token(dir.path());
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let first = overlay_request(dir.path(), server.port, &token, Some("s1"));
+        assert_eq!(first["claims"][0]["statement"], "serves requests", "{first}");
+        let again = overlay_request(dir.path(), server.port, &token, Some("s1"));
+        assert!(again["claims"].as_array().map_or(true, Vec::is_empty), "{again}");
+
+        // Reword the claim in the committed model.
+        let mut m = scryer_core::read_model_at(&r).unwrap();
+        let api = m.nodes.iter_mut().find(|n| n.id == "api").unwrap();
+        api.responsibilities[0].statement = "serves authenticated requests".into();
+        scryer_core::write_model_at(&r, &m).unwrap();
+
+        let changed = overlay_request(dir.path(), server.port, &token, Some("s1"));
+        assert_eq!(
+            changed["claims"][0]["statement"], "serves authenticated requests",
+            "a changed payload re-fires: {changed}"
+        );
+        // …and the new content is what is now deduped against.
+        let again = overlay_request(dir.path(), server.port, &token, Some("s1"));
+        assert!(again["claims"].as_array().map_or(true, Vec::is_empty), "{again}");
+    }
+
+    /// Dedupe is per session: what session A has seen says nothing about
+    /// session B, which gets the full overlay on its first request.
+    #[test]
+    fn overlay_dedupe_is_independent_per_session() {
+        let (dir, _) = temp_project();
+        let (server, token) = start_with_token(dir.path());
+
+        let a = overlay_request(dir.path(), server.port, &token, Some("a"));
+        assert_eq!(a["claims"][0]["id"], "r-1", "{a}");
+        let a_again = overlay_request(dir.path(), server.port, &token, Some("a"));
+        assert!(a_again["claims"].as_array().map_or(true, Vec::is_empty), "{a_again}");
+
+        let b = overlay_request(dir.path(), server.port, &token, Some("b"));
+        assert_eq!(b["claims"][0]["id"], "r-1", "session B is not gated by A: {b}");
+        let b_again = overlay_request(dir.path(), server.port, &token, Some("b"));
+        assert!(b_again["claims"].as_array().map_or(true, Vec::is_empty), "{b_again}");
+        // A's mark is still in place after B's requests.
+        let a_third = overlay_request(dir.path(), server.port, &token, Some("a"));
+        assert!(a_third["claims"].as_array().map_or(true, Vec::is_empty), "{a_third}");
+    }
+
+    /// No session named (Copilot sends none on some events) → today's behaviour:
+    /// the overlay is served every time and nothing is remembered.
+    #[test]
+    fn overlay_without_a_session_always_injects() {
+        let (dir, _) = temp_project();
+        let (server, token) = start_with_token(dir.path());
+
+        for _ in 0..2 {
+            let v = overlay_request(dir.path(), server.port, &token, None);
+            assert_eq!(v["claims"][0]["id"], "r-1", "{v}");
+            assert_eq!(v["file"], "src/auth.rs");
+        }
+        // An empty session id counts as none, too.
+        let v = overlay_request(dir.path(), server.port, &token, Some(""));
+        assert_eq!(v["claims"][0]["id"], "r-1", "{v}");
+        // The session-less requests left no mark: a named session still gets its first.
+        let v = overlay_request(dir.path(), server.port, &token, Some("s1"));
+        assert_eq!(v["claims"][0]["id"], "r-1", "{v}");
     }
 
     /// With a reconcile baseline in place, /close gates on the anchor

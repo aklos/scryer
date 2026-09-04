@@ -10,6 +10,7 @@
 //!
 //! - SessionStart      → GET /status   → inject the model's status line
 //! - PostToolUse read  → GET /overlay  → inject the file's governing intent
+//!                                        (once per session until it changes)
 //! - PostToolUse edit… → POST /touch   → record the touch, say nothing
 //! - Stop              → GET /close    → block once with unreconciled claims
 //!
@@ -269,16 +270,33 @@ fn tool_file(event: &serde_json::Value) -> Option<&str> {
         .or_else(|| event["tool_input"]["path"].as_str())
 }
 
+/// The session id an event carries, if any. Copilot sends none on some events;
+/// an absent or empty id means "no session" and the endpoint skips its
+/// per-session bookkeeping for the request.
+fn session_id(event: &serde_json::Value) -> Option<&str> {
+    event["session_id"].as_str().filter(|s| !s.is_empty())
+}
+
+/// The `/overlay` request target for one file. The session rides along so the
+/// endpoint can stay silent when this session already saw an identical overlay
+/// for the file — the same block re-injected on every re-read costs context and
+/// teaches the agent to skim the channel. No session, no parameter: the
+/// endpoint then injects every time.
+fn overlay_target(file: &str, session: Option<&str>) -> String {
+    let mut target = format!("/overlay?file={}", percent_encode(file));
+    if let Some(session) = session {
+        target.push_str(&format!("&session={}", percent_encode(session)));
+    }
+    target
+}
+
 fn post_tool_use(ep: &Endpoint, event: &serde_json::Value, harness: Harness) {
     match harness.tool_kind(event["tool_name"].as_str().unwrap_or_default()) {
         ToolKind::Read => {
             let Some(file) = tool_file(event) else { return };
-            let Some(overlay) = call(
-                ep,
-                "GET",
-                &format!("/overlay?file={}", percent_encode(file)),
-                "",
-            ) else {
+            let Some(overlay) =
+                call(ep, "GET", &overlay_target(file, session_id(event)), "")
+            else {
                 return;
             };
             if let Some(text) = render_overlay(&overlay) {
@@ -318,13 +336,9 @@ const OVERLAY_FILE_CAP: usize = 5;
 /// and both fire it).
 fn pre_tool_use(ep: &Endpoint, event: &serde_json::Value, harness: Harness) {
     let mut sections: Vec<String> = Vec::new();
+    let session = session_id(event);
     for file in patched_files(event).iter().take(OVERLAY_FILE_CAP) {
-        let Some(overlay) = call(
-            ep,
-            "GET",
-            &format!("/overlay?file={}", percent_encode(file)),
-            "",
-        ) else {
+        let Some(overlay) = call(ep, "GET", &overlay_target(file, session), "") else {
             continue;
         };
         if let Some(text) = render_overlay(&overlay) {
@@ -395,7 +409,9 @@ fn absolutize(cwd: &str, file: &str) -> String {
 
 /// The compact intent overlay for one file — or `None` when the model has
 /// nothing to say about it (dark files stay silent; noise here would teach
-/// the agent to ignore the channel).
+/// the agent to ignore the channel). The endpoint answers a repeat request —
+/// same session, same file, unchanged payload — with an overlay that has no
+/// claims, directives or pending work, so the same `None` keeps it silent.
 fn render_overlay(overlay: &serde_json::Value) -> Option<String> {
     let claims = overlay["claims"].as_array().cloned().unwrap_or_default();
     let pending = overlay["pending"].as_array().cloned().unwrap_or_default();
@@ -596,6 +612,38 @@ mod tests {
             }
         });
         assert_eq!(patched_files(&event), vec!["/repo/src/lib.rs"], "absolute path untouched");
+    }
+
+    /// The overlay request names the session when the event carries one
+    /// (percent-encoded, so the endpoint can dedupe per session) and omits the
+    /// parameter otherwise — a session-less harness must still get the overlay.
+    #[test]
+    fn overlay_target_carries_the_session_when_present() {
+        assert_eq!(
+            overlay_target("/repo/src/lib.rs", Some("sess 1")),
+            "/overlay?file=/repo/src/lib.rs&session=sess%201"
+        );
+        assert_eq!(overlay_target("/repo/src/lib.rs", None), "/overlay?file=/repo/src/lib.rs");
+
+        let event = serde_json::json!({ "session_id": "abc", "tool_input": {} });
+        assert_eq!(session_id(&event), Some("abc"));
+        assert_eq!(session_id(&serde_json::json!({ "session_id": "" })), None, "empty id is no id");
+        assert_eq!(session_id(&serde_json::json!({})), None);
+        assert!(overlay_target("f.rs", session_id(&event)).ends_with("&session=abc"));
+    }
+
+    /// An overlay payload with no claims, directives or pending work — what the
+    /// endpoint returns for a repeat request — renders to nothing, so the dedupe
+    /// on the server side keeps the client silent without a client-side rule.
+    #[test]
+    fn an_empty_overlay_renders_to_nothing() {
+        assert_eq!(render_overlay(&serde_json::json!({ "file": "src/lib.rs" })), None);
+        assert_eq!(render_overlay(&serde_json::json!({})), None);
+        assert!(render_overlay(&serde_json::json!({
+            "file": "src/lib.rs",
+            "claims": [{ "hostName": "API", "statement": "serves requests" }]
+        }))
+        .is_some());
     }
 
     /// A reaped child's pid is dead, so its (fabricated) discovery file is
