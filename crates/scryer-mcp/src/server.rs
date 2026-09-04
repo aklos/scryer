@@ -1,9 +1,12 @@
 use crate::instructions::INSTRUCTIONS;
 use rmcp::{
-    handler::server::router::tool::ToolRouter,
-    model::{InitializeRequestParams, InitializeResult, ServerCapabilities, ServerInfo},
+    handler::server::{router::tool::ToolRouter, tool::ToolCallContext},
+    model::{
+        CallToolRequestParams, CallToolResult, InitializeRequestParams, InitializeResult,
+        ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+    },
     service::{RequestContext, RoleServer},
-    tool_handler, ServerHandler,
+    ErrorData as McpError, ServerHandler,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -11,6 +14,9 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 pub struct ScryerServer {
     tool_router: ToolRouter<Self>,
+    /// The tool list as advertised: the router's tools with their input
+    /// schemas slimmed once at construction (see [`slim_schema`]).
+    tools: Vec<Tool>,
     /// The change this SESSION is writing into (set via `set_change`), scoped
     /// to the project it was opened in. Deliberately in-memory only: the
     /// ledger itself (registry + tags) is persisted in the plan, but "which
@@ -23,16 +29,36 @@ pub struct ScryerServer {
 
 impl ScryerServer {
     pub fn new() -> Self {
+        let tool_router = Self::tool_router_read()
+            + Self::tool_router_nodes()
+            + Self::tool_router_links()
+            + Self::tool_router_misc()
+            + Self::tool_router_generation()
+            + Self::tool_router_intent()
+            + Self::tool_router_testing();
+        let tools = tool_router
+            .list_all()
+            .into_iter()
+            .map(|mut t| {
+                let mut schema = serde_json::Value::Object((*t.input_schema).clone());
+                slim_schema(&mut schema);
+                if let serde_json::Value::Object(o) = schema {
+                    t.input_schema = Arc::new(o);
+                }
+                t
+            })
+            .collect();
         Self {
-            tool_router: Self::tool_router_read()
-                + Self::tool_router_nodes()
-                + Self::tool_router_links()
-                + Self::tool_router_misc()
-                + Self::tool_router_generation()
-                + Self::tool_router_intent()
-                + Self::tool_router_testing(),
+            tool_router,
+            tools,
             current_change: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// The advertised tools (slimmed schemas) — what `tools/list` returns.
+    #[cfg(test)]
+    pub(crate) fn tools(&self) -> &[Tool] {
+        &self.tools
     }
 
     /// The session's current change id, if one is set FOR THIS PROJECT — a
@@ -50,8 +76,62 @@ impl ScryerServer {
     }
 }
 
-#[tool_handler]
+/// Strip the keys a JSON-schema generator emits that carry nothing for a
+/// model reading the tool list: the `$schema` dialect URL, `default: null`,
+/// `nullable`, `format`, `minimum`, and per-type `title`s. Optionality is already expressed by
+/// `required`; the rest is validator metadata. `$defs`/`$ref` are left alone.
+/// Runs once per tool at construction, so the generator's output shape can
+/// change under a schemars upgrade without touching the request types.
+pub(crate) fn slim_schema(v: &mut serde_json::Value) {
+    match v {
+        serde_json::Value::Object(map) => {
+            map.retain(|k, val| {
+                !(k == "nullable"
+                    || k == "$schema"
+                    || k == "format"
+                    || k == "minimum"
+                    || k == "title"
+                    || (k == "default" && val.is_null()))
+            });
+            for val in map.values_mut() {
+                slim_schema(val);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                slim_schema(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 impl ServerHandler for ScryerServer {
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let tcc = ToolCallContext::new(self, request, context);
+        self.tool_router.call(tcc).await
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        Ok(ListToolsResult {
+            tools: self.tools.clone(),
+            meta: None,
+            next_cursor: None,
+        })
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        self.tools.iter().find(|t| t.name == name).cloned()
+    }
+
     fn get_info(&self) -> ServerInfo {
         // The connect-time block is kept tight and imperative on purpose: it is
         // always-loaded context, so it leads with the working loop and points at
@@ -87,9 +167,9 @@ mod rule_wiring {
 
     fn descriptions() -> Vec<(String, String)> {
         ScryerServer::new()
-            .tool_router
-            .list_all()
-            .into_iter()
+            .tools()
+            .iter()
+            .cloned()
             .map(|t| {
                 (
                     t.name.to_string(),
@@ -183,5 +263,94 @@ mod rule_wiring {
         for (name, d) in &descs {
             assert!(d.len() <= 800, "{name} description is {} chars (max 800)", d.len());
         }
+    }
+
+    /// Every schema string a client sees, with the JSON path it sits at.
+    fn schema_strings(v: &serde_json::Value, path: &str, out: &mut Vec<(String, String)>) {
+        match v {
+            serde_json::Value::Object(map) => {
+                for (k, val) in map {
+                    let p = format!("{path}/{k}");
+                    if k == "description" {
+                        if let Some(s) = val.as_str() {
+                            out.push((p.clone(), s.to_string()));
+                        }
+                    }
+                    schema_strings(val, &p, out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (i, item) in items.iter().enumerate() {
+                    schema_strings(item, &format!("{path}/{i}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn slim_schema_drops_generator_noise_and_keeps_structure() {
+        let mut v = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "title": "Req",
+            "properties": {
+                "n": {"type": "integer", "format": "uint32", "minimum": 0, "nullable": true},
+                "s": {"type": "string", "default": null, "description": "kept"},
+                "d": {"type": "string", "default": ""},
+                "items": {"type": "array", "items": {"$ref": "#/$defs/X", "nullable": true}}
+            },
+            "required": ["n"],
+            "$defs": {"X": {"type": "object", "title": "X"}}
+        });
+        slim_schema(&mut v);
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "n": {"type": "integer"},
+                    "s": {"type": "string", "description": "kept"},
+                    "d": {"type": "string", "default": ""},
+                    "items": {"type": "array", "items": {"$ref": "#/$defs/X"}}
+                },
+                "required": ["n"],
+                "$defs": {"X": {"type": "object"}}
+            })
+        );
+    }
+
+    /// The schemas are the bulk of the always-loaded surface. Budgets are
+    /// on the advertised (slimmed) list, as a client sees it.
+    #[test]
+    fn tool_schemas_stay_within_budget() {
+        let server = ScryerServer::new();
+        let mut total = 0;
+        for t in server.tools() {
+            let schema = serde_json::Value::Object((*t.input_schema).clone());
+            let text = serde_json::to_string(&schema).unwrap();
+            let desc = t.description.as_deref().unwrap_or("").len();
+            total += text.len();
+            assert!(
+                text.len() + desc <= 4_500,
+                "{}: {} schema + {desc} description chars (max 4500)",
+                t.name,
+                text.len()
+            );
+            for noise in ["\"$schema\"", "\"nullable\"", "\"format\"", "\"minimum\"", "\"title\"", "\"default\":null"] {
+                assert!(!text.contains(noise), "{}: schema still carries {noise}", t.name);
+            }
+            let mut strings = Vec::new();
+            schema_strings(&schema, "", &mut strings);
+            for (path, s) in strings {
+                assert!(
+                    s.len() <= 160,
+                    "{}: schema description at {path} is {} chars (max 160): {s}",
+                    t.name,
+                    s.len()
+                );
+            }
+        }
+        assert!(total <= 30_000, "schemas total {total} chars (budget 30000)");
     }
 }

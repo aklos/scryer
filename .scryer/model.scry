@@ -822,6 +822,11 @@
           "id": "resp-ezr6t4",
           "statement": "**Names** the rules governing each tool on a trailing Rules line of its description, every slug resolving to a rule",
           "lastTouchedAt": 1788518421
+        },
+        {
+          "id": "resp-y40qy1",
+          "statement": "**Advertises** every tool with its schema slimmed once at construction, inside a fixed character budget",
+          "lastTouchedAt": 1788519002
         }
       ],
       "properties": [
@@ -1820,6 +1825,11 @@
           "id": "resp-147",
           "statement": "Bundles the governing claims, directives, pending work, and matching rules for a task or file into one orientation call.",
           "lastTouchedAt": 1784883763
+        },
+        {
+          "id": "resp-9gstjh",
+          "statement": "**Returns** compact JSON from every read tool",
+          "lastTouchedAt": 1788519002
         }
       ]
     },
@@ -1937,6 +1947,16 @@
           "id": "resp-156",
           "statement": "**Bundles** the governing nodes, claims, directives, scoped pending items, drift, matching rule slugs, and phase verdict for a task and/or set of files",
           "lastTouchedAt": 1788518421
+        },
+        {
+          "id": "resp-078nbh",
+          "statement": "**Lists** a drift scope's changed files only where they meet the task's files, with the scope's total",
+          "lastTouchedAt": 1788519002
+        },
+        {
+          "id": "resp-jqk8cq",
+          "statement": "**Caps** task matches at three and keeps a single-file answer inside a fixed size",
+          "lastTouchedAt": 1788519002
         }
       ]
     },
@@ -2033,6 +2053,11 @@
           "id": "resp-163",
           "statement": "Reports how completely the committed model maps to code — coverage, discharge, broad boundaries, per-scope anchor health — redirecting to plan-layer reads before anything is built.",
           "lastTouchedAt": 1784883763
+        },
+        {
+          "id": "resp-kema2k",
+          "statement": "**Keeps** standing explanations out of the report; they live in the health-reading rule",
+          "lastTouchedAt": 1788519002
         }
       ]
     },
@@ -13016,6 +13041,19 @@
           "lastTouchedAt": 1788518421
         }
       ]
+    },
+    {
+      "id": "node-4aqmb2",
+      "kind": "symbol",
+      "name": "slim_schema",
+      "parentId": "node-47",
+      "responsibilities": [
+        {
+          "id": "resp-t3qyde",
+          "statement": "**Strips** the schema-generator keys that carry nothing for a model (dialect URL, null defaults, nullable, format, minimum, title) while leaving definitions and references intact",
+          "lastTouchedAt": 1788519001
+        }
+      ]
     }
   ],
   "links": [
@@ -17839,6 +17877,12 @@
         "endLine": 36
       }
     ],
+    "resp-078nbh": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "orient"
+      }
+    ],
     "resp-100": [
       {
         "pattern": "crates/scryer-mcp/src/tools/generation.rs",
@@ -21466,6 +21510,18 @@
         "symbol": "buildInboxCards"
       }
     ],
+    "resp-jqk8cq": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "orient"
+      }
+    ],
+    "resp-kema2k": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "get_health"
+      }
+    ],
     "resp-pcm2a4": [
       {
         "pattern": "crates/scryer-core/src/changes.rs",
@@ -21484,6 +21540,12 @@
         "symbol": "entry_hash"
       }
     ],
+    "resp-t3qyde": [
+      {
+        "pattern": "crates/scryer-mcp/src/server.rs",
+        "symbol": "slim_schema"
+      }
+    ],
     "resp-tp1k7j": [
       {
         "pattern": "src-tauri/src/project.rs",
@@ -21500,6 +21562,12 @@
       {
         "pattern": "crates/scryer-mcp/src/tools/read.rs",
         "symbol": "get_rules"
+      }
+    ],
+    "resp-y40qy1": [
+      {
+        "pattern": "crates/scryer-mcp/src/server.rs",
+        "symbol": "ScryerServer"
       }
     ]
   },
@@ -23200,6 +23268,18 @@
         "symbol": "clears a refused fold's card when the refusals ledger no longer holds it"
       }
     ],
+    "resp-jqk8cq": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "orient_bundles_scope_pending_rules_and_phase"
+      }
+    ],
+    "resp-kema2k": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/read.rs",
+        "symbol": "get_health_aggregates_anchors_per_scope"
+      }
+    ],
     "resp-pcm2a4": [
       {
         "pattern": "crates/scryer-core/src/changes.rs",
@@ -23218,6 +23298,12 @@
         "symbol": "entry_hash_ignores_cosmetics_but_sees_a_move"
       }
     ],
+    "resp-t3qyde": [
+      {
+        "pattern": "crates/scryer-mcp/src/server.rs",
+        "symbol": "slim_schema_drops_generator_noise_and_keeps_structure"
+      }
+    ],
     "resp-tp1k7j": [
       {
         "pattern": "src-tauri/src/project.rs",
@@ -23228,6 +23314,12 @@
       {
         "pattern": "crates/scryer-mcp/src/tools/read.rs",
         "symbol": "get_rules_by_id_returns_the_named_rules_and_flags_unknown_slugs"
+      }
+    ],
+    "resp-y40qy1": [
+      {
+        "pattern": "crates/scryer-mcp/src/server.rs",
+        "symbol": "tool_schemas_stay_within_budget"
       }
     ]
   },

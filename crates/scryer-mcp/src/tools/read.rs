@@ -404,7 +404,7 @@ impl ScryerServer {
         let Some(node_id) = req.node.as_deref() else {
             let payload = overview_payload(&model);
             return Ok(CallToolResult::success(vec![Content::text(
-                serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
+                serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()),
             )]));
         };
 
@@ -413,7 +413,7 @@ impl ScryerServer {
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
         };
         strip_fields_compact(&mut payload);
-        let detail = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string());
+        let detail = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
         if detail.len() <= DETAIL_LIMIT {
             return Ok(CallToolResult::success(vec![Content::text(detail)]));
         }
@@ -449,7 +449,7 @@ impl ScryerServer {
             "children": children,
         });
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
+            serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()),
         )]))
     }
 
@@ -543,7 +543,7 @@ impl ScryerServer {
             "results": results,
         });
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
+            serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()),
         )]))
     }
 
@@ -649,7 +649,7 @@ impl ScryerServer {
         });
         strip_fields_compact(&mut payload);
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
+            serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()),
         )]))
     }
 
@@ -774,7 +774,7 @@ impl ScryerServer {
                 }
             }
             scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-            for (score, n) in scored.iter().take(5) {
+            for (score, n) in scored.iter().take(3) {
                 finest.insert(n.id.clone());
                 let resps: Vec<&str> =
                     n.responsibilities.iter().map(|r| r.statement.as_str()).collect();
@@ -896,10 +896,24 @@ impl ScryerServer {
                 .iter()
                 .filter(|sc| scope.contains(&sc.node_id))
                 .map(|sc| {
+                    // A scope's changed files are listed only where they meet
+                    // the task: the files the caller named, else a sample. The
+                    // total says how much more the scope carries.
+                    let named: Vec<&String> = sc
+                        .changed_files
+                        .iter()
+                        .filter(|f| files.iter().any(|g| g == *f))
+                        .collect();
+                    let shown: Vec<&String> = if named.is_empty() {
+                        sc.changed_files.iter().take(5).collect()
+                    } else {
+                        named
+                    };
                     serde_json::json!({
                         "nodeId": sc.node_id,
                         "nodeName": sc.node_name,
-                        "changedFiles": sc.changed_files,
+                        "changedFiles": shown,
+                        "changedFilesTotal": sc.changed_files.len(),
                     })
                 })
                 .collect()
@@ -939,7 +953,7 @@ impl ScryerServer {
         });
         strip_fields_compact(&mut payload);
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
+            serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()),
         )]))
     }
 
@@ -1056,7 +1070,7 @@ impl ScryerServer {
             "results": hits,
         });
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
+            serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()),
         )]))
     }
 
@@ -1102,7 +1116,7 @@ impl ScryerServer {
                              Drift will surface here once code changes after this point.",
             });
             return Ok(CallToolResult::success(vec![Content::text(
-                serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
+                serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()),
             )]));
         }
 
@@ -1136,7 +1150,7 @@ impl ScryerServer {
             "guidance": guidance,
         });
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
+            serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()),
         )]))
     }
 
@@ -1317,7 +1331,7 @@ impl ScryerServer {
             payload["currentChange"] = serde_json::Value::String(current);
         }
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
+            serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()),
         )]))
     }
 
@@ -1548,7 +1562,7 @@ impl ScryerServer {
                              NOT conclude the model is empty.",
                     });
                     return Ok(CallToolResult::success(vec![Content::text(
-                        serde_json::to_string_pretty(&payload)
+                        serde_json::to_string(&payload)
                             .unwrap_or_else(|_| "{}".to_string()),
                     )]));
                 }
@@ -1859,17 +1873,12 @@ impl ScryerServer {
 
                 serde_json::json!({
                     "totals": counts_json(&health.totals),
-                    "totalsNote": "totals.stale counts claims semantically FLAGGED stale by a \
-                                   drift review (flag_drift) — it is NOT the anchor tripwire \
-                                   count. 0 stale next to changed/broken anchors means those \
-                                   anchors AWAIT review, not that all is clean.",
                     "roots": roots,
                     "anchorSummary": {
                         "changed": n_changed,
                         "broken": n_broken,
                         "fileMissing": n_missing,
                         "byScope": by_scope,
-                        "note": "per-anchor detail is node-scoped — get_health {nodeId} for a scope's exact anchors",
                     },
                     "reanchored": anchor_check.reanchored,
                     "assertedOnlyLinks": asserted_only,
@@ -1879,21 +1888,18 @@ impl ScryerServer {
                         let name = model.nodes.iter().find(|n| &n.id == id).map(|n| n.name.clone()).unwrap_or_default();
                         serde_json::json!({ "nodeId": id, "name": name, "path": breadcrumb(&model, id) })
                     }).collect::<Vec<_>>(),
-                    "disconnectedNote": "architecture nodes no relationship link names as source or target — they read as edgeless/disconnected on every diagram and are easy to miss. Wire each into the relationship it actually performs, or confirm it belongs. Symbols are exempt.",
                     "edgeGraph": if derived.is_some() { "from last build's dependency cache" } else { "absent — run a model build (or the app's health refresh) to derive the link audit" },
                     "coverage": {
                         "linkAudit": link_audit_coverage,
-                        "linkAuditNote": "declared links between nameHeuristic-language files can read asserted-only even when real — calibrate the audit's verdict accordingly",
                         "silentAnchors": silent_anchors.len(),
                         "silentAnchorSample": silent_anchors.iter().take(5).collect::<Vec<_>>(),
-                        "silentAnchorNote": if silent_anchors.is_empty() { "every anchor carries a fingerprint tripwire" } else { "these anchors have NO fingerprint (file absent, symbol unresolvable, or glob matching nothing) — drift can never fire for them, so their green is silence, not health" },
                     },
                 })
             }
         };
 
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
+            serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()),
         )]))
     }
 }
@@ -2564,10 +2570,10 @@ mod tests {
         assert_eq!(v["anchorSummary"]["byScope"][0]["nodeId"], "api");
         assert_eq!(v["anchorSummary"]["byScope"][0]["name"], "API");
         assert_eq!(v["anchorSummary"]["byScope"][0]["changed"], 1);
-        assert!(
-            v["totalsNote"].as_str().unwrap().contains("NOT the anchor tripwire count"),
-            "stale is annotated"
-        );
+        // Standing explanations live in the health-reading rule, not in
+        // every response.
+        assert!(v.get("totalsNote").is_none());
+        assert!(v["anchorSummary"].get("note").is_none());
 
         // Node-scoped call still carries the exact anchors.
         let v = result_json(
@@ -2856,6 +2862,13 @@ mod tests {
         assert!(pending.contains("r-new"), "{pending}");
         assert!(!pending.contains("\"web\""), "sibling work stays out: {pending}");
         assert_eq!(v["pendingTotal"], 1);
+
+        // Task matches are capped at 3 — the full list is search_model's job —
+        // and the whole single-file answer stays small: it is the per-task
+        // entry point, so its size is budgeted like the tool list.
+        assert!(v["matches"].as_array().unwrap().len() <= 3);
+        let rendered = serde_json::to_string(&v).unwrap();
+        assert!(rendered.len() <= 4_000, "orient response is {} chars", rendered.len());
 
         // Rules by slug: "symbol" names the symbols rule, capped at 3, no body.
         let rules = v["rules"].as_array().unwrap();

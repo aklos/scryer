@@ -284,7 +284,7 @@ fn commit(
         payload["state"] = serde_json::json!(h);
     }
     Ok(CallToolResult::success(vec![Content::text(
-        serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
+        serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()),
     )]))
 }
 

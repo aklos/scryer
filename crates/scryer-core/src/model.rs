@@ -29,12 +29,14 @@ pub enum Kind {
 /// conformance role.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(description = "A responsibility: a verb-led business statement with optional concern tag.")]
 pub struct Responsibility {
     pub id: String,
     /// Verb-led business statement of accountability. No mechanism words.
     /// EARS-shaped (condition first, response last) and may carry display
     /// markup — `**bold**` on the keyword and response verb — which the UI
-    /// renders and strips for comparison (rule 21).
+    /// renders and strips for comparison (statement-ears).
+    #[schemars(description = "Verb-led EARS statement, **bold** on the keyword and response verb.")]
     pub statement: String,
     /// The cross-cutting concern this responsibility serves — at most ONE
     /// kebab-case slug (e.g. "auth", "idempotency"), referencing an entry in
@@ -42,7 +44,8 @@ pub struct Responsibility {
     /// minted automatically on first use). Untagged means core domain flow —
     /// that absence is signal, not an omission. Metadata beside the statement,
     /// not part of it: no conformance role, and a tag change never re-dates
-    /// `last_touched_at`. See rule 20.
+    /// `last_touched_at`. See the concerns rule.
+    #[schemars(description = "ONE kebab-case concern slug; omit for core domain flow.")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub concern: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -68,6 +71,7 @@ pub struct Responsibility {
     /// verdict (re-implement, reword, or drop) — the status itself is the
     /// prescription and stays untouched until that verdict. Cleared by
     /// `mark_implemented` or by editing the claim.
+    #[schemars(description = "Drift flag: the code no longer discharges this claim.")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stale: Option<bool>,
     /// Drift's proposed correction for a `stale` claim: the statement that would
@@ -77,6 +81,7 @@ pub struct Responsibility {
     /// re-implement/drop verdicts. A localized hint, not a plan work item:
     /// `diff` ignores it, so a reword awaiting a verdict never enters the queue.
     /// Cleared with `stale` on any verdict or edit.
+    #[schemars(description = "Drift's proposed reword for a stale claim.")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stale_proposal: Option<String>,
     /// Optional prescriptive HOW-constraints — verb-led "must"/"never" rules
@@ -136,6 +141,7 @@ pub struct SchemaProperty {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Source {
     /// Glob pattern for matching files, e.g. "src/auth/**/*.rs"
+    #[schemars(description = "Glob pattern, e.g. src/auth/**/*.rs.")]
     pub pattern: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
@@ -145,10 +151,12 @@ pub struct Source {
 #[serde(rename_all = "camelCase")]
 pub struct SourceLocation {
     /// File path (relative to the project) the responsibility maps into.
+    #[schemars(description = "Project-relative file path.")]
     pub pattern: String,
     /// Durable anchor: the identifier (function/handler/type/component name)
     /// that discharges the responsibility. The exact line range is resolved
     /// from this on demand, so it survives edits that shift line numbers.
+    #[schemars(description = "Enclosing definition name; the durable anchor.")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symbol: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
