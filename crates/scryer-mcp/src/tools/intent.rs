@@ -1245,7 +1245,79 @@ mod tests {
             None,
         ));
         scryer_core::write_model_at(&model_ref, &model).unwrap();
-        (ScryerServer::new(), dir, "node-1".to_string())
+        let server = ScryerServer::with_change(dir.path());
+        (server, dir, "node-1".to_string())
+    }
+
+    /// Every plan write belongs to a change: with none open the write is
+    /// refused, names the call that opens one, and leaves the plan untouched.
+    #[test]
+    fn plan_writes_are_refused_without_an_open_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut model = ScryModel::new();
+        model.nodes.push(blank_node("node-1".into(), Kind::System, "Acme".into(), None));
+        scryer_core::write_model_at(&model_ref, &model).unwrap();
+        let project = Some(dir.path().to_string_lossy().to_string());
+
+        let server = ScryerServer::new();
+        let r = server
+            .add_container(Parameters(AddContainerRequest {
+                project: project.clone(),
+                items: vec![ContainerItem {
+                    parent_id: "node-1".into(),
+                    name: "API".into(),
+                    description: None,
+                    technology: None,
+                    external: false,
+                    boundary_dir: None,
+                    responsibilities: vec![],
+                }],
+            }))
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let text = r.content[0].as_text().unwrap().text.clone();
+        assert!(text.contains("REFUSED: no change is open"), "{text}");
+        assert!(text.contains("open_change {rationale:"), "{text}");
+        let plan = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert!(!plan.nodes.iter().any(|n| n.name == "API"), "nothing was written");
+
+        // A change that has since closed is no better than none: the session
+        // pointer is stale and the write still needs a live ledger.
+        server.set_session_change(Some((dir.path().to_path_buf(), "chg-gone".into())));
+        let r = server
+            .add_container(Parameters(AddContainerRequest {
+                project: project.clone(),
+                items: vec![ContainerItem {
+                    parent_id: "node-1".into(),
+                    name: "API".into(),
+                    description: None,
+                    technology: None,
+                    external: false,
+                    boundary_dir: None,
+                    responsibilities: vec![],
+                }],
+            }))
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+
+        // With one open, the same write lands.
+        let server = ScryerServer::with_change(dir.path());
+        let r = server
+            .add_container(Parameters(AddContainerRequest {
+                project,
+                items: vec![ContainerItem {
+                    parent_id: "node-1".into(),
+                    name: "API".into(),
+                    description: None,
+                    technology: None,
+                    external: false,
+                    boundary_dir: None,
+                    responsibilities: vec![],
+                }],
+            }))
+            .unwrap();
+        assert_ne!(r.is_error, Some(true));
     }
 
     fn read_back(dir: &tempfile::TempDir) -> ScryModel {
@@ -1317,7 +1389,7 @@ mod tests {
         plan.nodes.retain(|n| n.id != "node-2");
         scryer_core::write_planned_at(&r, &plan).unwrap();
 
-        let server = ScryerServer::new();
+        let server = ScryerServer::with_change(dir.path());
         let project = dir.path().to_string_lossy().to_string();
         server
             .add_container(Parameters(AddContainerRequest {
@@ -1415,7 +1487,7 @@ mod tests {
         assert!(!r.planned_path().exists(), "precondition: no draft exists yet");
 
         // An authoring write with no prior draft.
-        let server = ScryerServer::new();
+        let server = ScryerServer::with_change(dir.path());
         let project = dir.path().to_string_lossy().to_string();
         server
             .add_container(Parameters(AddContainerRequest {

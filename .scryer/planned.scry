@@ -1181,8 +1181,12 @@
         {
           "id": "resp-911",
           "statement": "**When** an agent write touches a signed-off change's entries, **report** each one that is now amended, added, or dropped against the sign-off snapshot",
-          "concern": "oversight",
           "lastTouchedAt": 1788498394
+        },
+        {
+          "id": "resp-n0xw7w",
+          "statement": "**If** the session has no open change, **refuse** the plan write and name `open_change` as the call that opens one",
+          "lastTouchedAt": 1788521154
         }
       ]
     },
@@ -1619,7 +1623,7 @@
     {
       "id": "node-93",
       "kind": "symbol",
-      "name": "set_groups",
+      "name": "replace_groups",
       "parentId": "node-91",
       "responsibilities": [
         {
@@ -1658,24 +1662,13 @@
     {
       "id": "node-96",
       "kind": "symbol",
-      "name": "set_change",
+      "name": "open_change",
       "parentId": "node-91",
       "responsibilities": [
         {
           "id": "resp-127",
-          "statement": "Opens a new named change, resumes an existing one by id, detaches the session from its current change, or closes an empty stranded one.",
-          "lastTouchedAt": 1784883763
-        },
-        {
-          "id": "resp-683",
-          "statement": "**When** `retag` names ids, **re-file** their pending work into the target change instead of the session's selection",
-          "lastTouchedAt": 1786010084
-        },
-        {
-          "id": "resp-910",
-          "statement": "**When** `sign_off` is passed, **stamp** the change with a snapshot of its tagged entries so later agent edits read as amendments",
-          "concern": "oversight",
-          "lastTouchedAt": 1788498394
+          "statement": "Opens a new change from a rationale, or resumes an open one by id, and points the session's plan writes at it",
+          "lastTouchedAt": 1788521154
         }
       ]
     },
@@ -1763,7 +1756,7 @@
     {
       "id": "node-102",
       "kind": "symbol",
-      "name": "set_model",
+      "name": "replace_model",
       "parentId": "node-97",
       "responsibilities": [
         {
@@ -1827,7 +1820,7 @@
     {
       "id": "node-106",
       "kind": "symbol",
-      "name": "set_node",
+      "name": "replace_subtree",
       "parentId": "node-97",
       "responsibilities": [
         {
@@ -13061,6 +13054,63 @@
           "lastTouchedAt": 1788518962
         }
       ]
+    },
+    {
+      "id": "node-5h83nx",
+      "kind": "symbol",
+      "name": "sign_off",
+      "parentId": "node-91",
+      "responsibilities": [
+        {
+          "id": "resp-7zjwrk",
+          "statement": "Records the developer's approval of a change, named by id or the session's own, and keeps the session pointed at it",
+          "lastTouchedAt": 1788521150
+        },
+        {
+          "id": "resp-910",
+          "statement": "**When** `sign_off` is passed, **stamp** the change with a snapshot of its tagged entries so later agent edits read as amendments",
+          "lastTouchedAt": 1788521160
+        }
+      ]
+    },
+    {
+      "id": "node-evq6b0",
+      "kind": "symbol",
+      "name": "close_change",
+      "parentId": "node-91",
+      "responsibilities": [
+        {
+          "id": "resp-z9kn5w",
+          "statement": "Closes an empty stranded change as abandoned, keeping its rationale in history, and detaches the session if it pointed there",
+          "lastTouchedAt": 1788521150
+        },
+        {
+          "id": "resp-qe543p",
+          "statement": "**If** the change still has tagged entries, **refuse** to close it and say that folding or reverting them closes it",
+          "lastTouchedAt": 1788521150
+        }
+      ]
+    },
+    {
+      "id": "node-6y7mms",
+      "kind": "symbol",
+      "name": "refile",
+      "parentId": "node-91",
+      "responsibilities": [
+        {
+          "id": "resp-s4nh6n",
+          "statement": "Moves pending work between changes by bare id, naming what came from where",
+          "lastTouchedAt": 1788521150
+        },
+        {
+          "id": "resp-683",
+          "statement": "**When** `ids` names pending work, **re-file** it into the `to` change instead of the session's selection",
+          "vagrant": true,
+          "vagrantOrigin": "amendment",
+          "approvedStatement": "**When** `retag` names ids, **re-file** their pending work into the target change instead of the session's selection",
+          "lastTouchedAt": 1788521675
+        }
+      ]
     }
   ],
   "links": [
@@ -16772,10 +16822,24 @@
     }
   ],
   "sourceMap": {
+    "resp-683": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/misc.rs",
+        "symbol": "refile"
+      }
+    ],
     "resp-kc1r12": [
       {
         "pattern": "src/hooks/useInbox.ts",
         "symbol": "useInbox"
+      }
+    ]
+  },
+  "testMap": {
+    "resp-683": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
+        "symbol": "refile_moves_pending_work_between_changes"
       }
     ]
   },
@@ -16798,9 +16862,81 @@
       "id": "chg-j88eqf",
       "rationale": "An in-session inbox: one live stream of cards for everything needing the developer's verdict, ordered by risk, with the resolving actions on each card",
       "createdAt": 1788498428
+    },
+    {
+      "id": "chg-qxjsaq",
+      "rationale": "Give every change-ledger action its own tool and refuse plan writes when no change is open; rename the replace-style generation primitives and the probe pair",
+      "createdAt": 1788521067,
+      "signedOff": {
+        "at": 1788521189,
+        "entries": {
+          "node:node-102": {
+            "hash": "d926f3cf9e71313d"
+          },
+          "node:node-106": {
+            "hash": "21979362dd926c92"
+          },
+          "node:node-5h83nx": {
+            "hash": "1ca4b1c792008cf4"
+          },
+          "node:node-6y7mms": {
+            "hash": "5891cdc0c65dc934"
+          },
+          "node:node-93": {
+            "hash": "0125c3c0d5cab4ba"
+          },
+          "node:node-96": {
+            "hash": "1706a47448dc4a44"
+          },
+          "node:node-evq6b0": {
+            "hash": "6046db908d8ea3d2"
+          },
+          "resp:resp-127": {
+            "hash": "1489bc7680783fb5",
+            "statement": "Opens a new change from a rationale, or resumes an open one by id, and points the session's plan writes at it",
+            "host": "node-96"
+          },
+          "resp:resp-683": {
+            "hash": "109bb9e474b31f68",
+            "statement": "**When** `retag` names ids, **re-file** their pending work into the target change instead of the session's selection",
+            "host": "node-6y7mms"
+          },
+          "resp:resp-7zjwrk": {
+            "hash": "3305d4cb880503d6",
+            "statement": "Records the developer's approval of a change, named by id or the session's own, and keeps the session pointed at it",
+            "host": "node-5h83nx"
+          },
+          "resp:resp-910": {
+            "hash": "c4ef3cb68848cca7",
+            "statement": "**When** `sign_off` is passed, **stamp** the change with a snapshot of its tagged entries so later agent edits read as amendments",
+            "host": "node-5h83nx"
+          },
+          "resp:resp-n0xw7w": {
+            "hash": "c13b7e7dfa74ffc0",
+            "statement": "**If** the session has no open change, **refuse** the plan write and name `open_change` as the call that opens one",
+            "host": "node-64"
+          },
+          "resp:resp-qe543p": {
+            "hash": "05919d46636bc95d",
+            "statement": "**If** the change still has tagged entries, **refuse** to close it and say that folding or reverting them closes it",
+            "host": "node-evq6b0"
+          },
+          "resp:resp-s4nh6n": {
+            "hash": "ef13d0e57fe227a3",
+            "statement": "Moves pending work between changes by bare id, naming what came from where",
+            "host": "node-6y7mms"
+          },
+          "resp:resp-z9kn5w": {
+            "hash": "059602916f7465a9",
+            "statement": "Closes an empty stranded change as abandoned, keeping its rationale in history, and detaches the session if it pointed there",
+            "host": "node-evq6b0"
+          }
+        }
+      }
     }
   ],
   "changeMap": {
+    "resp:resp-683": "chg-qxjsaq",
     "resp:resp-kc1r12": "chg-j88eqf"
   }
 }

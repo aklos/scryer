@@ -287,7 +287,7 @@ mod tests {
         m.nodes.push(node("a", "A"));
         m.nodes.push(node("b", "B"));
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
-        let server = ScryerServer::new();
+        let server = ScryerServer::with_change(dir.path());
         let project = dir.path().to_string_lossy().to_string();
 
         let r = server
@@ -345,7 +345,7 @@ mod tests {
         m.nodes.push(node("a", "A"));
         m.nodes.push(node("b", "B"));
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
-        let server = ScryerServer::new();
+        let server = ScryerServer::with_change(dir.path());
         let project = dir.path().to_string_lossy().to_string();
         let call = |label: &str| {
             server

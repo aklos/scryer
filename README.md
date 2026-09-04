@@ -83,7 +83,7 @@ Scryer keeps two layers on disk in `.scryer/`:
 
 The difference between them is the **plan**: the outstanding model→code work. When you add a responsibility or a node, it shows in the plan as an `added` mark in the tree. When the agent writes the code, `mark_implemented` folds that work into the committed model. Drift works the other way: when code changes, the agent reconciles undescribed behavior back into the model.
 
-Plan work can be filed into **named changes**: a session opens a change with `open_change {rationale}` and its plan writes tag to it automatically, so parallel sessions (or you, on the canvas) stay separable. When a change's last entry folds in, it closes and its rationale lands in the history log.
+Plan work is filed into **named changes**: a session opens a change with `open_change {rationale}` before it starts, its plan writes tag to it automatically (and are refused while no change is open), so parallel sessions (or you, on the canvas) stay separable. When a change's last entry folds in, it closes and its rationale lands in the history log.
 
 This is how the model stays ahead of the code: intent is captured as a plan before the code exists, and the committed model only ever reflects what's actually been built.
 

@@ -61,6 +61,19 @@ impl ScryerServer {
         &self.tools
     }
 
+    /// A server whose session already has an open change on `project`, so a
+    /// test can exercise a plan write without staging the ledger first.
+    #[cfg(test)]
+    pub(crate) fn with_change(project: &std::path::Path) -> Self {
+        let server = Self::new();
+        let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
+        let mut plan = scryer_core::read_planned_seeded_at(&model_ref).unwrap_or_default();
+        let id = scryer_core::changes::open_change(&mut plan, "test fixture", 0);
+        scryer_core::write_planned_at(&model_ref, &plan).unwrap();
+        server.set_session_change(Some((project.to_path_buf(), id)));
+        server
+    }
+
     /// The session's current change id, if one is set FOR THIS PROJECT — a
     /// change opened in project A never tags writes into project B.
     pub(crate) fn session_change(&self, model_ref: &scryer_core::ModelRef) -> Option<String> {

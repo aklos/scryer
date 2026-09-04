@@ -1127,7 +1127,7 @@ mod tests {
         });
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
 
-        let server = ScryerServer::new();
+        let server = ScryerServer::with_change(dir.path());
         let project = dir.path().to_string_lossy().to_string();
 
         server
@@ -1189,7 +1189,7 @@ mod tests {
         scryer_core::write_model_at(&model_ref, &m).unwrap();
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
 
-        let server = ScryerServer::new();
+        let server = ScryerServer::with_change(dir.path());
         let res = server
             .update_group(Parameters(UpdateGroupRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
@@ -1236,7 +1236,7 @@ mod tests {
             "memberIds": ["node-1", "node-2"],
             "responsibilities": [{ "id": "new", "statement": "coordinates the pair" }]
         }]);
-        let server = ScryerServer::new();
+        let server = ScryerServer::with_change(dir.path());
         let res = server
             .replace_groups(Parameters(SetGroupsRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),

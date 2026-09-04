@@ -14,19 +14,21 @@ that govern it, and a rule cites others by slug in double square brackets. Befor
 rules governs, or make a modeling judgment, fetch the rule: `get_rules {id: \"slug-a,slug-b\"}` \
 (`get_rules {}` lists them all). Never infer the conventions from existing nodes.\n\
 \n\
-## Every task that changes behaviour\n\
-1. ORIENT — `orient {task, files}` for a coding task; `get_health` then `read_model` for a \
+## Every task beyond a one-line fix\n\
+1. OPEN — `open_change {rationale}` first, whatever the task; plan writes are refused while no \
+change is open, and the rationale outlives the work in the history log. [[change-ledger]]\n\
+2. ORIENT — `orient {task, files}` for a coding task; `get_health` then `read_model` for a \
 model-building one. Honor every directive it returns. [[loop-orient]]\n\
-2. PLAN — author the change into the model before writing code; name your task with \
-`open_change {rationale}` when other work may share the plan. Only changes that alter what the \
-model claims need this. [[loop-plan]] [[proportionality]]\n\
-3. SIGN-OFF — tell the user what you planned and get their go-ahead; record it with \
+3. PLAN — author the change into the model before writing code. Only changes that alter what the \
+model claims need plan entries; the change stays open either way. [[loop-plan]] [[proportionality]]\n\
+4. SIGN-OFF — tell the user what you planned and get their go-ahead; record it with \
 `sign_off`. [[loop-sign-off]]\n\
-4. BUILD — implement claim by claim, each testable (When/While/If) claim with its test in the \
+5. BUILD — implement claim by claim, each testable (When/While/If) claim with its test in the \
 project's own suite. [[loop-build]]\n\
-5. CLOSE — `mark_implemented` with `anchors` and `tests` in the same call; the fold is gated on a \
+6. CLOSE — `mark_implemented` with `anchors` and `tests` in the same call; the fold is gated on a \
 passing verdict, so run the tests with a JUnit reporter and `ingest_test_report` first. Then \
-`get_test_radius`, `flag_drift`, `reconcile_drift`. [[loop-close]]\n\
+`get_test_radius`, `flag_drift`, `reconcile_drift`. A change that filed nothing closes with \
+`close_change`. [[loop-close]]\n\
 \n\
 If no model exists yet, build one first from the code. [[generation-fill]]\n\
 \n\

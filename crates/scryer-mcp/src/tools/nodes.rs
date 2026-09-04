@@ -2456,7 +2456,7 @@ mod tests {
         scryer_core::write_model_at(&model_ref, &m).unwrap();
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
 
-        let server = ScryerServer::new();
+        let server = ScryerServer::with_change(dir.path());
         let item = |n: Option<&str>, r: Option<&str>, d: &[&str]| SetDirectivesItem {
             node_id: n.map(Into::into),
             responsibility_id: r.map(Into::into),
@@ -2505,7 +2505,7 @@ mod tests {
         scryer_core::write_model_at(&model_ref, &m).unwrap();
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
 
-        let server = ScryerServer::new();
+        let server = ScryerServer::with_change(dir.path());
         server
             .set_directives(Parameters(SetDirectivesRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
@@ -2648,7 +2648,7 @@ mod tests {
         scryer_core::write_model_at(&model_ref, &m).unwrap();
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
 
-        let server = ScryerServer::new();
+        let server = ScryerServer::with_change(dir.path());
         server
             .move_nodes(Parameters(MoveNodesRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
@@ -2982,7 +2982,7 @@ mod tests {
         scryer_core::write_model_at(&model_ref, &m).unwrap();
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
 
-        let server = ScryerServer::new();
+        let server = ScryerServer::with_change(dir.path());
         // Stage the deletion of the whole `parent-1` subtree in the plan.
         server
             .delete_nodes(Parameters(DeleteNodeRequest {
@@ -3223,7 +3223,7 @@ mod tests {
             icon: None,
         });
         scryer_core::write_model_at(&model_ref, &m).unwrap();
-        let server = ScryerServer::new();
+        let server = ScryerServer::with_change(dir.path());
         let project = dir.path().to_string_lossy().to_string();
 
         // Valid: component A→B. The subtree (sym) follows; the group lets go.
@@ -3331,7 +3331,7 @@ mod tests {
         c.responsibilities.push(vagrant);
         m.nodes.push(c);
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
-        let server = ScryerServer::new();
+        let server = ScryerServer::with_change(dir.path());
         let project = dir.path().to_string_lossy().to_string();
 
         let r = server
@@ -3442,7 +3442,7 @@ mod tests {
             icon: None,
         });
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
-        let server = ScryerServer::new();
+        let server = ScryerServer::with_change(dir.path());
         let project = dir.path().to_string_lossy().to_string();
 
         let reparent = |node_id: &str, parent: &str| UpdateNodeItem {
@@ -4482,7 +4482,7 @@ mod tests {
         planned.nodes[0].responsibilities.retain(|r| r.id != "resp-2");
         scryer_core::write_planned_at(&model_ref, &planned).unwrap();
 
-        let server = ScryerServer::new();
+        let server = ScryerServer::with_change(dir.path());
         let r = server
             .update_nodes(Parameters(UpdateNodeRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
@@ -4546,7 +4546,7 @@ mod tests {
         scryer_core::write_planned_at(&model_ref, &committed).unwrap();
 
         // node-1 is written with resp-2 — which lives on node-2.
-        let server = ScryerServer::new();
+        let server = ScryerServer::with_change(dir.path());
         let r = server
             .update_nodes(Parameters(UpdateNodeRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),

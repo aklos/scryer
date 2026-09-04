@@ -1104,8 +1104,12 @@
         {
           "id": "resp-911",
           "statement": "**When** an agent write touches a signed-off change's entries, **report** each one that is now amended, added, or dropped against the sign-off snapshot",
-          "concern": "oversight",
           "lastTouchedAt": 1788500908
+        },
+        {
+          "id": "resp-n0xw7w",
+          "statement": "**If** the session has no open change, **refuse** the plan write and name `open_change` as the call that opens one",
+          "lastTouchedAt": 1788521688
         }
       ]
     },
@@ -1540,19 +1544,6 @@
       ]
     },
     {
-      "id": "node-93",
-      "kind": "symbol",
-      "name": "set_groups",
-      "parentId": "node-91",
-      "responsibilities": [
-        {
-          "id": "resp-124",
-          "statement": "Replaces the whole groups array from raw JSON, re-minting any caller-invented responsibility ids first.",
-          "lastTouchedAt": 1784883763
-        }
-      ]
-    },
-    {
       "id": "node-94",
       "kind": "symbol",
       "name": "update_group",
@@ -1575,30 +1566,6 @@
           "id": "resp-126",
           "statement": "Deletes a group by id, detaching any child groups from it.",
           "lastTouchedAt": 1784883763
-        }
-      ]
-    },
-    {
-      "id": "node-96",
-      "kind": "symbol",
-      "name": "set_change",
-      "parentId": "node-91",
-      "responsibilities": [
-        {
-          "id": "resp-127",
-          "statement": "Opens a new named change, resumes an existing one by id, detaches the session from its current change, or closes an empty stranded one.",
-          "lastTouchedAt": 1784883763
-        },
-        {
-          "id": "resp-683",
-          "statement": "**When** `retag` names ids, **re-file** their pending work into the target change instead of the session's selection",
-          "lastTouchedAt": 1786010102
-        },
-        {
-          "id": "resp-910",
-          "statement": "**When** `sign_off` is passed, **stamp** the change with a snapshot of its tagged entries so later agent edits read as amendments",
-          "concern": "oversight",
-          "lastTouchedAt": 1788500907
         }
       ]
     },
@@ -1684,19 +1651,6 @@
       ]
     },
     {
-      "id": "node-102",
-      "kind": "symbol",
-      "name": "set_model",
-      "parentId": "node-97",
-      "responsibilities": [
-        {
-          "id": "resp-136",
-          "statement": "Replaces the entire model from raw JSON, re-minting invented ids and restoring directives and positions before it lands.",
-          "lastTouchedAt": 1784883763
-        }
-      ]
-    },
-    {
       "id": "node-103",
       "kind": "symbol",
       "name": "update_nodes",
@@ -1743,19 +1697,6 @@
         {
           "id": "resp-139",
           "statement": "Reparents nodes with kind and cycle validation, clearing canvas position on a real reparent and evicting the node from its old-level group.",
-          "lastTouchedAt": 1784883763
-        }
-      ]
-    },
-    {
-      "id": "node-106",
-      "kind": "symbol",
-      "name": "set_node",
-      "parentId": "node-97",
-      "responsibilities": [
-        {
-          "id": "resp-140",
-          "statement": "Replaces one node's subtree from raw JSON describing code that already exists, committing it to both model layers so it never reads as pending.",
           "lastTouchedAt": 1784883763
         }
       ]
@@ -13054,6 +12995,107 @@
           "lastTouchedAt": 1788519001
         }
       ]
+    },
+    {
+      "id": "node-102",
+      "kind": "symbol",
+      "name": "replace_model",
+      "parentId": "node-97",
+      "responsibilities": [
+        {
+          "id": "resp-136",
+          "statement": "Replaces the entire model from raw JSON, re-minting invented ids and restoring directives and positions before it lands.",
+          "lastTouchedAt": 1784883763
+        }
+      ]
+    },
+    {
+      "id": "node-106",
+      "kind": "symbol",
+      "name": "replace_subtree",
+      "parentId": "node-97",
+      "responsibilities": [
+        {
+          "id": "resp-140",
+          "statement": "Replaces one node's subtree from raw JSON describing code that already exists, committing it to both model layers so it never reads as pending.",
+          "lastTouchedAt": 1784883763
+        }
+      ]
+    },
+    {
+      "id": "node-5h83nx",
+      "kind": "symbol",
+      "name": "sign_off",
+      "parentId": "node-91",
+      "responsibilities": [
+        {
+          "id": "resp-7zjwrk",
+          "statement": "Records the developer's approval of a change, named by id or the session's own, and keeps the session pointed at it",
+          "lastTouchedAt": 1788521675
+        },
+        {
+          "id": "resp-910",
+          "statement": "**When** `sign_off` is passed, **stamp** the change with a snapshot of its tagged entries so later agent edits read as amendments",
+          "lastTouchedAt": 1788521675
+        }
+      ]
+    },
+    {
+      "id": "node-6y7mms",
+      "kind": "symbol",
+      "name": "refile",
+      "parentId": "node-91",
+      "responsibilities": [
+        {
+          "id": "resp-s4nh6n",
+          "statement": "Moves pending work between changes by bare id, naming what came from where",
+          "lastTouchedAt": 1788521676
+        }
+      ]
+    },
+    {
+      "id": "node-93",
+      "kind": "symbol",
+      "name": "replace_groups",
+      "parentId": "node-91",
+      "responsibilities": [
+        {
+          "id": "resp-124",
+          "statement": "Replaces the whole groups array from raw JSON, re-minting any caller-invented responsibility ids first.",
+          "lastTouchedAt": 1784883763
+        }
+      ]
+    },
+    {
+      "id": "node-96",
+      "kind": "symbol",
+      "name": "open_change",
+      "parentId": "node-91",
+      "responsibilities": [
+        {
+          "id": "resp-127",
+          "statement": "Opens a new change from a rationale, or resumes an open one by id, and points the session's plan writes at it",
+          "lastTouchedAt": 1788521676
+        }
+      ]
+    },
+    {
+      "id": "node-evq6b0",
+      "kind": "symbol",
+      "name": "close_change",
+      "parentId": "node-91",
+      "responsibilities": [
+        {
+          "id": "resp-z9kn5w",
+          "statement": "Closes an empty stranded change as abandoned, keeping its rationale in history, and detaches the session if it pointed there",
+          "lastTouchedAt": 1788521676
+        },
+        {
+          "id": "resp-qe543p",
+          "statement": "**If** the change still has tagged entries, **refuse** to close it and say that folding or reverting them closes it",
+          "lastTouchedAt": 1788521688
+        }
+      ]
     }
   ],
   "links": [
@@ -17982,7 +18024,7 @@
     "resp-124": [
       {
         "pattern": "crates/scryer-mcp/src/tools/misc.rs",
-        "symbol": "set_groups"
+        "symbol": "replace_groups"
       }
     ],
     "resp-125": [
@@ -18000,7 +18042,7 @@
     "resp-127": [
       {
         "pattern": "crates/scryer-mcp/src/tools/misc.rs",
-        "symbol": "set_change"
+        "symbol": "open_change"
       }
     ],
     "resp-132": [
@@ -18030,7 +18072,7 @@
     "resp-136": [
       {
         "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
-        "symbol": "set_model"
+        "symbol": "replace_model"
       }
     ],
     "resp-137": [
@@ -18054,7 +18096,7 @@
     "resp-140": [
       {
         "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
-        "symbol": "set_node"
+        "symbol": "replace_subtree"
       }
     ],
     "resp-141": [
@@ -21188,6 +21230,12 @@
         "symbol": "mintId"
       }
     ],
+    "resp-7zjwrk": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/misc.rs",
+        "symbol": "sign_off"
+      }
+    ],
     "resp-8": [
       {
         "pattern": "crates/xtask/src/main.rs",
@@ -21321,7 +21369,7 @@
     "resp-910": [
       {
         "pattern": "crates/scryer-mcp/src/tools/misc.rs",
-        "symbol": "set_change"
+        "symbol": "sign_off"
       }
     ],
     "resp-911": [
@@ -21522,10 +21570,22 @@
         "symbol": "get_health"
       }
     ],
+    "resp-n0xw7w": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "write_planned_tagged"
+      }
+    ],
     "resp-pcm2a4": [
       {
         "pattern": "crates/scryer-core/src/changes.rs",
         "symbol": "classify_against_signoff"
+      }
+    ],
+    "resp-qe543p": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/misc.rs",
+        "symbol": "close_change"
       }
     ],
     "resp-ram7ds": [
@@ -21538,6 +21598,12 @@
       {
         "pattern": "crates/scryer-core/src/changes.rs",
         "symbol": "entry_hash"
+      }
+    ],
+    "resp-s4nh6n": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/misc.rs",
+        "symbol": "refile"
       }
     ],
     "resp-t3qyde": [
@@ -21568,6 +21634,12 @@
       {
         "pattern": "crates/scryer-mcp/src/server.rs",
         "symbol": "ScryerServer"
+      }
+    ],
+    "resp-z9kn5w": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/misc.rs",
+        "symbol": "close_change"
       }
     ]
   },
@@ -23280,10 +23352,22 @@
         "symbol": "get_health_aggregates_anchors_per_scope"
       }
     ],
+    "resp-n0xw7w": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/intent.rs",
+        "symbol": "plan_writes_are_refused_without_an_open_change"
+      }
+    ],
     "resp-pcm2a4": [
       {
         "pattern": "crates/scryer-core/src/changes.rs",
         "symbol": "sign_off_classifies_later_edits_against_the_snapshot"
+      }
+    ],
+    "resp-qe543p": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
+        "symbol": "close_change_discards_a_stranded_empty_ledger"
       }
     ],
     "resp-ram7ds": [
@@ -23296,6 +23380,12 @@
       {
         "pattern": "crates/scryer-core/src/changes.rs",
         "symbol": "entry_hash_ignores_cosmetics_but_sees_a_move"
+      }
+    ],
+    "resp-s4nh6n": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
+        "symbol": "refile_moves_pending_work_between_changes"
       }
     ],
     "resp-t3qyde": [
@@ -23320,6 +23410,12 @@
       {
         "pattern": "crates/scryer-mcp/src/server.rs",
         "symbol": "tool_schemas_stay_within_budget"
+      }
+    ],
+    "resp-z9kn5w": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
+        "symbol": "close_change_discards_a_stranded_empty_ledger"
       }
     ]
   },

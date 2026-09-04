@@ -518,9 +518,31 @@ pub(crate) fn write_planned_tagged(
     model: &mut ScryModel,
     change_id: Option<&str>,
 ) -> Result<Vec<String>, String> {
+    // The guard: every plan write belongs to a change. A session that has
+    // not opened one — or points at a change that has since closed — is told
+    // exactly which call fixes that, and nothing is written.
+    let Some(cid) = change_id.filter(|c| model.changes.iter().any(|m| m.id == *c)) else {
+        let hint = if model.changes.is_empty() {
+            "open_change {rationale: \"<the task in one sentence>\"}".to_string()
+        } else {
+            format!(
+                "open_change {{rationale: \"<the task in one sentence>\"}}, or resume one of: {}",
+                model
+                    .changes
+                    .iter()
+                    .map(|c| format!("{} (\"{}\")", c.id, c.rationale))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        return Err(format!(
+            "REFUSED: no change is open in this session, so this plan write has no ledger to \
+             land in. Open one first — {hint} — then repeat the write."
+        ));
+    };
     let mut warnings = Vec::new();
-    if let Some(cid) = change_id {
-        if model.changes.iter().any(|c| c.id == cid) {
+    {
+        {
             let before = scryer_core::read_planned_at(model_ref).unwrap_or_default();
             let keys: Vec<String> = scryer_core::diff::diff(&before, model)
                 .changes
