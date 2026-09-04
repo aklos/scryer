@@ -14,11 +14,9 @@ impl ScryerServer {
     #[tool(
         description = "Add links between nodes; direction is initiator (src) → provider (dst). Endpoints must \
          be siblings, or the deeper node's parent must already link to the other node — otherwise \
-         the batch is rejected with guidance, so order parent-level links first. Inside a styled \
-         container the link must also be legal in the style's layer matrix and every \
-         component/symbol-level link carries a `kind`. Also rejects missing endpoints, self-loops, \
-         and ancestor↔descendant links. Returns the link ids.
-\
+         the batch is rejected with guidance, so order parent-level links first. Under a style the \
+         link must pass the layer matrix and carry a `kind`. Also rejects missing endpoints, \
+         self-loops, and ancestor↔descendant links. Returns the link ids.\n\
          Rules: links-same-level, one-link, mentions-imply-links, styles"
     )]
     fn add_links(
@@ -313,7 +311,7 @@ mod tests {
         };
         m.nodes.extend([sys, svc, comp("dom", "Orders", "domain"), comp("app", "Checkout", "application")]);
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
-        let server = ScryerServer::new();
+        let server = ScryerServer::with_change(dir.path());
         let project = dir.path().to_string_lossy().to_string();
 
         let r = server

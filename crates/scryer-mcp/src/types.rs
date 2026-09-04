@@ -332,7 +332,7 @@ pub(crate) struct AddLinkItem {
     pub label: String,
     /// Method/protocol annotation, e.g. REST/JSON.
     pub method: Option<String>,
-    /// What the link IS — required when both endpoints sit inside styled containers (component/symbol level): `implements` (adapter → the port it realises), `calls` (into another node's public surface), `uses` (a same-layer sibling through its public surface), `depends` (a type/value import). Optional for system- and container-level prose links.
+    /// Required between styled nodes: implements (adapter → port) | calls (public surface) | uses (same-layer sibling) | depends (import). Optional on prose links.
     pub kind: Option<scryer_core::LinkKind>,
 }
 
@@ -462,7 +462,7 @@ pub(crate) struct ContainerItem {
     /// What it IS as software, a short badge (e.g. PostgreSQL 16).
     pub technology: Option<String>,
     pub description: Option<String>,
-    /// The architectural style this container's code ACTUALLY follows — one of `hexagonal` (services, backends, library cores), `feature-sliced` (SPAs, docs and static sites), `core-shell` (CLIs, small libraries, scripts), `pipeline` (ETL, dbt), or a project style under `.scryer/styles/`. OMIT it when the code has no recognisable shape: an unstyled container is a faithful description, and deciding what style it should take is a refactoring decision, never a modeling guess. Once set, every component under it carries one of the style's layers.
+    /// The style the code ACTUALLY follows: hexagonal | feature-sliced | core-shell | pipeline | a project style. Omit when the code has no shape; never guess.
     pub style: Option<String>,
     /// true for an external/third-party container.
     #[serde(default)]
@@ -484,7 +484,7 @@ pub(crate) struct AddContainerRequest {
 pub(crate) struct ComponentItem {
     pub parent_id: String,
     pub name: String,
-    /// The layer this component plays in its container's style — REQUIRED when the container has a style, one of its layer names (hexagonal: presentation | infrastructure | application | domain; feature-sliced: app | pages | widgets | features | entities | shared; core-shell: shell | core; pipeline: source | staging | intermediate | marts); OMIT under an unstyled container. Rejected when it is not in the style's list.
+    /// One of the container style's layer names; required under a styled container, omitted under an unstyled one. Rejected when not in the list.
     pub layer: Option<String>,
     pub description: Option<String>,
     /// Responsibility statements, each a plain string or `{statement, concern?}`.
@@ -642,7 +642,7 @@ pub(crate) struct AddSymbolRequest {
 pub(crate) struct ProposedComponent {
     pub key: String,
     pub name: String,
-    /// The layer this component plays in the container's style — REQUIRED when the container has a style (one of its layer names), OMITTED when it has none. The whole proposal is rejected when a layer is not in the style's list.
+    /// One of the container style's layer names; required under a styled container, omitted under an unstyled one. A bad layer rejects the whole proposal.
     pub layer: Option<String>,
     pub description: Option<String>,
     /// Responsibilities at the component's C4 altitude — each a plain string or `{statement, concern?}`.

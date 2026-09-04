@@ -210,12 +210,11 @@ fn validate_request(req: &CommitContainerModelRequest) -> Result<(), String> {
 #[tool_router(router = tool_router_generation, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
-        description = "The skeleton for a PLANNED component (or every component under a container) as \
-         data, never code: the directory its layer lives in, the layer, the only layers it may \
-         import, the symbols to define with their claims and fields, and the files already \
-         anchored there. Materialise it in the project's own language and idiom, then implement, \
-         anchor and attach tests (mark_implemented). Health flags a file outside the directory as \
-         `misplaced` and an import outside the allowed layers as a `layer_violation`.\n\
+        description = "Placement for a PLANNED component, or every component under a container: its \
+         layer's directory, the layers it may import, the symbols to define with their claims and \
+         fields, and the files already anchored there. Materialise it in the project's idiom, then \
+         mark_implemented with anchors and tests.
+\
          Rules: styles, loop-build"
     )]
     fn scaffold(

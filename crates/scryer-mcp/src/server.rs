@@ -263,16 +263,18 @@ mod rule_wiring {
 
     /// The always-loaded prose. Grows only by deliberate choice: raise the
     /// numbers here in the same change that adds the text.
+    /// The styles axis (the `scaffold` tool; `style`, `layer` and `kind` on the
+    /// write schemas) is what the current headroom above main's baseline pays for.
     #[test]
     fn instructions_and_descriptions_stay_within_budget() {
         assert!(
-            INSTRUCTIONS.len() <= 4_200,
-            "instructions are {} chars (budget 4200, ~1k tokens)",
+            INSTRUCTIONS.len() <= 4_400,
+            "instructions are {} chars (budget 4400, ~1k tokens)",
             INSTRUCTIONS.len()
         );
         let descs = descriptions();
         let total: usize = descs.iter().map(|(_, d)| d.len()).sum();
-        assert!(total <= 16_000, "descriptions total {total} chars (budget 16000)");
+        assert!(total <= 16_500, "descriptions total {total} chars (budget 16500)");
         for (name, d) in &descs {
             assert!(d.len() <= 800, "{name} description is {} chars (max 800)", d.len());
         }
@@ -364,6 +366,6 @@ mod rule_wiring {
                 );
             }
         }
-        assert!(total <= 30_000, "schemas total {total} chars (budget 30000)");
+        assert!(total <= 33_000, "schemas total {total} chars (budget 33000)");
     }
 }

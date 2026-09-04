@@ -656,7 +656,7 @@ impl ScryerServer {
     #[tool(
         description = "The front door for a CODING task: pass the `task` in a few words and/or the \
          project-relative `files` it touches. Returns, scoped to that: per file the governing \
-         node chain and its `placement` (layer, allowed imports, directory — obey it), anchored claims (`untested` flagged) and binding directives; per task the \
+         node chain and `placement`, anchored claims (`untested` flagged) and binding directives; per task the \
          best-matching nodes; pending entries and drift scopes inside the scope; matching rule \
          slugs; a `phase` verdict; and the loop `state` line. Replaces the get_health / \
          search_model / read_model dance for coding sessions.\n\
@@ -1504,9 +1504,8 @@ impl ScryerServer {
     #[tool(
         description = "The model's deterministic observability report. Headline: `tested` / `testable` / \
          `untested` claim counts; then per node rollups, vagrant/stale flags, anchor coverage and \
-         state, link audit, `style` (code-time conformance to each container's declared style: \
-         `layer_violation`, `isolation_violation`, `external_violation`, `misplaced`, each with the \
-         file and the fix), `completeness`, `coverage` and `silentAnchors`. `node_id` scopes to \
+         state, link audit, `style` (code-time conformance findings), `completeness`, `coverage` \
+         and `silentAnchors`. `node_id` scopes to \
          one subtree with per-child summaries; omit for the whole-model summary. Use it to decide \
          WHERE work is needed before reading subtrees.
 \
