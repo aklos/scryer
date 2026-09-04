@@ -280,6 +280,10 @@ export interface ModelStorage {
   /** Close an EMPTY (stranded) ledger change — one whose work ended up filed
    *  elsewhere. Backend-refused while it has entries; recorded "abandoned". */
   closeChange: (id: string) => Promise<void>;
+  /** Sign off an open change: the backend snapshots every entry tagged to it
+   *  so later AGENT plan writes are classified (amendment / addition) and land
+   *  as vagrant proposals. The plan write echoes back through the watcher. */
+  signOffChange: (id: string) => Promise<void>;
 
   /** Open a project. If it has no model, status becomes `needs-model`. */
   openProject: (path: string) => Promise<void>;
@@ -804,6 +808,16 @@ export function useModelStorage(): ModelStorage {
     }
   }, []);
 
+  const signOffChange = useCallback(async (id: string) => {
+    const ref = modelRefRef.current;
+    if (!ref) return;
+    try {
+      await invoke<number>("sign_off_change", { refStr: ref, changeId: id });
+    } catch (e) {
+      console.error("sign_off_change failed", e);
+    }
+  }, []);
+
   const setAgentRunning = useCallback((running: boolean) => {
     agentRunningRef.current = running;
   }, []);
@@ -857,6 +871,7 @@ export function useModelStorage(): ModelStorage {
     activeChange,
     setActiveChange,
     closeChange,
+    signOffChange,
     openProject,
     createBlankModel,
     closeProject,

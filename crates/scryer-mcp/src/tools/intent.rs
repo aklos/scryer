@@ -78,6 +78,8 @@ impl RespMinter {
                     stale_proposal: None,
                     directives: Vec::new(),
                     last_touched_at: None,
+                    vagrant_origin: None,
+                    approved_statement: None,
                 }
             })
             .collect()
@@ -103,6 +105,8 @@ impl RespMinter {
                     stale_proposal: None,
                     directives: Vec::new(),
                     last_touched_at: None,
+                    vagrant_origin: None,
+                    approved_statement: None,
                 };
                 (resp, i.line(), i.end_line())
             })
@@ -1250,6 +1254,8 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
+            vagrant_origin: None,
+            approved_statement: None,
         }
     }
 

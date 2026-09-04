@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Check, Crosshair, GitCompare, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check, Crosshair, GitCompare, PenLine, X } from "lucide-react";
 import { ConfirmPopover } from "../ConfirmPopover";
 import type { ScryModel, Node, Responsibility, SchemaProperty, DriftScope } from "../viewmodel";
 import { isNodeEmpty } from "../viewmodel";
@@ -10,7 +10,7 @@ import { kindIcon } from "../kindIcon";
 import { respElementId, propElementId } from "../SourceSection";
 import { BTN, BTN_AGENT, BTN_DANGER, BTN_GO, jumpTo, LINK, PageSection, WikiLink, WordDiffText } from "../pagekit";
 import { DRIFT_HINT, DRIFT_RULE } from "../diffkit";
-import { ANCHOR_CALM, StatementText, stripMarkup } from "../markup";
+import { ANCHOR_CALM, serializeEars, StatementText, stripMarkup } from "../markup";
 import { SpecialBody, SpecialHeader } from "./shell";
 
 // --- needs review ---------------------------------------------------------------
@@ -79,6 +79,149 @@ export function ClaimRow({
   );
 }
 
+/** Inline reword: a textarea seeded with the current wording, Save / Cancel.
+ *  Shared by the amendment rows here and the inbox cards, so "reword" is one
+ *  affordance everywhere. Enter saves, Escape cancels. */
+export function RewordEditor({
+  initial,
+  onSave,
+  onCancel,
+}: {
+  initial: string;
+  onSave: (text: string) => void;
+  onCancel: () => void;
+}) {
+  const [text, setText] = useState(initial);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+  const save = () => {
+    const t = text.trim();
+    if (t) onSave(t);
+  };
+  return (
+    <div className="flex w-full flex-col gap-1.5">
+      <textarea
+        ref={ref}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            save();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+        rows={2}
+        className="w-full resize-y rounded border border-[var(--border-strong)] bg-[var(--surface)] px-2 py-1 font-mono text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"
+      />
+      <div className="flex items-center gap-2 text-2xs">
+        <button type="button" onClick={save} className={BTN_GO} disabled={!text.trim()}>
+          Save wording
+        </button>
+        <button type="button" onClick={onCancel} className={BTN}>
+          Cancel
+        </button>
+        <span className="text-[var(--text-ghost)]">Enter saves · Esc cancels</span>
+      </div>
+    </div>
+  );
+}
+
+/** One post-sign-off amendment / addition awaiting a verdict: the approved
+ *  text against the amended text (an addition has none — "not in the
+ *  signed-off plan"), with adopt / reject / reword inline. */
+function AmendmentRow({
+  claim,
+  onSelectNode,
+  editor,
+}: {
+  claim: ClaimRef;
+  onSelectNode: (id: string) => void;
+  editor: Editor | undefined;
+}) {
+  const [rewording, setRewording] = useState(false);
+  const resp = claim.resp;
+  const addition = resp.vagrantOrigin === "addition";
+  return (
+    <ClaimRow
+      claim={claim}
+      onSelectNode={onSelectNode}
+      detail={
+        <div className="mt-0.5 border-l-2 border-violet-500/30 pl-3 text-2xs dark:border-violet-400/30">
+          {addition ? (
+            <span className="italic text-violet-700/80 dark:text-violet-400/80">not in the signed-off plan</span>
+          ) : (
+            <>
+              <span className="text-violet-700/80 dark:text-violet-400/80">approved → amended:</span>{" "}
+              <span className="font-mono text-sm text-[var(--text-secondary)]">
+                <WordDiffText
+                  from={stripMarkup(resp.approvedStatement ?? "")}
+                  to={stripMarkup(resp.statement)}
+                />
+              </span>
+            </>
+          )}
+          {rewording && editor && (
+            <div className="mt-1.5">
+              <RewordEditor
+                initial={stripMarkup(resp.statement)}
+                onSave={(t) => {
+                  editor.rewordResponsibility(resp.id, serializeEars(t));
+                  setRewording(false);
+                }}
+                onCancel={() => setRewording(false)}
+              />
+            </div>
+          )}
+        </div>
+      }
+      actions={
+        editor && (
+          <span className="flex shrink-0 items-center gap-2 pt-0.5 text-2xs">
+            <button
+              type="button"
+              onClick={() => editor.adoptResponsibility(resp.id)}
+              className={BTN_GO}
+              title={
+                addition
+                  ? "The added claim becomes intent — it folds once built and verified, else stays pending"
+                  : "The amended text becomes the intent — it folds once built and verified, else stays pending"
+              }
+            >
+              Adopt
+            </button>
+            <button
+              type="button"
+              onClick={() => editor.rejectResponsibility(resp.id)}
+              className={BTN_DANGER}
+              title={
+                addition
+                  ? "Remove the claim the plan never approved"
+                  : "Restore the approved text — the agent built something else; the work stays open"
+              }
+            >
+              Reject
+            </button>
+            <button
+              type="button"
+              onClick={() => setRewording((r) => !r)}
+              className={BTN}
+              title="Replace both with your own wording"
+            >
+              <PenLine className="h-3 w-3" /> Reword
+            </button>
+          </span>
+        )
+      }
+    />
+  );
+}
+
 interface PropRef {
   node: Node;
   prop: SchemaProperty;
@@ -131,6 +274,12 @@ function PropRow({
 }
 
 export interface ReviewIndex {
+  /** Claims the AGENT reworded or added after the developer signed off their
+   *  change (`vagrantOrigin`) — proposals awaiting adopt / reject / reword.
+   *  Listed apart from code-discovered vagrants: "what the agent changed" vs
+   *  "what the code does that I never said". */
+  amendments: ClaimRef[];
+  /** Code-discovered vagrant claims (amendments excluded). */
   vagrant: ClaimRef[];
   vagrantProps: PropRef[];
   stale: ClaimRef[];
@@ -166,6 +315,7 @@ export function buildReviewIndex(
     probes: Record<string, ClaimProbeStatus>;
   } = { committed: null, verdicts: {}, probes: {} },
 ): ReviewIndex {
+  const amendments: ClaimRef[] = [];
   const vagrant: ClaimRef[] = [];
   const vagrantProps: PropRef[] = [];
   const stale: ClaimRef[] = [];
@@ -177,7 +327,8 @@ export function buildReviewIndex(
   const staleNodeIds = new Set(staleNodes.map((n) => n.id));
   for (const node of model.nodes) {
     for (const resp of node.responsibilities ?? []) {
-      if (resp.vagrant) vagrant.push({ node, resp });
+      if (resp.vagrantOrigin) amendments.push({ node, resp });
+      else if (resp.vagrant) vagrant.push({ node, resp });
       if (resp.stale && !staleNodeIds.has(node.id)) stale.push({ node, resp });
       if (newRespIds.has(resp.id)) unseenClaims.push({ node, resp });
     }
@@ -201,6 +352,7 @@ export function buildReviewIndex(
   const untested = findings.filter((f) => f.kind === "untested");
   const total =
     testsNotHolding.length +
+    amendments.length +
     vagrant.length +
     vagrantProps.length +
     stale.length +
@@ -212,7 +364,7 @@ export function buildReviewIndex(
     disconnected.length +
     driftScopes.length +
     collapseAnchors(report?.anchors ?? []).length;
-  return { vagrant, vagrantProps, stale, staleProps, staleNodes, emptySymbols, unseenNodes, unseenClaims, disconnected, testsNotHolding, untested, total };
+  return { amendments, vagrant, vagrantProps, stale, staleProps, staleNodes, emptySymbols, unseenNodes, unseenClaims, disconnected, testsNotHolding, untested, total };
 }
 
 export function NeedsReviewPage({
@@ -353,6 +505,21 @@ export function NeedsReviewPage({
                   ))}
                   {idx.unseenClaims.map((ref) => (
                     <ClaimRow key={ref.resp.id} claim={ref} onSelectNode={onSelectNode} />
+                  ))}
+                </ul>
+              </PageSection>
+            )}
+
+            {idx.amendments.length > 0 && (
+              <PageSection title="Changed after sign-off" count={idx.amendments.length}>
+                <p className="mb-2 text-2xs text-[var(--text-muted)]">
+                  The agent reworded or added these after you signed off their change. Each is a
+                  proposal, not intent: adopt it (it folds once built and verified), reject it
+                  (the approved text comes back and the work stays open), or reword it yourself.
+                </p>
+                <ul className="flex flex-col">
+                  {idx.amendments.map((ref) => (
+                    <AmendmentRow key={ref.resp.id} claim={ref} onSelectNode={onSelectNode} editor={editor} />
                   ))}
                 </ul>
               </PageSection>

@@ -37,7 +37,7 @@ use crate::drift::now_secs;
 use crate::history::{append_event, EventKind, EventRow, HistoryEvent};
 use crate::{ModelRef, ScryModel};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 /// One open change in the plan's registry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -50,6 +50,275 @@ pub struct ChangeMeta {
     pub rationale: String,
     /// Unix seconds.
     pub created_at: u64,
+    /// The developer's sign-off, when given: a snapshot of every entry tagged
+    /// to the change at that moment. Anything the AGENT changes about the plan
+    /// afterwards is classified against it ([`classify_against_signoff`]) —
+    /// an amendment or addition is a proposal awaiting the developer's
+    /// verdict, never intent that folds silently. `None` = unsigned (today's
+    /// serial behaviour: every plan write folds as intent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_off: Option<SignOff>,
+}
+
+/// One sign-off snapshot: when it was stamped, and the content of each tagged
+/// entry as it stood.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SignOff {
+    /// Unix seconds.
+    pub at: u64,
+    /// Element key ([`element_key`]) → the entry's signed content.
+    #[serde(default)]
+    pub entries: BTreeMap<String, SignedEntry>,
+}
+
+/// What a sign-off remembered about one entry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SignedEntry {
+    /// [`entry_hash`] of the entry's truth-bearing fields at sign-off.
+    pub hash: String,
+    /// For a responsibility: the approved statement, so a rejected amendment
+    /// can be restored verbatim and a review shows approved vs amended text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub statement: Option<String>,
+    /// For a responsibility: the host it sat on at sign-off (a move is an
+    /// amendment too).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+}
+
+/// How one entry of a signed-off change stands against the snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Classification {
+    /// Matches the snapshot — the developer's intent, folds normally.
+    Untouched,
+    /// Existed at sign-off, content differs now — a reword, move, or repoint
+    /// the developer did not approve.
+    Amended,
+    /// Absent at sign-off — scope the agent invented after the go-ahead.
+    Added,
+    /// Present at sign-off, gone from the plan (or reverted) now.
+    Dropped,
+}
+
+impl Classification {
+    /// The `vagrant_origin` value the fold stamps on a withheld claim.
+    pub fn origin(self) -> Option<&'static str> {
+        match self {
+            Classification::Amended => Some("amendment"),
+            Classification::Added => Some("addition"),
+            _ => None,
+        }
+    }
+}
+
+/// FNV-1a 64 as 16 hex chars — the same cheap, dependency-free digest the
+/// anchor baseline uses for span content.
+pub fn fnv1a64(bytes: &[u8]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
+/// The signed content of one plan entry: a hash over its TRUTH-BEARING fields
+/// only, so the things a developer or canvas touches cosmetically — concern
+/// tags, positions, icons, directives, the fossilization stamp — never make an
+/// untouched entry read as amended (the same exclusions `last_touched_at`
+/// applies). `None` when the key names nothing in the plan (a pending
+/// deletion, or a malformed key).
+pub fn entry_hash(model: &ScryModel, key: &str) -> Option<SignedEntry> {
+    let (kind, owner, id) = parse_key(key)?;
+    let hash = |s: String| fnv1a64(s.as_bytes());
+    match kind {
+        ElementKind::Responsibility => {
+            let (host, r) = model
+                .nodes
+                .iter()
+                .flat_map(|n| n.responsibilities.iter().map(move |r| (&n.id, r)))
+                .chain(
+                    model
+                        .groups
+                        .iter()
+                        .flat_map(|g| g.responsibilities.iter().map(move |r| (&g.id, r))),
+                )
+                .find(|(_, r)| r.id == id)?;
+            Some(SignedEntry {
+                hash: hash(format!("resp|{host}|{}", r.statement)),
+                statement: Some(r.statement.clone()),
+                host: Some(host.clone()),
+            })
+        }
+        ElementKind::Property => {
+            let owner = owner?;
+            let p = model
+                .nodes
+                .iter()
+                .find(|n| n.id == owner)?
+                .properties
+                .iter()
+                .find(|p| p.label == id)?;
+            Some(SignedEntry {
+                hash: hash(format!("prop|{owner}|{}|{}", p.label, p.description)),
+                statement: None,
+                host: Some(owner),
+            })
+        }
+        ElementKind::Node => {
+            let n = model.nodes.iter().find(|n| n.id == id)?;
+            Some(SignedEntry {
+                hash: hash(format!(
+                    "node|{:?}|{}|{}|{}|{}|{}",
+                    n.kind,
+                    n.name,
+                    n.parent_id.as_deref().unwrap_or(""),
+                    n.description.as_deref().unwrap_or(""),
+                    n.technology.as_deref().unwrap_or(""),
+                    n.external.unwrap_or(false)
+                )),
+                statement: None,
+                host: None,
+            })
+        }
+        ElementKind::Link => {
+            let l = model.links.iter().find(|l| l.id == id)?;
+            Some(SignedEntry {
+                hash: hash(format!(
+                    "link|{}|{}|{}|{}",
+                    l.src,
+                    l.dst,
+                    l.label,
+                    l.method.as_deref().unwrap_or("")
+                )),
+                statement: None,
+                host: None,
+            })
+        }
+        ElementKind::Group => {
+            let g = model.groups.iter().find(|g| g.id == id)?;
+            let mut members = g.member_ids.clone();
+            members.sort();
+            Some(SignedEntry {
+                hash: hash(format!(
+                    "group|{}|{}|{}|{}|{}",
+                    g.name,
+                    g.description.as_deref().unwrap_or(""),
+                    members.join(","),
+                    g.parent_group_id.as_deref().unwrap_or(""),
+                    g.parent_node_id.as_deref().unwrap_or("")
+                )),
+                statement: None,
+                host: None,
+            })
+        }
+    }
+}
+
+/// The sign-off content of one key as the snapshot stores it: a live entry's
+/// [`entry_hash`], or the literal `deleted` marker for a tagged key whose
+/// element the plan has already removed (a pending deletion IS signed intent).
+fn signed_entry(model: &ScryModel, key: &str) -> SignedEntry {
+    entry_hash(model, key).unwrap_or(SignedEntry {
+        hash: "deleted".to_string(),
+        statement: None,
+        host: None,
+    })
+}
+
+/// Stamp `change_id` as signed off: snapshot every entry currently tagged to
+/// it. Re-stamping replaces the snapshot (the developer approved the plan as
+/// it now stands). Returns the number of entries captured. The caller persists
+/// the plan.
+pub fn sign_off(model: &mut ScryModel, change_id: &str, now: u64) -> Result<usize, String> {
+    let keys: Vec<String> = model
+        .change_map
+        .iter()
+        .filter(|(_, v)| v.as_str() == change_id)
+        .map(|(k, _)| k.clone())
+        .collect();
+    let entries: BTreeMap<String, SignedEntry> =
+        keys.iter().map(|k| (k.clone(), signed_entry(model, k))).collect();
+    let n = entries.len();
+    let meta = model
+        .changes
+        .iter_mut()
+        .find(|c| c.id == change_id)
+        .ok_or_else(|| format!("no open change '{change_id}'"))?;
+    meta.signed_off = Some(SignOff { at: now, entries });
+    Ok(n)
+}
+
+/// Re-stamp every signed-off change against the plan as it now stands — the
+/// developer's own edits (canvas saves) are intent by definition, so they
+/// must never read as amendments. A no-op for unsigned changes. Returns how
+/// many changes were re-stamped.
+pub fn restamp_signoffs(model: &mut ScryModel, now: u64) -> usize {
+    let signed: Vec<String> = model
+        .changes
+        .iter()
+        .filter(|c| c.signed_off.is_some())
+        .map(|c| c.id.clone())
+        .collect();
+    for cid in &signed {
+        let _ = sign_off(model, cid, now);
+    }
+    signed.len()
+}
+
+/// Every entry of a signed-off change that does NOT read as untouched intent:
+/// `(key, classification, snapshot)`. Keys tagged now: in the snapshot with
+/// the same hash → untouched (omitted); different hash → `Amended`; not in the
+/// snapshot → `Added`. Snapshot keys no longer tagged → `Dropped` (the element
+/// left the plan, or was reverted to committed and GC'd). Empty for an
+/// unsigned change — nothing to compare against.
+pub fn classify_against_signoff(
+    model: &ScryModel,
+    meta: &ChangeMeta,
+) -> Vec<(String, Classification, Option<SignedEntry>)> {
+    let Some(snap) = &meta.signed_off else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut tagged: Vec<&String> = model
+        .change_map
+        .iter()
+        .filter(|(_, v)| v.as_str() == meta.id)
+        .map(|(k, _)| k)
+        .collect();
+    tagged.sort();
+    for key in &tagged {
+        let now = signed_entry(model, key);
+        match snap.entries.get(*key) {
+            Some(was) if was.hash == now.hash => {}
+            Some(was) => out.push(((*key).clone(), Classification::Amended, Some(was.clone()))),
+            None => out.push(((*key).clone(), Classification::Added, None)),
+        }
+    }
+    for (key, was) in &snap.entries {
+        if !tagged.iter().any(|k| *k == key) {
+            out.push((key.clone(), Classification::Dropped, Some(was.clone())));
+        }
+    }
+    out
+}
+
+/// The classification of ONE key against its change's sign-off, for the fold:
+/// `None` when the key is unfiled, its change is unsigned, or it is untouched.
+pub fn classify_key(
+    model: &ScryModel,
+    key: &str,
+) -> Option<(String, Classification, Option<SignedEntry>)> {
+    let cid = model.change_map.get(key)?;
+    let meta = model.changes.iter().find(|c| &c.id == cid)?;
+    let snap = meta.signed_off.as_ref()?;
+    let now = signed_entry(model, key);
+    match snap.entries.get(key) {
+        Some(was) if was.hash == now.hash => None,
+        Some(was) => Some((cid.clone(), Classification::Amended, Some(was.clone()))),
+        None => Some((cid.clone(), Classification::Added, None)),
+    }
 }
 
 /// Canonical change-map key for an element. Kind-prefixed so a key classifies
@@ -106,6 +375,7 @@ pub fn open_change(model: &mut ScryModel, rationale: &str, now: u64) -> String {
         id: id.clone(),
         rationale: rationale.trim().to_string(),
         created_at: now,
+        signed_off: None,
     });
     id
 }
@@ -661,5 +931,93 @@ mod tests {
 
         // A destination that does not exist is refused outright.
         assert!(retag(&committed, &mut plan, &["r2".into()], Some("chg-99")).is_err());
+    }
+
+    /// Sign-off snapshots the tagged entries; afterwards a reword reads as
+    /// AMENDED, a fresh tag as ADDED, a removed entry as DROPPED, and an
+    /// unchanged one is not reported at all.
+    #[test]
+    fn sign_off_classifies_later_edits_against_the_snapshot() {
+        let mut plan = model_with_resps(&[("r1", "does one"), ("r2", "does two")]);
+        let cid = open_change(&mut plan, "two claims", 1);
+        tag(&mut plan, &["resp:r1".to_string(), "resp:r2".to_string()], &cid);
+        assert_eq!(sign_off(&mut plan, &cid, 2).unwrap(), 2);
+        let meta = plan.changes[0].clone();
+        assert_eq!(meta.signed_off.as_ref().unwrap().at, 2);
+        assert_eq!(
+            meta.signed_off.as_ref().unwrap().entries["resp:r1"].statement.as_deref(),
+            Some("does one")
+        );
+        assert!(classify_against_signoff(&plan, &meta).is_empty(), "nothing moved yet");
+
+        // Reword r1, add r3, drop r2.
+        plan.nodes[0].responsibilities[0].statement = "does one differently".into();
+        plan.nodes[0].responsibilities.retain(|r| r.id != "r2");
+        plan.change_map.remove("resp:r2");
+        plan.nodes[0]
+            .responsibilities
+            .push(serde_json::from_value(serde_json::json!({ "id": "r3", "statement": "does three" })).unwrap());
+        tag(&mut plan, &["resp:r3".to_string()], &cid);
+
+        let mut out = classify_against_signoff(&plan, &meta);
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        let kinds: Vec<(String, Classification)> = out.iter().map(|(k, c, _)| (k.clone(), *c)).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ("resp:r1".to_string(), Classification::Amended),
+                ("resp:r2".to_string(), Classification::Dropped),
+                ("resp:r3".to_string(), Classification::Added),
+            ]
+        );
+        // The snapshot travels with the amendment so a reject can restore it.
+        assert_eq!(out[0].2.as_ref().unwrap().statement.as_deref(), Some("does one"));
+        assert_eq!(classify_key(&plan, "resp:r1").unwrap().1, Classification::Amended);
+        assert_eq!(classify_key(&plan, "resp:r3").unwrap().1, Classification::Added);
+        assert!(classify_key(&plan, "resp:nope").is_none());
+    }
+
+    /// Concern tags, positions, icons, and directives are metadata: touching
+    /// them after sign-off must not read as an amendment. Moving a claim to
+    /// another host does.
+    #[test]
+    fn entry_hash_ignores_cosmetics_but_sees_a_move() {
+        let mut plan = model_with_resps(&[("r1", "does one")]);
+        plan.nodes.push(serde_json::from_value(serde_json::json!({ "id": "n2", "kind": "component", "name": "D" })).unwrap());
+        let before = entry_hash(&plan, "resp:r1").unwrap();
+        plan.nodes[0].responsibilities[0].concern = Some("auth".into());
+        plan.nodes[0].responsibilities[0].directives = vec!["must log".into()];
+        plan.nodes[0].responsibilities[0].last_touched_at = Some(99);
+        plan.nodes[0].icon = Some("Box".into());
+        assert_eq!(entry_hash(&plan, "resp:r1").unwrap().hash, before.hash, "cosmetic edits are not content");
+
+        let r = plan.nodes[0].responsibilities.remove(0);
+        plan.nodes[1].responsibilities.push(r);
+        let moved = entry_hash(&plan, "resp:r1").unwrap();
+        assert_ne!(moved.hash, before.hash, "a move changes the signed content");
+        assert_eq!(moved.host.as_deref(), Some("n2"));
+        assert!(entry_hash(&plan, "resp:gone").is_none());
+        assert_eq!(fnv1a64(b"foobar"), "85944171f73967e8");
+    }
+
+    /// A canvas save re-stamps every signed-off change: the developer's own
+    /// edit becomes the new intent, and an unsigned change is left alone.
+    #[test]
+    fn restamp_signoffs_refreshes_signed_changes_only() {
+        let mut plan = model_with_resps(&[("r1", "does one"), ("r2", "does two")]);
+        let signed = open_change(&mut plan, "signed", 1);
+        let unsigned = open_change(&mut plan, "unsigned", 1);
+        tag(&mut plan, &["resp:r1".to_string()], &signed);
+        tag(&mut plan, &["resp:r2".to_string()], &unsigned);
+        sign_off(&mut plan, &signed, 2).unwrap();
+        plan.nodes[0].responsibilities[0].statement = "does one, the dev's way".into();
+        let meta = plan.changes.iter().find(|c| c.id == signed).cloned().unwrap();
+        assert_eq!(classify_against_signoff(&plan, &meta).len(), 1, "diverges before the re-stamp");
+
+        assert_eq!(restamp_signoffs(&mut plan, 3), 1);
+        let meta = plan.changes.iter().find(|c| c.id == signed).cloned().unwrap();
+        assert!(classify_against_signoff(&plan, &meta).is_empty(), "the dev's edit is intent");
+        assert_eq!(meta.signed_off.as_ref().unwrap().at, 3);
+        assert!(plan.changes.iter().find(|c| c.id == unsigned).unwrap().signed_off.is_none());
     }
 }

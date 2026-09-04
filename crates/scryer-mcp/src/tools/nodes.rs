@@ -2282,6 +2282,8 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
+            vagrant_origin: None,
+            approved_statement: None,
         }
     }
 
@@ -4103,6 +4105,7 @@ mod tests {
                 clear: None,
                 close: None,
                 retag: None,
+                sign_off: None,
                 to: None,
             }))
             .unwrap();
@@ -4158,6 +4161,7 @@ mod tests {
                 clear: None,
                 close: None,
                 retag: None,
+                sign_off: None,
                 to: None,
             }))
             .unwrap();
@@ -4227,6 +4231,7 @@ mod tests {
                     clear: None,
                     close: None,
                     retag: None,
+                    sign_off: None,
                     to: None,
                 }))
                 .unwrap()
@@ -4256,6 +4261,7 @@ mod tests {
                 clear: None,
                 close: None,
                 retag: Some(vec![rl.clone(), "node-99".into()]),
+                sign_off: None,
                 to: Some(chg2.clone()),
             }))
             .unwrap();
@@ -4279,6 +4285,7 @@ mod tests {
                 clear: None,
                 close: None,
                 retag: Some(vec![chg2.clone()]),
+                sign_off: None,
                 to: Some("unfiled".into()),
             }))
             .unwrap();
@@ -4311,6 +4318,7 @@ mod tests {
                     clear: None,
                     close: None,
                     retag: None,
+                    sign_off: None,
                     to: None,
                 }))
                 .unwrap(),
@@ -4335,6 +4343,7 @@ mod tests {
                     clear: None,
                     close: None,
                     retag: None,
+                    sign_off: None,
                     to: None,
                 }))
                 .unwrap(),
@@ -4347,6 +4356,7 @@ mod tests {
                 clear: None,
                 close: Some(id.into()),
                 retag: None,
+                sign_off: None,
                 to: None,
             }))
         };
@@ -4402,6 +4412,7 @@ mod tests {
                     clear: None,
                     close: None,
                     retag: None,
+                    sign_off: None,
                     to: None,
                 }))
                 .unwrap(),
@@ -4429,6 +4440,7 @@ mod tests {
                     clear: None,
                     close: None,
                     retag: None,
+                    sign_off: None,
                     to: None,
                 }))
                 .unwrap(),
@@ -4730,5 +4742,65 @@ mod tests {
         let minted = &committed.nodes[0].responsibilities[0].id;
         assert!(scryer_core::is_minted_id(minted, "resp"), "{minted}");
         assert_ne!(minted, "resp-5", "must not reuse the dropped resp-5 still live in the outgoing layers");
+    }
+
+    /// `set_change {sign_off}` snapshots the session's change; a plan write
+    /// that rewords a signed-off claim afterwards succeeds but is reported as
+    /// an AMENDMENT (and an added claim as an ADDITION) in the tool response.
+    #[test]
+    fn sign_off_then_a_reword_is_reported_as_an_amendment() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        m.nodes.push(node("vt", Kind::Symbol, "verify_token", None));
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+        let project = Some(dir.path().to_string_lossy().to_string());
+        let server = ScryerServer::new();
+        let set_change = |req: SetChangeRequest| tool_text(&server.set_change(Parameters(req)).unwrap());
+        let blank = || SetChangeRequest {
+            project: project.clone(),
+            rationale: None,
+            change_id: None,
+            clear: None,
+            close: None,
+            retag: None,
+            sign_off: None,
+            to: None,
+        };
+        let r = server
+            .set_change(Parameters(SetChangeRequest { rationale: Some("verify tokens".into()), ..blank() }))
+            .unwrap();
+        let cid = opened(&r);
+        let write = |stmt: &str, extra: Option<&str>| {
+            let mut resps = vec![serde_json::json!({ "id": "resp-1", "statement": stmt })];
+            if let Some(e) = extra {
+                resps.push(serde_json::json!({ "id": "resp-2", "statement": e }));
+            }
+            let r = server
+                .update_nodes(Parameters(UpdateNodeRequest {
+                    project: project.clone(),
+                    nodes: vec![serde_json::from_value(serde_json::json!({
+                        "node_id": "vt", "responsibilities": resps
+                    }))
+                    .unwrap()],
+                }))
+                .unwrap();
+            tool_text(&r)
+        };
+        write("Verifies the approved thing", None);
+
+        let text = set_change(SetChangeRequest { sign_off: Some(true), ..blank() });
+        assert!(text.contains(&format!("Signed off {cid}")), "{text}");
+        assert!(text.contains("1 entry snapshotted"), "{text}");
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert!(planned.changes[0].signed_off.is_some());
+
+        let text = write("Verifies something else", Some("Also logs tokens"));
+        assert!(text.contains("AMENDMENT: resp:resp-1"), "{text}");
+        assert!(text.contains("approved: \"Verifies the approved thing\""), "{text}");
+        assert!(text.contains("ADDITION: resp:resp-2"), "{text}");
+        // The write itself landed — the agent can always record what it did.
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(planned.nodes[0].responsibilities.len(), 2);
     }
 }

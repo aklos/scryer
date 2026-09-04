@@ -22,6 +22,29 @@ export interface ChangeMeta {
   rationale: string;
   /** Unix seconds. */
   createdAt: number;
+  /** The developer's sign-off, when given: a snapshot of every entry tagged
+   *  to the change at that moment. Agent plan writes afterwards are classified
+   *  against it (amendment / addition) and land as vagrant for a verdict.
+   *  Mirrors Rust `ChangeMeta.signed_off`. */
+  signedOff?: SignOff;
+}
+
+/** One sign-off snapshot: when it was stamped, and each tagged entry's
+ *  signed content, keyed by {@link elementKey}. */
+export interface SignOff {
+  /** Unix seconds. */
+  at: number;
+  entries: Record<string, SignedEntry>;
+}
+
+/** What a sign-off remembered about one entry. */
+export interface SignedEntry {
+  /** Hash of the entry's truth-bearing fields at sign-off. */
+  hash: string;
+  /** For a responsibility: the approved statement. */
+  statement?: string;
+  /** For a responsibility: the host it sat on at sign-off. */
+  host?: string;
 }
 
 /** Canonical change-map key for an element — kind-prefixed, properties keyed

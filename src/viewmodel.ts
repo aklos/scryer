@@ -47,6 +47,16 @@ export interface Responsibility {
   /** Discovered in code with no upstream commitment (drift). The user adopts
    *  it (clear the flag) or rejects it (delete it). */
   vagrant?: boolean;
+  /** Why a claim is vagrant when the AGENT made it so after the developer
+   *  signed off its change: `amendment` = it reworded an approved claim,
+   *  `addition` = it added one the plan never approved. Absent on a
+   *  code-discovered vagrant. A proposal awaiting adopt / reject / reword,
+   *  never intent that folds silently. Mirrors Rust `vagrant_origin`. */
+  vagrantOrigin?: "amendment" | "addition";
+  /** For an amendment, the statement the developer signed off on — what a
+   *  reject restores, and the "approved" half of the review row. Undefined on
+   *  additions and code-discovered vagrants. */
+  approvedStatement?: string;
   /** Drift observation: the semantic check judged the code no longer
    *  discharges this claim. A flag awaiting a two-way verdict — the model
    *  adheres to the code (accept the reword, or drop a vanished claim) or the

@@ -1857,6 +1857,8 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
+            vagrant_origin: None,
+            approved_statement: None,
         }
     }
 
@@ -2521,6 +2523,8 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
+            vagrant_origin: None,
+            approved_statement: None,
         });
         m.nodes.push(sys);
         let mut leaf = node("leaf", Kind::Symbol, "leafFn", Some("sys"));
@@ -2533,6 +2537,8 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
+            vagrant_origin: None,
+            approved_statement: None,
         });
         m.nodes.push(leaf);
         scryer_core::write_model_at(&model_ref, &m).unwrap();

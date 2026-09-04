@@ -539,6 +539,40 @@ pub(crate) fn write_planned_tagged(
                      retagged to {cid} — two changes are touching the same element"
                 ));
             }
+            // Forward vagrancy: against a SIGNED-OFF change, say which of the
+            // touched entries now diverge from what the developer approved.
+            // The write succeeds regardless — the agent must be able to record
+            // what it did — but the divergence is named here and withheld at
+            // the fold.
+            if let Some(meta) = model.changes.iter().find(|c| c.id == cid) {
+                if meta.signed_off.is_some() {
+                    use scryer_core::changes::Classification as C;
+                    for (key, class, snap) in scryer_core::changes::classify_against_signoff(model, meta) {
+                        if !keys.contains(&key) && class != C::Dropped {
+                            continue; // an older divergence, already reported
+                        }
+                        let what = match class {
+                            C::Amended => format!(
+                                "AMENDMENT: {key} differs from what was signed off in {cid} \
+                                 (approved: \"{}\") — it will not fold; it lands as vagrant for \
+                                 the developer's verdict at mark_implemented",
+                                snap.as_ref().and_then(|s| s.statement.as_deref()).unwrap_or("?")
+                            ),
+                            C::Added => format!(
+                                "ADDITION: {key} was not in {cid} at sign-off — it will not \
+                                 fold; it lands as vagrant for the developer's verdict at \
+                                 mark_implemented"
+                            ),
+                            C::Dropped => format!(
+                                "DROPPED: {key} was signed off in {cid} and this plan no longer \
+                                 carries it — the fold restores it as pending intent"
+                            ),
+                            C::Untouched => continue,
+                        };
+                        warnings.push(what);
+                    }
+                }
+            }
         }
     }
     scryer_core::write_planned_at(model_ref, model)?;

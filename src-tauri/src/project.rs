@@ -149,7 +149,44 @@ pub(crate) fn read_planned(ref_str: String) -> Result<String, String> {
 pub(crate) fn write_planned(ref_str: String, data: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
     let _lock = scryer_core::lock_model(&model_ref)?;
+    // A canvas save is the DEVELOPER editing the plan — intent by definition.
+    // Re-stamp every signed-off change's snapshot so their edits never read
+    // as the agent's amendments at the next fold. Only a plan that carries a
+    // sign-off is re-serialized; otherwise the echo lands verbatim as before.
+    if let Ok(mut plan) = serde_json::from_str::<scryer_core::ScryModel>(&data) {
+        if plan.changes.iter().any(|c| c.signed_off.is_some()) {
+            scryer_core::changes::restamp_signoffs(&mut plan, scryer_core::drift::now_secs());
+            let json = serde_json::to_string_pretty(&plan).map_err(|e| e.to_string())?;
+            return scryer_core::write_planned_raw_at(&model_ref, &json);
+        }
+    }
     scryer_core::write_planned_raw_at(&model_ref, &data)
+}
+
+/// SIGN OFF a change from the canvas: snapshot its tagged entries as the
+/// developer-approved intent (see `scryer_core::changes::sign_off`). From here
+/// on, a claim the agent rewords or adds under the change lands as vagrant for
+/// the developer's verdict at the fold instead of folding. Returns how many
+/// entries the snapshot captured.
+#[tauri::command]
+pub(crate) fn sign_off_change(ref_str: String, change_id: String) -> Result<usize, String> {
+    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
+    let _lock = scryer_core::lock_model(&model_ref)?;
+    let mut plan = scryer_core::read_planned_seeded_at(&model_ref)?;
+    let n = scryer_core::changes::sign_off(&mut plan, &change_id, scryer_core::drift::now_secs())?;
+    scryer_core::write_planned_at(&model_ref, &plan)?;
+    Ok(n)
+}
+
+/// The fold-refusal ledger: every claim `mark_implemented` last declined to
+/// fold, with the missing fact it was refused for. Read by the inbox; a
+/// refusal clears when the same claim folds or leaves the plan.
+#[tauri::command]
+pub(crate) fn read_fold_refusals(
+    ref_str: String,
+) -> Result<Vec<scryer_core::refusals::Refusal>, String> {
+    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
+    Ok(scryer_core::refusals::read_refusals(&model_ref))
 }
 
 /// Close an EMPTY open change (a stranded ledger) from the canvas. Goes through
@@ -203,6 +240,7 @@ pub(crate) fn set_subagent_settings(settings: scryer_core::SubagentSettings) -> 
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use scryer_core::{ModelRef, ScryModel};
 
     fn committed_project() -> (tempfile::TempDir, ModelRef, String) {
@@ -312,5 +350,66 @@ mod tests {
 
         let empty = tempfile::tempdir().unwrap();
         assert!(!super::is_legacy_model(empty.path().to_string_lossy().to_string()));
+    }
+
+    /// Sign-off from the canvas snapshots the change; a later canvas save
+    /// re-stamps it so the developer's own edit never reads as an amendment;
+    /// the refusal ledger reads back through the command.
+    #[test]
+    fn canvas_sign_off_and_saves_keep_the_developer_as_the_author_of_intent() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut m = ScryModel::new();
+        m.nodes.push(
+            serde_json::from_value(serde_json::json!({ "id": "n1", "kind": "symbol", "name": "verify" }))
+                .unwrap(),
+        );
+        scryer_core::write_model_at(&r, &m).unwrap();
+        scryer_core::ensure_planned_at(&r).unwrap();
+        let mut planned = scryer_core::read_planned_at(&r).unwrap();
+        planned.nodes[0].responsibilities.push(
+            serde_json::from_value(serde_json::json!({ "id": "r1", "statement": "Verifies tokens" })).unwrap(),
+        );
+        let cid = scryer_core::changes::open_change(&mut planned, "verify", 1);
+        scryer_core::changes::tag(&mut planned, &["resp:r1".to_string()], &cid);
+        scryer_core::write_planned_at(&r, &planned).unwrap();
+        let ref_str = r.to_ref_string();
+
+        assert_eq!(sign_off_change(ref_str.clone(), cid.clone()).unwrap(), 1);
+        let planned = scryer_core::read_planned_at(&r).unwrap();
+        assert!(planned.changes[0].signed_off.is_some());
+
+        // The developer rewords on the canvas: the echo carries the old snapshot,
+        // and the save re-stamps it to the new text.
+        let mut echo = planned.clone();
+        echo.nodes[0].responsibilities[0].statement = "Verifies tokens, the dev's way".into();
+        write_planned(ref_str.clone(), serde_json::to_string(&echo).unwrap()).unwrap();
+        let planned = scryer_core::read_planned_at(&r).unwrap();
+        assert!(
+            scryer_core::changes::classify_against_signoff(&planned, &planned.changes[0]).is_empty(),
+            "a canvas edit is intent, never an amendment"
+        );
+        assert_eq!(
+            planned.changes[0].signed_off.as_ref().unwrap().entries["resp:r1"].statement.as_deref(),
+            Some("Verifies tokens, the dev's way")
+        );
+
+        assert!(read_fold_refusals(ref_str.clone()).unwrap().is_empty());
+        scryer_core::refusals::update_refusals(
+            &r,
+            &[scryer_core::refusals::Refusal {
+                resp_id: "r1".into(),
+                host_id: "n1".into(),
+                kind: "no-test".into(),
+                reason: "no test attached".into(),
+                run: vec![],
+                at: 5,
+            }],
+            &[],
+        )
+        .unwrap();
+        let refusals = read_fold_refusals(ref_str).unwrap();
+        assert_eq!(refusals.len(), 1);
+        assert_eq!(refusals[0].kind, "no-test");
     }
 }

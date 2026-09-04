@@ -92,6 +92,123 @@ fn fold_vagrant(
     Ok(FoldedVagrant { host_id, statement, source, chain })
 }
 
+/// Whether `resp_id` is a POST-SIGN-OFF amendment/addition awaiting a verdict
+/// (as opposed to a code-discovered vagrant): the plan copy carries a
+/// `vagrant_origin`. Returns the host id and the origin.
+fn amendment_of(planned: &scryer_core::ScryModel, resp_id: &str) -> Option<(String, String)> {
+    planned
+        .nodes
+        .iter()
+        .flat_map(|n| n.responsibilities.iter().map(move |r| (n.id.as_str(), r)))
+        .chain(
+            planned
+                .groups
+                .iter()
+                .flat_map(|g| g.responsibilities.iter().map(move |r| (g.id.as_str(), r))),
+        )
+        .find(|(_, r)| r.id == resp_id && r.vagrant == Some(true))
+        .and_then(|(host, r)| r.vagrant_origin.clone().map(|o| (host.to_string(), o)))
+}
+
+/// After a verdict on an amendment, the claim as it now stands IS the
+/// developer's intent: re-stamp its entry in the change's sign-off snapshot so
+/// it reads as untouched at the next fold (and never as an amendment again).
+fn restamp_signed_entry(planned: &mut scryer_core::ScryModel, resp_id: &str) {
+    use scryer_core::diff::ElementKind;
+    let key = scryer_core::changes::element_key(ElementKind::Responsibility, None, resp_id);
+    let Some(cid) = planned.change_map.get(&key).cloned() else { return };
+    let entry = scryer_core::changes::entry_hash(planned, &key);
+    if let Some(snap) = planned
+        .changes
+        .iter_mut()
+        .find(|c| c.id == cid)
+        .and_then(|c| c.signed_off.as_mut())
+    {
+        match entry {
+            Some(e) => {
+                snap.entries.insert(key, e);
+            }
+            None => {
+                snap.entries.remove(&key);
+            }
+        }
+    }
+}
+
+/// Timeline record for an amendment verdict: what was approved, what the
+/// agent built, and what the developer decided.
+fn log_amendment(
+    model_ref: &scryer_core::ModelRef,
+    host_id: &str,
+    driver: &str,
+    approved: Option<&str>,
+    amended: &str,
+) {
+    let mut rows = Vec::new();
+    if let Some(a) = approved {
+        rows.push(scryer_core::history::EventRow::new("−", a.to_string()));
+    }
+    rows.push(scryer_core::history::EventRow::new("+", amended.to_string()));
+    let _ = scryer_core::history::append_event(
+        model_ref,
+        &scryer_core::history::HistoryEvent::new(
+            scryer_core::drift::now_secs(),
+            scryer_core::history::EventKind::Impl,
+            host_id,
+            driver,
+        )
+        .with_rows(rows),
+    );
+}
+
+/// Adopt a POST-SIGN-OFF amendment or addition: the amended text becomes the
+/// intent. It stays PENDING in the plan for the agent to fold through the
+/// evidence gate — unless it is already anchored AND verified (test attached,
+/// current passing verdict), in which case adopting folds it, exactly as a
+/// code-discovered vagrant's adopt does. History reads "asked for A, built B,
+/// accepted". Returns true when it folded.
+fn adopt_amendment(
+    model_ref: &scryer_core::ModelRef,
+    resp_id: &str,
+    host_id: &str,
+) -> Result<bool, String> {
+    let mut planned = scryer_core::read_planned_seeded_at(model_ref)?;
+    let (approved, amended) = {
+        let r = planned
+            .nodes
+            .iter_mut()
+            .flat_map(|n| n.responsibilities.iter_mut())
+            .chain(planned.groups.iter_mut().flat_map(|g| g.responsibilities.iter_mut()))
+            .find(|r| r.id == resp_id)
+            .ok_or_else(|| format!("Responsibility '{resp_id}' not found in the plan"))?;
+        r.vagrant = None;
+        r.vagrant_origin = None;
+        (r.approved_statement.take(), r.statement.clone())
+    };
+    restamp_signed_entry(&mut planned, resp_id);
+    scryer_core::write_planned_at(model_ref, &planned)?;
+    log_amendment(model_ref, host_id, "adopted amendment", approved.as_deref(), &amended);
+
+    // Built AND verified → fold now; otherwise it waits for the agent's fold.
+    let committed = scryer_core::read_model_at(model_ref).unwrap_or_default();
+    let anchored =
+        planned.source_map.contains_key(resp_id) || committed.source_map.contains_key(resp_id);
+    let verified = scryer_extract::test_status::claim_evidence(model_ref, &[resp_id.to_string()])
+        .ok()
+        .and_then(|m| m.get(resp_id).map(|e| e.verified()))
+        .unwrap_or(false);
+    if anchored && verified {
+        scryer_core::commit_element(
+            model_ref,
+            scryer_core::diff::ElementKind::Responsibility,
+            None,
+            resp_id,
+        )?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 /// Adopt a code-discovered (vagrant) responsibility: clear its `vagrant` flag in
 /// the plan and FOLD it — together with any minted host chain (a new component,
 /// the symbol for a new function) — straight into the committed model. Ordinary
@@ -109,6 +226,14 @@ pub(crate) fn adopt_responsibility(cwd: String, resp_id: String) -> Result<(), S
     // lock across the whole read-modify-write — otherwise the canvas races the
     // agent's MCP process and the two writers clobber each other.
     let _lock = scryer_core::lock_model(&model_ref)?;
+    // An amendment is not code the model missed — it is the agent's proposal
+    // to change the intent. Adopting it makes the text the intent; it folds
+    // only if built and verified (see `adopt_amendment`).
+    if let Some((host, _)) = amendment_of(&scryer_core::read_planned_at(&model_ref)?, &resp_id) {
+        let _ = scryer_core::refusals::update_refusals(&model_ref, &[], &[resp_id.clone()]);
+        adopt_amendment(&model_ref, &resp_id, &host)?;
+        return Ok(());
+    }
     let folded = fold_vagrant(&model_ref, &resp_id)?;
 
     // Keep the legacy baseline in step and log the fold as a "took code" event,
@@ -146,6 +271,58 @@ pub(crate) fn reject_responsibility(cwd: String, resp_id: String) -> Result<(), 
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
     // Serialize the whole read-modify-write against the agent's MCP writer.
     let _lock = scryer_core::lock_model(&model_ref)?;
+    // Rejecting an AMENDMENT restores the approved text and keeps the entry
+    // pending: the agent implemented something other than what was asked, and
+    // the work is still open. Rejecting an ADDITION (nothing was approved)
+    // removes the claim from the plan.
+    let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
+    if let Some((host, origin)) = amendment_of(&planned, &resp_id) {
+        let _ = scryer_core::refusals::update_refusals(&model_ref, &[], &[resp_id.clone()]);
+        let mut amended = String::new();
+        let mut approved: Option<String> = None;
+        let mut keep = false;
+        for resps in planned
+            .nodes
+            .iter_mut()
+            .map(|n| &mut n.responsibilities)
+            .chain(planned.groups.iter_mut().map(|g| &mut g.responsibilities))
+        {
+            if let Some(r) = resps.iter_mut().find(|r| r.id == resp_id) {
+                amended = r.statement.clone();
+                approved = r.approved_statement.take();
+                r.vagrant = None;
+                r.vagrant_origin = None;
+                if let Some(a) = &approved {
+                    r.statement = a.clone();
+                    r.last_touched_at = Some(scryer_core::drift::now_secs());
+                    keep = true;
+                }
+                break;
+            }
+        }
+        if !keep {
+            for n in &mut planned.nodes {
+                n.responsibilities.retain(|r| r.id != resp_id);
+            }
+            for g in &mut planned.groups {
+                g.responsibilities.retain(|r| r.id != resp_id);
+            }
+            planned.source_map.remove(&resp_id);
+            planned.test_map.remove(&resp_id);
+        } else {
+            restamp_signed_entry(&mut planned, &resp_id);
+        }
+        scryer_core::write_planned_at(&model_ref, &planned)?;
+        log_amendment(
+            &model_ref,
+            &host,
+            &format!("rejected {origin}"),
+            approved.as_deref(),
+            &amended,
+        );
+        return Ok(());
+    }
+    drop(planned);
     let folded = fold_vagrant(&model_ref, &resp_id)?;
 
     // Schedule the deletion: drop the responsibility and the minted chain from the
@@ -455,6 +632,8 @@ pub(crate) fn reimplement_responsibility(cwd: String, resp_id: String) -> Result
                 stale_proposal: None,
                 directives: Vec::new(),
                 last_touched_at: None,
+                vagrant_origin: None,
+                approved_statement: None,
             });
             host_id = Some(chost.clone());
             statement = Some(cstmt.clone());
@@ -596,6 +775,34 @@ pub(crate) fn reword_responsibility(cwd: String, resp_id: String, statement: Str
     let _lock = scryer_core::lock_model(&model_ref)?;
     let mut committed = scryer_core::read_model_at(&model_ref)?;
     let mut planned = scryer_core::read_planned_seeded_at(&model_ref)?;
+
+    // Rewording an AMENDMENT: the developer's own text replaces both the
+    // approved and the amended statement in the PLAN only — it is intent,
+    // still pending, and folds through the agent's gate. Committed is untouched.
+    if let Some((host, origin)) = amendment_of(&planned, &resp_id) {
+        let _ = scryer_core::refusals::update_refusals(&model_ref, &[], &[resp_id.clone()]);
+        let now = scryer_core::drift::now_secs();
+        let mut approved: Option<String> = None;
+        for resps in planned
+            .nodes
+            .iter_mut()
+            .map(|n| &mut n.responsibilities)
+            .chain(planned.groups.iter_mut().map(|g| &mut g.responsibilities))
+        {
+            if let Some(r) = resps.iter_mut().find(|r| r.id == resp_id) {
+                approved = r.approved_statement.take();
+                r.vagrant = None;
+                r.vagrant_origin = None;
+                r.statement = statement.clone();
+                r.last_touched_at = Some(now);
+                break;
+            }
+        }
+        restamp_signed_entry(&mut planned, &resp_id);
+        scryer_core::write_planned_at(&model_ref, &planned)?;
+        log_amendment(&model_ref, &host, &format!("reworded {origin}"), approved.as_deref(), &statement);
+        return Ok(());
+    }
 
     let source = committed
         .source_map
@@ -749,6 +956,8 @@ mod verdict_tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
+            vagrant_origin: None,
+            approved_statement: None,
         }
     }
 
@@ -1025,6 +1234,7 @@ mod verdict_tests {
 
 #[cfg(test)]
 mod plan_seed_tests {
+    use super::*;
     use scryer_core::{ModelRef, ScryModel};
 
     fn resp(id: &str, statement: &str) -> scryer_core::Responsibility {
@@ -1037,6 +1247,8 @@ mod plan_seed_tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
+            vagrant_origin: None,
+            approved_statement: None,
         }
     }
 
@@ -1095,5 +1307,114 @@ mod plan_seed_tests {
         let committed = scryer_core::read_model_at(&r).unwrap();
         assert!(committed.source_map.contains_key("resp-1"));
         assert!(committed.boundaries.contains_key("node-2"));
+    }
+
+    /// A plan whose one change is signed off with `r1` approved as
+    /// "Verifies the approved thing", then reworded by the agent and withheld
+    /// at the fold as an amendment (the state the fold leaves behind).
+    fn amendment_project(with_addition: bool) -> (tempfile::TempDir, ModelRef, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let mut committed = ScryModel::new();
+        committed.nodes.push(serde_json::from_value(serde_json::json!({
+            "id": "n1", "kind": "symbol", "name": "verify",
+            "responsibilities": [resp("r1", "Verifies the old thing")]
+        })).unwrap());
+        scryer_core::write_model_at(&r, &committed).unwrap();
+        scryer_core::ensure_planned_at(&r).unwrap();
+        let mut planned = scryer_core::read_planned_at(&r).unwrap();
+        let cid = scryer_core::changes::open_change(&mut planned, "verify tokens", 1);
+        {
+            let host = &mut planned.nodes[0];
+            host.responsibilities[0].statement = "Verifies the approved thing".into();
+            if with_addition {
+                let mut extra = resp("r2", "Also logs every token");
+                extra.vagrant = Some(true);
+                extra.vagrant_origin = Some("addition".into());
+                host.responsibilities.push(extra);
+            }
+        }
+        scryer_core::changes::tag(&mut planned, &["resp:r1".to_string()], &cid);
+        if with_addition {
+            scryer_core::changes::tag(&mut planned, &["resp:r2".to_string()], &cid);
+        }
+        scryer_core::changes::sign_off(&mut planned, &cid, 2).unwrap();
+        if with_addition {
+            // The addition was not in the sign-off: drop it from the snapshot.
+            planned.changes[0].signed_off.as_mut().unwrap().entries.remove("resp:r2");
+        }
+        // The agent's amendment, as the fold flags it.
+        let r1 = &mut planned.nodes[0].responsibilities[0];
+        r1.statement = "Verifies something else".into();
+        r1.vagrant = Some(true);
+        r1.vagrant_origin = Some("amendment".into());
+        r1.approved_statement = Some("Verifies the approved thing".into());
+        scryer_core::write_planned_at(&r, &planned).unwrap();
+        let cwd = dir.path().to_string_lossy().to_string();
+        (dir, r, cwd)
+    }
+
+    fn plan_resp(r: &ModelRef, id: &str) -> Option<scryer_core::Responsibility> {
+        scryer_core::read_planned_at(r).unwrap().nodes[0]
+            .responsibilities
+            .iter()
+            .find(|x| x.id == id)
+            .cloned()
+    }
+
+    /// Adopting an unbuilt amendment makes the amended text the intent: flags
+    /// clear, it stays PENDING (committed untouched), the snapshot now matches
+    /// it, and history reads "asked for A, built B, accepted".
+    #[test]
+    fn adopting_an_amendment_makes_it_intent_but_does_not_fold_unverified() {
+        let (_dir, r, cwd) = amendment_project(false);
+        adopt_responsibility(cwd, "r1".into()).unwrap();
+        let p = plan_resp(&r, "r1").unwrap();
+        assert_eq!(p.statement, "Verifies something else");
+        assert!(p.vagrant.is_none() && p.vagrant_origin.is_none() && p.approved_statement.is_none());
+        let committed = scryer_core::read_model_at(&r).unwrap();
+        assert_eq!(committed.nodes[0].responsibilities[0].statement, "Verifies the old thing", "not folded");
+        let planned = scryer_core::read_planned_at(&r).unwrap();
+        let meta = &planned.changes[0];
+        assert!(
+            scryer_core::changes::classify_against_signoff(&planned, meta).is_empty(),
+            "adopted text is now the signed intent"
+        );
+        let ev = scryer_core::history::read_history(&r);
+        let e = ev.iter().find(|e| e.driver == "adopted amendment").expect("history row");
+        assert_eq!(e.rows[0].text, "Verifies the approved thing");
+        assert_eq!(e.rows[1].text, "Verifies something else");
+    }
+
+    /// Rejecting an amendment restores the approved text and keeps the entry
+    /// pending; rejecting an addition removes the invented claim outright.
+    #[test]
+    fn rejecting_restores_the_approved_text_and_removes_an_addition() {
+        let (_dir, r, cwd) = amendment_project(true);
+        reject_responsibility(cwd.clone(), "r1".into()).unwrap();
+        let p = plan_resp(&r, "r1").unwrap();
+        assert_eq!(p.statement, "Verifies the approved thing");
+        assert!(p.vagrant.is_none() && p.vagrant_origin.is_none());
+        let committed = scryer_core::read_model_at(&r).unwrap();
+        assert_eq!(committed.nodes[0].responsibilities[0].statement, "Verifies the old thing", "still pending work");
+
+        reject_responsibility(cwd, "r2".into()).unwrap();
+        assert!(plan_resp(&r, "r2").is_none(), "nothing was approved, so nothing to restore");
+        assert!(scryer_core::history::read_history(&r).iter().any(|e| e.driver == "rejected addition"));
+    }
+
+    /// Rewording an amendment writes the developer's own text into the plan
+    /// only — intent, still pending, committed untouched.
+    #[test]
+    fn rewording_an_amendment_replaces_both_texts_in_the_plan() {
+        let (_dir, r, cwd) = amendment_project(false);
+        reword_responsibility(cwd, "r1".into(), "Verifies what the dev wants".into()).unwrap();
+        let p = plan_resp(&r, "r1").unwrap();
+        assert_eq!(p.statement, "Verifies what the dev wants");
+        assert!(p.vagrant.is_none() && p.vagrant_origin.is_none() && p.approved_statement.is_none());
+        let committed = scryer_core::read_model_at(&r).unwrap();
+        assert_eq!(committed.nodes[0].responsibilities[0].statement, "Verifies the old thing");
+        let planned = scryer_core::read_planned_at(&r).unwrap();
+        assert!(scryer_core::changes::classify_against_signoff(&planned, &planned.changes[0]).is_empty());
     }
 }

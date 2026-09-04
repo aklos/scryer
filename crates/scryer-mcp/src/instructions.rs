@@ -44,7 +44,10 @@ resume a prior session's change with `set_change {change_id}` (listed in `get_pe
 `openChanges`). Quick serial edits can skip this and go unfiled.\n\
 3. SIGN-OFF — the plan is a proposal on the user's canvas; before building it, tell the user \
 what you planned and get their go-ahead. The user owns the spec — skip this only when they already \
-approved the change in this conversation or explicitly told you to run ahead.\n\
+approved the change in this conversation or explicitly told you to run ahead. Record the go-ahead \
+with `set_change {sign_off: true}`: it snapshots the change as the approved intent, and from then \
+on a claim you reword or add under it lands as vagrant for the developer's verdict at the fold — it \
+does not fold.\n\
 4. BUILD — implement the code to that plan, responsibility by responsibility, WITH ITS TESTS: for \
 each testable (When/While/If) claim you implement, the statement already names the trigger, state, \
 or failure to arrange and the response to assert — write that test in the project's own suite as \

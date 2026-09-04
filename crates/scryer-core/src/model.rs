@@ -47,6 +47,22 @@ pub struct Responsibility {
     pub concern: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vagrant: Option<bool>,
+    /// Why a claim is vagrant when it did NOT come from code: `"amendment"` (a
+    /// signed-off claim the agent reworded or moved after sign-off) or
+    /// `"addition"` (a claim the agent added after sign-off). Set by the fold
+    /// (`mark_implemented`) when it refuses to commit a post-sign-off change;
+    /// absent on code-discovered vagrants. Cleared with `vagrant` by the
+    /// developer's verdict. Never agent-authored, so hidden from write schemas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub vagrant_origin: Option<String>,
+    /// The statement the developer signed off on, kept beside an amendment so
+    /// a reject can restore it and the review shows approved vs amended text.
+    /// `None` on additions (nothing was approved) and on code-discovered
+    /// vagrants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub approved_statement: Option<String>,
     /// Drift observation: the semantic check judged that the code no longer
     /// discharges this claim. Like `vagrant`, a flag awaiting a human/agent
     /// verdict (re-implement, reword, or drop) — the status itself is the

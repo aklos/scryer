@@ -10,16 +10,20 @@
  *   R  relocated   — re-parented / re-pointed (amber — a structural edit; the → glyph carries "move")
  *   Q  undescribed — a vagrant claim: code does it, the model didn't say so (orange, drift)
  *   X  stale       — a committed claim the code regressed from (orange, drift)
+ *   P  proposed    — a claim the agent reworded or added AFTER the developer signed
+ *                    off its change; vagrant with an origin, awaiting a verdict (violet)
  *
  * A/M/D/R are PLAN marks (the model→code work queue, `diff(committed,planned)`);
- * Q/X are DRIFT marks (model↔code mismatch, carried as flags on claims). A row
- * can have both; the plan mark wins for the single glanceable letter.
+ * Q/X/P are DRIFT marks (model↔code — or agent↔developer — mismatch, carried as
+ * flags on claims). A row can have both; the plan mark wins for the single
+ * glanceable letter. P outranks Q so the tree separates "what I asked for"
+ * from "what the agent changed".
  */
 
 import type { Change, ElementChange, ModelDiff } from "./planDiff";
 import type { Group, Node, ScryModel } from "./viewmodel";
 
-export type Mark = "A" | "M" | "D" | "R" | "Q" | "X";
+export type Mark = "A" | "M" | "D" | "R" | "Q" | "X" | "P";
 
 /** The change categories the whole UI colours by. Both axes of marking draw
  *  from this: the element marks (A/M/D/R/Q/X, the glanceable tree/map badge) and
@@ -28,8 +32,9 @@ export type Mark = "A" | "M" | "D" | "R" | "Q" | "X";
  *  disagree. Two axes, distinct hue families: PLAN edits are the diff palette —
  *  add green, delete red, modified/relocate amber (the glyph carries the kind);
  *  DRIFT is orange for both vagrant and stale, so it reads as its own "review"
- *  axis, never mistaken for a planned edit. */
-export type ChangeKind = "add" | "modified" | "delete" | "relocate" | "vagrant" | "stale";
+ *  axis, never mistaken for a planned edit; an AMENDMENT (agent changed the
+ *  signed-off plan) is violet — the agent's hue everywhere else in the app. */
+export type ChangeKind = "add" | "modified" | "delete" | "relocate" | "vagrant" | "stale" | "amendment";
 
 // Light mode sits on the 700 tier — the 600s (amber especially) fall under
 // ~3.5:1 on the light canvas and small mono glyphs/counts become guesswork.
@@ -41,6 +46,7 @@ export const CHANGE_COLOR: Record<ChangeKind, string> = {
   relocate: "text-amber-700 dark:text-amber-400",
   vagrant: "text-orange-700 dark:text-orange-400",
   stale: "text-orange-700 dark:text-orange-400",
+  amendment: "text-violet-700 dark:text-violet-400",
 };
 
 /** Which category each element mark belongs to — the bridge between the
@@ -52,6 +58,7 @@ export const MARK_KIND: Record<Mark, ChangeKind> = {
   R: "relocate",
   Q: "vagrant",
   X: "stale",
+  P: "amendment",
 };
 
 /** Per-mark hue + label. The hue is the category colour, kept in lockstep with
@@ -63,6 +70,7 @@ export const MARK_META: Record<Mark, { color: string; label: string }> = {
   R: { color: CHANGE_COLOR.relocate, label: "Relocated" },
   Q: { color: CHANGE_COLOR.vagrant, label: "Undescribed in the model (drift)" },
   X: { color: CHANGE_COLOR.stale, label: "Stale — code regressed (drift)" },
+  P: { color: CHANGE_COLOR.amendment, label: "Changed after sign-off (awaiting verdict)" },
 };
 
 /** The plan diff, indexed for per-element lookup: each node/group's own changes,
@@ -101,21 +109,28 @@ export function classifyPlan(own: Change[] | undefined, childChanges: Change[]):
   return "M";
 }
 
-/** Drift mark for a set of responsibilities: a vagrant claim is undescribed
- *  behaviour (Q), a stale one is a regression (X). */
-function driftOf(resps: { vagrant?: boolean; stale?: boolean }[] | undefined): Mark | null {
+/** Drift mark for a set of responsibilities: a claim the agent changed after
+ *  sign-off is a proposal (P — outranks the rest: it is the developer's own
+ *  intent in question), a vagrant claim is undescribed behaviour (Q), a stale
+ *  one is a regression (X). */
+export function driftOf(
+  resps: { vagrant?: boolean; vagrantOrigin?: string; stale?: boolean }[] | undefined,
+): Mark | null {
+  let proposed = false;
   let vagrant = false;
   let stale = false;
   for (const r of resps ?? []) {
-    if (r.vagrant) vagrant = true;
+    if (r.vagrantOrigin) proposed = true;
+    else if (r.vagrant) vagrant = true;
     if (r.stale) stale = true;
   }
-  return vagrant ? "Q" : stale ? "X" : null;
+  return proposed ? "P" : vagrant ? "Q" : stale ? "X" : null;
 }
 
 /** A node's drift mark alone (no diff needed): the node's own vagrant/stale
  *  flag, or any flagged claim/property it holds. */
 export function nodeDrift(node: Node): Mark | null {
+  if ((node.responsibilities ?? []).some((r) => r.vagrantOrigin)) return "P";
   if (node.vagrant || (node.responsibilities ?? []).some((r) => r.vagrant) || (node.properties ?? []).some((p) => p.vagrant))
     return "Q";
   if (node.stale || (node.responsibilities ?? []).some((r) => r.stale) || (node.properties ?? []).some((p) => p.stale))
@@ -288,9 +303,9 @@ export function planCountLabel({ elements, carriers }: PlanCounts): string {
 
 /** Priority when several descendant marks collapse into one rolled-up letter:
  *  a hidden deletion outranks an addition outranks structure outranks rewords;
- *  undescribed behaviour outranks staleness. */
+ *  a post-sign-off proposal outranks undescribed behaviour outranks staleness. */
 const PLAN_ROLLUP: Mark[] = ["D", "A", "R", "M"];
-const DRIFT_ROLLUP: Mark[] = ["Q", "X"];
+const DRIFT_ROLLUP: Mark[] = ["P", "Q", "X"];
 
 /** Merge mark pairs by roll-up priority. */
 export function combineMarks(pairs: (MarkPair | undefined)[]): MarkPair {

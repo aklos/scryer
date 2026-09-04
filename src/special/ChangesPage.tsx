@@ -1,12 +1,13 @@
 import { useMemo } from "react";
-import { Check, CornerDownRight, GitCompare, X } from "lucide-react";
+import { Check, CornerDownRight, GitCompare, PenLine, X } from "lucide-react";
 import type { ChangeRevision } from "../hooks/useModelStorage";
 import type { ScryModel, Node } from "../viewmodel";
 import type { Change, ElementChange, ModelDiff } from "../planDiff";
 import { CHANGE_COLOR, type ChangeKind, collectPlanEntries, type LinkChange, MARK_META, type PlanEntry } from "../changeMarks";
 import { DIFF_ANCHOR, DIFF_TINT, DiffRow } from "../diffkit";
 import { ANCHOR_CALM, StatementText } from "../markup";
-import { entryChanges } from "../ledger";
+import { entryChanges, type SignOff } from "../ledger";
+import { relativeTime } from "../history";
 import { BTN, BTN_ICON, LINK, WordDiffText } from "../pagekit";
 import { SpecialBody, SpecialHeader, timeLabel } from "./shell";
 
@@ -415,6 +416,7 @@ export function ChangesPage({
   activeChange,
   onSetActiveChange,
   onCloseChange,
+  onSignOffChange,
 }: {
   planDiff: ModelDiff;
   /** The planned model — element names, kinds, and tree order. */
@@ -430,6 +432,10 @@ export function ChangesPage({
   onSetActiveChange?: (id: string | null) => void;
   /** Close an EMPTY (stranded) change. Absent = read-only (agent writing). */
   onCloseChange?: (id: string) => void;
+  /** Sign off a change: snapshot its tagged entries so anything the agent
+   *  changes afterwards lands as a proposal, never as silent intent. Absent =
+   *  read-only (agent writing). */
+  onSignOffChange?: (id: string) => void;
 }) {
   const ctx = useMemo<RowCtx>(
     () => ({
@@ -503,6 +509,8 @@ export function ChangesPage({
                   (() => onSetActiveChange(activeChange === c.id ? null : c.id))
                 }
                 onClose={onCloseChange && (() => onCloseChange(c.id))}
+                signedOff={c.signedOff}
+                onSignOff={onSignOffChange && (() => onSignOffChange(c.id))}
               />
             ))}
             {sections.unfiled.length > 0 && (
@@ -536,6 +544,8 @@ function ChangeSection({
   active,
   onToggleActive,
   onClose,
+  signedOff,
+  onSignOff,
 }: {
   id: string | null;
   rationale: string;
@@ -544,6 +554,8 @@ function ChangeSection({
   active: boolean;
   onToggleActive?: () => void;
   onClose?: () => void;
+  signedOff?: SignOff;
+  onSignOff?: () => void;
 }) {
   return (
     <section>
@@ -564,6 +576,28 @@ function ChangeSection({
             ? "no entries yet"
             : `${entries.length} entr${entries.length === 1 ? "y" : "ies"}`}
         </span>
+        {signedOff && (
+          <span
+            className="inline-flex items-center gap-1 rounded-full bg-violet-500/10 px-2 py-px text-2xs font-medium text-violet-700 ring-1 ring-inset ring-violet-500/25 dark:bg-violet-400/10 dark:text-violet-300 dark:ring-violet-400/25"
+            title={`Signed off ${new Date(signedOff.at * 1000).toLocaleString()} — ${Object.keys(signedOff.entries).length} entr${Object.keys(signedOff.entries).length === 1 ? "y" : "ies"} snapshotted. Agent edits since land as proposals (P).`}
+          >
+            <Check className="h-3 w-3" /> signed off {relativeTime(signedOff.at)}
+          </span>
+        )}
+        {id && onSignOff && (
+          <button
+            type="button"
+            className={BTN}
+            title={
+              signedOff
+                ? "Re-sign: snapshot the plan as it stands now — your own edits since are intent"
+                : "Sign off this change: snapshot its entries so anything the agent rewords or adds afterwards waits for your verdict instead of folding silently"
+            }
+            onClick={onSignOff}
+          >
+            <PenLine className="h-3 w-3" /> {signedOff ? "Re-sign" : "Sign off"}
+          </button>
+        )}
         {onToggleActive && (
           <button
             type="button"

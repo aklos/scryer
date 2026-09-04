@@ -146,6 +146,14 @@ pub(crate) struct SetChangeRequest {
     /// id moves everything currently filed under it; `"unfiled"` moves
     /// everything untagged. Pass `to` for the destination.
     pub retag: Option<Vec<String>>,
+    /// SIGN OFF the change: snapshot every entry currently tagged to it as the
+    /// developer-approved intent. Pass with `change_id` (or alone, for the
+    /// session's current change) once the developer has given the go-ahead.
+    /// From then on a claim the agent rewords or adds under this change is an
+    /// AMENDMENT/ADDITION: the write succeeds and reports it, but
+    /// `mark_implemented` leaves it in the plan as vagrant for the developer's
+    /// verdict instead of folding it. Re-signing replaces the snapshot.
+    pub sign_off: Option<bool>,
     /// Where `retag` sends its targets: an open change id, or "unfiled" to
     /// detach them. Omit to send them to the session's current change.
     pub to: Option<String>,

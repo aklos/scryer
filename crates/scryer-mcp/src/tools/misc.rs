@@ -505,7 +505,7 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Select which CHANGE this session's plan writes belong to — a named partition of the plan carrying the dev's rationale, so parallel workstreams stay separable and review/fold can work per task. Pass `rationale` (the task in one sentence, as the dev put it) to OPEN a new change, or `change_id` to RESUME an open one from a prior session (list them via get_pending's openChanges). After this, every plan write in this session is tagged to the change automatically; `mark_implemented {change}` folds exactly its entries, and the change closes when its last entry folds — the rationale survives in the history log. Pass `clear: true` to detach (writes go unfiled, today's serial behavior). Pass `close` (a change id) to close an EMPTY stranded change — one whose work ended up tagged elsewhere; refused while it has tagged entries, since a change normally closes itself when its last entry folds or reverts. Pass `retag` (bare ids) with `to` to MOVE work that is already pending into another change — a node/group id takes that carrier and everything pending under it, a responsibility/link id takes just that element, a `chg-N` id takes everything filed under it, and \"unfiled\" takes everything untagged; `to` accepts a change id or \"unfiled\", and defaults to this session's change. Use it when work landed in the wrong change or one task turns out to be two — never re-write elements just to re-file them. With no arguments, reports the current selection and the open changes. Use this at the start of a task when other work may share the plan; skip it for quick serial edits."
+        description = "Select which CHANGE this session's plan writes belong to — a named partition of the plan carrying the dev's rationale, so parallel workstreams stay separable and review/fold can work per task. Pass `rationale` (the task in one sentence, as the dev put it) to OPEN a new change, or `change_id` to RESUME an open one from a prior session (list them via get_pending's openChanges). After this, every plan write in this session is tagged to the change automatically; `mark_implemented {change}` folds exactly its entries, and the change closes when its last entry folds — the rationale survives in the history log. Pass `clear: true` to detach (writes go unfiled, today's serial behavior). Pass `close` (a change id) to close an EMPTY stranded change — one whose work ended up tagged elsewhere; refused while it has tagged entries, since a change normally closes itself when its last entry folds or reverts. Pass `retag` (bare ids) with `to` to MOVE work that is already pending into another change — a node/group id takes that carrier and everything pending under it, a responsibility/link id takes just that element, a `chg-N` id takes everything filed under it, and \"unfiled\" takes everything untagged; `to` accepts a change id or \"unfiled\", and defaults to this session's change. Use it when work landed in the wrong change or one task turns out to be two — never re-write elements just to re-file them. Pass `sign_off: true` (with `change_id`, or alone for the current change) once the developer has approved the plan: it snapshots the change's entries as intent, and from then on any claim the agent rewords or adds under it lands as vagrant for the developer's verdict at `mark_implemented` instead of folding. With no arguments, reports the current selection and the open changes. Use this at the start of a task when other work may share the plan; skip it for quick serial edits."
     )]
     pub(crate) fn set_change(
         &self,
@@ -627,6 +627,74 @@ impl ScryerServer {
                 msg.push_str(&format!("\n{h}"));
             }
             return Ok(CallToolResult::success(vec![Content::text(msg)]));
+        }
+
+        // Sign-off: stamp the change (named, or the session's) with a snapshot
+        // of its tagged entries. Anything the agent changes afterwards is
+        // classified against it (forward vagrancy).
+        if req.sign_off == Some(true) {
+            if req.rationale.is_some() || req.close.is_some() || req.clear == Some(true) {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "Pass sign_off with change_id (or alone for the session's current change) \
+                     — not with rationale, close, or clear."
+                        .to_string(),
+                )]));
+            }
+            let target = match req
+                .change_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .or_else(|| self.session_change(&model_ref))
+            {
+                Some(c) => c,
+                None => {
+                    return Ok(CallToolResult::error(vec![Content::text(
+                        "Nothing to sign off — pass change_id, or open/resume a change first."
+                            .to_string(),
+                    )]));
+                }
+            };
+            let _lock = match lock_or_err(&model_ref) {
+                Ok(l) => l,
+                Err(e) => return Ok(e),
+            };
+            let mut plan = match scryer_core::read_planned_seeded_at(&model_ref) {
+                Ok(p) => p,
+                Err(e) => {
+                    return Ok(CallToolResult::error(vec![Content::text(read_fail(
+                        "plan", &model_ref, &e,
+                    ))]));
+                }
+            };
+            let n = match scryer_core::changes::sign_off(
+                &mut plan,
+                &target,
+                scryer_core::drift::now_secs(),
+            ) {
+                Ok(n) => n,
+                Err(e) => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "{e}\n{}",
+                        open_changes_line(&plan)
+                    ))]));
+                }
+            };
+            if let Err(e) = scryer_core::write_planned_at(&model_ref, &plan) {
+                return Ok(CallToolResult::error(vec![Content::text(e)]));
+            }
+            drop(_lock);
+            // The session keeps working on the change it just signed off.
+            self.set_session_change(Some((model_ref.project_path().to_path_buf(), target.clone())));
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "Signed off {target} — {n} entr{} snapshotted as the developer's intent. From \
+                 here, a claim you reword or add under it is an amendment/addition: it lands \
+                 as vagrant for the developer's verdict at mark_implemented and does not fold. \
+                 If implementing shows a planned claim is wrong, reword it and fold the rest — \
+                 the reword waits.",
+                if n == 1 { "y" } else { "ies" }
+            ))]));
         }
 
         if req.clear == Some(true) {
