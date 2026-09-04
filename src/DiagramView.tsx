@@ -221,8 +221,8 @@ function DiagramInner({
   concernLens?: string | null;
 }) {
   const [scene, setScene] = useState<DiagramScene | null>(null);
-  // The conformance overlay: tints and violation edges from the deterministic
-  // facts on each node. On by default; the choice persists per viewer.
+  // The structural-violations overlay: tints and red edges from the
+  // deterministic facts on each node. On by default; the choice persists per viewer.
   const [overlay, setOverlay] = useState<boolean>(() => {
     try {
       return localStorage.getItem(OVERLAY_KEY) !== "off";
@@ -655,8 +655,8 @@ function DiagramInner({
                 <ControlButton
                   title={
                     overlay
-                      ? "Conformance overlay on — hide the style tints and violation edges"
-                      : "Conformance overlay off — show which nodes declare no style, carry no layer, or break their layer matrix"
+                      ? "Structural violations shown — hide the tints and the red edges"
+                      : "Structural violations hidden — show which nodes declare no style, carry no layer, or break their layer matrix"
                   }
                   className={overlay ? "!bg-red-500/15 !text-red-600 dark:!text-red-400" : ""}
                   onClick={toggleOverlay}

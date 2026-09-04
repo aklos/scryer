@@ -393,7 +393,7 @@ export const healthReport: ModelHealthReport = {
   // One real reach-around the layer matrix forbids: the domain model reads
   // the store directly. The map draws it red and tints both the component
   // and, from the level above, the whole Ledger Service.
-  style: {
+  structural: {
     violations: [
       {
         kind: "layer_violation",

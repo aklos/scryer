@@ -25,7 +25,7 @@ const model = {
 const report = {
   derived: { resolvedEdges: [] },
   completeness: {},
-  style: {
+  structural: {
     violations: [
       {
         kind: "layer_violation",

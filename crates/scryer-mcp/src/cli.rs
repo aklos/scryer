@@ -189,7 +189,7 @@ pub(crate) fn check_report(
             .map(|w| format!("conformance: {w}")),
     );
 
-    // 1b) Code-time style conformance. The check owns its own extraction so
+    // 1b) Structural violations: code-time conformance to declared styles. The check owns its own extraction so
     //    CI needs no cached dependency graph; the cache is refreshed as a
     //    side effect for the MCP tools. Every violation is a real import or
     //    file, so every one gates.
@@ -221,10 +221,10 @@ pub(crate) fn check_report(
                 Some(&files),
             );
             for v in &report.violations {
-                failures.push(format!("style: {}", v.detail));
+                failures.push(format!("structural: {}", v.detail));
             }
         }
-        Err(e) => notes.push(format!("style conformance unverified — extraction failed: {e}")),
+        Err(e) => notes.push(format!("structural conformance unverified — extraction failed: {e}")),
     }
 
     // 2) Anchor fingerprints, when a committed baseline exists. Changed spans
@@ -511,11 +511,11 @@ pub(crate) fn status_line(c: &StatusCounts) -> String {
     let pending = pending_phrase(c);
     // Test verdicts only when red or stale — verified-green stays silent.
     let tests = crate::helpers::tests_phrase(c);
-    let style = crate::helpers::style_phrase(c);
+    let structural = crate::helpers::structural_phrase(c);
     match &c.baseline {
-        None => format!("scryer: {pending} · no reconcile anchor yet{tests}{style}{changes}"),
+        None => format!("scryer: {pending} · no reconcile anchor yet{tests}{structural}{changes}"),
         Some(b) => format!(
-            "scryer: {pending} · {} drift scope(s) · anchors: {} broken, {} changed{tests}{style}{changes}",
+            "scryer: {pending} · {} drift scope(s) · anchors: {} broken, {} changed{tests}{structural}{changes}",
             b.drift_scopes, b.anchors_broken, b.anchors_changed
         ),
     }

@@ -1449,7 +1449,7 @@ impl ScryerServer {
         // gate feedback, but not commit-blocking. De-dup the advisory list against
         // the blocking one (`validate` reports the same id-collision facts as
         // advisories) so no single fact costs two lines.
-        let blocking = validate::structural_violations(&model);
+        let blocking = validate::invariant_violations(&model);
         let blocking_set: std::collections::HashSet<&str> =
             blocking.iter().map(String::as_str).collect();
         let styles = styles_for(&model_ref);
@@ -1489,7 +1489,7 @@ impl ScryerServer {
         }
         if !conformance.is_empty() {
             msg.push_str(&format!(
-                "\n\nStyle conformance — {} finding(s). These describe the code as it is \
+                "\n\nStructural conformance — {} finding(s). These describe the code as it is \
                  (the model is right to record them); fix them in the CODE, then re-model. \
                  Never rewire links or re-layer components just to silence them:",
                 conformance.len()
@@ -1504,7 +1504,7 @@ impl ScryerServer {
     #[tool(
         description = "The model's deterministic observability report. Headline: `tested` / `testable` / \
          `untested` claim counts; then per node rollups, vagrant/stale flags, anchor coverage and \
-         state, link audit, `style` (code-time conformance findings), `completeness`, `coverage` \
+         state, link audit, `structural` (structural violations: imports and files that break a declared style), `completeness`, `coverage` \
          and `silentAnchors`. `node_id` scopes to \
          one subtree with per-child summaries; omit for the whole-model summary. Use it to decide \
          WHERE work is needed before reading subtrees.
@@ -1651,7 +1651,7 @@ impl ScryerServer {
         let derived = edges
             .as_ref()
             .map(|edges| scryer_core::build_edges::derive_graph(&model, edges));
-        // Code-time style conformance over the same resolved edges: imports the
+        // Structural violations over the same resolved edges: imports the
         // matrix forbids, sibling isolation, banned packages, files on the wrong
         // layer's path. Absent with the cache, like the link audit.
         let style_report = edges.as_ref().zip(derived.as_ref()).map(|(edges, graph)| {
@@ -1819,7 +1819,7 @@ impl ScryerServer {
                     "subtree": nh.map(|h| counts_json(&h.subtree)),
                     "completeness": comp_json(&node.id),
                     "children": children,
-                    "style": style_report.as_ref().map(|r| r.scoped(&subtree_ids)),
+                    "structural": style_report.as_ref().map(|r| r.scoped(&subtree_ids)),
                     "anchors": drift_here,
                     "links": links_here,
                     "unmodeled": unmodeled_here,
@@ -1916,7 +1916,7 @@ impl ScryerServer {
                     "reanchored": anchor_check.reanchored,
                     "assertedOnlyLinks": asserted_only,
                     "unmodeled": derived.as_ref().map(|g| &g.unmodeled),
-                    "style": match style_report.as_ref() {
+                    "structural": match style_report.as_ref() {
                         Some(r) => {
                             // Per-container tally, so "fix the violations" knows
                             // where to drill before it reads a single line.
@@ -1939,7 +1939,7 @@ impl ScryerServer {
                                 "misplaced": r.misplaced,
                                 "byContainer": by_container,
                                 "sample": r.violations.iter().take(10).map(|v| &v.detail).collect::<Vec<_>>(),
-                                "note": "code-time style conformance from the build's import graph — the full list is node-scoped (get_health {nodeId} on a container); every line is a real import or file to fix, never a judgment call. Unstyled containers are not checked.",
+                                "note": "structural violations — real imports and files that break a container's declared style, from the build's import graph. The full list is node-scoped (get_health {nodeId} on a container); every line is a real import or file to fix, never a judgment call. Unstyled containers are not checked.",
                             })
                         }
                         None => serde_json::json!({

@@ -364,7 +364,7 @@ export async function buildDiagramScene(
   // a container lands on the container's card, so a mess lights up from the
   // level above as well as from inside.
   const reported = new Map<string, Set<string>>();
-  for (const v of report?.style?.violations ?? []) {
+  for (const v of report?.structural?.violations ?? []) {
     const at = liftToLevel(v.node);
     if (!at) continue;
     let set = reported.get(at);
@@ -452,7 +452,7 @@ export async function buildDiagramScene(
     // matrix forbids — are drawn even when no link declares the pair. The
     // map exists to expose exactly these; a declared-links-only view would
     // read as compliance the code does not have.
-    for (const v of report?.style?.violations ?? []) {
+    for (const v of report?.structural?.violations ?? []) {
       if (!v.other) continue;
       const s = liftToLevel(v.node), t = liftToLevel(v.other);
       if (!s || !t || s === t) continue;

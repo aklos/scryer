@@ -49,9 +49,9 @@ pub(crate) struct ModelHealthReport {
     /// Anchors silently healed this pass (symbol moved, content unchanged).
     reanchored: usize,
     derived: scryer_core::build_edges::DerivedGraph,
-    /// Code-time conformance to each container's declared style, over the
+    /// Structural violations: code-time conformance to each container's declared style, over the
     /// same resolved import graph as `derived`.
-    style: scryer_core::style_health::StyleReport,
+    structural: scryer_core::style_health::StyleReport,
     /// The project's style table (built-ins plus `.scryer/styles/*.json`), so
     /// the diagram draws custom styles with their own layers.
     styles: Vec<scryer_core::style::StyleDef>,
@@ -117,7 +117,7 @@ pub(crate) async fn get_model_health(cwd: String) -> Result<ModelHealthReport, S
 
         let derived = scryer_core::build_edges::derive_graph(&model, &edges);
         let styles = scryer_core::style::Styles::load(project);
-        let style = scryer_core::style_health::check_code(
+        let structural = scryer_core::style_health::check_code(
             &model,
             &styles,
             &derived,
@@ -131,7 +131,7 @@ pub(crate) async fn get_model_health(cwd: String) -> Result<ModelHealthReport, S
             anchors: check.observations,
             reanchored: check.reanchored,
             derived,
-            style,
+            structural,
             styles,
         })
     })

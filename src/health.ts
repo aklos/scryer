@@ -115,7 +115,7 @@ export type StyleViolationKind =
   | "external_violation"
   | "misplaced";
 
-/** One code-time style violation: a real import or file that breaks the
+/** One structural violation: a real import or file that breaks the
  *  container's declared style. Mirrors Rust `StyleViolation`. */
 export interface StyleViolation {
   kind: StyleViolationKind;
@@ -195,8 +195,8 @@ export interface ModelHealthReport {
   /** Anchors silently healed this pass (symbol moved, content unchanged). */
   reanchored: number;
   derived: DerivedGraph;
-  /** Code-time style conformance over the same resolved import graph. */
-  style: StyleReport;
+  /** Structural violations: code-time conformance to each declared style over the same resolved import graph. */
+  structural: StyleReport;
   /** The project's style table (built-ins plus `.scryer/styles/*.json`). */
   styles?: StyleDef[];
 }

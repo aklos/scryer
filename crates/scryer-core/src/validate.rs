@@ -389,7 +389,7 @@ pub fn validate_with(model: &ScryModel, styles: &Styles) -> Vec<String> {
 /// on this returning empty, so the committed layer can never hold one.
 ///
 /// Returns stable, de-duplicated messages (empty ⇒ no violation).
-pub fn structural_violations(model: &ScryModel) -> Vec<String> {
+pub fn invariant_violations(model: &ScryModel) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
 
     // Duplicate node / link / group ids — each is an identity every by-id lookup
@@ -1536,12 +1536,12 @@ mod resp_id_tests {
         );
     }
 
-    /// The gating subset (`structural_violations`) catches the same-id-two-hosts
+    /// The gating subset (`invariant_violations`) catches the same-id-two-hosts
     /// collision AND plain duplicate node ids — the silent-misbind states the
     /// committed-write seam must refuse — while staying silent on advisories.
     #[test]
-    fn structural_violations_flags_silent_misbind_states() {
-        use super::structural_violations;
+    fn invariant_violations_flags_silent_misbind_states() {
+        use super::invariant_violations;
         let mut m = ScryModel::new();
         m.nodes.push(node(serde_json::json!({
             "id": "node-1", "kind": "system", "name": "Acme",
@@ -1557,7 +1557,7 @@ mod resp_id_tests {
         m.nodes.push(node(serde_json::json!({
             "id": "node-2", "kind": "container", "name": "Dup", "parentId": "node-1",
         })));
-        let v = structural_violations(&m);
+        let v = invariant_violations(&m);
         assert!(v.iter().any(|w| w.contains("Duplicate node id: node-2")), "{v:?}");
         assert!(
             v.iter().any(|w| w.contains("globally unique") && w.contains("resp-1")),
@@ -1569,8 +1569,8 @@ mod resp_id_tests {
     /// bites genuine invariant breaks, never ordinary (or advisory-flawed)
     /// content, so it can guard every committed write without false positives.
     #[test]
-    fn structural_violations_empty_for_a_clean_model() {
-        use super::structural_violations;
+    fn invariant_violations_empty_for_a_clean_model() {
+        use super::invariant_violations;
         let mut m = ScryModel::new();
         m.nodes.push(node(serde_json::json!({
             "id": "node-1", "kind": "system", "name": "Acme",
@@ -1580,7 +1580,7 @@ mod resp_id_tests {
             "id": "node-2", "kind": "container", "name": "API", "parentId": "node-1",
             "responsibilities": [{ "id": "resp-2", "statement": "b" }]
         })));
-        assert!(structural_violations(&m).is_empty(), "{:?}", structural_violations(&m));
+        assert!(invariant_violations(&m).is_empty(), "{:?}", invariant_violations(&m));
     }
 
     /// Responsibility ids that are unique across hosts raise no collision warning.

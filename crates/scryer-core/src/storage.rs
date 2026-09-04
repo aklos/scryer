@@ -111,7 +111,7 @@ pub fn write_model_at(r: &ModelRef, model: &ScryModel) -> Result<(), String> {
     // invisible to the plan diff (its id-keyed index keeps only one copy), so
     // once written the stale copy sits wrong indefinitely with nothing able to
     // surface it. Fail loud at the seam instead, naming every violation.
-    let violations = crate::validate::structural_violations(&stamped);
+    let violations = crate::validate::invariant_violations(&stamped);
     if !violations.is_empty() {
         return Err(format!(
             "refusing to write committed model — structural invariant violation(s) that the \
