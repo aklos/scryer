@@ -36,7 +36,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ChevronRight, CornerLeftUp, LayoutGrid, ShieldAlert } from "lucide-react";
+import { ChevronRight, CornerLeftUp, LayoutGrid } from "lucide-react";
 import type { ScryModel } from "./viewmodel";
 import { concernCounts } from "./viewmodel";
 import type { ModelDiff } from "./planDiff";
@@ -129,7 +129,6 @@ const NO_EDGES: RFEdge<EdgeData>[] = [];
 // Drag snap pitch — one background dot (the Background gap below), so manual
 // placements land on the visible grid. Arch tiers only: snapping the code
 // tier's dots would fight the physics.
-const OVERLAY_KEY = "scryer.diagram.conformance";
 const SNAP_GRID: [number, number] = [24, 24];
 
 export function DiagramView({
@@ -221,25 +220,6 @@ function DiagramInner({
   concernLens?: string | null;
 }) {
   const [scene, setScene] = useState<DiagramScene | null>(null);
-  // The structural-violations overlay: tints and red edges from the
-  // deterministic facts on each node. On by default; the choice persists per viewer.
-  const [overlay, setOverlay] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem(OVERLAY_KEY) !== "off";
-    } catch {
-      return true;
-    }
-  });
-  const toggleOverlay = useCallback(() => {
-    setOverlay((v) => {
-      try {
-        localStorage.setItem(OVERLAY_KEY, v ? "off" : "on");
-      } catch {
-        /* storage unavailable — the toggle still works for this view */
-      }
-      return !v;
-    });
-  }, []);
   const { fitView } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
 
@@ -397,12 +377,11 @@ function DiagramInner({
             pending: pendingIds?.has(n.id),
             completeness: report?.completeness[n.id],
             styled: scene.mode === "styled",
-            overlay,
           },
         };
       }) as Array<RFCard | RFDot>;
     });
-  }, [scene, selectedId, markFor, highlight, pendingIds, report, concernLit, archDraggable, dotSim.live, overlay]);
+  }, [scene, selectedId, markFor, highlight, pendingIds, report, concernLit, archDraggable, dotSim.live]);
 
   const rfEdges = useMemo<RFEdge<EdgeData>[]>(() => {
     if (!scene) return [];
@@ -451,12 +430,8 @@ function DiagramInner({
     // Styled mode: an edge the drawing already implies (a step into the
     // innermost layer, an adapter onto its port) stays hidden until one of
     // its ends is selected — what remains is short and worth reading.
-    // Overlay off: the report-only violation edges leave with it (they exist
-    // only to expose violations), and the rest draw as plain links.
     const visible = scene.edges.filter(
-      (e) =>
-        (overlay || !e.id.startsWith("violation:")) &&
-        (!e.implied || e.source === selectedId || e.target === selectedId),
+      (e) => !e.implied || e.source === selectedId || e.target === selectedId,
     );
     return visible.map((e) => {
       const h = handles?.get(e.id);
@@ -477,7 +452,7 @@ function DiagramInner({
         targetHandle: scene.mode === "code" ? "c" : h?.targetHandle,
         data: {
           bow: e.bow,
-          violation: overlay ? e.violation : undefined,
+          violation: e.violation,
           label: ghostEdge ? undefined : e.label || undefined,
           method: ghostEdge ? undefined : e.method,
           dot: scene.mode === "code",
@@ -491,7 +466,7 @@ function DiagramInner({
         },
       };
     });
-  }, [scene, rfNodes, selectedId, highlight, concernLit, pendingIds, overlay]);
+  }, [scene, rfNodes, selectedId, highlight, concernLit, pendingIds]);
 
   // Refit when the level changes (a fresh scene of a different size/shape).
   const fitKey = `${focusId ?? "root"}:${rfNodes.length}`;
@@ -651,19 +626,6 @@ function DiagramInner({
             />
             {scene?.regions && <StyleRegions regions={scene.regions} />}
             <Controls showInteractive={false} className="!shadow-none">
-              {scene?.mode !== "code" && (
-                <ControlButton
-                  title={
-                    overlay
-                      ? "Structural violations shown — hide the tints and the red edges"
-                      : "Structural violations hidden — show which nodes declare no style, carry no layer, or break their layer matrix"
-                  }
-                  className={overlay ? "!bg-red-500/15 !text-red-600 dark:!text-red-400" : ""}
-                  onClick={toggleOverlay}
-                >
-                  <ShieldAlert />
-                </ControlButton>
-              )}
               {archDraggable && (
                 <ControlButton
                   title="Re-run auto-layout (releases this level's manual placements)"

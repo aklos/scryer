@@ -33,9 +33,6 @@ export interface CardData extends Record<string, unknown> {
   /** The level is drawn in a style: every card sits inside its layer's
    *  region, so the card's own layer tag would only repeat the region label. */
   styled?: boolean;
-  /** The conformance overlay is on: tint the card by its `conformance` facts
-   *  and show the badge that names them. */
-  overlay?: boolean;
 }
 export type RFCard = RFNode<CardData, "card">;
 
@@ -206,10 +203,10 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
   // External nodes keep their dashed outline but still show a change stroke —
   // an edited external dependency is exactly the change worth noticing.
   const markStroke = data.mark ? MARK_STROKE[data.mark] : null;
-  // Conformance overlay — facts only. Red: violations charged here. Amber: a
+  // Structural facts — never a judgment. Red: violations charged here. Amber: a
   // component its style can't place (no layer). Grey dotted: a container
   // declaring no style, so nothing inside is checked.
-  const conf = data.overlay && !isGhost ? node.conformance : undefined;
+  const conf = !isGhost ? node.conformance : undefined;
   const tint = !conf
     ? null
     : conf.violations.length

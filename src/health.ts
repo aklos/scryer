@@ -728,6 +728,45 @@ export function testFindings(
 
 /** Roll findings up the tree: every ancestor of a finding's host (host
  *  included) gets the count. Nodes with nothing below them stay absent. */
+/** Structural violations charged to each node's subtree, keyed by node id —
+ *  a container carries everything inside it, so the tree and the page can
+ *  list what the count means without opening every child. Insertion order
+ *  follows the report (sorted by kind, node, file). */
+export function rollupStructural(
+  model: Pick<ScryModel, "nodes">,
+  report: ModelHealthReport | null,
+): Map<string, StyleViolation[]> {
+  const out = new Map<string, StyleViolation[]>();
+  if (!report?.structural) return out;
+  const parent = new Map<string, string | undefined>();
+  for (const n of model.nodes) parent.set(n.id, n.parentId);
+  for (const v of report.structural.violations) {
+    let id: string | undefined = v.node;
+    const seen = new Set<string>();
+    while (id && !seen.has(id)) {
+      seen.add(id);
+      const list = out.get(id);
+      if (list) list.push(v);
+      else out.set(id, [v]);
+      id = parent.get(id);
+    }
+  }
+  return out;
+}
+
+/** The short label a violation kind reads as, where the full line won't fit. */
+export function violationKindLabel(kind: StyleViolationKind): string {
+  switch (kind) {
+    case "layer_violation": return "layer";
+    case "isolation_violation": return "isolation";
+    case "external_violation": return "banned import";
+    case "misplaced": return "misplaced file";
+    case "unstyled": return "no style";
+    case "layerless": return "no layer";
+    case "cycle": return "cycle";
+  }
+}
+
 export function rollupTestFindings(
   model: Pick<ScryModel, "nodes">,
   findings: TestFinding[],
