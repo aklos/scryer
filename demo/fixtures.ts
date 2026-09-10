@@ -409,6 +409,9 @@ export const healthReport: ModelHealthReport = {
     isolationViolations: 0,
     externalViolations: 0,
     misplaced: 0,
+    unstyled: 0,
+    layerless: 0,
+    cycles: 0,
   },
 };
 

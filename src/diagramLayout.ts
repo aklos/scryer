@@ -365,6 +365,8 @@ export async function buildDiagramScene(
   // level above as well as from inside.
   const reported = new Map<string, Set<string>>();
   for (const v of report?.structural?.violations ?? []) {
+    // The badge already says "no style" / "no layer"; only the rest tint red.
+    if (v.kind === "unstyled" || v.kind === "layerless") continue;
     const at = liftToLevel(v.node);
     if (!at) continue;
     let set = reported.get(at);

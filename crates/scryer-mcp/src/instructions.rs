@@ -52,8 +52,9 @@ concern each. [[statement-ears]] [[scanning]] [[naming]] [[concerns]]\n\
 - A claim has a test attached or it doesn't; that binary is the model's primary signal, and the \
 `untested` count in every status line is your standing work. [[test-attachment]] [[test-verdicts]]\n\
 - `N structural violations` in a status line counts real imports and files that break a \
-declared style. Fixing them means moving code, never un-declaring the style, dropping a layer, or \
-deleting the link; a container with no style has nothing to fix until the user declares one. \
+declared style, import cycles between components, and containers that declare no style at all. \
+Fixing them means moving code, never un-declaring the style, dropping a layer, or deleting the \
+link; an unstyled container is resolved only by the user declaring the style its code has. \
 [[styles]]\n\
 \n\
 Every tool takes an optional `project` (absolute path) that defaults to the working directory. \

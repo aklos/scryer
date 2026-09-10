@@ -113,7 +113,10 @@ export type StyleViolationKind =
   | "layer_violation"
   | "isolation_violation"
   | "external_violation"
-  | "misplaced";
+  | "misplaced"
+  | "unstyled"
+  | "layerless"
+  | "cycle";
 
 /** One structural violation: a real import or file that breaks the
  *  container's declared style. Mirrors Rust `StyleViolation`. */
@@ -139,6 +142,9 @@ export interface StyleReport {
   isolationViolations: number;
   externalViolations: number;
   misplaced: number;
+  unstyled: number;
+  layerless: number;
+  cycles: number;
 }
 
 export interface DerivedGraph {

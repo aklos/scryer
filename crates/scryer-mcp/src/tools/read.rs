@@ -1937,9 +1937,12 @@ impl ScryerServer {
                                 "isolationViolations": r.isolation_violations,
                                 "externalViolations": r.external_violations,
                                 "misplaced": r.misplaced,
+                                "unstyled": r.unstyled,
+                                "layerless": r.layerless,
+                                "cycles": r.cycles,
                                 "byContainer": by_container,
                                 "sample": r.violations.iter().take(10).map(|v| &v.detail).collect::<Vec<_>>(),
-                                "note": "structural violations — real imports and files that break a container's declared style, from the build's import graph. The full list is node-scoped (get_health {nodeId} on a container); every line is a real import or file to fix, never a judgment call. Unstyled containers are not checked.",
+                                "note": "structural violations — real imports and files that break a container's declared style, from the build's import graph. The full list is node-scoped (get_health {nodeId} on a container); every line is a real import or file to fix, never a judgment call. A container with no declared style is itself one violation (only the user can resolve it, by declaring the style its code has), and import cycles between components are reported with or without a style.",
                             })
                         }
                         None => serde_json::json!({

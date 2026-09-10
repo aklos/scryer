@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use crate::build_edges::{DerivedGraph, ExternalImport};
 use crate::ownership::BoundaryOwnership;
 use crate::style::{self, StyleDef, Styles};
-use crate::{Node, ScryModel};
+use crate::{Kind, Node, ScryModel};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -30,6 +30,16 @@ pub enum ViolationKind {
     ExternalViolation,
     /// A file whose path says one layer while its component says another.
     Misplaced,
+    /// A container with components but no declared style: nothing inside it
+    /// can be checked against a matrix. One per container.
+    Unstyled,
+    /// A component under a styled container carrying no layer, or one its
+    /// style has no row for.
+    Layerless,
+    /// A dependency cycle between components of one container — forbidden
+    /// under every style and checked whether or not one is declared. One per
+    /// strongly connected component, charged to its first member.
+    Cycle,
 }
 
 impl ViolationKind {
@@ -39,6 +49,9 @@ impl ViolationKind {
             ViolationKind::IsolationViolation => "isolation_violation",
             ViolationKind::ExternalViolation => "external_violation",
             ViolationKind::Misplaced => "misplaced",
+            ViolationKind::Unstyled => "unstyled",
+            ViolationKind::Layerless => "layerless",
+            ViolationKind::Cycle => "cycle",
         }
     }
 }
@@ -70,6 +83,9 @@ pub struct StyleReport {
     pub isolation_violations: usize,
     pub external_violations: usize,
     pub misplaced: usize,
+    pub unstyled: usize,
+    pub layerless: usize,
+    pub cycles: usize,
 }
 
 impl StyleReport {
@@ -97,6 +113,9 @@ impl StyleReport {
             isolation_violations: count(ViolationKind::IsolationViolation),
             external_violations: count(ViolationKind::ExternalViolation),
             misplaced: count(ViolationKind::Misplaced),
+            unstyled: count(ViolationKind::Unstyled),
+            layerless: count(ViolationKind::Layerless),
+            cycles: count(ViolationKind::Cycle),
             violations,
         }
     }
@@ -349,7 +368,205 @@ pub fn check_code(
         }
     }
 
+    // --- no style, no layer ------------------------------------------------------
+    // The facts the map badges: a container nobody has shaped, a component
+    // its style cannot place. Both are violations in the tally, so a model
+    // with no styles at all reads as what it is rather than as clean.
+    for container in model.nodes.iter().filter(|n| n.kind == Kind::Container) {
+        let comps: Vec<&Node> = model
+            .nodes
+            .iter()
+            .filter(|n| n.kind == Kind::Component && n.parent_id.as_deref() == Some(&container.id))
+            .collect();
+        if comps.is_empty() {
+            continue;
+        }
+        let def = governing(&container.id);
+        let dir = style::container_prefix(model, &container.id).unwrap_or_default();
+        match def {
+            None => {
+                let internal = derived
+                    .resolved_edges
+                    .iter()
+                    .filter(|e| {
+                        let s = style::container_of(model, &e.src_node).map(|c| c.id.as_str());
+                        let d = style::container_of(model, &e.dst_node).map(|c| c.id.as_str());
+                        s == Some(&container.id) && d == Some(&container.id) && e.src_node != e.dst_node
+                    })
+                    .count();
+                out.push(StyleViolation {
+                    kind: ViolationKind::Unstyled,
+                    node: container.id.clone(),
+                    other: None,
+                    file: dir,
+                    container: container.id.clone(),
+                    detail: format!(
+                        "'{}' declares no architectural style — {} components and {} internal \
+                         imports with no layer matrix to check them against; declare the style \
+                         the code has, or pick one with the user and refactor toward it",
+                        container.name,
+                        comps.len(),
+                        internal
+                    ),
+                });
+            }
+            Some(def) => {
+                for comp in comps.iter().filter(|c| {
+                    !c.layer.as_deref().map(|l| def.has_layer(l)).unwrap_or(false)
+                }) {
+                    let file = index
+                        .files_of(&comp.id)
+                        .and_then(|fs| fs.iter().next().cloned())
+                        .unwrap_or_else(|| dir.clone());
+                    out.push(StyleViolation {
+                        kind: ViolationKind::Layerless,
+                        node: comp.id.clone(),
+                        other: None,
+                        file,
+                        container: container.id.clone(),
+                        detail: match comp.layer.as_deref() {
+                            Some(l) => format!(
+                                "'{}' carries layer '{l}', which style '{}' has no row for — \
+                                 give it one of {}",
+                                comp.name, def.name, def.layer_names().join(", ")
+                            ),
+                            None => format!(
+                                "'{}' carries no layer under '{}' ({}) — give it one of {} \
+                                 from what its code is",
+                                comp.name, container.name, def.name, def.layer_names().join(", ")
+                            ),
+                        },
+                    });
+                }
+            }
+        }
+    }
+
+    // --- cycles -------------------------------------------------------------------
+    // Component-level import cycles inside one container. Every style's
+    // matrix is acyclic, so a cycle breaks any style the container could
+    // declare — it is reported with or without one.
+    let mut adjacency: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for e in &derived.resolved_edges {
+        let (Some(sc), Some(dc)) = (
+            style::layer_component(model, &e.src_node),
+            style::layer_component(model, &e.dst_node),
+        ) else {
+            continue;
+        };
+        if sc.id == dc.id {
+            continue;
+        }
+        let (Some(scont), Some(dcont)) =
+            (style::container_of(model, &sc.id), style::container_of(model, &dc.id))
+        else {
+            continue;
+        };
+        if scont.id != dcont.id {
+            continue;
+        }
+        adjacency.entry(sc.id.clone()).or_default().insert(dc.id.clone());
+    }
+    for cycle in strongly_connected(&adjacency).into_iter().filter(|c| c.len() > 1) {
+        let Some(first) = cycle.first() else { continue };
+        let Some(container) = style::container_of(model, first) else { continue };
+        let name = |id: &str| {
+            model.nodes.iter().find(|n| n.id == id).map(|n| n.name.clone()).unwrap_or_else(|| id.to_string())
+        };
+        let members: Vec<String> = cycle.iter().map(|id| name(id)).collect();
+        let file = index
+            .files_of(first)
+            .and_then(|fs| fs.iter().next().cloned())
+            .unwrap_or_default();
+        out.push(StyleViolation {
+            kind: ViolationKind::Cycle,
+            node: first.clone(),
+            other: None,
+            file,
+            container: container.id.clone(),
+            detail: format!(
+                "dependency cycle inside '{}' among {} components: {} — every one reaches every \
+                 other through imports; no layering admits it, so invert edges through an \
+                 interface the lower side owns until the tangle is a chain",
+                container.name,
+                members.len(),
+                members.join(", ")
+            ),
+        });
+    }
+
     StyleReport::from_violations(out)
+}
+
+/// Tarjan's strongly connected components over a small adjacency map. Each
+/// component comes back sorted by id, and the list is sorted by first member,
+/// so the report is stable across runs.
+fn strongly_connected(adj: &BTreeMap<String, BTreeSet<String>>) -> Vec<Vec<String>> {
+    struct State<'a> {
+        adj: &'a BTreeMap<String, BTreeSet<String>>,
+        index: usize,
+        indices: HashMap<&'a str, usize>,
+        low: HashMap<&'a str, usize>,
+        stack: Vec<&'a str>,
+        on_stack: HashSet<&'a str>,
+        out: Vec<Vec<String>>,
+    }
+    fn visit<'a>(st: &mut State<'a>, v: &'a str) {
+        st.indices.insert(v, st.index);
+        st.low.insert(v, st.index);
+        st.index += 1;
+        st.stack.push(v);
+        st.on_stack.insert(v);
+        if let Some(next) = st.adj.get(v) {
+            for w in next {
+                let w: &'a str = w.as_str();
+                if !st.indices.contains_key(w) {
+                    visit(st, w);
+                    let lw = st.low[w];
+                    let lv = st.low.get_mut(v).unwrap();
+                    *lv = (*lv).min(lw);
+                } else if st.on_stack.contains(w) {
+                    let iw = st.indices[w];
+                    let lv = st.low.get_mut(v).unwrap();
+                    *lv = (*lv).min(iw);
+                }
+            }
+        }
+        if st.low[v] == st.indices[v] {
+            let mut comp = Vec::new();
+            while let Some(w) = st.stack.pop() {
+                st.on_stack.remove(w);
+                comp.push(w.to_string());
+                if w == v {
+                    break;
+                }
+            }
+            comp.sort();
+            st.out.push(comp);
+        }
+    }
+    let mut st = State {
+        adj,
+        index: 0,
+        indices: HashMap::new(),
+        low: HashMap::new(),
+        stack: Vec::new(),
+        on_stack: HashSet::new(),
+        out: Vec::new(),
+    };
+    let mut keys: Vec<&str> = adj.keys().map(|k| k.as_str()).collect();
+    for next in adj.values() {
+        keys.extend(next.iter().map(|k| k.as_str()));
+    }
+    keys.sort();
+    keys.dedup();
+    for k in keys {
+        if !st.indices.contains_key(k) {
+            visit(&mut st, k);
+        }
+    }
+    st.out.sort();
+    st.out
 }
 
 #[cfg(test)]
@@ -423,6 +640,49 @@ mod tests {
     }
 
     #[test]
+    fn an_unstyled_container_is_one_violation_and_its_cycles_still_count() {
+        let mut m = hex_service();
+        // Strip the service's style: its imports stop being checked against a
+        // matrix, but the container itself becomes the finding.
+        m.nodes.iter_mut().find(|n| n.id == "svc").unwrap().style = None;
+        for n in m.nodes.iter_mut().filter(|n| n.parent_id.as_deref() == Some("svc")) {
+            n.layer = None;
+        }
+        let r = report(
+            &m,
+            vec![
+                // would be a layer violation under hexagonal — now unchecked
+                edge(("dom", "Order", "svc/domain/order.rs"), ("infra", "PgOrders", "svc/infrastructure/pg.rs")),
+                // a two-component cycle: app ⇄ app2
+                edge(("app", "checkout", "svc/application/checkout.rs"), ("app2", "refund", "svc/application/refunds.rs")),
+                edge(("app2", "refund", "svc/application/refunds.rs"), ("app", "checkout", "svc/application/checkout.rs")),
+            ],
+            vec![],
+        );
+        assert_eq!(r.layer_violations, 0, "{:#?}", r.violations);
+        assert_eq!(r.unstyled, 1);
+        assert_eq!(r.cycles, 1);
+        assert_eq!(r.total(), 2);
+        let unstyled = r.violations.iter().find(|v| v.kind == ViolationKind::Unstyled).unwrap();
+        assert_eq!(unstyled.node, "svc");
+        assert!(unstyled.detail.contains("5 components and 3 internal imports"), "{}", unstyled.detail);
+        let cycle = r.violations.iter().find(|v| v.kind == ViolationKind::Cycle).unwrap();
+        assert_eq!(cycle.node, "app");
+        assert!(cycle.detail.contains("Checkout, Refunds"), "{}", cycle.detail);
+    }
+
+    #[test]
+    fn a_component_without_a_layer_under_a_styled_container_is_layerless() {
+        let mut m = hex_service();
+        m.nodes.iter_mut().find(|n| n.id == "app2").unwrap().layer = None;
+        let r = report(&m, vec![], vec![]);
+        assert_eq!(r.layerless, 1, "{:#?}", r.violations);
+        let v = &r.violations[0];
+        assert_eq!(v.node, "app2");
+        assert!(v.detail.contains("carries no layer under 'Svc' (hexagonal)"), "{}", v.detail);
+    }
+
+    #[test]
     fn imports_against_the_matrix_are_layer_violations() {
         let m = hex_service();
         let r = report(
@@ -439,7 +699,10 @@ mod tests {
             vec![],
         );
         assert_eq!(r.layer_violations, 2, "{:#?}", r.violations);
-        assert_eq!(r.total(), 2);
+        // The illegal domain → infrastructure edge also closes a cycle
+        // (application → domain → infrastructure → application).
+        assert_eq!(r.cycles, 1);
+        assert_eq!(r.total(), 3);
         let v = &r.violations[0];
         assert_eq!(v.node, "dom");
         assert_eq!(v.other.as_deref(), Some("infra"));
