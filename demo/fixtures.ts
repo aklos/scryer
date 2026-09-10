@@ -139,8 +139,6 @@ const componentNodes: Node[] = [
   { id: "dash-payout", kind: "component", name: "Payout", parentId: "dashboard", layer: "entities" },
   { id: "dash-ui", kind: "component", name: "UI Kit", parentId: "dashboard", layer: "shared" },
   { id: "dash-api", kind: "component", name: "API Client", parentId: "dashboard", layer: "shared" },
-  // Carries no layer: the code has a `utils/` grab-bag the style has no row for.
-  { id: "dash-utils", kind: "component", name: "Utils", parentId: "dashboard" },
 ];
 
 // --- Links -------------------------------------------------------------------

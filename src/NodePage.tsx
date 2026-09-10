@@ -37,7 +37,6 @@ import { completenessBadge, subtreeTestTone, testStatesOf } from "./health";
 import { kindIcon, typeTag } from "./kindIcon";
 import { lookupIcon } from "./IconPicker";
 import { ConnectionsSection, ImpliedConnectionsSection } from "./ConnectionsSection";
-import { StructuralSection } from "./page/StructuralSection";
 import { PageMenuProvider, usePageMenu, useCopyId, copyIdItem } from "./pageMenu";
 import {
   Editable,
@@ -552,13 +551,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
               />
 
               <ImpliedConnectionsSection
-                model={model}
-                node={node}
-                report={report}
-                onSelectNode={onSelectNode}
-              />
-
-              <StructuralSection
                 model={model}
                 node={node}
                 report={report}

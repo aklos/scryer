@@ -40,7 +40,7 @@ import { previewableNodeIds, usePreviewServer } from "./hooks/usePreviewServer";
 import { useModelHealth } from "./hooks/useModelHealth";
 import { useTestStatuses } from "./hooks/useTestStatuses";
 import { useInbox } from "./hooks/useInbox";
-import { rollupStructural, rollupTestFindings, testFindings } from "./health";
+import { rollupTestFindings, testFindings } from "./health";
 import {
   addGroup as addGroupHelper,
   addLink as addLinkHelper,
@@ -726,9 +726,6 @@ function Workspace({
     model,
     testFindings(model, committed, testVerdicts, probeResults),
   );
-  // Structural violations per subtree — the tree's count and the page's list
-  // read from the same roll-up, so they can never disagree.
-  const structural = rollupStructural(model, healthReport);
   const plan = planCounts(planDiff, model, committed);
 
   return (
@@ -772,7 +769,6 @@ function Workspace({
           concernLens={concernLens}
           onSetConcernLens={setConcernLens}
           testTally={testTally}
-          structural={structural}
         />
         {view === "diagram" ? (
           <DiagramView

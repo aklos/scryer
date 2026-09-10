@@ -10,7 +10,7 @@
 
 import { useRef, useState } from "react";
 import { Braces, ChevronRight, Crosshair, FlaskConical, Loader2, Pencil, Plus, X } from "lucide-react";
-import type { Completeness, TestTally, StyleViolation } from "./health";
+import type { Completeness, TestTally } from "./health";
 import { CompletenessPie } from "./CompletenessPie";
 import type { ScryModel, Node, Group, Kind } from "./viewmodel";
 import { childKindFor, concernCounts, normalizeConcernSlug } from "./viewmodel";
@@ -29,7 +29,6 @@ import {
 } from "./changeMarks";
 import { kindIcon } from "./kindIcon";
 import { StyleGlyph } from "./styles/StyleGlyph";
-import { violationKindLabel } from "./health";
 import { styleTable } from "./styles";
 
 /** What a style or a layer IS, for the tree's tooltips — the built-in
@@ -186,7 +185,6 @@ export function ModelTree({
   onSetConcernLens,
   previewable,
   testTally,
-  structural,
 }: {
   model: ScryModel;
   /** Symbol ids the preview sidecar can render — derived from its export list,
@@ -220,10 +218,6 @@ export function ModelTree({
    *  keyed by node id — from {@link rollupTestFindings}. Absent = nothing to
    *  look at below. Drives the Tests lens. */
   testTally?: ReadonlyMap<string, TestTally>;
-  /** Structural violations charged to each node's subtree, keyed by node id
-   *  — from {@link rollupStructural}. A row with any shows a count whose
-   *  tooltip lists every line. */
-  structural?: ReadonlyMap<string, StyleViolation[]>;
 }) {
   const [width, setWidth] = useState(() => {
     const saved = Number(localStorage.getItem("scryer:treeWidth"));
@@ -893,28 +887,6 @@ export function ModelTree({
               title={`${c.pct}% of this subtree's claims read through to code`}
             >
               <CompletenessPie c={c} size={12} />
-            </span>
-          );
-        })()}
-        {/* Structural violations in this subtree: red when any is a real
-            import or file to fix, ghost when the subtree's only finding is
-            that nobody has declared a style or a layer. The tooltip lists
-            every line; the page lists them with their files. */}
-        {(() => {
-          const vs = structural?.get(node.id);
-          if (!vs || vs.length === 0) return null;
-          const real = vs.some((v) => v.kind !== "unstyled" && v.kind !== "layerless");
-          const tip = vs.map((v) => `${violationKindLabel(v.kind)}: ${v.detail}`).join("\n\n");
-          return (
-            <span
-              className={`shrink-0 rounded px-1 font-mono text-2xs tabular-nums ${
-                real
-                  ? "bg-red-500/10 text-red-600 dark:text-red-400"
-                  : "text-[var(--text-ghost)]"
-              }`}
-              title={tip}
-            >
-              {real ? vs.length : vs.length === 1 && vs[0].kind === "unstyled" ? "no style" : vs.length}
             </span>
           );
         })()}
