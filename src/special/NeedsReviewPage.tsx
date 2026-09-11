@@ -4,8 +4,8 @@ import { ConfirmPopover } from "../ConfirmPopover";
 import type { ScryModel, Node, Responsibility, SchemaProperty, DriftScope } from "../viewmodel";
 import { isNodeEmpty } from "../viewmodel";
 import type { Editor } from "../editor";
-import type { ClaimProbeStatus, ClaimTestStatus, ModelHealthReport, TestFinding } from "../health";
-import { ANCHOR_STATE_LABEL, collapseAnchors, testFindings } from "../health";
+import type { ClaimProbeStatus, ClaimTestStatus, ModelHealthReport, StyleViolation, TestFinding } from "../health";
+import { ANCHOR_STATE_LABEL, collapseAnchors, structuralNotice, testFindings } from "../health";
 import { kindIcon } from "../kindIcon";
 import { respElementId, propElementId } from "../SourceSection";
 import { BTN, BTN_AGENT, BTN_DANGER, BTN_GO, jumpTo, LINK, PageSection, WikiLink, WordDiffText } from "../pagekit";
@@ -298,7 +298,20 @@ export interface ReviewIndex {
    *  `total`: a standing gap to close, not a verdict awaiting a human, and
    *  it would swamp the counter on any model built before rule 22. */
   untested: TestFinding[];
+  /** Structural violations grouped by the container whose style they break,
+   *  in report order. Counted in `total`, except a container with no declared
+   *  style: only the user can pick one, so it is a standing decision rather
+   *  than a finding to fix. */
+  structural: StructuralGroup[];
   total: number;
+}
+
+export interface StructuralGroup {
+  containerId: string;
+  /** The container's name, or its id when the plan no longer holds it. */
+  name: string;
+  container?: Node;
+  violations: StyleViolation[];
 }
 
 /** Gather everything awaiting a human verdict. Shared by the page and the
@@ -350,6 +363,22 @@ export function buildReviewIndex(
   const findings = testFindings(model, tests.committed, tests.verdicts, tests.probes);
   const testsNotHolding = findings.filter((f) => f.kind !== "untested");
   const untested = findings.filter((f) => f.kind === "untested");
+  const byId = new Map(model.nodes.map((n) => [n.id, n]));
+  const groups = new Map<string, StructuralGroup>();
+  for (const v of report?.structural?.violations ?? []) {
+    let g = groups.get(v.container);
+    if (!g) {
+      const container = byId.get(v.container);
+      g = { containerId: v.container, name: container?.name ?? v.container, container, violations: [] };
+      groups.set(v.container, g);
+    }
+    g.violations.push(v);
+  }
+  const structural = [...groups.values()];
+  const structuralCount = structural.reduce(
+    (n, g) => n + g.violations.filter((v) => v.kind !== "unstyled").length,
+    0,
+  );
   const total =
     testsNotHolding.length +
     amendments.length +
@@ -363,8 +392,9 @@ export function buildReviewIndex(
     unseenClaims.length +
     disconnected.length +
     driftScopes.length +
-    collapseAnchors(report?.anchors ?? []).length;
-  return { amendments, vagrant, vagrantProps, stale, staleProps, staleNodes, emptySymbols, unseenNodes, unseenClaims, disconnected, testsNotHolding, untested, total };
+    collapseAnchors(report?.anchors ?? []).length +
+    structuralCount;
+  return { amendments, vagrant, vagrantProps, stale, staleProps, staleNodes, emptySymbols, unseenNodes, unseenClaims, disconnected, testsNotHolding, untested, structural, total };
 }
 
 export function NeedsReviewPage({
@@ -422,7 +452,7 @@ export function NeedsReviewPage({
         }
       />
       <SpecialBody>
-        {idx.total === 0 && (
+        {idx.total === 0 && idx.structural.length === 0 && (
           <div className="flex flex-col items-center gap-3 px-6 py-16">
             <Check className="h-6 w-6 text-emerald-500 dark:text-emerald-400" />
             <p className="text-xs text-[var(--text-muted)]">
@@ -430,8 +460,50 @@ export function NeedsReviewPage({
             </p>
           </div>
         )}
-        {idx.total > 0 && (
+        {(idx.total > 0 || idx.structural.length > 0) && (
           <>
+            {idx.structural.length > 0 && (
+              <PageSection
+                title="Structural violations"
+                hint={"The code or its declared links break the architecture their container declares, or the container declares none. Ask the agent to choose the architecture this code should have and refactor to it."}
+                count={idx.structural.reduce((n, g) => n + g.violations.length, 0)}
+              >
+                <ul className="flex flex-col">
+                  {idx.structural.map((g) => (
+                    <li key={g.containerId} className="border-b border-[var(--border-subtle)] py-2 last:border-b-0">
+                      <div className="flex flex-wrap items-center gap-x-2">
+                        <WikiLink
+                          name={g.name}
+                          Icon={g.container ? kindIcon(g.container) : undefined}
+                          onClick={() => onSelectNode(g.containerId)}
+                        />
+                        <span className="text-xs text-[var(--text-muted)]">
+                          {structuralNotice(g.violations)?.text}
+                        </span>
+                      </div>
+                      <ul className="mt-1 flex flex-col gap-1 pl-7">
+                        {g.violations.map((v, i) => (
+                          <li key={`${v.kind}:${v.node}:${v.other ?? ""}:${v.file}:${i}`}>
+                            <button
+                              type="button"
+                              onClick={() => onSelectNode(v.node)}
+                              className="block w-full text-left text-xs text-[var(--text-secondary)] hover:text-[var(--text)] hover:underline"
+                              title="Open the node it is charged to"
+                            >
+                              {v.detail}
+                            </button>
+                            {v.file && (
+                              <span className="block truncate font-mono text-2xs text-[var(--text-ghost)]">{v.file}</span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </li>
+                  ))}
+                </ul>
+              </PageSection>
+            )}
+
             {idx.testsNotHolding.length > 0 && (
               <PageSection title="Tests not holding" hint={"A failing test, or a test that stayed green while its claim's code was deliberately broken. Either way the claim is not held \u2014 fix the code, or strengthen the test and re-run for a fresh verdict."} count={idx.testsNotHolding.length}>
                 <ul className="flex flex-col">

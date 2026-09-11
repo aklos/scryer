@@ -40,6 +40,9 @@ pub enum ViolationKind {
     /// under every style and checked whether or not one is declared. One per
     /// strongly connected component, charged to its first member.
     Cycle,
+    /// A declared model link its style forbids — the same rules `add_links`
+    /// enforces, held against links that predate their style or layers.
+    ForbiddenLink,
 }
 
 impl ViolationKind {
@@ -52,6 +55,7 @@ impl ViolationKind {
             ViolationKind::Unstyled => "unstyled",
             ViolationKind::Layerless => "layerless",
             ViolationKind::Cycle => "cycle",
+            ViolationKind::ForbiddenLink => "forbidden_link",
         }
     }
 }
@@ -86,6 +90,7 @@ pub struct StyleReport {
     pub unstyled: usize,
     pub layerless: usize,
     pub cycles: usize,
+    pub forbidden_links: usize,
 }
 
 impl StyleReport {
@@ -116,6 +121,7 @@ impl StyleReport {
             unstyled: count(ViolationKind::Unstyled),
             layerless: count(ViolationKind::Layerless),
             cycles: count(ViolationKind::Cycle),
+            forbidden_links: count(ViolationKind::ForbiddenLink),
             violations,
         }
     }
@@ -253,6 +259,22 @@ pub fn check_code(
                         def.inbound.join(" or ")
                     ),
                 ));
+                continue;
+            }
+            // Leaving: only the importer's outbound layers talk to the outside.
+            let Some(def) = governing(&src_comp.id) else { continue };
+            if !def.outbound.is_empty() && !def.outbound.iter().any(|l| l == sl) {
+                out.push(charge(
+                    ViolationKind::LayerViolation,
+                    dst_comp,
+                    src_c,
+                    format!(
+                        "{} `{}` ({sl}) reaches out of container '{}' to `{}` in '{}' — in style \
+                         '{}' only {} talks to the outside",
+                        e.src_file, e.src_symbol, src_c.name, e.dst_symbol, dst_c.name, def.name,
+                        def.outbound.join(" or ")
+                    ),
+                ));
             }
             continue;
         }
@@ -311,6 +333,29 @@ pub fn check_code(
                 ));
             }
         }
+    }
+
+    // --- declared links ----------------------------------------------------------
+    // A link the style forbids, on the model side. When the code already
+    // imports across the same pair it was charged above; one line per fact.
+    for l in &model.links {
+        let Some(breach) = crate::validate::style_link_breach(model, styles, &l.src, &l.dst, l.kind) else {
+            continue;
+        };
+        let lift = |id: &str| style::layer_component(model, id).map(|c| c.id.clone()).unwrap_or_else(|| id.to_string());
+        let (src, dst) = (lift(&l.src), lift(&l.dst));
+        if out.iter().any(|v| v.node == src && v.other.as_deref() == Some(dst.as_str())) {
+            continue;
+        }
+        let file = index.files_of(&src).and_then(|fs| fs.iter().next().cloned()).unwrap_or_default();
+        out.push(StyleViolation {
+            kind: ViolationKind::ForbiddenLink,
+            node: src,
+            other: Some(dst),
+            file,
+            container: breach.container.id.clone(),
+            detail: format!("declared link {}: {}", l.id, breach.detail),
+        });
     }
 
     // --- banned packages ---------------------------------------------------------
@@ -711,18 +756,59 @@ mod tests {
 
     #[test]
     fn entering_a_container_below_its_inbound_layer_is_a_layer_violation() {
-        let m = hex_service();
+        let mut m = hex_service();
+        m.nodes.push(node(serde_json::json!({
+            "id": "shell", "kind": "component", "name": "Shell", "parentId": "ui", "layer": "app"
+        })));
         let r = report(
             &m,
             vec![
-                edge(("page", "CheckoutPage", "ui/pages/checkout.tsx"), ("app", "checkout", "svc/application/checkout.rs")),
-                edge(("page", "CheckoutPage", "ui/pages/checkout.tsx"), ("dom", "Order", "svc/domain/order.rs")),
+                edge(("shell", "App", "ui/app/app.tsx"), ("app", "checkout", "svc/application/checkout.rs")),
+                edge(("shell", "App", "ui/app/app.tsx"), ("dom", "Order", "svc/domain/order.rs")),
             ],
             vec![],
         );
         assert_eq!(r.layer_violations, 1, "{:#?}", r.violations);
         assert!(r.violations[0].detail.contains("reaches into container 'Svc' at `Order`"), "{}", r.violations[0].detail);
         assert!(r.violations[0].detail.contains("enter through presentation or application"));
+    }
+
+    #[test]
+    fn leaving_a_container_from_a_non_outbound_layer_is_a_layer_violation() {
+        let m = hex_service();
+        let r = report(
+            &m,
+            vec![edge(("page", "CheckoutPage", "ui/pages/checkout.tsx"), ("app", "checkout", "svc/application/checkout.rs"))],
+            vec![],
+        );
+        assert_eq!(r.layer_violations, 1, "{:#?}", r.violations);
+        let v = &r.violations[0];
+        assert_eq!((v.node.as_str(), v.container.as_str()), ("page", "ui"));
+        assert!(v.detail.contains("(pages) reaches out of container 'Ui'"), "{}", v.detail);
+        assert!(v.detail.contains("only shared or app talks to the outside"), "{}", v.detail);
+    }
+
+    #[test]
+    fn a_declared_link_the_style_forbids_is_a_forbidden_link() {
+        let mut m = hex_service();
+        m.links.push(Link {
+            id: "l-bad".into(), src: "dom".into(), dst: "infra".into(),
+            label: String::new(), method: None, kind: Some(LinkKind::Depends),
+        });
+        let r = report(&m, vec![], vec![]);
+        assert_eq!(r.forbidden_links, 1, "{:#?}", r.violations);
+        let v = &r.violations[0];
+        assert_eq!((v.node.as_str(), v.other.as_deref(), v.container.as_str()), ("dom", Some("infra"), "svc"));
+        assert!(v.detail.starts_with("declared link l-bad: 'Orders' (domain) → 'Postgres' (infrastructure) is illegal"), "{}", v.detail);
+
+        // The code importing across the same pair is already the layer
+        // violation; the declared link does not count it twice.
+        let r = report(
+            &m,
+            vec![edge(("dom", "Order", "svc/domain/order.rs"), ("infra", "PgOrders", "svc/infrastructure/pg.rs"))],
+            vec![],
+        );
+        assert_eq!((r.layer_violations, r.forbidden_links), (1, 0), "{:#?}", r.violations);
     }
 
     #[test]

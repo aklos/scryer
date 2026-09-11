@@ -33,7 +33,13 @@ import {
   isNodeEmpty,
   nextResponsibilityId,
 } from "./viewmodel";
-import { completenessBadge, subtreeTestTone, testStatesOf } from "./health";
+import {
+  completenessBadge,
+  structuralBySubtree,
+  structuralNotice,
+  subtreeTestTone,
+  testStatesOf,
+} from "./health";
 import { kindIcon, typeTag } from "./kindIcon";
 import { lookupIcon } from "./IconPicker";
 import { ConnectionsSection, ImpliedConnectionsSection } from "./ConnectionsSection";
@@ -155,6 +161,10 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const testMap = effectiveTestMap(committed, model);
   // Per-claim fingerprint state of the attached test (test: observations).
   const testStates = useMemo(() => testStatesOf(report), [report]);
+  const structural = useMemo(
+    () => structuralNotice(structuralBySubtree(model, report ?? null).get(node.id) ?? []),
+    [model, report, node.id],
+  );
   const dataShape = isDataShape(node);
   const resps = node.responsibilities ?? [];
   // The committed copy of this node's claims — the diff base for the Overview.
@@ -195,8 +205,13 @@ function NodePageBody(props: PageProps & { node: Node }) {
   // Maintenance notices — full-width amboxes stacked at the top of the article
   // body (the wiki hatnote pattern), not chips crammed beside the title.
   const bannerStack =
-    drift || node.stale || staleCount > 0 || vagrantCount > 0 || isNodeEmpty(node) ? (
+    drift || structural || node.stale || staleCount > 0 || vagrantCount > 0 || isNodeEmpty(node) ? (
       <>
+        {structural && (
+          <Ambox tone={structural.unstyledOnly ? "warning" : "danger"} icon={<Flag className="h-3 w-3" />}>
+            {structural.text}
+          </Ambox>
+        )}
         {node.stale && editor && (
           <Ambox
             tone="danger"

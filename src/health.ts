@@ -116,7 +116,8 @@ export type StyleViolationKind =
   | "misplaced"
   | "unstyled"
   | "layerless"
-  | "cycle";
+  | "cycle"
+  | "forbidden_link";
 
 /** One structural violation: a real import or file that breaks the
  *  container's declared style. Mirrors Rust `StyleViolation`. */
@@ -145,6 +146,7 @@ export interface StyleReport {
   unstyled: number;
   layerless: number;
   cycles: number;
+  forbiddenLinks: number;
 }
 
 export interface DerivedGraph {
@@ -745,4 +747,53 @@ export function rollupTestFindings(
     }
   }
   return out;
+}
+
+/** Structural violations charged to each node's subtree, keyed by node id: a
+ *  violation counts on the node it is charged to and on every ancestor, so a
+ *  container's or system's page knows what is wrong anywhere inside it. */
+export function structuralBySubtree(
+  model: Pick<ScryModel, "nodes">,
+  report: ModelHealthReport | null,
+): Map<string, StyleViolation[]> {
+  const out = new Map<string, StyleViolation[]>();
+  const parent = new Map<string, string | undefined>();
+  for (const n of model.nodes) parent.set(n.id, n.parentId);
+  for (const v of report?.structural?.violations ?? []) {
+    let id: string | undefined = v.node;
+    const seen = new Set<string>();
+    while (id && !seen.has(id)) {
+      seen.add(id);
+      const list = out.get(id);
+      if (list) list.push(v);
+      else out.set(id, [v]);
+      id = parent.get(id);
+    }
+  }
+  return out;
+}
+
+/** The one line a structurally invalid subtree reads as, or null when nothing
+ *  inside it is wrong. Findings that are only containers with no declared
+ *  style mean no architecture was chosen yet; anything else is code or links
+ *  breaking one. Either way the fix is the same conversation with the agent. */
+export function structuralNotice(
+  violations: readonly StyleViolation[],
+): { unstyledOnly: boolean; text: string } | null {
+  const n = violations.length;
+  if (n === 0) return null;
+  const ask = "ask the agent to choose the architecture this code should have and refactor to it";
+  if (violations.every((v) => v.kind === "unstyled")) {
+    return {
+      unstyledOnly: true,
+      text:
+        n === 1
+          ? `No architectural style declared — ${ask}`
+          : `${n} containers declare no architectural style — ${ask}`,
+    };
+  }
+  return {
+    unstyledOnly: false,
+    text: `Structurally invalid (${n} violation${n === 1 ? "" : "s"}) — ${ask}`,
+  };
 }

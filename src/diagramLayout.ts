@@ -408,10 +408,11 @@ export async function buildDiagramScene(
     for (const [id, at] of pinnedPos) positions.set(id, at);
     styled = { name: styleDef.name, drawing: styleDef.drawing, regions: laid.regions };
     regions = laid.regions;
-    // Code-time violations from the health report — real imports the layer
-    // matrix forbids — are drawn even when no link declares the pair. The
-    // map exists to expose exactly these; a declared-links-only view would
-    // read as compliance the code does not have.
+    // Structural violations from the health report — imports and declared
+    // links the style forbids — are the only source of red, so every red line
+    // is also a line on Needs review. They are drawn even when no link
+    // declares the pair: a declared-links-only view would read as compliance
+    // the code does not have.
     for (const v of report?.structural?.violations ?? []) {
       if (!v.other) continue;
       const s = liftToLevel(v.node), t = liftToLevel(v.other);
@@ -437,21 +438,16 @@ export async function buildDiagramScene(
       edgeMap.set(key, e);
       edges.push(e);
     }
-    // The drawing already says these — hide them until a selection asks.
+    // The drawing already says the legal ones — hide them until a selection asks.
     const layerById = new Map(children.map((c) => [c.id, c.layer] as const));
     const ringDrawing = styleDef.drawing === "rings" || styleDef.drawing === "hexagon";
     const innermost = styleDef.layers[styleDef.layers.length - 1]?.name;
     for (const e of edges) {
+      if (e.id.startsWith("violation:")) continue;
       const sourceGhost = ghostIds.has(e.source), targetGhost = ghostIds.has(e.target);
       const sl = layerById.get(e.source), tl = layerById.get(e.target);
-      const verdict = classifyStyledEdge(styleDef, sl, tl, { sourceGhost, targetGhost });
-      // A code-time violation stays a violation whatever the declared link says.
-      if (e.id.startsWith("violation:")) continue;
-      e.implied = verdict === "implied";
-      e.violation =
-        verdict === "violation"
-          ? violationReason(styleDef, byId.get(e.source)?.name ?? e.source, sl, byId.get(e.target)?.name ?? e.target, tl, sourceGhost, targetGhost)
-          : undefined;
+      e.implied =
+        !e.violation && classifyStyledEdge(styleDef, sl, tl, { sourceGhost, targetGhost }) === "implied";
       if (sourceGhost || targetGhost) continue;
       // A same-layer chord crosses whatever sits between its ends — the
       // centre on a ring, the neighbouring cards on a band. Bow it clear:
@@ -488,30 +484,6 @@ export async function buildDiagramScene(
   });
 
   return { mode, focusId, nodes, edges, styled, regions };
-}
-
-/** One line saying why a styled edge is red — the rule it breaks, in the
- *  style's own words, so the map never shows a red line without a reason. */
-function violationReason(
-  def: StyleDef,
-  source: string,
-  sl: string | undefined,
-  target: string,
-  tl: string | undefined,
-  sourceGhost: boolean,
-  targetGhost: boolean,
-): string {
-  if (sourceGhost && tl) {
-    return `${source} (outside) reaches ${target} on the ${tl} layer — in ${def.name}, traffic from outside enters through ${def.inbound.join(" or ")}`;
-  }
-  if (targetGhost && sl) {
-    return `${source} (${sl}) reaches out of the container to ${target} — in ${def.name}, only ${(def.outbound ?? []).join(" or ") || "no layer"} talks to the outside`;
-  }
-  if (sl && tl && sl === tl) {
-    return `${source} depends on ${target}, a sibling on the ${sl} layer — ${def.name} keeps slices on a layer isolated`;
-  }
-  const allowed = sl ? def.matrix[sl] ?? [] : [];
-  return `${source} (${sl}) depends on ${target} (${tl}) — in ${def.name}, ${sl} may depend on ${allowed.length ? allowed.join(", ") : "nothing"}`;
 }
 
 // ── Architecture tiers: planar boxes ────────────────────────────────────────

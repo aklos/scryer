@@ -584,13 +584,10 @@ pub fn check_styles(model: &ScryModel, styles: &Styles) -> Vec<String> {
 /// modeling error to repair — a generated model must describe a badly
 /// organised codebase faithfully. They surface in health and `check`, not in
 /// [`validate`], and the fix is in the code, followed by re-modeling.
+/// A declared link its style forbids is not one of them: it is a structural
+/// violation, reported with the code's by [`crate::style_health::check_code`].
 pub fn check_conformance(model: &ScryModel, styles: &Styles) -> Vec<String> {
     let mut warnings: Vec<String> = Vec::new();
-    for l in &model.links {
-        if let Some(v) = style_link_violation(model, styles, &l.src, &l.dst, l.kind) {
-            warnings.push(format!("Link {}: {v}", l.id));
-        }
-    }
     warnings.extend(check_unreached(model, styles));
     warnings.extend(check_file_listing(model));
     let mut seen: HashSet<String> = HashSet::new();
@@ -606,7 +603,9 @@ pub fn check_conformance(model: &ScryModel, styles: &Styles) -> Vec<String> {
 /// `kind: uses` (a sibling reached through its public surface). A link that
 /// enters a styled container from outside must land on one of its inbound
 /// layers (hex: presentation or application; FSD: app or pages; core-shell:
-/// shell), never deeper. Symbols carry their component's layer.
+/// shell), never deeper; one that leaves a styled container must leave from
+/// one of its outbound layers (hex: infrastructure; FSD: shared or app;
+/// core-shell: shell). Symbols carry their component's layer.
 pub fn style_link_violation(
     model: &ScryModel,
     styles: &Styles,
@@ -614,48 +613,93 @@ pub fn style_link_violation(
     dst: &str,
     kind: Option<LinkKind>,
 ) -> Option<String> {
+    style_link_breach(model, styles, src, dst, kind).map(|b| b.detail)
+}
+
+/// A link its style forbids: why, and the container whose style it breaks.
+pub struct StyleLinkBreach<'a> {
+    pub container: &'a crate::Node,
+    pub detail: String,
+}
+
+/// [`style_link_violation`] with the container it charges.
+pub fn style_link_breach<'a>(
+    model: &'a ScryModel,
+    styles: &Styles,
+    src: &str,
+    dst: &str,
+    kind: Option<LinkKind>,
+) -> Option<StyleLinkBreach<'a>> {
     let src_c = style::container_of(model, src)?;
     let dst_c = style::container_of(model, dst)?;
-    let dst_layer = style::layer_of(model, dst)?;
-    let def = styles.get(style::governing_style(model, dst)?)?;
     let src_name = name_of(model, src);
     let dst_name = name_of(model, dst);
 
     if src_c.id != dst_c.id {
         // Entering from outside: land on an inbound layer.
-        if def.is_inbound(dst_layer) || def.inbound.is_empty() {
+        if let (Some(dst_layer), Some(def)) = (
+            style::layer_of(model, dst),
+            style::governing_style(model, dst).and_then(|s| styles.get(s)),
+        ) {
+            if !def.inbound.is_empty() && !def.is_inbound(dst_layer) {
+                return Some(StyleLinkBreach {
+                    container: dst_c,
+                    detail: format!(
+                        "'{src_name}' enters container '{}' ({}) at '{dst_name}', which is on layer \
+                         '{dst_layer}' — links from outside land on {}; link to a node on that layer \
+                         (or to the container itself) instead",
+                        dst_c.name,
+                        def.name,
+                        def.inbound.join(" or ")
+                    ),
+                });
+            }
+        }
+        // Leaving for another container: go out from an outbound layer.
+        let src_layer = style::layer_of(model, src)?;
+        let def = styles.get(style::governing_style(model, src)?)?;
+        if def.outbound.is_empty() || def.outbound.iter().any(|l| l == src_layer) {
             return None;
         }
-        return Some(format!(
-            "'{src_name}' enters container '{}' ({}) at '{dst_name}', which is on layer \
-             '{dst_layer}' — links from outside land on {}; link to a node on that layer \
-             (or to the container itself) instead",
-            dst_c.name,
-            def.name,
-            def.inbound.join(" or ")
-        ));
+        return Some(StyleLinkBreach {
+            container: src_c,
+            detail: format!(
+                "'{src_name}' ({src_layer}) leaves container '{}' ({}) for '{dst_name}' — links \
+                 out of it leave from {}; route it through a node on that layer",
+                src_c.name,
+                def.name,
+                def.outbound.join(" or ")
+            ),
+        });
     }
 
+    let dst_layer = style::layer_of(model, dst)?;
     let src_layer = style::layer_of(model, src)?;
     // The importer's style governs; a component overriding its container's
     // style is checked by its own table.
     let def = styles.get(style::governing_style(model, src)?)?;
     if !def.may_depend(src_layer, dst_layer) {
         let allowed = def.allowed(src_layer);
-        return Some(format!(
-            "'{src_name}' ({src_layer}) → '{dst_name}' ({dst_layer}) is illegal in style '{}': \
-             {src_layer} may depend on {}",
-            def.name,
-            if allowed.is_empty() { "nothing".to_string() } else { allowed.join(", ") }
-        ));
+        return Some(StyleLinkBreach {
+            container: src_c,
+            detail: format!(
+                "'{src_name}' ({src_layer}) → '{dst_name}' ({dst_layer}) is illegal in style '{}': \
+                 {src_layer} may depend on {}",
+                def.name,
+                if allowed.is_empty() { "nothing".to_string() } else { allowed.join(", ") }
+            ),
+        });
     }
     let src_comp = style::layer_component(model, src)?;
     let dst_comp = style::layer_component(model, dst)?;
     if src_layer == dst_layer && src_comp.id != dst_comp.id && kind != Some(LinkKind::Uses) {
-        return Some(format!(
-            "'{src_name}' → '{dst_name}' joins two {src_layer} components — a same-layer link \
-             reaches a sibling through its public surface and is `kind: uses`",
-        ));
+        return Some(StyleLinkBreach {
+            container: src_c,
+            detail: format!(
+                "'{src_name}' → '{dst_name}' joins two {src_layer} components — a same-layer link \
+                 reaches a sibling through its public surface and is `kind: uses`",
+            ),
+        });
     }
     None
 }
@@ -1401,14 +1445,28 @@ mod style_tests {
     fn links_from_outside_land_on_inbound_layers() {
         use crate::LinkKind::*;
         let m = hex_model();
-        assert_eq!(violation(&m, "page", "app", Some(Calls)), None);
-        assert_eq!(violation(&m, "page", "pres", Some(Calls)), None);
-        assert_eq!(violation(&m, "page", "svc", Some(Calls)), None);
+        assert_eq!(violation(&m, "shell", "app", Some(Calls)), None);
+        assert_eq!(violation(&m, "shell", "pres", Some(Calls)), None);
+        assert_eq!(violation(&m, "shell", "svc", Some(Calls)), None);
         let v = violation(&m, "page", "dom", Some(Calls)).unwrap();
         assert!(v.contains("enters container 'Svc' (hexagonal) at 'Orders'"), "{v}");
         assert!(v.contains("land on presentation or application"), "{v}");
         let v = violation(&m, "ui", "infra", Some(Calls)).unwrap();
         assert!(v.contains("layer 'infrastructure'"), "{v}");
+    }
+
+    /// A link out of a styled container leaves from an outbound layer: in
+    /// feature-sliced only shared or app talks to the outside.
+    #[test]
+    fn links_out_of_a_container_leave_from_outbound_layers() {
+        use crate::LinkKind::*;
+        let m = hex_model();
+        assert_eq!(violation(&m, "shell", "app", Some(Calls)), None);
+        let v = violation(&m, "page", "app", Some(Calls)).unwrap();
+        assert!(v.contains("'CheckoutPage' (pages) leaves container 'Ui' (feature-sliced)"), "{v}");
+        assert!(v.contains("leave from shared or app"), "{v}");
+        // Linking to the other container itself still leaves from the wrong layer.
+        assert!(violation(&m, "page", "svc", Some(Calls)).is_some());
     }
 
     /// An application component nothing links into is dead; one driven by a

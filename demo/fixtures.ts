@@ -410,6 +410,7 @@ export const healthReport: ModelHealthReport = {
     unstyled: 0,
     layerless: 0,
     cycles: 0,
+    forbiddenLinks: 0,
   },
 };
 
