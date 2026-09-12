@@ -15,7 +15,7 @@ import { useLaunchSettings } from "./hooks/useLaunchSettings";
 import { useMcpSetup } from "./hooks/useMcpSetup";
 import { McpSetupPrompt } from "./McpSetupPrompt";
 import { useAgentLaunchGate } from "./AgentLaunchConfirm";
-import { WindowControls } from "./TopBar";
+import { WindowControls, IS_MAC } from "./TopBar";
 
 type Phase = "picker" | "needs-model";
 
@@ -245,7 +245,9 @@ function Centered({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen w-screen flex-col bg-[var(--surface-canvas)]">
       <div
         data-tauri-drag-region
-        className="flex h-9 shrink-0 items-center justify-end px-2 select-none"
+        className={`flex h-9 shrink-0 items-center ${
+          IS_MAC ? "justify-start" : "justify-end"
+        } px-2 select-none`}
       >
         <WindowControls divider={false} />
       </div>

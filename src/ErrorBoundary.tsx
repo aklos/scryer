@@ -1,6 +1,6 @@
 import { Component } from "react";
 import type { ReactNode, ErrorInfo } from "react";
-import { WindowControls } from "./TopBar";
+import { WindowControls, IS_MAC } from "./TopBar";
 
 interface Props {
   children: ReactNode;
@@ -29,7 +29,9 @@ export class ErrorBoundary extends Component<Props, State> {
         <div className="flex h-screen w-screen flex-col bg-[var(--surface)]">
           <div
             data-tauri-drag-region
-            className="flex h-9 shrink-0 items-center justify-end px-2 select-none"
+            className={`flex h-9 shrink-0 items-center ${
+              IS_MAC ? "justify-start" : "justify-end"
+            } px-2 select-none`}
           >
             <WindowControls divider={false} />
           </div>

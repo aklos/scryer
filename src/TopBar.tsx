@@ -33,7 +33,7 @@ import { applyColorMode, loadTheme, saveTheme, type ColorMode } from "./theme";
 export type WorkspaceView = "wiki" | "diagram";
 
 // The search shortcut chip, honest about the platform (⌘ exists only on mac).
-const IS_MAC = /Mac|iP/.test(navigator.userAgent);
+export const IS_MAC = /Mac|iP/.test(navigator.userAgent);
 const SEARCH_KEY = IS_MAC ? "⌘K" : "Ctrl K";
 
 export function TopBar({
@@ -93,6 +93,11 @@ export function TopBar({
           items-baseline: the button's exported baseline is its first child's —
           the logo image, i.e. its bottom edge — which drags the path ~3px low. */}
       <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center">
+        {IS_MAC && (
+          <div className="mr-2 flex shrink-0 items-center border-r border-[var(--border)] pr-2">
+            <WindowControls divider={false} />
+          </div>
+        )}
         <button
           type="button"
           onClick={(e) => {
@@ -189,7 +194,7 @@ export function TopBar({
         </div>
 
         <ThemeToggle />
-        <WindowControls />
+        {!IS_MAC && <WindowControls />}
       </div>
 
       {menu && (
@@ -244,7 +249,7 @@ export function WindowControls({ divider = true }: { divider?: boolean } = {}) {
     };
   }, []);
 
-  const controls = [
+  const defaultControls = [
     {
       id: "minimize",
       label: "Minimize",
@@ -265,6 +270,10 @@ export function WindowControls({ divider = true }: { divider?: boolean } = {}) {
       danger: true,
     },
   ];
+
+  const controls = IS_MAC
+    ? [defaultControls[2], defaultControls[0], defaultControls[1]]
+    : defaultControls;
 
   return (
     // Separated from the app's own controls by a hairline: these act on the
