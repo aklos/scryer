@@ -122,6 +122,11 @@ pub struct PathRef {
     pub segments: Vec<String>,
     /// 1-based line of the reference: the `use` line, or the call/type site.
     pub line: u32,
+    /// True when the path came from a `use` declaration — a lexical BINDING
+    /// that names the symbol for the rest of the file — rather than a
+    /// call/type site. The resolver binds the leaf name on a `use` and
+    /// attributes a call site to its enclosing definition.
+    pub is_use: bool,
 }
 
 /// One module import: a TS/JS `import`/`export … from` / `require(…)` /
@@ -745,6 +750,7 @@ fn collect_go_paths(node: Node, bytes: &[u8], out: &mut Vec<PathRef>) {
                 out.push(PathRef {
                     segments: vec![q.to_string(), nm.to_string()],
                     line: n.start_position().row as u32 + 1,
+                    is_use: false,
                 });
             }
         }
@@ -908,7 +914,7 @@ fn collect_use_paths(node: Node, bytes: &[u8], out: &mut Vec<PathRef>) {
             if let Some(arg) = child.child_by_field_name("argument") {
                 for segments in flatten_use(arg, bytes) {
                     if segments.len() >= 2 {
-                        out.push(PathRef { segments, line });
+                        out.push(PathRef { segments, line, is_use: true });
                     }
                 }
             }
@@ -937,6 +943,7 @@ fn collect_qualified_paths(node: Node, bytes: &[u8], out: &mut Vec<PathRef>) {
                     out.push(PathRef {
                         segments,
                         line: child.start_position().row as u32 + 1,
+                        is_use: false,
                     });
                 }
             }

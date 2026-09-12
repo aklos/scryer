@@ -13,7 +13,7 @@
 //! graph) and writing responsibilities is the agent's job — we precompute the
 //! map, not the model.
 
-use crate::lang::{Def, FileParse};
+use crate::lang::{Def, FileParse, ImportRef};
 use crate::tsconfig::TsAliases;
 use crate::manifest::Container;
 use serde::Serialize;
@@ -419,6 +419,98 @@ const UNIVERSAL_NAMES: &[&str] = &[
 /// and the standard library roots. Skipped before the crate-map lookup.
 const PATH_BUILTINS: &[&str] = &["crate", "self", "super", "std", "core", "alloc"];
 
+/// Resolve one TS/JS module spec from `from_file` to a project file: relative
+/// specs against the importing file's directory, bare specs through the
+/// governing tsconfig aliases and then the declared package map.
+fn resolve_ts_spec<'a>(
+    from_file: &str,
+    spec: &str,
+    ts_aliases: &[TsAliases],
+    inventory: &HashSet<&'a str>,
+    pkg_to_dir: &HashMap<&str, &'a str>,
+) -> Option<&'a str> {
+    if spec.starts_with('.') {
+        return resolve_relative(from_file, spec).and_then(|base| find_module_file(&base, inventory));
+    }
+    if spec.starts_with('/') {
+        return None;
+    }
+    let aliases = ts_aliases
+        .iter()
+        .filter(|a| a.dir.is_empty() || from_file.starts_with(&format!("{}/", a.dir)))
+        .max_by_key(|a| a.dir.len());
+    if let Some(hit) = aliases.and_then(|cfg| resolve_ts_alias(spec, cfg, inventory)) {
+        return Some(hit);
+    }
+    let (pkg, subpath) = split_package_spec(spec);
+    let dir = pkg_to_dir.get(pkg)?;
+    find_package_file(dir, subpath, inventory)
+}
+
+/// Follow a name through TS/JS RE-EXPORT barrels: `import { Btn } from "./kit"`
+/// where `kit/index.ts` only says `export { Btn } from "./Btn"`. A bundler
+/// follows that chain to the definition; without this the barrel looks like a
+/// module that exports nothing and the edge lands nowhere — which would make
+/// any codebase using public-surface `index.ts` files read as edgeless.
+/// Unique-or-skip like every other scope: an ambiguous star chain yields none.
+fn resolve_through_reexports<'a>(
+    file: &'a str,
+    name: &str,
+    depth: u8,
+    imports_by_file: &HashMap<&'a str, &'a [ImportRef]>,
+    file_names: &HashMap<&'a str, HashMap<&'a str, Vec<&'a str>>>,
+    ts_aliases: &[TsAliases],
+    inventory: &HashSet<&'a str>,
+    pkg_to_dir: &HashMap<&str, &'a str>,
+) -> Option<(&'a str, &'a str)> {
+    if depth == 0 {
+        return None;
+    }
+    if let Some(defs) = file_names.get(file).and_then(|m| m.get(name)) {
+        if defs.len() == 1 {
+            return Some((defs[0], file));
+        }
+        return None; // ambiguous here — don't look further
+    }
+    let imports = imports_by_file.get(file).copied().unwrap_or(&[]);
+    let step = |spec: &str, want: &str| {
+        resolve_ts_spec(file, spec, ts_aliases, inventory, pkg_to_dir)
+            .filter(|t| *t != file)
+            .and_then(|t| {
+                resolve_through_reexports(
+                    t,
+                    want,
+                    depth - 1,
+                    imports_by_file,
+                    file_names,
+                    ts_aliases,
+                    inventory,
+                    pkg_to_dir,
+                )
+            })
+    };
+    // A named re-export names its source symbol; take the first that resolves.
+    for imp in imports {
+        if let Some(sym) = imp.names.iter().find(|n| n.local == name) {
+            if let Some(hit) = step(&imp.spec, &sym.name) {
+                return Some(hit);
+            }
+        }
+    }
+    // `export * from "m"`: the name may come from any starred module, so it
+    // counts only when exactly one of them has it.
+    let mut star: Option<(&'a str, &'a str)> = None;
+    for imp in imports.iter().filter(|i| i.names.is_empty()) {
+        if let Some(hit) = step(&imp.spec, name) {
+            if star.is_some_and(|s| s != hit) {
+                return None; // two modules export it — ambiguous
+            }
+            star = Some(hit);
+        }
+    }
+    star
+}
+
 fn build_edges(
     files: &[ParsedFile],
     recs: &[SymRec],
@@ -517,6 +609,13 @@ fn build_edges(
             .push(file);
     }
 
+    // Per-file imports, so a named import can be followed through the target's
+    // own re-exports (barrels).
+    let imports_by_file: HashMap<&str, &[ImportRef]> = files
+        .iter()
+        .map(|f| (f.rel_path.as_str(), f.parse.imports.as_slice()))
+        .collect();
+
     let mut sym_edges: HashSet<(String, String)> = HashSet::new();
     let mut file_edges: HashSet<(String, String)> = HashSet::new();
     let mut externals: BTreeSet<(String, String)> = BTreeSet::new();
@@ -544,6 +643,13 @@ fn build_edges(
         // it to a same-name local def.
         let is_python = file.ends_with(".py") || file.ends_with(".pyi");
         let is_go = file.ends_with(".go");
+        let is_rust = file.ends_with(".rs");
+        // Languages that declare their imports get resolved through them; only
+        // the ones that don't (C/C++ headers, the generic fallback) fall back
+        // to bare-name coincidence. See `import_resolution_tier`.
+        let name_heuristic = crate::lang::import_resolution_tier(
+            file.rsplit_once('.').map(|(_, e)| e).unwrap_or(""),
+        ) == Some("nameHeuristic");
         let mut imported_locals: HashMap<&str, Option<&str>> = HashMap::new();
         // Go only: package qualifier -> package directory, joined against the
         // file's qualified references below.
@@ -630,6 +736,26 @@ fn build_edges(
                             .and_then(|m| m.get(n.name.as_str()))
                             .filter(|c| c.len() == 1)
                             .map(|c| (c[0].0, Some(c[0].1)))
+                    })
+                    .or_else(|| {
+                        // The target defines no such symbol: it may re-export
+                        // it (a barrel). Follow the chain to the definition.
+                        if is_python || is_go {
+                            return None;
+                        }
+                        target_file.and_then(|t| {
+                            resolve_through_reexports(
+                                t,
+                                n.name.as_str(),
+                                4,
+                                &imports_by_file,
+                                &file_names,
+                                ts_aliases,
+                                &inventory,
+                                &pkg_to_dir,
+                            )
+                        })
+                        .map(|(key, df)| (key, Some(df)))
                     });
                 match hit {
                     Some((dst_key, dst_file)) => {
@@ -655,6 +781,77 @@ fn build_edges(
                             }
                         }
                         imported_locals.insert(n.local.as_str(), None);
+                    }
+                }
+            }
+        }
+
+        // --- Rust same-container paths: `use` bindings and qualified calls ---
+        // Rust has no bare cross-file reference: naming a def from another
+        // module needs a `use` or a path. A `use crate::model::ScryModel`
+        // BINDS that name for the whole file (the ident pass then attributes
+        // it to each call site); `style::placement(..)` at a call site is
+        // exact evidence on its own. The cross-container scope further down
+        // only follows paths headed by another crate's name, so without this
+        // the same-container half would have no exact resolution at all.
+        if is_rust {
+            if let Some(cd) = container_dir {
+                for pref in &f.parse.paths {
+                    let head = pref.segments.first().map(String::as_str).unwrap_or("");
+                    let rooted = matches!(head, "crate" | "self" | "super");
+                    // A head naming a module of this container (`style::placement`,
+                    // bound by an earlier `use crate::style`) resolves in that file.
+                    let head_mod = if rooted {
+                        None
+                    } else {
+                        match mod_files.get(cd).and_then(|m| m.get(head)) {
+                            Some(files) if files.len() == 1 => Some(files[0]),
+                            _ => continue, // another crate, or ambiguous — skip
+                        }
+                    };
+                    let Some(leaf) = pref.segments[1..]
+                        .iter()
+                        .map(String::as_str)
+                        .rev()
+                        .find(|s| !UNIVERSAL_NAMES.contains(s))
+                    else {
+                        continue;
+                    };
+                    let hit = match head_mod {
+                        Some(mf) => file_names
+                            .get(mf)
+                            .and_then(|m| m.get(leaf))
+                            .filter(|d| d.len() == 1)
+                            .map(|d| (d[0], mf)),
+                        None => cont_names
+                            .get(cd)
+                            .and_then(|m| m.get(leaf))
+                            .filter(|c| c.len() == 1)
+                            .map(|c| c[0]),
+                    };
+                    match hit {
+                        Some((dst_key, dst_file)) => {
+                            if dst_file != file {
+                                file_edges.insert((file.to_string(), dst_file.to_string()));
+                            }
+                            if pref.is_use {
+                                imported_locals.insert(leaf, Some(dst_key));
+                            } else if let Some(src) = enclosing(file, pref.line) {
+                                if src != dst_key {
+                                    sym_edges.insert((src.to_string(), dst_key.to_string()));
+                                }
+                            }
+                        }
+                        // The leaf names a module, not a def (`use crate::changes;`):
+                        // file-level evidence, and the module name resolves as a
+                        // path head for the call sites that follow.
+                        None => {
+                            if let Some(cands) = mod_files.get(cd).and_then(|m| m.get(leaf)) {
+                                if cands.len() == 1 && cands[0] != file {
+                                    file_edges.insert((file.to_string(), cands[0].to_string()));
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -694,6 +891,16 @@ fn build_edges(
                         }
                     }
                 }
+            }
+            // Bare-name coincidence across files is evidence ONLY where the
+            // language declares no imports to follow. Everywhere else the
+            // reference had to come through an import or a path — both
+            // resolved above — so matching on the name alone mints edges the
+            // code does not have: a local named `start`, a prop named
+            // `driftScopes`, or the DOM's `Node` would each "call" whatever
+            // unique def shares the name.
+            if !name_heuristic {
+                continue;
             }
             if let Some(cd) = container_dir {
                 if let Some(cands) = cont_names.get(cd).and_then(|m| m.get(ident.name.as_str())) {
@@ -1590,7 +1797,10 @@ mod tests {
                     test_blocks: vec![],
                     defs: vec![def("run", 1, 10), def("compute", 12, 14)],
                     idents: vec![ident("run", 1), ident("compute", 5), ident("helper", 6)],
-                    paths: vec![],
+                    // Rust reaches another module only through a `use` (or a
+                    // path); the binding is what makes the bare `helper` at
+                    // line 6 a reference to it.
+                    paths: vec![usepath(&["crate", "helper", "helper"], 2)],
                     imports: vec![],
                 },
             },
@@ -1708,7 +1918,7 @@ mod tests {
                     defs: vec![def("serve", 1, 5)],
                     idents: vec![ident("util", 3)],
                     paths: vec![],
-                    imports: vec![],
+                    imports: vec![imp("../shared/util", &[("util", "util")], 1)],
                 },
             },
             ParsedFile {
@@ -1935,11 +2145,198 @@ fn add_one(x: u32) -> u32 {
         );
     }
 
+    /// A call/type-site path reference.
     fn pathref(segments: &[&str], line: u32) -> crate::lang::PathRef {
         crate::lang::PathRef {
             segments: segments.iter().map(|s| s.to_string()).collect(),
             line,
+            is_use: false,
         }
+    }
+
+    /// A `use` declaration: a binding, not a call site.
+    fn usepath(segments: &[&str], line: u32) -> crate::lang::PathRef {
+        crate::lang::PathRef { is_use: true, ..pathref(segments, line) }
+    }
+
+    /// A bare identifier that merely SHARES a name with a def elsewhere in the
+    /// container is not a reference to it: Rust would need a `use` or a path,
+    /// and a local binding (`let start = ...`) has neither. Guessing here used
+    /// to mint edges the code doesn't have.
+    #[test]
+    fn a_bare_local_name_does_not_resolve_across_rust_files() {
+        let files = vec![
+            ParsedFile {
+                rel_path: "src/hooks.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    test_blocks: vec![],
+                    defs: vec![def("start", 1, 3)],
+                    idents: vec![],
+                    paths: vec![],
+                    imports: vec![],
+                },
+            },
+            ParsedFile {
+                rel_path: "src/symbols.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    test_blocks: vec![],
+                    defs: vec![def("resolve", 1, 9)],
+                    // `let start = node.start_position();` inside resolve
+                    idents: vec![ident("start", 4)],
+                    paths: vec![],
+                    imports: vec![],
+                },
+            },
+        ];
+        let ctx = build_context("proj", &[container("", "proj")], &files, &[]);
+        assert!(
+            !ctx.file_edges
+                .iter()
+                .any(|e| e.src == "src/symbols.rs" && e.dst == "src/hooks.rs"),
+            "{:?}",
+            ctx.file_edges
+        );
+        assert!(ctx.symbol_edges.is_empty(), "{:?}", ctx.symbol_edges);
+    }
+
+    /// The TS/JS counterpart: an ES module reaches another file only through an
+    /// import, so a prop or DOM type sharing a name with some export is not a
+    /// reference to it.
+    #[test]
+    fn a_bare_name_does_not_resolve_across_ts_files() {
+        let files = vec![
+            ParsedFile {
+                rel_path: "src/fixtures.ts".into(),
+                source: String::new(),
+                parse: FileParse {
+                    test_blocks: vec![],
+                    defs: vec![def("driftScopes", 1, 4)],
+                    idents: vec![],
+                    paths: vec![],
+                    imports: vec![],
+                },
+            },
+            ParsedFile {
+                rel_path: "src/NodePage.tsx".into(),
+                source: String::new(),
+                parse: FileParse {
+                    test_blocks: vec![],
+                    defs: vec![def("NodePage", 1, 20)],
+                    // a destructured prop of the same name
+                    idents: vec![ident("driftScopes", 6)],
+                    paths: vec![],
+                    imports: vec![],
+                },
+            },
+        ];
+        let ctx = build_context("proj", &[container("", "proj")], &files, &[]);
+        assert!(ctx.file_edges.is_empty(), "{:?}", ctx.file_edges);
+        assert!(ctx.symbol_edges.is_empty(), "{:?}", ctx.symbol_edges);
+    }
+
+    /// A named import through a re-export barrel (`export { Btn } from "./Btn"`)
+    /// resolves to the DEFINING module, not to the barrel — otherwise a
+    /// codebase with public-surface `index.ts` files reads as edgeless.
+    #[test]
+    fn a_named_import_follows_a_re_export_barrel() {
+        let files = vec![
+            ParsedFile {
+                rel_path: "src/shared/ui/Btn.tsx".into(),
+                source: String::new(),
+                parse: FileParse {
+                    test_blocks: vec![],
+                    defs: vec![def("Btn", 1, 6)],
+                    idents: vec![],
+                    paths: vec![],
+                    imports: vec![],
+                },
+            },
+            ParsedFile {
+                rel_path: "src/shared/ui/index.ts".into(),
+                source: String::new(),
+                parse: FileParse {
+                    test_blocks: vec![],
+                    defs: vec![],
+                    idents: vec![],
+                    paths: vec![],
+                    // export { Btn } from "./Btn";
+                    imports: vec![imp("./Btn", &[("Btn", "Btn")], 1)],
+                },
+            },
+            ParsedFile {
+                rel_path: "src/pages/Page.tsx".into(),
+                source: String::new(),
+                parse: FileParse {
+                    test_blocks: vec![],
+                    defs: vec![def("Page", 1, 20)],
+                    idents: vec![ident("Btn", 8)],
+                    paths: vec![],
+                    imports: vec![imp("../shared/ui", &[("Btn", "Btn")], 1)],
+                },
+            },
+        ];
+        let ctx = build_context("proj", &[container("", "proj")], &files, &[]);
+        assert!(
+            ctx.file_edges
+                .iter()
+                .any(|e| e.src == "src/pages/Page.tsx" && e.dst == "src/shared/ui/Btn.tsx"),
+            "{:?}",
+            ctx.file_edges
+        );
+        assert!(
+            ctx.symbol_edges
+                .iter()
+                .any(|e| e.src.contains("Page") && e.dst.contains("Btn")),
+            "{:?}",
+            ctx.symbol_edges
+        );
+    }
+
+    /// A qualified call through a module of the same crate (`style::placement`,
+    /// after `use crate::style`) is exact evidence, attributed to the caller.
+    #[test]
+    fn a_same_crate_module_path_resolves_at_the_call_site() {
+        let files = vec![
+            ParsedFile {
+                rel_path: "src/style.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    test_blocks: vec![],
+                    defs: vec![def("placement", 1, 6)],
+                    idents: vec![],
+                    paths: vec![],
+                    imports: vec![],
+                },
+            },
+            ParsedFile {
+                rel_path: "src/locate.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    test_blocks: vec![],
+                    defs: vec![def("locate_at", 1, 20)],
+                    idents: vec![],
+                    paths: vec![
+                        usepath(&["crate", "style"], 1),
+                        pathref(&["style", "placement"], 8),
+                    ],
+                    imports: vec![],
+                },
+            },
+        ];
+        let ctx = build_context("proj", &[container("", "proj")], &files, &[]);
+        assert!(ctx
+            .file_edges
+            .iter()
+            .any(|e| e.src == "src/locate.rs" && e.dst == "src/style.rs"));
+        assert!(
+            ctx.symbol_edges
+                .iter()
+                .any(|e| e.src.contains("locate_at") && e.dst.contains("placement")),
+            "{:?}",
+            ctx.symbol_edges
+        );
     }
 
     /// A fully-qualified call-site reference into ANOTHER crate resolves through
