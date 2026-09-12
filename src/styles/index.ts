@@ -38,6 +38,10 @@ export interface StyleDef {
   /** Layers that may reach out of the container (the driven side). */
   outbound?: string[];
   publicSurface: string[];
+  /** The container is consumed as a code module (a library), so another
+   *  container's import of it is checked against the IMPORTER's matrix
+   *  rather than the outbound rule. Mirrors Rust `imported_as_module`. */
+  importedAsModule?: boolean;
   externalBans?: Record<string, string[]>;
   path: { dirs?: Record<string, string[]>; markers?: Record<string, string[]> };
   drawing: Drawing;

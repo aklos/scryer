@@ -637,6 +637,7 @@ pub fn style_link_breach<'a>(
     let dst_name = name_of(model, dst);
 
     if src_c.id != dst_c.id {
+        let dst_style = style::governing_style(model, dst).and_then(|s| styles.get(s));
         // Entering from outside: land on an inbound layer.
         if let (Some(dst_layer), Some(def)) = (
             style::layer_of(model, dst),
@@ -656,9 +657,29 @@ pub fn style_link_breach<'a>(
                 });
             }
         }
-        // Leaving for another container: go out from an outbound layer.
         let src_layer = style::layer_of(model, src)?;
         let def = styles.get(style::governing_style(model, src)?)?;
+        // A library is imported as a module: the source's own matrix decides,
+        // the way it would for a module of its own container. See StyleDef.
+        if let (Some(dst_def), Some(dst_layer)) = (dst_style, style::layer_of(model, dst)) {
+            if dst_def.imported_as_module && def.has_layer(dst_layer) {
+                if def.may_depend(src_layer, dst_layer) {
+                    return None;
+                }
+                let allowed = def.allowed(src_layer);
+                return Some(StyleLinkBreach {
+                    container: src_c,
+                    detail: format!(
+                        "'{src_name}' ({src_layer}) → '{dst_name}' ({dst_layer}), a module of \
+                         container '{}' — in style '{}' {src_layer} may depend on {}",
+                        dst_c.name,
+                        def.name,
+                        if allowed.is_empty() { "nothing".to_string() } else { allowed.join(", ") }
+                    ),
+                });
+            }
+        }
+        // Leaving for another container: go out from an outbound layer.
         if def.outbound.is_empty() || def.outbound.iter().any(|l| l == src_layer) {
             return None;
         }
@@ -1454,6 +1475,33 @@ mod style_tests {
         assert!(v.contains("land on presentation or application"), "{v}");
         let v = violation(&m, "ui", "infra", Some(Calls)).unwrap();
         assert!(v.contains("layer 'infrastructure'"), "{v}");
+    }
+
+    /// A LIBRARY is imported as a module, so the source's own matrix decides
+    /// instead of the outbound rule: an application may use a library's
+    /// application and domain, a presentation may not.
+    #[test]
+    fn links_into_a_library_follow_the_sources_matrix() {
+        use crate::LinkKind::*;
+        let mut m = hex_model();
+        for n in [
+            serde_json::json!({ "id": "lib", "kind": "container", "name": "Core", "parentId": "sys", "style": "library" }),
+            serde_json::json!({ "id": "lib_dom", "kind": "component", "name": "Model", "parentId": "lib", "layer": "domain" }),
+            serde_json::json!({ "id": "lib_infra", "kind": "component", "name": "Store", "parentId": "lib", "layer": "infrastructure" }),
+        ] {
+            m.nodes.push(serde_json::from_value(n).unwrap());
+        }
+        // application → the library's model: a module import, allowed by the
+        // hexagonal matrix (application may depend on domain).
+        assert_eq!(violation(&m, "app", "lib_dom", Some(Depends)), None);
+        assert_eq!(violation(&m, "infra", "lib_dom", Some(Depends)), None);
+        // presentation may not depend on domain — not even another container's.
+        let v = violation(&m, "pres", "lib_dom", Some(Depends)).unwrap();
+        assert!(v.contains("a module of container 'Core'"), "{v}");
+        assert!(v.contains("presentation may depend on presentation, application"), "{v}");
+        // The inbound rule still hides the library's adapters.
+        let v = violation(&m, "app", "lib_infra", Some(Depends)).unwrap();
+        assert!(v.contains("enters container 'Core' (library)"), "{v}");
     }
 
     /// A link out of a styled container leaves from an outbound layer: in

@@ -519,7 +519,8 @@
         ]
       }
     },
-    "drawing": "hexagon"
+    "drawing": "hexagon",
+    "importedAsModule": true
   },
   {
     "name": "pipeline",

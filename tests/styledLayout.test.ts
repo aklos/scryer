@@ -158,6 +158,34 @@ describe("composition", () => {
     expect(laid.regions.find((r) => r.layer === "composition")?.shape).toBe("rect");
     expect(laid.regions.filter((r) => r.shape === "hex").map((r) => r.layer)).toEqual(["domain", "application"]);
   });
+  it("an import of a library is judged by the importer's own matrix", () => {
+    const lib = style("library");
+    // application may depend on domain — here the library's domain.
+    expect(
+      classifyStyledEdge(hex, "application", undefined, {
+        targetGhost: true,
+        otherDef: lib,
+        otherLayer: "domain",
+      }),
+    ).toBe("implied");
+    // presentation may not depend on domain, in any container.
+    expect(
+      classifyStyledEdge(hex, "presentation", undefined, {
+        targetGhost: true,
+        otherDef: lib,
+        otherLayer: "domain",
+      }),
+    ).toBe("violation");
+    // Without a module-imported target the outbound rule still applies.
+    expect(
+      classifyStyledEdge(hex, "application", undefined, {
+        targetGhost: true,
+        otherDef: hex,
+        otherLayer: "presentation",
+      }),
+    ).toBe("violation");
+  });
+
   it("composition may wire every layer, and no layer may import it", () => {
     expect(classifyStyledEdge(hex, "composition", "infrastructure")).toBe("implied");
     expect(classifyStyledEdge(hex, "composition", "presentation")).toBe("implied");

@@ -109,6 +109,15 @@ pub struct StyleDef {
     #[serde(default)]
     pub path: PathConvention,
     pub drawing: Drawing,
+    /// This container is consumed as a CODE MODULE — a library another
+    /// container imports — rather than as a system it talks to. An import of
+    /// it is then checked against the IMPORTER's own matrix (its application
+    /// may use the library's application and domain, its presentation may
+    /// not), the way any module reference inside a container is checked,
+    /// instead of the outbound rule that governs talking to a running system.
+    /// The `inbound` list still fixes which of its layers are public at all.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub imported_as_module: bool,
 }
 
 impl StyleDef {
@@ -574,6 +583,7 @@ pub fn library() -> StyleDef {
         name: "library".into(),
         description: "library crates and packages other containers import: shared models, engines, SDKs".into(),
         inbound: strs(&["composition", "application", "domain"]),
+        imported_as_module: true,
         ..hexagonal()
     }
 }
@@ -621,6 +631,7 @@ pub fn hexagonal() -> StyleDef {
             ]),
         },
         drawing: Drawing::Hexagon,
+        imported_as_module: false,
     }
 }
 
@@ -663,6 +674,7 @@ pub fn feature_sliced() -> StyleDef {
             markers: BTreeMap::new(),
         },
         drawing: Drawing::Rows,
+        imported_as_module: false,
     }
 }
 
@@ -690,6 +702,7 @@ pub fn core_shell() -> StyleDef {
             markers: dirs(&[("shell", &["main.rs"]), ("core", &["lib.rs"])]),
         },
         drawing: Drawing::Rings,
+        imported_as_module: false,
     }
 }
 
@@ -729,6 +742,7 @@ pub fn pipeline() -> StyleDef {
             ]),
         },
         drawing: Drawing::Columns,
+        imported_as_module: false,
     }
 }
 

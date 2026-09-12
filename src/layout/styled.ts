@@ -440,8 +440,15 @@ export function classifyStyledEdge(
   targetLayer: string | undefined,
   /** Which end lives outside this container (a ghost). Traffic from outside
    *  must enter on an inbound layer; traffic to the outside must leave from
-   *  an outbound (driven) layer. Both are implied when legal. */
-  ends: { sourceGhost?: boolean; targetGhost?: boolean } = {},
+   *  an outbound (driven) layer. Both are implied when legal. `otherDef` /
+   *  `otherLayer` describe the ghost's own container, for the module rule
+   *  below. */
+  ends: {
+    sourceGhost?: boolean;
+    targetGhost?: boolean;
+    otherDef?: StyleDef;
+    otherLayer?: string;
+  } = {},
 ): "implied" | "violation" | "plain" {
   if (ends.sourceGhost && ends.targetGhost) return "plain";
   if (ends.sourceGhost) {
@@ -450,6 +457,12 @@ export function classifyStyledEdge(
   }
   if (ends.targetGhost) {
     if (!sourceLayer) return "plain";
+    // A library is imported as a module, not talked to as a system: our own
+    // matrix decides, exactly as it would for a module of this container.
+    const other = ends.otherLayer;
+    if (ends.otherDef?.importedAsModule && other && def.layers.some((l) => l.name === other)) {
+      return (def.matrix[sourceLayer] ?? []).includes(other) ? "implied" : "violation";
+    }
     const out = def.outbound ?? [];
     return out.length === 0 || out.includes(sourceLayer) ? "implied" : "violation";
   }

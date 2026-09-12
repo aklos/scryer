@@ -261,8 +261,32 @@ pub fn check_code(
                 ));
                 continue;
             }
-            // Leaving: only the importer's outbound layers talk to the outside.
+            let inbound_def = def;
             let Some(def) = governing(&src_comp.id) else { continue };
+            // A LIBRARY is imported as a module, not talked to as a system, so
+            // the importer's own matrix decides — its application may use the
+            // library's application and domain, its presentation may not —
+            // exactly as it would for a module of its own. Only comparable
+            // when the importer's style knows that layer name.
+            if inbound_def.imported_as_module && def.has_layer(dl) {
+                if !def.may_depend(sl, dl) {
+                    let allowed = def.allowed(sl);
+                    out.push(charge(
+                        ViolationKind::LayerViolation,
+                        dst_comp,
+                        src_c,
+                        format!(
+                            "{} `{}` ({sl}) imports `{}` from '{}' ({dl}), a module of container \
+                             '{}' — in style '{}' {sl} may depend on {}",
+                            e.src_file, e.src_symbol, e.dst_symbol, dst_comp.name, dst_c.name,
+                            def.name,
+                            if allowed.is_empty() { "nothing".to_string() } else { allowed.join(", ") }
+                        ),
+                    ));
+                }
+                continue;
+            }
+            // Leaving: only the importer's outbound layers talk to the outside.
             if !def.outbound.is_empty() && !def.outbound.iter().any(|l| l == sl) {
                 out.push(charge(
                     ViolationKind::LayerViolation,
@@ -768,6 +792,35 @@ mod tests {
         assert_eq!(r.total(), 1, "{:#?}", r.violations);
         let v = &r.violations[0];
         assert_eq!((v.kind, v.node.as_str(), v.other.as_deref()), (ViolationKind::LayerViolation, "app", Some("boot")));
+    }
+
+    /// An import of a library is a module reference, so the IMPORTER's matrix
+    /// decides: its application may use the library's domain, its presentation
+    /// may not — the same rule that governs a module of its own container.
+    #[test]
+    fn a_library_import_is_checked_against_the_importers_matrix() {
+        let mut m = hex_service();
+        m.nodes.push(node(serde_json::json!({ "id": "lib", "kind": "container", "name": "Lib", "parentId": "sys", "style": "library" })));
+        m.nodes.push(node(serde_json::json!({
+            "id": "model", "kind": "component", "name": "Model", "parentId": "lib", "layer": "domain",
+            "responsibilities": [{ "id": "r-model", "statement": "holds" }]
+        })));
+        anchor(&mut m, "r-model", "lib/domain/model.rs", "Model");
+        let r = report(
+            &m,
+            vec![
+                // legal: application (and infrastructure) may depend on domain
+                edge(("app", "checkout", "svc/application/checkout.rs"), ("model", "Model", "lib/domain/model.rs")),
+                edge(("infra", "PgOrders", "svc/infrastructure/pg.rs"), ("model", "Model", "lib/domain/model.rs")),
+                // illegal: presentation may depend on presentation and application only
+                edge(("pres", "serve", "svc/presentation/http.rs"), ("model", "Model", "lib/domain/model.rs")),
+            ],
+            vec![],
+        );
+        assert_eq!(r.total(), 1, "{:#?}", r.violations);
+        let v = &r.violations[0];
+        assert_eq!((v.kind, v.node.as_str()), (ViolationKind::LayerViolation, "pres"));
+        assert!(v.detail.contains("a module of container 'Lib'"), "{}", v.detail);
     }
 
     #[test]

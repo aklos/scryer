@@ -446,8 +446,19 @@ export async function buildDiagramScene(
       if (e.id.startsWith("violation:")) continue;
       const sourceGhost = ghostIds.has(e.source), targetGhost = ghostIds.has(e.target);
       const sl = layerById.get(e.source), tl = layerById.get(e.target);
+      // A ghost carries its OWN container's style and layer: a library is
+      // imported as a module, so this container's matrix judges the edge.
+      const ghostId = targetGhost ? e.target : sourceGhost ? e.source : undefined;
+      const otherDef = ghostId ? governingStyleDef(model, ghostId, styles) : undefined;
+      const otherLayer = ghostId ? layerOf(model, ghostId) : undefined;
       e.implied =
-        !e.violation && classifyStyledEdge(styleDef, sl, tl, { sourceGhost, targetGhost }) === "implied";
+        !e.violation &&
+        classifyStyledEdge(styleDef, sl, tl, {
+          sourceGhost,
+          targetGhost,
+          otherDef,
+          otherLayer,
+        }) === "implied";
       if (sourceGhost || targetGhost) continue;
       // A same-layer chord crosses whatever sits between its ends — the
       // centre on a ring, the neighbouring cards on a band. Bow it clear:
