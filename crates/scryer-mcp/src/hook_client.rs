@@ -401,9 +401,12 @@ fn envelope_files(command: &str) -> Vec<String> {
 fn absolutize(cwd: &str, file: &str) -> String {
     let p = Path::new(file);
     if p.is_absolute() || cwd.is_empty() {
-        file.to_string()
+        file.replace('\\', "/")
     } else {
-        Path::new(cwd).join(p).to_string_lossy().to_string()
+        Path::new(cwd)
+            .join(p)
+            .to_string_lossy()
+            .replace('\\', "/")
     }
 }
 
