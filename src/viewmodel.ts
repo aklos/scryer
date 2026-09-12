@@ -116,7 +116,7 @@ export interface Node {
   /** 1–2 sentence prose about what this node is. */
   description?: string;
   /** The architectural style this node's code actually follows
-   *  ("hexagonal" | "feature-sliced" | "core-shell" | "pipeline" | a project
+   *  ("hexagonal" | "library" | "feature-sliced" | "core-shell" | "pipeline" | a project
    *  style), declared on a container (a component may override). Absent
    *  when the code has no recognisable shape — that absence is the signal.
    *  Mirrors Rust `Node.style`. */

@@ -462,7 +462,7 @@ pub(crate) struct ContainerItem {
     /// What it IS as software, a short badge (e.g. PostgreSQL 16).
     pub technology: Option<String>,
     pub description: Option<String>,
-    /// The style the code ACTUALLY follows: hexagonal | feature-sliced | core-shell | pipeline | a project style. Omit when the code has no shape; never guess.
+    /// The style the code ACTUALLY follows: hexagonal | library | feature-sliced | core-shell | pipeline | project style. Omit if the code has no shape; never guess.
     pub style: Option<String>,
     /// true for an external/third-party container.
     #[serde(default)]

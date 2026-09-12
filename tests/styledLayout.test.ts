@@ -133,3 +133,36 @@ describe("classifyStyledEdge", () => {
     expect(classifyStyledEdge(fsd, "shared", undefined, { targetGhost: true })).toBe("implied");
   });
 });
+
+describe("composition", () => {
+  const hex = style("hexagonal");
+  it("hexagon: composition is a band above the whole drawing", () => {
+    const laid = styledLayout(
+      hex,
+      [
+        { id: "w", layer: "composition" },
+        { id: "d", layer: "domain" },
+        { id: "a", layer: "application" },
+        { id: "p", layer: "presentation" },
+        { id: "i", layer: "infrastructure" },
+      ],
+      [],
+      [
+        { source: "w", target: "p" },
+        { source: "w", target: "i" },
+      ],
+    );
+    const at = (id: string) => laid.centers.get(id)!;
+    expect(at("d")).toEqual({ x: 0, y: 0 });
+    for (const id of ["d", "a", "p", "i"]) expect(at("w").y).toBeLessThan(at(id).y);
+    expect(laid.regions.find((r) => r.layer === "composition")?.shape).toBe("rect");
+    expect(laid.regions.filter((r) => r.shape === "hex").map((r) => r.layer)).toEqual(["domain", "application"]);
+  });
+  it("composition may wire every layer, and no layer may import it", () => {
+    expect(classifyStyledEdge(hex, "composition", "infrastructure")).toBe("implied");
+    expect(classifyStyledEdge(hex, "composition", "presentation")).toBe("implied");
+    expect(classifyStyledEdge(hex, "presentation", "composition")).toBe("violation");
+    expect(classifyStyledEdge(hex, "domain", "composition")).toBe("violation");
+    expect(classifyStyledEdge(style("library"), undefined, "composition", { sourceGhost: true })).toBe("implied");
+  });
+});

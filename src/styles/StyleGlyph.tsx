@@ -16,6 +16,7 @@ export function StyleGlyph({ style, className }: { style: string; className?: st
   let body: ReactElement;
   switch (style) {
     case "hexagonal":
+    case "library":
       body = <polygon points="7,1 12.2,4 12.2,10 7,13 1.8,10 1.8,4" {...common} />;
       break;
     case "feature-sliced":

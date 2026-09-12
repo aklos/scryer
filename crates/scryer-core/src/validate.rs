@@ -602,10 +602,11 @@ pub fn check_conformance(model: &ScryModel, styles: &Styles) -> Vec<String> {
 /// matrix, and a same-layer link between two different components must be
 /// `kind: uses` (a sibling reached through its public surface). A link that
 /// enters a styled container from outside must land on one of its inbound
-/// layers (hex: presentation or application; FSD: app or pages; core-shell:
-/// shell), never deeper; one that leaves a styled container must leave from
-/// one of its outbound layers (hex: infrastructure; FSD: shared or app;
-/// core-shell: shell). Symbols carry their component's layer.
+/// layers (hex: presentation or application; library: application or domain;
+/// FSD: app or pages; core-shell: shell), never deeper; one that leaves a
+/// styled container must leave from one of its outbound layers (hex and
+/// library: infrastructure; FSD: shared or app; core-shell: shell). Symbols
+/// carry their component's layer.
 pub fn style_link_violation(
     model: &ScryModel,
     styles: &Styles,

@@ -14,7 +14,7 @@
 //! layer is required and must come from the style's list, because the map and
 //! the checks depend on it.
 //!
-//! The four built-ins (`hexagonal`, `feature-sliced`, `core-shell`,
+//! The five built-ins (`hexagonal`, `library`, `feature-sliced`, `core-shell`,
 //! `pipeline`) are ordinary [`StyleDef`] values; a project may add its own as
 //! `.scryer/styles/<name>.json` with the same shape. The engine never
 //! special-cases a built-in.
@@ -63,7 +63,7 @@ pub struct PathConvention {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Drawing {
-    /// Cockburn's hexagon: domain centre, application ring, ports on the edge, adapters outside.
+    /// Cockburn's hexagon: domain centre, application ring, ports on the edge, adapters outside, wiring above.
     Hexagon,
     /// Stacked rows, one per layer, first layer on top.
     Rows,
@@ -181,10 +181,10 @@ pub struct Styles {
 }
 
 impl Styles {
-    /// The four built-ins only.
+    /// The five built-ins only.
     pub fn builtin() -> Self {
         let mut defs = BTreeMap::new();
-        for s in [hexagonal(), feature_sliced(), core_shell(), pipeline()] {
+        for s in [hexagonal(), library(), feature_sliced(), core_shell(), pipeline()] {
             defs.insert(s.name.clone(), s);
         }
         Self { defs }
@@ -565,12 +565,27 @@ const IO_PACKAGES: &[&str] = &[
     "net/http", "database/sql", "gorm.io/gorm",
 ];
 
-/// Cockburn's hexagon with the four layers most codebases use inside it.
+/// Hexagonal's layers for code other containers build on — a shared model, an
+/// engine, an SDK. Its domain types and use cases ARE its public API, and its
+/// composition is where a consumer opens it, so all three are inbound; its
+/// adapters stay private.
+pub fn library() -> StyleDef {
+    StyleDef {
+        name: "library".into(),
+        description: "library crates and packages other containers import: shared models, engines, SDKs".into(),
+        inbound: strs(&["composition", "application", "domain"]),
+        ..hexagonal()
+    }
+}
+
+/// Cockburn's hexagon with the four layers most codebases use inside it, plus
+/// the composition that wires them — the one layer allowed to see them all.
 pub fn hexagonal() -> StyleDef {
     StyleDef {
         name: "hexagonal".into(),
-        description: "services, backends, library cores".into(),
+        description: "services, backends".into(),
         layers: layers(&[
+            ("composition", "wiring that builds the adapters and hands them to the application: main, bootstrap, dependency setup"),
             ("presentation", "entry points that drive the application: handlers, controllers, CLI commands, UI"),
             ("infrastructure", "adapters the application drives: storage, network, filesystem, third parties"),
             ("application", "use cases and the ports they expose; orchestrates the domain"),
@@ -581,14 +596,18 @@ pub fn hexagonal() -> StyleDef {
             ("application", &["application", "domain"]),
             ("infrastructure", &["infrastructure", "application", "domain"]),
             ("presentation", &["presentation", "application"]),
+            ("composition", &["composition", "presentation", "infrastructure", "application", "domain"]),
         ]),
         isolation: Isolation::Inclusive,
         inbound: strs(&["presentation", "application"]),
-        outbound: strs(&["infrastructure"]),
+        // The wiring may construct another container's entry point; otherwise
+        // only the driven adapters talk to the outside.
+        outbound: strs(&["infrastructure", "composition"]),
         public_surface: strs(&["index.ts", "index.js", "mod.rs", "lib.rs", "__init__.py"]),
         external_bans: [("domain".to_string(), strs(IO_PACKAGES))].into_iter().collect(),
         path: PathConvention {
             dirs: dirs(&[
+                ("composition", &["composition", "bootstrap", "wiring"]),
                 ("presentation", &["presentation", "controllers", "handlers", "api", "cli", "ui"]),
                 ("infrastructure", &["infrastructure", "infra", "adapters"]),
                 ("application", &["application", "usecases", "use-cases", "use_cases"]),
@@ -748,6 +767,27 @@ mod tests {
     }
 
     #[test]
+    fn composition_may_import_every_layer_and_none_imports_it() {
+        let h = hexagonal();
+        for l in h.layer_names() {
+            assert!(h.may_depend("composition", l), "composition → {l}");
+            if l != "composition" {
+                assert!(!h.may_depend(l, "composition"), "{l} → composition");
+            }
+        }
+        assert_eq!(h.layer_of_path("svc/src/bootstrap/main.rs"), Some("composition"));
+        assert!(h.outbound.iter().any(|l| l == "composition"));
+    }
+
+    #[test]
+    fn library_is_hexagonal_entered_at_its_model_and_use_cases() {
+        let (h, l) = (hexagonal(), library());
+        assert_eq!((&l.layers, &l.matrix, &l.outbound), (&h.layers, &h.matrix, &h.outbound));
+        assert!(l.is_inbound("composition") && l.is_inbound("domain") && l.is_inbound("application"));
+        assert!(!l.is_inbound("infrastructure") && !l.is_inbound("presentation"));
+    }
+
+    #[test]
     fn feature_sliced_is_strictly_downward() {
         let f = feature_sliced();
         assert!(f.may_depend("pages", "shared"));
@@ -830,7 +870,7 @@ mod tests {
         let styles = Styles::load(dir.path());
         assert!(styles.get("two-tier").is_some());
         assert!(styles.get("hexagonal").is_some());
-        assert_eq!(styles.names().len(), 5);
+        assert_eq!(styles.names().len(), 6);
     }
 
     fn node(id: &str, kind: Kind, parent: Option<&str>) -> Node {

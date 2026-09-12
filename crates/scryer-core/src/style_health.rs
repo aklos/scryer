@@ -717,6 +717,60 @@ mod tests {
     }
 
     #[test]
+    fn a_library_is_entered_at_its_domain_but_never_its_infrastructure() {
+        let mut m = hex_service();
+        m.nodes.push(node(serde_json::json!({ "id": "lib", "kind": "container", "name": "Lib", "parentId": "sys", "style": "library" })));
+        for (id, name, layer, file, sym) in [
+            ("model", "Model", "domain", "lib/domain/model.rs", "Model"),
+            ("store", "Store", "infrastructure", "lib/infrastructure/store.rs", "Store"),
+        ] {
+            m.nodes.push(node(serde_json::json!({
+                "id": id, "kind": "component", "name": name, "parentId": "lib", "layer": layer,
+                "responsibilities": [{ "id": format!("r-{id}"), "statement": "does x" }]
+            })));
+            anchor(&mut m, &format!("r-{id}"), file, sym);
+        }
+        let r = report(
+            &m,
+            vec![
+                // legal: the service's adapter uses the library's model type
+                edge(("infra", "PgOrders", "svc/infrastructure/pg.rs"), ("model", "Model", "lib/domain/model.rs")),
+                // illegal: reaching past the library's use cases into its adapter
+                edge(("infra", "PgOrders", "svc/infrastructure/pg.rs"), ("store", "Store", "lib/infrastructure/store.rs")),
+            ],
+            vec![],
+        );
+        assert_eq!(r.total(), 1, "{:#?}", r.violations);
+        let v = &r.violations[0];
+        assert_eq!((v.kind, v.other.as_deref()), (ViolationKind::LayerViolation, Some("store")));
+        assert!(v.detail.contains("enter through composition or application or domain"), "{}", v.detail);
+    }
+
+    #[test]
+    fn composition_wires_every_layer_and_nothing_imports_it() {
+        let mut m = hex_service();
+        m.nodes.push(node(serde_json::json!({
+            "id": "boot", "kind": "component", "name": "Boot", "parentId": "svc", "layer": "composition",
+            "responsibilities": [{ "id": "r-boot", "statement": "wires" }]
+        })));
+        anchor(&mut m, "r-boot", "svc/composition/main.rs", "main");
+        let r = report(
+            &m,
+            vec![
+                // legal: the wiring builds the adapter and the entry point
+                edge(("boot", "main", "svc/composition/main.rs"), ("infra", "PgOrders", "svc/infrastructure/pg.rs")),
+                edge(("boot", "main", "svc/composition/main.rs"), ("pres", "serve", "svc/presentation/http.rs")),
+                // illegal: a use case reaching back into the wiring
+                edge(("app", "checkout", "svc/application/checkout.rs"), ("boot", "main", "svc/composition/main.rs")),
+            ],
+            vec![],
+        );
+        assert_eq!(r.total(), 1, "{:#?}", r.violations);
+        let v = &r.violations[0];
+        assert_eq!((v.kind, v.node.as_str(), v.other.as_deref()), (ViolationKind::LayerViolation, "app", Some("boot")));
+    }
+
+    #[test]
     fn a_component_without_a_layer_under_a_styled_container_is_layerless() {
         let mut m = hex_service();
         m.nodes.iter_mut().find(|n| n.id == "app2").unwrap().layer = None;

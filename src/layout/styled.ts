@@ -8,9 +8,9 @@
  *   - `rows`    (feature-sliced): stacked bands, first layer on top
  *   - `columns` (pipeline):       left to right, one column per stage
  *   - `rings`   (core-shell):     concentric, last layer innermost
- *   - `hexagon` (hexagonal):      Cockburn's hexagon — domain centre,
+ *   - `hexagon` (hexagonal, library): Cockburn's hexagon — domain centre,
  *                                 application ring, driving side left,
- *                                 driven side right
+ *                                 driven side right, composition above
  *
  * Placement is deterministic: the layer fixes the band / ring / column, and
  * the only freedom is the order within it, chosen to shorten links. Ghosts
@@ -289,15 +289,19 @@ function ringsLayout(def: StyleDef, members: StyledMember[], ghosts: string[], e
 // ── hexagon ─────────────────────────────────────────────────────────────────
 
 /**
- * Cockburn's drawing, read off the style's layer order: layers[0] (the
- * driving side, presentation) as a column on the LEFT, layers[1] (the driven
- * side, infrastructure) as a column on the RIGHT, layers[2] (application) on
- * the hexagon ring, layers[3] (domain) in the centre. A style with another
- * layer count falls back to rings.
+ * Cockburn's drawing, read off the style's layer order. The last four layers
+ * are the hexagon: the driving side (presentation) as a column on the LEFT,
+ * the driven side (infrastructure) as a column on the RIGHT, application on
+ * the hexagon ring, domain in the centre. A fifth, first layer (composition,
+ * the wiring) is a band ABOVE the whole drawing. Four layers (a project style
+ * without composition) draw without the band; any other count falls back to
+ * rings.
  */
 function hexagonLayout(def: StyleDef, members: StyledMember[], ghosts: string[], edges: StyledEdge[]): StyledLayout {
-  if (def.layers.length !== 4) return ringsLayout(def, members, ghosts, edges);
-  const [driving, driven, ring, core] = def.layers.map((l) => l.name);
+  const names = def.layers.map((l) => l.name);
+  if (names.length !== 4 && names.length !== 5) return ringsLayout(def, members, ghosts, edges);
+  const wiring = names.length === 5 ? names[0] : undefined;
+  const [driving, driven, ring, core] = names.slice(names.length - 4);
   const ids = (layer: string) => members.filter((m) => m.layer === layer).map((m) => m.id);
   const unknown = members.filter((m) => !m.layer || !def.layers.some((l) => l.name === m.layer)).map((m) => m.id);
   const centers = new Map<string, { x: number; y: number }>();
@@ -344,6 +348,36 @@ function hexagonLayout(def: StyleDef, members: StyledMember[], ghosts: string[],
   const sideX = r + PAD + CARD_W / 2 + 20;
   column(ids(driving), -sideX, driving);
   column(ids(driven), sideX, driven);
+
+  // Composition: one band above everything it wires, each card over the mean
+  // x of what it touches.
+  const wiringIds = wiring ? ids(wiring) : [];
+  if (wiring && wiringIds.length) {
+    const top = Math.min(-r, ...[...centers.values()].map((p) => p.y - CARD_H / 2));
+    const y = top - PAD * 2 - LABEL_ROOM - CARD_H / 2;
+    const meanX = new Map<string, number>();
+    wiringIds.forEach((id, i) => {
+      const xs: number[] = [];
+      for (const e of edges) {
+        const other = e.source === id ? e.target : e.target === id ? e.source : null;
+        const p = other ? centers.get(other) : undefined;
+        if (p) xs.push(p.x);
+      }
+      meanX.set(id, xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 1e6 + i);
+    });
+    const ordered = [...wiringIds].sort((a, b) => meanX.get(a)! - meanX.get(b)!);
+    const w = (ordered.length - 1) * PITCH_X;
+    ordered.forEach((id, i) => centers.set(id, { x: -w / 2 + i * PITCH_X, y }));
+    regions.push({
+      layer: wiring,
+      caption: describe(def, wiring),
+      shape: "rect",
+      x: -w / 2 - CARD_W / 2 - PAD,
+      y: y - CARD_H / 2 - PAD - LABEL_ROOM,
+      w: w + CARD_W + 2 * PAD,
+      h: CARD_H + 2 * PAD + LABEL_ROOM,
+    });
+  }
   column(unknown, 0, unknown.length ? "unlayered" : null);
   if (unknown.length) {
     // Unlayered cards go below the hexagon rather than on top of the core.

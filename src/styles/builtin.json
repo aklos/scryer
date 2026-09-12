@@ -198,8 +198,12 @@
   },
   {
     "name": "hexagonal",
-    "description": "services, backends, library cores",
+    "description": "services, backends",
     "layers": [
+      {
+        "name": "composition",
+        "description": "wiring that builds the adapters and hands them to the application: main, bootstrap, dependency setup"
+      },
       {
         "name": "presentation",
         "description": "entry points that drive the application: handlers, controllers, CLI commands, UI"
@@ -222,6 +226,13 @@
         "application",
         "domain"
       ],
+      "composition": [
+        "composition",
+        "presentation",
+        "infrastructure",
+        "application",
+        "domain"
+      ],
       "domain": [
         "domain"
       ],
@@ -241,7 +252,8 @@
       "application"
     ],
     "outbound": [
-      "infrastructure"
+      "infrastructure",
+      "composition"
     ],
     "publicSurface": [
       "index.ts",
@@ -297,6 +309,174 @@
           "usecases",
           "use-cases",
           "use_cases"
+        ],
+        "composition": [
+          "composition",
+          "bootstrap",
+          "wiring"
+        ],
+        "domain": [
+          "domain"
+        ],
+        "infrastructure": [
+          "infrastructure",
+          "infra",
+          "adapters"
+        ],
+        "presentation": [
+          "presentation",
+          "controllers",
+          "handlers",
+          "api",
+          "cli",
+          "ui"
+        ]
+      },
+      "markers": {
+        "application": [
+          ".use-case.",
+          ".usecase.",
+          ".port.",
+          ".service."
+        ],
+        "domain": [
+          ".entity.",
+          ".value.",
+          ".aggregate."
+        ],
+        "infrastructure": [
+          ".adapter.",
+          ".repository.",
+          ".client."
+        ],
+        "presentation": [
+          ".controller.",
+          ".handler.",
+          ".route."
+        ]
+      }
+    },
+    "drawing": "hexagon"
+  },
+  {
+    "name": "library",
+    "description": "library crates and packages other containers import: shared models, engines, SDKs",
+    "layers": [
+      {
+        "name": "composition",
+        "description": "wiring that builds the adapters and hands them to the application: main, bootstrap, dependency setup"
+      },
+      {
+        "name": "presentation",
+        "description": "entry points that drive the application: handlers, controllers, CLI commands, UI"
+      },
+      {
+        "name": "infrastructure",
+        "description": "adapters the application drives: storage, network, filesystem, third parties"
+      },
+      {
+        "name": "application",
+        "description": "use cases and the ports they expose; orchestrates the domain"
+      },
+      {
+        "name": "domain",
+        "description": "the business model and its rules; pure, no I/O, no framework"
+      }
+    ],
+    "matrix": {
+      "application": [
+        "application",
+        "domain"
+      ],
+      "composition": [
+        "composition",
+        "presentation",
+        "infrastructure",
+        "application",
+        "domain"
+      ],
+      "domain": [
+        "domain"
+      ],
+      "infrastructure": [
+        "infrastructure",
+        "application",
+        "domain"
+      ],
+      "presentation": [
+        "presentation",
+        "application"
+      ]
+    },
+    "isolation": "inclusive",
+    "inbound": [
+      "composition",
+      "application",
+      "domain"
+    ],
+    "outbound": [
+      "infrastructure",
+      "composition"
+    ],
+    "publicSurface": [
+      "index.ts",
+      "index.js",
+      "mod.rs",
+      "lib.rs",
+      "__init__.py"
+    ],
+    "externalBans": {
+      "domain": [
+        "react",
+        "react-dom",
+        "vue",
+        "svelte",
+        "@angular/core",
+        "next",
+        "astro",
+        "express",
+        "fastify",
+        "koa",
+        "hono",
+        "@nestjs/core",
+        "axum",
+        "actix-web",
+        "rocket",
+        "tokio",
+        "sqlx",
+        "diesel",
+        "reqwest",
+        "rusqlite",
+        "prisma",
+        "@prisma/client",
+        "typeorm",
+        "sequelize",
+        "mongoose",
+        "pg",
+        "mysql2",
+        "django",
+        "flask",
+        "fastapi",
+        "sqlalchemy",
+        "requests",
+        "httpx",
+        "net/http",
+        "database/sql",
+        "gorm.io/gorm"
+      ]
+    },
+    "path": {
+      "dirs": {
+        "application": [
+          "application",
+          "usecases",
+          "use-cases",
+          "use_cases"
+        ],
+        "composition": [
+          "composition",
+          "bootstrap",
+          "wiring"
         ],
         "domain": [
           "domain"
