@@ -577,9 +577,13 @@ fn build_edges(
             // no module FILE resolved, for the submodule fallback below.
             let mut module_base: Option<String> = None;
             if is_clojure {
-                target_file = clj_roots
-                    .get(container_dir.unwrap_or(""))
-                    .and_then(|roots| resolve_clj_ns(&imp.spec, roots, file_ext, &inventory));
+                target_file = resolve_clj_ns(
+                    &imp.spec,
+                    container_dir.unwrap_or(""),
+                    &clj_roots,
+                    file_ext,
+                    &inventory,
+                );
                 // `:as` binds a QUALIFIER, not symbols: usage sites spell
                 // `db/query`, so the binding is joined against `paths` below
                 // rather than resolved to a def here. The local is consumed
@@ -1079,25 +1083,41 @@ fn resolve_py_import<'a>(
     (None, None) // external package: consume locals, no edges
 }
 
-/// Map a Clojure namespace to the file that declares it: the first candidate
-/// path that exists, searching the container's source roots in priority order.
-/// A namespace is exactly one file, so there is nothing to disambiguate —
-/// unlike Python there is no package/`__init__` case, and unlike Go no
-/// directory-as-unit case. An unresolved spec is an external dependency.
+/// Map a Clojure namespace to the file that declares it. A namespace is
+/// global to the classpath, not to the requiring container, so the requiring
+/// container's own source roots are searched first (in priority order) and
+/// every other container's after — a module requiring a sibling module, or an
+/// example app requiring the library, is the ordinary monorepo case. Outside
+/// the own container the hit must be unique: two containers declaring the same
+/// namespace (a template copied into several examples) is ambiguous, and
+/// unique-or-skip beats a wrong edge. An unresolved spec is an external
+/// dependency.
 fn resolve_clj_ns<'a>(
     spec: &str,
-    roots: &[String],
+    own_dir: &str,
+    clj_roots: &HashMap<&str, Vec<String>>,
     prefer_ext: &str,
     inventory: &HashSet<&'a str>,
 ) -> Option<&'a str> {
-    for root in roots {
-        for cand in crate::lang::clj_ns_candidates(root, spec, prefer_ext) {
-            if let Some(&hit) = inventory.get(cand.as_str()) {
-                return Some(hit);
-            }
-        }
+    let first_hit = |roots: &[String]| {
+        roots.iter().find_map(|root| {
+            crate::lang::clj_ns_candidates(root, spec, prefer_ext)
+                .iter()
+                .find_map(|cand| inventory.get(cand.as_str()).copied())
+        })
+    };
+    if let Some(hit) = clj_roots.get(own_dir).and_then(|r| first_hit(r)) {
+        return Some(hit);
     }
-    None
+    let elsewhere: HashSet<&'a str> = clj_roots
+        .iter()
+        .filter(|(dir, _)| **dir != own_dir)
+        .filter_map(|(_, roots)| first_hit(roots))
+        .collect();
+    match elsewhere.len() {
+        1 => elsewhere.into_iter().next(),
+        _ => None,
+    }
 }
 
 /// Map a Go import path to a repo directory via the containers' declared
@@ -2547,6 +2567,58 @@ fn add_one(x: u32) -> u32 {
         assert!(has_sym_edge(&ctx, "fetch-user", "query"));
         // `insert!` is never referenced — no edge invented for it.
         assert!(!has_sym_edge(&ctx, "fetch-user", "insert!"));
+    }
+
+    /// A namespace is global to the classpath: a module requiring a sibling
+    /// module (or an example app requiring the library) must resolve across
+    /// containers, under the TARGET container's source roots.
+    #[test]
+    fn clj_require_resolves_across_containers() {
+        let files = vec![
+            clj_file(
+                "modules/core/src/lib/core.clj",
+                "(ns lib.core)\n\n(defn route [p] p)\n",
+            ),
+            clj_file(
+                "modules/ring/src/lib/ring.clj",
+                "(ns lib.ring\n  (:require [lib.core :as core]))\n\n(defn handler [p] (core/route p))\n",
+            ),
+        ];
+        let containers = vec![
+            clj_container("modules/core", "core", &["src"]),
+            clj_container("modules/ring", "ring", &["src"]),
+        ];
+        let ctx = build_context("proj", &containers, &files, &[]);
+
+        assert!(has_file_edge(
+            &ctx,
+            "modules/ring/src/lib/ring.clj",
+            "modules/core/src/lib/core.clj"
+        ));
+        assert!(has_sym_edge(&ctx, "handler", "route"));
+    }
+
+    /// The same namespace declared in two OTHER containers is ambiguous: no
+    /// edge rather than a guessed one.
+    #[test]
+    fn clj_ambiguous_cross_container_namespace_resolves_to_nothing() {
+        let files = vec![
+            clj_file("a/src/demo/util.clj", "(ns demo.util)\n\n(defn helper [x] x)\n"),
+            clj_file("b/src/demo/util.clj", "(ns demo.util)\n\n(defn helper [x] x)\n"),
+            clj_file(
+                "c/src/demo/main.clj",
+                "(ns demo.main\n  (:require [demo.util :as u]))\n\n(defn run [x] (u/helper x))\n",
+            ),
+        ];
+        let containers = vec![
+            clj_container("a", "a", &["src"]),
+            clj_container("b", "b", &["src"]),
+            clj_container("c", "c", &["src"]),
+        ];
+        let ctx = build_context("proj", &containers, &files, &[]);
+
+        assert!(!has_file_edge(&ctx, "c/src/demo/main.clj", "a/src/demo/util.clj"));
+        assert!(!has_file_edge(&ctx, "c/src/demo/main.clj", "b/src/demo/util.clj"));
     }
 
     /// `-` in a namespace segment is `_` on disk. Without the munging the
