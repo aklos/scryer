@@ -17,11 +17,22 @@ import type { ModelHealthReport } from "../health";
 import type { Node, ScryModel } from "../viewmodel";
 
 export type Drawing = "hexagon" | "rows" | "rings" | "columns";
-export type Isolation = "strict" | "inclusive";
+export type Isolation = "strict" | "inclusive" | "open";
 
 export interface LayerDef {
   name: string;
   description: string;
+}
+
+/** A kind of type a style checks by name (an ECS's systems, components,
+ *  events). Mirrors Rust `RoleDef`. */
+export interface RoleDef {
+  name: string;
+  description: string;
+  suffixes: string[];
+  layers: string[];
+  mayUse: string[];
+  dataOnly?: boolean;
 }
 
 /** Mirrors Rust `StyleDef` (camelCase serde). */
@@ -45,6 +56,7 @@ export interface StyleDef {
   externalBans?: Record<string, string[]>;
   path: { dirs?: Record<string, string[]>; markers?: Record<string, string[]> };
   drawing: Drawing;
+  roles?: RoleDef[];
 }
 
 export const builtinStyles: readonly StyleDef[] = builtin as unknown as StyleDef[];

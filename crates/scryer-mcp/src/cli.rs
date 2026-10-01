@@ -195,21 +195,7 @@ pub(crate) fn check_report(
     //    file, so every one gates.
     match scryer_extract::extract_context_with_stats(project) {
         Ok((ctx, _)) => {
-            let edges = scryer_core::build_edges::BuildEdges {
-                symbol_edges: ctx
-                    .symbol_edges
-                    .iter()
-                    .map(|e| scryer_core::build_edges::CachedEdge { src: e.src.clone(), dst: e.dst.clone(), guessed: e.guessed })
-                    .collect(),
-                external_imports: ctx
-                    .external_imports
-                    .iter()
-                    .map(|i| scryer_core::build_edges::ExternalImport {
-                        file: i.file.clone(),
-                        package: i.package.clone(),
-                    })
-                    .collect(),
-            };
+            let edges = ctx.build_edges();
             let _ = scryer_core::build_edges::write_build_edges(project, &edges);
             let derived = scryer_core::build_edges::derive_graph(&working, &edges);
             let files = scryer_extract::list_project_files(project);
@@ -217,7 +203,7 @@ pub(crate) fn check_report(
                 &working,
                 &scryer_core::load_styles(project),
                 &derived,
-                &edges.external_imports,
+                &edges,
                 Some(&files),
             );
             for v in &report.violations {

@@ -99,6 +99,204 @@
     "drawing": "rings"
   },
   {
+    "name": "ecs",
+    "description": "game simulations: entities, components, events and systems",
+    "layers": [
+      {
+        "name": "composition",
+        "description": "assembles the world: registers every system and wires the event bus"
+      },
+      {
+        "name": "content",
+        "description": "entities declared as data: prototypes and their loading"
+      },
+      {
+        "name": "features",
+        "description": "one slice per game feature: its components, events, queries and the system that runs it"
+      },
+      {
+        "name": "framework",
+        "description": "the ECS itself: entity manager, event bus, base component and system types"
+      }
+    ],
+    "matrix": {
+      "composition": [
+        "composition",
+        "content",
+        "features",
+        "framework"
+      ],
+      "content": [
+        "content",
+        "features",
+        "framework"
+      ],
+      "features": [
+        "features",
+        "framework"
+      ],
+      "framework": [
+        "framework"
+      ]
+    },
+    "isolation": "open",
+    "inbound": [
+      "composition",
+      "features",
+      "framework"
+    ],
+    "outbound": [
+      "content",
+      "composition"
+    ],
+    "publicSurface": [],
+    "externalBans": {
+      "features": [
+        "Godot",
+        "UnityEngine",
+        "UnityEditor",
+        "Microsoft.Xna.Framework",
+        "Stride.Engine",
+        "System.Windows",
+        "Microsoft.Maui",
+        "Avalonia",
+        "Xamarin.Forms",
+        "react",
+        "react-dom",
+        "react-native",
+        "vue",
+        "svelte",
+        "solid-js",
+        "@angular/core",
+        "three",
+        "pixi.js",
+        "phaser",
+        "PyQt5",
+        "PyQt6",
+        "PySide6",
+        "tkinter",
+        "egui",
+        "iced",
+        "bevy_render",
+        "bevy_ui"
+      ],
+      "framework": [
+        "Godot",
+        "UnityEngine",
+        "UnityEditor",
+        "Microsoft.Xna.Framework",
+        "Stride.Engine",
+        "System.Windows",
+        "Microsoft.Maui",
+        "Avalonia",
+        "Xamarin.Forms",
+        "react",
+        "react-dom",
+        "react-native",
+        "vue",
+        "svelte",
+        "solid-js",
+        "@angular/core",
+        "three",
+        "pixi.js",
+        "phaser",
+        "PyQt5",
+        "PyQt6",
+        "PySide6",
+        "tkinter",
+        "egui",
+        "iced",
+        "bevy_render",
+        "bevy_ui"
+      ]
+    },
+    "path": {
+      "dirs": {
+        "composition": [
+          "composition",
+          "bootstrap"
+        ],
+        "content": [
+          "content",
+          "prototypes"
+        ],
+        "features": [
+          "features",
+          "systems"
+        ],
+        "framework": [
+          "framework",
+          "ecs"
+        ]
+      }
+    },
+    "drawing": "rows",
+    "importedAsModule": true,
+    "roles": [
+      {
+        "name": "system",
+        "description": "reacts to events on entities that carry its components; never calls another system",
+        "suffixes": [
+          "System"
+        ],
+        "layers": [
+          "features"
+        ],
+        "mayUse": [
+          "component",
+          "event",
+          "query"
+        ]
+      },
+      {
+        "name": "query",
+        "description": "a read-only view a system publishes for other systems",
+        "suffixes": [
+          "Query"
+        ],
+        "layers": [
+          "features"
+        ],
+        "mayUse": [
+          "component",
+          "event",
+          "query"
+        ]
+      },
+      {
+        "name": "component",
+        "description": "data on an entity; no behaviour",
+        "suffixes": [
+          "Component"
+        ],
+        "layers": [
+          "features",
+          "framework"
+        ],
+        "mayUse": [
+          "component",
+          "event"
+        ],
+        "dataOnly": true
+      },
+      {
+        "name": "event",
+        "description": "a message raised on an entity or broadcast",
+        "suffixes": [
+          "Event"
+        ],
+        "layers": [
+          "features",
+          "framework"
+        ],
+        "mayUse": [
+          "component",
+          "event"
+        ]
+      }
+    ]
+  },
+  {
     "name": "feature-sliced",
     "description": "SPAs, React/Vue/Svelte apps, docs and static sites",
     "layers": [
@@ -521,6 +719,156 @@
     },
     "drawing": "hexagon",
     "importedAsModule": true
+  },
+  {
+    "name": "mvvm",
+    "description": "UI clients: desktop, mobile and game front-ends",
+    "layers": [
+      {
+        "name": "composition",
+        "description": "the app's entry point: builds the model and viewmodels and hands them to the view"
+      },
+      {
+        "name": "view",
+        "description": "UI and engine code: scenes, nodes, widgets, painters; renders a viewmodel and forwards input"
+      },
+      {
+        "name": "viewmodel",
+        "description": "presentation state and logic without the UI framework: readouts, formatting, layout as data, commands"
+      },
+      {
+        "name": "model",
+        "description": "the state the client works on and how it arrives: domain types, network, persistence"
+      }
+    ],
+    "matrix": {
+      "composition": [
+        "composition",
+        "view",
+        "viewmodel",
+        "model"
+      ],
+      "model": [
+        "model"
+      ],
+      "view": [
+        "view",
+        "viewmodel"
+      ],
+      "viewmodel": [
+        "viewmodel",
+        "model"
+      ]
+    },
+    "isolation": "inclusive",
+    "inbound": [
+      "composition",
+      "view",
+      "model"
+    ],
+    "outbound": [
+      "composition",
+      "model",
+      "viewmodel"
+    ],
+    "publicSurface": [],
+    "externalBans": {
+      "model": [
+        "Godot",
+        "UnityEngine",
+        "UnityEditor",
+        "Microsoft.Xna.Framework",
+        "Stride.Engine",
+        "System.Windows",
+        "Microsoft.Maui",
+        "Avalonia",
+        "Xamarin.Forms",
+        "react",
+        "react-dom",
+        "react-native",
+        "vue",
+        "svelte",
+        "solid-js",
+        "@angular/core",
+        "three",
+        "pixi.js",
+        "phaser",
+        "PyQt5",
+        "PyQt6",
+        "PySide6",
+        "tkinter",
+        "egui",
+        "iced",
+        "bevy_render",
+        "bevy_ui"
+      ],
+      "viewmodel": [
+        "Godot",
+        "UnityEngine",
+        "UnityEditor",
+        "Microsoft.Xna.Framework",
+        "Stride.Engine",
+        "System.Windows",
+        "Microsoft.Maui",
+        "Avalonia",
+        "Xamarin.Forms",
+        "react",
+        "react-dom",
+        "react-native",
+        "vue",
+        "svelte",
+        "solid-js",
+        "@angular/core",
+        "three",
+        "pixi.js",
+        "phaser",
+        "PyQt5",
+        "PyQt6",
+        "PySide6",
+        "tkinter",
+        "egui",
+        "iced",
+        "bevy_render",
+        "bevy_ui"
+      ]
+    },
+    "path": {
+      "dirs": {
+        "composition": [
+          "composition",
+          "bootstrap"
+        ],
+        "model": [
+          "models",
+          "model",
+          "state"
+        ],
+        "view": [
+          "views",
+          "view",
+          "ui",
+          "scenes"
+        ],
+        "viewmodel": [
+          "viewmodels",
+          "viewmodel",
+          "presenters"
+        ]
+      },
+      "markers": {
+        "view": [
+          "View.",
+          ".view.",
+          ".xaml"
+        ],
+        "viewmodel": [
+          "ViewModel.",
+          ".viewmodel.",
+          "Presenter."
+        ]
+      }
+    },
+    "drawing": "rows"
   },
   {
     "name": "pipeline",

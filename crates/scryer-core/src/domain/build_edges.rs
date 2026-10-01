@@ -42,6 +42,23 @@ pub struct BuildEdges {
     /// Imports of packages outside the repository, per file.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub external_imports: Vec<ExternalImport>,
+    /// Every outermost definition (a top-level type or free function) with
+    /// its extent, so an edge from a method can be charged to the type that
+    /// declares it. What a style's type roles are checked on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub types: Vec<TypeSpan>,
+}
+
+/// One outermost definition: its symbol key (`path#name@startLine`), the last
+/// line it spans, and how many definitions it nests (methods, constructors,
+/// nested types) — zero for a pure data shape.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TypeSpan {
+    pub key: String,
+    pub end_line: u32,
+    #[serde(default)]
+    pub nested: u32,
 }
 
 impl BuildEdges {
@@ -421,6 +438,7 @@ mod tests {
 
         let edges = BuildEdges {
             external_imports: Vec::new(),
+            types: Vec::new(),
             symbol_edges: vec![
                 CachedEdge {
                     src: "a/src/x.ts#useThing@1".into(),
@@ -490,6 +508,7 @@ mod tests {
 
         let edges = BuildEdges {
             external_imports: Vec::new(),
+            types: Vec::new(),
             symbol_edges: vec![
                 // Cross-container: counts via file-owner fallback.
                 CachedEdge { src: "a/m.ts#f@1".into(), dst: "b/n.ts#g@1".into(), guessed: false },
@@ -523,6 +542,7 @@ mod tests {
 
         let edges = BuildEdges {
             external_imports: Vec::new(),
+            types: Vec::new(),
             // Both endpoints are also matched by c0's `**/*`; the specific owners
             // must win, yielding a real c1->c2 edge rather than c0->c0 (self).
             symbol_edges: vec![CachedEdge {
@@ -581,6 +601,7 @@ mod tests {
 
         let edges = BuildEdges {
             external_imports: Vec::new(),
+            types: Vec::new(),
             symbol_edges: vec![CachedEdge {
                 src: "src/a.ts#doA@1".into(),
                 dst: "src/b.ts#doB@9".into(),

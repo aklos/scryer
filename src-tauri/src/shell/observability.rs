@@ -73,26 +73,7 @@ pub(crate) async fn get_model_health(cwd: String) -> Result<ModelHealthReport, S
         let (ctx, _) = scryer_extract::extract_context_with_stats(project)?;
         let files: std::collections::BTreeSet<String> =
             ctx.files.iter().map(|f| f.rel_path.clone()).collect();
-        let edges = scryer_core::build_edges::BuildEdges {
-            symbol_edges: ctx
-                .symbol_edges
-                .iter()
-                .map(|e| scryer_core::build_edges::CachedEdge {
-                    src: e.src.clone(),
-                    dst: e.dst.clone(),
-                    guessed: e.guessed,
-                })
-                .collect(),
-        
-            external_imports: ctx
-                .external_imports
-                .iter()
-                .map(|i| scryer_core::build_edges::ExternalImport {
-                    file: i.file.clone(),
-                    package: i.package.clone(),
-                })
-                .collect(),
-        };
+        let edges = ctx.build_edges();
         // Keep the cross-process cache fresh for the MCP commit tool. Best-effort.
         let _ = scryer_core::build_edges::write_build_edges(project, &edges);
 
@@ -122,7 +103,7 @@ pub(crate) async fn get_model_health(cwd: String) -> Result<ModelHealthReport, S
             &model,
             &styles,
             &derived,
-            &edges.external_imports,
+            &edges,
             Some(&all_files),
         );
         let styles: Vec<scryer_core::style::StyleDef> = styles.iter().cloned().collect();

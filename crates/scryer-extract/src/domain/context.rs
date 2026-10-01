@@ -51,6 +51,47 @@ pub struct ProjectContext {
     index: ContextIndex,
 }
 
+impl ProjectContext {
+    /// The slice of this context the edge cache keeps for one build: symbol
+    /// edges, external imports, and every outermost definition's extent (what
+    /// the style checks charge a method's edge to).
+    pub fn build_edges(&self) -> scryer_core::build_edges::BuildEdges {
+        use scryer_core::build_edges::{BuildEdges, CachedEdge, ExternalImport, TypeSpan};
+        let mut types = Vec::new();
+        for f in &self.files {
+            // Symbols are sorted by start line, so an enclosing definition
+            // always comes before what it nests.
+            let mut open: Vec<u32> = Vec::new();
+            let mut outer = 0usize;
+            for s in &f.symbols {
+                while open.last().is_some_and(|&end| end < s.start_line) {
+                    open.pop();
+                }
+                if open.is_empty() {
+                    types.push(TypeSpan { key: s.key.clone(), end_line: s.end_line, nested: 0 });
+                    outer = types.len() - 1;
+                } else {
+                    types[outer].nested += 1;
+                }
+                open.push(s.end_line);
+            }
+        }
+        BuildEdges {
+            symbol_edges: self
+                .symbol_edges
+                .iter()
+                .map(|e| CachedEdge { src: e.src.clone(), dst: e.dst.clone(), guessed: e.guessed })
+                .collect(),
+            external_imports: self
+                .external_imports
+                .iter()
+                .map(|i| ExternalImport { file: i.file.clone(), package: i.package.clone() })
+                .collect(),
+            types,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 struct ContextIndex {
     files_by_container: HashMap<String, Vec<usize>>,
@@ -651,6 +692,15 @@ fn build_edges(
         // unparsed target): the name is lexically bound to another module, so
         // letting it fall through to the bare-name scopes would misattribute
         // it to a same-name local def.
+        // C#: a `using` that opens no namespace the project declares names a
+        // package outside it (`using Godot;`) — remembered for the style bans.
+        if let Some(cs) = &f.parse.cs {
+            for u in cs.usings.iter().filter(|u| !u.is_static && u.alias.is_none()) {
+                if !cs_index.declares_namespace(&u.target) {
+                    externals.insert((file.to_string(), u.target.clone()));
+                }
+            }
+        }
         let is_python = file.ends_with(".py") || file.ends_with(".pyi");
         let is_go = file.ends_with(".go");
         let is_rust = file.ends_with(".rs");
@@ -1378,6 +1428,12 @@ impl<'a> CsIndex<'a> {
             }
         }
         CsIndex { types, global_usings }
+    }
+
+    /// Does the project declare `ns`, or a namespace nested under it?
+    fn declares_namespace(&self, ns: &str) -> bool {
+        self.types.contains_key(ns)
+            || self.types.keys().any(|k| k.len() > ns.len() && k.starts_with(ns) && k.as_bytes()[ns.len()] == b'.')
     }
 
     /// The one type `name` can mean at `line` of a file with scope `cs`, or
@@ -2450,6 +2506,47 @@ fn add_one(x: u32) -> u32 {
             edge_names(&ctx),
             vec![("Dock".to_string(), "Hull".to_string()), ("Mine".to_string(), "Rock".to_string())]
         );
+    }
+
+    /// The edge cache records each file's outermost types with how much they
+    /// nest — what tells a data-only component from one with behaviour.
+    #[test]
+    fn the_edge_cache_spans_outermost_types_and_counts_what_they_nest() {
+        let files = vec![cs_file(
+            "App/Dock.cs",
+            "namespace Game;\npublic sealed class DockComponent\n{\n    public int Bay { get; set; }\n    public double Range => 2.0;\n}\npublic sealed class DockingSystem\n{\n    public DockingSystem() {}\n    public void Update() { int Local() => 1; }\n}\n",
+        )];
+        let ctx = build_context("proj", &[container("App", "App")], &files, &[]);
+        let spans: Vec<(String, u32, u32)> =
+            ctx.build_edges().types.into_iter().map(|t| (t.key, t.end_line, t.nested)).collect();
+        assert_eq!(
+            spans,
+            vec![
+                // Properties, even with bodies, are data.
+                ("App/Dock.cs#DockComponent@2".to_string(), 6, 0),
+                // A constructor, a method and the local function inside it.
+                ("App/Dock.cs#DockingSystem@7".to_string(), 11, 3),
+            ]
+        );
+    }
+
+    /// A `using` that opens no namespace the project declares is an import of
+    /// something outside it — what a style's banned packages are matched on.
+    #[test]
+    fn a_csharp_using_of_an_undeclared_namespace_is_an_external_import() {
+        let files = vec![
+            cs_file("App/World/Hull.cs", "namespace Game.World;\npublic class Hull {}\n"),
+            cs_file(
+                "App/View/HullView.cs",
+                "using Godot;\nusing Godot.Collections;\nusing Game.World;\nusing Game;\nusing static System.Math;\nnamespace Game.View;\npublic partial class HullView : Node3D {}\n",
+            ),
+        ];
+        let ctx = build_context("proj", &[container("App", "App")], &files, &[]);
+        let externals: Vec<&str> = ctx.external_imports.iter().map(|i| i.package.as_str()).collect();
+        // `Game` is declared (as the parent of `Game.World`); a static using
+        // opens a type, not a package.
+        assert_eq!(externals, vec!["Godot", "Godot.Collections"]);
+        assert!(ctx.external_imports.iter().all(|i| i.file == "App/View/HullView.cs"));
     }
 
     /// Where a language has no imports to follow, a bare-name edge is kept as

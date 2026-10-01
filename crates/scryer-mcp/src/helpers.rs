@@ -713,7 +713,7 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
                 &committed,
                 &scryer_core::load_styles(model_ref.project_path()),
                 &derived,
-                &edges.external_imports,
+                &edges,
                 None,
             )
             .total()

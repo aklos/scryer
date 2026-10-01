@@ -12,9 +12,9 @@
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::domain::build_edges::{DerivedGraph, ExternalImport};
+use crate::domain::build_edges::{BuildEdges, DerivedGraph};
 use crate::domain::ownership::BoundaryOwnership;
-use crate::domain::style::{self, StyleDef, Styles};
+use crate::domain::style::{self, Isolation, RoleDef, StyleDef, Styles};
 use crate::{Kind, Node, ScryModel};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -43,6 +43,11 @@ pub enum ViolationKind {
     /// A declared model link its style forbids — the same rules `add_links`
     /// enforces, held against links that predate their style or layers.
     ForbiddenLink,
+    /// A type referencing a type whose role its own role may not use (an ECS
+    /// system reaching another system). One per (type, type) pair.
+    RoleViolation,
+    /// A type whose role is data only declaring methods or nested types.
+    DataViolation,
 }
 
 impl ViolationKind {
@@ -56,6 +61,8 @@ impl ViolationKind {
             ViolationKind::Layerless => "layerless",
             ViolationKind::Cycle => "cycle",
             ViolationKind::ForbiddenLink => "forbidden_link",
+            ViolationKind::RoleViolation => "role_violation",
+            ViolationKind::DataViolation => "data_violation",
         }
     }
 }
@@ -91,6 +98,8 @@ pub struct StyleReport {
     pub layerless: usize,
     pub cycles: usize,
     pub forbidden_links: usize,
+    pub role_violations: usize,
+    pub data_violations: usize,
 }
 
 impl StyleReport {
@@ -122,6 +131,8 @@ impl StyleReport {
             layerless: count(ViolationKind::Layerless),
             cycles: count(ViolationKind::Cycle),
             forbidden_links: count(ViolationKind::ForbiddenLink),
+            role_violations: count(ViolationKind::RoleViolation),
+            data_violations: count(ViolationKind::DataViolation),
             violations,
         }
     }
@@ -198,8 +209,68 @@ fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
+/// A ban names a package and everything under it: `@acme/ui/button` for
+/// `@acme/ui`, `Godot.Collections` for `Godot`.
 fn ban_matches(package: &str, ban: &str) -> bool {
-    package == ban || package.strip_prefix(ban).is_some_and(|rest| rest.starts_with('/'))
+    package == ban
+        || package
+            .strip_prefix(ban)
+            .is_some_and(|rest| rest.starts_with('/') || rest.starts_with('.'))
+}
+
+/// The start line a symbol key (`path#name@line`) carries.
+fn key_line(key: &str) -> u32 {
+    key.rsplit_once('@').and_then(|(_, l)| l.parse().ok()).unwrap_or(0)
+}
+
+/// One outermost type, placed: where it is, which component and style govern
+/// it, and the role it plays there.
+struct Typed<'a> {
+    file: &'a str,
+    name: &'a str,
+    nested: u32,
+    comp: &'a Node,
+    def: &'a StyleDef,
+    role: &'a RoleDef,
+}
+
+/// The outermost definitions of each file, for charging an edge from a
+/// method to the type that declares it.
+struct TypeIndex<'a> {
+    by_file: HashMap<&'a str, Vec<(u32, u32, &'a str, u32)>>,
+}
+
+impl<'a> TypeIndex<'a> {
+    fn new(edges: &'a BuildEdges) -> Self {
+        let mut by_file: HashMap<&str, Vec<(u32, u32, &str, u32)>> = HashMap::new();
+        for t in &edges.types {
+            let Some((file, name)) = BuildEdges::split_symbol_key(&t.key) else { continue };
+            by_file.entry(file).or_default().push((key_line(&t.key), t.end_line, name, t.nested));
+        }
+        Self { by_file }
+    }
+
+    /// The type at `key`'s line, if it plays a role under its style.
+    fn typed(
+        &self,
+        key: &'a str,
+        model: &'a ScryModel,
+        styles: &'a Styles,
+        index: &FileIndex<'a>,
+    ) -> Option<Typed<'a>> {
+        let (file, _) = BuildEdges::split_symbol_key(key)?;
+        let line = key_line(key);
+        let &(_, _, name, nested) = self
+            .by_file
+            .get(file)?
+            .iter()
+            .find(|(start, end, _, _)| *start <= line && line <= *end)?;
+        let comp = index.component_of_file(file)?;
+        let layer = comp.layer.as_deref()?;
+        let def = styles.get(style::governing_style(model, &comp.id)?)?;
+        let role = def.role_of(layer, name)?;
+        Some(Typed { file, name, nested, comp, def, role })
+    }
 }
 
 /// Run the code-time checks. `derived` comes from the build's dependency
@@ -210,7 +281,7 @@ pub fn check_code(
     model: &ScryModel,
     styles: &Styles,
     derived: &DerivedGraph,
-    externals: &[ExternalImport],
+    edges: &BuildEdges,
     files: Option<&BTreeSet<String>>,
 ) -> StyleReport {
     let index = FileIndex::new(model, files);
@@ -271,7 +342,13 @@ pub fn check_code(
             // library's application and domain, its presentation may not —
             // exactly as it would for a module of its own. Only comparable
             // when the importer's style knows that layer name.
-            if inbound_def.imported_as_module && def.has_layer(dl) {
+            // A module whose layers the importer's style does not name (an
+            // ECS imported by a hexagonal server) is a package like any
+            // other: its public layers were checked on the way in above.
+            if inbound_def.imported_as_module && !def.has_layer(dl) {
+                continue;
+            }
+            if inbound_def.imported_as_module {
                 // The matrix decides when the layers line up (your application
                 // may use a library's application and domain). A library's
                 // FACADE — the wiring it publishes so a consumer can open it —
@@ -340,7 +417,11 @@ pub fn check_code(
             continue;
         }
         // Same layer, different components: needs a declared link, and goes
-        // through the sibling's public surface when it has one.
+        // through the sibling's public surface when it has one — unless the
+        // style shares a layer's types openly.
+        if def.isolation == Isolation::Open {
+            continue;
+        }
         let declared = model
             .links
             .iter()
@@ -401,7 +482,7 @@ pub fn check_code(
     }
 
     // --- banned packages ---------------------------------------------------------
-    for imp in externals {
+    for imp in &edges.external_imports {
         let Some(comp) = index.component_of_file(&imp.file) else { continue };
         let Some(layer) = comp.layer.as_deref() else { continue };
         let Some(def) = governing(&comp.id) else { continue };
@@ -420,6 +501,64 @@ pub fn check_code(
                 imp.file, comp.name, imp.package, def.name
             ),
         });
+    }
+
+    // --- type roles --------------------------------------------------------------
+    // Where a style names kinds of type (an ECS's systems, components, events),
+    // each code edge is charged to the outermost type at both ends and checked
+    // against the source role's `may_use`. Edges inside one component count:
+    // an ECS slices by feature, so a system and the system it must not call
+    // can share a directory, and only the types tell them apart.
+    if styles.iter().any(|d| !d.roles.is_empty()) {
+        let types = TypeIndex::new(edges);
+        let mut seen: BTreeSet<(&str, &str, &str)> = BTreeSet::new();
+        for e in edges.symbol_edges.iter().filter(|e| !e.guessed) {
+            let Some(src) = types.typed(&e.src, model, styles, &index) else { continue };
+            let Some(dst) = types.typed(&e.dst, model, styles, &index) else { continue };
+            if (src.file, src.name) == (dst.file, dst.name) || src.def.name != dst.def.name {
+                continue;
+            }
+            if src.role.may_use.contains(&dst.role.name) {
+                continue;
+            }
+            if !seen.insert((src.file, src.name, dst.name)) {
+                continue;
+            }
+            let Some(container) = style::container_of(model, &src.comp.id) else { continue };
+            out.push(StyleViolation {
+                kind: ViolationKind::RoleViolation,
+                node: src.comp.id.clone(),
+                other: (dst.comp.id != src.comp.id).then(|| dst.comp.id.clone()),
+                file: src.file.to_string(),
+                container: container.id.clone(),
+                detail: format!(
+                    "{} `{}` ({}) references `{}` ({}) in {} — in style '{}' a {} may use only {}: {}",
+                    src.file, src.name, src.role.name, dst.name, dst.role.name, dst.file,
+                    src.def.name, src.role.name,
+                    if src.role.may_use.is_empty() { "untyped values".to_string() } else { src.role.may_use.join(", ") },
+                    src.role.description
+                ),
+            });
+        }
+        for t in edges.types.iter().filter(|t| t.nested > 0) {
+            let Some(typed) = types.typed(&t.key, model, styles, &index) else { continue };
+            if !typed.role.data_only {
+                continue;
+            }
+            let Some(container) = style::container_of(model, &typed.comp.id) else { continue };
+            out.push(StyleViolation {
+                kind: ViolationKind::DataViolation,
+                node: typed.comp.id.clone(),
+                other: None,
+                file: typed.file.to_string(),
+                container: container.id.clone(),
+                detail: format!(
+                    "{} `{}` is a {} but declares {} method(s) or nested type(s) — in style '{}' a {} \
+                     is data only; move the behaviour out of it",
+                    typed.file, typed.name, typed.role.name, typed.nested, typed.def.name, typed.role.name
+                ),
+            });
+        }
     }
 
     // --- path convention ---------------------------------------------------------
@@ -490,7 +629,7 @@ pub fn check_code(
                     detail: format!(
                         "'{}' declares no architectural style — {} components and {} internal \
                          imports with no layer matrix to check them against; declare the style \
-                         the code has, or pick one with the user and refactor toward it",
+                         the code has, or propose one and refactor toward it",
                         container.name,
                         comps.len(),
                         internal
@@ -532,7 +671,8 @@ pub fn check_code(
     // --- cycles -------------------------------------------------------------------
     // Component-level import cycles inside one container. Every style's
     // matrix is acyclic, so a cycle breaks any style the container could
-    // declare — it is reported with or without one.
+    // declare — it is reported with or without one, except between the
+    // slices of an open layer.
     let mut adjacency: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for e in derived.resolved_edges.iter().filter(|e| !e.guessed) {
         let (Some(sc), Some(dc)) = (
@@ -550,6 +690,15 @@ pub fn check_code(
             continue;
         };
         if scont.id != dcont.id {
+            continue;
+        }
+        // Slices of an open layer share types by design (an ECS's features
+        // read each other's components); what may not loop there is the
+        // style's roles, checked type by type above.
+        let open = sc.layer.is_some()
+            && sc.layer == dc.layer
+            && governing(&sc.id).is_some_and(|d| d.isolation == Isolation::Open);
+        if open {
             continue;
         }
         adjacency.entry(sc.id.clone()).or_default().insert(dc.id.clone());
@@ -659,7 +808,7 @@ fn strongly_connected(adj: &BTreeMap<String, BTreeSet<String>>) -> Vec<Vec<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::build_edges::ResolvedEdge;
+    use crate::domain::build_edges::{ExternalImport, ResolvedEdge};
     use crate::{Link, LinkKind};
 
     fn node(v: serde_json::Value) -> Node {
@@ -720,11 +869,14 @@ mod tests {
 
     fn report(m: &ScryModel, edges: Vec<ResolvedEdge>, externals: Vec<(&str, &str)>) -> StyleReport {
         let derived = DerivedGraph { resolved_edges: edges, ..Default::default() };
-        let externals: Vec<ExternalImport> = externals
-            .into_iter()
-            .map(|(f, p)| ExternalImport { file: f.into(), package: p.into() })
-            .collect();
-        check_code(m, &Styles::builtin(), &derived, &externals, None)
+        let edges = BuildEdges {
+            external_imports: externals
+                .into_iter()
+                .map(|(f, p)| ExternalImport { file: f.into(), package: p.into() })
+                .collect(),
+            ..Default::default()
+        };
+        check_code(m, &Styles::builtin(), &derived, &edges, None)
     }
 
     #[test]
@@ -1024,7 +1176,7 @@ mod tests {
             vec![crate::Source { pattern: "svc/application/refunds/**/*".into(), comment: None }],
         );
         let derived = DerivedGraph { resolved_edges: vec![e], ..Default::default() };
-        let r = check_code(&m, &Styles::builtin(), &derived, &[], Some(&files));
+        let r = check_code(&m, &Styles::builtin(), &derived, &BuildEdges::default(), Some(&files));
         assert_eq!(r.isolation_violations, 1, "{:#?}", r.violations);
         assert!(r.violations[0].detail.contains("bypassing its public surface"), "{}", r.violations[0].detail);
         assert!(r.violations[0].detail.contains("svc/application/refunds/mod.rs"));
@@ -1097,4 +1249,123 @@ mod tests {
         let scope: HashSet<&str> = ["page"].into_iter().collect();
         assert_eq!(r.scoped(&scope).total(), 0);
     }
+
+    /// A small ECS: the framework, and two feature slices (Docking, Cruise),
+    /// each holding its components, events and system side by side.
+    fn ecs_world() -> (ScryModel, BuildEdges) {
+        let mut m = ScryModel::new();
+        m.nodes = vec![
+            node(serde_json::json!({ "id": "sys", "kind": "system", "name": "S" })),
+            node(serde_json::json!({ "id": "sim", "kind": "container", "name": "Sim", "parentId": "sys", "style": "ecs" })),
+            node(serde_json::json!({ "id": "fw", "kind": "component", "name": "Entities", "parentId": "sim", "layer": "framework" })),
+            node(serde_json::json!({ "id": "dock", "kind": "component", "name": "Docking", "parentId": "sim", "layer": "features" })),
+            node(serde_json::json!({ "id": "cruise", "kind": "component", "name": "Cruise", "parentId": "sim", "layer": "features" })),
+        ];
+        for (id, glob) in [("fw", "sim/Entities/**/*"), ("dock", "sim/Docking/**/*"), ("cruise", "sim/Cruise/**/*")] {
+            m.boundaries.insert(id.into(), vec![crate::Source { pattern: glob.into(), comment: None }]);
+        }
+        let span = |key: &str, end_line: u32, nested: u32| crate::domain::build_edges::TypeSpan {
+            key: key.into(),
+            end_line,
+            nested,
+        };
+        let edge = |src: &str, dst: &str| crate::domain::build_edges::CachedEdge {
+            src: src.into(),
+            dst: dst.into(),
+            guessed: false,
+        };
+        let edges = BuildEdges {
+            types: vec![
+                span("sim/Entities/EntitySystem.cs#EntitySystem@1", 20, 2),
+                span("sim/Docking/Components.cs#DockComponent@1", 5, 0),
+                span("sim/Docking/DockingSystem.cs#DockingSystem@1", 40, 3),
+                span("sim/Cruise/Components.cs#CruiseComponent@1", 9, 1),
+                span("sim/Cruise/Events.cs#DriveDrainedEvent@1", 4, 0),
+                span("sim/Cruise/CruiseSystem.cs#CruiseSystem@1", 60, 4),
+                span("sim/Cruise/CruiseSystem.cs#ICruiseQuery@62", 66, 0),
+            ],
+            symbol_edges: vec![
+                // Fine: its own base type (framework, so no role), its own
+                // component, another slice's component, event and query.
+                edge("sim/Docking/DockingSystem.cs#DockingSystem@1", "sim/Entities/EntitySystem.cs#EntitySystem@1"),
+                edge("sim/Docking/DockingSystem.cs#Update@10", "sim/Docking/Components.cs#DockComponent@1"),
+                edge("sim/Docking/DockingSystem.cs#Update@10", "sim/Cruise/Components.cs#CruiseComponent@1"),
+                edge("sim/Docking/DockingSystem.cs#Undock@20", "sim/Cruise/Events.cs#DriveDrainedEvent@1"),
+                edge("sim/Docking/DockingSystem.cs#Undock@20", "sim/Cruise/CruiseSystem.cs#ICruiseQuery@62"),
+                // Not fine: the system itself, from two methods (one finding).
+                edge("sim/Docking/DockingSystem.cs#DockingSystem@1", "sim/Cruise/CruiseSystem.cs#CruiseSystem@1"),
+                edge("sim/Docking/DockingSystem.cs#Undock@20", "sim/Cruise/CruiseSystem.cs#Drain@30"),
+            ],
+            ..Default::default()
+        };
+        (m, edges)
+    }
+
+    #[test]
+    fn an_ecs_system_may_use_components_events_and_queries_but_never_another_system() {
+        let (m, edges) = ecs_world();
+        let r = check_code(&m, &Styles::builtin(), &DerivedGraph::default(), &edges, None);
+        let roles: Vec<&StyleViolation> =
+            r.violations.iter().filter(|v| v.kind == ViolationKind::RoleViolation).collect();
+        assert_eq!(roles.len(), 1, "{:#?}", r.violations);
+        assert_eq!(roles[0].node, "dock");
+        assert_eq!(roles[0].other.as_deref(), Some("cruise"));
+        assert!(roles[0].detail.contains("`DockingSystem` (system) references `CruiseSystem` (system)"), "{}", roles[0].detail);
+    }
+
+    #[test]
+    fn an_ecs_component_with_methods_is_a_data_violation() {
+        let (m, edges) = ecs_world();
+        let r = check_code(&m, &Styles::builtin(), &DerivedGraph::default(), &edges, None);
+        let data: Vec<&StyleViolation> =
+            r.violations.iter().filter(|v| v.kind == ViolationKind::DataViolation).collect();
+        // CruiseComponent nests one method; DockComponent none; systems may.
+        assert_eq!(data.len(), 1, "{:#?}", r.violations);
+        assert_eq!(data[0].node, "cruise");
+        assert!(data[0].detail.contains("`CruiseComponent`"));
+        assert_eq!(r.data_violations, 1);
+    }
+
+    #[test]
+    fn a_ban_reaches_a_csharp_namespace_under_the_banned_one() {
+        assert!(ban_matches("Godot", "Godot"));
+        assert!(ban_matches("Godot.Collections", "Godot"));
+        assert!(!ban_matches("GodotSharpExtras", "Godot"));
+    }
+
+
+    /// An ECS's feature slices read each other's components freely: no
+    /// declared link is owed between them and they form no reportable cycle.
+    #[test]
+    fn ecs_feature_slices_share_types_without_links_or_cycles() {
+        let (m, edges) = ecs_world();
+        let derived = DerivedGraph {
+            resolved_edges: vec![
+                edge(("dock", "Update", "sim/Docking/DockingSystem.cs"), ("cruise", "CruiseComponent", "sim/Cruise/Components.cs")),
+                edge(("cruise", "Update", "sim/Cruise/CruiseSystem.cs"), ("dock", "DockComponent", "sim/Docking/Components.cs")),
+            ],
+            ..Default::default()
+        };
+        let r = check_code(&m, &Styles::builtin(), &derived, &edges, None);
+        assert_eq!(r.isolation_violations, 0, "{:#?}", r.violations);
+        assert_eq!(r.cycles, 0, "{:#?}", r.violations);
+    }
+
+    /// A module whose layers the importer's style does not name is imported
+    /// like a package: any layer may use its public layers, none its private.
+    #[test]
+    fn a_module_of_another_style_is_imported_through_its_public_layers_only() {
+        let (mut m, _) = ecs_world();
+        m.nodes.push(node(serde_json::json!({ "id": "srv", "kind": "container", "name": "Srv", "parentId": "sys", "style": "hexagonal" })));
+        m.nodes.push(node(serde_json::json!({ "id": "host", "kind": "component", "name": "Host", "parentId": "srv", "layer": "application" })));
+        m.nodes.push(node(serde_json::json!({ "id": "load", "kind": "component", "name": "Load", "parentId": "sim", "layer": "content" })));
+        let public = edge(("host", "Tick", "srv/application/host.rs"), ("dock", "DockComponent", "sim/Docking/Components.cs"));
+        let private = edge(("host", "Tick", "srv/application/host.rs"), ("load", "Prototypes", "sim/Content/Prototypes.cs"));
+        let r = report(&m, vec![public], vec![]);
+        assert_eq!(r.layer_violations, 0, "{:#?}", r.violations);
+        let r = report(&m, vec![private], vec![]);
+        assert_eq!(r.layer_violations, 1, "{:#?}", r.violations);
+        assert!(r.violations.iter().any(|v| v.detail.contains("enter through")), "{:#?}", r.violations);
+    }
+
 }

@@ -381,26 +381,7 @@ pub(crate) async fn start_model_build(
     // `fill_container` tool (a separate process) wires code-level links
     // from the same edges the agent saw, instead of having the agent author
     // them by hand and fight the same-level link validator. Best-effort.
-    let build_edges = scryer_core::build_edges::BuildEdges {
-        symbol_edges: ctx
-            .symbol_edges
-            .iter()
-            .map(|e| scryer_core::build_edges::CachedEdge {
-                src: e.src.clone(),
-                dst: e.dst.clone(),
-                guessed: e.guessed,
-            })
-            .collect(),
-    
-        external_imports: ctx
-            .external_imports
-            .iter()
-            .map(|i| scryer_core::build_edges::ExternalImport {
-                file: i.file.clone(),
-                package: i.package.clone(),
-            })
-            .collect(),
-    };
+    let build_edges = ctx.build_edges();
     if let Err(e) = scryer_core::build_edges::write_build_edges(project, &build_edges) {
         eprintln!("[build] could not cache dependency graph: {e}");
     }

@@ -587,7 +587,7 @@ pub fn check_styles(model: &ScryModel, styles: &Styles) -> Vec<String> {
 /// A declared link its style forbids is not one of them: it is a structural
 /// violation, reported with the code's by [`crate::domain::style_health::check_code`].
 pub fn check_conformance(model: &ScryModel, styles: &Styles) -> Vec<String> {
-    let mut warnings: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = styles.errors().to_vec();
     warnings.extend(check_unreached(model, styles));
     warnings.extend(check_file_listing(model));
     let mut seen: HashSet<String> = HashSet::new();

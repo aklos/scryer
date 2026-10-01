@@ -117,7 +117,9 @@ export type StyleViolationKind =
   | "unstyled"
   | "layerless"
   | "cycle"
-  | "forbidden_link";
+  | "forbidden_link"
+  | "role_violation"
+  | "data_violation";
 
 /** One structural violation: a real import or file that breaks the
  *  container's declared style. Mirrors Rust `StyleViolation`. */
@@ -147,6 +149,8 @@ export interface StyleReport {
   layerless: number;
   cycles: number;
   forbiddenLinks: number;
+  roleViolations: number;
+  dataViolations: number;
 }
 
 export interface DerivedGraph {

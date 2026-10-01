@@ -54,8 +54,8 @@ concern each. [[statement-ears]] [[scanning]] [[naming]] [[concerns]]\n\
 - `N structural violations` in a status line counts real imports and files that break a \
 declared style, import cycles between components, and containers that declare no style at all. \
 Fixing them means moving code, never un-declaring the style, dropping a layer, or deleting the \
-link; an unstyled container is resolved only by the user declaring the style its code has. \
-[[styles]]\n\
+link; an unstyled container is resolved by declaring the style its code has, or by a change whose \
+stated purpose is to refactor it into one. [[styles]]\n\
 \n\
 Every tool takes an optional `project` (absolute path) that defaults to the working directory. \
 Schema version is `0.3`.\n\

@@ -14,8 +14,8 @@
 //! layer is required and must come from the style's list, because the map and
 //! the checks depend on it.
 //!
-//! The five built-ins (`hexagonal`, `library`, `feature-sliced`, `core-shell`,
-//! `pipeline`) are ordinary [`StyleDef`] values; a project may add its own as
+//! The seven built-ins (`hexagonal`, `library`, `feature-sliced`, `core-shell`,
+//! `pipeline`, `ecs`, `mvvm`) are ordinary [`StyleDef`] values; a project may add its own as
 //! `.scryer/styles/<name>.json` with the same shape. The engine never
 //! special-cases a built-in.
 
@@ -36,6 +36,32 @@ pub struct LayerDef {
     pub description: String,
 }
 
+/// A kind of TYPE a style recognises inside its layers — an ECS's systems,
+/// components and events. Where layers say which component may import which,
+/// roles say which kind of type may reference which, wherever the types live:
+/// an ECS slices by feature, so a system and the components it reads share a
+/// directory, and only the types tell them apart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RoleDef {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// Type-name suffixes that mark the role (`System`, `Component`).
+    pub suffixes: Vec<String>,
+    /// Layers whose types can carry the role; empty = every layer. Keeps the
+    /// framework's own base types (`EntitySystem`) out of the role they name.
+    #[serde(default)]
+    pub layers: Vec<String>,
+    /// Roles a type of this role may reference. A reference to a type with no
+    /// role (a value, a constant table) is always allowed.
+    #[serde(default)]
+    pub may_use: Vec<String>,
+    /// The type is data only: no methods, constructors or nested types.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub data_only: bool,
+}
+
 /// Whether two components on the SAME layer may import each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +70,11 @@ pub enum Isolation {
     Strict,
     /// Siblings on a layer may import each other freely (hexagonal, Nx).
     Inclusive,
+    /// Siblings on a layer share their types with no declared link: an ECS's
+    /// feature slices read each other's components and raise each other's
+    /// events by design, and the style's roles govern which type may
+    /// reference which.
+    Open,
 }
 
 /// How layer maps onto a path under a node's boundary glob. Either form is
@@ -118,6 +149,9 @@ pub struct StyleDef {
     /// The `inbound` list still fixes which of its layers are public at all.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub imported_as_module: bool,
+    /// Kinds of type checked against each other by name. See [`RoleDef`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<RoleDef>,
 }
 
 impl StyleDef {
@@ -142,6 +176,14 @@ impl StyleDef {
     /// Is `layer` one a cross-container link may enter this container on?
     pub fn is_inbound(&self, layer: &str) -> bool {
         self.inbound.iter().any(|l| l == layer)
+    }
+
+    /// The role a type named `type_name` plays on `layer`, if any.
+    pub fn role_of(&self, layer: &str, type_name: &str) -> Option<&RoleDef> {
+        self.roles.iter().find(|r| {
+            (r.layers.is_empty() || r.layers.iter().any(|l| l == layer))
+                && r.suffixes.iter().any(|s| type_name.ends_with(s.as_str()))
+        })
     }
 
     /// The directory name placement suggests for `layer`, if the convention has one.
@@ -187,16 +229,29 @@ impl StyleDef {
 #[derive(Debug, Clone, Default)]
 pub struct Styles {
     defs: BTreeMap<String, StyleDef>,
+    /// Project style files that could not be loaded, one line each — a
+    /// container naming the style they meant would otherwise fail with no
+    /// word on why.
+    errors: Vec<String>,
 }
 
 impl Styles {
-    /// The five built-ins only.
+    /// The built-ins only.
     pub fn builtin() -> Self {
         let mut defs = BTreeMap::new();
-        for s in [hexagonal(), library(), feature_sliced(), core_shell(), pipeline()] {
+        for s in [hexagonal(), library(), feature_sliced(), core_shell(), pipeline(), ecs(), mvvm()] {
             defs.insert(s.name.clone(), s);
         }
-        Self { defs }
+        Self { defs, errors: Vec::new() }
+    }
+
+    /// Record a project style file that could not be loaded.
+    pub fn push_error(&mut self, error: String) {
+        self.errors.push(error);
+    }
+
+    pub fn errors(&self) -> &[String] {
+        &self.errors
     }
 
 
@@ -614,6 +669,7 @@ pub fn hexagonal() -> StyleDef {
         },
         drawing: Drawing::Hexagon,
         imported_as_module: false,
+        roles: Vec::new(),
     }
 }
 
@@ -657,6 +713,7 @@ pub fn feature_sliced() -> StyleDef {
         },
         drawing: Drawing::Rows,
         imported_as_module: false,
+        roles: Vec::new(),
     }
 }
 
@@ -685,6 +742,142 @@ pub fn core_shell() -> StyleDef {
         },
         drawing: Drawing::Rings,
         imported_as_module: false,
+        roles: Vec::new(),
+    }
+}
+
+/// UI and engine packages: what only a view may touch.
+const UI_PACKAGES: &[&str] = &[
+    "Godot", "UnityEngine", "UnityEditor", "Microsoft.Xna.Framework", "Stride.Engine",
+    "System.Windows", "Microsoft.Maui", "Avalonia", "Xamarin.Forms",
+    "react", "react-dom", "react-native", "vue", "svelte", "solid-js", "@angular/core",
+    "three", "pixi.js", "phaser",
+    "PyQt5", "PyQt6", "PySide6", "tkinter",
+    "egui", "iced", "bevy_render", "bevy_ui",
+];
+
+/// Entity–component–system the way Space Station 14's Robust Toolbox runs it:
+/// components are data on entities, systems react to events raised on the
+/// entities that carry their components, and systems never call each other —
+/// a system that needs another's answer reads a query it publishes, and one
+/// that needs another to act raises an event.
+pub fn ecs() -> StyleDef {
+    StyleDef {
+        name: "ecs".into(),
+        description: "game simulations: entities, components, events and systems".into(),
+        layers: layers(&[
+            ("composition", "assembles the world: registers every system and wires the event bus"),
+            ("content", "entities declared as data: prototypes and their loading"),
+            ("features", "one slice per game feature: its components, events, queries and the system that runs it"),
+            ("framework", "the ECS itself: entity manager, event bus, base component and system types"),
+        ]),
+        matrix: matrix(&[
+            ("framework", &["framework"]),
+            ("features", &["features", "framework"]),
+            ("content", &["content", "features", "framework"]),
+            ("composition", &["composition", "content", "features", "framework"]),
+        ]),
+        isolation: Isolation::Open,
+        inbound: strs(&["composition", "features", "framework"]),
+        outbound: strs(&["content", "composition"]),
+        public_surface: Vec::new(),
+        external_bans: [
+            ("framework".to_string(), strs(UI_PACKAGES)),
+            ("features".to_string(), strs(UI_PACKAGES)),
+        ]
+        .into_iter()
+        .collect(),
+        path: PathConvention {
+            dirs: dirs(&[
+                ("composition", &["composition", "bootstrap"]),
+                ("content", &["content", "prototypes"]),
+                ("features", &["features", "systems"]),
+                ("framework", &["framework", "ecs"]),
+            ]),
+            markers: BTreeMap::new(),
+        },
+        drawing: Drawing::Rows,
+        imported_as_module: true,
+        roles: vec![
+            RoleDef {
+                name: "system".into(),
+                description: "reacts to events on entities that carry its components; never calls another system".into(),
+                suffixes: strs(&["System"]),
+                layers: strs(&["features"]),
+                may_use: strs(&["component", "event", "query"]),
+                data_only: false,
+            },
+            RoleDef {
+                name: "query".into(),
+                description: "a read-only view a system publishes for other systems".into(),
+                suffixes: strs(&["Query"]),
+                layers: strs(&["features"]),
+                may_use: strs(&["component", "event", "query"]),
+                data_only: false,
+            },
+            RoleDef {
+                name: "component".into(),
+                description: "data on an entity; no behaviour".into(),
+                suffixes: strs(&["Component"]),
+                layers: strs(&["features", "framework"]),
+                may_use: strs(&["component", "event"]),
+                data_only: true,
+            },
+            RoleDef {
+                name: "event".into(),
+                description: "a message raised on an entity or broadcast".into(),
+                suffixes: strs(&["Event"]),
+                layers: strs(&["features", "framework"]),
+                may_use: strs(&["component", "event"]),
+                data_only: false,
+            },
+        ],
+    }
+}
+
+/// Model–View–ViewModel with a humble view: everything worth testing lives
+/// below the UI framework, and the view only renders and forwards input.
+pub fn mvvm() -> StyleDef {
+    StyleDef {
+        name: "mvvm".into(),
+        description: "UI clients: desktop, mobile and game front-ends".into(),
+        layers: layers(&[
+            ("composition", "the app's entry point: builds the model and viewmodels and hands them to the view"),
+            ("view", "UI and engine code: scenes, nodes, widgets, painters; renders a viewmodel and forwards input"),
+            ("viewmodel", "presentation state and logic without the UI framework: readouts, formatting, layout as data, commands"),
+            ("model", "the state the client works on and how it arrives: domain types, network, persistence"),
+        ]),
+        matrix: matrix(&[
+            ("composition", &["composition", "view", "viewmodel", "model"]),
+            ("view", &["view", "viewmodel"]),
+            ("viewmodel", &["viewmodel", "model"]),
+            ("model", &["model"]),
+        ]),
+        isolation: Isolation::Inclusive,
+        inbound: strs(&["composition", "view", "model"]),
+        outbound: strs(&["composition", "model", "viewmodel"]),
+        public_surface: Vec::new(),
+        external_bans: [
+            ("viewmodel".to_string(), strs(UI_PACKAGES)),
+            ("model".to_string(), strs(UI_PACKAGES)),
+        ]
+        .into_iter()
+        .collect(),
+        path: PathConvention {
+            dirs: dirs(&[
+                ("composition", &["composition", "bootstrap"]),
+                ("view", &["views", "view", "ui", "scenes"]),
+                ("viewmodel", &["viewmodels", "viewmodel", "presenters"]),
+                ("model", &["models", "model", "state"]),
+            ]),
+            markers: dirs(&[
+                ("view", &["View.", ".view.", ".xaml"]),
+                ("viewmodel", &["ViewModel.", ".viewmodel.", "Presenter."]),
+            ]),
+        },
+        drawing: Drawing::Rows,
+        imported_as_module: false,
+        roles: Vec::new(),
     }
 }
 
@@ -725,6 +918,7 @@ pub fn pipeline() -> StyleDef {
         },
         drawing: Drawing::Columns,
         imported_as_module: false,
+        roles: Vec::new(),
     }
 }
 
@@ -866,7 +1060,9 @@ mod tests {
         let styles = crate::composition::styles::load_styles(dir.path());
         assert!(styles.get("two-tier").is_some());
         assert!(styles.get("hexagonal").is_some());
-        assert_eq!(styles.names().len(), 6);
+        assert_eq!(styles.names().len(), 8);
+        assert_eq!(styles.errors().len(), 1);
+        assert!(styles.errors()[0].contains("broken.json"), "{:?}", styles.errors());
     }
 
     fn node(id: &str, kind: Kind, parent: Option<&str>) -> Node {

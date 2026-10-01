@@ -1659,7 +1659,7 @@ impl ScryerServer {
                 &model,
                 &styles_for(&model_ref),
                 graph,
-                &edges.external_imports,
+                &edges,
                 Some(&files),
             )
         });

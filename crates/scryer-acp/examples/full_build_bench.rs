@@ -92,14 +92,7 @@ async fn main() {
 
     // Deterministic context + dependency-graph cache (as the app does).
     let ctx = scryer_extract::extract_context(project_path).expect("extraction");
-    let edges = scryer_core::build_edges::BuildEdges {
-        external_imports: Vec::new(),
-        symbol_edges: ctx
-            .symbol_edges
-            .iter()
-            .map(|e| scryer_core::build_edges::CachedEdge { src: e.src.clone(), dst: e.dst.clone(), guessed: e.guessed })
-            .collect(),
-    };
+    let edges = ctx.build_edges();
     scryer_core::build_edges::write_build_edges(project_path, &edges).expect("edge cache");
 
     // Seed the skeleton mechanically (A2) into a fresh model.
