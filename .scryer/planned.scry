@@ -13113,21 +13113,6 @@
       ]
     },
     {
-      "id": "node-1xmmpb",
-      "kind": "container",
-      "name": "Clojure Grammar",
-      "parentId": "node-1",
-      "technology": "tree-sitter grammar (C)",
-      "description": "Upstream's generated tree-sitter Clojure parser, vendored into the workspace because the published crate collides with ours on tree-sitter's `links` native library.",
-      "responsibilities": [
-        {
-          "id": "resp-yhdnmg",
-          "statement": "**When** Clojure source is parsed, **provide** the compiled grammar it is parsed with",
-          "lastTouchedAt": 1789073076
-        }
-      ]
-    },
-    {
       "id": "node-9r9vds",
       "kind": "symbol",
       "name": "collect_clojure",
@@ -16885,18 +16870,6 @@
       "src": "node-389",
       "dst": "node-680",
       "label": "watches report dirs"
-    },
-    {
-      "id": "link-node-5-node-1xmmpb",
-      "src": "node-5",
-      "dst": "node-1xmmpb",
-      "label": "parses Clojure sources with"
-    },
-    {
-      "id": "link-node-9-node-1xmmpb",
-      "src": "node-9",
-      "dst": "node-1xmmpb",
-      "label": "highlights Clojure sources with"
     }
   ],
   "groups": [

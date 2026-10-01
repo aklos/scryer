@@ -3579,7 +3579,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-c",
  "tree-sitter-c-sharp",
- "tree-sitter-clojure",
+ "tree-sitter-clojure-orchard",
  "tree-sitter-cpp",
  "tree-sitter-go",
  "tree-sitter-highlight",
@@ -3639,7 +3639,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-c",
  "tree-sitter-c-sharp",
- "tree-sitter-clojure",
+ "tree-sitter-clojure-orchard",
  "tree-sitter-cpp",
  "tree-sitter-go",
  "tree-sitter-java",
@@ -4960,11 +4960,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "tree-sitter-clojure"
-version = "0.1.0"
+name = "tree-sitter-clojure-orchard"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67b854ba5935d62a713280b867c09cae08c6ad2286895734b5550ed02122d8fd"
 dependencies = [
  "cc",
- "tree-sitter",
  "tree-sitter-language",
 ]
 

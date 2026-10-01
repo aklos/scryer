@@ -13098,21 +13098,6 @@
       ]
     },
     {
-      "id": "node-1xmmpb",
-      "kind": "container",
-      "name": "Clojure Grammar",
-      "parentId": "node-1",
-      "technology": "tree-sitter grammar (C)",
-      "description": "Upstream's generated tree-sitter Clojure parser, vendored into the workspace because the published crate collides with ours on tree-sitter's `links` native library.",
-      "responsibilities": [
-        {
-          "id": "resp-yhdnmg",
-          "statement": "**When** Clojure source is parsed, **provide** the compiled grammar it is parsed with",
-          "lastTouchedAt": 1789073173
-        }
-      ]
-    },
-    {
       "id": "node-1efzfr",
       "kind": "symbol",
       "name": "resolve_clj_ns",
@@ -16870,18 +16855,6 @@
       "src": "node-669",
       "dst": "node-435",
       "label": "lists project files"
-    },
-    {
-      "id": "link-node-5-node-1xmmpb",
-      "src": "node-5",
-      "dst": "node-1xmmpb",
-      "label": "parses Clojure sources with"
-    },
-    {
-      "id": "link-node-9-node-1xmmpb",
-      "src": "node-9",
-      "dst": "node-1xmmpb",
-      "label": "highlights Clojure sources with"
     }
   ],
   "groups": [
@@ -21796,11 +21769,6 @@
         "symbol": "ScryerServer"
       }
     ],
-    "resp-yhdnmg": [
-      {
-        "pattern": "crates/tree-sitter-clojure/**"
-      }
-    ],
     "resp-z9kn5w": [
       {
         "pattern": "crates/scryer-mcp/src/tools/misc.rs",
@@ -23619,12 +23587,6 @@
         "symbol": "tool_schemas_stay_within_budget"
       }
     ],
-    "resp-yhdnmg": [
-      {
-        "pattern": "crates/tree-sitter-clojure/src/lib.rs",
-        "symbol": "grammar_loads_and_parses"
-      }
-    ],
     "resp-z9kn5w": [
       {
         "pattern": "crates/scryer-mcp/src/tools/nodes.rs",
@@ -23633,11 +23595,6 @@
     ]
   },
   "boundaries": {
-    "node-1xmmpb": [
-      {
-        "pattern": "crates/tree-sitter-clojure/**/*"
-      }
-    ],
     "node-2": [
       {
         "pattern": "src/**/*"

@@ -28,10 +28,10 @@ tree-sitter-c = "0.24"
 tree-sitter-cpp = "0.23"
 tree-sitter-c-sharp = "0.23"
 tree-sitter-php = "0.24"
-# Vendored, NOT the crates.io crate: upstream depends on `tree-sitter` directly
-# and `tree-sitter` sets `links = "tree-sitter"`, so it cannot coexist with our
-# 0.26. See crates/tree-sitter-clojure/README.md.
-tree-sitter-clojure = { path = "../tree-sitter-clojure" }
+# The grammar-orchard fork, not `tree-sitter-clojure`: that crate depends on
+# `tree-sitter` ^0.25 directly, and `links = "tree-sitter"` forbids a second
+# copy beside our 0.26. Renamed so call sites read `tree_sitter_clojure`.
+tree-sitter-clojure = { package = "tree-sitter-clojure-orchard", version = "0.2.8" }
 
 [dev-dependencies]
 tempfile = "3"
