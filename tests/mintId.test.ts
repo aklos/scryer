@@ -5,8 +5,8 @@
  * in sight does not.
  */
 import { describe, expect, it } from "vitest";
-import { addNode, mintId, nextNodeId, nextResponsibilityId } from "../src/viewmodel";
-import type { ScryModel } from "../src/viewmodel";
+import { addNode, mintId, nextNodeId, nextResponsibilityId } from "../src/entities/model/viewmodel";
+import type { ScryModel } from "../src/entities/model/viewmodel";
 
 const model = (ids: string[]): ScryModel =>
   ({

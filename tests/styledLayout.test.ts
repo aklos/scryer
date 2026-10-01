@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { builtinStyles } from "../src/styles";
-import { classifyStyledEdge, styledLayout, CARD_W } from "../src/layout/styled";
+import { builtinStyles } from "../src/entities/model/styles";
+import { classifyStyledEdge, styledLayout, CARD_W } from "../src/widgets/diagram-canvas/styled";
 
 const style = (name: string) => builtinStyles.find((s) => s.name === name)!;
 
@@ -174,6 +174,21 @@ describe("composition", () => {
         targetGhost: true,
         otherDef: lib,
         otherLayer: "domain",
+      }),
+    ).toBe("violation");
+    // The library's facade: reached from the driven side, not by the matrix.
+    expect(
+      classifyStyledEdge(hex, "infrastructure", undefined, {
+        targetGhost: true,
+        otherDef: lib,
+        otherLayer: "composition",
+      }),
+    ).toBe("implied");
+    expect(
+      classifyStyledEdge(hex, "application", undefined, {
+        targetGhost: true,
+        otherDef: lib,
+        otherLayer: "composition",
       }),
     ).toBe("violation");
     // Without a module-imported target the outbound rule still applies.

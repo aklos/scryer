@@ -184,7 +184,7 @@ pub(crate) fn check_report(
     warnings.extend(scryer_extract::anchors::whole_symbol_warnings(&working, project));
     failures.extend(warnings.into_iter().map(|w| format!("validator: {w}")));
     failures.extend(
-        scryer_core::validate::check_conformance(&working, &scryer_core::style::Styles::load(project))
+        scryer_core::validate::check_conformance(&working, &scryer_core::load_styles(project))
             .into_iter()
             .map(|w| format!("conformance: {w}")),
     );
@@ -199,7 +199,7 @@ pub(crate) fn check_report(
                 symbol_edges: ctx
                     .symbol_edges
                     .iter()
-                    .map(|e| scryer_core::build_edges::CachedEdge { src: e.src.clone(), dst: e.dst.clone() })
+                    .map(|e| scryer_core::build_edges::CachedEdge { src: e.src.clone(), dst: e.dst.clone(), guessed: e.guessed })
                     .collect(),
                 external_imports: ctx
                     .external_imports
@@ -215,7 +215,7 @@ pub(crate) fn check_report(
             let files = scryer_extract::list_project_files(project);
             let report = scryer_core::style_health::check_code(
                 &working,
-                &scryer_core::style::Styles::load(project),
+                &scryer_core::load_styles(project),
                 &derived,
                 &edges.external_imports,
                 Some(&files),

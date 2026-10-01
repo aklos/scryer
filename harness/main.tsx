@@ -12,9 +12,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import "../src/index.css";
-import { DiagramView } from "../src/DiagramView";
-import { setNodePosition, type ScryModel } from "../src/viewmodel";
-import type { ModelDiff } from "../src/planDiff";
+import { DiagramView } from "../src/widgets/diagram-canvas/DiagramView";
+import { setNodePosition, type ScryModel } from "../src/entities/model/viewmodel";
+import type { ModelDiff } from "../src/entities/model/planDiff";
 
 const EMPTY_DIFF: ModelDiff = { changes: [] };
 

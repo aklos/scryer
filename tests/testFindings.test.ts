@@ -10,8 +10,8 @@ import {
   testFindings,
   type ClaimProbeStatus,
   type ClaimTestStatus,
-} from "../src/health";
-import type { Node, ScryModel } from "../src/viewmodel";
+} from "../src/entities/model/health";
+import type { Node, ScryModel } from "../src/entities/model/viewmodel";
 
 const node = (id: string, parentId: string | undefined, over: Partial<Node> = {}): Node => ({
   id,

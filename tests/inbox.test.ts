@@ -8,7 +8,7 @@
  * tier; and an amendment card carries the approved text beside the amended.
  */
 import { describe, expect, it } from "vitest";
-import type { ClaimProbeStatus, ClaimTestStatus } from "../src/health";
+import type { ClaimProbeStatus, ClaimTestStatus } from "../src/entities/model/health";
 import {
   buildInboxCards,
   closeGateItems,
@@ -18,9 +18,9 @@ import {
   type InboxCard,
   type InboxInput,
   type Refusal,
-} from "../src/inbox";
-import { planDiff } from "../src/planDiff";
-import type { ScryModel } from "../src/viewmodel";
+} from "../src/features/inbox/inbox";
+import { planDiff } from "../src/entities/model/planDiff";
+import type { ScryModel } from "../src/entities/model/viewmodel";
 
 type N = ScryModel["nodes"][number];
 type R = NonNullable<N["responsibilities"]>[number];
@@ -188,6 +188,21 @@ describe("buildInboxCards", () => {
     const cards = buildInboxCards(input({ model: m, committed }));
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({ tier: "contract", kind: "contract-reword", before: "old wording", after: "new wording" });
+  });
+
+  it("lists a cross-container link's other dependents, never the link's own source", () => {
+    const nodes = [
+      node("client", { kind: "container" }),
+      node("server", { kind: "container" }),
+      node("shared", { kind: "container" }),
+    ];
+    const serverLink = { id: "l-server", src: "server", dst: "shared", label: "runs" };
+    const committed = model(nodes, { links: [serverLink] });
+    const m = model(nodes, { links: [serverLink, { id: "l-client", src: "client", dst: "shared", label: "predicts with" }] });
+    const cards = buildInboxCards(input({ model: m, committed }));
+    const card = cards.find((c) => c.kind === "contract-link")!;
+    expect(card.statement).toBe("CLIENT → SHARED — predicts with");
+    expect(card.evidence.dependents).toEqual(["SERVER"]);
   });
 
   it("gives amendment cards the approved and amended text, additions only the new text", () => {

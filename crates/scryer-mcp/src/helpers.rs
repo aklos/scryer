@@ -6,7 +6,7 @@ use scryer_core::{Kind, ModelLock, ModelRef, Node, Responsibility, ScryModel};
 
 /// The style table for a project: built-ins plus `.scryer/styles/*.json`.
 pub(crate) fn styles_for(model_ref: &ModelRef) -> Styles {
-    Styles::load(model_ref.project_path())
+    scryer_core::load_styles(model_ref.project_path())
 }
 use std::collections::HashMap;
 
@@ -711,7 +711,7 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
             let derived = scryer_core::build_edges::derive_graph(&committed, &edges);
             scryer_core::style_health::check_code(
                 &committed,
-                &Styles::load(model_ref.project_path()),
+                &scryer_core::load_styles(model_ref.project_path()),
                 &derived,
                 &edges.external_imports,
                 None,
@@ -869,7 +869,7 @@ pub(crate) fn apply_resp_anchor_entries(
 ) -> (Vec<String>, bool) {
     let mut normalized: Vec<String> = Vec::new();
     {
-        let mut resolver = scryer_extract::anchors::ExtentResolver::new(project);
+        let mut resolver = scryer_extract::anchors::SpanReader::new(project);
         for entry in &mut entries {
             for loc in &mut entry.locations {
                 let (Some(sym), Some(line)) = (loc.symbol.clone(), loc.line) else {

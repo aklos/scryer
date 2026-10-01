@@ -45,7 +45,7 @@ fn job_permits(job: &Job, pool: usize) -> u32 {
 }
 
 async fn run_session(
-    runtime: &scryer_acp::AcpRuntime,
+    runtime: &scryer_acp::AgentSync,
     binary: &str,
     kind: &scryer_acp::AgentKind,
     cwd: &str,
@@ -59,7 +59,7 @@ async fn run_session(
     runtime
         .start_session(
             binary.to_string(),
-            scryer_acp::runtime::LaunchMode::Cli { kind: kind.clone() },
+            scryer_acp::LaunchMode::Cli { kind: kind.clone() },
             cwd.to_string(),
             model_name.to_string(),
             effort.to_string(),
@@ -97,7 +97,7 @@ async fn main() {
         symbol_edges: ctx
             .symbol_edges
             .iter()
-            .map(|e| scryer_core::build_edges::CachedEdge { src: e.src.clone(), dst: e.dst.clone() })
+            .map(|e| scryer_core::build_edges::CachedEdge { src: e.src.clone(), dst: e.dst.clone(), guessed: e.guessed })
             .collect(),
     };
     scryer_core::build_edges::write_build_edges(project_path, &edges).expect("edge cache");
@@ -175,7 +175,7 @@ async fn main() {
         scryer_acp::AgentLaunch::Acp { .. } => panic!("bench needs a CLI agent"),
     };
 
-    let runtime = scryer_acp::AcpRuntime::new();
+    let runtime = scryer_acp::AgentSync::open();
     let sem = Arc::new(tokio::sync::Semaphore::new(pool + 1));
     let results: Arc<tokio::sync::Mutex<Vec<(String, f64, scryer_acp::Usage)>>> =
         Arc::new(tokio::sync::Mutex::new(Vec::new()));

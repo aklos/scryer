@@ -210,12 +210,12 @@ fn lockstep_fixtures_are_current() {
 }
 
 /// The frontend renders each style's drawing without a round trip, so it
-/// carries a copy of the built-in style table (`src/styles/builtin.json`).
+/// carries a copy of the built-in style table (`src/entities/model/styles/builtin.json`).
 /// This pins that copy to `Styles::builtin()`; the health report ships the
 /// project's full table (custom styles included) on top of it.
 #[test]
 fn builtin_styles_match_the_frontend_copy() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../src/styles/builtin.json");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../src/entities/model/styles/builtin.json");
     let styles = scryer_core::style::Styles::builtin();
     let defs: Vec<&scryer_core::style::StyleDef> = styles.iter().collect();
     let rendered = serde_json::to_string_pretty(&defs).unwrap() + "\n";
@@ -228,7 +228,7 @@ fn builtin_styles_match_the_frontend_copy() {
     });
     assert_eq!(
         on_disk, rendered,
-        "style.rs built-ins no longer match src/styles/builtin.json. If the change is \
+        "style.rs built-ins no longer match src/entities/model/styles/builtin.json. If the change is \
          intentional: UPDATE_LOCKSTEP=1 cargo test -p scryer-core --test lockstep"
     );
 }

@@ -7,7 +7,7 @@
  * identifier or prose — is ever consumed as a marker.
  */
 import { describe, expect, it } from "vitest";
-import { earsTestable, earsTokenize, hasMarkup, lintEars, parseMarkup, serializeEars, stripMarkup } from "../src/markup";
+import { earsTestable, earsTokenize, hasMarkup, lintEars, parseMarkup, serializeEars, stripMarkup } from "../src/features/markup/markup";
 
 describe("parseMarkup", () => {
   it("splits a marked statement into anchor / plain segments", () => {

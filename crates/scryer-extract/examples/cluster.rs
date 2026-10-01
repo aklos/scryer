@@ -99,10 +99,6 @@ fn main() {
     eprintln!("\ntotal wall time: {:?}", t0.elapsed());
 }
 
-fn file_of(key: &str) -> Option<&str> {
-    key.split('#').next()
-}
-
 fn files_by_dir<'a>(paths: &[&'a str]) -> HashMap<&'a str, Vec<usize>> {
     let mut by_dir: HashMap<&str, Vec<usize>> = HashMap::new();
     for (i, p) in paths.iter().enumerate() {

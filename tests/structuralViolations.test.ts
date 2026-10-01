@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { ModelHealthReport, StyleViolation } from "../src/health";
-import { structuralBySubtree, structuralNotice } from "../src/health";
-import { buildReviewIndex } from "../src/special/NeedsReviewPage";
-import { buildDiagramScene } from "../src/diagramLayout";
-import type { ScryModel } from "../src/viewmodel";
+import type { ModelHealthReport, StyleViolation } from "../src/entities/model/health";
+import { structuralBySubtree, structuralNotice } from "../src/entities/model/health";
+import { buildReviewIndex } from "../src/pages/needs-review/NeedsReviewPage";
+import { buildDiagramScene } from "../src/widgets/diagram-canvas/diagramLayout";
+import type { ScryModel } from "../src/entities/model/viewmodel";
 
 /** A hexagonal service with a declared domain → infrastructure link (which the
  *  matrix forbids) and a legal application → domain one, beside an unstyled
@@ -98,10 +98,16 @@ describe("styled map: red comes from the report", () => {
 
   it("marks red only the edges the structural report charges", async () => {
     const quiet = await edge([], "l-bad");
-    expect(quiet?.violation).toBeUndefined();
+    expect(quiet?.violations).toBeUndefined();
     const red = await edge([forbidden], "l-bad");
-    expect(red?.violation).toBe(forbidden.detail);
+    expect(red?.violations).toEqual([forbidden.detail]);
     expect(red?.implied).toBe(false);
     expect((await edge([forbidden], "l-ok"))?.implied).toBe(true);
+  });
+
+  it("carries every reason charged on one pair, each once", async () => {
+    const second = { ...forbidden, detail: `${forbidden.detail} (second import)` };
+    const red = await edge([forbidden, second, forbidden], "l-bad");
+    expect(red?.violations).toEqual([forbidden.detail, second.detail]);
   });
 });

@@ -17,9 +17,9 @@
  *    drilling between levels, which `DiagramView` animates for us.
  */
 
-import { ProjectPicker } from "../../../src/ProjectPicker";
-import type { ModelStorage } from "../../../src/hooks/useModelStorage";
-import type { ModelBuild } from "../../../src/hooks/useModelBuild";
+import { ProjectPicker } from "../../../src/pages/project-picker/ProjectPicker";
+import type { ModelStorage } from "../../../src/features/model-storage/useModelStorage";
+import type { ModelBuild } from "../../../src/features/model-build/useModelBuild";
 import { paymentsModel } from "../../fixtures";
 import {
   WorkspaceShell,

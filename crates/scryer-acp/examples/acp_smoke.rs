@@ -45,12 +45,12 @@ async fn main() {
     };
     eprintln!("[smoke] {binary} (model {model_name:?}, effort {effort:?}) on {project}");
 
-    let runtime = scryer_acp::AcpRuntime::new();
+    let runtime = scryer_acp::AgentSync::open();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let session = runtime
         .start_session(
             binary,
-            scryer_acp::runtime::LaunchMode::Acp { kind },
+            scryer_acp::LaunchMode::Acp { kind },
             project.clone(),
             model_name,
             effort,

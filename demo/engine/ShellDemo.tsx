@@ -8,8 +8,8 @@
  */
 
 import { useCallback, useState } from "react";
-import type { WorkspaceView } from "../../src/TopBar";
-import type { Selected } from "../../src/NodePage";
+import type { WorkspaceView } from "../../src/widgets/top-bar/TopBar";
+import type { Selected } from "../../src/pages/node/NodePage";
 import { paymentsModel, committedModel, healthReport } from "../fixtures";
 import { WorkspaceShell, IDLE_AGENT, IDLE_BUILD, type WorkspaceState } from "./Workspace";
 

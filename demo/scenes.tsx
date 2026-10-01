@@ -8,16 +8,16 @@
  */
 
 import type { ReactNode } from "react";
-import { DiagramView } from "../src/DiagramView";
-import { NodePage } from "../src/NodePage";
-import { NeedsReviewPage } from "../src/SpecialPages";
-import { Powerline } from "../src/Powerline";
-import { buildReviewIndex } from "../src/SpecialPages";
-import { EMPTY_DIFF } from "../src/planDiff";
-import { planCounts } from "../src/changeMarks";
-import type { AgentSession } from "../src/hooks/useAgentSession";
-import type { ModelBuild } from "../src/hooks/useModelBuild";
-import type { ResolvedLaunch } from "../src/SettingsPanel";
+import { DiagramView } from "../src/widgets/diagram-canvas/DiagramView";
+import { NodePage } from "../src/pages/node/NodePage";
+import { NeedsReviewPage } from "../src/pages";
+import { Powerline } from "../src/widgets/top-bar/Powerline";
+import { buildReviewIndex } from "../src/pages";
+import { EMPTY_DIFF } from "../src/entities/model/planDiff";
+import { planCounts } from "../src/features/change-marks/changeMarks";
+import type { AgentSession } from "../src/features/agent-launch/useAgentSession";
+import type { ModelBuild } from "../src/features/model-build/useModelBuild";
+import type { ResolvedLaunch } from "../src/widgets/settings-panel/SettingsPanel";
 import { Treated } from "./treatment";
 import {
   paymentsModel,

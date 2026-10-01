@@ -10,9 +10,9 @@
  * services inside the platform), with links the diagram can lay out.
  */
 
-import type { ScryModel, Node, Link, DriftScope } from "../src/viewmodel";
-import { SCRY_VERSION } from "../src/viewmodel";
-import type { ModelHealthReport, HealthCounts } from "../src/health";
+import type { ScryModel, Node, Link, DriftScope } from "../src/entities/model/viewmodel";
+import { SCRY_VERSION } from "../src/entities/model/viewmodel";
+import type { ModelHealthReport, HealthCounts } from "../src/entities/model/health";
 
 // --- Context tier: people, the platform, and the outside systems ------------
 

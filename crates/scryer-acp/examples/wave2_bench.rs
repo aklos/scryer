@@ -69,6 +69,7 @@ async fn main() {
             .map(|e| scryer_core::build_edges::CachedEdge {
                 src: e.src.clone(),
                 dst: e.dst.clone(),
+                guessed: e.guessed,
             })
             .collect(),
     };
@@ -140,13 +141,13 @@ async fn main() {
         if no_code { "index only" } else { "evidence embedded" },
     );
 
-    let runtime = scryer_acp::AcpRuntime::new();
+    let runtime = scryer_acp::AgentSync::open();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let start = std::time::Instant::now();
     runtime
         .start_session(
             binary,
-            scryer_acp::runtime::LaunchMode::Cli { kind },
+            scryer_acp::LaunchMode::Cli { kind },
             project.to_string(),
             model_name,
             effort,

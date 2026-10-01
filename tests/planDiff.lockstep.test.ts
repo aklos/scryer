@@ -15,8 +15,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { planDiff, type ElementChange, type ModelDiff } from "../src/planDiff";
-import type { ScryModel } from "../src/viewmodel";
+import { planDiff, type ElementChange, type ModelDiff } from "../src/entities/model/planDiff";
+import type { ScryModel } from "../src/entities/model/viewmodel";
 
 const FIXTURE_DIR = new URL("../crates/scryer-core/tests/lockstep/", import.meta.url).pathname;
 

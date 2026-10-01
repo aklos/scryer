@@ -910,6 +910,7 @@ mod tests {
             symbol_edges: vec![scryer_core::build_edges::CachedEdge {
                 src: "src/auth.rs#login@10".into(),
                 dst: "src/session.rs#Session@99".into(),
+                guessed: false,
             }],
         };
         scryer_core::build_edges::write_build_edges(dir.path(), &edges).unwrap();
