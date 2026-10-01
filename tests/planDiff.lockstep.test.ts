@@ -14,11 +14,12 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { planDiff, type ElementChange, type ModelDiff } from "../src/planDiff";
 import type { ScryModel } from "../src/viewmodel";
 
-const FIXTURE_DIR = new URL("../crates/scryer-core/tests/lockstep/", import.meta.url).pathname;
+const FIXTURE_DIR = fileURLToPath(new URL("../crates/scryer-core/tests/lockstep/", import.meta.url));
 
 /** Rust iterates id-sorted BTreeMaps, the port iterates model order — element
  *  order is not part of the contract, so compare order-insensitively. The
