@@ -655,10 +655,11 @@ impl ScryerServer {
 
     #[tool(
         description = "The front door for a CODING task: pass the `task` in a few words and/or the \
-         project-relative `files` it touches. Returns, scoped to that: per file the governing \
-         node chain and `placement`, anchored claims (`untested` flagged) and binding directives; per task the \
-         best-matching nodes; pending entries and drift scopes inside the scope; matching rule \
-         slugs; a `phase` verdict; and the loop `state` line. Replaces the get_health / \
+         project-relative `files` it touches. Returns, scoped to that and capped at ~4k chars: per \
+         file its path, `placement`, one line per anchored claim (`untested` flagged) and binding \
+         directives; the best-matching nodes by id; pending entries and drift scopes as one-liners; \
+         matching rule slugs; a `phase` verdict; and the loop `state` line. `locate` / `read_model` \
+         have the detail. Replaces the get_health / \
          search_model / read_model dance for coding sessions.\n\
          Rules: orient-phases, loop-orient, directives-binding, styles"
     )]
@@ -715,13 +716,26 @@ impl ScryerServer {
                         }
                         chain.insert(b.id.clone());
                     }
+                    // One line per claim: the statement is what the agent
+                    // acts on; anchors and tests are a `locate` away.
+                    let claims: Vec<String> = report
+                        .result
+                        .claims
+                        .iter()
+                        .take(ORIENT_CLAIMS_PER_FILE)
+                        .map(claim_line)
+                        .collect();
+                    let more = report.result.claims.len().saturating_sub(ORIENT_CLAIMS_PER_FILE);
+                    let mut directives: Vec<String> = report.result.own_directives.clone();
+                    for inh in &report.result.inherited_directives {
+                        directives.extend(inh.directives.iter().map(|d| format!("{d} (from {})", inh.name)));
+                    }
                     let mut v = serde_json::json!({
                         "file": file,
                         "path": report.path,
-                        "ownerChain": report.result.owner_chain,
-                        "claims": report.result.claims,
-                        "ownDirectives": report.result.own_directives,
-                        "inheritedDirectives": report.result.inherited_directives,
+                        "claims": claims,
+                        "moreClaims": (more > 0).then(|| format!("{more} more — locate {{file}}")),
+                        "directives": directives,
                         "placement": report.placement.as_ref().map(|p| p.line()),
                     });
                     strip_fields_compact(&mut v);
@@ -775,10 +789,8 @@ impl ScryerServer {
                 }
             }
             scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-            for (score, n) in scored.iter().take(3) {
+            for (_, n) in scored.iter().take(3) {
                 finest.insert(n.id.clone());
-                let resps: Vec<&str> =
-                    n.responsibilities.iter().map(|r| r.statement.as_str()).collect();
                 // Testable claims on this node with no test attached — same
                 // gate as health's `untested` (person/external never expect
                 // tests), surfaced per match so the test gap is in view from
@@ -798,15 +810,14 @@ impl ScryerServer {
                         })
                         .count()
                 };
+                // Where to look, not what is there: `read_model {node}` has the
+                // claims when the agent needs them.
                 let mut v = serde_json::json!({
                     "id": n.id,
                     "kind": kind_str(&n.kind),
-                    "name": n.name,
                     "path": breadcrumb(&working, &n.id),
-                    "score": (score * 100.0).round() / 100.0,
-                    "responsibilities": resps,
+                    "claims": n.responsibilities.len(),
                     "untestedClaims": if untested > 0 { Some(untested) } else { None },
-                    "inheritedDirectives": scryer_core::inherited_directives(&working, &n.id),
                 });
                 strip_fields_compact(&mut v);
                 matches_out.push(v);
@@ -883,10 +894,17 @@ impl ScryerServer {
             })
             .collect();
         let pending_total = scoped_pending.len();
-        let pending_out: Vec<serde_json::Value> = scoped_pending
+        let pending_out: Vec<String> = scoped_pending
             .iter()
-            .take(20)
-            .map(|ch| serde_json::to_value(ch).unwrap_or(serde_json::Value::Null))
+            .take(ORIENT_PENDING)
+            .map(|ch| {
+                let what: Vec<String> = ch
+                    .changes
+                    .iter()
+                    .filter_map(|c| serde_json::to_value(c).ok()?["type"].as_str().map(str::to_string))
+                    .collect();
+                format!("{} {}: {}", what.join("+"), ch.id, clip(&ch.label, 80))
+            })
             .collect();
 
         // Drift scopes inside the scope (only meaningful once a reconcile
@@ -897,31 +915,23 @@ impl ScryerServer {
                 .iter()
                 .filter(|sc| scope.contains(&sc.node_id))
                 .map(|sc| {
-                    // A scope's changed files are listed only where they meet
-                    // the task: the files the caller named, else a sample. The
-                    // total says how much more the scope carries.
-                    let named: Vec<&String> = sc
-                        .changed_files
-                        .iter()
-                        .filter(|f| files.iter().any(|g| g == *f))
-                        .collect();
-                    let shown: Vec<&String> = if named.is_empty() {
-                        sc.changed_files.iter().take(5).collect()
-                    } else {
-                        named
-                    };
-                    serde_json::json!({
-                        "nodeId": sc.node_id,
-                        "nodeName": sc.node_name,
-                        "changedFiles": shown,
-                        "changedFilesTotal": sc.changed_files.len(),
-                    })
+                    serde_json::json!(format!(
+                        "{} ({}): {} changed file(s) — get_drift",
+                        sc.node_name,
+                        sc.node_id,
+                        sc.changed_files.len()
+                    ))
                 })
                 .collect()
         } else {
             Vec::new()
         };
         let drift_total = drift_out.len();
+        let mut drift_out = drift_out;
+        if drift_total > ORIENT_DRIFT {
+            drift_out.truncate(ORIENT_DRIFT);
+            drift_out.push(serde_json::json!(format!("{} more scope(s) — get_drift", drift_total - ORIENT_DRIFT)));
+        }
 
         // The 2-3 rules the task is about, by slug — the tool the agent reaches
         // for next names the same slugs, so the bodies are fetched on demand.
@@ -929,7 +939,7 @@ impl ScryerServer {
             Some(t) => scryer_core::rules::lookup(t)
                 .iter()
                 .take(3)
-                .map(|r| serde_json::json!({ "id": r.slug, "title": r.title }))
+                .map(|r| serde_json::json!(r.slug))
                 .collect(),
             None => Vec::new(),
         };
@@ -942,7 +952,6 @@ impl ScryerServer {
         };
 
         let mut payload = serde_json::json!({
-            "task": task,
             "files": files_out,
             "matches": matches_out,
             "pending": pending_out,
@@ -953,9 +962,7 @@ impl ScryerServer {
             "state": status_header(&model_ref),
         });
         strip_fields_compact(&mut payload);
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()),
-        )]))
+        Ok(CallToolResult::success(vec![Content::text(fit_orient(payload))]))
     }
 
     #[tool(
@@ -1299,9 +1306,8 @@ impl ScryerServer {
             changes_out.push(v);
         }
 
-        // The open-change registry rides every pending read: a fresh session
-        // resumes a change from here (open_change {change_id}) instead of doing
-        // archaeology on the flat queue.
+        // The open-change registry rides every pending read, so the queue reads
+        // per session instead of as one flat pile.
         let open_changes: Vec<serde_json::Value> = planned
             .changes
             .iter()
@@ -1971,6 +1977,76 @@ impl ScryerServer {
     }
 }
 
+/// Claims shown per file in `orient`; the rest are counted.
+const ORIENT_CLAIMS_PER_FILE: usize = 12;
+/// Drift scopes shown in `orient`; the rest are counted.
+const ORIENT_DRIFT: usize = 5;
+/// Pending entries shown in `orient`; the rest are counted.
+const ORIENT_PENDING: usize = 10;
+/// The ceiling on `orient`'s whole answer. It is read on every coding task, so
+/// it is a pointer into the model, never the model itself.
+const ORIENT_MAX_CHARS: usize = 4000;
+
+fn clip(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
+    }
+}
+
+/// `id: statement [flags] ⚑ directive…` — one claim as `orient` shows it.
+fn claim_line(c: &scryer_core::locate::LocatedClaim) -> String {
+    let mut line = format!(
+        "{}: {}",
+        c.id,
+        clip(c.statement.as_deref().unwrap_or("(data shape)"), 140)
+    );
+    for (on, flag) in [
+        (c.untested, " [untested]"),
+        (c.stale == Some(true), " [stale]"),
+        (c.vagrant == Some(true), " [vagrant]"),
+        (c.via_test, " [via test]"),
+    ] {
+        if on {
+            line.push_str(flag);
+        }
+    }
+    for d in &c.directives {
+        line.push_str(&format!(" ⚑ {d}"));
+    }
+    line
+}
+
+/// Serialize `orient`'s payload within [`ORIENT_MAX_CHARS`]: shed the per-file
+/// claim lists from the last file backwards, then the matches, until it fits —
+/// each shed list is replaced by a count so nothing is silently missing.
+fn fit_orient(mut payload: serde_json::Value) -> String {
+    let len = |p: &serde_json::Value| serde_json::to_string(p).map(|s| s.len()).unwrap_or(0);
+    let nfiles = payload["files"].as_array().map_or(0, Vec::len);
+    for i in (0..nfiles).rev() {
+        if len(&payload) <= ORIENT_MAX_CHARS {
+            break;
+        }
+        let f = &mut payload["files"][i];
+        let n = f["claims"].as_array().map_or(0, Vec::len)
+            + f["moreClaims"].as_str().and_then(|m| m.split(' ').next()?.parse::<usize>().ok()).unwrap_or(0);
+        if let Some(obj) = f.as_object_mut() {
+            if obj.remove("claims").is_some() {
+                obj.insert("moreClaims".into(), serde_json::json!(format!("{n} claims — locate {{file}}")));
+            }
+        }
+    }
+    if len(&payload) > ORIENT_MAX_CHARS {
+        if let Some(obj) = payload.as_object_mut() {
+            if let Some(m) = obj.remove("matches") {
+                let ids: Vec<&str> = m.as_array().into_iter().flatten().filter_map(|n| n["id"].as_str()).collect();
+                obj.insert("matches".into(), serde_json::json!(ids));
+            }
+        }
+    }
+    serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2009,8 +2085,6 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
-            vagrant_origin: None,
-            approved_statement: None,
         }
     }
 
@@ -2717,8 +2791,6 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
-            vagrant_origin: None,
-            approved_statement: None,
         });
         m.nodes.push(sys);
         let mut leaf = node("leaf", Kind::Symbol, "leafFn", Some("sys"));
@@ -2731,8 +2803,6 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
-            vagrant_origin: None,
-            approved_statement: None,
         });
         m.nodes.push(leaf);
         scryer_core::write_model_at(&model_ref, &m).unwrap();
@@ -2888,8 +2958,8 @@ mod tests {
 
     /// orient bundles the five-call dance: per-file governing chain +
     /// directives, task-matched nodes, the pending entries scoped to that
-    /// region (an unrelated sibling's work stays out), the matching rules in
-    /// full, and a phase verdict.
+    /// region (an unrelated sibling's work stays out), the matching rule slugs,
+    /// and a phase verdict.
     #[test]
     fn orient_bundles_scope_pending_rules_and_phase() {
         let (server, _dir, project, model_ref) = locate_project();
@@ -2916,9 +2986,10 @@ mod tests {
                 .unwrap(),
         );
 
-        // File side: the chain and the binding directives ride along.
-        assert_eq!(v["files"][0]["ownerChain"][0]["id"], "vt");
-        let inh = serde_json::to_string(&v["files"][0]["inheritedDirectives"]).unwrap();
+        // File side: one line per claim, and the binding directives ride along.
+        let claims = serde_json::to_string(&v["files"][0]["claims"]).unwrap();
+        assert!(claims.contains("r-vt: rejects forged credentials"), "{claims}");
+        let inh = serde_json::to_string(&v["files"][0]["directives"]).unwrap();
         assert!(inh.contains("must never log tokens"), "{inh}");
 
         // Task side: the symbol matches on its name/claim.
@@ -2941,9 +3012,8 @@ mod tests {
 
         // Rules by slug: "symbol" names the symbols rule, capped at 3, no body.
         let rules = v["rules"].as_array().unwrap();
-        assert!(rules.iter().any(|r| r["id"] == "symbols"), "symbols rule rides along: {rules:?}");
+        assert!(rules.iter().any(|r| r == "symbols"), "symbols rule rides along: {rules:?}");
         assert!(rules.len() <= 3);
-        assert!(rules.iter().all(|r| r.get("body").is_none()), "bodies are fetched on demand");
 
         // Phase: pending intent exists, no drift baseline → plan-execution.
         let phase = v["phase"].as_str().unwrap();

@@ -83,29 +83,6 @@ pub(crate) struct GetPendingRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct OpenChangeRequest {
-    pub project: Option<String>,
-    /// Open a NEW change: the task in one sentence, as the dev put it.
-    pub rationale: Option<String>,
-    /// Resume an EXISTING open change by id instead.
-    pub change_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct SignOffRequest {
-    pub project: Option<String>,
-    /// The change to sign off; defaults to the session's current one.
-    pub change_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct CloseChangeRequest {
-    pub project: Option<String>,
-    /// The EMPTY open change to close; refused while it has tagged entries.
-    pub change_id: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RefileRequest {
     pub project: Option<String>,
     /// Bare ids of pending work to MOVE: node/group (carrier + everything under it), responsibility/link, a change id, or "unfiled".

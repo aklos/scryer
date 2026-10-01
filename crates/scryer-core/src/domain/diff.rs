@@ -705,8 +705,6 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
-            vagrant_origin: None,
-            approved_statement: None,
         }
     }
 

@@ -8,7 +8,6 @@ use rmcp::{
     service::{RequestContext, RoleServer},
     ErrorData as McpError, ServerHandler,
 };
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
@@ -17,14 +16,9 @@ pub struct ScryerServer {
     /// The tool list as advertised: the router's tools with their input
     /// schemas slimmed once at construction (see [`slim_schema`]).
     tools: Vec<Tool>,
-    /// The change this SESSION is writing into (set via `open_change`), scoped
-    /// to the project it was opened in. Deliberately in-memory only: the
-    /// ledger itself (registry + tags) is persisted in the plan, but "which
-    /// change am I writing to" is a per-session pointer — a fresh session sees
-    /// the open changes and re-selects, it does not inherit a stale one. The
-    /// server is stdio, one process per agent session, so process state IS
-    /// session state.
-    current_change: Arc<Mutex<Option<(PathBuf, String)>>>,
+    /// A session id pinned in-process (tests); otherwise the harness's own
+    /// (see [`ScryerServer::session_id`]).
+    session_override: Arc<Mutex<Option<String>>>,
 }
 
 impl ScryerServer {
@@ -51,7 +45,7 @@ impl ScryerServer {
         Self {
             tool_router,
             tools,
-            current_change: Arc::new(Mutex::new(None)),
+            session_override: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -61,31 +55,36 @@ impl ScryerServer {
         &self.tools
     }
 
-    /// A server whose session already has an open change on `project`, so a
-    /// test can exercise a plan write without staging the ledger first.
+    /// A server pinned to session `id` — how a test stands in for the
+    /// harness's session.
     #[cfg(test)]
-    pub(crate) fn with_change(project: &std::path::Path) -> Self {
+    pub(crate) fn for_session(id: &str) -> Self {
         let server = Self::new();
-        let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
-        let mut plan = scryer_core::read_planned_seeded_at(&model_ref).unwrap_or_default();
-        let id = scryer_core::changes::open_change(&mut plan, "test fixture", 0);
-        scryer_core::write_planned_at(&model_ref, &plan).unwrap();
-        server.set_session_change(Some((project.to_path_buf(), id)));
+        server.set_session(id);
         server
     }
 
-    /// The session's current change id, if one is set FOR THIS PROJECT — a
-    /// change opened in project A never tags writes into project B.
-    pub(crate) fn session_change(&self, model_ref: &scryer_core::ModelRef) -> Option<String> {
-        let cur = self.current_change.lock().ok()?;
-        let (project, id) = cur.as_ref()?;
-        (project == model_ref.project_path()).then(|| id.clone())
+    #[cfg(test)]
+    pub(crate) fn set_session(&self, id: &str) {
+        if let Ok(mut s) = self.session_override.lock() {
+            *s = Some(id.to_string());
+        }
     }
 
-    pub(crate) fn set_session_change(&self, value: Option<(PathBuf, String)>) {
-        if let Ok(mut cur) = self.current_change.lock() {
-            *cur = value;
+    /// The agent session this server serves. The server is stdio, one process
+    /// per agent session, and the harness names the session in its env.
+    pub(crate) fn session_id(&self) -> Option<String> {
+        if let Some(id) = self.session_override.lock().ok().and_then(|s| s.clone()) {
+            return Some(id);
         }
+        std::env::var("CLAUDE_CODE_SESSION_ID").ok().filter(|s| !s.is_empty())
+    }
+
+    /// The open change this session's plan writes land in, if one exists yet.
+    pub(crate) fn session_change(&self, model_ref: &scryer_core::ModelRef) -> Option<String> {
+        let sid = self.session_id()?;
+        let plan = scryer_core::read_planned_at(model_ref).ok()?;
+        scryer_core::changes::session_change(&plan, &sid).map(|c| c.id.clone())
     }
 }
 

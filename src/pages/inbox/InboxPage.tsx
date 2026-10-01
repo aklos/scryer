@@ -49,10 +49,6 @@ const TIER_META: Record<InboxTier, { label: string; cls: string }> = {
     label: "Survivor",
     cls: "bg-red-500/10 text-red-700 ring-red-500/25 dark:bg-red-400/10 dark:text-red-300 dark:ring-red-400/25",
   },
-  amendment: {
-    label: "Reworded after sign-off",
-    cls: "bg-violet-500/10 text-violet-700 ring-violet-500/25 dark:bg-violet-400/10 dark:text-violet-300 dark:ring-violet-400/25",
-  },
   vagrant: {
     label: "Undescribed",
     cls: "bg-orange-500/10 text-orange-700 ring-orange-500/25 dark:bg-orange-400/10 dark:text-orange-300 dark:ring-orange-400/25",
@@ -79,12 +75,6 @@ const TIER_META: Record<InboxTier, { label: string; cls: string }> = {
  *  count, a refusal's reason, the session's touch. Every other title restates
  *  the pill and is dropped. */
 const TITLED_KINDS = new Set<InboxCard["kind"]>(["survivor", "refused", "close-gate"]);
-
-/** The pill's text: the tier, narrowed by kind where the tier is ambiguous. */
-function pillLabel(card: InboxCard): string {
-  if (card.kind === "addition") return "Added after sign-off";
-  return TIER_META[card.tier].label;
-}
 
 function isEditableTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -363,7 +353,7 @@ function Card({
           belongs to is the filter's job, not the card's. */}
       <div className="flex min-w-0 items-center gap-2.5">
         <span className={`${PILL_BASE} ${meta.cls}`} title={card.title}>
-          {pillLabel(card)}
+          {TIER_META[card.tier].label}
           {card.concern && card.tier === "concern" && <span className="font-normal opacity-80">· {card.concern}</span>}
         </span>
         <span className="flex min-w-0 items-baseline gap-1 truncate text-xs text-[var(--text-muted)]" title={rationale && `Change: ${rationale}`}>
@@ -385,9 +375,7 @@ function Card({
         <div className="mt-2 text-xs text-[var(--text-tertiary)]">{card.title}</div>
       )}
       <div className="mt-2 font-mono text-sm leading-relaxed text-[var(--text)]">
-        {card.kind === "addition" ? (
-          <StatementText text={card.after ?? card.statement ?? ""} anchor={ANCHOR_CALM} />
-        ) : card.before !== undefined && card.after !== undefined ? (
+        {card.before !== undefined && card.after !== undefined ? (
           <WordDiffText from={stripMarkup(card.before)} to={stripMarkup(card.after)} />
         ) : card.statement ? (
           <StatementText text={card.statement} anchor={ANCHOR_CALM} />

@@ -25,15 +25,13 @@ const inboxModel: ScryModel = (() => {
   const wh = m.nodes.find((n) => n.id === "webhooks")!;
   const r = wh.responsibilities!.find((x) => x.id === "r-wh-2")!;
   r.vagrant = true;
-  r.vagrantOrigin = "amendment";
-  r.approvedStatement = "**If** a delivery fails, **then** retry with exponential backoff for up to 12 hours";
   r.lastTouchedAt = 1_700_000_500;
   const ledger = m.nodes.find((n) => n.id === "ledger")!;
   const stale = ledger.responsibilities!.find((x) => x.id === "r-ledger-2")!;
   stale.staleProposal = "**While** settlement is unconfirmed, **hold** the captured funds in a pending-settlement account";
   m.changes = [
     { id: "chg-1", rationale: "Refund support for captured payments", createdAt: 1_700_000_000 },
-    { id: "chg-2", rationale: "Harden webhook retries", createdAt: 1_700_000_100, signedOff: { at: 1_700_000_200, entries: {} } },
+    { id: "chg-2", rationale: "Harden webhook retries", createdAt: 1_700_000_100 },
   ];
   m.changeMap = { [elementKey("responsibility", "webhooks", "r-wh-2")]: "chg-2" };
   m.sourceMap = {
@@ -139,7 +137,6 @@ const ChangesStill = () => (
       activeChange="chg-1"
       onSetActiveChange={noop}
       onCloseChange={() => Promise.reject(new Error("chg-2 still has 1 tagged entry — fold or revert it"))}
-      onSignOffChange={noop}
     />
   </div>
 );

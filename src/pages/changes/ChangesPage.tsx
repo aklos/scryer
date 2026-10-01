@@ -7,8 +7,7 @@ import type { Change, ElementChange, ModelDiff } from "../../entities/model/plan
 import { CHANGE_COLOR, type ChangeKind, collectPlanEntries, type LinkChange, MARK_META, type PlanEntry } from "../../features/change-marks/changeMarks";
 import { DIFF_ANCHOR, DIFF_TINT, DiffRow } from "../../entities/model/diffkit";
 import { ANCHOR_CALM, StatementText } from "../../features/markup/markup";
-import { entryChanges, type SignOff } from "../../entities/model/ledger";
-import { relativeTime } from "../../entities/model/history";
+import { entryChanges } from "../../entities/model/ledger";
 import { BTN, BTN_ICON, LINK, WordDiffText } from "../../shared/ui/pagekit";
 import { SpecialBody, SpecialHeader, timeLabel } from "../../widgets/special-page-shell/shell";
 
@@ -417,7 +416,6 @@ export function ChangesPage({
   activeChange,
   onSetActiveChange,
   onCloseChange,
-  onSignOffChange,
 }: {
   planDiff: ModelDiff;
   /** The planned model — element names, kinds, and tree order. */
@@ -434,10 +432,6 @@ export function ChangesPage({
   /** Close an EMPTY (stranded) change. Rejects with the backend's reason when
    *  refused. Absent = read-only (agent writing). */
   onCloseChange?: (id: string) => Promise<void> | void;
-  /** Sign off a change: snapshot its tagged entries so anything the agent
-   *  changes afterwards lands as a proposal, never as silent intent. Absent =
-   *  read-only (agent writing). */
-  onSignOffChange?: (id: string) => void;
 }) {
   const ctx = useMemo<RowCtx>(
     () => ({
@@ -457,7 +451,7 @@ export function ChangesPage({
   const { toast } = useToast();
   // What the backend counts when asked to close: every ledger key tagged to
   // the change — including claims this page does not list because they await
-  // a verdict in the Inbox (an agent amendment is a plan entry too).
+  // a verdict in the Inbox (a vagrant claim is a plan entry too).
   const taggedOf = useMemo(() => {
     const counts = new Map<string, number>();
     for (const c of Object.values(model.changeMap ?? {})) counts.set(c, (counts.get(c) ?? 0) + 1);
@@ -524,8 +518,6 @@ export function ChangesPage({
                 }
                 tagged={taggedOf.get(c.id) ?? 0}
                 onClose={closeChange && (() => closeChange(c.id))}
-                signedOff={c.signedOff}
-                onSignOff={onSignOffChange && (() => onSignOffChange(c.id))}
               />
             ))}
             {sections.unfiled.length > 0 && (
@@ -560,8 +552,6 @@ function ChangeSection({
   active,
   onToggleActive,
   onClose,
-  signedOff,
-  onSignOff,
 }: {
   id: string | null;
   rationale: string;
@@ -572,11 +562,9 @@ function ChangeSection({
   active: boolean;
   onToggleActive?: () => void;
   onClose?: () => void;
-  signedOff?: SignOff;
-  onSignOff?: () => void;
 }) {
-  // Tagged entries the page does not list — agent amendments and additions
-  // that wait for a verdict in the Inbox. They still block the close.
+  // Tagged entries the page does not list — vagrant claims that wait for a
+  // verdict in the Inbox. They still block the close.
   const inInbox = Math.max(0, tagged - entries.length);
   return (
     <section>
@@ -591,28 +579,6 @@ function ChangeSection({
           <span className="shrink-0 text-xs text-[var(--text-muted)]">
             {inInbox} awaiting your verdict in the Inbox
           </span>
-        )}
-        {signedOff && (
-          <span
-            className="inline-flex shrink-0 items-center gap-1 text-xs text-violet-700 dark:text-violet-400"
-            title={`Signed off ${new Date(signedOff.at * 1000).toLocaleString()}. Anything the agent rewords or adds afterwards lands in the Inbox as a proposal.`}
-          >
-            <Check className="h-3 w-3" /> Signed off {relativeTime(signedOff.at)}
-          </span>
-        )}
-        {id && onSignOff && (
-          <button
-            type="button"
-            className={BTN}
-            title={
-              signedOff
-                ? "Snapshot the plan as it stands now — your own edits since count as intent"
-                : "Snapshot this change's entries so anything the agent rewords or adds afterwards waits for your verdict"
-            }
-            onClick={onSignOff}
-          >
-            {signedOff ? "Re-sign" : "Sign off"}
-          </button>
         )}
         {onToggleActive && (
           <button

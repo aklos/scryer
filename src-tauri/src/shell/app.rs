@@ -64,7 +64,6 @@ pub fn run() {
             project::read_planned,
             project::write_planned,
             project::close_change,
-            project::sign_off_change,
             project::read_fold_refusals,
             project::read_history,
             source_view::open_in_editor,

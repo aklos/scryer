@@ -17,8 +17,8 @@
  *    that say code exists but anchor to nothing. The list behind the coverage
  *    percentage; its complement.
  *  - Inbox: the in-session queue — every item awaiting the developer's verdict
- *    (amendments, vagrants, stale, survivors, failing, contract rewords, refused
- *    folds, close-gate items) as one live stream ordered by risk then recency.
+ *    (vagrants, stale, survivors, failing, contract rewords, refused folds,
+ *    close-gate items) as one live stream ordered by risk then recency.
  *
  * All are pages, not panels — reached from the status bar counters, left via
  * any link, exactly like Wikipedia's Special:RecentChanges and cleanup

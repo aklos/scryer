@@ -46,8 +46,7 @@ function genState(pending?: boolean): "pending" | "live" | undefined {
 }
 
 /** Card outline stroke per change mark — same palette as the tree gutter and
- *  the dots: A green, M/R amber (plan edits), D red, Q/X orange (drift),
- *  P violet (amended after sign-off). */
+ *  the dots: A green, M/R amber (plan edits), D red, Q/X orange (drift). */
 const MARK_STROKE: Record<Mark, string> = {
   A: "stroke-emerald-500/70 dark:stroke-emerald-400/50",
   M: "stroke-amber-500/70 dark:stroke-amber-400/50",
@@ -55,7 +54,6 @@ const MARK_STROKE: Record<Mark, string> = {
   R: "stroke-amber-500/70 dark:stroke-amber-400/50",
   Q: "stroke-orange-500/70 dark:stroke-orange-400/50",
   X: "stroke-orange-500/70 dark:stroke-orange-400/50",
-  P: "stroke-violet-500/70 dark:stroke-violet-400/50",
 };
 
 /** The shared completeness pie, positioned on the card corner. */

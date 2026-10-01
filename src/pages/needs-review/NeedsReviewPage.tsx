@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Crosshair, GitCompare, PenLine, X } from "lucide-react";
+import { Check, Crosshair, GitCompare, X } from "lucide-react";
 import { ConfirmPopover } from "../../shared/feedback/ConfirmPopover";
 import type { ScryModel, Node, Responsibility, SchemaProperty, DriftScope } from "../../entities/model/viewmodel";
 import { isNodeEmpty } from "../../entities/model/viewmodel";
@@ -10,7 +10,7 @@ import { kindIcon } from "../../entities/model/kindIcon";
 import { respElementId, propElementId } from "../../widgets/source-section/SourceSection";
 import { BTN, BTN_AGENT, BTN_DANGER, BTN_GO, jumpTo, LINK, PageSection, WikiLink, WordDiffText } from "../../shared/ui/pagekit";
 import { DRIFT_HINT, DRIFT_RULE } from "../../entities/model/diffkit";
-import { ANCHOR_CALM, serializeEars, StatementText, stripMarkup } from "../../features/markup/markup";
+import { ANCHOR_CALM, StatementText, stripMarkup } from "../../features/markup/markup";
 import { SpecialBody, SpecialHeader } from "../../widgets/special-page-shell/shell";
 
 // --- needs review ---------------------------------------------------------------
@@ -80,7 +80,7 @@ export function ClaimRow({
 }
 
 /** Inline reword: a textarea seeded with the current wording, Save / Cancel.
- *  Shared by the amendment rows here and the inbox cards, so "reword" is one
+ *  Shared by the rows here and the inbox cards, so "reword" is one
  *  affordance everywhere. Enter saves, Escape cancels. */
 export function RewordEditor({
   initial,
@@ -129,96 +129,6 @@ export function RewordEditor({
         <span className="text-[var(--text-ghost)]">Enter saves · Esc cancels</span>
       </div>
     </div>
-  );
-}
-
-/** One post-sign-off amendment / addition awaiting a verdict: the approved
- *  text against the amended text (an addition has none — "not in the
- *  signed-off plan"), with adopt / reject / reword inline. */
-function AmendmentRow({
-  claim,
-  onSelectNode,
-  editor,
-}: {
-  claim: ClaimRef;
-  onSelectNode: (id: string) => void;
-  editor: Editor | undefined;
-}) {
-  const [rewording, setRewording] = useState(false);
-  const resp = claim.resp;
-  const addition = resp.vagrantOrigin === "addition";
-  return (
-    <ClaimRow
-      claim={claim}
-      onSelectNode={onSelectNode}
-      detail={
-        <div className="mt-0.5 border-l-2 border-violet-500/30 pl-3 text-xs dark:border-violet-400/30">
-          {addition ? (
-            <span className="italic text-violet-700/80 dark:text-violet-400/80">not in the signed-off plan</span>
-          ) : (
-            <>
-              <span className="text-violet-700/80 dark:text-violet-400/80">approved → amended:</span>{" "}
-              <span className="font-mono text-sm text-[var(--text-secondary)]">
-                <WordDiffText
-                  from={stripMarkup(resp.approvedStatement ?? "")}
-                  to={stripMarkup(resp.statement)}
-                />
-              </span>
-            </>
-          )}
-          {rewording && editor && (
-            <div className="mt-1.5">
-              <RewordEditor
-                initial={stripMarkup(resp.statement)}
-                onSave={(t) => {
-                  editor.rewordResponsibility(resp.id, serializeEars(t));
-                  setRewording(false);
-                }}
-                onCancel={() => setRewording(false)}
-              />
-            </div>
-          )}
-        </div>
-      }
-      actions={
-        editor && (
-          <span className="flex shrink-0 items-center gap-2 pt-0.5 text-xs">
-            <button
-              type="button"
-              onClick={() => editor.adoptResponsibility(resp.id)}
-              className={BTN_GO}
-              title={
-                addition
-                  ? "The added claim becomes intent — it folds once built and verified, else stays pending"
-                  : "The amended text becomes the intent — it folds once built and verified, else stays pending"
-              }
-            >
-              Adopt
-            </button>
-            <button
-              type="button"
-              onClick={() => editor.rejectResponsibility(resp.id)}
-              className={BTN_DANGER}
-              title={
-                addition
-                  ? "Remove the claim the plan never approved"
-                  : "Restore the approved text — the agent built something else; the work stays open"
-              }
-            >
-              Reject
-            </button>
-            <button
-              type="button"
-              onClick={() => setRewording((r) => !r)}
-              className={BTN}
-              title="Replace both with your own wording"
-            >
-              <PenLine className="h-3 w-3" /> Reword
-            </button>
-          </span>
-        )
-      }
-    />
   );
 }
 
@@ -274,12 +184,7 @@ function PropRow({
 }
 
 export interface ReviewIndex {
-  /** Claims the AGENT reworded or added after the developer signed off their
-   *  change (`vagrantOrigin`) — proposals awaiting adopt / reject / reword.
-   *  Listed apart from code-discovered vagrants: "what the agent changed" vs
-   *  "what the code does that I never said". */
-  amendments: ClaimRef[];
-  /** Code-discovered vagrant claims (amendments excluded). */
+  /** Code-discovered vagrant claims. */
   vagrant: ClaimRef[];
   vagrantProps: PropRef[];
   stale: ClaimRef[];
@@ -328,7 +233,6 @@ export function buildReviewIndex(
     probes: Record<string, ClaimProbeStatus>;
   } = { committed: null, verdicts: {}, probes: {} },
 ): ReviewIndex {
-  const amendments: ClaimRef[] = [];
   const vagrant: ClaimRef[] = [];
   const vagrantProps: PropRef[] = [];
   const stale: ClaimRef[] = [];
@@ -340,8 +244,7 @@ export function buildReviewIndex(
   const staleNodeIds = new Set(staleNodes.map((n) => n.id));
   for (const node of model.nodes) {
     for (const resp of node.responsibilities ?? []) {
-      if (resp.vagrantOrigin) amendments.push({ node, resp });
-      else if (resp.vagrant) vagrant.push({ node, resp });
+      if (resp.vagrant) vagrant.push({ node, resp });
       if (resp.stale && !staleNodeIds.has(node.id)) stale.push({ node, resp });
       if (newRespIds.has(resp.id)) unseenClaims.push({ node, resp });
     }
@@ -381,7 +284,6 @@ export function buildReviewIndex(
   );
   const total =
     testsNotHolding.length +
-    amendments.length +
     vagrant.length +
     vagrantProps.length +
     stale.length +
@@ -394,7 +296,7 @@ export function buildReviewIndex(
     driftScopes.length +
     collapseAnchors(report?.anchors ?? []).length +
     structuralCount;
-  return { amendments, vagrant, vagrantProps, stale, staleProps, staleNodes, emptySymbols, unseenNodes, unseenClaims, disconnected, testsNotHolding, untested, structural, total };
+  return { vagrant, vagrantProps, stale, staleProps, staleNodes, emptySymbols, unseenNodes, unseenClaims, disconnected, testsNotHolding, untested, structural, total };
 }
 
 export function NeedsReviewPage({
@@ -568,16 +470,6 @@ export function NeedsReviewPage({
                   ))}
                   {idx.unseenClaims.map((ref) => (
                     <ClaimRow key={ref.resp.id} claim={ref} onSelectNode={onSelectNode} />
-                  ))}
-                </ul>
-              </PageSection>
-            )}
-
-            {idx.amendments.length > 0 && (
-              <PageSection title="Changed after sign-off" hint={"The agent reworded or added these after you signed off their change. Each is a proposal, not intent: adopt it (it folds once built and verified), reject it (the approved text comes back and the work stays open), or reword it yourself."} count={idx.amendments.length}>
-                <ul className="flex flex-col">
-                  {idx.amendments.map((ref) => (
-                    <AmendmentRow key={ref.resp.id} claim={ref} onSelectNode={onSelectNode} editor={editor} />
                   ))}
                 </ul>
               </PageSection>

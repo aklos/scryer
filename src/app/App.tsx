@@ -128,7 +128,6 @@ function AppBody() {
       activeChange={storage.activeChange}
       setActiveChange={storage.setActiveChange}
       closeChange={storage.closeChange}
-      signOffChange={storage.signOffChange}
     />
   );
 }
@@ -156,7 +155,6 @@ function Workspace({
   activeChange,
   setActiveChange,
   closeChange,
-  signOffChange,
 }: {
   model: ScryModel;
   committed: ScryModel | null;
@@ -180,7 +178,6 @@ function Workspace({
   activeChange: string | null;
   setActiveChange: (id: string | null) => void;
   closeChange: (id: string) => Promise<void>;
-  signOffChange: (id: string) => Promise<void>;
 }) {
   const agent = useAgentSession();
   // One preview sidecar per open project; node pages derive their Preview
@@ -795,7 +792,6 @@ function Workspace({
               activeChange={activeChange}
               onSetActiveChange={writing ? undefined : setActiveChange}
               onCloseChange={writing ? undefined : closeChange}
-              onSignOffChange={writing ? undefined : (id) => void signOffChange(id)}
             />
           ) : selected.id === "inbox" ? (
             <InboxPage

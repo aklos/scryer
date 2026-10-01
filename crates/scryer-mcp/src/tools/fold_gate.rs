@@ -1,21 +1,15 @@
-//! The fold's two gates — what `mark_implemented` refuses to commit, and why.
+//! The fold's evidence gate — what `mark_implemented` refuses to commit, and
+//! why. A testable (When/While/If) claim on a code-backed host folds only with
+//! a test attached AND a current passing verdict
+//! (`scryer_extract::test_status::claim_evidence`). Otherwise it stays in the
+//! plan and the response names the missing fact and the test files to run.
+//! `force` bypasses this gate visibly (an `unverified` history event).
 //!
-//! 1. **Sign-off** (forward vagrancy): a claim the agent reworded, moved, or
-//!    added AFTER the developer signed off its change is a proposal, not
-//!    intent. It is flagged `vagrant` with a `vagrant_origin` and the approved
-//!    text, left in the plan, and reported as awaiting the developer's verdict.
-//!    A signed-off claim the agent dropped is restored as pending intent.
-//! 2. **Evidence**: a testable (When/While/If) claim on a code-backed host
-//!    folds only with a test attached AND a current passing verdict
-//!    (`scryer_extract::test_status::claim_evidence`). Otherwise it stays in the
-//!    plan and the response names the missing fact and the test files to run.
-//!    `force` bypasses this gate visibly (an `unverified` history event).
-//!
-//! Both gates return a WITHHOLD set the fold engine honours
+//! The gate returns a WITHHOLD set the fold engine honours
 //! (`commit_element_withholding`), so the rest of the fold proceeds — leaving
 //! a claim pending is a legitimate, honest exit, never a loop.
 
-use scryer_core::changes::{self, Classification};
+use scryer_core::changes;
 use scryer_core::diff::{self, ElementKind as EK};
 use scryer_core::refusals::Refusal;
 use scryer_core::{ears, Kind, ModelRef, Responsibility, ScryModel};
@@ -33,9 +27,6 @@ pub(crate) struct GateOutcome {
     pub lines: Vec<String>,
     /// Claims that failed the evidence gate but fold anyway under `force`.
     pub forced: Vec<String>,
-    /// Whether the gates wrote to the plan (vagrant flags set, dropped claims
-    /// restored) and the caller must persist it before folding.
-    pub plan_dirty: bool,
 }
 
 /// The claims PENDING on `node_id` — the ones a whole-node fold would actually
@@ -73,23 +64,6 @@ pub(crate) fn pending_claims_on(
         .collect()
 }
 
-fn find_resp_mut<'a>(
-    model: &'a mut ScryModel,
-    id: &str,
-) -> Option<(String, &'a mut Responsibility)> {
-    for n in &mut model.nodes {
-        if let Some(r) = n.responsibilities.iter_mut().find(|r| r.id == id) {
-            return Some((n.id.clone(), r));
-        }
-    }
-    for g in &mut model.groups {
-        if let Some(r) = g.responsibilities.iter_mut().find(|r| r.id == id) {
-            return Some((g.id.clone(), r));
-        }
-    }
-    None
-}
-
 fn find_resp<'a>(model: &'a ScryModel, id: &str) -> Option<(&'a str, &'a Responsibility)> {
     model
         .nodes
@@ -115,13 +89,13 @@ fn code_backed_host(model: &ScryModel, host_id: &str) -> bool {
     }
 }
 
-/// Run both gates over `candidates` (the claims this fold is about to commit).
+/// Run the gate over `candidates` (the claims this fold is about to commit).
 /// `tests_in_call` maps claim id → test files attached in the SAME call: an
 /// attachment with no verdict yet still refuses (the verdict comes from a run
 /// + ingest, which must precede the fold), but the refusal names those files.
 pub(crate) fn gate(
     model_ref: &ModelRef,
-    planned: &mut ScryModel,
+    planned: &ScryModel,
     candidates: &[String],
     tests_in_call: &HashMap<String, Vec<String>>,
     force: bool,
@@ -129,107 +103,7 @@ pub(crate) fn gate(
 ) -> Result<GateOutcome, String> {
     let mut out = GateOutcome::default();
 
-    // ---- 1. Sign-off: amendments and additions stay behind as vagrant. -----
-    let mut involved: BTreeSet<String> = BTreeSet::new();
-    for id in candidates {
-        let key = changes::element_key(EK::Responsibility, None, id);
-        if let Some(cid) = planned.change_map.get(&key) {
-            involved.insert(cid.clone());
-        }
-        let Some((cid, class, snap)) = changes::classify_key(planned, &key) else { continue };
-        let Some(origin) = class.origin() else { continue };
-        let Some((host, r)) = find_resp_mut(planned, id) else { continue };
-        let approved = snap.as_ref().and_then(|s| s.statement.clone());
-        r.vagrant = Some(true);
-        r.vagrant_origin = Some(origin.to_string());
-        r.approved_statement = approved.clone();
-        let reason = match class {
-            Classification::Amended => format!(
-                "reworded after sign-off of {cid} (approved: \"{}\")",
-                approved.as_deref().unwrap_or("?")
-            ),
-            _ => format!("added after sign-off of {cid}"),
-        };
-        out.lines.push(format!(
-            "AWAITING VERDICT {id} (stays in the plan, flagged vagrant/{origin}): {reason} — the \
-             developer adopts, rejects, or rewords it from Needs Review; it does not fold"
-        ));
-        out.refusals.push(Refusal {
-            resp_id: id.clone(),
-            host_id: host,
-            kind: origin.to_string(),
-            reason,
-            run: Vec::new(),
-            at: now,
-        });
-        out.withhold.insert(id.clone());
-        out.plan_dirty = true;
-    }
-
-    // Dropped signed-off claims come back as the original intent.
-    for cid in &involved {
-        let Some(meta) = planned.changes.iter().find(|c| &c.id == cid).cloned() else { continue };
-        for (key, class, snap) in changes::classify_against_signoff(planned, &meta) {
-            if class != Classification::Dropped {
-                continue;
-            }
-            let Some((EK::Responsibility, _, rid)) = changes::parse_key(&key) else { continue };
-            let Some(snap) = snap else { continue };
-            // Folded, not dropped: the element stands in the plan exactly as
-            // approved and only lost its tag because an earlier fold carried
-            // it into committed. Nothing to restore.
-            if changes::entry_hash(planned, &key).is_some_and(|now| now.hash == snap.hash) {
-                continue;
-            }
-            let (Some(stmt), Some(host)) = (snap.statement.clone(), snap.host.clone()) else {
-                continue;
-            };
-            let restored = match find_resp_mut(planned, &rid) {
-                // Reverted in place (the tag was GC'd): put the approved text back.
-                Some((_, r)) => {
-                    r.statement = stmt.clone();
-                    true
-                }
-                // Gone: re-insert on its approved host, if that host still exists.
-                None => match planned.nodes.iter_mut().find(|n| n.id == host) {
-                    Some(n) => {
-                        n.responsibilities.push(Responsibility {
-                            id: rid.clone(),
-                            statement: stmt.clone(),
-                            concern: None,
-                            vagrant: None,
-                            vagrant_origin: None,
-                            approved_statement: None,
-                            stale: None,
-                            stale_proposal: None,
-                            directives: Vec::new(),
-                            last_touched_at: Some(now),
-                        });
-                        true
-                    }
-                    None => false,
-                },
-            };
-            if restored {
-                planned.change_map.insert(key.clone(), cid.clone());
-                // Restored means PENDING: this fold must not carry it across.
-                out.withhold.insert(rid.clone());
-                out.plan_dirty = true;
-                out.lines.push(format!(
-                    "RESTORED {rid} as pending intent (\"{stmt}\") — it was signed off in {cid} \
-                     and the plan no longer carried it; the agent's proposal to drop it needs \
-                     the developer's verdict, so it stays in the queue"
-                ));
-            } else {
-                out.lines.push(format!(
-                    "DROPPED {rid} (\"{stmt}\") was signed off in {cid} and is gone from the plan \
-                     along with its host — the developer should know the agent dropped it"
-                ));
-            }
-        }
-    }
-
-    // ---- 2. Evidence: testable claims need a current passing verdict. --------
+    // Evidence: testable claims need a current passing verdict.
     let mut gated: Vec<String> = Vec::new();
     for id in candidates {
         if out.withhold.contains(id) {

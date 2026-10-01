@@ -555,8 +555,6 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
-            vagrant_origin: None,
-            approved_statement: None,
         });
         m.nodes.push(sa);
         m.nodes.push(node("symb", Kind::Symbol, Some("sys")));

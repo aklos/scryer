@@ -5,7 +5,7 @@
  * What these pin: tier-then-recency ordering; a card leaves the moment its
  * source does (a resolved vagrant, a fold that later succeeds); the change
  * pin filters by the ledger tag; a concern-tagged claim outranks its source
- * tier; and an amendment card carries the approved text beside the amended.
+ * tier.
  */
 import { describe, expect, it } from "vitest";
 import type { ClaimProbeStatus, ClaimTestStatus } from "../src/entities/model/health";
@@ -74,16 +74,9 @@ describe("buildInboxCards", () => {
           // two vagrants, different ages — newest first within the tier
           resp("v-old", "does old thing", { vagrant: true, lastTouchedAt: 100 }),
           resp("v-new", "does new thing", { vagrant: true, lastTouchedAt: 200 }),
-          // an amendment (higher tier) that is OLDER than both vagrants
-          resp("am", "amended text", {
-            vagrant: true,
-            vagrantOrigin: "amendment",
-            approvedStatement: "approved text",
-            lastTouchedAt: 50,
-          }),
           // stale (lower tier) but newest of all
           resp("st", "stale claim", { stale: true, lastTouchedAt: 900 }),
-          // a survivor (above amendments) and a failing verdict (below stale)
+          // a survivor (above vagrants) and a failing verdict (below stale)
           resp("sv", "probed claim"),
           resp("fl", "failing claim"),
         ],
@@ -98,7 +91,6 @@ describe("buildInboxCards", () => {
     );
     expect(cards.map((c) => `${c.tier}:${c.respId}`)).toEqual([
       "survivor:sv",
-      "amendment:am",
       "vagrant:v-new",
       "vagrant:v-old",
       "stale:st",
@@ -140,8 +132,8 @@ describe("buildInboxCards", () => {
       [
         node("a", {
           responsibilities: [
-            resp("x", "in chg-1", { vagrant: true, vagrantOrigin: "addition" }),
-            resp("y", "in chg-2", { vagrant: true, vagrantOrigin: "addition" }),
+            resp("x", "in chg-1", { vagrant: true }),
+            resp("y", "in chg-2", { vagrant: true }),
             resp("z", "unfiled", { vagrant: true }),
           ],
         }),
@@ -203,35 +195,6 @@ describe("buildInboxCards", () => {
     const card = cards.find((c) => c.kind === "contract-link")!;
     expect(card.statement).toBe("CLIENT → SHARED — predicts with");
     expect(card.evidence.dependents).toEqual(["SERVER"]);
-  });
-
-  it("gives amendment cards the approved and amended text, additions only the new text", () => {
-    const m = model([
-      node("a", {
-        responsibilities: [
-          resp("am", "**When** asked, **answers** twice", {
-            vagrant: true,
-            vagrantOrigin: "amendment",
-            approvedStatement: "**When** asked, **answers** once",
-          }),
-          resp("ad", "**When** idle, **sleeps**", { vagrant: true, vagrantOrigin: "addition" }),
-        ],
-      }),
-    ]);
-    const cards = buildInboxCards(input({ model: m }));
-    const am = cards.find((c) => c.respId === "am")!;
-    const ad = cards.find((c) => c.respId === "ad")!;
-    expect(am).toMatchObject({
-      tier: "amendment",
-      kind: "amendment",
-      before: "**When** asked, **answers** once",
-      after: "**When** asked, **answers** twice",
-    });
-    expect(am.actions.map((a) => a.kind)).toEqual(["adopt", "reject", "reword"]);
-    expect(ad).toMatchObject({ tier: "amendment", kind: "addition", after: "**When** idle, **sleeps**" });
-    expect(ad.before).toBeUndefined();
-    // Neither is a code-discovered vagrant card.
-    expect(cards.some((c) => c.kind === "vagrant-claim")).toBe(false);
   });
 
   it("leaves untested claims out — they are a standing list, not a verdict", () => {

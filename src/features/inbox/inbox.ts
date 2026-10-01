@@ -2,7 +2,6 @@
  * The in-session inbox — one live stream of cards, each an item that needs the
  * developer's verdict, merged from every source the app already watches:
  *
- *   - amendments / additions after sign-off (`vagrantOrigin`, forward-vagrancy)
  *   - code-discovered vagrant claims and properties (drift)
  *   - stale claims, with drift's proposed reword when it has one
  *   - probe survivors (a deliberate break the attached test did not catch)
@@ -39,7 +38,7 @@ export interface Refusal {
   respId: string;
   /** The node or group the claim sits on. */
   hostId: string;
-  kind: "no-test" | "no-verdict" | "stale" | "failing" | "amendment" | "addition";
+  kind: "no-test" | "no-verdict" | "stale" | "failing";
   /** The missing fact in the fold's own words. */
   reason: string;
   /** Test files whose run would clear the refusal, when any. */
@@ -88,7 +87,6 @@ export type InboxTier =
   | "contract"
   | "concern"
   | "survivor"
-  | "amendment"
   | "vagrant"
   | "stale"
   | "failing"
@@ -99,7 +97,6 @@ export const TIER_ORDER: readonly InboxTier[] = [
   "contract",
   "concern",
   "survivor",
-  "amendment",
   "vagrant",
   "stale",
   "failing",
@@ -110,8 +107,6 @@ export const TIER_ORDER: readonly InboxTier[] = [
 /** What produced the card — finer than the tier (a concern-promoted card keeps
  *  its source kind so the page can still render the right body and actions). */
 export type InboxKind =
-  | "amendment"
-  | "addition"
   | "vagrant-claim"
   | "vagrant-property"
   | "stale"
@@ -310,30 +305,7 @@ export function buildInboxCards(input: InboxInput): InboxCard[] {
   for (const { host, resp } of claims) {
     const at = resp.lastTouchedAt ?? 0;
 
-    // 1) Amendments / additions after sign-off — the agent changed the
-    //    signed-off plan; the developer's own intent is in question.
-    if (resp.vagrantOrigin) {
-      const addition = resp.vagrantOrigin === "addition";
-      cards.push({
-        ...base(host, resp),
-        id: `${resp.vagrantOrigin}:${resp.id}:${stamp(resp.statement)}`,
-        tier: "amendment",
-        kind: resp.vagrantOrigin,
-        at,
-        title: addition ? "Added after sign-off" : "Reworded after sign-off",
-        before: addition ? undefined : resp.approvedStatement,
-        after: resp.statement,
-        evidence: evidence(resp.id),
-        actions: [
-          A("adopt", "Adopt", addition ? "The added claim becomes intent — folds once built and verified" : "The amended text becomes the intent — folds once built and verified"),
-          A("reject", "Reject", addition ? "Remove the claim the plan never approved" : "Restore the approved text; the work stays open"),
-          A("reword", "Reword", "Replace it with your own wording"),
-        ],
-      });
-      continue;
-    }
-
-    // 2) Code-discovered vagrant claims.
+    // 1) Code-discovered vagrant claims.
     if (resp.vagrant) {
       cards.push({
         ...base(host, resp),
@@ -352,7 +324,7 @@ export function buildInboxCards(input: InboxInput): InboxCard[] {
       continue;
     }
 
-    // 3) Stale claims (a whole stale node is verdicted as a subtree elsewhere).
+    // 2) Stale claims (a whole stale node is verdicted as a subtree elsewhere).
     if (resp.stale && !(host.kind === "node" && staleNodeIds.has(host.id))) {
       const proposal = resp.staleProposal;
       cards.push({
@@ -373,7 +345,7 @@ export function buildInboxCards(input: InboxInput): InboxCard[] {
       });
     }
 
-    // 4) Probe survivors — the test stayed green while the code was broken.
+    // 3) Probe survivors — the test stayed green while the code was broken.
     const probe = probes[resp.id];
     if (probe && !probe.stale && probe.survived > 0) {
       cards.push({
@@ -391,7 +363,7 @@ export function buildInboxCards(input: InboxInput): InboxCard[] {
       });
     }
 
-    // 5) Failing / errored verdicts (a stale verdict is outdated, not an alarm).
+    // 4) Failing / errored verdicts (a stale verdict is outdated, not an alarm).
     const verdict = verdicts[resp.id];
     if (verdict && !verdict.stale && (verdict.outcome === "failed" || verdict.outcome === "errored")) {
       cards.push({
@@ -431,7 +403,7 @@ export function buildInboxCards(input: InboxInput): InboxCard[] {
     }
   }
 
-  // 6) Contract-level plan entries.
+  // 5) Contract-level plan entries.
   const links = [...(committed?.links ?? []), ...model.links];
   const linkById = new Map(links.map((l) => [l.id, l] as const));
   // `except` drops the card's own source: a link card's src always depends on
@@ -448,7 +420,7 @@ export function buildInboxCards(input: InboxInput): InboxCard[] {
       const owner = byId.get(ec.ownerId);
       if (!owner || (owner.kind !== "container" && owner.kind !== "system")) continue;
       const resp = (owner.responsibilities ?? []).find((r) => r.id === ec.id);
-      if (!resp || resp.vagrant) continue; // vagrant/amended claims have their own card
+      if (!resp || resp.vagrant) continue; // vagrant claims have their own card
       const reword = ec.changes.find(
         (c): c is Extract<Change, { type: "reworded" }> => c.type === "reworded" && c.field === "statement",
       );
@@ -504,14 +476,12 @@ export function buildInboxCards(input: InboxInput): InboxCard[] {
     }
   }
 
-  // 7) Refused folds — informational; the backend clears them on a later fold.
+  // 6) Refused folds — informational; the backend clears them on a later fold.
   for (const ref of refusals) {
     const host = hostOfResp.get(ref.respId);
     const resp = host
       ? ((host.node?.responsibilities ?? host.group?.responsibilities ?? []).find((r) => r.id === ref.respId))
       : undefined;
-    // An amended claim already has its own card; the refusal restates it.
-    if (resp?.vagrantOrigin && (ref.kind === "amendment" || ref.kind === "addition")) continue;
     const fallback: Host = host ?? {
       kind: "node",
       id: ref.hostId,
@@ -531,7 +501,7 @@ export function buildInboxCards(input: InboxInput): InboxCard[] {
     });
   }
 
-  // 8) Close-gate items — a session touched an anchored span and moved on.
+  // 7) Close-gate items — a session touched an anchored span and moved on.
   for (const item of closeGate) {
     const host =
       hostOfResp.get(item.id) ??

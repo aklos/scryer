@@ -78,8 +78,6 @@ impl RespMinter {
                     stale_proposal: None,
                     directives: Vec::new(),
                     last_touched_at: None,
-                    vagrant_origin: None,
-                    approved_statement: None,
                 }
             })
             .collect()
@@ -105,8 +103,6 @@ impl RespMinter {
                     stale_proposal: None,
                     directives: Vec::new(),
                     last_touched_at: None,
-                    vagrant_origin: None,
-                    approved_statement: None,
                 };
                 (resp, i.line(), i.end_line())
             })
@@ -335,7 +331,7 @@ impl ScryerServer {
             &prior,
             &minted,
             &reused,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id().as_deref(),
             _lock,
         )
     }
@@ -385,7 +381,7 @@ impl ScryerServer {
             &prior,
             &minted,
             &reused,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id().as_deref(),
             _lock,
         )
     }
@@ -475,7 +471,7 @@ impl ScryerServer {
             &prior,
             &minted,
             &reused,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id().as_deref(),
             _lock,
         )
     }
@@ -538,7 +534,7 @@ impl ScryerServer {
             &prior,
             &minted,
             &reused,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id().as_deref(),
             _lock,
         )
     }
@@ -621,7 +617,7 @@ impl ScryerServer {
         let tag_warnings = match write_planned_tagged(
             &model_ref,
             &mut model,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id().as_deref(),
         ) {
             Ok(w) => w,
             Err(e) => return Ok(err(e)),
@@ -741,7 +737,7 @@ impl ScryerServer {
             &prior,
             &minted,
             &reused,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id().as_deref(),
             _lock,
         )
     }
@@ -1265,82 +1261,50 @@ mod tests {
             None,
         ));
         scryer_core::write_model_at(&model_ref, &model).unwrap();
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         (server, dir, "node-1".to_string())
     }
 
-    /// Every plan write belongs to a change: with none open the write is
-    /// refused, names the call that opens one, and leaves the plan untouched.
+    /// Every plan write lands in its session's one change, opened by the first
+    /// write — never a step the agent takes. A second write reuses it; another
+    /// session gets its own.
     #[test]
-    fn plan_writes_are_refused_without_an_open_change() {
-        let dir = tempfile::tempdir().unwrap();
-        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let mut model = ScryModel::new();
-        model.nodes.push(blank_node("node-1".into(), Kind::System, "Acme".into(), None));
-        scryer_core::write_model_at(&model_ref, &model).unwrap();
+    fn the_first_plan_write_opens_the_sessions_change() {
+        let (server, dir, sys) = temp_project();
         let project = Some(dir.path().to_string_lossy().to_string());
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let add = |server: &ScryerServer, name: &str| {
+            let r = server
+                .add_container(Parameters(AddContainerRequest {
+                    project: project.clone(),
+                    items: vec![ContainerItem {
+                        parent_id: sys.clone(),
+                        name: name.into(),
+                        description: None,
+                        technology: None,
+                        style: None,
+                        external: false,
+                        boundary_dir: None,
+                        responsibilities: vec![],
+                    }],
+                }))
+                .unwrap();
+            assert_ne!(r.is_error, Some(true), "{:?}", r.content);
+        };
 
-        let server = ScryerServer::new();
-        let r = server
-            .add_container(Parameters(AddContainerRequest {
-                project: project.clone(),
-                items: vec![ContainerItem {
-                    parent_id: "node-1".into(),
-                    name: "API".into(),
-                    description: None,
-                    technology: None,
-                    style: None,
-                    external: false,
-                    boundary_dir: None,
-                    responsibilities: vec![],
-                }],
-            }))
-            .unwrap();
-        assert_eq!(r.is_error, Some(true));
-        let text = r.content[0].as_text().unwrap().text.clone();
-        assert!(text.contains("REFUSED: no change is open"), "{text}");
-        assert!(text.contains("open_change {rationale:"), "{text}");
+        add(&server, "API");
+        add(&server, "Worker");
         let plan = scryer_core::read_planned_at(&model_ref).unwrap();
-        assert!(!plan.nodes.iter().any(|n| n.name == "API"), "nothing was written");
+        assert_eq!(plan.changes.len(), 1, "one change per session");
+        let cid = &plan.changes[0].id;
+        assert_eq!(plan.changes[0].session.as_deref(), Some("test"));
+        assert_eq!(plan.change_map.values().filter(|v| *v == cid).count(), 2);
+        assert_eq!(server.session_change(&model_ref).as_deref(), Some(cid.as_str()));
 
-        // A change that has since closed is no better than none: the session
-        // pointer is stale and the write still needs a live ledger.
-        server.set_session_change(Some((dir.path().to_path_buf(), "chg-gone".into())));
-        let r = server
-            .add_container(Parameters(AddContainerRequest {
-                project: project.clone(),
-                items: vec![ContainerItem {
-                    parent_id: "node-1".into(),
-                    name: "API".into(),
-                    description: None,
-                    technology: None,
-                    style: None,
-                    external: false,
-                    boundary_dir: None,
-                    responsibilities: vec![],
-                }],
-            }))
-            .unwrap();
-        assert_eq!(r.is_error, Some(true));
-
-        // With one open, the same write lands.
-        let server = ScryerServer::with_change(dir.path());
-        let r = server
-            .add_container(Parameters(AddContainerRequest {
-                project,
-                items: vec![ContainerItem {
-                    parent_id: "node-1".into(),
-                    name: "API".into(),
-                    description: None,
-                    technology: None,
-                    style: None,
-                    external: false,
-                    boundary_dir: None,
-                    responsibilities: vec![],
-                }],
-            }))
-            .unwrap();
-        assert_ne!(r.is_error, Some(true));
+        server.set_session("other");
+        add(&server, "Cron");
+        let plan = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(plan.changes.len(), 2, "another session, another change");
     }
 
     fn read_back(dir: &tempfile::TempDir) -> ScryModel {
@@ -1382,8 +1346,6 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
-            vagrant_origin: None,
-            approved_statement: None,
         }
     }
 
@@ -1412,7 +1374,7 @@ mod tests {
         plan.nodes.retain(|n| n.id != "node-2");
         scryer_core::write_planned_at(&r, &plan).unwrap();
 
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         let project = dir.path().to_string_lossy().to_string();
         server
             .add_container(Parameters(AddContainerRequest {
@@ -1512,7 +1474,7 @@ mod tests {
         assert!(!r.planned_path().exists(), "precondition: no draft exists yet");
 
         // An authoring write with no prior draft.
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         let project = dir.path().to_string_lossy().to_string();
         server
             .add_container(Parameters(AddContainerRequest {
