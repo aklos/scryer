@@ -8,10 +8,14 @@
 //! against the project's model and the session's log
 //! (`.scryer/sessions/<session_id>.jsonl`); the desktop app need not be open.
 //!
+//! - UserPromptSubmit  → record the prompt verbatim; tell the agent to break it
+//!                       into asks
 //! - PostToolUse read  → inject the file's governing intent (once per session
 //!                       until it changes)
 //! - PostToolUse edit… → record the touch, say nothing
-//! - Stop              → block once with unreconciled claims
+//! - Stop              → block on unfiled prompts and open asks (once each)
+//!                       and, once per session, on unreconciled claims;
+//!                       otherwise hand the user a one-line summary
 //!
 //! Where they differ is the tool vocabulary and the reply shape, and neither is
 //! discoverable from the event — so the install writes which harness it is
@@ -116,6 +120,7 @@ pub fn run_hook_client(args: &[String]) -> Result<(), Box<dyn std::error::Error>
     };
 
     match event["hook_event_name"].as_str().unwrap_or_default() {
+        "UserPromptSubmit" => user_prompt_submit(&r, &event, harness),
         "PreToolUse" => pre_tool_use(&r, &event, harness),
         "PostToolUse" => post_tool_use(&r, &event, harness),
         "Stop" => stop(&r, &event),
@@ -362,52 +367,81 @@ fn render_overlay(overlay: &serde_json::Value) -> Option<String> {
     Some(out)
 }
 
-fn stop(r: &ModelRef, event: &serde_json::Value) {
-    // Never block twice: a prior block already told the agent what to do, and
-    // the flag is Claude Code's own infinite-loop guard.
-    if event["stop_hook_active"].as_bool() == Some(true) {
-        return;
-    }
+/// Record the prompt and ask the agent to break it into asks. The harness
+/// process is bound to the session here too, so an MCP server it spawned
+/// before a `/clear` follows the session to its new id.
+fn user_prompt_submit(r: &ModelRef, event: &serde_json::Value, harness: Harness) {
     let Some(session) = session_id(event) else { return };
-    let close = scryer_core::session::close_gate(r, session, |files| anchor_flags(r, files));
-    let close = serde_json::to_value(&close).unwrap_or_default();
-
-    // The close view already did the discrimination work: `needsReconcile`
-    // holds only touched files whose anchor fingerprints report the modeled
-    // spans changed, broken, or missing. Clean-modeled and unmodeled touches
-    // owe nothing — a session that edited around the claims stops freely.
-    let needs = close["needsReconcile"].as_array().cloned().unwrap_or_default();
-    if needs.is_empty() {
-        return;
+    let Some(prompt) = event["prompt"].as_str().filter(|p| !p.trim().is_empty()) else { return };
+    for pid in ancestor_pids() {
+        let _ = scryer_core::session::bind_pid(r, session, pid);
     }
+    let Ok(id) = scryer_core::session::record_prompt(r, session, prompt) else { return };
+    let mut text = format!(
+        "[scryer] Prompt {id} logged. Before working, break it into asks with \
+         file_asks {{prompt: \"{id}\", asks: [...]}} — one per distinct thing asked; `kind: \
+         \"answer\"` for questions; an empty list if it asks for nothing new. Do only what the asks \
+         cover; the user sees every edit no ask accounts for."
+    );
+    if scryer_core::session::asks_for_parity(prompt) {
+        text.push_str(
+            " This prompt asks for parity with a source: read the source and file one build ask \
+             per feature it has, each with `source` set.",
+        );
+    }
+    harness.emit_context("UserPromptSubmit", &text);
+}
 
-    let mut lines: Vec<String> = Vec::new();
-    for f in &needs {
-        let file = f["file"].as_str().unwrap_or("?");
-        lines.push(format!("- {file}:"));
-        for c in f["claims"].as_array().into_iter().flatten() {
-            let host = c["host"].as_str().unwrap_or("?");
-            let statement = c["statement"].as_str().unwrap_or("(data shape declaration)");
-            let state = c["state"].as_str().unwrap_or("changed");
-            lines.push(format!("    [{state}] ({host}) {statement}"));
+/// The hook's ancestor processes, nearest first — the harness process that
+/// also spawned this session's MCP server is among them.
+fn ancestor_pids() -> Vec<u32> {
+    let mut out = Vec::new();
+    #[cfg(unix)]
+    {
+        let mut pid = std::os::unix::process::parent_id();
+        for _ in 0..4 {
+            if pid <= 1 {
+                break;
+            }
+            out.push(pid);
+            match parent_of(pid) {
+                Some(p) => pid = p,
+                None => break,
+            }
         }
     }
+    out
+}
 
-    let reason = format!(
-        "Scryer close gate — this session's edits reached the anchored span(s) of {} claim(s) \
-         in {} file(s):\n{}\nBefore stopping, reconcile each: if the claim still describes the \
-         code, no write is needed; if behaviour changed, update the model over MCP (update_nodes \
-         to reword the claim, update_source_map to re-anchor, mark_implemented to fold finished \
-         plan work, flag_drift for new undescribed behaviour). Then finish — this gate fires \
-         only once per session.",
-        needs
-            .iter()
-            .map(|f| f["claims"].as_array().map(Vec::len).unwrap_or(0))
-            .sum::<usize>(),
-        needs.len(),
-        lines.join("\n"),
+/// A process's parent, from `/proc` (Linux); elsewhere only the direct parent
+/// is known.
+#[cfg(unix)]
+fn parent_of(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // `pid (comm) state ppid …` — comm may hold spaces and parens.
+    stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()
+}
+
+fn stop(r: &ModelRef, event: &serde_json::Value) {
+    let Some(session) = session_id(event) else { return };
+    let out = scryer_core::session::stop(
+        r,
+        session,
+        |files| anchor_flags(r, files),
+        |claims| verified_claims(r, claims),
     );
-    emit(&serde_json::json!({ "decision": "block", "reason": reason }));
+    if let Some(reason) = out.block {
+        emit(&serde_json::json!({ "decision": "block", "reason": reason }));
+    } else if let Some(summary) = out.summary {
+        emit(&serde_json::json!({ "systemMessage": summary }));
+    }
+}
+
+/// Which of `claims` carry a current passing verdict.
+fn verified_claims(r: &ModelRef, claims: &[String]) -> std::collections::HashMap<String, bool> {
+    scryer_extract::test_status::claim_evidence(r, claims)
+        .map(|m| m.into_iter().map(|(k, e)| (k, e.verified())).collect())
+        .unwrap_or_default()
 }
 
 /// Out-of-sync anchors in the session's touched files (may silently re-anchor

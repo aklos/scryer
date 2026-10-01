@@ -7,6 +7,10 @@
 //!
 //! One file per session id, so a resumed session (same id) keeps its history
 //! and a new one starts clean — no TTL, no pruning.
+//!
+//! The ask ledger rides the same log: every user prompt is recorded verbatim,
+//! the agent breaks it into asks, and each ask ends delivered (claims linked,
+//! verified, and their code touched), answered, or descoped with a reason.
 
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +32,64 @@ pub enum SessionEvent {
     Overlay { file: String, hash: u64 },
     /// The Stop gate blocked on unreconciled anchors — at most once per session.
     ReconcileGate,
+    /// The user's prompt, verbatim. `id` is `p1`, `p2`, … in session order.
+    Prompt { id: String, text: String },
+    /// The agent broke prompt `prompt` into these asks. An empty list says the
+    /// prompt asked for nothing new ("continue", "thanks").
+    Asks { prompt: String, asks: Vec<Ask> },
+    /// Claims that deliver ask `id`, added to any linked before.
+    AskLinked { id: String, claims: Vec<String> },
+    /// An `answer` ask was answered.
+    AskAnswered { id: String },
+    /// Ask `id` will not be delivered, and why — shown to the user.
+    AskDescoped { id: String, reason: String },
+    /// The Stop gate blocked on these prompts and asks. Each is blocked on
+    /// at most once.
+    AsksGate {
+        #[serde(default)]
+        prompts: Vec<String>,
+        #[serde(default)]
+        asks: Vec<String>,
+    },
+    /// The agent wrote these plan elements (change-map keys).
+    ModelEdit { keys: Vec<String> },
+    /// The summary last shown to the user, so an unchanged one stays silent.
+    Summary { text: String },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum AskKind {
+    /// Changes what the code does: delivered by verified claims whose code
+    /// the session touched.
+    #[default]
+    Build,
+    /// Wants an answer, not a change: delivered when answered.
+    Answer,
+}
+
+/// One thing the user asked for, in the agent's words.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Ask {
+    /// `a1`, `a2`, … in session order.
+    pub id: String,
+    pub text: String,
+    #[serde(default)]
+    pub kind: AskKind,
+    /// For "port X" / "match the prototype": the path the feature comes from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+/// Where an ask stands in the log (delivery is judged against the model and
+/// the verdicts, outside the log).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AskEntry {
+    pub ask: Ask,
+    pub prompt: String,
+    pub claims: Vec<String>,
+    pub answered: bool,
+    pub descoped: Option<String>,
 }
 
 /// The fold of a session's events.
@@ -39,6 +101,17 @@ pub struct SessionLog {
     pub overlays: Vec<(String, u64)>,
     /// Whether the reconcile gate already fired.
     pub reconcile_gated: bool,
+    /// Prompts in order, `(id, text)`.
+    pub prompts: Vec<(String, String)>,
+    /// Prompts the agent has filed asks for.
+    pub filed: Vec<String>,
+    pub asks: Vec<AskEntry>,
+    /// Prompts and asks the Stop gate already blocked on.
+    pub gated_prompts: Vec<String>,
+    pub gated_asks: Vec<String>,
+    /// Plan elements the agent wrote, first-write order, each once.
+    pub model_edits: Vec<String>,
+    pub last_summary: Option<String>,
 }
 
 impl SessionLog {
@@ -64,7 +137,80 @@ impl SessionLog {
                 }
             }
             SessionEvent::ReconcileGate => self.reconcile_gated = true,
+            SessionEvent::Prompt { id, text } => self.prompts.push((id.clone(), text.clone())),
+            SessionEvent::Asks { prompt, asks } => {
+                if !self.filed.contains(prompt) {
+                    self.filed.push(prompt.clone());
+                }
+                for a in asks {
+                    self.asks.push(AskEntry {
+                        ask: a.clone(),
+                        prompt: prompt.clone(),
+                        claims: Vec::new(),
+                        answered: false,
+                        descoped: None,
+                    });
+                }
+            }
+            SessionEvent::AskLinked { id, claims } => {
+                if let Some(a) = self.ask_mut(id) {
+                    for c in claims {
+                        if !a.claims.contains(c) {
+                            a.claims.push(c.clone());
+                        }
+                    }
+                }
+            }
+            SessionEvent::AskAnswered { id } => {
+                if let Some(a) = self.ask_mut(id) {
+                    a.answered = true;
+                }
+            }
+            SessionEvent::AskDescoped { id, reason } => {
+                if let Some(a) = self.ask_mut(id) {
+                    a.descoped = Some(reason.clone());
+                }
+            }
+            SessionEvent::AsksGate { prompts, asks } => {
+                self.gated_prompts.extend(prompts.iter().cloned());
+                self.gated_asks.extend(asks.iter().cloned());
+            }
+            SessionEvent::ModelEdit { keys } => {
+                for k in keys {
+                    if !self.model_edits.contains(k) {
+                        self.model_edits.push(k.clone());
+                    }
+                }
+            }
+            SessionEvent::Summary { text } => self.last_summary = Some(text.clone()),
         }
+    }
+
+    fn ask_mut(&mut self, id: &str) -> Option<&mut AskEntry> {
+        self.asks.iter_mut().find(|a| a.ask.id == id)
+    }
+
+    pub fn ask(&self, id: &str) -> Option<&AskEntry> {
+        self.asks.iter().find(|a| a.ask.id == id)
+    }
+
+    /// The id the next prompt gets.
+    pub fn next_prompt_id(&self) -> String {
+        format!("p{}", self.prompts.len() + 1)
+    }
+
+    /// The id the next ask gets.
+    pub fn next_ask_id(&self) -> String {
+        format!("a{}", self.asks.len() + 1)
+    }
+
+    /// Prompts the agent has not broken into asks yet, oldest first.
+    pub fn unfiled_prompts(&self) -> Vec<&str> {
+        self.prompts
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .filter(|id| !self.filed.iter().any(|f| f == id))
+            .collect()
     }
 
     /// Whether `hash` is exactly what this session was last shown for `file` —
@@ -72,6 +218,20 @@ impl SessionLog {
     pub fn overlay_is_repeat(&self, file: &str, hash: u64) -> bool {
         self.overlays.iter().any(|(f, h)| f == file && *h == hash)
     }
+}
+
+/// Whether a prompt asks to port something or to match a reference — the asks
+/// where "done" means feature parity with a source, so the agent must list the
+/// source's features rather than file one vague ask.
+pub fn asks_for_parity(prompt: &str) -> bool {
+    let lower = prompt.to_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let has = |w: &str| words.contains(&w);
+    has("port") || has("porting") || has("ported") || has("replicate")
+        || (has("prototype") && (has("match") || has("like") || has("same") || has("from")))
 }
 
 /// FNV-1a, 64-bit. Not cryptographic — it only tells "same payload as last

@@ -14,6 +14,13 @@ that govern it, and a rule cites others by slug in double square brackets. Befor
 rules governs, or make a modeling judgment, fetch the rule: `get_rules {id: \"slug-a,slug-b\"}` \
 (`get_rules {}` lists them all). Never infer the conventions from existing nodes.\n\
 \n\
+## Every prompt\n\
+The hook logs each user prompt and names it (`p3`). Break it into asks with `file_asks` before \
+anything else, do what the asks cover and nothing beyond it, and end each one delivered \
+(`resolve_ask {id, claims}`: verified claims on code you edited), answered, or descoped with a \
+reason. The Stop hook names whatever is still open. Never ask the user to review or approve: \
+finish the work. [[ask-ledger]]\n\
+\n\
 ## Every task beyond a one-line fix\n\
 1. ORIENT — `orient {task, files}` for a coding task; `get_health` then `read_model` for a \
 model-building one. Honor every directive it returns. [[loop-orient]]\n\
@@ -27,7 +34,8 @@ project's own suite. Placement is given, not chosen: `scaffold {node_id}` and `o
 name each planned component's directory, layer and allowed imports. [[loop-build]] [[styles]]\n\
 4. CLOSE — `mark_implemented` with `anchors` and `tests` in the same call; the fold is gated on a \
 passing verdict, so run the tests with a JUnit reporter and `ingest_test_report` first. Then \
-`get_test_radius`, `flag_drift`, `reconcile_drift`. [[loop-close]]\n\
+`get_test_radius`, `flag_drift`, `reconcile_drift`, then link the claims to their ask. \
+[[loop-close]]\n\
 \n\
 If no model exists yet, build one first from the code. [[generation-fill]]\n\
 \n\

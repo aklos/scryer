@@ -332,7 +332,7 @@ impl ScryerServer {
         let tag_warnings = match write_planned_tagged(
             &model_ref,
             &mut model,
-            self.session_id().as_deref(),
+            self.session_id(&model_ref).as_deref(),
         ) {
             Ok(w) => w,
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
@@ -448,7 +448,7 @@ impl ScryerServer {
         let tag_warnings = match write_planned_tagged(
             &model_ref,
             &mut model,
-            self.session_id().as_deref(),
+            self.session_id(&model_ref).as_deref(),
         ) {
             Ok(w) => w,
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
@@ -501,7 +501,7 @@ impl ScryerServer {
         let tag_warnings = match write_planned_tagged(
             &model_ref,
             &mut model,
-            self.session_id().as_deref(),
+            self.session_id(&model_ref).as_deref(),
         ) {
             Ok(w) => w,
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),

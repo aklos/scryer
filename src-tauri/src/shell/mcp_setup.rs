@@ -53,7 +53,10 @@ fn check_claude_approved(project_path: &str) -> bool {
 
 /// The Claude Code hook events scryer registers, with the matcher each needs.
 /// One client command serves all of them (it dispatches on the event JSON).
+/// An install counts as present only when its UserPromptSubmit entry is — the
+/// newest registration — so an install that predates it is offered again.
 const SCRYER_HOOK_EVENTS: &[(&str, Option<&str>, u64)] = &[
+    ("UserPromptSubmit", None, 10),
     ("PostToolUse", Some("Read"), 10),
     ("PostToolUse", Some("Edit|Write|NotebookEdit"), 10),
     ("Stop", None, 15),
@@ -66,6 +69,7 @@ const SCRYER_HOOK_EVENTS: &[(&str, Option<&str>, u64)] = &[
 /// route (the client no-ops on Bash commands with no patch envelope).
 /// Timeouts stay explicit: Codex's default is 600 s.
 const SCRYER_CODEX_HOOK_EVENTS: &[(&str, Option<&str>, u64)] = &[
+    ("UserPromptSubmit", None, 10),
     ("PreToolUse", Some("apply_patch|Bash"), 10),
     ("PostToolUse", Some("apply_patch|Bash"), 10),
     ("Stop", None, 15),
@@ -81,6 +85,7 @@ const SCRYER_CODEX_HOOK_EVENTS: &[(&str, Option<&str>, u64)] = &[
 /// Copilot has a native patch tool, so unlike Codex there is no heredoc route
 /// worth spawning this client for on every shell command.
 const SCRYER_COPILOT_HOOK_EVENTS: &[(&str, Option<&str>, u64)] = &[
+    ("UserPromptSubmit", None, 10),
     ("PostToolUse", Some("view"), 10),
     ("PostToolUse", Some("create|edit|str_replace_editor|apply_patch"), 10),
     ("Stop", None, 15),
@@ -121,7 +126,7 @@ fn check_claude_hooks(project_path: &str) -> bool {
         if let Ok(contents) = std::fs::read_to_string(&path) {
             if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
                 let installed = root
-                    .pointer("/hooks/Stop")
+                    .pointer("/hooks/UserPromptSubmit")
                     .and_then(|v| v.as_array())
                     .is_some_and(|entries| entries.iter().any(is_scryer_hook_entry));
                 if installed {
@@ -169,7 +174,7 @@ fn check_codex_hooks(project_path: &str) -> bool {
     if let Ok(contents) = std::fs::read_to_string(&path) {
         if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
             return root
-                .pointer("/hooks/Stop")
+                .pointer("/hooks/UserPromptSubmit")
                 .and_then(|v| v.as_array())
                 .is_some_and(|entries| entries.iter().any(is_scryer_hook_entry));
         }
@@ -203,7 +208,7 @@ fn check_copilot_hooks(project_path: &str) -> bool {
     if let Ok(contents) = std::fs::read_to_string(copilot_hooks_path(project_path)) {
         if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
             return root
-                .pointer("/hooks/Stop")
+                .pointer("/hooks/UserPromptSubmit")
                 .and_then(|v| v.as_array())
                 .is_some_and(|entries| entries.iter().any(is_scryer_hook_entry));
         }

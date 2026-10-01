@@ -203,6 +203,13 @@ Statements also carry a markdown-lite display markup the UI renders — and stri
     // connect-time instructions so a session pays for a phase only when it
     // reaches it. ----
     Rule {
+        id: 53,
+        slug: "ask-ledger",
+        title: "ASKS — what the user asked for is the definition of done",
+        tags: &["ask", "asks", "prompt", "file_asks", "resolve_ask", "descope", "scope", "done", "port", "prototype"],
+        body: r#"Every user prompt is logged verbatim by the session hook, which names its id (`p3`). Before working on it, break it into asks with `file_asks {prompt, asks}`: one per distinct thing the prompt asks for, in the user's terms — "re-layout the cockpit" is an ask; the claims and code you choose for it are not. A question is `kind: "answer"`. A prompt asking to port something or match a reference (a prototype, another screen) is refused until you have READ the source and filed one build ask per feature it has, each with `source` — parity is the asks, not a feeling. An empty list says the prompt asked for nothing new ("continue", "thanks"). The asks are the scope: do not add mechanics, features, doc edits or commits they don't cover — every file you edit that no ask accounts for is shown to the user as unasked. Each ask ends one of three ways: DELIVERED — a build ask with claims linked (`resolve_ask {id, claims}`), each with a passing verdict and anchored to code this session edited, so green tests alone never deliver anything ([[test-verdicts]]); ANSWERED — `resolve_ask {id, answered: true}` once you answered it; DESCOPED — `resolve_ask {id, descoped: "<one-line reason>"}` when it cannot or should not be done, and the user reads the reason. The Stop hook blocks once per prompt you never filed and once per ask still open, naming exactly what is missing; finish the work rather than asking the user to review or approve it. `get_asks` shows where every ask stands."#,
+    },
+    Rule {
         id: 23,
         slug: "loop-orient",
         title: "ORIENT — find which phase you are in before touching anything",

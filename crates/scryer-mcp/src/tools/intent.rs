@@ -331,7 +331,7 @@ impl ScryerServer {
             &prior,
             &minted,
             &reused,
-            self.session_id().as_deref(),
+            self.session_id(&model_ref).as_deref(),
             _lock,
         )
     }
@@ -381,7 +381,7 @@ impl ScryerServer {
             &prior,
             &minted,
             &reused,
-            self.session_id().as_deref(),
+            self.session_id(&model_ref).as_deref(),
             _lock,
         )
     }
@@ -471,7 +471,7 @@ impl ScryerServer {
             &prior,
             &minted,
             &reused,
-            self.session_id().as_deref(),
+            self.session_id(&model_ref).as_deref(),
             _lock,
         )
     }
@@ -534,7 +534,7 @@ impl ScryerServer {
             &prior,
             &minted,
             &reused,
-            self.session_id().as_deref(),
+            self.session_id(&model_ref).as_deref(),
             _lock,
         )
     }
@@ -617,7 +617,7 @@ impl ScryerServer {
         let tag_warnings = match write_planned_tagged(
             &model_ref,
             &mut model,
-            self.session_id().as_deref(),
+            self.session_id(&model_ref).as_deref(),
         ) {
             Ok(w) => w,
             Err(e) => return Ok(err(e)),
@@ -737,7 +737,7 @@ impl ScryerServer {
             &prior,
             &minted,
             &reused,
-            self.session_id().as_deref(),
+            self.session_id(&model_ref).as_deref(),
             _lock,
         )
     }

@@ -511,9 +511,19 @@ pub(crate) fn remint_colliding_node_ids(
     report
 }
 
-/// The rationale a session's change opens with.
-fn session_rationale(_model_ref: &ModelRef, sid: &str) -> String {
-    format!("Session {}", sid.get(..8).unwrap_or(sid))
+/// The rationale a session's change opens with: the user's first prompt, as
+/// they wrote it.
+fn session_rationale(model_ref: &ModelRef, sid: &str) -> String {
+    match scryer_core::session::first_prompt(model_ref, sid) {
+        Some(p) => {
+            let p = p.trim();
+            match p.char_indices().nth(200) {
+                Some((i, _)) => format!("{}…", &p[..i]),
+                None => p.to_string(),
+            }
+        }
+        None => format!("Session {}", sid.get(..8).unwrap_or(sid)),
+    }
 }
 
 /// Sessions without a harness session id share this one change.
@@ -542,29 +552,30 @@ pub(crate) fn write_planned_tagged(
     };
     let cid = cid.as_str();
     let mut warnings = Vec::new();
-    {
-        {
-            let before = scryer_core::read_planned_at(model_ref).unwrap_or_default();
-            let keys: Vec<String> = scryer_core::diff::diff(&before, model)
-                .changes
-                .iter()
-                .map(scryer_core::changes::key_for)
-                .collect();
-            for (key, prev) in scryer_core::changes::tag(model, &keys, cid) {
-                let rationale = model
-                    .changes
-                    .iter()
-                    .find(|c| c.id == prev)
-                    .map(|c| c.rationale.clone())
-                    .unwrap_or_default();
-                warnings.push(format!(
-                    "conflict: {key} was tagged by {prev} (\"{rationale}\") and is now \
-                     retagged to {cid} — two changes are touching the same element"
-                ));
-            }
-        }
+    let before = scryer_core::read_planned_at(model_ref).unwrap_or_default();
+    let keys: Vec<String> = scryer_core::diff::diff(&before, model)
+        .changes
+        .iter()
+        .map(scryer_core::changes::key_for)
+        .collect();
+    for (key, prev) in scryer_core::changes::tag(model, &keys, cid) {
+        let rationale = model
+            .changes
+            .iter()
+            .find(|c| c.id == prev)
+            .map(|c| c.rationale.clone())
+            .unwrap_or_default();
+        warnings.push(format!(
+            "conflict: {key} was tagged by {prev} (\"{rationale}\") and is now \
+             retagged to {cid} — two changes are touching the same element"
+        ));
     }
     scryer_core::write_planned_at(model_ref, model)?;
+    // Logged, not gated: the session view shows the user every plan element
+    // the agent wrote.
+    if session.is_some() {
+        let _ = scryer_core::session::record_model_edit(model_ref, sid, keys);
+    }
     Ok(warnings)
 }
 

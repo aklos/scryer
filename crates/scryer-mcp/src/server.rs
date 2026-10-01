@@ -29,7 +29,8 @@ impl ScryerServer {
             + Self::tool_router_misc()
             + Self::tool_router_generation()
             + Self::tool_router_intent()
-            + Self::tool_router_testing();
+            + Self::tool_router_testing()
+            + Self::tool_router_asks();
         let tools = tool_router
             .list_all()
             .into_iter()
@@ -72,17 +73,27 @@ impl ScryerServer {
     }
 
     /// The agent session this server serves. The server is stdio, one process
-    /// per agent session, and the harness names the session in its env.
-    pub(crate) fn session_id(&self) -> Option<String> {
+    /// per agent session: the session its harness process last bound (the
+    /// hooks keep that current across `/clear`), else the one the harness
+    /// named in the env at spawn.
+    pub(crate) fn session_id(&self, model_ref: &scryer_core::ModelRef) -> Option<String> {
         if let Some(id) = self.session_override.lock().ok().and_then(|s| s.clone()) {
             return Some(id);
         }
+        #[cfg(unix)]
+        if let Some(id) =
+            scryer_core::session::session_for_pid(model_ref, std::os::unix::process::parent_id())
+        {
+            return Some(id);
+        }
+        #[cfg(not(unix))]
+        let _ = model_ref;
         std::env::var("CLAUDE_CODE_SESSION_ID").ok().filter(|s| !s.is_empty())
     }
 
     /// The open change this session's plan writes land in, if one exists yet.
     pub(crate) fn session_change(&self, model_ref: &scryer_core::ModelRef) -> Option<String> {
-        let sid = self.session_id()?;
+        let sid = self.session_id(model_ref)?;
         let plan = scryer_core::read_planned_at(model_ref).ok()?;
         scryer_core::changes::session_change(&plan, &sid).map(|c| c.id.clone())
     }
