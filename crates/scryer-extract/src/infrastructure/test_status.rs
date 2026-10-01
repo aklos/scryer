@@ -189,6 +189,13 @@ fn provably_fresh(model: &ScryModel, rec: &ClaimRecord, project: &Path) -> Optio
 /// is cheap enough to ride every response. Claims that have left the model
 /// are omitted, not reported as ghosts.
 pub fn read_test_statuses(r: &ModelRef) -> Result<Vec<ClaimTestStatus>, String> {
+    statuses_for(r, None)
+}
+
+/// [`read_test_statuses`] for `only` these claims (all when `None`): the
+/// staleness check re-fingerprints each claim's code, so a caller asking about
+/// a handful must not pay for the whole model.
+fn statuses_for(r: &ModelRef, only: Option<&BTreeSet<&str>>) -> Result<Vec<ClaimTestStatus>, String> {
     let cache = read_cache(r);
     if cache.results.is_empty() {
         return Ok(Vec::new());
@@ -206,7 +213,9 @@ pub fn read_test_statuses(r: &ModelRef) -> Result<Vec<ClaimTestStatus>, String> 
     let mut project_files: Option<BTreeSet<String>> = None;
     let mut out = Vec::new();
     for rec in &cache.results {
-        if !live.contains(rec.resp_id.as_str()) {
+        if !live.contains(rec.resp_id.as_str())
+            || only.is_some_and(|o| !o.contains(rec.resp_id.as_str()))
+        {
             continue;
         }
         let stale = if rec.fingerprints.is_empty() {
@@ -236,8 +245,12 @@ pub fn evidence_for_claim(
     r: &ModelRef,
     resp_ids: &[String],
 ) -> Result<BTreeMap<String, Evidence>, String> {
+    if resp_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
     let model = working_model(r)?;
-    let verdicts = read_test_statuses(r)?;
+    let only: BTreeSet<&str> = resp_ids.iter().map(String::as_str).collect();
+    let verdicts = statuses_for(r, Some(&only))?;
     let mut out = BTreeMap::new();
     for id in resp_ids {
         let tests: Vec<String> = model
