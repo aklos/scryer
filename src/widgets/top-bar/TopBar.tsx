@@ -18,7 +18,7 @@ import {
   ChevronDown,
   Copy,
   FileText,
-  Inbox,
+  History,
   Minus,
   Moon,
   Network,
@@ -44,10 +44,10 @@ export function TopBar({
   onCloseProject,
   onOpenSearch,
   onOpenSettings,
-  inboxUnread = 0,
-  inboxLive = false,
-  inboxOpen = false,
-  onOpenInbox,
+  sessionBadge = 0,
+  sessionLive = false,
+  sessionOpen = false,
+  onOpenSession,
 }: {
   projectPath: string | null;
   view: WorkspaceView;
@@ -56,13 +56,13 @@ export function TopBar({
   onCloseProject: () => void;
   onOpenSearch: () => void;
   onOpenSettings: () => void;
-  /** Cards in the inbox the developer has not seen. */
-  inboxUnread?: number;
-  /** A hook session is active — the badge pulses. */
-  inboxLive?: boolean;
-  /** The inbox page is the one showing — the entry reads pressed. */
-  inboxOpen?: boolean;
-  onOpenInbox?: () => void;
+  /** Open asks + files no ask accounts for, in the session on screen. */
+  sessionBadge?: number;
+  /** A hook session is active — the badge pulses (a dot when it is empty). */
+  sessionLive?: boolean;
+  /** The session page is the one showing — the entry reads pressed. */
+  sessionOpen?: boolean;
+  onOpenSession?: () => void;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const projectName = projectPath?.split("/").filter(Boolean).pop() ?? "scryer";
@@ -134,36 +134,37 @@ export function TopBar({
       </button>
 
       <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center justify-end">
-        {/* Wiki / Map / Inbox — three destinations, one joined control, exactly
-            one lit. The inbox is a wiki page underneath, but to the user it is
-            its own place: lighting Wiki too read as two selections, and Wiki
-            then "went back" to the inbox. Its cell carries the unread badge;
-            while a hook session is live the badge pulses. */}
+        {/* Wiki / Map / Session — three destinations, one joined control,
+            exactly one lit. The session log is a wiki page underneath, but to
+            the user it is its own place: lighting Wiki too read as two
+            selections, and Wiki then "went back" to it. Its cell carries the
+            badge (open asks + untraced files); while a hook session is live
+            the badge pulses, or a dot does when there is nothing to count. */}
         <div className="ml-2 flex items-stretch overflow-hidden rounded-md border border-[var(--border)] divide-x divide-[var(--border)]">
           {([
             { id: "wiki", label: "Wiki", Icon: FileText, title: "Wiki view (Ctrl+Space to switch)" },
             { id: "diagram", label: "Map", Icon: Network, title: "Map view (Ctrl+Space to switch)" },
-            ...(onOpenInbox
+            ...(onOpenSession
               ? [{
-                  id: "inbox",
-                  label: "Inbox",
-                  Icon: Inbox,
+                  id: "session",
+                  label: "Session",
+                  Icon: History,
                   title:
-                    inboxUnread > 0
-                      ? `Inbox — ${inboxUnread} unread item${inboxUnread === 1 ? "" : "s"} awaiting your verdict${inboxLive ? " (session live)" : ""}`
-                      : `Inbox — nothing unread${inboxLive ? " (session live)" : ""}`,
+                    sessionBadge > 0
+                      ? `Session — ${sessionBadge} to look at: open asks and files nobody asked for${sessionLive ? " (session live)" : ""}`
+                      : `Session — nothing open${sessionLive ? " (session live)" : ""}`,
                 }]
               : []),
           ] as const).map(({ id, label, Icon, title }) => {
-            const lit = inboxOpen ? id === "inbox" : id === view;
+            const lit = sessionOpen ? id === "session" : id === view;
             return (
               <button
                 key={id}
                 type="button"
-                data-cam={id === "inbox" ? "inbox" : `view-${id}`}
+                data-cam={id === "session" ? "session" : `view-${id}`}
                 title={title}
                 aria-pressed={lit}
-                onClick={() => (id === "inbox" ? onOpenInbox?.() : onSetView(id as WorkspaceView))}
+                onClick={() => (id === "session" ? onOpenSession?.() : onSetView(id as WorkspaceView))}
                 className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium transition-colors ${
                   lit
                     ? "bg-[var(--surface-active)] text-[var(--text)]"
@@ -172,16 +173,19 @@ export function TopBar({
               >
                 <Icon className="h-3.5 w-3.5" />
                 {label}
-                {id === "inbox" && inboxUnread > 0 && (
+                {id === "session" && sessionBadge > 0 && (
                   <span
                     className={`inline-flex min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-2xs font-semibold tabular-nums ${
-                      inboxLive
+                      sessionLive
                         ? "animate-pulse bg-violet-600 text-white dark:bg-violet-500"
                         : "bg-orange-600 text-white dark:bg-orange-500"
                     }`}
                   >
-                    {inboxUnread > 99 ? "99+" : inboxUnread}
+                    {sessionBadge > 99 ? "99+" : sessionBadge}
                   </span>
+                )}
+                {id === "session" && sessionBadge === 0 && sessionLive && (
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-600 dark:bg-violet-500" />
                 )}
               </button>
             );

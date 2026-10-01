@@ -1,17 +1,16 @@
 /**
  * Untreated stills — lifted pages rendered plain on the fixtures, for
- * eyeballing styling in `shoot.mjs` (`#inbox`, `#review`, `#page`). Not part
+ * eyeballing styling in `shoot.mjs` (`#session`, `#review`, `#page`). Not part
  * of the trailer timeline.
  */
 
 import type { ReactNode } from "react";
-import { ChangesPage, InboxPage, NeedsReviewPage, buildReviewIndex } from "../src/pages";
+import { ChangesPage, NeedsReviewPage, SessionPage, buildReviewIndex } from "../src/pages";
 import { NodePage } from "../src/pages/node/NodePage";
-import { buildInboxCards } from "../src/features/inbox/inbox";
 import { planDiff } from "../src/entities/model/planDiff";
 import { elementKey } from "../src/entities/model/ledger";
 import type { Editor } from "../src/entities/model/editor";
-import type { Inbox } from "../src/features/inbox/useInbox";
+import type { SessionLog } from "../src/features/session-log/useSessionLog";
 import type { ScryModel } from "../src/entities/model/viewmodel";
 import { committedModel, driftModel, driftScopes, healthReport, newRespIds, paymentsModel } from "./fixtures";
 
@@ -20,7 +19,7 @@ const EMPTY = new Set<string>();
 // Every editor method is a no-op so action buttons render.
 const editor = new Proxy({}, { get: () => noop }) as unknown as Editor;
 
-const inboxModel: ScryModel = (() => {
+const pendingModel: ScryModel = (() => {
   const m = JSON.parse(JSON.stringify(driftModel)) as ScryModel;
   const wh = m.nodes.find((n) => n.id === "webhooks")!;
   const r = wh.responsibilities!.find((x) => x.id === "r-wh-2")!;
@@ -49,43 +48,45 @@ const inboxModel: ScryModel = (() => {
   return m;
 })();
 
-const cards = buildInboxCards({
-  model: inboxModel,
-  committed: committedModel,
-  planDiff: planDiff(committedModel, inboxModel),
-  verdicts: {
-    "r-ledger-1": { respId: "r-ledger-1", outcome: "failed", cases: 4, stale: false, recordedAt: 1_700_000_600 },
-    "r-fraud-1": { respId: "r-fraud-1", outcome: "passed", cases: 2, stale: false, recordedAt: 1_700_000_300 },
-  },
-  probes: {
-    "r-fraud-1": { respId: "r-fraud-1", probes: 3, survived: 1, survivors: ["removed the threshold comparison"], stale: false, recordedAt: 1_700_000_400 },
-  },
-  refusals: [
-    { respId: "r-auth-1", hostId: "auth", kind: "no-test", reason: "no attached test", at: 1_700_000_200 } as never,
+// One session: a delivered build ask, an open one, a descoped one, an
+// unbroken follow-up prompt, and a file nobody asked for.
+const sessionLog: SessionLog = {
+  sessions: [
+    { session: "7f3a9c2e1b", updatedAt: 1_700_000_700, firstPrompt: "Add refunds for captured payments" },
+    { session: "2c81d0aa94", updatedAt: 1_699_990_000, firstPrompt: "Harden webhook retries" },
   ],
-  closeGate: [
-    { session: "7f3a9c2e1b", file: "auth/internal/session.go", symbol: "Refresh", id: "auth", respId: "r-auth-2", at: 1_700_000_700 } as never,
-  ],
-  now: 1_700_001_000,
-});
+  selectedId: "7f3a9c2e1b",
+  select: noop,
+  badge: 2,
+  live: true,
+  view: {
+    session: "7f3a9c2e1b",
+    startedAt: 1_700_000_000,
+    updatedAt: 1_700_000_700,
+    prompts: [
+      { id: "p1", text: "Add refunds for captured payments. Partial refunds too, and keep the ledger balanced — every refund needs its reversing entry." },
+      { id: "p2", text: "Also, why does the webhook retry twice?" },
+    ],
+    unfiled: ["p2"],
+    asks: [
+      { id: "a1", prompt: "p1", text: "Refund a captured payment", kind: "build", claims: ["r-ledger-1"], status: "delivered" },
+      { id: "a2", prompt: "p1", text: "Partial refunds", kind: "build", claims: [], status: "open", missing: ["no claim covers a partial amount"] },
+      { id: "a3", prompt: "p1", text: "Refund to a different card", kind: "build", claims: [], status: "descoped", reason: "the processor only refunds to the original instrument" },
+    ],
+    touched: [
+      { file: "ledger/src/escrow.rs", claims: [["r-ledger-2", "hold the captured funds"]] },
+      { file: "webhooks/retry.go", claims: [] },
+    ],
+    untraced: ["webhooks/retry.go"],
+    modelEdits: ["resp:r-ledger-1", "node:ledger", "resp:r-gone"],
+  },
+};
 
-function InboxStill({ live }: { live: boolean }) {
-  const inbox: Inbox = {
-    cards,
-    unread: 0,
-    live,
-    seen: EMPTY,
-    markSeen: noop,
-    dismiss: noop,
-    pinnedChange: null,
-    setPinnedChange: noop,
-  };
-  return (
-    <div className="flex h-screen w-screen bg-[var(--surface)]">
-      <InboxPage model={inboxModel} inbox={inbox} editor={editor} onSelectNode={noop} onSelectGroup={noop} />
-    </div>
-  );
-}
+const SessionStill = () => (
+  <div className="flex h-screen w-screen bg-[var(--surface)]">
+    <SessionPage model={pendingModel} log={sessionLog} onSelectNode={noop} onSelectGroup={noop} />
+  </div>
+);
 
 const ReviewStill = () => (
   <div className="flex h-screen w-screen bg-[var(--surface)]">
@@ -129,8 +130,8 @@ void buildReviewIndex;
 const ChangesStill = () => (
   <div className="flex h-screen w-screen bg-[var(--surface)]">
     <ChangesPage
-      planDiff={planDiff(committedModel, inboxModel)}
-      model={inboxModel}
+      planDiff={planDiff(committedModel, pendingModel)}
+      model={pendingModel}
       committed={committedModel}
       changeLog={[]}
       onSelectNode={noop}
@@ -143,7 +144,7 @@ const ChangesStill = () => (
 
 export const stills: Record<string, () => ReactNode> = {
   changes: () => <ChangesStill />,
-  inbox: () => <InboxStill live />,
+  session: () => <SessionStill />,
   review: () => <ReviewStill />,
   page: () => <PageStill />,
 };

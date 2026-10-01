@@ -20,8 +20,8 @@ import {
   buildReviewIndex,
   ChangesPage,
   DarkCodePage,
-  InboxPage,
   NeedsReviewPage,
+  SessionPage,
   UnmappedClaimsPage,
 } from "../pages";
 import { ProjectPicker } from "../pages/project-picker/ProjectPicker";
@@ -39,7 +39,7 @@ import { useAgentSession } from "../features/agent-launch/useAgentSession";
 import { previewableNodeIds, usePreviewServer } from "../features/preview-client/usePreviewServer";
 import { useModelHealth } from "../features/health-feed/useModelHealth";
 import { useTestStatuses } from "../features/health-feed/useTestStatuses";
-import { useInbox } from "../features/inbox/useInbox";
+import { useSessionLog } from "../features/session-log/useSessionLog";
 import { rollupTestFindings, testFindings } from "../entities/model/health";
 import {
   addGroup as addGroupHelper,
@@ -223,18 +223,9 @@ function Workspace({
   // (an agent ingesting a report mid-session) — not only on the busy edge.
   const { verdicts: testVerdicts, probes: probeResults } = useTestStatuses(projectPath, writing);
 
-  // The in-session inbox: every item awaiting a verdict, merged from the
-  // sources above plus the fold-refusal ledger and the hook server's
-  // close-gate / touch events. The top bar shows its unread count.
-  const inbox = useInbox({
-    model,
-    committed,
-    planDiff,
-    verdicts: testVerdicts,
-    probes: probeResults,
-    projectPath,
-    modelRef: modelRefStr,
-  });
+  // The agent session log: what each session was asked and what it did,
+  // re-read live as the hook server appends. The top bar shows its badge.
+  const sessionLog = useSessionLog({ modelRef: modelRefStr });
 
   // Cheap, agent-free nudge: which scopes have code changes since the last
   // reconcile. Refreshes on open, when ANY writer finishes (builds and
@@ -306,23 +297,23 @@ function Workspace({
     localStorage.setItem("scryer:view", v);
     setView(v);
   }, []);
-  // The inbox is a wiki page, but the top bar shows it as its own destination,
-  // so "Wiki" must land on a real page — the last one open before the inbox,
-  // or the top node — never straight back into the inbox.
-  const inboxOpen = view === "wiki" && selected?.kind === "special" && selected.id === "inbox";
+  // The session log is a wiki page, but the top bar shows it as its own
+  // destination, so "Wiki" must land on a real page — the last one open before
+  // it, or the top node — never straight back into the session log.
+  const sessionOpen = view === "wiki" && selected?.kind === "special" && selected.id === "session";
   const lastWikiRef = useRef<Selected | null>(null);
   useEffect(() => {
-    if (!(selected?.kind === "special" && selected.id === "inbox")) lastWikiRef.current = selected;
+    if (!(selected?.kind === "special" && selected.id === "session")) lastWikiRef.current = selected;
   }, [selected]);
   const showView = useCallback(
     (v: WorkspaceView) => {
       setWorkspaceView(v);
-      if (v === "wiki" && inboxOpen) {
+      if (v === "wiki" && sessionOpen) {
         const top = model.nodes.find((n) => !n.parentId);
         setSelected(lastWikiRef.current ?? (top ? { kind: "node", id: top.id } : null));
       }
     },
-    [setWorkspaceView, inboxOpen, model.nodes],
+    [setWorkspaceView, sessionOpen, model.nodes],
   );
   // Flip wiki↔diagram in one step (the Ctrl+Space shortcut).
   const toggleView = useCallback(() => showView(view === "diagram" ? "wiki" : "diagram"), [showView, view]);
@@ -740,10 +731,10 @@ function Workspace({
         onCloseProject={closeProject}
         onOpenSearch={() => setSearchOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
-        inboxUnread={inbox.unread}
-        inboxLive={inbox.live}
-        inboxOpen={inboxOpen}
-        onOpenInbox={() => openSpecial("inbox")}
+        sessionBadge={sessionLog.badge}
+        sessionLive={sessionLog.live}
+        sessionOpen={sessionOpen}
+        onOpenSession={() => openSpecial("session")}
       />
       <div className="flex min-h-0 flex-1">
         <ModelTree
@@ -793,14 +784,8 @@ function Workspace({
               onSetActiveChange={writing ? undefined : setActiveChange}
               onCloseChange={writing ? undefined : closeChange}
             />
-          ) : selected.id === "inbox" ? (
-            <InboxPage
-              model={model}
-              inbox={inbox}
-              editor={pageEditor}
-              onSelectNode={selectNode}
-              onSelectGroup={selectGroup}
-            />
+          ) : selected.id === "session" ? (
+            <SessionPage model={model} log={sessionLog} onSelectNode={selectNode} onSelectGroup={selectGroup} />
           ) : selected.id === "dark" ? (
             <DarkCodePage model={model} report={healthReport} onSelectNode={selectNode} />
           ) : selected.id === "unmapped" ? (

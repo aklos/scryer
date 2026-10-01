@@ -451,7 +451,7 @@ export function ChangesPage({
   const { toast } = useToast();
   // What the backend counts when asked to close: every ledger key tagged to
   // the change — including claims this page does not list because they await
-  // a verdict in the Inbox (a vagrant claim is a plan entry too).
+  // a verdict in Needs review (a vagrant claim is a plan entry too).
   const taggedOf = useMemo(() => {
     const counts = new Map<string, number>();
     for (const c of Object.values(model.changeMap ?? {})) counts.set(c, (counts.get(c) ?? 0) + 1);
@@ -564,8 +564,8 @@ function ChangeSection({
   onClose?: () => void;
 }) {
   // Tagged entries the page does not list — vagrant claims that wait for a
-  // verdict in the Inbox. They still block the close.
-  const inInbox = Math.max(0, tagged - entries.length);
+  // verdict in Needs review. They still block the close.
+  const awaiting = Math.max(0, tagged - entries.length);
   return (
     <section>
       <div className="sticky top-0 z-10 flex min-h-10 items-center gap-3 border-b border-[var(--border)] bg-[var(--surface)] px-4 py-1.5">
@@ -575,9 +575,9 @@ function ChangeSection({
         >
           {rationale}
         </span>
-        {inInbox > 0 && (
+        {awaiting > 0 && (
           <span className="shrink-0 text-xs text-[var(--text-muted)]">
-            {inInbox} awaiting your verdict in the Inbox
+            {awaiting} awaiting your verdict in Needs review
           </span>
         )}
         {onToggleActive && (

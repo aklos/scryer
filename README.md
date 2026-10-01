@@ -83,7 +83,9 @@ Scryer keeps two layers on disk in `.scryer/`:
 
 The difference between them is the **plan**: the outstanding model→code work. When you add a responsibility or a node, it shows in the plan as an `added` mark in the tree. When the agent writes the code, `mark_implemented` folds that work into the committed model. Drift works the other way: when code changes, the agent reconciles undescribed behavior back into the model.
 
-Plan work is filed into **named changes**: a session opens a change with `open_change {rationale}` before it starts, its plan writes tag to it automatically (and are refused while no change is open), so parallel sessions (or you, on the canvas) stay separable. When a change's last entry folds in, it closes and its rationale lands in the history log.
+Plan work is filed into **changes**, one per agent session: the session's first plan write opens it with the user's first prompt as its rationale, and later writes tag to it automatically, so parallel sessions (or you, on the canvas) stay separable. When a change's last entry folds in, it closes and its rationale lands in the history log.
+
+What the user asked for is tracked too. A hook logs every prompt verbatim; the agent breaks it into **asks** and ends each one delivered (claims that are verified and anchored to code the session edited), answered, or descoped with a reason. The session can't stop while an ask is open without being told exactly what's left, and the Session page shows each session's asks, the files it touched, and any edit no ask accounts for.
 
 This is how the model stays ahead of the code: intent is captured as a plan before the code exists, and the committed model only ever reflects what's actually been built.
 
@@ -94,7 +96,7 @@ Scryer works with **Claude Code**, **Codex** and **GitHub Copilot CLI**.
 - **MCP** (Model Context Protocol) — how agents read and write architecture models. Required for any agent integration.
 - **CLI spawning** — how Scryer launches agents for automated model builds and drift sync. Claude Code is spawned via `claude -p` (uses your subscription), Codex via `codex exec` (uses your API key). Both get the Scryer MCP server attached automatically.
 - **ACP** (Agent Client Protocol) — Copilot CLI serves ACP from its own binary (`copilot --acp`), so that's how Scryer launches it; any other agent with a `{name}-acp` adapter on PATH is launched the same way.
-- **Session hooks** — an optional, per-project opt-in for all three: the model's status on session start, the claims governing a file as the agent works in it, and a one-time close check for claims it touched. Inert whenever the Scryer app isn't open on the project.
+- **Session hooks** — an optional, per-project opt-in for all three: each prompt logged for the ask ledger, the claims governing a file as the agent works in it, and a Stop check that holds the agent to its open asks and to reconciling claims it touched. They run in-process with or without the Scryer app open, and log to `.scryer/sessions/` (untracked).
 
 When an agent connects via MCP, Scryer captures its identity from the protocol handshake. When a build or sync is triggered, Scryer resolves that identity to a binary and launches it with the right flags.
 
@@ -171,7 +173,8 @@ For Claude Code, you can also auto-approve Scryer's tools so the agent doesn't p
 - `validate_model` — check the model against C4 rules.
 
 **Authoring (writes the plan):**
-- `open_change` / `sign_off` / `close_change` / `refile` — open (or resume) a named change so this session's plan writes tag to it, record the developer's go-ahead, close an empty one, or move pending work between changes.
+- `file_asks` / `resolve_ask` / `get_asks` — break a logged prompt into asks, and deliver (link claims), answer, or descope each.
+- `refile` — move pending work between changes.
 - `add_person` / `add_system` / `add_container` / `add_component` / `add_symbol` — mint nodes from plain responsibility statements.
 - `add_group` / `update_group` / `delete_group` — group sibling nodes (a secondary packaging axis).
 - `add_links` / `update_links` / `delete_links` — typed relationships between nodes.

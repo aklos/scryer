@@ -16,9 +16,10 @@
  *  - Unmapped claims: the same gap from the model's side — committed leaf claims
  *    that say code exists but anchor to nothing. The list behind the coverage
  *    percentage; its complement.
- *  - Inbox: the in-session queue — every item awaiting the developer's verdict
- *    (vagrants, stale, survivors, failing, contract rewords, refused folds,
- *    close-gate items) as one live stream ordered by risk then recency.
+ *  - Session: one agent session's log — each prompt verbatim with the asks the
+ *    agent broke it into and their outcome, the files it edited that no ask
+ *    accounts for, the claims its edits affected, and the plan elements it
+ *    wrote. Glanced at while the agent works, to catch "I didn't ask for that".
  *
  * All are pages, not panels — reached from the status bar counters, left via
  * any link, exactly like Wikipedia's Special:RecentChanges and cleanup
@@ -31,4 +32,4 @@ export type { ReviewIndex } from "./needs-review/NeedsReviewPage";
 export { buildReviewIndex, NeedsReviewPage } from "./needs-review/NeedsReviewPage";
 export { DarkCodePage } from "./coverage-gaps/DarkCodePage";
 export { findUnmappedClaims, UnmappedClaimsPage } from "./coverage-gaps/UnmappedClaimsPage";
-export { InboxPage } from "./inbox/InboxPage";
+export { SessionPage } from "./session/SessionPage";

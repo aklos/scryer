@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Check, Crosshair, GitCompare, X } from "lucide-react";
 import { ConfirmPopover } from "../../shared/feedback/ConfirmPopover";
 import type { ScryModel, Node, Responsibility, SchemaProperty, DriftScope } from "../../entities/model/viewmodel";
@@ -76,59 +76,6 @@ export function ClaimRow({
       </div>
       {actions}
     </li>
-  );
-}
-
-/** Inline reword: a textarea seeded with the current wording, Save / Cancel.
- *  Shared by the rows here and the inbox cards, so "reword" is one
- *  affordance everywhere. Enter saves, Escape cancels. */
-export function RewordEditor({
-  initial,
-  onSave,
-  onCancel,
-}: {
-  initial: string;
-  onSave: (text: string) => void;
-  onCancel: () => void;
-}) {
-  const [text, setText] = useState(initial);
-  const ref = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
-    ref.current?.focus();
-    ref.current?.select();
-  }, []);
-  const save = () => {
-    const t = text.trim();
-    if (t) onSave(t);
-  };
-  return (
-    <div className="flex w-full flex-col gap-1.5">
-      <textarea
-        ref={ref}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            save();
-          } else if (e.key === "Escape") {
-            e.preventDefault();
-            onCancel();
-          }
-        }}
-        rows={2}
-        className="w-full resize-y rounded border border-[var(--border-strong)] bg-[var(--surface)] px-2 py-1 font-mono text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"
-      />
-      <div className="flex items-center gap-2 text-xs">
-        <button type="button" onClick={save} className={BTN_GO} disabled={!text.trim()}>
-          Save wording
-        </button>
-        <button type="button" onClick={onCancel} className={BTN}>
-          Cancel
-        </button>
-        <span className="text-[var(--text-ghost)]">Enter saves · Esc cancels</span>
-      </div>
-    </div>
   );
 }
 

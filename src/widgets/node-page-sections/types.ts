@@ -5,7 +5,7 @@ import type { ChangeRevision } from "../../features/model-storage/useModelStorag
 import type { HistoryEvent } from "../../entities/model/history";
 import type { PreviewServerState } from "../../features/preview-client/usePreviewServer";
 
-export type SpecialPage = "changes" | "review" | "dark" | "unmapped" | "inbox";
+export type SpecialPage = "changes" | "review" | "dark" | "unmapped" | "session";
 
 export type Selected =
   | { kind: "node"; id: string }

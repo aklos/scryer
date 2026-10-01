@@ -138,6 +138,45 @@ pub(crate) fn write_planned(ref_str: String, data: String) -> Result<(), String>
     scryer_core::write_planned_raw_at(&model_ref, &data)
 }
 
+/// One agent session's log, newest first, for the session list.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionSummary {
+    session: String,
+    updated_at: u64,
+    /// The session's first prompt, for a title.
+    first_prompt: Option<String>,
+}
+
+/// Every agent session with a log in this project, most recent first.
+#[tauri::command]
+pub(crate) fn list_sessions(ref_str: String) -> Result<Vec<SessionSummary>, String> {
+    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
+    Ok(scryer_core::session::list_sessions(&model_ref)
+        .into_iter()
+        .map(|(session, updated_at)| SessionSummary {
+            first_prompt: scryer_core::session::first_prompt(&model_ref, &session),
+            session,
+            updated_at,
+        })
+        .collect())
+}
+
+/// One session as the user reviews it: prompts, asks and where each stands,
+/// files touched with the claims they reached, and edits no ask accounts for.
+#[tauri::command]
+pub(crate) fn read_session(
+    ref_str: String,
+    session: String,
+) -> Result<scryer_core::session::SessionView, String> {
+    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
+    Ok(scryer_core::session::session_view(&model_ref, &session, |claims| {
+        scryer_extract::test_status::claim_evidence(&model_ref, claims)
+            .map(|m| m.into_iter().map(|(k, e)| (k, e.verified())).collect())
+            .unwrap_or_default()
+    }))
+}
+
 /// The fold-refusal ledger: every claim `mark_implemented` last declined to
 /// fold, with the missing fact it was refused for. Read by the inbox; a
 /// refusal clears when the same claim folds or leaves the plan.
