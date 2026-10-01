@@ -14,6 +14,7 @@ pub mod locate;
 pub mod history_log;
 pub mod model_store;
 pub mod refusal_ledger;
+pub mod session;
 pub mod settings_store;
 pub mod styles;
 pub mod sync;

@@ -1,9 +1,8 @@
 use std::sync::Mutex;
 
 use notify::{recommended_watcher, EventKind, RecursiveMode, Watcher};
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 
-use crate::shell::hooks;
 use crate::shell::state::WatcherState;
 
 /// True if the given project has a `.scryer/model.scry` whose version is not
@@ -35,40 +34,7 @@ pub(crate) fn watch_project(
 
     state.project = None;
 
-    // The session-hook endpoint follows the watched project: opening a project
-    // brings it up, switching projects replaces it (the old server's Drop
-    // removes its discovery file, so its hooks fall silent).
     let scryer_core::ModelRef::ProjectLocal(ref project_path) = model_ref;
-    {
-        let hook_state = app.state::<hooks::HookState>();
-        let mut hook = hook_state.0.lock().unwrap();
-        let already = hook
-            .as_ref()
-            .is_some_and(|s| s.project() == project_path.as_path());
-        if !already {
-            *hook = None; // drop the old endpoint before starting the new one
-            // Touches stream to the canvas as "hook-touch" events — the live
-            // "a session is working here" signal.
-            let touch_handle = app.clone();
-            let on_touch = move |t: &hooks::Touch| {
-                let _ = touch_handle.emit("hook-touch", t);
-            };
-            // A close gate that fires is review work: the inbox shows its
-            // needs-reconcile items live as "hook-close-gate" events.
-            let gate_handle = app.clone();
-            let on_close_gate = move |payload: &serde_json::Value| {
-                let _ = gate_handle.emit("hook-close-gate", payload);
-            };
-            match hooks::start(project_path, on_touch, on_close_gate) {
-                Ok(server) => {
-                    eprintln!("[hooks] session endpoint on 127.0.0.1:{}", server.port);
-                    *hook = Some(server);
-                }
-                Err(e) => eprintln!("[hooks] endpoint not started: {e}"),
-            }
-        }
-    }
-
     let _ = std::fs::create_dir_all(&target_dir);
     let handle = app.clone();
     let ref_string = ref_str.clone();
@@ -88,6 +54,16 @@ pub(crate) fn watch_project(
                 return;
             }
             for path in &event.paths {
+                // Session logs are appended by the agent's hooks and MCP server;
+                // the session view re-reads the one that changed.
+                if path.parent().is_some_and(|p| p.ends_with("sessions"))
+                    && path.extension().is_some_and(|e| e == "jsonl")
+                {
+                    if let Some(id) = path.file_stem().and_then(|s| s.to_str()) {
+                        let _ = handle.emit("session-changed", id.to_string());
+                    }
+                    continue;
+                }
                 // The test-status cache lives beside the model files; an agent
                 // ingesting a report mid-session must light the verdict badges
                 // without waiting for the session to end.
@@ -118,6 +94,10 @@ pub(crate) fn watch_project(
     watcher
         .watch(&target_dir, RecursiveMode::NonRecursive)
         .map_err(|e| e.to_string())?;
+    // Session logs live one level down; create the directory so a session
+    // that starts after the project opens is still seen.
+    let _ = scryer_core::session::ensure_sessions_dir(&model_ref);
+    let _ = watcher.watch(&model_ref.sessions_dir(), RecursiveMode::NonRecursive);
     // Report directories are best-effort: a vanished one must not break the
     // model watch that everything else depends on.
     for dir in crate::shell::test_reports::report_dirs(project_path) {

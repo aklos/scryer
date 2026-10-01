@@ -115,6 +115,14 @@ impl ModelRef {
         }
     }
 
+    /// Per-session logs, one append-only `<session_id>.jsonl` each (see
+    /// `crate::domain::session`). Local to this checkout, never committed.
+    pub fn sessions_dir(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join("sessions"),
+        }
+    }
+
     pub fn dir(&self) -> PathBuf {
         match self {
             ModelRef::ProjectLocal(path) => path.join(".scryer"),

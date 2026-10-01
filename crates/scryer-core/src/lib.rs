@@ -62,6 +62,13 @@ pub mod build_edges {
     pub use crate::domain::build_edges::*;
 }
 
+/// The session log and what the session hooks answer from it.
+pub mod session {
+    pub use crate::application::hooks::*;
+    pub use crate::composition::session::*;
+    pub use crate::domain::session::SessionLog;
+}
+
 /// The change ledger.
 pub mod changes {
     pub use crate::composition::change_ledger::*;

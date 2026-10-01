@@ -1,6 +1,5 @@
 pub mod app;
 pub mod build;
-pub mod hooks;
 pub mod mcp_setup;
 pub mod observability;
 pub mod preview;

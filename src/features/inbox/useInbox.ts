@@ -3,7 +3,7 @@
  * the app already holds), the verdict/probe feed (`useTestStatuses`), the
  * fold-refusal ledger (`read_fold_refusals`, re-read on every `model-changed`
  * — the `.scryer/` watcher fires for the ledger file too), the hook server's
- * close-gate events, and the live-session signal (a `hook-touch` in the last
+ * close-gate events, and the live-session signal (a session-log write in the last
  * ten minutes). Hands the merged inputs to the pure `buildInboxCards` and
  * keeps the per-project "seen" and "dismissed" sets in localStorage.
  */
@@ -167,7 +167,7 @@ export function useInbox({
   const [tick, setTick] = useState(0);
   useEffect(() => {
     if (!projectPath) return;
-    const un = listen("hook-touch", () => setLastTouch(Math.floor(Date.now() / 1000)));
+    const un = listen("session-changed", () => setLastTouch(Math.floor(Date.now() / 1000)));
     return () => {
       void un.then((f) => f());
     };
