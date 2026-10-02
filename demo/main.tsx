@@ -9,7 +9,7 @@
 
 import { useSyncExternalStore } from "react";
 import ReactDOM from "react-dom/client";
-import "../src/index.css";
+import "../src/app/index.css";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
 import "@fontsource-variable/space-grotesk";
