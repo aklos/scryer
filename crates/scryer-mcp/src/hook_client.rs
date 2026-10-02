@@ -186,9 +186,26 @@ fn post_tool_use(r: &ModelRef, event: &serde_json::Value, harness: Harness) {
             for file in patched_files(event) {
                 touch(r, event, &file);
             }
+            if is_shell(event) {
+                if let Some(session) = session_id(event) {
+                    let _ = scryer_core::session::record_shell_edits(r, session, tool_use_id(event));
+                }
+            }
         }
         ToolKind::Other => {}
     }
+}
+
+/// Whether this tool call runs a shell command — the one route by which an
+/// edit names no file in its arguments (`sed -i`, a script, a heredoc).
+fn is_shell(event: &serde_json::Value) -> bool {
+    event["tool_name"].as_str() == Some("Bash")
+}
+
+/// The harness's id for this tool call, which pairs a PreToolUse with its
+/// PostToolUse.
+fn tool_use_id(event: &serde_json::Value) -> Option<&str> {
+    event["tool_use_id"].as_str().filter(|s| !s.is_empty())
 }
 
 /// Record one touched file. No output: touch recording must cost the session
@@ -206,10 +223,16 @@ const OVERLAY_FILE_CAP: usize = 5;
 
 /// Codex reads fire no hook events, so the intent overlay rides the edit
 /// instead: just before a patch lands, inject the claims and directives
-/// governing the files it names. Claude Code and Copilot never send this event
-/// (scryer registers PreToolUse for neither — post-Read is the better moment,
-/// and both fire it).
+/// governing the files it names. Claude Code sends this event only for Bash
+/// (post-Read is its overlay moment), and Copilot not at all. Before any shell
+/// command, its start is marked, so the files it modifies count as the
+/// session's edits when it finishes.
 fn pre_tool_use(r: &ModelRef, event: &serde_json::Value, harness: Harness) {
+    if is_shell(event) {
+        if let Some(session) = session_id(event) {
+            let _ = scryer_core::session::record_shell_start(r, session, tool_use_id(event));
+        }
+    }
     let sections: Vec<String> = patched_files(event)
         .iter()
         .take(OVERLAY_FILE_CAP)
@@ -379,20 +402,25 @@ fn user_prompt_submit(r: &ModelRef, event: &serde_json::Value, harness: Harness)
     for pid in ancestor_pids() {
         let _ = scryer_core::session::bind_pid(r, session, pid);
     }
+    if is_peer_message(prompt) {
+        return;
+    }
     let Ok(id) = scryer_core::session::record_prompt(r, session, prompt) else { return };
-    let mut text = format!(
+    let text = format!(
         "[scryer] Prompt {id} logged. Before working, break it into asks with \
          file_asks {{prompt: \"{id}\", asks: [...]}} — one per distinct thing asked; `kind: \
          \"answer\"` for questions; an empty list if it asks for nothing new. Do only what the asks \
          cover; the user sees every edit no ask accounts for."
     );
-    if scryer_core::session::asks_for_parity(prompt) {
-        text.push_str(
-            " This prompt asks for parity with a source: read the source and file one build ask \
-             per feature it has, each with `source` set.",
-        );
-    }
     harness.emit_context("UserPromptSubmit", &text);
+}
+
+/// Whether a submitted "prompt" is another agent's message the harness relays
+/// into the session — a subagent's hand-back or a peer's note — rather than
+/// the user's. Claude Code wraps those in an `<agent-message …>` envelope; the
+/// user asked for none of it, so it is never logged as a prompt.
+fn is_peer_message(prompt: &str) -> bool {
+    prompt.trim_start().starts_with("<agent-message")
 }
 
 /// The hook's ancestor processes, nearest first — the harness process that
@@ -530,6 +558,49 @@ mod tests {
             }
         });
         assert_eq!(patched_files(&event), vec!["/repo/src/lib.rs"], "absolute path untouched");
+    }
+
+    /// A subagent's hand-back or a peer's note, relayed into the session in an
+    /// `<agent-message>` envelope, is not the user's prompt; anything else is.
+    #[test]
+    fn peer_messages_are_not_user_prompts() {
+        assert!(is_peer_message("<agent-message from=\"a1b2\">\n[Subagent hand-back] …"));
+        assert!(is_peer_message("  <agent-message from=\"x\">"));
+        assert!(!is_peer_message("go ahead"));
+        assert!(!is_peer_message("what does <agent-message> mean in the log?"));
+    }
+
+    /// A Bash call is bracketed: its start is marked before it runs, and every
+    /// project file it modified — by `sed`, a script, a heredoc — is a touch
+    /// once it finishes. No file name in the arguments is needed.
+    #[test]
+    fn a_bash_commands_edits_become_session_touches() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let model: scryer_core::ScryModel =
+            serde_json::from_value(serde_json::json!({ "version": "0.3", "nodes": [], "links": [] })).unwrap();
+        scryer_core::write_model_at(&r, &model).unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "old").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        let call = |hook: &str| {
+            serde_json::json!({
+                "hook_event_name": hook,
+                "session_id": "s",
+                "tool_name": "Bash",
+                "tool_use_id": "toolu_1",
+                "cwd": dir.path(),
+                "tool_input": { "command": "sed -i 's/old/new/' src/lib.rs" }
+            })
+        };
+        pre_tool_use(&r, &call("PreToolUse"), Harness::ClaudeLike);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(dir.path().join("src/lib.rs"), "new").unwrap();
+        post_tool_use(&r, &call("PostToolUse"), Harness::ClaudeLike);
+
+        let log = scryer_core::session::session_log(&r, "s");
+        assert_eq!(log.touched, vec!["src/lib.rs".to_string()]);
     }
 
     /// An overlay with no claims, directives, pending work or placement — a

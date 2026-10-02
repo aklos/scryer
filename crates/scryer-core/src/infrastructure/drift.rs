@@ -118,6 +118,11 @@ fn git_changed_files(project: &Path, commit: &str) -> Option<BTreeSet<String>> {
     Some(out)
 }
 
+/// Project files modified after `ns` (unix nanoseconds) — whatever wrote them.
+pub fn files_modified_since_ns(project: &Path, ns: u64) -> BTreeSet<String> {
+    mtime_changed_files(project, ns / 1_000_000_000, Some(ns))
+}
+
 /// Files whose mtime is newer than the anchor. With a ns anchor the comparison
 /// is nanosecond-exact (a same-second edit is visible); without one (old
 /// `.sync` files) it falls back to whole seconds. Honors the same directory

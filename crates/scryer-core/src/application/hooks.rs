@@ -3,7 +3,7 @@
 //! the events these answers call for.
 
 use crate::application::locate::locate;
-use crate::domain::model::ScryModel;
+use crate::domain::model::{Kind, ScryModel};
 use crate::domain::session::{AskKind, SessionLog};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -198,10 +198,30 @@ fn claim_patterns<'a>(working: &'a ScryModel, claim: &str) -> impl Iterator<Item
         .map(|l| l.pattern.as_str())
 }
 
+/// Whether claim `id` needs a passing verdict to deliver — the same line the
+/// fold gate draws: a When/While/If claim on a code-backed host. A ubiquitous
+/// claim, or one on a person or an external system, carries no condition a
+/// test arranges, so its touched, folded code is the evidence.
+fn needs_verdict(working: &ScryModel, id: &str) -> bool {
+    let host = working
+        .nodes
+        .iter()
+        .find_map(|n| n.responsibilities.iter().find(|r| r.id == id).map(|r| (n, r)));
+    match host {
+        Some((n, r)) => {
+            n.kind != Kind::Person
+                && n.external != Some(true)
+                && crate::domain::ears::classify(&r.statement).testable()
+        }
+        None => false, // a group's claim: discharged by its members
+    }
+}
+
 /// Judge every ask in the log. A build ask is delivered when it has claims and
 /// each one exists, is folded (not still `pending` in the plan), has a passing
-/// verdict (`verified`), and anchors code this session edited — a green suite
-/// alone never delivers anything, and neither does a plan.
+/// verdict (`verified`) when it is testable, and anchors code this session
+/// edited — a green suite alone never delivers anything, and neither does a
+/// plan.
 pub fn ask_views(
     log: &SessionLog,
     working: &ScryModel,
@@ -246,7 +266,7 @@ pub fn ask_views(
                                      descope the ask saying exactly what is left"
                                 ));
                             }
-                            if !verified.get(c).copied().unwrap_or(false) {
+                            if needs_verdict(working, c) && !verified.get(c).copied().unwrap_or(false) {
                                 missing.push(format!("{c} has no passing test verdict"));
                             }
                             let touched = claim_patterns(working, c)

@@ -1873,26 +1873,8 @@
       "responsibilities": [
         {
           "id": "resp-78cq5d",
-          "statement": "Dispatches an incoming hook event to the session-start, tool-use, or stop handler by event name",
-          "lastTouchedAt": 1788958615
-        }
-      ]
-    },
-    {
-      "id": "node-qbga03",
-      "kind": "symbol",
-      "name": "Endpoint",
-      "parentId": "node-erg0zt",
-      "properties": [
-        {
-          "label": "port",
-          "description": "",
-          "lastTouchedAt": 1788958615
-        },
-        {
-          "label": "token",
-          "description": "",
-          "lastTouchedAt": 1788958615
+          "statement": "Dispatches an incoming hook event to the prompt-submit, tool-use, or stop handler by event name",
+          "lastTouchedAt": 1790939985
         }
       ]
     },
@@ -1904,60 +1886,8 @@
       "responsibilities": [
         {
           "id": "resp-1qaygn",
-          "statement": "Finds the live endpoint by walking up from the event's project directory to .scryer/hook.json",
-          "lastTouchedAt": 1788958615
-        }
-      ]
-    },
-    {
-      "id": "node-6yf8zs",
-      "kind": "symbol",
-      "name": "parse_live_endpoint",
-      "parentId": "node-erg0zt",
-      "responsibilities": [
-        {
-          "id": "resp-h6c1hg",
-          "statement": "Trusts a discovery file's port/token only when the app process that wrote it is still alive, closing the window for a squatter to harvest the token",
-          "lastTouchedAt": 1788958615
-        }
-      ]
-    },
-    {
-      "id": "node-jn7zmt",
-      "kind": "symbol",
-      "name": "process_alive",
-      "parentId": "node-erg0zt",
-      "responsibilities": [
-        {
-          "id": "resp-0ghpzg",
-          "statement": "Probes whether a pid is a currently-running process without signalling it",
-          "lastTouchedAt": 1788958615
-        }
-      ]
-    },
-    {
-      "id": "node-44dc1q",
-      "kind": "symbol",
-      "name": "call",
-      "parentId": "node-erg0zt",
-      "responsibilities": [
-        {
-          "id": "resp-s0va1s",
-          "statement": "Makes one HTTP exchange against the app's loopback endpoint, treating any failure as \"app unreachable, stay silent\"",
-          "lastTouchedAt": 1788958615
-        }
-      ]
-    },
-    {
-      "id": "node-ggp6s4",
-      "kind": "symbol",
-      "name": "session_start",
-      "parentId": "node-erg0zt",
-      "responsibilities": [
-        {
-          "id": "resp-jvk0a7",
-          "statement": "Announces on session start that the model is live and binding, and how claims/directives will be injected",
-          "lastTouchedAt": 1788958615
+          "statement": "Finds the project's model by walking up from $CLAUDE_PROJECT_DIR or the event's working directory",
+          "lastTouchedAt": 1790939984
         }
       ]
     },
@@ -1975,19 +1905,6 @@
       ]
     },
     {
-      "id": "node-8qy05s",
-      "kind": "symbol",
-      "name": "overlay_target",
-      "parentId": "node-erg0zt",
-      "responsibilities": [
-        {
-          "id": "resp-4readk",
-          "statement": "Builds the /overlay request, carrying the session id so the endpoint can dedupe a repeat overlay for the same file",
-          "lastTouchedAt": 1788958615
-        }
-      ]
-    },
-    {
       "id": "node-e9k3dv",
       "kind": "symbol",
       "name": "post_tool_use",
@@ -1995,8 +1912,8 @@
       "responsibilities": [
         {
           "id": "resp-zbed2y",
-          "statement": "On a read, injects the file's intent overlay; on a write, records the touch",
-          "lastTouchedAt": 1788958615
+          "statement": "On a read, injects the file's intent overlay; on a write or a finished shell command, records the files touched",
+          "lastTouchedAt": 1790939985
         }
       ]
     },
@@ -2009,19 +1926,6 @@
         {
           "id": "resp-5tcyhp",
           "statement": "Records one touched file at zero token cost to the session",
-          "lastTouchedAt": 1788958615
-        }
-      ]
-    },
-    {
-      "id": "node-bxmfw7",
-      "kind": "symbol",
-      "name": "pre_tool_use",
-      "parentId": "node-erg0zt",
-      "responsibilities": [
-        {
-          "id": "resp-edajeb",
-          "statement": "Injects the intent overlay for every file a Codex apply_patch is about to touch, since Codex reads fire no hook events",
           "lastTouchedAt": 1788958615
         }
       ]
@@ -2073,8 +1977,8 @@
       "responsibilities": [
         {
           "id": "resp-8wcazz",
-          "statement": "On session stop, closes out the endpoint's session bookkeeping, guarding against Claude Code's own re-entrant stop loop",
-          "lastTouchedAt": 1788958615
+          "statement": "On session stop, runs the close, ask-ledger and probe gates, blocking once with what is missing or showing the session summary",
+          "lastTouchedAt": 1790939984
         }
       ]
     },
@@ -14125,6 +14029,72 @@
           "lastTouchedAt": 1790939246
         }
       ]
+    },
+    {
+      "id": "node-0zrtkd",
+      "kind": "component",
+      "name": "Session Ask Ledger",
+      "parentId": "node-t58dyd",
+      "description": "Judges each ask a session filed against the claims linked to it.",
+      "responsibilities": [
+        {
+          "id": "resp-gxaeq8",
+          "statement": "**When** an ask's linked claim has no testable condition, **counts** it toward delivery without a test verdict",
+          "lastTouchedAt": 1790939923
+        }
+      ],
+      "layer": "application"
+    },
+    {
+      "id": "node-7h6fth",
+      "kind": "component",
+      "name": "Session Ledger Wiring",
+      "parentId": "node-t58dyd",
+      "description": "The session-log entry points the hook client and MCP tools call: prompts, asks, touches.",
+      "responsibilities": [
+        {
+          "id": "resp-wqpdcg",
+          "statement": "**When** the agent files asks for a prompt, **records** them as given, never inferring from the prompt's wording what they must contain",
+          "lastTouchedAt": 1790939924
+        },
+        {
+          "id": "resp-xxh3fn",
+          "statement": "**When** a shell command finishes, **records** every project file modified since it started as touched by the session",
+          "lastTouchedAt": 1790939924
+        }
+      ],
+      "layer": "composition"
+    },
+    {
+      "id": "node-da3a8k",
+      "kind": "symbol",
+      "name": "user_prompt_submit",
+      "parentId": "node-erg0zt",
+      "responsibilities": [
+        {
+          "id": "resp-3phfpc",
+          "statement": "**If** a submitted prompt is a peer agent's message, **then** **skips** logging it as a user prompt",
+          "lastTouchedAt": 1790939923
+        }
+      ]
+    },
+    {
+      "id": "node-bxmfw7",
+      "kind": "symbol",
+      "name": "pre_tool_use",
+      "parentId": "node-erg0zt",
+      "responsibilities": [
+        {
+          "id": "resp-edajeb",
+          "statement": "Injects the intent overlay for every file a Codex apply_patch is about to touch, since Codex reads fire no hook events",
+          "lastTouchedAt": 1788958615
+        },
+        {
+          "id": "resp-v08x63",
+          "statement": "**When** a shell command is about to run, **marks** its start in the session log",
+          "lastTouchedAt": 1790939924
+        }
+      ]
     }
   ],
   "links": [
@@ -14940,27 +14910,6 @@
       "kind": "depends"
     },
     {
-      "id": "link-node-44dc1q-node-qbga03",
-      "src": "node-44dc1q",
-      "dst": "node-qbga03",
-      "label": "",
-      "kind": "depends"
-    },
-    {
-      "id": "link-node-fgx0t0-node-qbga03",
-      "src": "node-fgx0t0",
-      "dst": "node-qbga03",
-      "label": "",
-      "kind": "depends"
-    },
-    {
-      "id": "link-node-fgx0t0-node-6yf8zs",
-      "src": "node-fgx0t0",
-      "dst": "node-6yf8zs",
-      "label": "",
-      "kind": "depends"
-    },
-    {
       "id": "link-node-cvnd5s-node-9v5b7g",
       "src": "node-cvnd5s",
       "dst": "node-9v5b7g",
@@ -14968,23 +14917,9 @@
       "kind": "depends"
     },
     {
-      "id": "link-node-6yf8zs-node-qbga03",
-      "src": "node-6yf8zs",
-      "dst": "node-qbga03",
-      "label": "",
-      "kind": "depends"
-    },
-    {
       "id": "link-node-x8g5z6-node-de88wh",
       "src": "node-x8g5z6",
       "dst": "node-de88wh",
-      "label": "",
-      "kind": "depends"
-    },
-    {
-      "id": "link-node-e9k3dv-node-qbga03",
-      "src": "node-e9k3dv",
-      "dst": "node-qbga03",
       "label": "",
       "kind": "depends"
     },
@@ -14999,20 +14934,6 @@
       "id": "link-node-e9k3dv-node-v614v2",
       "src": "node-e9k3dv",
       "dst": "node-v614v2",
-      "label": "",
-      "kind": "depends"
-    },
-    {
-      "id": "link-node-e9k3dv-node-44dc1q",
-      "src": "node-e9k3dv",
-      "dst": "node-44dc1q",
-      "label": "",
-      "kind": "depends"
-    },
-    {
-      "id": "link-node-e9k3dv-node-8qy05s",
-      "src": "node-e9k3dv",
-      "dst": "node-8qy05s",
       "label": "",
       "kind": "depends"
     },
@@ -15045,30 +14966,9 @@
       "kind": "depends"
     },
     {
-      "id": "link-node-bxmfw7-node-qbga03",
-      "src": "node-bxmfw7",
-      "dst": "node-qbga03",
-      "label": "",
-      "kind": "depends"
-    },
-    {
       "id": "link-node-bxmfw7-node-9v5b7g",
       "src": "node-bxmfw7",
       "dst": "node-9v5b7g",
-      "label": "",
-      "kind": "depends"
-    },
-    {
-      "id": "link-node-bxmfw7-node-44dc1q",
-      "src": "node-bxmfw7",
-      "dst": "node-44dc1q",
-      "label": "",
-      "kind": "depends"
-    },
-    {
-      "id": "link-node-bxmfw7-node-8qy05s",
-      "src": "node-bxmfw7",
-      "dst": "node-8qy05s",
       "label": "",
       "kind": "depends"
     },
@@ -15115,51 +15015,9 @@
       "kind": "depends"
     },
     {
-      "id": "link-node-ywg09k-node-ggp6s4",
-      "src": "node-ywg09k",
-      "dst": "node-ggp6s4",
-      "label": "",
-      "kind": "depends"
-    },
-    {
       "id": "link-node-ywg09k-node-7fb28e",
       "src": "node-ywg09k",
       "dst": "node-7fb28e",
-      "label": "",
-      "kind": "depends"
-    },
-    {
-      "id": "link-node-ggp6s4-node-qbga03",
-      "src": "node-ggp6s4",
-      "dst": "node-qbga03",
-      "label": "",
-      "kind": "depends"
-    },
-    {
-      "id": "link-node-ggp6s4-node-9v5b7g",
-      "src": "node-ggp6s4",
-      "dst": "node-9v5b7g",
-      "label": "",
-      "kind": "depends"
-    },
-    {
-      "id": "link-node-ggp6s4-node-44dc1q",
-      "src": "node-ggp6s4",
-      "dst": "node-44dc1q",
-      "label": "",
-      "kind": "depends"
-    },
-    {
-      "id": "link-node-7fb28e-node-qbga03",
-      "src": "node-7fb28e",
-      "dst": "node-qbga03",
-      "label": "",
-      "kind": "depends"
-    },
-    {
-      "id": "link-node-7fb28e-node-44dc1q",
-      "src": "node-7fb28e",
-      "dst": "node-44dc1q",
       "label": "",
       "kind": "depends"
     },
@@ -15174,20 +15032,6 @@
       "id": "link-node-rc0aym-node-v614v2",
       "src": "node-rc0aym",
       "dst": "node-v614v2",
-      "label": "",
-      "kind": "depends"
-    },
-    {
-      "id": "link-node-7zbq1a-node-qbga03",
-      "src": "node-7zbq1a",
-      "dst": "node-qbga03",
-      "label": "",
-      "kind": "depends"
-    },
-    {
-      "id": "link-node-7zbq1a-node-44dc1q",
-      "src": "node-7zbq1a",
-      "dst": "node-44dc1q",
       "label": "",
       "kind": "depends"
     },
@@ -19353,14 +19197,6 @@
         "endLine": 144
       }
     ],
-    "node-qbga03": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "Endpoint",
-        "line": 134,
-        "endLine": 137
-      }
-    ],
     "node-qdf3af": [
       {
         "pattern": "src-tauri/src/shell/state.rs",
@@ -19721,12 +19557,6 @@
         "symbol": "useInbox"
       }
     ],
-    "resp-0ghpzg": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "process_alive"
-      }
-    ],
     "resp-0gvebr": [
       {
         "pattern": "crates/xtask/src/main.rs",
@@ -19997,6 +19827,12 @@
         "symbol": "registerConcerns"
       }
     ],
+    "resp-3phfpc": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "is_peer_message"
+      }
+    ],
     "resp-3ybzm1": [
       {
         "pattern": "crates/scryer-core/src/domain/diff.rs",
@@ -20061,12 +19897,6 @@
       {
         "pattern": "src/shared/theme/theme.ts",
         "symbol": "applyTheme"
-      }
-    ],
-    "resp-4readk": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "overlay_target"
       }
     ],
     "resp-4s2fx7": [
@@ -21261,6 +21091,12 @@
         "symbol": "record_probe_result"
       }
     ],
+    "resp-gxaeq8": [
+      {
+        "pattern": "crates/scryer-core/src/application/hooks.rs",
+        "symbol": "needs_verdict"
+      }
+    ],
     "resp-h18azm": [
       {
         "pattern": "crates/scryer-mcp/src/tools/misc.rs",
@@ -21277,12 +21113,6 @@
       {
         "pattern": "crates/scryer-extract/src/domain/lang.rs",
         "symbol": "parse_vue_sfc"
-      }
-    ],
-    "resp-h6c1hg": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "parse_live_endpoint"
       }
     ],
     "resp-h6kc5k": [
@@ -21385,12 +21215,6 @@
       {
         "pattern": "crates/scryer-mcp/src/helpers.rs",
         "symbol": "write_planned_tagged"
-      }
-    ],
-    "resp-jvk0a7": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "session_start"
       }
     ],
     "resp-jw6sc9": [
@@ -22105,12 +21929,6 @@
         "symbol": "prune_touches"
       }
     ],
-    "resp-s0va1s": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "call"
-      }
-    ],
     "resp-s18hdy": [
       {
         "pattern": "src/features/agent-launch/useAgentSession.ts",
@@ -22327,6 +22145,12 @@
         "symbol": "flag_drift"
       }
     ],
+    "resp-v08x63": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "pre_tool_use"
+      }
+    ],
     "resp-v16bw1": [
       {
         "pattern": "src-tauri/src/shell/observability.rs",
@@ -22471,6 +22295,12 @@
         "symbol": "record_test_results"
       }
     ],
+    "resp-wqpdcg": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "file_asks"
+      }
+    ],
     "resp-wrge88": [
       {
         "pattern": "crates/scryer-core/src/domain/test_results.rs",
@@ -22589,6 +22419,12 @@
       {
         "pattern": "src/pages/project-picker/ProjectPicker.tsx",
         "symbol": "ProjectPicker"
+      }
+    ],
+    "resp-xxh3fn": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "record_shell_edits"
       }
     ],
     "resp-xzztek": [
@@ -22839,6 +22675,12 @@
         "symbol": "hook_status_tells_outdated_installs_from_missing_ones"
       }
     ],
+    "resp-3phfpc": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "peer_messages_are_not_user_prompts"
+      }
+    ],
     "resp-463yda": [
       {
         "pattern": "src-tauri/src/shell/mcp_setup.rs",
@@ -22917,6 +22759,12 @@
       {
         "pattern": "crates/scryer-core/src/domain/style_health.rs",
         "symbol": "composition_wires_every_layer_and_nothing_imports_it"
+      }
+    ],
+    "resp-gxaeq8": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "an_untestable_claim_delivers_without_a_verdict"
       }
     ],
     "resp-k3sjnc": [
@@ -23011,6 +22859,12 @@
         "symbol": "a_guessed_edge_charges_no_violation"
       }
     ],
+    "resp-v08x63": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "a_bash_commands_edits_become_session_touches"
+      }
+    ],
     "resp-vk8n9a": [
       {
         "pattern": "crates/scryer-extract/src/domain/lang.rs",
@@ -23021,6 +22875,12 @@
       {
         "pattern": "crates/scryer-extract/src/domain/context.rs",
         "symbol": "a_named_import_follows_a_re_export_barrel"
+      }
+    ],
+    "resp-wqpdcg": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "asks_are_filed_as_given_whatever_the_prompt_says"
       }
     ],
     "resp-wtnehp": [
@@ -23053,6 +22913,16 @@
       {
         "pattern": "tests/structuralViolations.test.ts",
         "symbol": "tells the user to have the agent choose an architecture and refactor"
+      }
+    ],
+    "resp-xxh3fn": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "a_shell_commands_edits_are_recorded_as_touches"
+      },
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "a_bash_commands_edits_become_session_touches"
       }
     ],
     "resp-yqsm59": [

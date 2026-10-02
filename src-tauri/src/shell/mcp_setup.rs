@@ -56,10 +56,14 @@ fn check_claude_approved(project_path: &str) -> bool {
 /// An install counts as current only when its scryer entries are exactly this
 /// set (see `hook_install_status`), so one that predates a change is offered
 /// as an update rather than read as missing.
+/// Bash is bracketed (Pre marks its start, Post records the files it
+/// modified) so edits made through the shell count as the session's.
 const SCRYER_HOOK_EVENTS: &[(&str, Option<&str>, u64)] = &[
     ("UserPromptSubmit", None, 10),
+    ("PreToolUse", Some("Bash"), 10),
     ("PostToolUse", Some("Read"), 10),
     ("PostToolUse", Some("Edit|Write|NotebookEdit"), 10),
+    ("PostToolUse", Some("Bash"), 10),
     ("Stop", None, 15),
 ];
 
@@ -689,7 +693,12 @@ mod hook_install_tests {
         let current = |binary: &str| {
             serde_json::json!({
                 "UserPromptSubmit": [entry(None, binary)],
-                "PostToolUse": [entry(Some("Read"), binary), entry(Some("Edit|Write|NotebookEdit"), binary)],
+                "PreToolUse": [entry(Some("Bash"), binary)],
+                "PostToolUse": [
+                    entry(Some("Read"), binary),
+                    entry(Some("Edit|Write|NotebookEdit"), binary),
+                    entry(Some("Bash"), binary),
+                ],
                 "Stop": [entry(None, binary)],
             })
         };
@@ -711,6 +720,10 @@ mod hook_install_tests {
             })),
             HookStatus::Outdated
         );
+        // A registration installed twice is not the current set.
+        let mut doubled = current(&bin);
+        doubled["Stop"].as_array_mut().unwrap().push(entry(None, &bin));
+        assert_eq!(status(doubled), HookStatus::Outdated);
         // A changed matcher is a different registration.
         let mut changed = current(&bin);
         changed["PostToolUse"][1]["matcher"] = serde_json::json!("Edit|Write");
@@ -760,12 +773,17 @@ mod hook_install_tests {
         // Untouched sections and foreign hooks survive.
         assert_eq!(root["permissions"]["allow"][0], "mcp__scryer");
         let post = root["hooks"]["PostToolUse"].as_array().unwrap();
-        assert!(post.iter().any(|e| e["matcher"] == "Bash"), "foreign hook kept");
+        assert!(
+            post.iter().any(|e| e["hooks"][0]["command"] == "my-linter"),
+            "foreign hook kept"
+        );
         // Exactly one scryer entry per registration, even after re-install.
         let scryer_post: Vec<_> = post.iter().filter(|e| is_scryer_hook_entry(e)).collect();
-        assert_eq!(scryer_post.len(), 2, "Read overlay + Edit touch: {post:?}");
+        assert_eq!(scryer_post.len(), 3, "Read overlay + Edit touch + Bash edits: {post:?}");
         assert!(scryer_post.iter().any(|e| e["matcher"] == "Read"));
         assert!(scryer_post.iter().any(|e| e["matcher"] == "Edit|Write|NotebookEdit"));
+        assert!(scryer_post.iter().any(|e| e["matcher"] == "Bash"));
+        assert_eq!(root["hooks"]["PreToolUse"].as_array().unwrap().len(), 1, "Bash start marker");
         assert!(root["hooks"].get("SessionStart").is_none(), "stale SessionStart removed: {root}");
         assert_eq!(root["hooks"]["Stop"].as_array().unwrap().len(), 1);
     }

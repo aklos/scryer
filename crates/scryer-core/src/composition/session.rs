@@ -8,7 +8,7 @@ use crate::application::hooks::{
 use crate::application::locate::LocateReport;
 use crate::composition::locate::locate_at;
 use crate::composition::model_store::{read_model_at, read_planned_at};
-use crate::domain::session::{asks_for_parity, fnv1a64, relativize, Ask, AskKind, SessionLog};
+use crate::domain::session::{fnv1a64, relativize, Ask, AskKind, SessionLog};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use crate::infrastructure::session_store;
@@ -26,6 +26,34 @@ pub fn session_log(r: &ModelRef, session: &str) -> SessionLog {
 pub fn record_touch(r: &ModelRef, session: &str, file: &str) -> Result<(), String> {
     let file = relativize(r.project_path(), file);
     session_store::append(r, session, SessionEvent::Touch { file })
+}
+
+/// Mark that a shell command is about to run in `session`. `tool` is the
+/// harness's id for the call, when it gives one.
+pub fn record_shell_start(r: &ModelRef, session: &str, tool: Option<&str>) -> Result<(), String> {
+    let ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or_default();
+    session_store::append(r, session, SessionEvent::ShellStart { tool: tool.map(str::to_string), ns })
+}
+
+/// A shell command finished: record every project file modified since it
+/// started as touched — edits made with `sed`, a script or a heredoc are the
+/// session's as surely as an Edit tool's. Scryer's own `.scryer/` files are
+/// not code. Returns the newly touched files.
+pub fn record_shell_edits(r: &ModelRef, session: &str, tool: Option<&str>) -> Result<Vec<String>, String> {
+    let log = session_log(r, session);
+    let Some(since) = log.shell_started(tool) else { return Ok(Vec::new()) };
+    let mut added = Vec::new();
+    for file in crate::infrastructure::drift::files_modified_since_ns(r.project_path(), since) {
+        if file.starts_with(".scryer/") || log.touched.contains(&file) {
+            continue;
+        }
+        session_store::append(r, session, SessionEvent::Touch { file: file.clone() })?;
+        added.push(file);
+    }
+    Ok(added)
 }
 
 /// The intent overlay for `file`, or `None` when the session was already shown
@@ -108,11 +136,9 @@ pub struct NewAsk {
     pub source: Option<String>,
 }
 
-/// Break prompt `prompt` (default: the oldest one not filed yet) into asks.
-/// A prompt that asks for parity with a source ("port X", "match the
-/// prototype") is refused unless its build asks name the `source` and list
-/// its features one per ask — one vague "port X" ask is how a missing
-/// throttle passes 298 green tests.
+/// Break prompt `prompt` (default: the oldest one not filed yet) into asks,
+/// recorded as the agent gives them. What a prompt asks for is the agent's
+/// reading, never inferred here from its wording.
 pub fn file_asks(
     r: &ModelRef,
     session: &str,
@@ -129,25 +155,11 @@ pub fn file_asks(
             .or_else(|| log.prompts.last().map(|(id, _)| id.clone()))
             .ok_or("no prompt is recorded for this session yet")?,
     };
-    let text = log
-        .prompts
-        .iter()
-        .find(|(id, _)| *id == prompt)
-        .map(|(_, t)| t.as_str())
-        .ok_or_else(|| format!("no prompt '{prompt}' in this session"))?;
+    if !log.prompts.iter().any(|(id, _)| *id == prompt) {
+        return Err(format!("no prompt '{prompt}' in this session"));
+    }
     if let Some(a) = asks.iter().find(|a| a.text.trim().is_empty()) {
         return Err(format!("an ask needs text (got {:?})", a.text));
-    }
-    if asks_for_parity(text) {
-        let sourced = asks.iter().filter(|a| a.kind == AskKind::Build && a.source.is_some()).count();
-        if sourced < 2 {
-            return Err(format!(
-                "prompt {prompt} asks for parity with a source (\"{}\"). Read the source and file \
-                 ONE build ask per feature it has, each with `source` set to the path it comes \
-                 from — not one ask for the whole port.",
-                text.chars().take(120).collect::<String>()
-            ));
-        }
     }
     let first = log.asks.len() + 1;
     let filed: Vec<Ask> = asks
@@ -485,9 +497,15 @@ mod tests {
             "nodes": [
                 { "id": "sys", "kind": "system", "name": "Acme" },
                 { "id": "api", "kind": "container", "name": "API", "parentId": "sys",
-                  "responsibilities": [{ "id": "r-1", "statement": "serves requests" }] }
+                  "responsibilities": [
+                      { "id": "r-1", "statement": "**When** a request arrives, **serves** it" },
+                      { "id": "r-2", "statement": "**Log** every request" }
+                  ] }
             ],
-            "sourceMap": { "r-1": [{ "pattern": "src/auth.rs", "symbol": "verify" }] }
+            "sourceMap": {
+                "r-1": [{ "pattern": "src/auth.rs", "symbol": "verify" }],
+                "r-2": [{ "pattern": "src/log.rs", "symbol": "log" }]
+            }
         }))
         .unwrap();
         crate::write_model_at(&r, &m).unwrap();
@@ -711,23 +729,79 @@ mod tests {
         assert!(out.summary.unwrap().contains("descoped a1 \"add dark mode\": the theme system lands next sprint"));
     }
 
-    /// "Port X" asks must be split into the source's features.
+    /// A claim with no When/While/If condition has nothing for a test to
+    /// arrange, so it delivers on its touched code alone; a testable one still
+    /// needs its passing verdict.
     #[test]
-    fn a_parity_prompt_needs_one_sourced_ask_per_feature() {
+    fn an_untestable_claim_delivers_without_a_verdict() {
         let (_dir, r) = project();
+        record_prompt(&r, "s", "log requests and serve them").unwrap();
+        file_asks(&r, "s", None, vec![ask("log requests", AskKind::Build), ask("serve", AskKind::Build)]).unwrap();
+        resolve_ask(&r, "s", "a1", Resolution::Claims(vec!["r-2".into()])).unwrap();
+        resolve_ask(&r, "s", "a2", Resolution::Claims(vec!["r-1".into()])).unwrap();
+        record_touch(&r, "s", "src/log.rs").unwrap();
+        record_touch(&r, "s", "src/auth.rs").unwrap();
+
+        let views = ask_views(&session_log(&r, "s"), &working(&r).unwrap(), &HashMap::new(), &HashSet::new());
+        assert_eq!(views[0].status, crate::session::AskStatus::Delivered, "ubiquitous: {:?}", views[0].status);
+        assert!(
+            matches!(&views[1].status, crate::session::AskStatus::Open { missing }
+                if missing.iter().any(|m| m.contains("no passing test verdict"))),
+            "testable: {:?}",
+            views[1].status
+        );
+    }
+
+    /// Asks are filed as the agent reads the prompt: no wording in it — "a
+    /// port request", "port the prototype" — makes the filing refuse.
+    #[test]
+    fn asks_are_filed_as_given_whatever_the_prompt_says() {
+        let (_dir, r) = project();
+        record_prompt(&r, "s", "file_asks flags this as a port request").unwrap();
+        let (_, filed) = file_asks(&r, "s", None, Vec::new()).unwrap();
+        assert!(filed.is_empty());
+
         record_prompt(&r, "s", "port the prototype flight model").unwrap();
-        let vague = file_asks(&r, "s", None, vec![ask("port the flight model", AskKind::Build)]);
-        assert!(vague.unwrap_err().contains("ONE build ask per feature"));
-        let sourced = |t: &str| NewAsk {
-            text: t.into(),
+        let (_, filed) =
+            file_asks(&r, "s", Some("p2"), vec![ask("port the flight model", AskKind::Build)]).unwrap();
+        assert_eq!(filed[0].text, "port the flight model");
+        let sourced = NewAsk {
+            text: "drag".into(),
             kind: AskKind::Build,
             source: Some("proto/flight.js".into()),
         };
-        let (_, filed) =
-            file_asks(&r, "s", None, vec![sourced("thrust from throttle"), sourced("drag")]).unwrap();
+        let (_, filed) = file_asks(&r, "s", Some("p2"), vec![sourced]).unwrap();
         assert_eq!(filed[0].source.as_deref(), Some("proto/flight.js"));
-        assert!(crate::session::asks_for_parity("match the prototype's HUD"));
-        assert!(!crate::session::asks_for_parity("fix the report export"), "no false hit on 'report'");
+    }
+
+    /// Files a shell command modified between its start and finish become the
+    /// session's touches — however the command wrote them — and scryer's own
+    /// files and ones already touched are left out.
+    #[test]
+    fn a_shell_commands_edits_are_recorded_as_touches() {
+        let (dir, r) = project();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/before.rs"), "old").unwrap();
+        std::fs::write(dir.path().join("src/kept.rs"), "old").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        record_shell_start(&r, "s", Some("call-1")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(dir.path().join("src/before.rs"), "sed'd").unwrap();
+        std::fs::write(dir.path().join("src/new.rs"), "heredoc").unwrap();
+        std::fs::write(dir.path().join(".scryer/scratch.json"), "{}").unwrap();
+
+        let mut added = record_shell_edits(&r, "s", Some("call-1")).unwrap();
+        added.sort();
+        assert_eq!(added, vec!["src/before.rs", "src/new.rs"]);
+        let log = session_log(&r, "s");
+        assert!(log.touched.contains(&"src/new.rs".to_string()));
+        assert!(!log.touched.contains(&"src/kept.rs".to_string()), "unmodified file untouched");
+        assert!(
+            record_shell_edits(&r, "s", Some("call-1")).unwrap().is_empty(),
+            "a file already touched is not recorded twice"
+        );
+        assert!(record_shell_edits(&r, "other", None).unwrap().is_empty(), "no start, no touches");
     }
 
     #[test]

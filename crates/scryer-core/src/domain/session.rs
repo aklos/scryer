@@ -64,6 +64,14 @@ pub enum SessionEvent {
     /// The Stop gate blocked until this session's new tests were
     /// mutation-probed — at most once per session.
     ProbeGate,
+    /// A shell command is about to run: files modified after `ns` (unix
+    /// nanoseconds) and before it finishes are the session's edits. `tool` is
+    /// the harness's tool-call id, so concurrent commands pair up.
+    ShellStart {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool: Option<String>,
+        ns: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -85,7 +93,8 @@ pub struct Ask {
     pub text: String,
     #[serde(default)]
     pub kind: AskKind,
-    /// For "port X" / "match the prototype": the path the feature comes from.
+    /// When the ask is a feature of something to port or match: the path the
+    /// feature comes from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 }
@@ -125,6 +134,8 @@ pub struct SessionLog {
     /// Plan elements the agent wrote, first-write order, each once.
     pub model_edits: Vec<String>,
     pub last_summary: Option<String>,
+    /// Shell commands started, `(tool-call id, unix ns)`, in start order.
+    pub shell_starts: Vec<(Option<String>, u64)>,
 }
 
 impl SessionLog {
@@ -198,7 +209,21 @@ impl SessionLog {
             SessionEvent::Summary { text } => self.last_summary = Some(text.clone()),
             SessionEvent::PendingGate { keys } => self.gated_pending.extend(keys.iter().cloned()),
             SessionEvent::ProbeGate => self.probe_gated = true,
+            SessionEvent::ShellStart { tool, ns } => self.shell_starts.push((tool.clone(), *ns)),
         }
+    }
+
+    /// When the shell command `tool` started: its own start when the harness
+    /// names the call, else the latest start.
+    pub fn shell_started(&self, tool: Option<&str>) -> Option<u64> {
+        tool.and_then(|t| {
+            self.shell_starts
+                .iter()
+                .rev()
+                .find(|(id, _)| id.as_deref() == Some(t))
+                .map(|(_, ns)| *ns)
+        })
+        .or_else(|| self.shell_starts.last().map(|(_, ns)| *ns))
     }
 
     fn ask_mut(&mut self, id: &str) -> Option<&mut AskEntry> {
@@ -233,20 +258,6 @@ impl SessionLog {
     pub fn overlay_is_repeat(&self, file: &str, hash: u64) -> bool {
         self.overlays.iter().any(|(f, h)| f == file && *h == hash)
     }
-}
-
-/// Whether a prompt asks to port something or to match a reference — the asks
-/// where "done" means feature parity with a source, so the agent must list the
-/// source's features rather than file one vague ask.
-pub fn asks_for_parity(prompt: &str) -> bool {
-    let lower = prompt.to_lowercase();
-    let words: Vec<&str> = lower
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .collect();
-    let has = |w: &str| words.contains(&w);
-    has("port") || has("porting") || has("ported") || has("replicate")
-        || (has("prototype") && (has("match") || has("like") || has("same") || has("from")))
 }
 
 /// FNV-1a, 64-bit. Not cryptographic — it only tells "same payload as last
