@@ -19,7 +19,8 @@ The hook logs each user prompt and names it (`p3`). Break it into asks with `fil
 anything else, do what the asks cover and nothing beyond it, and end each one delivered \
 (`resolve_ask {id, claims}`: verified claims on code you edited), answered, or descoped with a \
 reason. The Stop hook names whatever is still open. Never ask the user to review or approve: \
-finish the work. [[ask-ledger]]\n\
+finish the work. No silent passes or stubs: an unfinished ask is descoped saying what is left. \
+[[ask-ledger]]\n\
 \n\
 ## Every task beyond a one-line fix\n\
 1. ORIENT — `orient {task, files}` for a coding task; `get_health` then `read_model` for a \

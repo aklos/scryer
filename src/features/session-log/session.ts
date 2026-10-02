@@ -57,6 +57,8 @@ export interface SessionView {
   touched: { file: string; claims: [string, string][] }[];
   /** Edited files no ask accounts for — the "I didn't ask for that" view. */
   untraced: string[];
+  /** Plan entries the session planned and never folded: `[key, label]`. */
+  unfolded?: [string, string][];
   /** Plan element keys the agent wrote (`resp:…`, `node:…`, …). */
   modelEdits: string[];
 }

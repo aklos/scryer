@@ -10,7 +10,7 @@ use crate::composition::locate::locate_at;
 use crate::composition::model_store::{read_model_at, read_planned_at};
 use crate::domain::session::{asks_for_parity, fnv1a64, relativize, Ask, AskKind, SessionLog};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::infrastructure::session_store;
 use crate::ModelRef;
 
@@ -217,6 +217,19 @@ pub fn resolve_ask(r: &ModelRef, session: &str, id: &str, how: Resolution) -> Re
     session_store::append(r, session, event)
 }
 
+/// Claim ids the plan still holds unbuilt: added or changed, not yet folded.
+fn pending_claims(r: &ModelRef) -> HashSet<String> {
+    let (Ok(committed), Ok(planned)) = (read_model_at(r), read_planned_at(r)) else {
+        return HashSet::new();
+    };
+    crate::domain::diff::diff(&committed, &planned)
+        .changes
+        .into_iter()
+        .filter(|ch| ch.kind == crate::domain::diff::ElementKind::Responsibility)
+        .map(|ch| ch.id)
+        .collect()
+}
+
 fn working(r: &ModelRef) -> Option<crate::ScryModel> {
     let committed = read_model_at(r).ok()?;
     Some(match read_planned_at(r) {
@@ -237,6 +250,8 @@ pub struct SessionView {
     pub asks: Vec<AskView>,
     pub touched: Vec<TouchedFile>,
     pub untraced: Vec<String>,
+    /// Plan entries the session planned and has not folded: `(key, label)`.
+    pub unfolded: Vec<(String, String)>,
     pub model_edits: Vec<String>,
     /// Unix seconds of the first and last event.
     pub started_at: u64,
@@ -283,9 +298,10 @@ pub fn session_view(
         session: session.to_string(),
         prompts: log.prompts.iter().map(|(id, text)| PromptView { id: id.clone(), text: text.clone() }).collect(),
         unfiled: log.unfiled_prompts().into_iter().map(str::to_string).collect(),
-        asks: ask_views(&log, &working, &verified),
+        asks: ask_views(&log, &working, &verified, &pending_claims(r)),
         touched,
         untraced: untraced_edits(&log, &working),
+        unfolded: unfolded(r, session),
         model_edits: log.model_edits.clone(),
         started_at: entries.first().map_or(0, |e| e.at),
         updated_at: entries.last().map_or(0, |e| e.at),
@@ -313,7 +329,8 @@ pub fn stop(
     let log = session_log(r, session);
     let working = working(r).unwrap_or_default();
     let linked: Vec<String> = log.asks.iter().flat_map(|a| a.claims.iter().cloned()).collect();
-    let views = ask_views(&log, &working, &verified(&linked));
+    let views = ask_views(&log, &working, &verified(&linked), &pending_claims(r));
+    let left = unfolded(r, session);
 
     let gate = asks_gate(&log, &views);
     let mut reasons: Vec<String> = Vec::new();
@@ -329,7 +346,6 @@ pub fn stop(
         );
     }
     if !log.pending_gated {
-        let left = unfolded(r, session);
         if !left.is_empty() {
             reasons.push(pending_reason(&left));
             let _ = session_store::append(r, session, SessionEvent::PendingGate);
@@ -343,7 +359,7 @@ pub fn stop(
         return StopOutcome { block: Some(reasons.join("\n\n")), summary: None };
     }
 
-    let summary = session_summary(&views, &untraced_edits(&log, &working))
+    let summary = session_summary(&views, &untraced_edits(&log, &working), &left)
         .filter(|s| log.last_summary.as_deref() != Some(s.as_str()));
     if let Some(s) = &summary {
         let _ = session_store::append(r, session, SessionEvent::Summary { text: s.clone() });
@@ -563,10 +579,10 @@ mod tests {
         resolve_ask(&r, "s", "a2", Resolution::Answered).unwrap();
         let log = session_log(&r, "s");
         let working = working(&r).unwrap();
-        let views = ask_views(&log, &working, &pass(&["r-1".into()]));
+        let views = ask_views(&log, &working, &pass(&["r-1".into()]), &HashSet::new());
         assert!(matches!(&views[0].status, crate::session::AskStatus::Open { missing } if missing[0].contains("edited none")));
         assert_eq!(views[1].status, crate::session::AskStatus::Answered);
-        let failing = ask_views(&log, &working, &HashMap::new());
+        let failing = ask_views(&log, &working, &HashMap::new(), &HashSet::new());
         assert!(matches!(&failing[0].status, crate::session::AskStatus::Open { missing } if missing.iter().any(|m| m.contains("no passing test verdict"))));
 
         record_touch(&r, "s", "src/auth.rs").unwrap();
@@ -600,7 +616,24 @@ mod tests {
         assert!(unfolded(&r, "other").is_empty(), "another session's work is not this one's");
         let reason = stop(&r, "s", no_flags, pass).block.expect("unfolded work blocks");
         assert!(reason.contains("resp:r-2") && reason.contains("mark_implemented"), "{reason}");
-        assert!(stop(&r, "s", no_flags, pass).block.is_none(), "once per session");
+        let quiet = stop(&r, "s", no_flags, pass);
+        assert!(quiet.block.is_none(), "once per session");
+        let summary = quiet.summary.expect("the user still hears about it");
+        assert!(summary.contains("planned, not built: 1") && summary.contains("rate-limits callers"), "{summary}");
+
+        // An ask linked to a claim that is only planned is not delivered,
+        // however green its test.
+        record_prompt(&r, "s", "rate-limit the API").unwrap();
+        file_asks(&r, "s", None, vec![ask("rate-limit callers", AskKind::Build)]).unwrap();
+        resolve_ask(&r, "s", "a1", Resolution::Claims(vec!["r-2".into()])).unwrap();
+        record_touch(&r, "s", "src/auth.rs").unwrap();
+        let view = session_view(&r, "s", |_| pass(&["r-2".into()]));
+        assert!(
+            matches!(&view.asks[0].status, crate::session::AskStatus::Open { missing } if missing.iter().any(|m| m.contains("planned, not built"))),
+            "{:?}",
+            view.asks[0].status
+        );
+        assert_eq!(view.unfolded.len(), 1);
     }
 
     #[test]

@@ -6,7 +6,7 @@ use crate::application::locate::locate;
 use crate::domain::model::ScryModel;
 use crate::domain::session::{AskKind, SessionLog};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// One anchor the fingerprint check reports out of sync, in the shape the close
 /// view needs. The check itself lives outside this crate.
@@ -199,12 +199,14 @@ fn claim_patterns<'a>(working: &'a ScryModel, claim: &str) -> impl Iterator<Item
 }
 
 /// Judge every ask in the log. A build ask is delivered when it has claims and
-/// each one exists, has a passing verdict (`verified`), and anchors code this
-/// session edited — a green suite alone never delivers anything.
+/// each one exists, is folded (not still `pending` in the plan), has a passing
+/// verdict (`verified`), and anchors code this session edited — a green suite
+/// alone never delivers anything, and neither does a plan.
 pub fn ask_views(
     log: &SessionLog,
     working: &ScryModel,
     verified: &HashMap<String, bool>,
+    pending: &HashSet<String>,
 ) -> Vec<AskView> {
     let exists = |id: &str| {
         working
@@ -237,6 +239,12 @@ pub fn ask_views(
                             if !exists(c) {
                                 missing.push(format!("{c} is not in the model"));
                                 continue;
+                            }
+                            if pending.contains(c) {
+                                missing.push(format!(
+                                    "{c} is planned, not built — finish it and mark_implemented, or \
+                                     descope the ask saying exactly what is left"
+                                ));
                             }
                             if !verified.get(c).copied().unwrap_or(false) {
                                 missing.push(format!("{c} has no passing test verdict"));
@@ -341,8 +349,12 @@ pub fn asks_gate(log: &SessionLog, views: &[AskView]) -> AsksGate {
 }
 
 /// The one-line summary for the user, or `None` when there is nothing to say.
-pub fn session_summary(views: &[AskView], untraced: &[String]) -> Option<String> {
-    if views.is_empty() && untraced.is_empty() {
+pub fn session_summary(
+    views: &[AskView],
+    untraced: &[String],
+    unfolded: &[(String, String)],
+) -> Option<String> {
+    if views.is_empty() && untraced.is_empty() && unfolded.is_empty() {
         return None;
     }
     let count = |f: &dyn Fn(&AskStatus) -> bool| views.iter().filter(|v| f(&v.status)).count();
@@ -357,6 +369,16 @@ pub fn session_summary(views: &[AskView], untraced: &[String]) -> Option<String>
         if let AskStatus::Descoped { reason } = &v.status {
             parts.push(format!("descoped {} \"{}\": {}", v.id, clip(&v.text, 60), clip(reason, 100)));
         }
+    }
+    if !unfolded.is_empty() {
+        let shown: Vec<String> = unfolded.iter().take(3).map(|(_, l)| format!("\"{}\"", clip(l, 50))).collect();
+        let more = unfolded.len().saturating_sub(3);
+        parts.push(format!(
+            "planned, not built: {} ({}{})",
+            unfolded.len(),
+            shown.join(", "),
+            if more > 0 { format!(" +{more}") } else { String::new() }
+        ));
     }
     if !untraced.is_empty() {
         let shown: Vec<&str> = untraced.iter().take(5).map(String::as_str).collect();
