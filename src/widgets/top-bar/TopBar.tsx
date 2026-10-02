@@ -33,7 +33,11 @@ import { applyColorMode, loadTheme, saveTheme, type ColorMode } from "../../shar
 export type WorkspaceView = "wiki" | "diagram";
 
 // The search shortcut chip, honest about the platform (⌘ exists only on mac).
-const IS_MAC = /Mac|iP/.test(navigator.userAgent);
+export const IS_MAC = /Mac|iP/.test(navigator.userAgent);
+/** On macOS the window keeps its NATIVE traffic lights, drawn by the OS over
+ *  the webview (`tauri.macos.conf.json`: overlay title bar). This is the room
+ *  the top bar leaves them. */
+const MAC_TRAFFIC_LIGHTS_WIDTH = 72;
 const SEARCH_KEY = IS_MAC ? "⌘K" : "Ctrl K";
 
 export function TopBar({
@@ -93,6 +97,9 @@ export function TopBar({
           items-baseline: the button's exported baseline is its first child's —
           the logo image, i.e. its bottom edge — which drags the path ~3px low. */}
       <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center">
+        {IS_MAC && (
+          <div data-tauri-drag-region className="shrink-0" style={{ width: MAC_TRAFFIC_LIGHTS_WIDTH }} />
+        )}
         <button
           type="button"
           onClick={(e) => {
@@ -193,7 +200,7 @@ export function TopBar({
         </div>
 
         <ThemeToggle />
-        <WindowControls />
+        {!IS_MAC && <WindowControls />}
       </div>
 
       {menu && (
@@ -215,7 +222,14 @@ export function TopBar({
  *  mirrors the real window state, which the OS can change behind our back
  *  (a double-click on the drag region, a window-manager shortcut), so it is
  *  re-read on every resize rather than tracked locally. */
-export function WindowControls({ divider = true }: { divider?: boolean } = {}) {
+/** The window's minimize / maximize / close buttons. Drawn here on Windows and
+ *  Linux, where the window is frameless; on macOS the OS draws its own traffic
+ *  lights, so there is nothing to render. */
+export function WindowControls(props: { divider?: boolean } = {}) {
+  return IS_MAC ? null : <DrawnWindowControls {...props} />;
+}
+
+function DrawnWindowControls({ divider = true }: { divider?: boolean }) {
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
