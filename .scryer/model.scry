@@ -1170,8 +1170,8 @@
       "responsibilities": [
         {
           "id": "resp-5hpmah",
-          "statement": "Renders the whole model as a navigable, filterable tree with plan/drift marks, test tallies, and inline structural editing",
-          "lastTouchedAt": 1788958565
+          "statement": "Renders the whole model as a navigable, filterable tree with plan/drift marks, test tallies, structural violation counts, and inline structural editing",
+          "lastTouchedAt": 1790939245
         }
       ]
     },
@@ -12505,8 +12505,8 @@
       "responsibilities": [
         {
           "id": "resp-d269b4",
-          "statement": "Renders one C4 box node on the diagram — shape, drift/plan outline, completeness gauge, and drill-down",
-          "lastTouchedAt": 1788958565
+          "statement": "Renders one C4 box node on the diagram — shape, drift/plan outline, completeness gauge, structural violation count, and drill-down",
+          "lastTouchedAt": 1790939246
         }
       ]
     },
@@ -12590,19 +12590,6 @@
           "id": "resp-fz6z9n",
           "statement": "Renders a simulated agent terminal session: streamed prompts, tool calls, and code diffs",
           "lastTouchedAt": 1789208878
-        }
-      ]
-    },
-    {
-      "id": "node-mn7y1d",
-      "kind": "symbol",
-      "name": "McpSetupPrompt",
-      "parentId": "node-9562dh",
-      "responsibilities": [
-        {
-          "id": "resp-x6kw7r",
-          "statement": "One-click prompt to wire scryer's MCP server into every detected AI coding tool",
-          "lastTouchedAt": 1788958565
         }
       ]
     },
@@ -14043,6 +14030,99 @@
           "id": "resp-rfybmq",
           "statement": "**When** a Leiningen project is read, **extract** its declared name and source paths",
           "lastTouchedAt": 1789073173
+        }
+      ]
+    },
+    {
+      "id": "node-b42pqv",
+      "kind": "symbol",
+      "name": "hook_install_status",
+      "parentId": "node-7vjcgn",
+      "responsibilities": [
+        {
+          "id": "resp-1pv0ha",
+          "statement": "**When** a tool's hook settings hold scryer entries that differ from the current registration set, **reports** the install as outdated",
+          "lastTouchedAt": 1790939245
+        },
+        {
+          "id": "resp-463yda",
+          "statement": "**If** a scryer hook entry names a scryer-mcp binary that no longer exists, **then** **reports** the install as outdated",
+          "lastTouchedAt": 1790939245
+        },
+        {
+          "id": "resp-mm76pz",
+          "statement": "**When** a tool's hook settings hold exactly the current scryer registration set, **reports** the install as current",
+          "lastTouchedAt": 1790939246
+        }
+      ]
+    },
+    {
+      "id": "node-5mk6t0",
+      "kind": "symbol",
+      "name": "hooksToUpdate",
+      "parentId": "node-9562dh",
+      "responsibilities": [
+        {
+          "id": "resp-6n0gsn",
+          "statement": "**When** a detected tool's session hooks are outdated, **lists** that tool among the hooks to update",
+          "lastTouchedAt": 1790939246
+        }
+      ]
+    },
+    {
+      "id": "node-cst49n",
+      "kind": "symbol",
+      "name": "HooksRow",
+      "parentId": "node-1bwtge",
+      "responsibilities": [
+        {
+          "id": "resp-6p9870",
+          "statement": "**When** a tool's session hooks are outdated, **shows** an Update action in place of Installed",
+          "lastTouchedAt": 1790939246
+        }
+      ]
+    },
+    {
+      "id": "node-mn7y1d",
+      "kind": "symbol",
+      "name": "McpSetupPrompt",
+      "parentId": "node-9562dh",
+      "responsibilities": [
+        {
+          "id": "resp-x6kw7r",
+          "statement": "One-click prompt to wire scryer's MCP server into every detected AI coding tool",
+          "lastTouchedAt": 1788958565
+        },
+        {
+          "id": "resp-r05we9",
+          "statement": "**When** a detected tool's session hooks are outdated, **offers** to update them, naming each file it rewrites",
+          "lastTouchedAt": 1790939247
+        }
+      ]
+    },
+    {
+      "id": "node-vd81jd",
+      "kind": "symbol",
+      "name": "StructuralViolationList",
+      "parentId": "node-35zvw4",
+      "responsibilities": [
+        {
+          "id": "resp-rnz1pv",
+          "statement": "**When** the user expands the structural notice, **lists** each violation under the container whose style it breaks, with the charged component, the file to fix and what is wrong",
+          "lastTouchedAt": 1790939247
+        }
+      ]
+    },
+    {
+      "id": "node-45vp3y",
+      "kind": "symbol",
+      "name": "StructuralCount",
+      "parentId": "node-b9sv18",
+      "responsibilities": [
+        {
+          "id": "resp-5nhv0y",
+          "statement": "**When** the structural check charges violations inside a node's subtree, **shows** their count, orange when every one is an undeclared style and red otherwise",
+          "lastTouchedAt": 1790939246
         }
       ]
     }
@@ -18307,16 +18387,16 @@
       {
         "pattern": "crates/scryer-core/src/domain/build_edges.rs",
         "symbol": "DerivedEdge",
-        "line": 75,
-        "endLine": 79
+        "line": 92,
+        "endLine": 96
       }
     ],
     "node-0wrr9d": [
       {
         "pattern": "crates/scryer-extract/src/domain/test_status.rs",
         "symbol": "RadiusFile",
-        "line": 167,
-        "endLine": 174
+        "line": 171,
+        "endLine": 178
       }
     ],
     "node-0zepe1": [
@@ -18325,6 +18405,38 @@
         "symbol": "Change",
         "line": 57,
         "endLine": 87
+      }
+    ],
+    "node-142": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "ProposedLink",
+        "line": 649,
+        "endLine": 654
+      }
+    ],
+    "node-144": [
+      {
+        "pattern": "crates/scryer-mcp/src/types.rs",
+        "symbol": "CommitContainerModelRequest",
+        "line": 667,
+        "endLine": 675
+      }
+    ],
+    "node-159": [
+      {
+        "pattern": "demo/engine/Workspace.tsx",
+        "symbol": "WorkspaceState",
+        "line": 77,
+        "endLine": 96
+      }
+    ],
+    "node-160": [
+      {
+        "pattern": "demo/engine/Workspace.tsx",
+        "symbol": "WorkspaceActions",
+        "line": 100,
+        "endLine": 109
       }
     ],
     "node-1gk866": [
@@ -18337,32 +18449,48 @@
       {
         "pattern": "crates/scryer-mcp/src/types.rs",
         "symbol": "ProposedSymbol",
-        "line": 656,
-        "endLine": 666
+        "line": 642,
+        "endLine": 652
       }
     ],
     "node-1mx7t1": [
       {
         "pattern": "crates/scryer-core/src/domain/changes.rs",
         "symbol": "Retag",
-        "line": 355,
-        "endLine": 364
+        "line": 134,
+        "endLine": 143
       }
     ],
     "node-1v066s": [
       {
         "pattern": "crates/scryer-core/src/domain/model.rs",
         "symbol": "SchemaProperty",
-        "line": 110,
-        "endLine": 136
+        "line": 94,
+        "endLine": 120
       }
     ],
     "node-1vqyzw": [
       {
         "pattern": "crates/scryer-mcp/src/types.rs",
         "symbol": "GroupItem",
-        "line": 510,
-        "endLine": 521
+        "line": 496,
+        "endLine": 507
+      }
+    ],
+    "node-23": [
+      {
+        "pattern": "crates/scryer-mcp/src/cli.rs",
+        "symbol": "CheckReport",
+        "line": 158,
+        "endLine": 164
+      }
+    ],
+    "node-25": [
+      {
+        "pattern": "crates/scryer-mcp/src/cli.rs",
+        "symbol": "StatuslineInstall",
+        "line": 396,
+        "endLine": 402
       }
     ],
     "node-25vvv3": [
@@ -18373,12 +18501,36 @@
         "endLine": 52
       }
     ],
+    "node-282": [
+      {
+        "pattern": "src/entities/model/viewmodel.ts",
+        "symbol": "ScryModel",
+        "line": 191,
+        "endLine": 218
+      }
+    ],
+    "node-285": [
+      {
+        "pattern": "src/entities/model/viewmodel.ts",
+        "symbol": "SchemaProperty",
+        "line": 79,
+        "endLine": 91
+      }
+    ],
+    "node-286": [
+      {
+        "pattern": "src/entities/model/viewmodel.ts",
+        "symbol": "Group",
+        "line": 165,
+        "endLine": 175
+      }
+    ],
     "node-2hpvrt": [
       {
         "pattern": "crates/scryer-extract/src/domain/context.rs",
         "symbol": "PromptScopeContext",
-        "line": 1468,
-        "endLine": 1475
+        "line": 1640,
+        "endLine": 1647
       }
     ],
     "node-2kpf40": [
@@ -18411,6 +18563,30 @@
         "endLine": 111
       }
     ],
+    "node-349": [
+      {
+        "pattern": "src-tauri/src/shell/hooks.rs",
+        "symbol": "Touch",
+        "line": 97,
+        "endLine": 102
+      }
+    ],
+    "node-35": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "Endpoint",
+        "line": 134,
+        "endLine": 137
+      }
+    ],
+    "node-350": [
+      {
+        "pattern": "src-tauri/src/shell/hooks.rs",
+        "symbol": "HookServer",
+        "line": 107,
+        "endLine": 111
+      }
+    ],
     "node-3ce8en": [
       {
         "pattern": "src/shared/theme/theme.ts",
@@ -18437,12 +18613,44 @@
         "endLine": 17
       }
     ],
+    "node-442": [
+      {
+        "pattern": "crates/scryer-extract/src/domain/lang.rs",
+        "symbol": "Def",
+        "line": 93,
+        "endLine": 105
+      }
+    ],
+    "node-444": [
+      {
+        "pattern": "crates/scryer-extract/src/domain/lang.rs",
+        "symbol": "PathRef",
+        "line": 127,
+        "endLine": 132
+      }
+    ],
+    "node-445": [
+      {
+        "pattern": "crates/scryer-extract/src/domain/lang.rs",
+        "symbol": "FileParse",
+        "line": 182,
+        "endLine": 195
+      }
+    ],
+    "node-464": [
+      {
+        "pattern": "crates/scryer-extract/src/infrastructure/anchors.rs",
+        "symbol": "UntrackedAnchor",
+        "line": 758,
+        "endLine": 763
+      }
+    ],
     "node-49xpj5": [
       {
         "pattern": "crates/scryer-mcp/src/types.rs",
         "symbol": "NewNode",
-        "line": 745,
-        "endLine": 760
+        "line": 731,
+        "endLine": 746
       }
     ],
     "node-4gv57m": [
@@ -18465,8 +18673,8 @@
       {
         "pattern": "crates/scryer-mcp/src/types.rs",
         "symbol": "SymbolItem",
-        "line": 618,
-        "endLine": 631
+        "line": 604,
+        "endLine": 617
       }
     ],
     "node-525yq7": [
@@ -18475,6 +18683,30 @@
         "symbol": "HookServer",
         "line": 107,
         "endLine": 111
+      }
+    ],
+    "node-526": [
+      {
+        "pattern": "crates/scryer-core/src/domain/model.rs",
+        "symbol": "SchemaProperty",
+        "line": 111,
+        "endLine": 137
+      }
+    ],
+    "node-529": [
+      {
+        "pattern": "crates/scryer-core/src/domain/model.rs",
+        "symbol": "Link",
+        "line": 313,
+        "endLine": 321
+      }
+    ],
+    "node-530": [
+      {
+        "pattern": "crates/scryer-core/src/domain/model.rs",
+        "symbol": "Group",
+        "line": 325,
+        "endLine": 341
       }
     ],
     "node-5hkxf8": [
@@ -18489,6 +18721,14 @@
         "symbol": "StyleReport"
       }
     ],
+    "node-67": [
+      {
+        "pattern": "crates/scryer-mcp/src/helpers.rs",
+        "symbol": "BaselineCounts",
+        "line": 644,
+        "endLine": 648
+      }
+    ],
     "node-6mzxe5": [
       {
         "pattern": "src-tauri/src/shell/source_view.rs",
@@ -18501,8 +18741,8 @@
       {
         "pattern": "crates/scryer-core/src/domain/model.rs",
         "symbol": "LinkKind",
-        "line": 320,
-        "endLine": 329
+        "line": 304,
+        "endLine": 313
       }
     ],
     "node-72bc0w": [
@@ -18517,8 +18757,8 @@
       {
         "pattern": "crates/scryer-core/src/domain/style.rs",
         "symbol": "Placement",
-        "line": 285,
-        "endLine": 294
+        "line": 340,
+        "endLine": 349
       }
     ],
     "node-7sxvrj": [
@@ -18531,8 +18771,8 @@
       {
         "pattern": "crates/scryer-mcp/src/types.rs",
         "symbol": "OrientRequest",
-        "line": 203,
-        "endLine": 209
+        "line": 189,
+        "endLine": 195
       }
     ],
     "node-8ax847": [
@@ -18567,8 +18807,8 @@
       {
         "pattern": "crates/scryer-mcp/src/types.rs",
         "symbol": "SetDirectivesItem",
-        "line": 298,
-        "endLine": 305
+        "line": 284,
+        "endLine": 291
       }
     ],
     "node-9b4xhe": [
@@ -18599,40 +18839,40 @@
       {
         "pattern": "crates/scryer-core/src/domain/model.rs",
         "symbol": "Position",
-        "line": 174,
-        "endLine": 177
+        "line": 158,
+        "endLine": 161
       }
     ],
     "node-9r425v": [
       {
         "pattern": "crates/scryer-extract/src/domain/facts.rs",
         "symbol": "TsAliases",
-        "line": 25,
-        "endLine": 36
+        "line": 30,
+        "endLine": 41
       }
     ],
     "node-9v5b7g": [
       {
         "pattern": "crates/scryer-mcp/src/hook_client.rs",
         "symbol": "Harness",
-        "line": 56,
-        "endLine": 60
+        "line": 54,
+        "endLine": 58
       }
     ],
     "node-a83hfb": [
       {
         "pattern": "crates/scryer-extract/src/domain/lang.rs",
         "symbol": "Def",
-        "line": 92,
-        "endLine": 104
+        "line": 95,
+        "endLine": 107
       }
     ],
     "node-agrk83": [
       {
         "pattern": "crates/scryer-mcp/src/types.rs",
         "symbol": "CommitContainerModelRequest",
-        "line": 690,
-        "endLine": 698
+        "line": 676,
+        "endLine": 684
       }
     ],
     "node-apvc62": [
@@ -18669,8 +18909,8 @@
       {
         "pattern": "crates/scryer-core/src/domain/model.rs",
         "symbol": "InheritedDirectives",
-        "line": 283,
-        "endLine": 287
+        "line": 267,
+        "endLine": 271
       }
     ],
     "node-c41tx0": [
@@ -18685,8 +18925,8 @@
       {
         "pattern": "crates/scryer-core/src/domain/test_results.rs",
         "symbol": "ReportMatch",
-        "line": 136,
-        "endLine": 146
+        "line": 149,
+        "endLine": 159
       }
     ],
     "node-d1bx5q": [
@@ -18707,8 +18947,8 @@
       {
         "pattern": "crates/scryer-extract/src/domain/test_status.rs",
         "symbol": "ProbeRecord",
-        "line": 40,
-        "endLine": 56
+        "line": 44,
+        "endLine": 60
       }
     ],
     "node-dwfpbn": [
@@ -18771,8 +19011,8 @@
       {
         "pattern": "crates/scryer-core/src/domain/style.rs",
         "symbol": "PathConvention",
-        "line": 53,
-        "endLine": 60
+        "line": 84,
+        "endLine": 91
       }
     ],
     "node-fbc41e": [
@@ -18787,48 +19027,48 @@
       {
         "pattern": "crates/scryer-mcp/src/types.rs",
         "symbol": "ProposedComponent",
-        "line": 642,
-        "endLine": 653
+        "line": 628,
+        "endLine": 639
       }
     ],
     "node-g2yqtm": [
       {
         "pattern": "crates/scryer-core/src/domain/changes.rs",
         "symbol": "Gc",
-        "line": 471,
-        "endLine": 474
+        "line": 250,
+        "endLine": 253
       }
     ],
     "node-g3hyy4": [
       {
         "pattern": "crates/scryer-mcp/src/helpers.rs",
         "symbol": "StatusCounts",
-        "line": 622,
-        "endLine": 652
+        "line": 594,
+        "endLine": 624
       }
     ],
     "node-g3y1j7": [
       {
         "pattern": "crates/scryer-extract/src/domain/context.rs",
         "symbol": "SymbolContext",
-        "line": 102,
-        "endLine": 124
+        "line": 143,
+        "endLine": 165
       }
     ],
     "node-g7ebtc": [
       {
         "pattern": "crates/scryer-core/src/domain/model.rs",
         "symbol": "Source",
-        "line": 141,
-        "endLine": 147
+        "line": 125,
+        "endLine": 131
       }
     ],
     "node-gg3awz": [
       {
         "pattern": "crates/scryer-core/src/domain/style.rs",
         "symbol": "ScaffoldManifest",
-        "line": 372,
-        "endLine": 391
+        "line": 427,
+        "endLine": 446
       }
     ],
     "node-gvn53d": [
@@ -18851,8 +19091,8 @@
       {
         "pattern": "crates/scryer-core/src/domain/model.rs",
         "symbol": "Node",
-        "line": 181,
-        "endLine": 264
+        "line": 165,
+        "endLine": 248
       }
     ],
     "node-h6azxj": [
@@ -18889,8 +19129,8 @@
       {
         "pattern": "crates/scryer-mcp/src/types.rs",
         "symbol": "UndescribedItem",
-        "line": 702,
-        "endLine": 715
+        "line": 688,
+        "endLine": 701
       }
     ],
     "node-jqp69g": [
@@ -18921,8 +19161,8 @@
       {
         "pattern": "crates/scryer-core/src/domain/model.rs",
         "symbol": "ConcernDef",
-        "line": 615,
-        "endLine": 626
+        "line": 602,
+        "endLine": 613
       }
     ],
     "node-k22hs2": [
@@ -18937,8 +19177,8 @@
       {
         "pattern": "crates/scryer-mcp/src/types.rs",
         "symbol": "StaleResponsibility",
-        "line": 763,
-        "endLine": 769
+        "line": 749,
+        "endLine": 755
       }
     ],
     "node-kt7yax": [
@@ -18965,8 +19205,8 @@
       {
         "pattern": "crates/scryer-core/src/domain/build_edges.rs",
         "symbol": "LinkAudit",
-        "line": 87,
-        "endLine": 90
+        "line": 104,
+        "endLine": 107
       }
     ],
     "node-kz1mn5": [
@@ -18993,8 +19233,8 @@
       {
         "pattern": "crates/scryer-core/src/domain/model.rs",
         "symbol": "SourceLocation",
-        "line": 151,
-        "endLine": 165
+        "line": 135,
+        "endLine": 149
       }
     ],
     "node-mw9czz": [
@@ -19025,16 +19265,16 @@
       {
         "pattern": "crates/scryer-mcp/src/types.rs",
         "symbol": "FlagDriftRequest",
-        "line": 778,
-        "endLine": 799
+        "line": 764,
+        "endLine": 785
       }
     ],
     "node-nrhptb": [
       {
         "pattern": "crates/scryer-mcp/src/types.rs",
         "symbol": "UpdateNodeItem",
-        "line": 255,
-        "endLine": 276
+        "line": 241,
+        "endLine": 262
       }
     ],
     "node-p9wpw4": [
@@ -19049,8 +19289,8 @@
       {
         "pattern": "crates/scryer-extract/src/domain/context.rs",
         "symbol": "ScopeContext",
-        "line": 1450,
-        "endLine": 1460
+        "line": 1622,
+        "endLine": 1632
       }
     ],
     "node-pfa9e2": [
@@ -19063,8 +19303,8 @@
       {
         "pattern": "crates/scryer-core/src/domain/style_health.rs",
         "symbol": "StyleViolation",
-        "line": 65,
-        "endLine": 79
+        "line": 72,
+        "endLine": 86
       }
     ],
     "node-psyrrs": [
@@ -19079,8 +19319,8 @@
       {
         "pattern": "crates/scryer-mcp/src/types.rs",
         "symbol": "EndProbeRequest",
-        "line": 167,
-        "endLine": 175
+        "line": 153,
+        "endLine": 161
       }
     ],
     "node-pwppwj": [
@@ -19093,24 +19333,24 @@
       {
         "pattern": "crates/scryer-core/src/domain/model.rs",
         "symbol": "Group",
-        "line": 358,
-        "endLine": 374
+        "line": 342,
+        "endLine": 358
       }
     ],
     "node-q73k4m": [
       {
         "pattern": "src-tauri/src/shell/observability.rs",
         "symbol": "ModelHealthReport",
-        "line": 41,
-        "endLine": 58
+        "line": 48,
+        "endLine": 65
       }
     ],
     "node-q8ja8y": [
       {
         "pattern": "crates/scryer-core/src/domain/test_results.rs",
         "symbol": "AmbiguousCase",
-        "line": 127,
-        "endLine": 131
+        "line": 140,
+        "endLine": 144
       }
     ],
     "node-qbga03": [
@@ -19131,8 +19371,8 @@
       {
         "pattern": "crates/scryer-mcp/src/helpers.rs",
         "symbol": "TestCounts",
-        "line": 665,
-        "endLine": 669
+        "line": 637,
+        "endLine": 641
       }
     ],
     "node-qmeg32": [
@@ -19195,48 +19435,48 @@
       {
         "pattern": "crates/scryer-mcp/src/types.rs",
         "symbol": "ComponentItem",
-        "line": 484,
-        "endLine": 493
+        "line": 470,
+        "endLine": 479
       }
     ],
     "node-s52pg1": [
       {
         "pattern": "crates/scryer-core/src/domain/test_results.rs",
         "symbol": "UnseenAttachment",
-        "line": 114,
-        "endLine": 121
+        "line": 127,
+        "endLine": 134
       }
     ],
     "node-s9cbzn": [
       {
         "pattern": "crates/scryer-core/src/domain/model.rs",
         "symbol": "Link",
-        "line": 343,
-        "endLine": 354
+        "line": 327,
+        "endLine": 338
       }
     ],
     "node-sn4rpw": [
       {
         "pattern": "crates/scryer-core/src/domain/style.rs",
         "symbol": "ScaffoldSymbol",
-        "line": 351,
-        "endLine": 364
+        "line": 406,
+        "endLine": 419
       }
     ],
     "node-synrvy": [
       {
         "pattern": "crates/scryer-extract/src/domain/test_status.rs",
         "symbol": "ProbeTarget",
-        "line": 179,
-        "endLine": 193
+        "line": 277,
+        "endLine": 291
       }
     ],
     "node-tazn59": [
       {
         "pattern": "crates/scryer-core/src/domain/build_edges.rs",
         "symbol": "DerivedGraph",
-        "line": 116,
-        "endLine": 126
+        "line": 133,
+        "endLine": 143
       }
     ],
     "node-txzcjm": [
@@ -19251,16 +19491,16 @@
       {
         "pattern": "crates/scryer-mcp/src/cli.rs",
         "symbol": "StatuslineInstall",
-        "line": 439,
-        "endLine": 445
+        "line": 425,
+        "endLine": 431
       }
     ],
     "node-v614v2": [
       {
         "pattern": "crates/scryer-mcp/src/hook_client.rs",
         "symbol": "ToolKind",
-        "line": 65,
-        "endLine": 73
+        "line": 63,
+        "endLine": 71
       }
     ],
     "node-v7n3m8": [
@@ -19275,8 +19515,8 @@
       {
         "pattern": "crates/scryer-mcp/src/types.rs",
         "symbol": "UpdateSourceMapRequest",
-        "line": 388,
-        "endLine": 399
+        "line": 374,
+        "endLine": 385
       }
     ],
     "node-vnh5y3": [
@@ -19329,8 +19569,8 @@
       {
         "pattern": "crates/scryer-extract/src/domain/test_status.rs",
         "symbol": "Evidence",
-        "line": 118,
-        "endLine": 129
+        "line": 122,
+        "endLine": 133
       }
     ],
     "node-wpmqwr": [
@@ -19601,6 +19841,12 @@
         "symbol": "go_import_dir"
       }
     ],
+    "resp-1pv0ha": [
+      {
+        "pattern": "src-tauri/src/shell/mcp_setup.rs",
+        "symbol": "hook_install_status"
+      }
+    ],
     "resp-1qaygn": [
       {
         "pattern": "crates/scryer-mcp/src/hook_client.rs",
@@ -19763,6 +20009,12 @@
         "symbol": "update_nodes"
       }
     ],
+    "resp-463yda": [
+      {
+        "pattern": "src-tauri/src/shell/mcp_setup.rs",
+        "symbol": "hook_binary_exists"
+      }
+    ],
     "resp-4f95xf": [
       {
         "pattern": "crates/scryer-mcp/src/tools/intent.rs",
@@ -19907,6 +20159,12 @@
         "symbol": "job_permits"
       }
     ],
+    "resp-5nhv0y": [
+      {
+        "pattern": "src/entities/model/StructuralCount.tsx",
+        "symbol": "StructuralCount"
+      }
+    ],
     "resp-5rx1n5": [
       {
         "pattern": "crates/scryer-core/src/domain/validate.rs",
@@ -19961,6 +20219,14 @@
         "symbol": "apply_patch"
       }
     ],
+    "resp-696": [
+      {
+        "pattern": "crates/scryer-core/src/domain/changes.rs",
+        "symbol": "retag",
+        "line": 450,
+        "endLine": 497
+      }
+    ],
     "resp-6a6srs": [
       {
         "pattern": "src/widgets/diagram-canvas/styled.ts",
@@ -20003,6 +20269,18 @@
         "symbol": "drop_node"
       }
     ],
+    "resp-6n0gsn": [
+      {
+        "pattern": "src/features/mcp-setup/useMcpSetup.ts",
+        "symbol": "hooksToUpdate"
+      }
+    ],
+    "resp-6p9870": [
+      {
+        "pattern": "src/widgets/settings-panel/SettingsPanel.tsx",
+        "symbol": "HooksRow"
+      }
+    ],
     "resp-6rnkds": [
       {
         "pattern": "crates/scryer-mcp/src/hook_client.rs",
@@ -20013,6 +20291,12 @@
       {
         "pattern": "src/shared/ui/InlineText.tsx",
         "symbol": "InlineText"
+      }
+    ],
+    "resp-6tjtn4": [
+      {
+        "pattern": "crates/scryer-extract/src/domain/lang.rs",
+        "symbol": "collect_clojure"
       }
     ],
     "resp-6wgtg4": [
@@ -20167,6 +20451,12 @@
       {
         "pattern": "crates/scryer-core/src/domain/changes.rs",
         "symbol": "classify_against_signoff"
+      }
+    ],
+    "resp-8n3sxq": [
+      {
+        "pattern": "src-tauri/src/core/symbols.rs",
+        "symbol": "resolve_via_extractor"
       }
     ],
     "resp-8p0w95": [
@@ -21115,6 +21405,12 @@
         "symbol": "lookup"
       }
     ],
+    "resp-k3sjnc": [
+      {
+        "pattern": "crates/scryer-extract/src/domain/lang.rs",
+        "symbol": "collect_clj_idents"
+      }
+    ],
     "resp-k65v20": [
       {
         "pattern": "src/features/agent-launch/AgentFailure.tsx",
@@ -21305,6 +21601,12 @@
       {
         "pattern": "crates/scryer-core/src/domain/style.rs",
         "symbol": "library"
+      }
+    ],
+    "resp-mm76pz": [
+      {
+        "pattern": "src-tauri/src/shell/mcp_setup.rs",
+        "symbol": "hook_install_status"
       }
     ],
     "resp-mn5bk4": [
@@ -21613,6 +21915,12 @@
         "symbol": "new"
       }
     ],
+    "resp-q9rhp4": [
+      {
+        "pattern": "crates/scryer-extract/src/domain/lang.rs",
+        "symbol": "edn_string_vec"
+      }
+    ],
     "resp-qd07bb": [
       {
         "pattern": "crates/scryer-extract/src/composition/extract.rs",
@@ -21695,6 +22003,12 @@
         "symbol": "CompletenessPie"
       }
     ],
+    "resp-r05we9": [
+      {
+        "pattern": "src/features/mcp-setup/McpSetupPrompt.tsx",
+        "symbol": "McpSetupPrompt"
+      }
+    ],
     "resp-r0n9ta": [
       {
         "pattern": "src/features/model-storage/useModelStorage.ts",
@@ -21731,6 +22045,12 @@
         "symbol": "handle_request"
       }
     ],
+    "resp-rfybmq": [
+      {
+        "pattern": "crates/scryer-extract/src/domain/lang.rs",
+        "symbol": "project_clj_header"
+      }
+    ],
     "resp-rh7fja": [
       {
         "pattern": "src/features/change-marks/changeMarks.ts",
@@ -21759,6 +22079,12 @@
       {
         "pattern": "crates/scryer-extract/src/domain/lang.rs",
         "symbol": "classify_ts"
+      }
+    ],
+    "resp-rnz1pv": [
+      {
+        "pattern": "src/pages/node/NodePage.tsx",
+        "symbol": "StructuralViolationList"
       }
     ],
     "resp-rpdbck": [
@@ -22043,6 +22369,12 @@
         "symbol": "read_planned_seeded_at"
       }
     ],
+    "resp-vk8n9a": [
+      {
+        "pattern": "crates/scryer-extract/src/domain/lang.rs",
+        "symbol": "collect_clj_imports"
+      }
+    ],
     "resp-vkdexk": [
       {
         "pattern": "src/app/ErrorBoundary.tsx",
@@ -22191,6 +22523,12 @@
       {
         "pattern": "crates/scryer-core/src/composition/model_store.rs",
         "symbol": "write_model_at"
+      }
+    ],
+    "resp-x31891": [
+      {
+        "pattern": "crates/scryer-extract/src/domain/context.rs",
+        "symbol": "resolve_clj_ns"
       }
     ],
     "resp-x4q31x": [
@@ -22456,216 +22794,6 @@
         "pattern": "src/widgets/source-section/SourceSection.tsx",
         "symbol": "ClaimTests"
       }
-    ],
-    "node-142": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "ProposedLink",
-        "line": 649,
-        "endLine": 654
-      }
-    ],
-    "node-144": [
-      {
-        "pattern": "crates/scryer-mcp/src/types.rs",
-        "symbol": "CommitContainerModelRequest",
-        "line": 667,
-        "endLine": 675
-      }
-    ],
-    "node-159": [
-      {
-        "pattern": "demo/engine/Workspace.tsx",
-        "symbol": "WorkspaceState",
-        "line": 77,
-        "endLine": 96
-      }
-    ],
-    "node-160": [
-      {
-        "pattern": "demo/engine/Workspace.tsx",
-        "symbol": "WorkspaceActions",
-        "line": 100,
-        "endLine": 109
-      }
-    ],
-    "node-23": [
-      {
-        "pattern": "crates/scryer-mcp/src/cli.rs",
-        "symbol": "CheckReport",
-        "line": 158,
-        "endLine": 164
-      }
-    ],
-    "node-25": [
-      {
-        "pattern": "crates/scryer-mcp/src/cli.rs",
-        "symbol": "StatuslineInstall",
-        "line": 396,
-        "endLine": 402
-      }
-    ],
-    "node-282": [
-      {
-        "pattern": "src/entities/model/viewmodel.ts",
-        "symbol": "ScryModel",
-        "line": 191,
-        "endLine": 218
-      }
-    ],
-    "node-285": [
-      {
-        "pattern": "src/entities/model/viewmodel.ts",
-        "symbol": "SchemaProperty",
-        "line": 79,
-        "endLine": 91
-      }
-    ],
-    "node-286": [
-      {
-        "pattern": "src/entities/model/viewmodel.ts",
-        "symbol": "Group",
-        "line": 165,
-        "endLine": 175
-      }
-    ],
-    "node-349": [
-      {
-        "pattern": "src-tauri/src/shell/hooks.rs",
-        "symbol": "Touch",
-        "line": 97,
-        "endLine": 102
-      }
-    ],
-    "node-35": [
-      {
-        "pattern": "crates/scryer-mcp/src/hook_client.rs",
-        "symbol": "Endpoint",
-        "line": 134,
-        "endLine": 137
-      }
-    ],
-    "node-350": [
-      {
-        "pattern": "src-tauri/src/shell/hooks.rs",
-        "symbol": "HookServer",
-        "line": 107,
-        "endLine": 111
-      }
-    ],
-    "node-442": [
-      {
-        "pattern": "crates/scryer-extract/src/domain/lang.rs",
-        "symbol": "Def",
-        "line": 93,
-        "endLine": 105
-      }
-    ],
-    "node-444": [
-      {
-        "pattern": "crates/scryer-extract/src/domain/lang.rs",
-        "symbol": "PathRef",
-        "line": 127,
-        "endLine": 132
-      }
-    ],
-    "node-445": [
-      {
-        "pattern": "crates/scryer-extract/src/domain/lang.rs",
-        "symbol": "FileParse",
-        "line": 182,
-        "endLine": 195
-      }
-    ],
-    "node-464": [
-      {
-        "pattern": "crates/scryer-extract/src/infrastructure/anchors.rs",
-        "symbol": "UntrackedAnchor",
-        "line": 758,
-        "endLine": 763
-      }
-    ],
-    "node-526": [
-      {
-        "pattern": "crates/scryer-core/src/domain/model.rs",
-        "symbol": "SchemaProperty",
-        "line": 111,
-        "endLine": 137
-      }
-    ],
-    "node-529": [
-      {
-        "pattern": "crates/scryer-core/src/domain/model.rs",
-        "symbol": "Link",
-        "line": 313,
-        "endLine": 321
-      }
-    ],
-    "node-530": [
-      {
-        "pattern": "crates/scryer-core/src/domain/model.rs",
-        "symbol": "Group",
-        "line": 325,
-        "endLine": 341
-      }
-    ],
-    "node-67": [
-      {
-        "pattern": "crates/scryer-mcp/src/helpers.rs",
-        "symbol": "BaselineCounts",
-        "line": 644,
-        "endLine": 648
-      }
-    ],
-    "resp-696": [
-      {
-        "pattern": "crates/scryer-core/src/domain/changes.rs",
-        "symbol": "retag",
-        "line": 450,
-        "endLine": 497
-      }
-    ],
-    "resp-6tjtn4": [
-      {
-        "pattern": "crates/scryer-extract/src/domain/lang.rs",
-        "symbol": "collect_clojure"
-      }
-    ],
-    "resp-8n3sxq": [
-      {
-        "pattern": "src-tauri/src/core/symbols.rs",
-        "symbol": "resolve_via_extractor"
-      }
-    ],
-    "resp-k3sjnc": [
-      {
-        "pattern": "crates/scryer-extract/src/domain/lang.rs",
-        "symbol": "collect_clj_idents"
-      }
-    ],
-    "resp-q9rhp4": [
-      {
-        "pattern": "crates/scryer-extract/src/domain/lang.rs",
-        "symbol": "edn_string_vec"
-      }
-    ],
-    "resp-rfybmq": [
-      {
-        "pattern": "crates/scryer-extract/src/domain/lang.rs",
-        "symbol": "project_clj_header"
-      }
-    ],
-    "resp-vk8n9a": [
-      {
-        "pattern": "crates/scryer-extract/src/domain/lang.rs",
-        "symbol": "collect_clj_imports"
-      }
-    ],
-    "resp-x31891": [
-      {
-        "pattern": "crates/scryer-extract/src/domain/context.rs",
-        "symbol": "resolve_clj_ns"
-      }
     ]
   },
   "testMap": {
@@ -22705,6 +22833,42 @@
         "symbol": "a_same_crate_module_path_resolves_at_the_call_site"
       }
     ],
+    "resp-1pv0ha": [
+      {
+        "pattern": "src-tauri/src/shell/mcp_setup.rs",
+        "symbol": "hook_status_tells_outdated_installs_from_missing_ones"
+      }
+    ],
+    "resp-463yda": [
+      {
+        "pattern": "src-tauri/src/shell/mcp_setup.rs",
+        "symbol": "hook_status_tells_outdated_installs_from_missing_ones"
+      }
+    ],
+    "resp-5nhv0y": [
+      {
+        "pattern": "tests/structuralLocate.test.tsx",
+        "symbol": "counts a subtree's violations, orange when only styles are undeclared"
+      }
+    ],
+    "resp-6n0gsn": [
+      {
+        "pattern": "tests/hooksUpdate.test.tsx",
+        "symbol": "lists only detected tools whose hooks are outdated"
+      }
+    ],
+    "resp-6p9870": [
+      {
+        "pattern": "tests/hooksUpdate.test.tsx",
+        "symbol": "shows Update in a settings row whose hooks are outdated"
+      }
+    ],
+    "resp-6tjtn4": [
+      {
+        "pattern": "crates/scryer-extract/src/domain/lang.rs",
+        "symbol": "clojure_def_forms_collected"
+      }
+    ],
     "resp-7g0mkm": [
       {
         "pattern": "tests/structuralViolations.test.ts",
@@ -22715,6 +22879,12 @@
       {
         "pattern": "tests/mapExplicitDetail.test.ts",
         "symbol": "carries no hover tooltips"
+      }
+    ],
+    "resp-8n3sxq": [
+      {
+        "pattern": "src-tauri/src/core/symbols.rs",
+        "symbol": "clojure_defn"
       }
     ],
     "resp-as9xwv": [
@@ -22749,6 +22919,12 @@
         "symbol": "composition_wires_every_layer_and_nothing_imports_it"
       }
     ],
+    "resp-k3sjnc": [
+      {
+        "pattern": "crates/scryer-extract/src/domain/context.rs",
+        "symbol": "clj_external_alias_does_not_misresolve_to_a_local_def"
+      }
+    ],
     "resp-k91yqn": [
       {
         "pattern": "tests/structuralViolations.test.ts",
@@ -22775,6 +22951,12 @@
         "symbol": "a_library_is_entered_at_its_domain_but_never_its_infrastructure"
       }
     ],
+    "resp-mm76pz": [
+      {
+        "pattern": "src-tauri/src/shell/mcp_setup.rs",
+        "symbol": "hook_status_tells_outdated_installs_from_missing_ones"
+      }
+    ],
     "resp-nx5cn6": [
       {
         "pattern": "tests/styledLayout.test.ts",
@@ -22787,10 +22969,34 @@
         "symbol": "a_bare_name_edge_in_c_is_marked_guessed"
       }
     ],
+    "resp-q9rhp4": [
+      {
+        "pattern": "crates/scryer-extract/src/infrastructure/manifest.rs",
+        "symbol": "clojure_source_roots_read_from_declared_manifests"
+      }
+    ],
     "resp-qsm3qp": [
       {
         "pattern": "tests/mapExplicitDetail.test.ts",
         "symbol": "toggle open and closed on a click of the layer's ⓘ"
+      }
+    ],
+    "resp-r05we9": [
+      {
+        "pattern": "tests/hooksUpdate.test.tsx",
+        "symbol": "offers an update naming the files it rewrites"
+      }
+    ],
+    "resp-rfybmq": [
+      {
+        "pattern": "crates/scryer-extract/src/infrastructure/manifest.rs",
+        "symbol": "clojure_source_roots_read_from_declared_manifests"
+      }
+    ],
+    "resp-rnz1pv": [
+      {
+        "pattern": "tests/structuralLocate.test.tsx",
+        "symbol": "lists each violation under its container with component, file and detail"
       }
     ],
     "resp-tg9fk5": [
@@ -22805,6 +23011,12 @@
         "symbol": "a_guessed_edge_charges_no_violation"
       }
     ],
+    "resp-vk8n9a": [
+      {
+        "pattern": "crates/scryer-extract/src/domain/lang.rs",
+        "symbol": "clojure_ns_requires_become_imports"
+      }
+    ],
     "resp-w6cn2y": [
       {
         "pattern": "crates/scryer-extract/src/domain/context.rs",
@@ -22815,6 +23027,12 @@
       {
         "pattern": "tests/styledLayout.test.ts",
         "symbol": "hexagon: composition is a band above the whole drawing"
+      }
+    ],
+    "resp-x31891": [
+      {
+        "pattern": "crates/scryer-extract/src/domain/context.rs",
+        "symbol": "clj_namespace_munging_resolves_to_the_file"
       }
     ],
     "resp-x4q31x": [
@@ -22841,48 +23059,6 @@
       {
         "pattern": "crates/scryer-extract/src/domain/context.rs",
         "symbol": "a_csharp_global_using_and_alias_reach_their_types"
-      }
-    ],
-    "resp-6tjtn4": [
-      {
-        "pattern": "crates/scryer-extract/src/domain/lang.rs",
-        "symbol": "clojure_def_forms_collected"
-      }
-    ],
-    "resp-8n3sxq": [
-      {
-        "pattern": "src-tauri/src/core/symbols.rs",
-        "symbol": "clojure_defn"
-      }
-    ],
-    "resp-k3sjnc": [
-      {
-        "pattern": "crates/scryer-extract/src/domain/context.rs",
-        "symbol": "clj_external_alias_does_not_misresolve_to_a_local_def"
-      }
-    ],
-    "resp-q9rhp4": [
-      {
-        "pattern": "crates/scryer-extract/src/infrastructure/manifest.rs",
-        "symbol": "clojure_source_roots_read_from_declared_manifests"
-      }
-    ],
-    "resp-rfybmq": [
-      {
-        "pattern": "crates/scryer-extract/src/infrastructure/manifest.rs",
-        "symbol": "clojure_source_roots_read_from_declared_manifests"
-      }
-    ],
-    "resp-vk8n9a": [
-      {
-        "pattern": "crates/scryer-extract/src/domain/lang.rs",
-        "symbol": "clojure_ns_requires_become_imports"
-      }
-    ],
-    "resp-x31891": [
-      {
-        "pattern": "crates/scryer-extract/src/domain/context.rs",
-        "symbol": "clj_namespace_munging_resolves_to_the_file"
       }
     ]
   },

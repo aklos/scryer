@@ -10,7 +10,8 @@
 
 import { useRef, useState } from "react";
 import { Braces, ChevronRight, Crosshair, FlaskConical, Loader2, Pencil, Plus, X } from "lucide-react";
-import type { Completeness, TestTally } from "../../entities/model/health";
+import type { Completeness, StyleViolation, TestTally } from "../../entities/model/health";
+import { StructuralCount } from "../../entities/model/StructuralCount";
 import { CompletenessPie } from "../../entities/model/CompletenessPie";
 import type { ScryModel, Node, Group, Kind } from "../../entities/model/viewmodel";
 import { childKindFor, concernCounts, normalizeConcernSlug } from "../../entities/model/viewmodel";
@@ -185,6 +186,7 @@ export function ModelTree({
   onSetConcernLens,
   previewable,
   testTally,
+  structural,
 }: {
   model: ScryModel;
   /** Symbol ids the preview sidecar can render — derived from its export list,
@@ -218,6 +220,10 @@ export function ModelTree({
    *  keyed by node id — from {@link rollupTestFindings}. Absent = nothing to
    *  look at below. Drives the Tests lens. */
   testTally?: ReadonlyMap<string, TestTally>;
+  /** Structural violations charged inside each node's subtree, keyed by node
+   *  id — from {@link structuralBySubtree}. Shown on every row, lens or not:
+   *  it is the trail from a flagged system down to the file to fix. */
+  structural?: ReadonlyMap<string, readonly StyleViolation[]>;
 }) {
   const [width, setWidth] = useState(() => {
     const saved = Number(localStorage.getItem("scryer:treeWidth"));
@@ -898,6 +904,7 @@ export function ModelTree({
             {concernTally.get(node.id)}
           </span>
         )}
+        <StructuralCount violations={structural?.get(node.id)} />
         {lens === "tests" && testTally?.get(node.id) && (
           <TestTallyChips tally={testTally.get(node.id)!} />
         )}

@@ -53,8 +53,9 @@ fn check_claude_approved(project_path: &str) -> bool {
 
 /// The Claude Code hook events scryer registers, with the matcher each needs.
 /// One client command serves all of them (it dispatches on the event JSON).
-/// An install counts as present only when its UserPromptSubmit entry is — the
-/// newest registration — so an install that predates it is offered again.
+/// An install counts as current only when its scryer entries are exactly this
+/// set (see `hook_install_status`), so one that predates a change is offered
+/// as an update rather than read as missing.
 const SCRYER_HOOK_EVENTS: &[(&str, Option<&str>, u64)] = &[
     ("UserPromptSubmit", None, 10),
     ("PostToolUse", Some("Read"), 10),
@@ -119,23 +120,112 @@ fn is_scryer_hook_entry(entry: &serde_json::Value) -> bool {
         .any(is_scryer_hook_command)
 }
 
-/// Check if Claude Code has scryer's session hooks installed for the project.
-fn check_claude_hooks(project_path: &str) -> bool {
-    for filename in &["settings.local.json", "settings.json"] {
-        let path = PathBuf::from(project_path).join(".claude").join(filename);
-        if let Ok(contents) = std::fs::read_to_string(&path) {
-            if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
-                let installed = root
-                    .pointer("/hooks/UserPromptSubmit")
-                    .and_then(|v| v.as_array())
-                    .is_some_and(|entries| entries.iter().any(is_scryer_hook_entry));
-                if installed {
-                    return true;
-                }
+/// Where one tool's scryer hook install stands. `Outdated` is an install from
+/// an earlier registration set (or one whose binary has since moved): it is
+/// offered as an update, never read as missing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HookStatus {
+    None,
+    Outdated,
+    Current,
+}
+
+impl HookStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            HookStatus::None => "none",
+            HookStatus::Outdated => "outdated",
+            HookStatus::Current => "current",
+        }
+    }
+}
+
+/// The binary a scryer hook command invokes: the quoted path `install` writes,
+/// or the first word of a hand-written one.
+fn hook_binary(command: &str) -> &str {
+    let c = command.trim_start();
+    match c.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or(rest),
+        None => c.split_whitespace().next().unwrap_or(c),
+    }
+}
+
+/// Does the binary a hook command names still exist? A bare name resolves on
+/// PATH, the way the agent's shell would run it.
+fn hook_binary_exists(command: &str) -> bool {
+    let bin = hook_binary(command);
+    if bin.contains('/') || bin.contains('\\') {
+        Path::new(bin).exists()
+    } else {
+        which::which(bin).is_ok()
+    }
+}
+
+/// Classify the scryer entries in one `hooks` object against the registration
+/// set `install` would write now. No scryer entry is `None`; exactly the set —
+/// every (event, matcher) once, each naming a binary that exists — is
+/// `Current`; anything else (an event since dropped or added, a changed
+/// matcher, a duplicate, a binary that moved) is `Outdated`.
+fn hook_install_status(
+    hooks: Option<&serde_json::Value>,
+    events: &[(&str, Option<&str>, u64)],
+) -> HookStatus {
+    let Some(map) = hooks.and_then(|h| h.as_object()) else {
+        return HookStatus::None;
+    };
+    let mut found: Vec<(String, Option<String>)> = Vec::new();
+    let mut binary_missing = false;
+    for (event, entries) in map {
+        for entry in entries.as_array().into_iter().flatten().filter(|e| is_scryer_hook_entry(e)) {
+            found.push((event.clone(), entry["matcher"].as_str().map(String::from)));
+            let commands = entry["command"].as_str().into_iter().chain(
+                entry["hooks"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|h| h["command"].as_str()),
+            );
+            for command in commands.filter(|c| is_scryer_hook_command(c)) {
+                binary_missing |= !hook_binary_exists(command);
             }
         }
     }
-    false
+    if found.is_empty() {
+        return HookStatus::None;
+    }
+    let mut want: Vec<(String, Option<String>)> = events
+        .iter()
+        .map(|(e, m, _)| (e.to_string(), m.map(String::from)))
+        .collect();
+    found.sort();
+    want.sort();
+    if found == want && !binary_missing {
+        HookStatus::Current
+    } else {
+        HookStatus::Outdated
+    }
+}
+
+/// The status of the first file in `paths` that holds any scryer hook entry.
+fn hook_status_in(paths: &[PathBuf], events: &[(&str, Option<&str>, u64)]) -> HookStatus {
+    for path in paths {
+        let Ok(contents) = std::fs::read_to_string(path) else { continue };
+        let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) else { continue };
+        let status = hook_install_status(root.get("hooks"), events);
+        if status != HookStatus::None {
+            return status;
+        }
+    }
+    HookStatus::None
+}
+
+/// Where Claude Code's scryer hooks stand for the project.
+fn check_claude_hooks(project_path: &str) -> HookStatus {
+    let claude_dir = PathBuf::from(project_path).join(".claude");
+    hook_status_in(
+        &[claude_dir.join("settings.local.json"), claude_dir.join("settings.json")],
+        SCRYER_HOOK_EVENTS,
+    )
 }
 
 /// Is this `statusLine` entry ours? Same marker as the CLI's `install_statusline`
@@ -168,18 +258,12 @@ fn check_claude_statusline(project_path: &str) -> (bool, bool) {
     (false, false)
 }
 
-/// Check if Codex has scryer's session hooks installed for the project.
-fn check_codex_hooks(project_path: &str) -> bool {
-    let path = PathBuf::from(project_path).join(".codex").join("hooks.json");
-    if let Ok(contents) = std::fs::read_to_string(&path) {
-        if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
-            return root
-                .pointer("/hooks/UserPromptSubmit")
-                .and_then(|v| v.as_array())
-                .is_some_and(|entries| entries.iter().any(is_scryer_hook_entry));
-        }
-    }
-    false
+/// Where Codex's scryer hooks stand for the project.
+fn check_codex_hooks(project_path: &str) -> HookStatus {
+    hook_status_in(
+        &[PathBuf::from(project_path).join(".codex").join("hooks.json")],
+        SCRYER_CODEX_HOOK_EVENTS,
+    )
 }
 
 /// Where Copilot's hook registration goes. `.github/hooks/` is the only
@@ -203,17 +287,9 @@ fn copilot_hooks_path(project_path: &str) -> PathBuf {
         .join("scryer.json")
 }
 
-/// Check if Copilot CLI has scryer's session hooks installed for the project.
-fn check_copilot_hooks(project_path: &str) -> bool {
-    if let Ok(contents) = std::fs::read_to_string(copilot_hooks_path(project_path)) {
-        if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
-            return root
-                .pointer("/hooks/UserPromptSubmit")
-                .and_then(|v| v.as_array())
-                .is_some_and(|entries| entries.iter().any(is_scryer_hook_entry));
-        }
-    }
-    false
+/// Where Copilot CLI's scryer hooks stand for the project.
+fn check_copilot_hooks(project_path: &str) -> HookStatus {
+    hook_status_in(&[copilot_hooks_path(project_path)], SCRYER_COPILOT_HOOK_EVENTS)
 }
 
 /// Check if a project has .codex/config.toml with a scryer MCP entry.
@@ -240,9 +316,9 @@ pub(crate) fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value
     let codex_mcp = project_path.as_deref().map(check_codex_toml).unwrap_or(false);
     let copilot_mcp = project_path.as_deref().map(check_copilot_mcp).unwrap_or(false);
     let claude_approved = project_path.as_deref().map(check_claude_approved).unwrap_or(false);
-    let claude_hooks = project_path.as_deref().map(check_claude_hooks).unwrap_or(false);
-    let codex_hooks = project_path.as_deref().map(check_codex_hooks).unwrap_or(false);
-    let copilot_hooks = project_path.as_deref().map(check_copilot_hooks).unwrap_or(false);
+    let hooks = |check: fn(&str) -> HookStatus| {
+        project_path.as_deref().map(check).unwrap_or(HookStatus::None).as_str()
+    };
     let (claude_statusline, claude_statusline_foreign) =
         project_path.as_deref().map(check_claude_statusline).unwrap_or((false, false));
 
@@ -254,9 +330,9 @@ pub(crate) fn detect_ai_tools(project_path: Option<String>) -> serde_json::Value
         "codexMcpEnabled": codex_mcp,
         "copilotMcpEnabled": copilot_mcp,
         "claudeApproved": claude_approved,
-        "claudeHooksEnabled": claude_hooks,
-        "codexHooksEnabled": codex_hooks,
-        "copilotHooksEnabled": copilot_hooks,
+        "claudeHooks": hooks(check_claude_hooks),
+        "codexHooks": hooks(check_codex_hooks),
+        "copilotHooks": hooks(check_copilot_hooks),
         "claudeStatuslineEnabled": claude_statusline,
         "claudeStatuslineForeign": claude_statusline_foreign,
     })
@@ -584,6 +660,66 @@ fn write_scryer_hooks(
 mod hook_install_tests {
     use super::*;
 
+    /// A stand-in scryer-mcp binary inside the test's tempdir, so installs
+    /// name a binary that exists (a missing one reads as outdated).
+    fn fake_binary(dir: &Path) -> String {
+        let bin = dir.join("bin").join("scryer-mcp");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        std::fs::write(&bin, "").unwrap();
+        bin.to_string_lossy().to_string()
+    }
+
+    /// Detection tells an install from an earlier registration set, or one
+    /// naming a binary that has since gone, apart from no install at all — so
+    /// an existing project is offered an update instead of a fresh install.
+    #[test]
+    fn hook_status_tells_outdated_installs_from_missing_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = fake_binary(dir.path());
+        let entry = |matcher: Option<&str>, binary: &str| {
+            let mut e = serde_json::json!({
+                "hooks": [{ "type": "command", "command": format!("\"{binary}\" hook") }]
+            });
+            if let Some(m) = matcher {
+                e["matcher"] = serde_json::json!(m);
+            }
+            e
+        };
+        let status = |hooks: serde_json::Value| hook_install_status(Some(&hooks), SCRYER_HOOK_EVENTS);
+        let current = |binary: &str| {
+            serde_json::json!({
+                "UserPromptSubmit": [entry(None, binary)],
+                "PostToolUse": [entry(Some("Read"), binary), entry(Some("Edit|Write|NotebookEdit"), binary)],
+                "Stop": [entry(None, binary)],
+            })
+        };
+
+        // Only foreign hooks: nothing of ours installed.
+        assert_eq!(
+            status(serde_json::json!({ "Stop": [{ "hooks": [{ "type": "command", "command": "my-linter" }] }] })),
+            HookStatus::None
+        );
+        assert_eq!(hook_install_status(None, SCRYER_HOOK_EVENTS), HookStatus::None);
+        // Exactly the registration set, naming a binary that exists.
+        assert_eq!(status(current(&bin)), HookStatus::Current);
+        // The pre-ask-ledger install: SessionStart, no UserPromptSubmit.
+        assert_eq!(
+            status(serde_json::json!({
+                "SessionStart": [entry(None, &bin)],
+                "PostToolUse": [entry(Some("Read"), &bin), entry(Some("Edit|Write|NotebookEdit"), &bin)],
+                "Stop": [entry(None, &bin)],
+            })),
+            HookStatus::Outdated
+        );
+        // A changed matcher is a different registration.
+        let mut changed = current(&bin);
+        changed["PostToolUse"][1]["matcher"] = serde_json::json!("Edit|Write");
+        assert_eq!(status(changed), HookStatus::Outdated);
+        // The right set, but the binary it names has moved away.
+        let gone = dir.path().join("old").join("scryer-mcp");
+        assert_eq!(status(current(&gone.to_string_lossy())), HookStatus::Outdated);
+    }
+
     /// Install twice into a settings file that already has a foreign hook:
     /// the foreign entry survives, scryer entries don't duplicate, and both
     /// PostToolUse matchers (Read overlay + Edit touch) are present.
@@ -611,10 +747,11 @@ mod hook_install_tests {
         .unwrap();
 
         let project = dir.path().to_string_lossy().to_string();
-        assert!(!check_claude_hooks(&project));
-        write_claude_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
-        write_claude_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
-        assert!(check_claude_hooks(&project));
+        let bin = fake_binary(dir.path());
+        assert_eq!(check_claude_hooks(&project), HookStatus::Outdated, "a leftover SessionStart entry is an old install");
+        write_claude_hooks(&project, &bin).unwrap();
+        write_claude_hooks(&project, &bin).unwrap();
+        assert_eq!(check_claude_hooks(&project), HookStatus::Current);
 
         let root: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(claude_dir.join("settings.local.json")).unwrap(),
@@ -742,10 +879,11 @@ mod hook_install_tests {
         .unwrap();
 
         let project = dir.path().to_string_lossy().to_string();
-        assert!(!check_codex_hooks(&project));
-        write_codex_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
-        write_codex_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
-        assert!(check_codex_hooks(&project));
+        let bin = fake_binary(dir.path());
+        assert_eq!(check_codex_hooks(&project), HookStatus::None);
+        write_codex_hooks(&project, &bin).unwrap();
+        write_codex_hooks(&project, &bin).unwrap();
+        assert_eq!(check_codex_hooks(&project), HookStatus::Current);
 
         let root: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(codex_dir.join("hooks.json")).unwrap(),
@@ -779,10 +917,11 @@ mod hook_install_tests {
         std::fs::write(&hooks_file, "{ not json at all").unwrap();
 
         let project = dir.path().to_string_lossy().to_string();
-        assert!(!check_copilot_hooks(&project));
-        write_copilot_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
-        write_copilot_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
-        assert!(check_copilot_hooks(&project));
+        let bin = fake_binary(dir.path());
+        assert_eq!(check_copilot_hooks(&project), HookStatus::None);
+        write_copilot_hooks(&project, &bin).unwrap();
+        write_copilot_hooks(&project, &bin).unwrap();
+        assert_eq!(check_copilot_hooks(&project), HookStatus::Current);
 
         let root: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&hooks_file).unwrap()).unwrap();
@@ -796,7 +935,7 @@ mod hook_install_tests {
             .any(|e| e["matcher"] == "create|edit|str_replace_editor|apply_patch"));
         // Flat schema, and the client is told which harness it is serving.
         assert_eq!(post[0]["type"], "command");
-        assert_eq!(post[0]["command"], "\"/opt/scryer/scryer-mcp\" hook --copilot");
+        assert_eq!(post[0]["command"], format!("\"{bin}\" hook --copilot"));
         assert!(post.iter().all(is_scryer_hook_entry));
         assert!(root["hooks"].get("SessionStart").is_none());
         assert_eq!(root["hooks"]["Stop"].as_array().unwrap().len(), 1);
@@ -932,10 +1071,11 @@ mod hook_install_tests {
             "[mcp_servers.scryer]\ncommand = \"/opt/scryer-mcp\"\n",
         )
         .unwrap();
-        write_claude_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
-        write_claude_statusline(&project, "/opt/scryer/scryer-mcp").unwrap();
-        write_codex_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
-        write_copilot_hooks(&project, "/opt/scryer/scryer-mcp").unwrap();
+        let bin = fake_binary(dir.path());
+        write_claude_hooks(&project, &bin).unwrap();
+        write_claude_statusline(&project, &bin).unwrap();
+        write_codex_hooks(&project, &bin).unwrap();
+        write_copilot_hooks(&project, &bin).unwrap();
 
         let status = detect_ai_tools(Some(project));
         for flag in [
@@ -943,18 +1083,18 @@ mod hook_install_tests {
             "codexMcpEnabled",
             "copilotMcpEnabled",
             "claudeApproved",
-            "claudeHooksEnabled",
-            "codexHooksEnabled",
-            "copilotHooksEnabled",
             "claudeStatuslineEnabled",
         ] {
             assert_eq!(status[flag], true, "{flag}: {status}");
+        }
+        for hooks in ["claudeHooks", "codexHooks", "copilotHooks"] {
+            assert_eq!(status[hooks], "current", "{hooks}: {status}");
         }
         assert_eq!(status["claudeStatuslineForeign"], false);
 
         let none = detect_ai_tools(None);
         assert_eq!(none["claudeMcpEnabled"], false, "no project, no project flags");
-        assert_eq!(none["claudeHooksEnabled"], false);
+        assert_eq!(none["claudeHooks"], "none");
     }
 
     /// With no binary beside the app, the PATH lookup finds scryer-mcp.

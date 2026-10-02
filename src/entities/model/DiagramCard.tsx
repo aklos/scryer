@@ -11,7 +11,8 @@
 import type { NodeProps, Node as RFNode } from "@xyflow/react";
 import type { DiagramNode } from "../../widgets/diagram-canvas/diagramLayout";
 import type { Mark } from "../../features/change-marks/changeMarks";
-import type { Completeness } from "./health";
+import type { Completeness, StyleViolation } from "./health";
+import { StructuralCount } from "./StructuralCount";
 import { CompletenessPie } from "./CompletenessPie";
 import { NodeHandles } from "../../shared/diagram/NodeHandles";
 import { ShapeBackground, resolveShape, getContentInsets } from "./shapes";
@@ -30,6 +31,9 @@ export interface CardData extends Record<string, unknown> {
   pending?: boolean;
   /** Build completeness for this node — drives the corner % + anchorage badge. */
   completeness?: Completeness;
+  /** Structural violations charged inside this node's subtree — counted on
+   *  the card so the drill path to them is visible from any level. */
+  structural?: readonly StyleViolation[];
   /** The level is drawn in a style: every card sits inside its layer's
    *  region, so the card's own layer tag would only repeat the region label. */
   styled?: boolean;
@@ -236,6 +240,14 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
         {/* Completeness pie, bottom-left. Hidden while the card is still
             generating so it doesn't flash on empty. */}
         {showComp && !data.pending && <CompletenessDot c={comp!} />}
+
+        {/* Structural violations inside, top-left. Ghosts are counted at home. */}
+        {!isGhost && !data.pending && (
+          <StructuralCount
+            violations={data.structural}
+            className="pointer-events-auto absolute left-2.5 top-1.5 z-10"
+          />
+        )}
 
         {/* Drill-in — shown on select. */}
         {expandable && selected && (

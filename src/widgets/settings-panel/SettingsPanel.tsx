@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Check, X } from "lucide-react";
 import { Input, Select } from "../../shared/ui";
 import { BTN, BTN_GO, BTN_ICON, EYEBROW, SegField } from "../../shared/ui/pagekit";
-import { useMcpSetup } from "../../features/mcp-setup/useMcpSetup";
+import { HOOK_TARGETS, useMcpSetup, type HookStatus } from "../../features/mcp-setup/useMcpSetup";
 
 /** The agents a fill can run with, in the order they're fallen back to when the
  *  preferred one isn't installed. Mirrors `detect_available_agent_pref`, so the
@@ -251,16 +251,15 @@ export function SettingsPanel({
             (mcpSetup.tools.claude || mcpSetup.tools.codex || mcpSetup.tools.copilot) && (
             <Field label="Session hooks (this project)">
               <p className="text-xs leading-relaxed text-[var(--text-muted)]">
-                Let agent sessions see the model as they work: the status line on start, each
-                file's claims and directives as they work in it, and a one-time close check for
-                touched claims. Hooks are inert while Scryer is closed — installed per tool,
-                active whenever Scryer has this project open.
+                Let agent sessions see the model as they work: each prompt logged as asks, each
+                file's claims and directives as they work in it, and a close check on the claims
+                they touched. Installed per tool; they run whether or not Scryer is open.
               </p>
               {mcpSetup.tools.claude && (
                 <HooksRow
                   name="Claude Code"
-                  target=".claude/settings.local.json"
-                  installed={mcpSetup.tools.claudeHooksEnabled}
+                  target={HOOK_TARGETS.claude}
+                  status={mcpSetup.tools.claudeHooks}
                   busy={mcpSetup.busy}
                   onInstall={() => void mcpSetup.enableHooks("claude")}
                 />
@@ -268,8 +267,8 @@ export function SettingsPanel({
               {mcpSetup.tools.codex && (
                 <HooksRow
                   name="Codex"
-                  target=".codex/hooks.json"
-                  installed={mcpSetup.tools.codexHooksEnabled}
+                  target={HOOK_TARGETS.codex}
+                  status={mcpSetup.tools.codexHooks}
                   busy={mcpSetup.busy}
                   onInstall={() => void mcpSetup.enableHooks("codex")}
                 />
@@ -278,8 +277,8 @@ export function SettingsPanel({
                 <>
                   <HooksRow
                     name="Copilot CLI"
-                    target=".github/hooks/scryer.json"
-                    installed={mcpSetup.tools.copilotHooksEnabled}
+                    target={HOOK_TARGETS.copilot}
+                    status={mcpSetup.tools.copilotHooks}
                     busy={mcpSetup.busy}
                     onInstall={() => void mcpSetup.enableHooks("copilot")}
                   />
@@ -341,32 +340,44 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-/** One tool's hook-install state: installed check, or the target file + button. */
-function HooksRow({
+/** One tool's hook-install state: installed check, or the target file + an
+ *  Install button — Update when the install predates the current hooks. */
+export function HooksRow({
   name,
   target,
-  installed,
+  status,
   busy,
   onInstall,
 }: {
   name: string;
   target: string;
-  installed: boolean;
+  status: HookStatus;
   busy: boolean;
   onInstall: () => void;
 }) {
+  const outdated = status === "outdated";
   return (
     <div className="flex items-center justify-between gap-2">
       <span className="text-xs text-[var(--text)]">{name}</span>
-      {installed ? (
+      {status === "current" ? (
         <span className="flex items-center gap-1 text-xs text-emerald-500">
           <Check className="h-3 w-3" /> Installed
         </span>
       ) : (
         <span className="flex items-center gap-2">
-          <span className="font-mono text-xs text-[var(--text-muted)]">{target}</span>
-          <button type="button" className={BTN} disabled={busy} onClick={onInstall}>
-            {busy ? "Installing…" : "Install"}
+          {outdated ? (
+            <span className="text-xs text-orange-600 dark:text-orange-400">Outdated</span>
+          ) : (
+            <span className="font-mono text-xs text-[var(--text-muted)]">{target}</span>
+          )}
+          <button
+            type="button"
+            className={outdated ? BTN_GO : BTN}
+            disabled={busy}
+            onClick={onInstall}
+            title={outdated ? `Rewrite scryer's hook entries in ${target}` : undefined}
+          >
+            {outdated ? (busy ? "Updating…" : "Update") : busy ? "Installing…" : "Install"}
           </button>
         </span>
       )}

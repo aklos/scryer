@@ -33,7 +33,7 @@ import { previewableNodeIds, usePreviewServer } from "../features/preview-client
 import { useModelHealth } from "../features/health-feed/useModelHealth";
 import { useTestStatuses } from "../features/health-feed/useTestStatuses";
 import { useSessionLog } from "../features/session-log/useSessionLog";
-import { rollupTestFindings, testFindings } from "../entities/model/health";
+import { rollupTestFindings, structuralBySubtree, testFindings } from "../entities/model/health";
 import {
   addGroup as addGroupHelper,
   addLink as addLinkHelper,
@@ -646,10 +646,13 @@ function Workspace({
     testFindings(model, committed, testVerdicts, probeResults),
   );
   const plan = planCounts(planDiff, model, committed);
+  // Structural violations per subtree — the tree marks every row that leads
+  // down to one.
+  const structural = structuralBySubtree(model, healthReport);
 
   return (
     <div className="relative flex h-screen w-screen flex-col bg-[var(--surface-canvas)]">
-      {mcpSetup.needsSetup && !mcpSetup.dismissed && (
+      {(mcpSetup.needsSetup || mcpSetup.hooksOutdated.length > 0) && !mcpSetup.dismissed && (
         <div className="absolute right-3 top-12 z-30 w-[300px]">
           <McpSetupPrompt setup={mcpSetup} onDone={launchSettings.reload} dismissable />
         </div>
@@ -688,6 +691,7 @@ function Workspace({
           concernLens={concernLens}
           onSetConcernLens={setConcernLens}
           testTally={testTally}
+          structural={structural}
         />
         {view === "diagram" ? (
           <DiagramView

@@ -5,6 +5,21 @@ import { invoke } from "@tauri-apps/api/core";
  *  PATH, and whether THIS project already has scryer wired into each one's
  *  config. The `*Enabled` / `*Approved` flags are always false when no project
  *  path is given (the PATH-only check used by the launch readout elsewhere). */
+/** Where one tool's scryer hook install stands. `outdated` is an install from
+ *  an earlier registration set, or one naming a binary that has since moved —
+ *  offered as an update, never shown as missing. */
+export type HookStatus = "none" | "outdated" | "current";
+
+export type HookTool = "claude" | "codex" | "copilot";
+
+/** Where each tool's hook registration lives, as the Settings rows and the
+ *  update prompt name it. */
+export const HOOK_TARGETS: Record<HookTool, string> = {
+  claude: ".claude/settings.local.json",
+  codex: ".codex/hooks.json",
+  copilot: ".github/hooks/scryer.json",
+};
+
 export interface AiToolsState {
   claude: boolean;
   codex: boolean;
@@ -16,14 +31,14 @@ export interface AiToolsState {
    *  `claudeMcpEnabled` is — no config file of its own. */
   copilotMcpEnabled: boolean;
   claudeApproved: boolean;
-  /** Scryer's session hooks are registered in this project's Claude Code settings. */
-  claudeHooksEnabled: boolean;
-  /** Scryer's session hooks are registered in this project's `.codex/hooks.json`. */
-  codexHooksEnabled: boolean;
-  /** Scryer's session hooks are registered in this project's
-   *  `.github/hooks/scryer.json` — the only project-scoped location Copilot
-   *  actually loads, and only once the folder is trusted. */
-  copilotHooksEnabled: boolean;
+  /** Scryer's session hooks in this project's Claude Code settings. */
+  claudeHooks: HookStatus;
+  /** Scryer's session hooks in this project's `.codex/hooks.json`. */
+  codexHooks: HookStatus;
+  /** Scryer's session hooks in this project's `.github/hooks/scryer.json` —
+   *  the only project-scoped location Copilot actually loads, and only once
+   *  the folder is trusted. */
+  copilotHooks: HookStatus;
   /** Scryer's status one-liner is registered as this project's Claude Code
    *  statusLine — the persistent segment that also works while Scryer is closed. */
   claudeStatuslineEnabled: boolean;
@@ -40,9 +55,9 @@ const EMPTY: AiToolsState = {
   codexMcpEnabled: false,
   copilotMcpEnabled: false,
   claudeApproved: false,
-  claudeHooksEnabled: false,
-  codexHooksEnabled: false,
-  copilotHooksEnabled: false,
+  claudeHooks: "none",
+  codexHooks: "none",
+  copilotHooks: "none",
   claudeStatuslineEnabled: false,
   claudeStatuslineForeign: false,
 };
@@ -53,6 +68,10 @@ export interface McpSetup {
    *  the signal to offer setup. Tool auto-approve alone never nags (it rides
    *  along in `enable`, but its absence isn't worth a prompt). */
   needsSetup: boolean;
+  /** Detected tools whose session hooks were installed from an earlier
+   *  registration set — the signal to offer an update. Hooks are an opt-in, so
+   *  only an install the user already made is ever offered again. */
+  hooksOutdated: HookTool[];
   /** The user clicked "Not now" for this project this session. */
   dismissed: boolean;
   /** An enable write is in flight. */
@@ -65,7 +84,9 @@ export interface McpSetup {
    *  or Copilot (`.github/hooks/scryer.json`). Never bundled into `enable` —
    *  the hooks change every session's behavior, so they
    *  are only written when the user asks for exactly that. */
-  enableHooks: (tool: "claude" | "codex" | "copilot") => Promise<void>;
+  enableHooks: (tool: HookTool) => Promise<void>;
+  /** Re-install every outdated hook registration in `hooksOutdated`. */
+  updateHooks: () => Promise<void>;
   /** Its own opt-in, separate from the session hooks: register scryer's status
    *  one-liner as Claude Code's persistent statusLine. The only integration that
    *  keeps reporting while Scryer is closed (it reads the model off disk), so it
@@ -74,6 +95,16 @@ export interface McpSetup {
   dismiss: () => void;
   /** Re-read detection from disk (e.g. after a config is written externally). */
   reload: () => void;
+}
+
+/** The detected tools whose session hooks are outdated. */
+export function hooksToUpdate(tools: AiToolsState): HookTool[] {
+  const status: Record<HookTool, HookStatus> = {
+    claude: tools.claude ? tools.claudeHooks : "none",
+    codex: tools.codex ? tools.codexHooks : "none",
+    copilot: tools.copilot ? tools.copilotHooks : "none",
+  };
+  return (Object.keys(status) as HookTool[]).filter((t) => status[t] === "outdated");
 }
 
 /// Detects whether the opened project is wired for AI-tool integration and
@@ -119,7 +150,7 @@ export function useMcpSetup(projectPath: string | null): McpSetup {
   }, [projectPath, tools, reload]);
 
   const enableHooks = useCallback(
-    async (tool: "claude" | "codex" | "copilot") => {
+    async (tool: HookTool) => {
       if (!projectPath) return;
       setBusy(true);
       try {
@@ -132,6 +163,21 @@ export function useMcpSetup(projectPath: string | null): McpSetup {
     },
     [projectPath, reload],
   );
+
+  const hooksOutdated = hooksToUpdate(tools);
+
+  const updateHooks = useCallback(async () => {
+    if (!projectPath) return;
+    setBusy(true);
+    try {
+      for (const tool of hooksToUpdate(tools)) {
+        await invoke("setup_mcp_integration", { action: `${tool}_hooks`, projectPath });
+      }
+      reload();
+    } finally {
+      setBusy(false);
+    }
+  }, [projectPath, tools, reload]);
 
   const enableStatusline = useCallback(async () => {
     if (!projectPath) return;
@@ -155,5 +201,17 @@ export function useMcpSetup(projectPath: string | null): McpSetup {
     (tools.copilot && !tools.copilotMcpEnabled);
   const dismissed = projectPath ? dismissedPaths.has(projectPath) : false;
 
-  return { tools, needsSetup, dismissed, busy, enable, enableHooks, enableStatusline, dismiss, reload };
+  return {
+    tools,
+    needsSetup,
+    hooksOutdated,
+    dismissed,
+    busy,
+    enable,
+    enableHooks,
+    updateHooks,
+    enableStatusline,
+    dismiss,
+    reload,
+  };
 }

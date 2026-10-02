@@ -49,7 +49,7 @@ import { buildDiagramScene, CARD_W, CARD_H, type DiagramScene, type DiagramNode 
 import { useDotSim } from "../../shared/lib/useDotSim";
 import { StyleRegions } from "./StyleRegions";
 import { nextOpenEdge } from "./edgePanel";
-import type { ModelHealthReport } from "../../entities/model/health";
+import { structuralBySubtree, type ModelHealthReport } from "../../entities/model/health";
 
 type DotData = CardData;
 type RFDot = RFNode<DotData, "dot">;
@@ -339,6 +339,9 @@ function DiagramInner({
     return concernCounts(model, concernLens);
   }, [model, concernLens]);
 
+  // Structural violations per subtree — each card counts what lies inside it.
+  const structural = useMemo(() => structuralBySubtree(model, report ?? null), [model, report]);
+
   // Arch cards drag and persist via onMoveNode — except ghosts, whose stored
   // placement belongs to the surface where the node really lives. Code-tier
   // dots drag whenever the live sim is on: pure physics, nothing written, so
@@ -383,12 +386,13 @@ function DiagramInner({
               (concernLit !== null && !concernLit.has(n.id)),
             pending: pendingIds?.has(n.id),
             completeness: report?.completeness[n.id],
+            structural: structural.get(n.id),
             styled: scene.mode === "styled",
           },
         };
       }) as Array<RFCard | RFDot>;
     });
-  }, [scene, selectedId, markFor, highlight, pendingIds, report, concernLit, archDraggable, dotSim.live]);
+  }, [scene, selectedId, markFor, highlight, pendingIds, report, structural, concernLit, archDraggable, dotSim.live]);
 
   const rfEdges = useMemo<RFEdge<EdgeData>[]>(() => {
     if (!scene) return [];

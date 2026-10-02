@@ -25,7 +25,7 @@ import {
   Flag,
   GitCompare,
 } from "lucide-react";
-import type { Node } from "../../entities/model/viewmodel";
+import type { Node, ScryModel } from "../../entities/model/viewmodel";
 import {
   effectiveSourceMap,
   effectiveTestMap,
@@ -39,6 +39,7 @@ import {
   structuralNotice,
   subtreeTestTone,
   testStatesOf,
+  type StyleViolation,
 } from "../../entities/model/health";
 import { kindIcon, typeTag } from "../../entities/model/kindIcon";
 import { lookupIcon } from "../../features/search/IconPicker";
@@ -93,6 +94,88 @@ export function NodePage(props: PageProps) {
     <PageMenuProvider>
       <NodePageBody key={node.id} {...props} node={node} />
     </PageMenuProvider>
+  );
+}
+
+/** Plain words for each violation kind, as the list labels them. */
+const VIOLATION_KIND: Record<StyleViolation["kind"], string> = {
+  layer_violation: "layer",
+  isolation_violation: "isolation",
+  external_violation: "external import",
+  misplaced: "misplaced file",
+  unstyled: "no style",
+  layerless: "no layer",
+  cycle: "cycle",
+  forbidden_link: "forbidden link",
+  role_violation: "role",
+  data_violation: "data shape",
+};
+
+/** Where the structural notice's violations are: grouped under the container
+ *  whose style each breaks, each naming the component charged (and the one it
+ *  reaches, for an import or link), the file the fix goes in, and the check's
+ *  own one-line account. Names navigate to their pages. */
+export function StructuralViolationList({
+  violations,
+  model,
+  onSelectNode,
+}: {
+  violations: readonly StyleViolation[];
+  model: Pick<ScryModel, "nodes">;
+  onSelectNode: (id: string) => void;
+}) {
+  const names = new Map(model.nodes.map((n) => [n.id, n.name] as const));
+  const byContainer = new Map<string, StyleViolation[]>();
+  for (const v of violations) {
+    const list = byContainer.get(v.container);
+    if (list) list.push(v);
+    else byContainer.set(v.container, [v]);
+  }
+  const link = (id: string) => (
+    <button
+      type="button"
+      onClick={() => onSelectNode(id)}
+      className="font-medium text-[var(--text)] underline-offset-2 hover:underline"
+    >
+      {names.get(id) || id}
+    </button>
+  );
+  return (
+    <div
+      data-structural-list
+      className="flex flex-col gap-3 rounded-md border border-[var(--border)] px-3 py-2 text-xs"
+    >
+      {[...byContainer].map(([container, vs]) => (
+        <div key={container} className="flex flex-col gap-1.5">
+          <div className="flex items-baseline gap-2">
+            {link(container)}
+            <span className="text-[var(--text-ghost)]">
+              {vs.length} violation{vs.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <ul className="flex flex-col gap-1.5 border-l border-[var(--border)] pl-3">
+            {vs.map((v, i) => (
+              <li key={i} className="flex flex-col gap-0.5">
+                <span className="flex flex-wrap items-baseline gap-x-1.5">
+                  {v.node !== v.container && link(v.node)}
+                  {v.other && (
+                    <>
+                      <span className="text-[var(--text-ghost)]">→</span>
+                      {link(v.other)}
+                    </>
+                  )}
+                  <span className="text-2xs uppercase tracking-wider text-[var(--text-ghost)]">
+                    {VIOLATION_KIND[v.kind]}
+                  </span>
+                </span>
+                <span className="font-mono text-2xs text-[var(--text-muted)]">{v.file}</span>
+                <span className="text-[var(--text-secondary)]">{v.detail}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -160,10 +243,12 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const testMap = effectiveTestMap(committed, model);
   // Per-claim fingerprint state of the attached test (test: observations).
   const testStates = useMemo(() => testStatesOf(report), [report]);
-  const structural = useMemo(
-    () => structuralNotice(structuralBySubtree(model, report ?? null).get(node.id) ?? []),
+  const structuralViolations = useMemo(
+    () => structuralBySubtree(model, report ?? null).get(node.id) ?? [],
     [model, report, node.id],
   );
+  const structural = structuralNotice(structuralViolations);
+  const [structuralOpen, setStructuralOpen] = useState(false);
   const dataShape = isDataShape(node);
   const resps = node.responsibilities ?? [];
   // The committed copy of this node's claims — the diff base for the Overview.
@@ -200,9 +285,31 @@ function NodePageBody(props: PageProps & { node: Node }) {
     drift || structural || node.stale || isNodeEmpty(node) ? (
       <>
         {structural && (
-          <Ambox tone={structural.unstyledOnly ? "warning" : "danger"} icon={<Flag className="h-3 w-3" />}>
-            {structural.text}
-          </Ambox>
+          <>
+            <Ambox
+              tone={structural.unstyledOnly ? "warning" : "danger"}
+              icon={<Flag className="h-3 w-3" />}
+              actions={
+                <button
+                  type="button"
+                  onClick={() => setStructuralOpen((o) => !o)}
+                  aria-expanded={structuralOpen}
+                  className={NOTICE_ACTION}
+                >
+                  {structuralOpen ? "Hide" : "Show where"}
+                </button>
+              }
+            >
+              {structural.text}
+            </Ambox>
+            {structuralOpen && (
+              <StructuralViolationList
+                violations={structuralViolations}
+                model={model}
+                onSelectNode={onSelectNode}
+              />
+            )}
+          </>
         )}
         {node.stale && editor && (
           <Ambox

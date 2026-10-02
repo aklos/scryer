@@ -1099,6 +1099,11 @@
           "id": "resp-x6kw7r",
           "statement": "One-click prompt to wire scryer's MCP server into every detected AI coding tool",
           "lastTouchedAt": 1788958565
+        },
+        {
+          "id": "resp-r05we9",
+          "statement": "**When** a detected tool's session hooks are outdated, **offers** to update them, naming each file it rewrites",
+          "lastTouchedAt": 1790938920
         }
       ]
     },
@@ -2579,8 +2584,8 @@
       "responsibilities": [
         {
           "id": "resp-d269b4",
-          "statement": "Renders one C4 box node on the diagram — shape, drift/plan outline, completeness gauge, and drill-down",
-          "lastTouchedAt": 1788958565
+          "statement": "Renders one C4 box node on the diagram — shape, drift/plan outline, completeness gauge, structural violation count, and drill-down",
+          "lastTouchedAt": 1790938920
         }
       ]
     },
@@ -2687,8 +2692,8 @@
       "responsibilities": [
         {
           "id": "resp-5hpmah",
-          "statement": "Renders the whole model as a navigable, filterable tree with plan/drift marks, test tallies, and inline structural editing",
-          "lastTouchedAt": 1788958565
+          "statement": "Renders the whole model as a navigable, filterable tree with plan/drift marks, test tallies, structural violation counts, and inline structural editing",
+          "lastTouchedAt": 1790938920
         }
       ]
     },
@@ -3155,14 +3160,6 @@
           "id": "resp-t0ksj3",
           "statement": "Gathers everything awaiting a human verdict — amendments, vagrant/stale claims, untested claims, unseen work — into one index",
           "lastTouchedAt": 1788958565
-        },
-        {
-          "id": "resp-1f73kk",
-          "statement": "**When** the structural check reports violations, **groups** them by container into the index and counts every one but an unstyled container toward its total",
-          "vagrant": true,
-          "vagrantOrigin": "amendment",
-          "approvedStatement": "**When** the structural check reports violations, **groups** them by container into the index and counts each toward its total",
-          "lastTouchedAt": 1789126042
         }
       ]
     },
@@ -14058,6 +14055,81 @@
           "lastTouchedAt": 1789073110
         }
       ]
+    },
+    {
+      "id": "node-b42pqv",
+      "kind": "symbol",
+      "name": "hook_install_status",
+      "parentId": "node-7vjcgn",
+      "responsibilities": [
+        {
+          "id": "resp-mm76pz",
+          "statement": "**When** a tool's hook settings hold exactly the current scryer registration set, **reports** the install as current",
+          "lastTouchedAt": 1790938916
+        },
+        {
+          "id": "resp-1pv0ha",
+          "statement": "**When** a tool's hook settings hold scryer entries that differ from the current registration set, **reports** the install as outdated",
+          "lastTouchedAt": 1790938916
+        },
+        {
+          "id": "resp-463yda",
+          "statement": "**If** a scryer hook entry names a scryer-mcp binary that no longer exists, **then** **reports** the install as outdated",
+          "lastTouchedAt": 1790938916
+        }
+      ]
+    },
+    {
+      "id": "node-5mk6t0",
+      "kind": "symbol",
+      "name": "hooksToUpdate",
+      "parentId": "node-9562dh",
+      "responsibilities": [
+        {
+          "id": "resp-6n0gsn",
+          "statement": "**When** a detected tool's session hooks are outdated, **lists** that tool among the hooks to update",
+          "lastTouchedAt": 1790938916
+        }
+      ]
+    },
+    {
+      "id": "node-cst49n",
+      "kind": "symbol",
+      "name": "HooksRow",
+      "parentId": "node-1bwtge",
+      "responsibilities": [
+        {
+          "id": "resp-6p9870",
+          "statement": "**When** a tool's session hooks are outdated, **shows** an Update action in place of Installed",
+          "lastTouchedAt": 1790938916
+        }
+      ]
+    },
+    {
+      "id": "node-vd81jd",
+      "kind": "symbol",
+      "name": "StructuralViolationList",
+      "parentId": "node-35zvw4",
+      "responsibilities": [
+        {
+          "id": "resp-rnz1pv",
+          "statement": "**When** the user expands the structural notice, **lists** each violation under the container whose style it breaks, with the charged component, the file to fix and what is wrong",
+          "lastTouchedAt": 1790938916
+        }
+      ]
+    },
+    {
+      "id": "node-45vp3y",
+      "kind": "symbol",
+      "name": "StructuralCount",
+      "parentId": "node-b9sv18",
+      "responsibilities": [
+        {
+          "id": "resp-5nhv0y",
+          "statement": "**When** the structural check charges violations inside a node's subtree, **shows** their count, orange when every one is an undeclared style and red otherwise",
+          "lastTouchedAt": 1790938916
+        }
+      ]
     }
   ],
   "links": [
@@ -18283,91 +18355,11 @@
       "parentNodeId": "node-t58dyd"
     }
   ],
-  "sourceMap": {
-    "resp-1f73kk": [
-      {
-        "pattern": "src/pages/needs-review/NeedsReviewPage.tsx",
-        "symbol": "buildReviewIndex"
-      }
-    ]
-  },
-  "testMap": {
-    "resp-1f73kk": [
-      {
-        "pattern": "tests/structuralViolations.test.ts",
-        "symbol": "groups violations by container and counts all but unstyled containers"
-      }
-    ]
-  },
   "changes": [
-    {
-      "id": "chg-g09ar0",
-      "rationale": "Show a banner on a structurally invalid node's page telling the user to ask the agent to pick a correct architecture and refactor.",
-      "createdAt": 1789124358,
-      "signedOff": {
-        "at": 1789125524,
-        "entries": {
-          "prop:node-5hkxf8:Cycle": {
-            "hash": "a6b49ce075009573",
-            "host": "node-5hkxf8"
-          },
-          "prop:node-5hkxf8:ForbiddenLink": {
-            "hash": "1db835c817ee4228",
-            "host": "node-5hkxf8"
-          },
-          "prop:node-5hkxf8:Layerless": {
-            "hash": "66bc863f6c5a99a5",
-            "host": "node-5hkxf8"
-          },
-          "prop:node-5hkxf8:Unstyled": {
-            "hash": "17612c2a3f663c8b",
-            "host": "node-5hkxf8"
-          },
-          "resp:resp-0pssms": {
-            "hash": "ef28184ccd1b122a",
-            "statement": "**If** an import leaves a styled container from a layer outside its style's outbound layers, **then** **reports** a layer violation charged to the importer",
-            "host": "node-7ecyk8"
-          },
-          "resp:resp-1f73kk": {
-            "hash": "37080d79413a71dc",
-            "statement": "**When** the structural check reports violations, **groups** them by container into the index and counts each toward its total",
-            "host": "node-kfszr9"
-          },
-          "resp:resp-7g0mkm": {
-            "hash": "bc91db7cd01112fd",
-            "statement": "**When** a styled level is drawn, **marks** red only the edges the structural report charges, each carrying its violation's detail",
-            "host": "node-vqwatq"
-          },
-          "resp:resp-as9xwv": {
-            "hash": "108187db74a8968b",
-            "statement": "**When** a declared model link breaks its style's legality rules, **reports** it as a forbidden link charged to the linking component",
-            "host": "node-7ecyk8"
-          },
-          "resp:resp-k91yqn": {
-            "hash": "806a78b98eb83db0",
-            "statement": "**When** the structural check charges violations to the node or anything inside it, **shows** a notice telling the user to have the agent choose the architecture the code should have and refactor to it",
-            "host": "node-r5mfg8"
-          },
-          "resp:resp-mjrrnd": {
-            "hash": "896c25206c4a0922",
-            "statement": "**If** a link leaves a styled container from a layer outside its style's outbound layers, **then** **flags** it as illegal",
-            "host": "node-kdz13m"
-          },
-          "resp:resp-xd8zrt": {
-            "hash": "49cf54484d556548",
-            "statement": "**When** the index holds structural violations, **lists** them per container with a hint to have the agent choose the architecture the code should have and refactor to it",
-            "host": "node-kkhg9g"
-          }
-        }
-      }
-    },
     {
       "id": "chg-af0ftw",
       "rationale": "Declare MCP Server core-shell and layer its components",
       "createdAt": 1789208416
     }
-  ],
-  "changeMap": {
-    "resp:resp-1f73kk": "chg-g09ar0"
-  }
+  ]
 }
