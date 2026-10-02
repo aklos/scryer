@@ -285,6 +285,14 @@ pub fn match_report(
 /// drift on exactly these.
 pub fn normalize_leaf(name: &str) -> String {
     let leaf = name.rsplit(" > ").next().unwrap_or(name);
+    // A data-driven case (xUnit `[InlineData]`, NUnit `[TestCase]`) is the
+    // method's name plus its arguments: `Name(kind: "rock")`. Drop the list
+    // — only after an identifier, so a sentence title ending in "(slow)"
+    // keeps its words.
+    let leaf = match leaf.find('(') {
+        Some(i) if leaf.ends_with(')') && i > 0 && !leaf[..i].chars().any(char::is_whitespace) => &leaf[..i],
+        _ => leaf,
+    };
     let leaf = if !leaf.chars().any(char::is_whitespace) {
         leaf.rsplit("::").next().unwrap_or(leaf)
     } else {
@@ -442,6 +450,28 @@ mod tests {
         assert_eq!(m.claims["resp-1"].outcome, TestOutcome::Passed);
         assert_eq!(m.claims["resp-2"].outcome, TestOutcome::Passed, "spaced :: is a title, not a path");
         assert!(m.unseen.is_empty());
+    }
+
+    /// xUnit/NUnit report each data-driven case as the method name plus its
+    /// arguments; every case matches the one attached test, and a sentence
+    /// title ending in a parenthesis keeps its words.
+    #[test]
+    fn matches_dotnet_data_driven_cases_by_the_method_name() {
+        let map = attach(&[(
+            "resp-lock",
+            "tests/Client.Tests/LockTests.cs",
+            Some("Approaching_a_lock_with_a_solid_stops_short"),
+        )]);
+        let xml = r#"<testsuites><testsuite name="Client.Tests">
+            <testcase classname="Client.Tests.LockTests" name="Approaching_a_lock_with_a_solid_stops_short(kind: &quot;rock&quot;)"/>
+            <testcase classname="Client.Tests.LockTests" name="Approaching_a_lock_with_a_solid_stops_short(kind: &quot;station&quot;)"/>
+            <testcase classname="Client.Tests.LockTests" name="Approaching_a_lock_with_a_solid_stops_short(kind: &quot;derelict&quot;)"/>
+        </testsuite></testsuites>"#;
+        let m = match_report(&map, &parse_junit(xml).unwrap());
+        let claim = &m.claims["resp-lock"];
+        assert_eq!(claim.outcome, TestOutcome::Passed);
+        assert_eq!(claim.cases, 3);
+        assert_eq!(normalize_leaf("answers fast (slow path)"), "answers fast (slow path)");
     }
 
     #[test]
