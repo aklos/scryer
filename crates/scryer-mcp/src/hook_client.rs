@@ -99,6 +99,23 @@ impl Harness {
             Harness::Copilot => emit(&serde_json::json!({ "additionalContext": text })),
         }
     }
+
+    /// Refuse the tool call about to run, with `reason` for the agent.
+    fn deny(self, event_name: &str, reason: &str) {
+        match self {
+            Harness::ClaudeLike => emit(&serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": event_name,
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                }
+            })),
+            Harness::Copilot => emit(&serde_json::json!({
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            })),
+        }
+    }
 }
 
 pub fn run_hook_client(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -241,6 +258,10 @@ const OVERLAY_FILE_CAP: usize = 5;
 /// command, its start is marked, so the files it modifies count as the
 /// session's edits when it finishes.
 fn pre_tool_use(r: &ModelRef, event: &serde_json::Value, harness: Harness) {
+    if let Some(reason) = probe_guard(r, event) {
+        harness.deny("PreToolUse", &reason);
+        return;
+    }
     if is_shell(event) {
         if let Some(session) = session_id(event) {
             let _ = scryer_core::session::record_shell_start(r, session, tool_use_id(event));
@@ -259,6 +280,71 @@ fn pre_tool_use(r: &ModelRef, event: &serde_json::Value, harness: Harness) {
         return;
     }
     harness.emit_context("PreToolUse", &sections.join("\n\n"));
+}
+
+/// While the session has a probe open, a shell command that would discard
+/// uncommitted work outside the probe worktree is refused. A probe never needs
+/// one — close_probe resets the worktree — and in the developer's tree it
+/// throws away their work and every other session's.
+fn probe_guard(r: &ModelRef, event: &serde_json::Value) -> Option<String> {
+    if !is_shell(event) || !scryer_core::session::probe_open(r, session_id(event)?) {
+        return None;
+    }
+    let command = event["tool_input"]["command"].as_str()?;
+    let cwd = event["cwd"].as_str().map(std::path::PathBuf::from).unwrap_or_else(|| r.project_path().to_path_buf());
+    let wt = scryer_core::worktree::worktree_path(r.project_path());
+    let git = discarding_git(command, &cwd, &wt)?;
+    Some(format!(
+        "Scryer refused `git {git}` while a probe is open: it discards uncommitted work, and \
+         outside the probe worktree ({}) that is the developer's own. Make breaks only in the \
+         probe worktree and never revert them — close_probe resets it.",
+        wt.display()
+    ))
+}
+
+/// The first git subcommand in `command` that discards uncommitted work
+/// (`checkout`, `restore`, `clean`, `stash` other than list/show, `reset
+/// --hard`) and runs outside `wt`, resolving `cd` and `-C` against `cwd`.
+fn discarding_git(command: &str, cwd: &std::path::Path, wt: &std::path::Path) -> Option<String> {
+    let mut dir = cwd.to_path_buf();
+    let normalized = command.replace("&&", "\n").replace("||", "\n").replace([';', '|'], "\n");
+    for segment in normalized.lines() {
+        let words: Vec<&str> =
+            segment.split_whitespace().map(|w| w.trim_matches(|c| c == '"' || c == '\'')).collect();
+        if words.first() == Some(&"cd") {
+            if let Some(to) = words.get(1) {
+                dir = dir.join(to);
+            }
+            continue;
+        }
+        let Some(at) = words.iter().position(|w| *w == "git" || w.ends_with("/git")) else {
+            continue;
+        };
+        let mut here = dir.clone();
+        let mut rest = words[at + 1..].iter();
+        let sub = loop {
+            match rest.next() {
+                Some(&"-C") => here = here.join(rest.next()?),
+                Some(&"-c") => {
+                    rest.next();
+                }
+                Some(w) if w.starts_with('-') => {}
+                Some(w) => break *w,
+                None => break "",
+            }
+        };
+        let args: Vec<&str> = rest.copied().collect();
+        let discards = match sub {
+            "checkout" | "restore" | "clean" => true,
+            "stash" => !matches!(args.first(), Some(&"list" | &"show")),
+            "reset" => args.iter().any(|a| matches!(*a, "--hard" | "--merge" | "--keep")),
+            _ => false,
+        };
+        if discards && !here.starts_with(wt) {
+            return Some(sub.to_string());
+        }
+    }
+    None
 }
 
 /// File paths named by the apply_patch envelope in this tool call, if any.
@@ -580,6 +666,51 @@ mod tests {
 
         let log = scryer_core::session::session_log(&r, "s");
         assert_eq!(log.touched, vec!["src/lib.rs".to_string()]);
+    }
+
+    /// While a probe is open, git that discards uncommitted work is refused in
+    /// the developer's tree and allowed in the probe worktree; with no probe
+    /// open, nothing is refused.
+    #[test]
+    fn an_open_probe_refuses_discarding_git_outside_its_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let model: scryer_core::ScryModel =
+            serde_json::from_value(serde_json::json!({ "version": "0.3", "nodes": [], "links": [] })).unwrap();
+        scryer_core::write_model_at(&r, &model).unwrap();
+        let wt = scryer_core::worktree::worktree_path(dir.path());
+        let call = |command: String| {
+            serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "session_id": "s",
+                "tool_name": "Bash",
+                "cwd": dir.path(),
+                "tool_input": { "command": command }
+            })
+        };
+        let checkout = || call("git checkout -- src/Modules.cs".into());
+
+        assert!(probe_guard(&r, &checkout()).is_none(), "no probe open");
+        scryer_core::session::record_probe(&r, "s", true).unwrap();
+        for refused in [
+            "git checkout -- src/Modules.cs",
+            "git stash -u",
+            "dotnet test && git restore .",
+            "git -c core.x=y reset --hard HEAD",
+        ] {
+            assert!(probe_guard(&r, &call(refused.into())).is_some(), "{refused}");
+        }
+        for allowed in [
+            "git status",
+            "git stash list",
+            "git diff HEAD",
+            &format!("git -C {} checkout -- src/m.ts", wt.display()),
+            &format!("cd {} && git restore .", wt.display()),
+        ] {
+            assert!(probe_guard(&r, &call(allowed.to_string())).is_none(), "{allowed}");
+        }
+        scryer_core::session::record_probe(&r, "s", false).unwrap();
+        assert!(probe_guard(&r, &checkout()).is_none(), "the probe closed");
     }
 
     /// An overlay with no claims, directives, pending work or placement — a

@@ -3119,6 +3119,16 @@
           "id": "resp-13z65n",
           "statement": "Resets the probe worktree and records which deliberate breaks the claim's test failed to catch",
           "lastTouchedAt": 1788958615
+        },
+        {
+          "id": "resp-88k8e3",
+          "statement": "**If** no break was tried, **then** **leaves** the claim's probe record untouched and reports it as unprobed",
+          "lastTouchedAt": 1790956514
+        },
+        {
+          "id": "resp-dsw6zb",
+          "statement": "**If** breaks are reported but the claim's code in the probe worktree still matches the developer's, **then** **leaves** the claim's probe record untouched and reports it as unprobed",
+          "lastTouchedAt": 1790962984
         }
       ]
     },
@@ -9949,6 +9959,11 @@
           "id": "resp-1s35xd",
           "statement": "**When** anchors or tests are added to a claim with a current verdict, **refingerprints** the verdict, unless a span it recorded changed or a newly anchored file was modified since its run",
           "lastTouchedAt": 1790949986
+        },
+        {
+          "id": "resp-vfpenc",
+          "statement": "**If** a stored probe round tried no break, **then** **leaves** it out of the claim's probe status",
+          "lastTouchedAt": 1790962987
         }
       ],
       "layer": "infrastructure"
@@ -14131,6 +14146,11 @@
           "id": "resp-sbg2z1",
           "statement": "**When** the close gate blocks, **lists** one line per file with its claims counted once each by state, at most eight files",
           "lastTouchedAt": 1790942465
+        },
+        {
+          "id": "resp-5wz5x1",
+          "statement": "**If** the session has edited no file since it planned an entry, **then** **leaves** that entry out of the stop gate",
+          "lastTouchedAt": 1790956519
         }
       ],
       "layer": "composition"
@@ -14150,6 +14170,11 @@
           "id": "resp-v08x63",
           "statement": "**When** a shell command is about to run, **marks** its start in the session log",
           "lastTouchedAt": 1790939924
+        },
+        {
+          "id": "resp-rfv9cp",
+          "statement": "**While** the session has a probe open, **denies** git commands that discard uncommitted changes outside the probe worktree",
+          "lastTouchedAt": 1790962992
         }
       ]
     },
@@ -20118,6 +20143,16 @@
         "symbol": "NodePage"
       }
     ],
+    "resp-5wz5x1": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "stop"
+      },
+      {
+        "pattern": "crates/scryer-core/src/domain/session.rs",
+        "symbol": "edited_since_planning"
+      }
+    ],
     "resp-60bw8b": [
       {
         "pattern": "src-tauri/src/shell/hooks.rs",
@@ -20368,6 +20403,12 @@
       {
         "pattern": "crates/scryer-core/src/domain/ownership.rs",
         "symbol": "pattern_rank"
+      }
+    ],
+    "resp-88k8e3": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/testing.rs",
+        "symbol": "close_probe"
       }
     ],
     "resp-8a1dwz": [
@@ -20942,6 +20983,16 @@
       {
         "pattern": "crates/scryer-core/src/composition/session.rs",
         "symbol": "close_gate"
+      }
+    ],
+    "resp-dsw6zb": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/testing.rs",
+        "symbol": "close_probe"
+      },
+      {
+        "pattern": "crates/scryer-core/src/infrastructure/worktree.rs",
+        "symbol": "holds_change"
       }
     ],
     "resp-dts1zp": [
@@ -22036,6 +22087,16 @@
         "symbol": "handle_request"
       }
     ],
+    "resp-rfv9cp": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "probe_guard"
+      },
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "discarding_git"
+      }
+    ],
     "resp-rfybmq": [
       {
         "pattern": "crates/scryer-extract/src/domain/lang.rs",
@@ -22358,6 +22419,12 @@
       {
         "pattern": "src/features/markup/wordDiff.ts",
         "symbol": "wordDiff"
+      }
+    ],
+    "resp-vfpenc": [
+      {
+        "pattern": "crates/scryer-extract/src/infrastructure/test_status.rs",
+        "symbol": "read_probe_statuses"
       }
     ],
     "resp-vfz9ek": [
@@ -22890,6 +22957,12 @@
         "symbol": "counts a subtree's violations, orange when only styles are undeclared"
       }
     ],
+    "resp-5wz5x1": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "a_plan_awaiting_sign_off_does_not_block_the_stop"
+      }
+    ],
     "resp-6dkm04": [
       {
         "pattern": "crates/scryer-core/src/domain/test_results.rs",
@@ -22924,6 +22997,12 @@
       {
         "pattern": "tests/mapExplicitDetail.test.ts",
         "symbol": "carries no hover tooltips"
+      }
+    ],
+    "resp-88k8e3": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/testing.rs",
+        "symbol": "a_round_with_no_break_tried_records_nothing"
       }
     ],
     "resp-8n3sxq": [
@@ -22996,6 +23075,12 @@
       {
         "pattern": "crates/scryer-core/src/composition/session.rs",
         "symbol": "the_close_gate_leaves_out_drift_the_session_found"
+      }
+    ],
+    "resp-dsw6zb": [
+      {
+        "pattern": "crates/scryer-mcp/src/tools/testing.rs",
+        "symbol": "breaks_not_in_the_probe_worktree_record_nothing"
       }
     ],
     "resp-hp3k5v": [
@@ -23090,6 +23175,12 @@
         "symbol": "offers an update naming the files it rewrites"
       }
     ],
+    "resp-rfv9cp": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "an_open_probe_refuses_discarding_git_outside_its_worktree"
+      }
+    ],
     "resp-rfybmq": [
       {
         "pattern": "crates/scryer-extract/src/infrastructure/manifest.rs",
@@ -23124,6 +23215,12 @@
       {
         "pattern": "crates/scryer-mcp/src/hook_client.rs",
         "symbol": "a_bash_commands_edits_become_session_touches"
+      }
+    ],
+    "resp-vfpenc": [
+      {
+        "pattern": "crates/scryer-extract/src/infrastructure/test_status.rs",
+        "symbol": "a_stored_round_with_no_break_tried_is_not_a_probe"
       }
     ],
     "resp-vk8n9a": [

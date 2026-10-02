@@ -41,6 +41,16 @@ pub fn record_shell_start(r: &ModelRef, session: &str, tool: Option<&str>) -> Re
     session_store::append(r, session, SessionEvent::ShellStart { tool: tool.map(str::to_string), ns })
 }
 
+/// Record that `session` opened (`true`) or closed a probe.
+pub fn record_probe(r: &ModelRef, session: &str, open: bool) -> Result<(), String> {
+    session_store::append(r, session, if open { SessionEvent::ProbeOpen } else { SessionEvent::ProbeClose })
+}
+
+/// Whether `session` has a probe open.
+pub fn probe_open(r: &ModelRef, session: &str) -> bool {
+    session_log(r, session).probe_open
+}
+
 /// A shell command finished: record every project file modified since it
 /// started as touched — edits made with `sed`, a script or a heredoc are the
 /// session's as surely as an Edit tool's. Scryer's own `.scryer/` files are
@@ -240,9 +250,10 @@ pub struct StopOutcome {
     pub summary: Option<String>,
 }
 
-/// The Stop check. Blocks on planned work left unbuilt with no note, on an
-/// unprobed test, and on unreconciled anchors — each at most once. A clean
-/// stop hands the user a summary, unless it says what the last one said.
+/// The Stop check. Blocks on planned work left unbuilt with no note once code
+/// was edited after it was planned, on an unprobed test, and on unreconciled
+/// anchors — each at most once. A clean stop hands the user a summary, unless
+/// it says what the last one said.
 pub fn stop(
     r: &ModelRef,
     session: &str,
@@ -254,9 +265,13 @@ pub fn stop(
     let left = unfolded(r, session);
 
     let mut reasons: Vec<String> = Vec::new();
+    // An entry nothing was built on since it was planned is a plan waiting
+    // on the user's sign-off — blocking there buries the question.
     let silent: Vec<&Unfolded> = left
         .iter()
-        .filter(|u| u.note.is_none() && !log.gated_pending.contains(&u.key))
+        .filter(|u| {
+            u.note.is_none() && !log.gated_pending.contains(&u.key) && log.edited_since_planning(&u.key)
+        })
         .collect();
     if !silent.is_empty() {
         reasons.push(pending_reason(&silent));
@@ -584,15 +599,40 @@ mod tests {
         crate::write_planned_at(&r, &plan).unwrap();
 
         assert!(unfolded(&r, "other").is_empty(), "another session's work is not this one's");
+        record_model_edit(&r, "s", vec!["resp:r-2".to_string()]).unwrap();
+        record_touch(&r, "s", "src/auth.rs").unwrap();
         let reason = stop(&r, "s", no_flags, no_probes).block.expect("unfolded work blocks");
         assert!(reason.contains("resp:r-2") && reason.contains("mark_implemented"), "{reason}");
         let quiet = stop(&r, "s", no_flags, no_probes);
         assert!(quiet.block.is_none(), "once per session");
         let summary = quiet.summary.expect("the user still hears about it");
         assert!(summary.contains("planned, not built: 1") && summary.contains("rate-limits callers"), "{summary}");
+        assert_eq!(session_view(&r, "s").unfolded.len(), 1);
+    }
+
+    /// A plan nothing was built on yet is waiting on the user's sign-off: the
+    /// stop lets the question stand, and the gate arms once code is edited.
+    #[test]
+    fn a_plan_awaiting_sign_off_does_not_block_the_stop() {
+        let (_dir, r) = project();
+        let mut plan = crate::read_model_at(&r).unwrap();
+        plan.nodes[1].responsibilities.push(serde_json::from_value(
+            serde_json::json!({ "id": "r-2", "statement": "rate-limits callers" }),
+        )
+        .unwrap());
+        let cid = crate::domain::changes::open_change_for(&mut plan, "limit", Some("s"), 1);
+        crate::domain::changes::tag(&mut plan, &["resp:r-2".to_string()], &cid);
+        crate::write_planned_at(&r, &plan).unwrap();
+
+        record_touch(&r, "s", "src/log.rs").unwrap();
+        record_model_edit(&r, "s", vec!["resp:r-2".to_string()]).unwrap();
+        let out = stop(&r, "s", no_flags, no_probes);
+        assert!(out.block.is_none(), "an edit before planning is not building it: {out:?}");
+        assert!(out.summary.unwrap().contains("rate-limits callers"), "the user still sees it");
 
         record_touch(&r, "s", "src/auth.rs").unwrap();
-        assert_eq!(session_view(&r, "s").unfolded.len(), 1);
+        let reason = stop(&r, "s", no_flags, no_probes).block.expect("built on, then left unfolded");
+        assert!(reason.contains("resp:r-2"), "{reason}");
     }
 
     /// Edits outside the project — a probe worktree, a scratch file — are

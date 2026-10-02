@@ -565,9 +565,9 @@ pub fn session_probe_check(r: &ModelRef, touched: &[String]) -> ProbeCheck {
             rank_probe_candidates(candidates).into_iter().take(needed - probes.len()).collect();
         format!(
             "Scryer probe check — this session wrote or changed tests behind {} green claim(s), \
-             and {} of them must be probed before you stop. Probe {}: hand each to a subagent on \
-             a cheap model with open_probe {{resp_id}} → up to 3 breaks in the probe worktree → \
-             close_probe {{probes, survivors}}. A survivor goes in the user's summary; strengthen \
+             and {} of them must be probed before you stop. Probe {} yourself, never through a \
+             subagent: open_probe {{resp_id}} → up to 3 breaks in the probe worktree, the last \
+             left in place → close_probe {{probes, survivors}}. A survivor goes in the user's summary; strengthen \
              that test. This check fires once per session.",
             eligible.len(),
             needed,
@@ -874,7 +874,9 @@ pub fn read_probe_statuses(r: &ModelRef) -> Result<Vec<ClaimProbeStatus>, String
     let mut project_files: Option<BTreeSet<String>> = None;
     let mut out = Vec::new();
     for rec in &cache.probes {
-        if !live.contains(rec.resp_id.as_str()) {
+        // A round that tried no break learned nothing — such records predate
+        // close_probe refusing them, and must not read as probed.
+        if !live.contains(rec.resp_id.as_str()) || rec.probes == 0 {
             continue;
         }
         let stale = rec.fingerprints.is_empty()
@@ -1240,6 +1242,16 @@ mod tests {
         assert_eq!(statuses[0].survived, 1);
         assert_eq!(statuses[0].survivors, vec!["boundary at line 2 survived"]);
         assert!(!statuses[0].stale);
+    }
+
+    /// A stored round with no break tried — written before close_probe
+    /// refused them — reads as unprobed, not as probed clean.
+    #[test]
+    fn a_stored_round_with_no_break_tried_is_not_a_probe() {
+        let (_dir, r) = project();
+        fresh_statuses(&r);
+        store_probe_result(&r, "r1", 0, Vec::new()).unwrap();
+        assert!(read_probe_statuses(&r).unwrap().is_empty(), "unprobed, not clean");
     }
 
     /// resp-767: a probe result is fingerprinted against the same anchors a

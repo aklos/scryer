@@ -60,6 +60,10 @@ pub enum SessionEvent {
         tool: Option<String>,
         ns: u64,
     },
+    /// The session opened a probe; until it closes, the developer's tree is
+    /// off-limits to commands that discard uncommitted work.
+    ProbeOpen,
+    ProbeClose,
 }
 
 /// The fold of a session's events.
@@ -75,8 +79,12 @@ pub struct SessionLog {
     pub gated_pending: Vec<String>,
     /// Whether the probe gate already fired.
     pub probe_gated: bool,
+    /// Whether the session has a probe open.
+    pub probe_open: bool,
     /// Plan elements the agent wrote, first-write order, each once.
     pub model_edits: Vec<String>,
+    /// Plan elements a file edit followed — planned, then built on.
+    pub built_on: Vec<String>,
     pub last_summary: Option<String>,
     /// Shell commands started, `(tool-call id, unix ns)`, in start order.
     pub shell_starts: Vec<(Option<String>, u64)>,
@@ -102,6 +110,11 @@ impl SessionLog {
                 if !self.touched.contains(file) {
                     self.touched.push(file.clone());
                 }
+                for k in &self.model_edits {
+                    if !self.built_on.contains(k) {
+                        self.built_on.push(k.clone());
+                    }
+                }
             }
             SessionEvent::Overlay { file, hash } => {
                 match self.overlays.iter_mut().find(|(f, _)| f == file) {
@@ -120,6 +133,8 @@ impl SessionLog {
             SessionEvent::Summary { text } => self.last_summary = Some(text.clone()),
             SessionEvent::PendingGate { keys } => self.gated_pending.extend(keys.iter().cloned()),
             SessionEvent::ProbeGate => self.probe_gated = true,
+            SessionEvent::ProbeOpen => self.probe_open = true,
+            SessionEvent::ProbeClose => self.probe_open = false,
             SessionEvent::ShellStart { tool, ns } => self.shell_starts.push((tool.clone(), *ns)),
             SessionEvent::Task { text } => {
                 if self.task.is_none() {
@@ -140,6 +155,16 @@ impl SessionLog {
         self.first_sight
             .iter()
             .any(|(f, stale)| f == file && stale.iter().any(|(k, s)| k == key && s == state))
+    }
+
+    /// Whether the session edited a file after planning `key`. An entry the
+    /// log never saw planned counts any edit at all.
+    pub fn edited_since_planning(&self, key: &str) -> bool {
+        if self.model_edits.iter().any(|k| k == key) {
+            self.built_on.iter().any(|k| k == key)
+        } else {
+            !self.touched.is_empty()
+        }
     }
 
     /// Whether the session has read `file` yet.

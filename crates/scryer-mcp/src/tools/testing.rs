@@ -240,9 +240,9 @@ impl ScryerServer {
     #[tool(
         description = "Open a falsification probe on one claim: would its attached test FAIL if the code \
          stopped honouring it? Syncs an isolated git worktree and returns its path, the claim, \
-         the exact span to break, and the test files. DELEGATE THIS TO A SUBAGENT on a cheap \
-         model; close with close_probe. Refused without an attached test and a current passing \
-         verdict, or outside a git repo.\n\
+         the exact span to break, and the test files. Run it yourself, never through a \
+         subagent; close with close_probe. Refused without an attached test and a current \
+         passing verdict, or outside a git repo.\n\
          Rules: probe-loop"
     )]
     fn open_probe(
@@ -261,6 +261,9 @@ impl ScryerServer {
             Ok(w) => w,
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
         };
+        if let Some(sid) = self.session_id(&model_ref) {
+            let _ = scryer_core::session::record_probe(&model_ref, &sid, true);
+        }
 
         let mut msg = format!(
             "Probe OPEN on {} — work ONLY in the probe worktree:\n  {}\n\
@@ -286,8 +289,9 @@ impl ScryerServer {
         msg.push_str(
             "\nMake ONE breaking edit inside the span, run those tests in the worktree, expect \
              them to FAIL. A test that still passes is a survivor — record what you changed. \
-             Up to 3 breaks, stop at the first survivor, then close_probe. No need to revert: \
-             close_probe resets the worktree.",
+             Up to 3 breaks, stop at the first survivor, then close_probe. Never revert a break \
+             or run git checkout/restore/stash/reset: leave the last break in place, close_probe \
+             resets the worktree and refuses a round with no break in it.",
         );
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
@@ -303,16 +307,49 @@ impl ScryerServer {
         Parameters(req): Parameters<EndProbeRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
+        // Read before the reset wipes it: the last break must still be in the
+        // worktree, or the breaks reported were made somewhere else.
+        let broke_here =
+            worktree::holds_change(model_ref.project_path(), &claim_code_files(&model_ref, &req.resp_id));
         // Reset first and unconditionally. Recording can fail; a worktree left
         // holding a mutation would silently poison the next probe's baseline.
         let reset = worktree::reset(model_ref.project_path());
+        if let Some(sid) = self.session_id(&model_ref) {
+            let _ = scryer_core::session::record_probe(&model_ref, &sid, false);
+        }
         let _lock = match lock_or_err(&model_ref) {
             Ok(l) => l,
             Err(e) => return Ok(e),
         };
         let survivors = req.survivors.clone();
         let survived = survivors.len();
-        let result = record_probe_result(&model_ref, &req.resp_id, req.probes, survivors);
+        // A survivor is a break tried, whatever the count says.
+        let tried = req.probes.max(survived as u32);
+        if tried == 0 || !broke_here {
+            // Nothing was broken where it counts, so nothing was learned:
+            // recording it would read as probed and overwrite whatever the
+            // claim's last real round found.
+            drop(_lock);
+            let mut msg = match reset {
+                Ok(()) => format!("Probe CLOSED on {} — worktree reset.", req.resp_id),
+                Err(e) => format!(
+                    "Probe CLOSED on {}, but the probe worktree could not be reset: {e}. Clear it \
+                     before probing again.",
+                    req.resp_id
+                ),
+            };
+            msg.push_str(if tried == 0 {
+                "\nNo break was tried, so nothing was recorded: the claim stays UNPROBED. If a \
+                 test run was blocked or the probe went wrong, say so in the user's summary."
+            } else {
+                "\nThe claim's code in the probe worktree matched the developer's at close, so \
+                 no break was in place there: nothing was recorded and the claim stays UNPROBED. \
+                 Breaks go in the probe worktree only, and the last one stays for close_probe to \
+                 reset. If any break touched the developer's own tree, tell the user which files."
+            });
+            return Ok(CallToolResult::success(vec![Content::text(msg)]));
+        }
+        let result = record_probe_result(&model_ref, &req.resp_id, tried, survivors);
         drop(_lock);
         if let Err(e) = result {
             return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -329,7 +366,7 @@ impl ScryerServer {
 
         let mut msg = format!(
             "Probe CLOSED on {} — worktree reset. {} break(s) tried, {} survived.",
-            req.resp_id, req.probes, survived
+            req.resp_id, tried, survived
         );
         if survived == 0 {
             msg.push_str(
@@ -351,6 +388,29 @@ impl ScryerServer {
         }
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
+}
+
+/// The project-relative files the claim's code anchors name — where a probe's
+/// break must land. Globs name no one file and are left out.
+fn claim_code_files(r: &ModelRef, resp_id: &str) -> Vec<String> {
+    let Ok(committed) = scryer_core::read_model_at(r) else {
+        return Vec::new();
+    };
+    let working = match scryer_core::read_planned_at(r) {
+        Ok(p) => scryer_core::working_view(&committed, &p),
+        Err(_) => committed,
+    };
+    let mut files: Vec<String> = working
+        .source_map
+        .get(resp_id)
+        .into_iter()
+        .flatten()
+        .map(|l| l.pattern.clone())
+        .filter(|p| !p.contains('*'))
+        .collect();
+    files.sort();
+    files.dedup();
+    files
 }
 
 #[cfg(test)]
@@ -756,6 +816,12 @@ mod tests {
         std::fs::remove_dir_all(&wt).ok();
     }
 
+    /// Leave a break in the probe worktree, as a probe that ran does.
+    fn break_worktree(dir: &tempfile::TempDir) {
+        let wt = scryer_core::worktree::worktree_path(dir.path());
+        std::fs::write(wt.join("src/m.ts"), IMPL_TS.replace("return 1", "return 2")).unwrap();
+    }
+
     /// A clean round says PROBED and explicitly refuses to say proven.
     #[test]
     fn a_clean_round_reads_as_probed_not_proven() {
@@ -767,6 +833,7 @@ mod tests {
                 resp_id: "r1".into(),
             }))
             .unwrap();
+        break_worktree(&dir);
 
         let result = server
             .close_probe(Parameters(EndProbeRequest {
@@ -780,6 +847,77 @@ mod tests {
         let text = text_of(&result);
         assert!(text.contains("PROBED"), "{text}");
         assert!(text.contains("sample, not a"), "{text}");
+    }
+
+    /// A round that tried no break — its test run blocked, say — learned
+    /// nothing: the claim reads unprobed and its last real finding stands.
+    #[test]
+    fn a_round_with_no_break_tried_records_nothing() {
+        let (server, dir) = tested_project();
+        ingest(&server, &dir);
+        let close = |probes: u32, survivors: Vec<String>| {
+            server
+                .open_probe(Parameters(ProbeClaimRequest {
+                    project: project_arg(&dir),
+                    resp_id: "r1".into(),
+                }))
+                .unwrap();
+            if probes > 0 {
+                break_worktree(&dir);
+            }
+            text_of(
+                &server
+                    .close_probe(Parameters(EndProbeRequest {
+                        project: project_arg(&dir),
+                        resp_id: "r1".into(),
+                        probes,
+                        survivors,
+                    }))
+                    .unwrap(),
+            )
+        };
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+
+        let text = close(0, Vec::new());
+        assert!(text.contains("UNPROBED") && !text.contains("reads as PROBED"), "{text}");
+        assert!(scryer_extract::test_status::probe_statuses(&r).unwrap().is_empty(), "unprobed, not clean");
+
+        close(2, vec!["returning 2 went unnoticed".into()]);
+        close(0, Vec::new());
+        let probes = scryer_extract::test_status::probe_statuses(&r).unwrap();
+        assert_eq!(probes[0].survived, 1, "the earlier survivor still stands");
+        std::fs::remove_dir_all(scryer_core::worktree::worktree_path(dir.path())).ok();
+    }
+
+    /// Breaks reported while the claim's code in the probe worktree still
+    /// matches the developer's were made somewhere else — or never: nothing
+    /// is recorded.
+    #[test]
+    fn breaks_not_in_the_probe_worktree_record_nothing() {
+        let (server, dir) = tested_project();
+        ingest(&server, &dir);
+        server
+            .open_probe(Parameters(ProbeClaimRequest {
+                project: project_arg(&dir),
+                resp_id: "r1".into(),
+            }))
+            .unwrap();
+
+        let text = text_of(
+            &server
+                .close_probe(Parameters(EndProbeRequest {
+                    project: project_arg(&dir),
+                    resp_id: "r1".into(),
+                    probes: 3,
+                    survivors: Vec::new(),
+                }))
+                .unwrap(),
+        );
+
+        assert!(text.contains("UNPROBED") && !text.contains("reads as PROBED"), "{text}");
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        assert!(scryer_extract::test_status::probe_statuses(&r).unwrap().is_empty());
+        std::fs::remove_dir_all(scryer_core::worktree::worktree_path(dir.path())).ok();
     }
 
     /// resp-772: a surviving break says a test the model calls green does not
@@ -803,6 +941,7 @@ mod tests {
                     resp_id: "r1".into(),
                 }))
                 .unwrap();
+            break_worktree(&dir);
             server
                 .close_probe(Parameters(EndProbeRequest {
                     project: project_arg(&dir),
@@ -825,11 +964,11 @@ mod tests {
         std::fs::remove_dir_all(scryer_core::worktree::worktree_path(dir.path())).ok();
     }
 
-    /// resp-771: the churn of a probe — many edits, many test runs — must not
-    /// land in the context of the session that asked for it, so the tool tells
-    /// the caller to hand the loop off rather than running it inline.
+    /// A helper handed the loop may lack permission to run the tests, or fan
+    /// out to helpers that lose the worktree instruction and revert the
+    /// developer's files — so the tool tells the caller to run it itself.
     #[test]
-    fn probe_claim_tells_the_caller_to_delegate_the_loop() {
+    fn probe_claim_tells_the_caller_not_to_delegate_the_loop() {
         let desc = ScryerServer::tool_router_testing()
             .list_all()
             .into_iter()
@@ -839,7 +978,6 @@ mod tests {
             .clone()
             .unwrap_or_default()
             .to_string();
-        assert!(desc.contains("DELEGATE THIS TO A SUBAGENT"), "{desc}");
-        assert!(desc.contains("cheap model"), "{desc}");
+        assert!(desc.contains("never through a subagent"), "{desc}");
     }
 }

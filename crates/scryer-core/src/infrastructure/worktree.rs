@@ -207,6 +207,19 @@ fn apply_patch(wt: &Path, diff: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether any of `files` (project-relative) reads differently in the probe
+/// worktree than in the developer's tree — whether a break is actually in
+/// place there. A probe asks the agent to leave its last break for
+/// `close_probe` to reset, so a worktree identical to the developer's code
+/// means the breaks it reports were never made where they count.
+pub fn holds_change(project: &Path, files: &[String]) -> bool {
+    let wt = worktree_path(project);
+    wt.join(".git").exists()
+        && files
+            .iter()
+            .any(|f| std::fs::read(wt.join(f)).ok() != std::fs::read(project.join(f)).ok())
+}
+
 /// Drop whatever the probe did. Called when a probe ends, so a mutation never
 /// survives into the next round and a survivor is never mistaken for a break
 /// the previous probe left behind. Ignored build output is preserved, as in

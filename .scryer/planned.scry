@@ -3840,6 +3840,11 @@
           "id": "resp-v08x63",
           "statement": "**When** a shell command is about to run, **marks** its start in the session log",
           "lastTouchedAt": 1790939672
+        },
+        {
+          "id": "resp-rfv9cp",
+          "statement": "**While** the session has a probe open, **denies** git commands that discard uncommitted changes outside the probe worktree",
+          "lastTouchedAt": 1790962681
         }
       ]
     },
@@ -5262,6 +5267,16 @@
           "id": "resp-13z65n",
           "statement": "Resets the probe worktree and records which deliberate breaks the claim's test failed to catch",
           "lastTouchedAt": 1788958615
+        },
+        {
+          "id": "resp-88k8e3",
+          "statement": "**If** no break was tried, **then** **leaves** the claim's probe record untouched and reports it as unprobed",
+          "lastTouchedAt": 1790955912
+        },
+        {
+          "id": "resp-dsw6zb",
+          "statement": "**If** breaks are reported but the claim's code in the probe worktree still matches the developer's, **then** **leaves** the claim's probe record untouched and reports it as unprobed",
+          "lastTouchedAt": 1790962681
         }
       ]
     },
@@ -13800,6 +13815,11 @@
           "id": "resp-1s35xd",
           "statement": "**When** anchors or tests are added to a claim with a current verdict, **refingerprints** the verdict, unless a span it recorded changed or a newly anchored file was modified since its run",
           "lastTouchedAt": 1790949849
+        },
+        {
+          "id": "resp-vfpenc",
+          "statement": "**If** a stored probe round tried no break, **then** **leaves** it out of the claim's probe status",
+          "lastTouchedAt": 1790962681
         }
       ],
       "layer": "infrastructure"
@@ -14149,6 +14169,11 @@
           "id": "resp-sbg2z1",
           "statement": "**When** the close gate blocks, **lists** one line per file with its claims counted once each by state, at most eight files",
           "lastTouchedAt": 1790942328
+        },
+        {
+          "id": "resp-5wz5x1",
+          "statement": "**If** the session has edited no file since it planned an entry, **then** **leaves** that entry out of the stop gate",
+          "lastTouchedAt": 1790956390
         }
       ],
       "layer": "composition"
