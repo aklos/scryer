@@ -814,7 +814,7 @@ impl ScryerServer {
         let tag_warnings = match write_planned_tagged(
             &model_ref,
             &mut model,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id(&model_ref).as_deref(),
         ) {
             Ok(w) => w,
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
@@ -917,7 +917,7 @@ impl ScryerServer {
         let tag_warnings = match write_planned_tagged(
             &model_ref,
             &mut model,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id(&model_ref).as_deref(),
         ) {
             Ok(w) => w,
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
@@ -941,7 +941,7 @@ impl ScryerServer {
          (design-first model), or `change` (a whole change). Testable claims fold only with a \
          passing verdict; `force: true` overrides and is recorded. Vagrant claims never fold. \
          Ends with a scoped post-flight.\n\
-         Rules: fold-evidence-gate, fold-after-sign-off, fold-in-layers, fold-post-flight, \
+         Rules: fold-evidence-gate, fold-in-layers, fold-post-flight, \
          test-attachment, anchor-completeness, descope-vs-delete"
     )]
     fn mark_implemented(
@@ -1057,11 +1057,10 @@ impl ScryerServer {
             }
         }
 
-        // ---- The gates: sign-off (forward vagrancy) and evidence. ------------
+        // ---- The evidence gate. ---------------------------------------------
         // Decide, BEFORE anything folds, which of the claims this call is about
-        // to commit must stay in the plan: post-sign-off amendments/additions
-        // (flagged vagrant for the developer's verdict) and testable claims
-        // without a current passing verdict (refused with the missing fact).
+        // to commit must stay in the plan: testable claims without a current
+        // passing verdict (refused with the missing fact).
         // The fold engine honours the withhold set; everything else proceeds.
         let force = req.force == Some(true);
         let now = scryer_core::drift::now_secs();
@@ -1106,10 +1105,9 @@ impl ScryerServer {
         } else {
             Vec::new()
         };
-        let mut planned_gated = planned.clone();
         let gate = match fold_gate::gate(
             &model_ref,
-            &mut planned_gated,
+            &planned,
             &candidates,
             &tests_in_call,
             force,
@@ -1117,14 +1115,6 @@ impl ScryerServer {
         ) {
             Ok(g) => g,
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
-        };
-        let planned = if gate.plan_dirty {
-            if let Err(e) = scryer_core::write_planned_at(&model_ref, &planned_gated) {
-                return Ok(CallToolResult::error(vec![Content::text(e)]));
-            }
-            planned_gated
-        } else {
-            planned
         };
         let folded_ids: Vec<String> = candidates
             .iter()
@@ -1605,21 +1595,16 @@ impl ScryerServer {
                         .map(|r| r.id.as_str())
                         .collect();
                     if !untested.is_empty() {
-                        let strength = if node.kind == scryer_core::Kind::Symbol {
-                            "MANDATORY on a symbol host (see test-attachment)"
-                        } else {
-                            "expected (see test-attachment)"
-                        };
                         lines.push(format!(
-                            "NO TEST ATTACHED to {} testable claim(s) on it ({}) — a test is {}. \
-                             Each statement already names the trigger/state/failure to arrange \
-                             and the response to assert: write that test in the project's suite, \
-                             then attach it via update_source_map `test_entries` (or `tests` on \
-                             your next mark_implemented) with `pattern` = test file, `symbol` = \
-                             the test function",
+                            "NO TEST ATTACHED to {} testable claim(s) on it ({}) — each needs a \
+                             test that would fail if it broke (see test-attachment). Prefer one \
+                             behaviour-level test that asserts several of them, or an existing \
+                             one that already does, over a unit test per symbol; attach it via \
+                             update_source_map `test_entries` (or `tests` on your next \
+                             mark_implemented) with `pattern` = test file, `symbol` = the test \
+                             name",
                             untested.len(),
                             untested.join(", "),
-                            strength
                         ));
                     }
                 }
@@ -1880,7 +1865,7 @@ impl ScryerServer {
         let tag_warnings = match write_planned_tagged(
             &model_ref,
             &mut model,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id(&model_ref).as_deref(),
         ) {
             Ok(w) => w,
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
@@ -2116,7 +2101,7 @@ impl ScryerServer {
         let tag_warnings = match write_planned_tagged(
             &model_ref,
             &mut model,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id(&model_ref).as_deref(),
         ) {
             Ok(w) => w,
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
@@ -2291,7 +2276,7 @@ impl ScryerServer {
         let tag_warnings = match write_planned_tagged(
             &model_ref,
             &mut model,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id(&model_ref).as_deref(),
         ) {
             Ok(w) => w,
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
@@ -2358,8 +2343,6 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
-            vagrant_origin: None,
-            approved_statement: None,
         }
     }
 
@@ -2493,7 +2476,7 @@ mod tests {
         scryer_core::write_model_at(&model_ref, &m).unwrap();
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
 
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         let item = |n: Option<&str>, r: Option<&str>, d: &[&str]| SetDirectivesItem {
             node_id: n.map(Into::into),
             responsibility_id: r.map(Into::into),
@@ -2542,7 +2525,7 @@ mod tests {
         scryer_core::write_model_at(&model_ref, &m).unwrap();
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
 
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         server
             .set_directives(Parameters(SetDirectivesRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
@@ -2685,7 +2668,7 @@ mod tests {
         scryer_core::write_model_at(&model_ref, &m).unwrap();
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
 
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         server
             .move_nodes(Parameters(MoveNodesRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
@@ -3020,7 +3003,7 @@ mod tests {
         scryer_core::write_model_at(&model_ref, &m).unwrap();
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
 
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         // Stage the deletion of the whole `parent-1` subtree in the plan.
         server
             .delete_nodes(Parameters(DeleteNodeRequest {
@@ -3263,7 +3246,7 @@ mod tests {
             icon: None,
         });
         scryer_core::write_model_at(&model_ref, &m).unwrap();
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         let project = dir.path().to_string_lossy().to_string();
 
         // Valid: component A→B. The subtree (sym) follows; the group lets go.
@@ -3373,7 +3356,7 @@ mod tests {
         c.responsibilities.push(vagrant);
         m.nodes.push(c);
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         let project = dir.path().to_string_lossy().to_string();
 
         let r = server
@@ -3486,7 +3469,7 @@ mod tests {
             icon: None,
         });
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         let project = dir.path().to_string_lossy().to_string();
 
         let reparent = |node_id: &str, parent: &str| UpdateNodeItem {
@@ -3740,28 +3723,6 @@ mod tests {
         tool_text(&r)
     }
 
-    /// Fold a whole change — how tagged work folds in practice (a whole-node
-    /// fold of an untagged host leaves tagged claims behind by design).
-    fn fold_change(server: &ScryerServer, dir: &std::path::Path, cid: &str) -> String {
-        let r = server
-            .mark_implemented(Parameters(MarkImplementedRequest {
-                project: Some(dir.to_string_lossy().to_string()),
-                node_id: None,
-                responsibility_ids: None,
-                property_labels: None,
-                link_ids: None,
-                group_ids: None,
-                commit_ancestors: None,
-                force: None,
-                anchors: None,
-                tests: None,
-                change: Some(cid.into()),
-            }))
-            .unwrap();
-        assert!(!r.is_error.unwrap_or(false), "a refusal is never a tool error: {}", tool_text(&r));
-        tool_text(&r)
-    }
-
     fn committed_has(model_ref: &ModelRef, resp_id: &str) -> bool {
         scryer_core::read_model_at(model_ref)
             .unwrap()
@@ -3942,157 +3903,6 @@ mod tests {
         assert!(scryer_core::refusals::read_refusals(&model_ref).is_empty());
     }
 
-    /// A signed-off plan with one change, `resp-1` tagged to it. Ubiquitous
-    /// statement so the evidence gate stays out of the picture.
-    fn signed_off_plan(model_ref: &ModelRef, committed_statement: Option<&str>) -> String {
-        let mut committed = ScryModel::new();
-        let mut sym = node("vt", Kind::Symbol, "verify_token", None);
-        if let Some(stmt) = committed_statement {
-            let mut r1 = resp("resp-1");
-            r1.statement = stmt.into();
-            sym.responsibilities.push(r1);
-        }
-        committed.nodes.push(sym);
-        scryer_core::write_model_at(model_ref, &committed).unwrap();
-        scryer_core::ensure_planned_at(model_ref).unwrap();
-        let mut planned = scryer_core::read_planned_at(model_ref).unwrap();
-        let host = planned.nodes.iter_mut().find(|n| n.id == "vt").unwrap();
-        host.responsibilities.retain(|r| r.id != "resp-1");
-        let mut r1 = resp("resp-1");
-        r1.statement = "Verifies the approved thing".into();
-        host.responsibilities.push(r1);
-        let cid = scryer_core::changes::open_change(&mut planned, "verify tokens", 1);
-        scryer_core::changes::tag(&mut planned, &["resp:resp-1".to_string()], &cid);
-        scryer_core::changes::sign_off(&mut planned, &cid, 2).unwrap();
-        scryer_core::write_planned_at(model_ref, &planned).unwrap();
-        cid
-    }
-
-    /// Rewording a signed-off claim after sign-off: the fold does NOT commit
-    /// it. It becomes vagrant/amendment carrying the approved text, stays in
-    /// the plan, and — when it was already committed — committed keeps the
-    /// original instead of losing the claim.
-    #[test]
-    fn fold_withholds_a_post_signoff_amendment_and_keeps_the_committed_original() {
-        let dir = tempfile::tempdir().unwrap();
-        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let cid = signed_off_plan(&model_ref, Some("Verifies the old thing"));
-        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
-        planned.nodes[0].responsibilities[0].statement = "Verifies something else entirely".into();
-        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
-
-        let text = fold_change(&ScryerServer::new(), dir.path(), &cid);
-        assert!(text.contains("AWAITING VERDICT resp-1"), "{text}");
-        assert!(text.contains("reworded after sign-off"), "{text}");
-        let r = planned_resp(&model_ref, "resp-1").unwrap();
-        assert_eq!(r.vagrant, Some(true));
-        assert_eq!(r.vagrant_origin.as_deref(), Some("amendment"));
-        assert_eq!(r.approved_statement.as_deref(), Some("Verifies the approved thing"));
-        assert_eq!(r.statement, "Verifies something else entirely");
-        let committed = scryer_core::read_model_at(&model_ref).unwrap();
-        let c = committed.nodes[0].responsibilities.iter().find(|r| r.id == "resp-1").unwrap();
-        assert_eq!(c.statement, "Verifies the old thing", "committed keeps the original");
-        assert_eq!(scryer_core::refusals::read_refusals(&model_ref)[0].kind, "amendment");
-    }
-
-    /// A claim the agent adds after sign-off is scope it invented: withheld as
-    /// vagrant/addition, while the signed-off claim beside it folds.
-    #[test]
-    fn fold_withholds_a_post_signoff_addition_but_folds_the_untouched() {
-        let dir = tempfile::tempdir().unwrap();
-        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let cid = signed_off_plan(&model_ref, None);
-        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
-        let mut extra = resp("resp-2");
-        extra.statement = "Also logs every token".into();
-        planned.nodes[0].responsibilities.push(extra);
-        scryer_core::changes::tag(&mut planned, &["resp:resp-2".to_string()], &cid);
-        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
-
-        let text = fold_change(&ScryerServer::new(), dir.path(), &cid);
-        assert!(text.contains("AWAITING VERDICT resp-2"), "{text}");
-        assert!(text.contains("added after sign-off"), "{text}");
-        assert!(committed_has(&model_ref, "resp-1"), "the untouched intent folded");
-        assert!(!committed_has(&model_ref, "resp-2"), "the addition did not");
-        let r2 = planned_resp(&model_ref, "resp-2").unwrap();
-        assert_eq!(r2.vagrant_origin.as_deref(), Some("addition"));
-        assert!(r2.approved_statement.is_none());
-    }
-
-    /// A signed-off claim that FOLDED is not a dropped one: a later fold of
-    /// the same change (say, after its withheld amendment got a verdict) must
-    /// not restore it as pending intent or say the agent proposed dropping it.
-    #[test]
-    fn a_second_fold_does_not_restore_what_the_first_one_folded() {
-        let dir = tempfile::tempdir().unwrap();
-        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let cid = signed_off_plan(&model_ref, None);
-        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
-        let mut extra = resp("resp-2");
-        extra.statement = "Also logs every token".into();
-        planned.nodes[0].responsibilities.push(extra);
-        scryer_core::changes::tag(&mut planned, &["resp:resp-2".to_string()], &cid);
-        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
-
-        // First fold: resp-1 folds, the post-sign-off addition is withheld.
-        let text = fold_change(&ScryerServer::new(), dir.path(), &cid);
-        assert!(committed_has(&model_ref, "resp-1"), "{text}");
-        assert!(text.contains("AWAITING VERDICT resp-2"), "{text}");
-
-        // Second fold: resp-1 is still committed and untouched, not "dropped".
-        let text = fold_change(&ScryerServer::new(), dir.path(), &cid);
-        assert!(!text.contains("RESTORED resp-1"), "{text}");
-        assert!(!text.contains("DROPPED resp-1"), "{text}");
-        assert!(committed_has(&model_ref, "resp-1"));
-        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
-        assert!(planned.change_map.get("resp:resp-1").is_none(), "no tag was re-minted");
-    }
-
-    /// Retagging the concern is metadata, not intent — it never reads as an
-    /// amendment, so the claim folds as signed off.
-    #[test]
-    fn a_cosmetic_edit_after_signoff_is_not_an_amendment() {
-        let dir = tempfile::tempdir().unwrap();
-        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let cid = signed_off_plan(&model_ref, None);
-        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
-        planned.nodes[0].responsibilities[0].concern = Some("auth".into());
-        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
-        let text = fold_change(&ScryerServer::new(), dir.path(), &cid);
-        assert!(!text.contains("AWAITING VERDICT"), "{text}");
-        assert!(committed_has(&model_ref, "resp-1"));
-    }
-
-    /// A signed-off claim the agent dropped from the plan comes back as
-    /// pending intent at the fold, and the response says the agent proposed
-    /// dropping it.
-    #[test]
-    fn fold_restores_a_signed_off_claim_the_agent_dropped() {
-        let dir = tempfile::tempdir().unwrap();
-        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let cid = signed_off_plan(&model_ref, None);
-        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
-        let mut keep = resp("resp-3");
-        keep.statement = "Keeps this one".into();
-        planned.nodes[0].responsibilities.push(keep);
-        scryer_core::changes::tag(&mut planned, &["resp:resp-3".to_string()], &cid);
-        scryer_core::changes::sign_off(&mut planned, &cid, 3).unwrap();
-        // The agent drops resp-1 (its tag is GC'd by the write) and folds.
-        planned.nodes[0].responsibilities.retain(|r| r.id != "resp-1");
-        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
-        assert!(planned_resp(&model_ref, "resp-1").is_none());
-
-        let text = fold_change(&ScryerServer::new(), dir.path(), &cid);
-        assert!(text.contains("RESTORED resp-1"), "{text}");
-        let r1 = planned_resp(&model_ref, "resp-1").expect("restored into the plan");
-        assert_eq!(r1.statement, "Verifies the approved thing");
-        assert!(!committed_has(&model_ref, "resp-1"), "restored as PENDING intent, not folded");
-        assert!(committed_has(&model_ref, "resp-3"), "the untouched claim folded");
-        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
-        assert_eq!(planned.change_map.get("resp:resp-1").map(String::as_str), Some(cid.as_str()));
-        assert!(planned.changes.iter().any(|c| c.id == cid), "the change stays open on it");
-    }
-
     /// The fold response carries a scoped post-flight: what's still pending on
     /// the node (with the deletions-need-explicit-ids hint) and which committed
     /// claims have no code anchor — the consistency burden lives in the tool,
@@ -4175,11 +3985,9 @@ mod tests {
         );
     }
 
-    /// The change id an `open_change` response opened — "Opened chg-…".
-    fn opened(r: &CallToolResult) -> String {
-        let text = tool_text(r);
-        let rest = text.split("Opened ").nth(1).unwrap_or_else(|| panic!("no 'Opened' in: {text}"));
-        rest.split(|c: char| c.is_whitespace() || c == '(' || c == ',' || c == '.').next().unwrap().to_string()
+    /// The change `server`'s session writes into.
+    fn change_of(server: &ScryerServer, model_ref: &ModelRef) -> String {
+        server.session_change(model_ref).expect("the session has a change")
     }
 
     /// The minted id (and first claim id) of the planned node called `name`.
@@ -4227,16 +4035,7 @@ mod tests {
         });
         scryer_core::write_model_at(&model_ref, &m).unwrap();
 
-        let server = ScryerServer::new();
-        let chg = opened(
-            &server
-                .open_change(Parameters(OpenChangeRequest {
-                    project: Some(project.clone()),
-                    rationale: Some("restyle".into()),
-                    change_id: None,
-                }))
-                .unwrap(),
-        );
+        let server = ScryerServer::for_session("restyle");
         let item = |id: &str, style: Option<&str>, layer: Option<&str>| UpdateNodeItem {
             node_id: id.into(),
             kind: None,
@@ -4257,6 +4056,7 @@ mod tests {
             }))
             .unwrap();
         assert!(!r.is_error.unwrap_or(false), "{}", tool_text(&r));
+        let chg = change_of(&server, &model_ref);
         // update_links lives in another tool module; tag the kind edit the way
         // it would.
         let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
@@ -4278,7 +4078,22 @@ mod tests {
             assert!(pending.contains(&id.to_string()), "{id} pends: {pending:?}");
         }
 
-        let text = fold_change(&server, dir.path(), &chg);
+        let r = server
+            .mark_implemented(Parameters(MarkImplementedRequest {
+                project: Some(project.clone()),
+                node_id: None,
+                responsibility_ids: None,
+                property_labels: None,
+                link_ids: None,
+                group_ids: None,
+                commit_ancestors: None,
+                force: None,
+                anchors: None,
+                tests: None,
+                change: Some(chg.clone()),
+            }))
+            .unwrap();
+        let text = tool_text(&r);
         assert!(text.contains("fully folded and closed"), "{text}");
         let committed = scryer_core::read_model_at(&model_ref).unwrap();
         let n = |id: &str| committed.nodes.iter().find(|n| n.id == id).unwrap().clone();
@@ -4289,9 +4104,9 @@ mod tests {
         assert!(scryer_core::diff::diff(&committed, &planned).is_empty(), "nothing left pending");
     }
 
-    /// The ledger loop end to end: `open_change` opens a named change, an
-    /// authoring write tags to it automatically, `get_pending` groups and
-    /// filters by it, a second session resumes it by id, and
+    /// The ledger loop end to end: the session's first authoring write opens
+    /// its change and tags what it changed, `get_pending` groups and filters by
+    /// it, a restarted server for the same session finds it again, and
     /// `mark_implemented {change}` folds exactly its entries — closing the
     /// change and recording its rationale in history.
     #[test]
@@ -4304,18 +4119,10 @@ mod tests {
         m.nodes.push(node("node-2", Kind::Container, "API", Some("node-1")));
         scryer_core::write_model_at(&model_ref, &m).unwrap();
 
-        let server = ScryerServer::new();
-        let r = server
-            .open_change(Parameters(OpenChangeRequest {
-                project: Some(project.clone()),
-                rationale: Some("give the API rate limiting".into()),
-                change_id: None,
-            }))
-            .unwrap();
-        assert!(tool_text(&r).contains("Opened chg-"), "{}", tool_text(&r));
-        let chg = opened(&r);
+        let server = ScryerServer::for_session("s1");
 
-        // An authoring write in this session tags what it changed.
+        // An authoring write in this session opens its change and tags what
+        // it changed.
         server
             .add_component(Parameters(AddComponentRequest {
                 project: Some(project.clone()),
@@ -4328,6 +4135,7 @@ mod tests {
                 }],
             }))
             .unwrap();
+        let chg = change_of(&server, &model_ref);
         let (rl, rl_resp) = planned_named(&model_ref, "RateLimiter");
         let rl_resp = rl_resp.unwrap();
         let planned = scryer_core::read_planned_at(&model_ref).unwrap();
@@ -4344,7 +4152,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&tool_text(&r)).unwrap();
         assert_eq!(v["currentChange"], chg.as_str());
         assert_eq!(v["openChanges"][0]["id"], chg.as_str());
-        assert_eq!(v["openChanges"][0]["rationale"], "give the API rate limiting");
+        assert_eq!(v["openChanges"][0]["rationale"], "Session s1");
         assert!(v["changes"].as_array().unwrap().iter().all(|c| c["change"] == chg.as_str()));
         let r = server
             .get_pending(Parameters(GetPendingRequest {
@@ -4355,16 +4163,9 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&tool_text(&r)).unwrap();
         assert!(v["changes"].as_array().unwrap().is_empty(), "everything is tagged");
 
-        // A FRESH session (new server) resumes the change by id…
-        let session2 = ScryerServer::new();
-        let r = session2
-            .open_change(Parameters(OpenChangeRequest {
-                project: Some(project.clone()),
-                rationale: None,
-                change_id: Some(chg.clone()),
-            }))
-            .unwrap();
-        assert!(tool_text(&r).contains(&format!("Resumed {chg}")), "{}", tool_text(&r));
+        // A restarted server for the same session finds its change again…
+        let session2 = ScryerServer::for_session("s1");
+        assert_eq!(change_of(&session2, &model_ref), chg);
 
         // …and folds the whole change in one call.
         let r = session2
@@ -4398,7 +4199,7 @@ mod tests {
             .find(|e| e.kind == scryer_core::history::EventKind::Change)
             .expect("a change-closed event");
         assert_eq!(close.change_id.as_deref(), Some(chg.as_str()));
-        assert_eq!(close.rows[0].text, "give the API rate limiting");
+        assert_eq!(close.rows[0].text, "Session s1");
         let impl_ev = history
             .iter()
             .find(|e| e.kind == EventKind::Impl)
@@ -4420,18 +4221,8 @@ mod tests {
         m.nodes.push(node("node-2", Kind::Container, "API", Some("node-1")));
         scryer_core::write_model_at(&model_ref, &m).unwrap();
 
-        let server = ScryerServer::new();
-        let open = |rationale: &str| {
-            server
-                .open_change(Parameters(OpenChangeRequest {
-                project: Some(project.clone()),
-                rationale: Some(rationale.into()),
-                change_id: None,
-            }))
-                .unwrap()
-        };
-        let chg1 = opened(&open("give the API rate limiting"));
-        // Written while chg-1 is selected — this is the mis-filing.
+        let server = ScryerServer::for_session("s1");
+        // Written in s1's change — this is the mis-filing.
         server
             .add_component(Parameters(AddComponentRequest {
                 project: Some(project.clone()),
@@ -4444,7 +4235,10 @@ mod tests {
                 }],
             }))
             .unwrap();
-        let chg2 = opened(&open("the change it actually belongs to"));
+        let chg1 = change_of(&server, &model_ref);
+        let mut plan = scryer_core::read_planned_at(&model_ref).unwrap();
+        let chg2 = scryer_core::changes::open_change(&mut plan, "the change it actually belongs to", 0);
+        scryer_core::write_planned_at(&model_ref, &plan).unwrap();
         let (rl, rl_resp) = planned_named(&model_ref, "RateLimiter");
         let rl_resp = rl_resp.unwrap();
 
@@ -4479,86 +4273,6 @@ mod tests {
         assert!(planned.change_map.is_empty(), "{:?}", planned.change_map);
     }
 
-    /// `close_change` is the escape hatch for a stranded empty ledger:
-    /// it refuses while the change has tagged entries, closes it once empty,
-    /// and detaches a session selection pointing at the closed id.
-    #[test]
-    fn close_change_discards_a_stranded_empty_ledger() {
-        let dir = tempfile::tempdir().unwrap();
-        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let project = dir.path().to_string_lossy().to_string();
-        let mut m = ScryModel::new();
-        m.nodes.push(node("node-1", Kind::System, "Acme", None));
-        m.nodes.push(node("node-2", Kind::Container, "API", Some("node-1")));
-        scryer_core::write_model_at(&model_ref, &m).unwrap();
-
-        // chg-1 gets real work; chg-2 is opened and never written to.
-        let server = ScryerServer::new();
-        let chg1 = opened(
-            &server
-                .open_change(Parameters(OpenChangeRequest {
-                project: Some(project.clone()),
-                rationale: Some("rate limiting".into()),
-                change_id: None,
-            }))
-                .unwrap(),
-        );
-        server
-            .add_component(Parameters(AddComponentRequest {
-                project: Some(project.clone()),
-                items: vec![ComponentItem {
-                    layer: Some("core".into()),
-                    parent_id: "node-2".into(),
-                    name: "RateLimiter".into(),
-                    description: None,
-                    responsibilities: vec![],
-                }],
-            }))
-            .unwrap();
-        let chg2 = opened(
-            &server
-                .open_change(Parameters(OpenChangeRequest {
-                project: Some(project.clone()),
-                rationale: Some("opened then orphaned".into()),
-                change_id: None,
-            }))
-                .unwrap(),
-        );
-        let close = |id: &str| {
-            server.close_change(Parameters(CloseChangeRequest {
-                project: Some(project.clone()),
-                change_id: id.into(),
-            }))
-        };
-
-        // A change with tagged entries refuses to close by hand.
-        let r = close(&chg1).unwrap();
-        assert_eq!(r.is_error, Some(true));
-        assert!(tool_text(&r).contains("still has 1 tagged entry"), "{}", tool_text(&r));
-
-        // The stranded one closes, and the session (which selected it on
-        // open) detaches.
-        let r = close(&chg2).unwrap();
-        assert!(tool_text(&r).contains(&format!("Closed {chg2}")), "{}", tool_text(&r));
-        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
-        assert_eq!(planned.changes.len(), 1);
-        assert_eq!(planned.changes[0].id, chg1);
-        assert!(server.session_change(&model_ref).is_none(), "selection detached");
-
-        let history = scryer_core::history::read_history(&model_ref);
-        let ev = history
-            .iter()
-            .find(|e| e.kind == scryer_core::history::EventKind::Change)
-            .expect("a change-closed event");
-        assert_eq!(ev.change_id.as_deref(), Some(chg2.as_str()));
-        assert_eq!(ev.driver, "abandoned");
-        assert_eq!(ev.rows[0].text, "opened then orphaned");
-
-        let r = close("chg-9").unwrap();
-        assert_eq!(r.is_error, Some(true));
-        assert!(tool_text(&r).contains("no open change 'chg-9'"), "{}", tool_text(&r));
-    }
-
     /// Two changes touching the same element is the collision the ledger
     /// exists to catch: the second session's write wins the tag, but the
     /// response says so out loud.
@@ -4572,16 +4286,7 @@ mod tests {
         m.nodes.push(node("node-2", Kind::Container, "API", Some("node-1")));
         scryer_core::write_model_at(&model_ref, &m).unwrap();
 
-        let session1 = ScryerServer::new();
-        let chg1 = opened(
-            &session1
-                .open_change(Parameters(OpenChangeRequest {
-                project: Some(project.clone()),
-                rationale: Some("rate limiting".into()),
-                change_id: None,
-            }))
-                .unwrap(),
-        );
+        let session1 = ScryerServer::for_session("s1");
         session1
             .add_component(Parameters(AddComponentRequest {
                 project: Some(project.clone()),
@@ -4595,17 +4300,9 @@ mod tests {
             }))
             .unwrap();
 
+        let chg1 = change_of(&session1, &model_ref);
         let (rl, _) = planned_named(&model_ref, "RateLimiter");
-        let session2 = ScryerServer::new();
-        let chg2 = opened(
-            &session2
-                .open_change(Parameters(OpenChangeRequest {
-                project: Some(project.clone()),
-                rationale: Some("rename things".into()),
-                change_id: None,
-            }))
-                .unwrap(),
-        );
+        let session2 = ScryerServer::for_session("s2");
         let r = session2
             .update_nodes(Parameters(UpdateNodeRequest {
                 project: Some(project.clone()),
@@ -4626,9 +4323,10 @@ mod tests {
             .unwrap();
         let text = tool_text(&r);
         assert!(
-            text.contains(&format!("conflict: node:{rl} was tagged by {chg1} (\"rate limiting\")")),
+            text.contains(&format!("conflict: node:{rl} was tagged by {chg1} (\"Session s1\")")),
             "{text}"
         );
+        let chg2 = change_of(&session2, &model_ref);
         let planned = scryer_core::read_planned_at(&model_ref).unwrap();
         assert_eq!(
             planned.change_map.get(&format!("node:{rl}")).map(String::as_str),
@@ -4657,7 +4355,7 @@ mod tests {
         planned.nodes[0].responsibilities.retain(|r| r.id != "resp-2");
         scryer_core::write_planned_at(&model_ref, &planned).unwrap();
 
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         let r = server
             .update_nodes(Parameters(UpdateNodeRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
@@ -4723,7 +4421,7 @@ mod tests {
         scryer_core::write_planned_at(&model_ref, &committed).unwrap();
 
         // node-1 is written with resp-2 — which lives on node-2.
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         let r = server
             .update_nodes(Parameters(UpdateNodeRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
@@ -4911,60 +4609,4 @@ mod tests {
         assert_ne!(minted, "resp-5", "must not reuse the dropped resp-5 still live in the outgoing layers");
     }
 
-    /// `sign_off` snapshots the session's change; a plan write
-    /// that rewords a signed-off claim afterwards succeeds but is reported as
-    /// an AMENDMENT (and an added claim as an ADDITION) in the tool response.
-    #[test]
-    fn sign_off_then_a_reword_is_reported_as_an_amendment() {
-        let dir = tempfile::tempdir().unwrap();
-        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let mut m = ScryModel::new();
-        m.nodes.push(node("vt", Kind::Symbol, "verify_token", None));
-        scryer_core::write_model_at(&model_ref, &m).unwrap();
-        let project = Some(dir.path().to_string_lossy().to_string());
-        let server = ScryerServer::new();
-        let r = server
-            .open_change(Parameters(OpenChangeRequest {
-                project: project.clone(),
-                rationale: Some("verify tokens".into()),
-                change_id: None,
-            }))
-            .unwrap();
-        let cid = opened(&r);
-        let write = |stmt: &str, extra: Option<&str>| {
-            let mut resps = vec![serde_json::json!({ "id": "resp-1", "statement": stmt })];
-            if let Some(e) = extra {
-                resps.push(serde_json::json!({ "id": "resp-2", "statement": e }));
-            }
-            let r = server
-                .update_nodes(Parameters(UpdateNodeRequest {
-                    project: project.clone(),
-                    nodes: vec![serde_json::from_value(serde_json::json!({
-                        "node_id": "vt", "responsibilities": resps
-                    }))
-                    .unwrap()],
-                }))
-                .unwrap();
-            tool_text(&r)
-        };
-        write("Verifies the approved thing", None);
-
-        let text = tool_text(
-            &server
-                .sign_off(Parameters(SignOffRequest { project: project.clone(), change_id: None }))
-                .unwrap(),
-        );
-        assert!(text.contains(&format!("Signed off {cid}")), "{text}");
-        assert!(text.contains("1 entry snapshotted"), "{text}");
-        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
-        assert!(planned.changes[0].signed_off.is_some());
-
-        let text = write("Verifies something else", Some("Also logs tokens"));
-        assert!(text.contains("AMENDMENT: resp:resp-1"), "{text}");
-        assert!(text.contains("approved: \"Verifies the approved thing\""), "{text}");
-        assert!(text.contains("ADDITION: resp:resp-2"), "{text}");
-        // The write itself landed — the agent can always record what it did.
-        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
-        assert_eq!(planned.nodes[0].responsibilities.len(), 2);
-    }
 }

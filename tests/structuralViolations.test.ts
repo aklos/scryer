@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ModelHealthReport, StyleViolation } from "../src/entities/model/health";
 import { structuralBySubtree, structuralNotice } from "../src/entities/model/health";
-import { buildReviewIndex } from "../src/pages/needs-review/NeedsReviewPage";
 import { buildDiagramScene } from "../src/widgets/diagram-canvas/diagramLayout";
 import type { ScryModel } from "../src/entities/model/viewmodel";
 
@@ -73,22 +72,6 @@ describe("structural notice", () => {
       unstyledOnly: false,
       text: `Structurally invalid (2 violations) — ${ASK}`,
     });
-  });
-});
-
-describe("needs review: structural violations", () => {
-  const index = (violations: StyleViolation[]) =>
-    buildReviewIndex(model, reportWith(violations), [], new Set(), new Set());
-
-  it("groups violations by container and counts all but unstyled containers", () => {
-    const base = index([]).total;
-    const idx = index([forbidden, unstyled]);
-    expect(idx.structural.map((g) => [g.containerId, g.name, g.violations.length])).toEqual([
-      ["svc", "Svc", 1],
-      ["bare", "Bare", 1],
-    ]);
-    expect(idx.total).toBe(base + 1);
-    expect(index([unstyled]).total).toBe(base);
   });
 });
 

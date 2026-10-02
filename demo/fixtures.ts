@@ -35,7 +35,7 @@ const contextNodes: Node[] = [
 const containerNodes: Node[] = [
   {
     id: "dashboard", kind: "container", name: "Merchant Dashboard", parentId: "aperture",
-    technology: "React", visual: true, style: "feature-sliced",
+    technology: "React", style: "feature-sliced",
     description: "Where merchants watch payouts, disputes, and live volume.",
   },
   {
@@ -461,5 +461,16 @@ export const cleanHealth: ModelHealthReport = {
     ],
     unmodeled: [{ src: "fraud", dst: "event-bus", count: 4 }],
     resolvedEdges: [],
+  },  // In sync: no structural violations.
+  structural: {
+    violations: [],
+    layerViolations: 0,
+    isolationViolations: 0,
+    externalViolations: 0,
+    misplaced: 0,
+    unstyled: 0,
+    layerless: 0,
+    cycles: 0,
+    forbiddenLinks: 0,
   },
 };

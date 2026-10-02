@@ -47,16 +47,6 @@ export interface Responsibility {
   /** Discovered in code with no upstream commitment (drift). The user adopts
    *  it (clear the flag) or rejects it (delete it). */
   vagrant?: boolean;
-  /** Why a claim is vagrant when the AGENT made it so after the developer
-   *  signed off its change: `amendment` = it reworded an approved claim,
-   *  `addition` = it added one the plan never approved. Absent on a
-   *  code-discovered vagrant. A proposal awaiting adopt / reject / reword,
-   *  never intent that folds silently. Mirrors Rust `vagrant_origin`. */
-  vagrantOrigin?: "amendment" | "addition";
-  /** For an amendment, the statement the developer signed off on — what a
-   *  reject restores, and the "approved" half of the review row. Undefined on
-   *  additions and code-discovered vagrants. */
-  approvedStatement?: string;
   /** Drift observation: the semantic check judged the code no longer
    *  discharges this claim. A flag awaiting a two-way verdict — the model
    *  adheres to the code (accept the reword, or drop a vanished claim) or the
@@ -206,6 +196,9 @@ export interface ConcernDef {
 
 export interface ScryModel {
   version: typeof SCRY_VERSION;
+  /** Plan-only: claim id → the agent's progress note on a planned claim it
+   *  left unfolded (what is built, what is left). Gone once the claim folds. */
+  notes?: Record<string, string>;
   nodes: Node[];
   links: Link[];
   groups: Group[];
@@ -225,12 +218,6 @@ export interface ScryModel {
   /** Keyed by **node id** → boundary globs (coverage denominator + extraction
    *  scope). Agent-produced and regenerable; never hand-authored. */
   boundaries?: Record<string, Source[]>;
-  /** The open-change registry — named plan partitions, each carrying the
-   *  dev's rationale. Plan-layer only; see `src/ledger.ts`. */
-  changes?: import("./ledger").ChangeMeta[];
-  /** Element key (`ledger.elementKey`) → change id: which change each pending
-   *  plan entry belongs to. Untagged entries are the unfiled bucket. */
-  changeMap?: Record<string, string>;
 }
 
 export function emptyModel(): ScryModel {

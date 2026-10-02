@@ -16,7 +16,7 @@ fn ensure_project_gitignore(scryer_dir: &Path) -> Result<(), String> {
     if !gitignore.exists() {
         fs::write(
             &gitignore,
-            "*.baseline.scry\n.sync\n.tmp.*\n.lock\n.anchors.json\n.build_edges.json\nhook.json\npreview/\nbuild-logs/\n",
+            "*.baseline.scry\n.sync\n.tmp.*\n.lock\n.anchors.json\n.build_edges.json\nsessions/\npreview/\nbuild-logs/\n",
         )
         .map_err(|e| format!("Failed to create .gitignore: {}", e))?;
     }
@@ -81,8 +81,6 @@ mod tests {
                 stale_proposal: None,
                 directives: Vec::new(),
                 last_touched_at: None,
-                vagrant_origin: None,
-                approved_statement: None,
             }],
             properties: Vec::new(),
             icon: None,
@@ -569,8 +567,6 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
-            vagrant_origin: None,
-            approved_statement: None,
         }
     }
 
@@ -679,6 +675,7 @@ pub fn write_committed_file(r: &ModelRef, model: &ScryModel) -> Result<(), Strin
     // caller — a plan-derived model (fold, replace_model) rides through this path.
     stamped.changes.clear();
     stamped.change_map.clear();
+    stamped.notes.clear();
     // Structural-invariant gate. This is the single committed-layer writer every
     // commit / fold / replace_model rides through, so refusing here is what keeps a
     // silently-misbindable duplicate — most notably the same responsibility id
@@ -922,7 +919,7 @@ pub fn write_planned_file(r: &ModelRef, model: &ScryModel) -> Result<(), String>
     // back to its committed form, killing the pending entry its tag named. A
     // change emptied that way closes as "abandoned" — the fold paths close
     // theirs as "folded" via their own gc call.
-    if !(stamped.change_map.is_empty() && stamped.changes.is_empty()) {
+    if !(stamped.change_map.is_empty() && stamped.changes.is_empty() && stamped.notes.is_empty()) {
         if let Ok(committed) = read_committed_file(r) {
             let gc = changes::gc(&committed, &mut stamped);
             for meta in &gc.closed {

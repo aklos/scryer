@@ -20,13 +20,7 @@ import { ModelTree } from "../../src/widgets/model-tree/ModelTree";
 import { DiagramView } from "../../src/widgets/diagram-canvas/DiagramView";
 import { NodePage, type Selected } from "../../src/pages/node/NodePage";
 import type { Editor } from "../../src/entities/model/editor";
-import {
-  buildReviewIndex,
-  ChangesPage,
-  DarkCodePage,
-  NeedsReviewPage,
-  UnmappedClaimsPage,
-} from "../../src/pages";
+import { ChangesPage, DarkCodePage, UnmappedClaimsPage } from "../../src/pages";
 import { Powerline } from "../../src/widgets/top-bar/Powerline";
 import { planDiff } from "../../src/entities/model/planDiff";
 import { planCounts } from "../../src/features/change-marks/changeMarks";
@@ -51,7 +45,6 @@ export const IDLE_AGENT: AgentSession = {
   activity: null,
   outcome: null,
   startFixture: noop,
-  startVariation: noop,
   cancel: noop,
 };
 
@@ -83,8 +76,6 @@ export interface WorkspaceState {
   expanded: ReadonlySet<string>;
   diagramFocus: string | null;
   driftScopes: DriftScope[];
-  newNodeIds: ReadonlySet<string>;
-  newRespIds: ReadonlySet<string>;
   health: ModelHealthReport | null;
   agent: AgentSession;
   build: ModelBuild;
@@ -128,8 +119,6 @@ export function WorkspaceShell({
     expanded,
     diagramFocus,
     driftScopes,
-    newNodeIds,
-    newRespIds,
     health,
     agent,
     build,
@@ -140,11 +129,6 @@ export function WorkspaceShell({
   const diff = useMemo(
     () => (committed ? planDiff(committed, model) : { changes: [] }),
     [committed, model],
-  );
-
-  const reviewIndex = useMemo(
-    () => buildReviewIndex(model, health, driftScopes, newNodeIds, newRespIds),
-    [model, health, driftScopes, newNodeIds, newRespIds],
   );
 
   const sel = actions.onSelectNode ?? noop;
@@ -183,6 +167,7 @@ export function WorkspaceShell({
         {view === "diagram" ? (
           <DiagramView
             model={model}
+            previewable={EMPTY_IDS}
             planDiff={diff}
             committed={null}
             report={health}
@@ -203,19 +188,8 @@ export function WorkspaceShell({
             />
           ) : selected.id === "dark" ? (
             <DarkCodePage model={model} report={health} onSelectNode={sel} />
-          ) : selected.id === "unmapped" ? (
-            <UnmappedClaimsPage model={model} committed={committed} report={health} onSelectNode={sel} />
           ) : (
-            <NeedsReviewPage
-              model={model}
-              report={health}
-              driftScopes={driftScopes}
-              newNodeIds={newNodeIds}
-              newRespIds={newRespIds}
-              editor={undefined}
-              onSelectNode={sel}
-              onClearAllNew={noop}
-            />
+            <UnmappedClaimsPage model={model} committed={committed} report={health} onSelectNode={sel} />
           )
         ) : selected?.kind === "node" || selected?.kind === "group" ? (
           <NodePage
@@ -229,10 +203,8 @@ export function WorkspaceShell({
             projectPath={projectPath}
             editor={editor}
             onCheckDrift={editor ? noop : undefined}
-            onDismissDrift={editor ? noop : undefined}
             onSelectNode={sel}
             onSelectGroup={selGroup}
-            variationState={null}
             changeLog={[]}
             history={[]}
             driftScopes={driftScopes}
@@ -248,7 +220,6 @@ export function WorkspaceShell({
         agent={agent}
         build={build}
         plan={planCounts(diff, model, committed)}
-        reviewIndex={reviewIndex}
         health={health}
         launch={DEMO_LAUNCH}
         onOpenSpecial={noop}

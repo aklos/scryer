@@ -122,6 +122,7 @@ pub fn store_test_results(r: &ModelRef, report: &ReportMatch) -> Result<usize, S
             cases: verdict.cases,
             recorded_at,
             fingerprints,
+            millis: verdict.millis.clone(),
         };
         match cache.results.iter_mut().find(|c| &&c.resp_id == resp_id) {
             Some(existing) => *existing = record,
@@ -189,6 +190,13 @@ fn provably_fresh(model: &ScryModel, rec: &ClaimRecord, project: &Path) -> Optio
 /// is cheap enough to ride every response. Claims that have left the model
 /// are omitted, not reported as ghosts.
 pub fn read_test_statuses(r: &ModelRef) -> Result<Vec<ClaimTestStatus>, String> {
+    statuses_for(r, None)
+}
+
+/// [`read_test_statuses`] for `only` these claims (all when `None`): the
+/// staleness check re-fingerprints each claim's code, so a caller asking about
+/// a handful must not pay for the whole model.
+fn statuses_for(r: &ModelRef, only: Option<&BTreeSet<&str>>) -> Result<Vec<ClaimTestStatus>, String> {
     let cache = read_cache(r);
     if cache.results.is_empty() {
         return Ok(Vec::new());
@@ -206,7 +214,9 @@ pub fn read_test_statuses(r: &ModelRef) -> Result<Vec<ClaimTestStatus>, String> 
     let mut project_files: Option<BTreeSet<String>> = None;
     let mut out = Vec::new();
     for rec in &cache.results {
-        if !live.contains(rec.resp_id.as_str()) {
+        if !live.contains(rec.resp_id.as_str())
+            || only.is_some_and(|o| !o.contains(rec.resp_id.as_str()))
+        {
             continue;
         }
         let stale = if rec.fingerprints.is_empty() {
@@ -236,8 +246,12 @@ pub fn evidence_for_claim(
     r: &ModelRef,
     resp_ids: &[String],
 ) -> Result<BTreeMap<String, Evidence>, String> {
+    if resp_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
     let model = working_model(r)?;
-    let verdicts = read_test_statuses(r)?;
+    let only: BTreeSet<&str> = resp_ids.iter().map(String::as_str).collect();
+    let verdicts = statuses_for(r, Some(&only))?;
     let mut out = BTreeMap::new();
     for id in resp_ids {
         let tests: Vec<String> = model
@@ -312,6 +326,210 @@ pub fn compute_blast_radius(r: &ModelRef) -> Result<Vec<RadiusFile>, String> {
         f.claims.sort();
     }
     Ok(out)
+}
+
+/// Whether any of `resp_id`'s anchors — implementation or attached test —
+/// lies in one of `touched`.
+fn claim_touched(model: &ScryModel, resp_id: &str, touched: &[String]) -> bool {
+    [model.source_map.get(resp_id), model.test_map.get(resp_id)]
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|loc| {
+            if is_glob_pattern(&loc.pattern) {
+                glob::Pattern::new(&loc.pattern)
+                    .is_ok_and(|p| touched.iter().any(|f| p.matches(f)))
+            } else {
+                touched.iter().any(|f| f == &loc.pattern)
+            }
+        })
+}
+
+/// The radius for one session: claims with missing or stale verdicts whose
+/// anchored code or tests `touched` reaches, and the tests to run for them.
+/// A stale verdict on a claim the session never touched is listed apart as
+/// someone else's. With no session (`None`) every claim counts and nothing
+/// is touched, so every slow test is left out of the run.
+pub fn compute_session_radius(
+    r: &ModelRef,
+    touched: Option<&[String]>,
+) -> Result<SessionRadius, String> {
+    let model = working_model(r)?;
+    let verdicts = read_test_statuses(r)?;
+    let stale_of: BTreeMap<&str, bool> =
+        verdicts.iter().map(|s| (s.resp_id.as_str(), s.stale)).collect();
+    let cache = read_cache(r);
+    let live: BTreeSet<&str> = model
+        .nodes
+        .iter()
+        .flat_map(|n| n.responsibilities.iter())
+        .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
+        .map(|resp| resp.id.as_str())
+        .collect();
+    let mut out = SessionRadius { scoped: touched.is_some(), ..Default::default() };
+    let mut by_file: BTreeMap<&str, RadiusFile> = BTreeMap::new();
+    let mut tests: BTreeMap<(&str, Option<&str>), RadiusTest> = BTreeMap::new();
+    let mut touched_claims: BTreeSet<&str> = BTreeSet::new();
+    for (resp_id, locs) in &model.test_map {
+        if !live.contains(resp_id.as_str()) {
+            continue;
+        }
+        let stale = match stale_of.get(resp_id.as_str()) {
+            Some(false) => continue,
+            Some(true) => true,
+            None => false,
+        };
+        if let Some(t) = touched {
+            if !claim_touched(&model, resp_id, t) {
+                if stale {
+                    out.not_yours.push(resp_id.clone());
+                }
+                continue;
+            }
+            touched_claims.insert(resp_id);
+        }
+        for loc in locs {
+            let entry = by_file.entry(&loc.pattern).or_insert_with(|| RadiusFile {
+                pattern: loc.pattern.clone(),
+                claims: Vec::new(),
+                stale: 0,
+            });
+            if !entry.claims.contains(resp_id) {
+                entry.claims.push(resp_id.clone());
+                entry.stale += stale as usize;
+            }
+            let test = tests
+                .entry((&loc.pattern, loc.symbol.as_deref()))
+                .or_insert_with(|| RadiusTest {
+                    pattern: loc.pattern.clone(),
+                    name: loc.symbol.clone(),
+                    claims: Vec::new(),
+                    millis: None,
+                });
+            if !test.claims.contains(resp_id) {
+                test.claims.push(resp_id.clone());
+            }
+        }
+    }
+    // A test's duration is the slowest any verdict recorded for its name.
+    for test in tests.values_mut() {
+        let Some(name) = &test.name else { continue };
+        test.millis = cache.results.iter().filter_map(|rec| rec.millis.get(name).copied()).max();
+    }
+    for test in tests.into_values() {
+        let slow = test.millis.is_some_and(|ms| ms > SLOW_TEST_MILLIS)
+            && !test.claims.iter().any(|c| touched_claims.contains(c.as_str()));
+        if slow {
+            out.slow.push(test);
+        } else {
+            out.run.push(test);
+        }
+    }
+    out.files = by_file.into_values().collect();
+    for f in &mut out.files {
+        f.claims.sort();
+    }
+    Ok(out)
+}
+
+/// Where the project's radius test command is stored: one template line,
+/// set once (see [`render_test_command`]).
+fn test_command_path(r: &ModelRef) -> std::path::PathBuf {
+    r.dir().join("test-command")
+}
+
+pub fn read_test_command(r: &ModelRef) -> Option<String> {
+    let raw = std::fs::read_to_string(test_command_path(r)).ok()?;
+    let t = raw.trim();
+    (!t.is_empty()).then(|| t.to_string())
+}
+
+pub fn write_test_command(r: &ModelRef, template: &str) -> Result<(), String> {
+    std::fs::create_dir_all(r.dir()).map_err(|e| e.to_string())?;
+    std::fs::write(test_command_path(r), format!("{}\n", template.trim())).map_err(|e| e.to_string())
+}
+
+/// The directory radius runs write their JUnit reports into, created with
+/// its own `.gitignore` so reports never reach a commit. Project-relative.
+pub fn ensure_reports_dir(r: &ModelRef) -> Result<String, String> {
+    let dir = r.dir().join("reports");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        std::fs::write(ignore, "*\n").map_err(|e| e.to_string())?;
+    }
+    Ok(".scryer/reports".to_string())
+}
+
+/// The Stop hook's probe check for a session. Its claims under test are the
+/// ones whose attached tests sit in a file the session touched and whose
+/// verdict is current and passing — tests it wrote or changed, already green.
+/// Until [`PROBES_PER_SESSION`] of them (or all, when fewer) hold a probe
+/// result on the current code, `block` names which to probe. `summary` names
+/// any of them whose probe let a break survive.
+pub fn session_probe_check(r: &ModelRef, touched: &[String]) -> ProbeCheck {
+    if touched.is_empty() {
+        return ProbeCheck::default();
+    }
+    let Ok(model) = working_model(r) else {
+        return ProbeCheck::default();
+    };
+    let in_touched_test = |resp_id: &str| {
+        model.test_map.get(resp_id).is_some_and(|locs| {
+            locs.iter().any(|l| touched.iter().any(|f| f == &l.pattern))
+        })
+    };
+    let verdicts = read_test_statuses(r).unwrap_or_default();
+    let eligible: Vec<&str> = verdicts
+        .iter()
+        .filter(|s| !s.stale && s.outcome == TestOutcome::Passed && in_touched_test(&s.resp_id))
+        .map(|s| s.resp_id.as_str())
+        .collect();
+    if eligible.is_empty() {
+        return ProbeCheck::default();
+    }
+    let probes: Vec<ClaimProbeStatus> = read_probe_statuses(r)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| !p.stale && eligible.contains(&p.resp_id.as_str()))
+        .collect();
+
+    let survivors: Vec<String> = probes
+        .iter()
+        .filter(|p| p.survived > 0)
+        .map(|p| match p.survivors.first() {
+            Some(s) => format!("{} ({s})", p.resp_id),
+            None => p.resp_id.clone(),
+        })
+        .collect();
+    let summary = (!survivors.is_empty()).then(|| {
+        format!(
+            "probe: {} claim(s) whose test let a break survive — {}",
+            survivors.len(),
+            survivors.join("; ")
+        )
+    });
+
+    let needed = PROBES_PER_SESSION.min(eligible.len());
+    let block = (probes.len() < needed).then(|| {
+        let todo: Vec<&str> = eligible
+            .iter()
+            .copied()
+            .filter(|id| !probes.iter().any(|p| p.resp_id == *id))
+            .take(needed - probes.len())
+            .collect();
+        format!(
+            "Scryer probe check — this session wrote or changed tests behind {} green claim(s), \
+             and {} of them must be probed before you stop. Probe {}: hand each to a subagent on \
+             a cheap model with open_probe {{resp_id}} → up to 3 breaks in the probe worktree → \
+             close_probe {{probes, survivors}}. A survivor goes in the user's summary; strengthen \
+             that test. This check fires once per session.",
+            eligible.len(),
+            needed,
+            todo.join(", "),
+        )
+    });
+    ProbeCheck { block, summary }
 }
 
 /// The one-call entry point: JUnit XML in, per-claim outcomes recorded,
@@ -541,8 +759,6 @@ mod tests {
                 stale_proposal: None,
                 directives: Vec::new(),
                 last_touched_at: None,
-                vagrant_origin: None,
-                approved_statement: None,
             }],
             properties: Vec::new(),
             icon: None,
@@ -748,8 +964,6 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
-            vagrant_origin: None,
-            approved_statement: None,
         });
         m.test_map.insert(
             "r2".into(),
@@ -953,8 +1167,6 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
-            vagrant_origin: None,
-            approved_statement: None,
         });
         planned.test_map.insert(
             "r2".into(),
@@ -974,5 +1186,128 @@ mod tests {
         let s = statuses.iter().find(|s| s.resp_id == "r2").expect("plan-only claim has a verdict");
         assert!(!s.stale);
         assert_eq!(evidence_for_claim(&r, &["r2".to_string()]).unwrap()["r2"], Evidence::Verified);
+    }
+
+    // --- session radius ---
+
+    /// Two claims in two files: r1 (src/m.ts, attached in src/m.spec.ts) and
+    /// r2 (src/n.ts, attached in src/n.spec.ts as "answers two").
+    fn two_claim_project() -> (tempfile::TempDir, ModelRef) {
+        let (dir, r) = project();
+        std::fs::write(dir.path().join("src/n.ts"), IMPL_TS.replace("alpha", "beta")).unwrap();
+        std::fs::write(
+            dir.path().join("src/n.spec.ts"),
+            SPEC_TS.replace("alpha", "beta").replace("answers one", "answers two"),
+        )
+        .unwrap();
+        let mut m = read_model_at(&r).unwrap();
+        m.nodes[0].responsibilities.push(Responsibility {
+            concern: None,
+            id: "r2".into(),
+            statement: "answers two".into(),
+            vagrant: None,
+            stale: None,
+            stale_proposal: None,
+            directives: Vec::new(),
+            last_touched_at: None,
+        });
+        let loc = |pattern: &str, symbol: &str| SourceLocation {
+            pattern: pattern.into(),
+            symbol: Some(symbol.into()),
+            line: None,
+            end_line: None,
+        };
+        m.source_map.insert("r2".into(), vec![loc("src/n.ts", "beta")]);
+        m.test_map.insert("r2".into(), vec![loc("src/n.spec.ts", "answers two")]);
+        scryer_core::write_model_at(&r, &m).unwrap();
+        (dir, r)
+    }
+
+    const BOTH: &str = r#"<testsuites><testsuite name="s">
+        <testcase classname="src/m.spec.ts" name="alpha &gt; answers one" time="0.01"/>
+        <testcase classname="src/n.spec.ts" name="beta &gt; answers two" time="42.5"/>
+    </testsuite></testsuites>"#;
+
+    #[test]
+    fn ingest_records_each_attached_tests_duration() {
+        let (_dir, r) = two_claim_project();
+        ingest_report_file(&r, BOTH).unwrap();
+        let cache = read_cache(&r);
+        let r2 = cache.results.iter().find(|c| c.resp_id == "r2").unwrap();
+        assert_eq!(r2.millis["answers two"], 42_500);
+    }
+
+    /// The session's radius is its own claims; a stale verdict it never
+    /// touched is listed as someone else's, not handed to it to run.
+    #[test]
+    fn a_session_radius_holds_only_the_claims_it_touched() {
+        let (dir, r) = two_claim_project();
+        ingest_report_file(&r, BOTH).unwrap();
+        for f in ["src/m.ts", "src/n.ts"] {
+            let body = std::fs::read_to_string(dir.path().join(f)).unwrap();
+            std::fs::write(dir.path().join(f), body.replace("return 1", "return 2")).unwrap();
+        }
+        let touched = vec!["src/m.ts".to_string()];
+        let radius = compute_session_radius(&r, Some(&touched)).unwrap();
+        assert!(radius.scoped);
+        assert_eq!(radius.files.len(), 1);
+        assert_eq!(radius.files[0].claims, vec!["r1"]);
+        assert_eq!(radius.run.len(), 1);
+        assert_eq!(radius.run[0].name.as_deref(), Some("answers one"));
+        assert_eq!(radius.not_yours, vec!["r2"]);
+    }
+
+    /// A slow test stays out of the run unless its own claim was touched.
+    #[test]
+    fn slow_tests_are_left_out_unless_their_claim_was_touched() {
+        let (dir, r) = two_claim_project();
+        ingest_report_file(&r, BOTH).unwrap();
+        let body = std::fs::read_to_string(dir.path().join("src/n.ts")).unwrap();
+        std::fs::write(dir.path().join("src/n.ts"), body.replace("return 1", "return 2")).unwrap();
+
+        let unscoped = compute_session_radius(&r, None).unwrap();
+        assert!(unscoped.run.is_empty(), "{unscoped:?}");
+        assert_eq!(unscoped.slow.len(), 1);
+        assert_eq!(unscoped.slow[0].millis, Some(42_500));
+
+        let touched = vec!["src/n.ts".to_string()];
+        let mine = compute_session_radius(&r, Some(&touched)).unwrap();
+        assert!(mine.slow.is_empty());
+        assert_eq!(mine.run[0].name.as_deref(), Some("answers two"));
+    }
+
+    // --- probe check ---
+
+    #[test]
+    fn the_probe_check_blocks_until_the_sessions_tested_claims_are_probed() {
+        let (_dir, r) = two_claim_project();
+        ingest_report_file(&r, BOTH).unwrap();
+        let touched = vec!["src/m.spec.ts".to_string(), "src/n.spec.ts".to_string()];
+
+        let check = session_probe_check(&r, &touched);
+        let block = check.block.expect("two green claims behind touched tests, none probed");
+        assert!(block.contains("r1, r2"), "{block}");
+        assert!(check.summary.is_none());
+
+        store_probe_result(&r, "r1", 3, Vec::new()).unwrap();
+        assert!(session_probe_check(&r, &touched).block.is_some(), "one of two is not enough");
+
+        store_probe_result(&r, "r2", 2, vec!["dropped the guard".into()]).unwrap();
+        let check = session_probe_check(&r, &touched);
+        assert!(check.block.is_none());
+        let summary = check.summary.expect("a survivor reaches the user");
+        assert!(summary.contains("r2 (dropped the guard)"), "{summary}");
+    }
+
+    /// Only tests the session wrote or changed count: editing code alone, or
+    /// a test whose verdict is not green, asks for no probe.
+    #[test]
+    fn the_probe_check_ignores_claims_whose_tests_the_session_left_alone() {
+        let (_dir, r) = two_claim_project();
+        ingest_report_file(&r, BOTH).unwrap();
+        assert_eq!(session_probe_check(&r, &["src/m.ts".to_string()]), ProbeCheck::default());
+        // One touched test file, one green claim: one probe is the whole ask.
+        let check = session_probe_check(&r, &["src/m.spec.ts".to_string()]);
+        assert!(check.block.unwrap().contains("1 of them"));
     }
 }

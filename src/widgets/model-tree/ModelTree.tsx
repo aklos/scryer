@@ -1059,8 +1059,7 @@ export function ModelTree({
             dividers, the active cell filled. */}
         <div className="flex items-stretch overflow-hidden rounded-md border border-[var(--border)] divide-x divide-[var(--border)]">
           {/* Lenses are a FILTER, not a readout — the standing counts live in
-              the powerline (pending work) and its "to review" segment (drift),
-              where they survive the sidebar being narrowed or closed. */}
+              the powerline (pending work), where they survive the sidebar being narrowed or closed. */}
           {(
             [
               { id: "all", label: "All" },

@@ -63,7 +63,7 @@ export interface McpSetup {
   /** Explicit, separate opt-in: install scryer's session hooks for one tool —
    *  Claude Code (`.claude/settings.local.json`), Codex (`.codex/hooks.json`)
    *  or Copilot (`.github/hooks/scryer.json`). Never bundled into `enable` —
-   *  the hooks change every session's behavior (while the app is open), so they
+   *  the hooks change every session's behavior, so they
    *  are only written when the user asks for exactly that. */
   enableHooks: (tool: "claude" | "codex" | "copilot") => Promise<void>;
   /** Its own opt-in, separate from the session hooks: register scryer's status

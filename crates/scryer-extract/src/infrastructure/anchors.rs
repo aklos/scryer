@@ -237,6 +237,23 @@ fn read_baseline(r: &ModelRef) -> Option<AnchorBaseline> {
 /// content-hash rescue attempt (rename tracking) before it reports. No
 /// baseline → empty (the first reconcile seeds it).
 pub fn run_anchor_check(r: &ModelRef) -> Result<AnchorCheck, String> {
+    run_anchor_check_scoped(r, None)
+}
+
+/// [`run_anchor_check`] limited to `files` (project-relative): no mtime walk —
+/// the caller already knows which files changed (a session's touches) — and
+/// only those files' anchors are checked, missing or not.
+pub fn run_anchor_check_in(r: &ModelRef, files: &BTreeSet<String>) -> Result<AnchorCheck, String> {
+    run_anchor_check_scoped(r, Some(files))
+}
+
+fn run_anchor_check_scoped(
+    r: &ModelRef,
+    scope: Option<&BTreeSet<String>>,
+) -> Result<AnchorCheck, String> {
+    if scope.is_some_and(|s| s.is_empty()) {
+        return Ok(AnchorCheck::default());
+    }
     let Some(mut baseline) = read_baseline(r) else {
         return Ok(AnchorCheck::default());
     };
@@ -244,14 +261,19 @@ pub fn run_anchor_check(r: &ModelRef) -> Result<AnchorCheck, String> {
 
     let _lock = lock_model(r)?;
     let mut model = read_model_at(r)?;
-    let sync = scryer_core::read_sync_state(r);
-    let touched: BTreeSet<String> = drift::changed_files_since(&project, &sync);
+    let touched: BTreeSet<String> = match scope {
+        Some(files) => files.clone(),
+        None => drift::changed_files_since(&project, &scryer_core::read_sync_state(r)),
+    };
 
     // The mtime walk only sees files that exist — a deleted anchor file never
     // lands in `touched`. Existence is a cheap stat per distinct baseline file,
-    // so missing files are swept unconditionally.
+    // so missing files are swept unconditionally (within the scope, if any).
     let mut exists: HashMap<String, bool> = HashMap::new();
     for entry in &baseline.anchors {
+        if scope.is_some_and(|s| !s.contains(&entry.file)) {
+            continue;
+        }
         if !exists.contains_key(&entry.file) {
             let e = project.join(&entry.file).exists();
             exists.insert(entry.file.clone(), e);
@@ -290,6 +312,9 @@ pub fn run_anchor_check(r: &ModelRef) -> Result<AnchorCheck, String> {
     let mut rescue_candidates: Option<Vec<String>> = None;
 
     for entry in baseline.anchors.iter_mut() {
+        if scope.is_some_and(|s| !s.contains(&entry.file)) {
+            continue;
+        }
         let file_exists = exists.get(&entry.file).copied().unwrap_or(true);
         if file_exists && !touched.contains(&entry.file) {
             continue;
@@ -621,8 +646,6 @@ mod tests {
                 stale_proposal: None,
                 directives: Vec::new(),
                 last_touched_at: None,
-                vagrant_origin: None,
-                approved_statement: None,
             }],
             properties: Vec::new(),
             icon: None,
@@ -1190,8 +1213,6 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
-            vagrant_origin: None,
-            approved_statement: None,
         });
         m.source_map.insert(
             "r2".into(),
@@ -1230,8 +1251,6 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
-            vagrant_origin: None,
-            approved_statement: None,
         });
         m.source_map.insert(
             "r2".into(),

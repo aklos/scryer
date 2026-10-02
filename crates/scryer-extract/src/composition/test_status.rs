@@ -6,9 +6,11 @@ use crate::infrastructure::test_status as store;
 
 // Declared in the domain, named here so the crate has one public path per area.
 pub use crate::domain::test_status::{
-    ClaimProbeStatus, ClaimRecord, ClaimTestStatus, Evidence, IngestSummary, ProbeRecord,
-    ProbeTarget, RadiusFile, TestStatusCache,
+    render_test_command, ClaimProbeStatus, ClaimRecord, ClaimTestStatus, Evidence, IngestSummary,
+    ProbeCheck, ProbeRecord, ProbeTarget, RadiusFile, RadiusTest, SessionRadius, TestStatusCache,
+    PROBES_PER_SESSION, SLOW_TEST_MILLIS,
 };
+use scryer_core::session::SessionLog;
 use scryer_core::test_results::ReportMatch;
 use scryer_core::ModelRef;
 use std::collections::BTreeMap;
@@ -34,6 +36,32 @@ pub fn claim_evidence(
 /// The test files whose claims hold missing or stale verdicts — what to re-run.
 pub fn test_blast_radius(r: &ModelRef) -> Result<Vec<RadiusFile>, String> {
     store::compute_blast_radius(r)
+}
+
+/// What needs running for one session's touches (`None`: project-wide).
+pub fn session_radius(r: &ModelRef, touched: Option<&[String]>) -> Result<SessionRadius, String> {
+    store::compute_session_radius(r, touched)
+}
+
+/// The project's radius test-command template, when one is set.
+pub fn test_command(r: &ModelRef) -> Option<String> {
+    store::read_test_command(r)
+}
+
+/// Store the project's radius test-command template.
+pub fn set_test_command(r: &ModelRef, template: &str) -> Result<(), String> {
+    store::write_test_command(r, template)
+}
+
+/// Create the git-ignored directory radius runs report into; returns its
+/// project-relative path.
+pub fn reports_dir(r: &ModelRef) -> Result<String, String> {
+    store::ensure_reports_dir(r)
+}
+
+/// The Stop hook's probe check over `log`'s touches.
+pub fn probe_check(r: &ModelRef, log: &SessionLog) -> ProbeCheck {
+    store::session_probe_check(r, &log.touched)
 }
 
 /// Parse a JUnit report and record every case it matches.

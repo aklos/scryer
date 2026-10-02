@@ -18,6 +18,14 @@ pub fn check_anchors(r: &ModelRef) -> Result<AnchorCheck, String> {
     store::run_anchor_check(r)
 }
 
+/// [`check_anchors`] for a known set of changed files — no project walk.
+pub fn check_anchors_in(
+    r: &ModelRef,
+    files: &std::collections::BTreeSet<String>,
+) -> Result<AnchorCheck, String> {
+    store::run_anchor_check_in(r, files)
+}
+
 /// Fingerprint every anchor in the model and write the baseline.
 pub fn write_baseline(r: &ModelRef) -> Result<usize, String> {
     store::store_baseline(r)

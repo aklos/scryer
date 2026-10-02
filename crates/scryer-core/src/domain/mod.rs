@@ -19,4 +19,5 @@ pub mod drift_scope;
 pub mod history_events;
 pub mod product_code;
 pub mod refusal;
+pub mod session;
 pub mod layers;

@@ -48,6 +48,10 @@ pub struct TestCase {
     /// The failure/error message, when the report carried one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Wall time from the `time` attribute (seconds in JUnit), in millis;
+    /// 0 when the report gave none.
+    #[serde(default)]
+    pub millis: u64,
 }
 
 /// Parse a JUnit XML document into flat test cases.
@@ -89,6 +93,11 @@ pub fn parse_junit(xml: &str) -> Result<Vec<TestCase>, String> {
             name: node.attribute("name").unwrap_or_default().to_string(),
             outcome,
             message,
+            millis: node
+                .attribute("time")
+                .and_then(|t| t.trim().parse::<f64>().ok())
+                .filter(|t| t.is_finite() && *t > 0.0)
+                .map_or(0, |t| (t * 1000.0).round() as u64),
         });
     }
     Ok(cases)
@@ -105,6 +114,10 @@ pub struct ClaimOutcome {
     pub outcome: TestOutcome,
     /// How many report cases fed the verdict.
     pub cases: usize,
+    /// Attached test name (as the attachment spells it) → its cases' summed
+    /// wall time in millis, so a slow test can be named and skipped.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub millis: BTreeMap<String, u64>,
 }
 
 /// An attached test the report never mentioned. Normal for a partial run
@@ -157,6 +170,7 @@ pub fn match_report(
     struct Attachment<'a> {
         resp_id: &'a str,
         pattern: &'a str,
+        symbol: &'a str,
     }
     let mut by_name: HashMap<String, Vec<Attachment>> = HashMap::new();
     for (resp_id, locs) in test_map {
@@ -168,6 +182,7 @@ pub fn match_report(
                     .push(Attachment {
                         resp_id,
                         pattern: &loc.pattern,
+                        symbol,
                     });
             }
         }
@@ -175,6 +190,7 @@ pub fn match_report(
 
     let mut matched: HashMap<(String, String), TestOutcome> = HashMap::new(); // (resp, pattern) → worst
     let mut case_counts: HashMap<String, usize> = HashMap::new();
+    let mut durations: HashMap<String, BTreeMap<String, u64>> = HashMap::new(); // resp → test → ms
     let mut seen_names: HashMap<String, bool> = HashMap::new(); // leaf → matched anywhere
     let mut unmatched_cases = 0usize;
     let mut ambiguous = Vec::new();
@@ -216,6 +232,11 @@ pub fn match_report(
                 .or_insert(case.outcome);
             *worst = (*worst).max(case.outcome);
             *case_counts.entry(a.resp_id.to_string()).or_default() += 1;
+            *durations
+                .entry(a.resp_id.to_string())
+                .or_default()
+                .entry(a.symbol.to_string())
+                .or_default() += case.millis;
         }
     }
 
@@ -224,6 +245,7 @@ pub fn match_report(
         let entry = claims.entry(resp_id.clone()).or_insert(ClaimOutcome {
             outcome: *outcome,
             cases: *case_counts.get(resp_id).unwrap_or(&0),
+            millis: durations.get(resp_id).cloned().unwrap_or_default(),
         });
         entry.outcome = entry.outcome.max(*outcome);
     }
@@ -490,6 +512,7 @@ mod tests {
             name: "round-trips".into(),
             outcome: TestOutcome::Passed,
             message: None,
+            millis: 0,
         }];
         let m = match_report(&map, &cases);
         assert!(m.claims.is_empty());
@@ -533,5 +556,22 @@ mod tests {
         )]);
         let m = match_report(&map, &parse_junit(PYTEST_XML).unwrap());
         assert_eq!(m.claims["resp-m"].outcome, TestOutcome::Errored);
+    }
+
+    /// A parametrized test's cases sum into one duration for its attachment,
+    /// so a slow test reads as slow however its runner splits it.
+    #[test]
+    fn case_times_sum_per_attached_test() {
+        let map = attach(&[("resp-f", "tests/test_voice.py", Some("test_rules_out_filler"))]);
+        let xml = r#"<testsuite>
+            <testcase classname="tests.test_voice" name="test_rules_out_filler[um]" time="2.5"/>
+            <testcase classname="tests.test_voice" name="test_rules_out_filler[ah]" time="3"/>
+            <testcase classname="tests.test_voice" name="untimed"/>
+        </testsuite>"#;
+        let cases = parse_junit(xml).unwrap();
+        assert_eq!(cases[0].millis, 2500);
+        assert_eq!(cases[2].millis, 0, "no time attribute reads as zero");
+        let m = match_report(&map, &cases);
+        assert_eq!(m.claims["resp-f"].millis["test_rules_out_filler"], 5500);
     }
 }

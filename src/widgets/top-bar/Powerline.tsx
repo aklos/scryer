@@ -4,7 +4,7 @@
  * glance: the subagent launch setup (which agent + model + effort a fill runs
  * with), coverage, and the model's size + schema. Right side folds in the live
  * bits the SyncBar carried — the agent's activity (barber-pole) with Cancel
- * while it works, and the review / recent-changes jumps when idle. The pending
+ * while it works, and the changes jump when idle. The pending
  * count rides the changes segment: the tree's lenses are a FILTER, and hanging
  * the model's standing state off a filter meant it vanished with the sidebar.
  *
@@ -14,13 +14,12 @@
  */
 
 import type { CSSProperties } from "react";
-import { Flag, History, Loader2, X } from "lucide-react";
+import { History, Loader2, X } from "lucide-react";
 import { type PlanCounts, planCountLabel } from "../../features/change-marks/changeMarks";
 import { AgentMark } from "../../shared/ui/pagekit";
 import type { AgentSession } from "../../features/agent-launch/useAgentSession";
 import type { ModelBuild } from "../../features/model-build/useModelBuild";
 import { darkBoundaries, type ModelHealthReport } from "../../entities/model/health";
-import type { ReviewIndex } from "../../pages";
 import { AGENT_LABEL, type ResolvedLaunch } from "../settings-panel/SettingsPanel";
 import type { ScryModel } from "../../entities/model/viewmodel";
 import type { SpecialPage } from "../../pages/node/NodePage";
@@ -31,8 +30,6 @@ interface PowerlineProps {
   build: ModelBuild;
   /** Pending plan work — elements and the carriers they sit on. */
   plan: PlanCounts;
-  /** Everything awaiting a human verdict (vagrant / stale / agent edits …). */
-  reviewIndex: ReviewIndex;
   /** Coverage + flag totals; null until the first health fetch lands. */
   health: ModelHealthReport | null;
   /** The subagent launch setup a fill will run with — agent + model + effort. */
@@ -49,7 +46,6 @@ export function Powerline({
   agent,
   build,
   plan,
-  reviewIndex,
   health,
   launch,
   onOpenSpecial,
@@ -181,26 +177,12 @@ export function Powerline({
         </>
       ) : (
         <>
-          {reviewIndex.total > 0 && (
-            <button
-              type="button"
-              onClick={() => onOpenSpecial("review")}
-              className="rseg"
-              style={sb("color-mix(in srgb, var(--color-orange-500) 18%, var(--surface-canvas))")}
-              title="Open Needs review — flags awaiting a human verdict (drift, stale claims, agent edits, empty symbols …)"
-            >
-              <Flag className="h-3 w-3 shrink-0 text-orange-600 dark:text-orange-400" />
-              <span className="font-medium text-orange-600 dark:text-orange-400">
-                {reviewIndex.total} to review
-              </span>
-            </button>
-          )}
           <button
             type="button"
             onClick={() => onOpenSpecial("changes")}
             className="rseg"
             style={sb("color-mix(in srgb, var(--text) 6.5%, var(--surface-canvas))")}
-            title="Changes — the whole plan diff against the committed model, grouped by the ledger's open changes"
+            title="Changes — the whole plan diff against the committed model"
           >
             <History className="h-3.5 w-3.5" />
             <span>
@@ -216,15 +198,6 @@ export function Powerline({
                 >
                   {" "}
                   · <span className="pl-strong">{planCountLabel(plan)}</span>
-                </span>
-              )}
-              {(model.changes?.length ?? 0) > 0 && (
-                <span
-                  className="text-[var(--text-muted)]"
-                  title="Open changes in the ledger — planned work not yet folded into the committed model. A change closes when all its work is marked implemented (or reverted)."
-                >
-                  {" "}
-                  · {model.changes!.length} in flight
                 </span>
               )}
             </span>

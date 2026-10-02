@@ -36,6 +36,7 @@ pub mod history {
 pub mod drift {
     pub use crate::composition::sync::*;
     pub use crate::domain::drift_scope::*;
+    pub use crate::composition::drift_verdicts as verdicts;
 }
 
 /// Fold refusals.
@@ -60,6 +61,13 @@ pub mod settings {
 pub mod build_edges {
     pub use crate::composition::edges::*;
     pub use crate::domain::build_edges::*;
+}
+
+/// The session log and what the session hooks answer from it.
+pub mod session {
+    pub use crate::application::hooks::*;
+    pub use crate::composition::session::*;
+    pub use crate::domain::session::{asks_for_parity, Ask, AskEntry, AskKind, SessionLog};
 }
 
 /// The change ledger.

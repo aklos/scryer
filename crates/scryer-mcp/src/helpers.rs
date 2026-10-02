@@ -511,99 +511,71 @@ pub(crate) fn remint_colliding_node_ids(
     report
 }
 
+/// The rationale a session's change opens with: the user's first prompt, as
+/// they wrote it.
+fn session_rationale(model_ref: &ModelRef, sid: &str) -> String {
+    match scryer_core::session::first_prompt(model_ref, sid) {
+        Some(p) => {
+            let p = p.trim();
+            match p.char_indices().nth(200) {
+                Some((i, _)) => format!("{}…", &p[..i]),
+                None => p.to_string(),
+            }
+        }
+        None => format!("Session {}", sid.get(..8).unwrap_or(sid)),
+    }
+}
+
+/// Sessions without a harness session id share this one change.
+pub(crate) const NO_SESSION: &str = "unknown";
+
 /// Write the plan, first tagging what THIS write changed to the session's
-/// current change (see `ScryerServer::session_change`) — computed as the diff
-/// between the plan on disk and the model being written, so every authoring
-/// tool gets attribution without bespoke bookkeeping, deletions included. No
-/// current change (or one this plan's registry doesn't know) writes unfiled,
-/// exactly as before. Returns conflict warnings for the tool's response: a key
-/// already tagged by a DIFFERENT change is two tasks touching the same element
-/// — the collision the ledger exists to catch before the code merges.
+/// change — computed as the diff between the plan on disk and the model being
+/// written, so every authoring tool gets attribution without bespoke
+/// bookkeeping, deletions included. The session's change is opened on its
+/// first write: one change per session, never a step the agent has to take.
+/// Returns conflict warnings for the tool's response: a key already tagged by
+/// a DIFFERENT change is two sessions touching the same element — the
+/// collision the ledger exists to catch before the code merges.
 pub(crate) fn write_planned_tagged(
     model_ref: &ModelRef,
     model: &mut ScryModel,
-    change_id: Option<&str>,
+    session: Option<&str>,
 ) -> Result<Vec<String>, String> {
-    // The guard: every plan write belongs to a change. A session that has
-    // not opened one — or points at a change that has since closed — is told
-    // exactly which call fixes that, and nothing is written.
-    let Some(cid) = change_id.filter(|c| model.changes.iter().any(|m| m.id == *c)) else {
-        let hint = if model.changes.is_empty() {
-            "open_change {rationale: \"<the task in one sentence>\"}".to_string()
-        } else {
-            format!(
-                "open_change {{rationale: \"<the task in one sentence>\"}}, or resume one of: {}",
-                model
-                    .changes
-                    .iter()
-                    .map(|c| format!("{} (\"{}\")", c.id, c.rationale))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        };
-        return Err(format!(
-            "REFUSED: no change is open in this session, so this plan write has no ledger to \
-             land in. Open one first — {hint} — then repeat the write."
-        ));
-    };
-    let mut warnings = Vec::new();
-    {
-        {
-            let before = scryer_core::read_planned_at(model_ref).unwrap_or_default();
-            let keys: Vec<String> = scryer_core::diff::diff(&before, model)
-                .changes
-                .iter()
-                .map(scryer_core::changes::key_for)
-                .collect();
-            for (key, prev) in scryer_core::changes::tag(model, &keys, cid) {
-                let rationale = model
-                    .changes
-                    .iter()
-                    .find(|c| c.id == prev)
-                    .map(|c| c.rationale.clone())
-                    .unwrap_or_default();
-                warnings.push(format!(
-                    "conflict: {key} was tagged by {prev} (\"{rationale}\") and is now \
-                     retagged to {cid} — two changes are touching the same element"
-                ));
-            }
-            // Forward vagrancy: against a SIGNED-OFF change, say which of the
-            // touched entries now diverge from what the developer approved.
-            // The write succeeds regardless — the agent must be able to record
-            // what it did — but the divergence is named here and withheld at
-            // the fold.
-            if let Some(meta) = model.changes.iter().find(|c| c.id == cid) {
-                if meta.signed_off.is_some() {
-                    use scryer_core::changes::Classification as C;
-                    for (key, class, snap) in scryer_core::changes::classify_against_signoff(model, meta) {
-                        if !keys.contains(&key) && class != C::Dropped {
-                            continue; // an older divergence, already reported
-                        }
-                        let what = match class {
-                            C::Amended => format!(
-                                "AMENDMENT: {key} differs from what was signed off in {cid} \
-                                 (approved: \"{}\") — it will not fold; it lands as vagrant for \
-                                 the developer's verdict at mark_implemented",
-                                snap.as_ref().and_then(|s| s.statement.as_deref()).unwrap_or("?")
-                            ),
-                            C::Added => format!(
-                                "ADDITION: {key} was not in {cid} at sign-off — it will not \
-                                 fold; it lands as vagrant for the developer's verdict at \
-                                 mark_implemented"
-                            ),
-                            C::Dropped => format!(
-                                "DROPPED: {key} was signed off in {cid} and this plan no longer \
-                                 carries it — the fold restores it as pending intent"
-                            ),
-                            C::Untouched => continue,
-                        };
-                        warnings.push(what);
-                    }
-                }
-            }
+    let sid = session.unwrap_or(NO_SESSION);
+    let cid = match scryer_core::changes::session_change(model, sid) {
+        Some(c) => c.id.clone(),
+        None => {
+            let rationale = session_rationale(model_ref, sid);
+            scryer_core::changes::open_change_for(model, &rationale, Some(sid), scryer_core::drift::now_secs())
         }
+    };
+    let cid = cid.as_str();
+    let mut warnings = Vec::new();
+    let before = scryer_core::read_planned_at(model_ref).unwrap_or_default();
+    let keys: Vec<String> = scryer_core::diff::diff(&before, model)
+        .changes
+        .iter()
+        .map(scryer_core::changes::key_for)
+        .collect();
+    for (key, prev) in scryer_core::changes::tag(model, &keys, cid) {
+        let rationale = model
+            .changes
+            .iter()
+            .find(|c| c.id == prev)
+            .map(|c| c.rationale.clone())
+            .unwrap_or_default();
+        warnings.push(format!(
+            "conflict: {key} was tagged by {prev} (\"{rationale}\") and is now \
+             retagged to {cid} — two changes are touching the same element"
+        ));
     }
     scryer_core::write_planned_at(model_ref, model)?;
+    // Logged, not gated: the session view shows the user every plan element
+    // the agent wrote.
+    if session.is_some() {
+        let _ = scryer_core::session::record_model_edit(model_ref, sid, keys);
+    }
     Ok(warnings)
 }
 

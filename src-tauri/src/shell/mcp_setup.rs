@@ -53,8 +53,10 @@ fn check_claude_approved(project_path: &str) -> bool {
 
 /// The Claude Code hook events scryer registers, with the matcher each needs.
 /// One client command serves all of them (it dispatches on the event JSON).
+/// An install counts as present only when its UserPromptSubmit entry is — the
+/// newest registration — so an install that predates it is offered again.
 const SCRYER_HOOK_EVENTS: &[(&str, Option<&str>, u64)] = &[
-    ("SessionStart", None, 10),
+    ("UserPromptSubmit", None, 10),
     ("PostToolUse", Some("Read"), 10),
     ("PostToolUse", Some("Edit|Write|NotebookEdit"), 10),
     ("Stop", None, 15),
@@ -67,7 +69,7 @@ const SCRYER_HOOK_EVENTS: &[(&str, Option<&str>, u64)] = &[
 /// route (the client no-ops on Bash commands with no patch envelope).
 /// Timeouts stay explicit: Codex's default is 600 s.
 const SCRYER_CODEX_HOOK_EVENTS: &[(&str, Option<&str>, u64)] = &[
-    ("SessionStart", None, 10),
+    ("UserPromptSubmit", None, 10),
     ("PreToolUse", Some("apply_patch|Bash"), 10),
     ("PostToolUse", Some("apply_patch|Bash"), 10),
     ("Stop", None, 15),
@@ -83,7 +85,7 @@ const SCRYER_CODEX_HOOK_EVENTS: &[(&str, Option<&str>, u64)] = &[
 /// Copilot has a native patch tool, so unlike Codex there is no heredoc route
 /// worth spawning this client for on every shell command.
 const SCRYER_COPILOT_HOOK_EVENTS: &[(&str, Option<&str>, u64)] = &[
-    ("SessionStart", None, 10),
+    ("UserPromptSubmit", None, 10),
     ("PostToolUse", Some("view"), 10),
     ("PostToolUse", Some("create|edit|str_replace_editor|apply_patch"), 10),
     ("Stop", None, 15),
@@ -124,7 +126,7 @@ fn check_claude_hooks(project_path: &str) -> bool {
         if let Ok(contents) = std::fs::read_to_string(&path) {
             if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
                 let installed = root
-                    .pointer("/hooks/SessionStart")
+                    .pointer("/hooks/UserPromptSubmit")
                     .and_then(|v| v.as_array())
                     .is_some_and(|entries| entries.iter().any(is_scryer_hook_entry));
                 if installed {
@@ -172,7 +174,7 @@ fn check_codex_hooks(project_path: &str) -> bool {
     if let Ok(contents) = std::fs::read_to_string(&path) {
         if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
             return root
-                .pointer("/hooks/SessionStart")
+                .pointer("/hooks/UserPromptSubmit")
                 .and_then(|v| v.as_array())
                 .is_some_and(|entries| entries.iter().any(is_scryer_hook_entry));
         }
@@ -188,10 +190,9 @@ fn check_codex_hooks(project_path: &str) -> bool {
 ///
 /// It is a COMMITTED path, unlike Claude Code's `settings.local.json` — so this
 /// registration is shared with the checkout, the same way `.codex/hooks.json`
-/// already is. That costs teammates nothing: the registered command exits in
-/// milliseconds unless the Scryer app has this project open, so a checkout
-/// without Scryer — including a CI run of the Copilot cloud agent, which reads
-/// exactly this directory — sees no behaviour at all.
+/// already is. That costs teammates little: the registered command exits silently
+/// when the scryer binary or the model is missing, and otherwise only logs the
+/// session to the untracked `.scryer/sessions/`.
 ///
 /// Scryer owns this file outright (hence its own name in a directory Copilot
 /// reads whole), which is what lets it be written wholesale rather than merged.
@@ -207,7 +208,7 @@ fn check_copilot_hooks(project_path: &str) -> bool {
     if let Ok(contents) = std::fs::read_to_string(copilot_hooks_path(project_path)) {
         if let Ok(root) = serde_json::from_str::<serde_json::Value>(&contents) {
             return root
-                .pointer("/hooks/SessionStart")
+                .pointer("/hooks/UserPromptSubmit")
                 .and_then(|v| v.as_array())
                 .is_some_and(|entries| entries.iter().any(is_scryer_hook_entry));
         }
@@ -541,16 +542,23 @@ fn write_scryer_hooks(
     if !root.get("hooks").is_some_and(|v| v.is_object()) {
         root["hooks"] = serde_json::json!({});
     }
+    // Strip scryer entries from EVERY event, not just the current set, so an
+    // event scryer no longer registers (SessionStart) is cleaned up too; an
+    // event list this emptied is dropped rather than left as `[]`.
+    let hooks = root["hooks"].as_object_mut().unwrap();
+    hooks.retain(|_, entries| {
+        let Some(list) = entries.as_array_mut() else { return true };
+        let before = list.len();
+        list.retain(|e| !is_scryer_hook_entry(e));
+        !(list.is_empty() && before > 0)
+    });
     for (event, _, _) in events {
-        let entries = root["hooks"]
-            .as_object_mut()
-            .unwrap()
+        let entries = hooks
             .entry(event.to_string())
             .or_insert_with(|| serde_json::json!([]));
         if !entries.is_array() {
             *entries = serde_json::json!([]);
         }
-        entries.as_array_mut().unwrap().retain(|e| !is_scryer_hook_entry(e));
     }
     for (event, matcher, timeout) in events {
         let mut entry = serde_json::json!({
@@ -591,6 +599,10 @@ mod hook_install_tests {
                 "hooks": {
                     "PostToolUse": [
                         { "matcher": "Bash", "hooks": [{ "type": "command", "command": "my-linter" }] }
+                    ],
+                    // A registration from before SessionStart was dropped.
+                    "SessionStart": [
+                        { "hooks": [{ "type": "command", "command": "\"/old/scryer-mcp\" hook" }] }
                     ]
                 }
             })
@@ -617,7 +629,7 @@ mod hook_install_tests {
         assert_eq!(scryer_post.len(), 2, "Read overlay + Edit touch: {post:?}");
         assert!(scryer_post.iter().any(|e| e["matcher"] == "Read"));
         assert!(scryer_post.iter().any(|e| e["matcher"] == "Edit|Write|NotebookEdit"));
-        assert_eq!(root["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+        assert!(root["hooks"].get("SessionStart").is_none(), "stale SessionStart removed: {root}");
         assert_eq!(root["hooks"]["Stop"].as_array().unwrap().len(), 1);
     }
 
@@ -749,7 +761,7 @@ mod hook_install_tests {
             1,
             "Codex set has ONE PostToolUse entry (no Read overlay there)"
         );
-        assert_eq!(root["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+        assert!(root["hooks"].get("SessionStart").is_none());
         assert_eq!(root["hooks"]["Stop"].as_array().unwrap().len(), 1);
     }
 
@@ -786,7 +798,7 @@ mod hook_install_tests {
         assert_eq!(post[0]["type"], "command");
         assert_eq!(post[0]["command"], "\"/opt/scryer/scryer-mcp\" hook --copilot");
         assert!(post.iter().all(is_scryer_hook_entry));
-        assert_eq!(root["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+        assert!(root["hooks"].get("SessionStart").is_none());
         assert_eq!(root["hooks"]["Stop"].as_array().unwrap().len(), 1);
     }
 

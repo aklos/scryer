@@ -409,8 +409,7 @@ export async function buildDiagramScene(
     styled = { name: styleDef.name, drawing: styleDef.drawing, regions: laid.regions };
     regions = laid.regions;
     // Structural violations from the health report — imports and declared
-    // links the style forbids — are the only source of red, so every red line
-    // is also a line on Needs review. They are drawn even when no link
+    // links the style forbids — are the only source of red. They are drawn even when no link
     // declares the pair: a declared-links-only view would read as compliance
     // the code does not have.
     for (const v of report?.structural?.violations ?? []) {

@@ -16,6 +16,8 @@ export function useModelHealth(
   busy: boolean,
 ): { report: ModelHealthReport | null; refresh: () => void } {
   const [report, setReport] = useState<ModelHealthReport | null>(null);
+  // Serialized last report: an unchanged refresh must not re-render the app.
+  const lastJson = useRef<string | null>(null);
   const inFlight = useRef(false);
   // A refresh issued mid-fetch used to be DROPPED — the caller had a reason
   // (a verdict just changed what the anchors mean), so queue one trailing
@@ -30,7 +32,12 @@ export function useModelHealth(
     }
     inFlight.current = true;
     invoke<ModelHealthReport>("get_model_health", { cwd: projectPath })
-      .then((r) => setReport(r))
+      .then((r) => {
+        const json = JSON.stringify(r);
+        if (json === lastJson.current) return;
+        lastJson.current = json;
+        setReport(r);
+      })
       .catch(() => {})
       .finally(() => {
         inFlight.current = false;

@@ -49,22 +49,6 @@ pub struct Responsibility {
     pub concern: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vagrant: Option<bool>,
-    /// Why a claim is vagrant when it did NOT come from code: `"amendment"` (a
-    /// signed-off claim the agent reworded or moved after sign-off) or
-    /// `"addition"` (a claim the agent added after sign-off). Set by the fold
-    /// (`mark_implemented`) when it refuses to commit a post-sign-off change;
-    /// absent on code-discovered vagrants. Cleared with `vagrant` by the
-    /// developer's verdict. Never agent-authored, so hidden from write schemas.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub vagrant_origin: Option<String>,
-    /// The statement the developer signed off on, kept beside an amendment so
-    /// a reject can restore it and the review shows approved vs amended text.
-    /// `None` on additions (nothing was approved) and on code-discovered
-    /// vagrants.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub approved_statement: Option<String>,
     /// Drift observation: the semantic check judged that the code no longer
     /// discharges this claim. Like `vagrant`, a flag awaiting a human/agent
     /// verdict (re-implement, reword, or drop) — the status itself is the
@@ -420,6 +404,11 @@ pub struct ScryModel {
     /// like `changes`; kept honest by [`changes::gc`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub change_map: BTreeMap<String, String>,
+    /// Claim id → the agent's progress note on a planned claim it has not
+    /// folded: what is built, what is left, what it waits on. Plan-layer only,
+    /// like `changes`; a note dies when its claim stops being pending.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub notes: BTreeMap<String, String>,
 }
 
 impl ScryModel {
@@ -435,6 +424,7 @@ impl ScryModel {
             concerns: Vec::new(),
             changes: Vec::new(),
             change_map: BTreeMap::new(),
+            notes: BTreeMap::new(),
         }
     }
 }
@@ -596,14 +586,11 @@ pub struct ChangeMeta {
     pub rationale: String,
     /// Unix seconds.
     pub created_at: u64,
-    /// The developer's sign-off, when given: a snapshot of every entry tagged
-    /// to the change at that moment. Anything the AGENT changes about the plan
-    /// afterwards is classified against it ([`classify_against_signoff`]) —
-    /// an amendment or addition is a proposal awaiting the developer's
-    /// verdict, never intent that folds silently. `None` = unsigned (today's
-    /// serial behaviour: every plan write folds as intent).
+    /// The agent session this change belongs to: a session's plan writes land
+    /// in its one change, opened implicitly on the first write. `None` for a
+    /// change opened by hand (the app) or before changes were per-session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub signed_off: Option<SignOff>,
+    pub session: Option<String>,
 }
 
 /// One entry in the model's concern registry: the single place a concern is
@@ -625,30 +612,3 @@ pub struct ConcernDef {
     pub icon: Option<String>,
 }
 
-/// One sign-off snapshot: when it was stamped, and the content of each tagged
-/// entry as it stood.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SignOff {
-    /// Unix seconds.
-    pub at: u64,
-    /// Element key ([`element_key`]) → the entry's signed content.
-    #[serde(default)]
-    pub entries: BTreeMap<String, SignedEntry>,
-}
-
-/// What a sign-off remembered about one entry.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SignedEntry {
-    /// [`entry_hash`] of the entry's truth-bearing fields at sign-off.
-    pub hash: String,
-    /// For a responsibility: the approved statement, so a rejected amendment
-    /// can be restored verbatim and a review shows approved vs amended text.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub statement: Option<String>,
-    /// For a responsibility: the host it sat on at sign-off (a move is an
-    /// amendment too).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host: Option<String>,
-}

@@ -78,37 +78,14 @@ pub(crate) struct QueryModelRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct GetPendingRequest {
     pub project: Option<String>,
-    /// A change id, or "unfiled", to filter the queue to one task.
+    /// A change id or "unfiled".
     pub change: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct OpenChangeRequest {
-    pub project: Option<String>,
-    /// Open a NEW change: the task in one sentence, as the dev put it.
-    pub rationale: Option<String>,
-    /// Resume an EXISTING open change by id instead.
-    pub change_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct SignOffRequest {
-    pub project: Option<String>,
-    /// The change to sign off; defaults to the session's current one.
-    pub change_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct CloseChangeRequest {
-    pub project: Option<String>,
-    /// The EMPTY open change to close; refused while it has tagged entries.
-    pub change_id: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RefileRequest {
     pub project: Option<String>,
-    /// Bare ids of pending work to MOVE: node/group (carrier + everything under it), responsibility/link, a change id, or "unfiled".
+    /// Pending work to move: node/group (with all under it), responsibility/link, a change id, or "unfiled".
     pub ids: Vec<String>,
     /// Destination: a change id or "unfiled"; defaults to the session's change.
     pub to: Option<String>,
@@ -145,6 +122,12 @@ pub(crate) struct ReconcileDriftRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ResolveDriftRequest {
+    pub project: Option<String>,
+    pub verdicts: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct IngestTestReportRequest {
     pub project: Option<String>,
     /// The JUnit XML report file, absolute or project-relative.
@@ -154,6 +137,9 @@ pub(crate) struct IngestTestReportRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct GetTestRadiusRequest {
     pub project: Option<String>,
+    /// Set the test command once: {names} {files} {report}.
+    #[serde(default)]
+    pub command: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -195,7 +181,7 @@ pub(crate) struct MarkImplementedRequest {
     pub anchors: Option<Vec<SourceMapEntry>>,
     /// Attach tests to the folded claims in the same call; same shape, `pattern` = test file, `symbol` = test name.
     pub tests: Option<Vec<SourceMapEntry>>,
-    /// Fold an ENTIRE change by id, every entry in dependency order; standalone, not with node_id.
+    /// Fold a whole change by id, in dependency order; not with node_id.
     pub change: Option<String>,
 }
 
@@ -796,4 +782,42 @@ pub(crate) struct FlagDriftRequest {
     /// Nodes whose backing code is entirely gone.
     #[serde(default, alias = "staleNodes")]
     pub stale_nodes: Vec<StaleNode>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct FileAsksRequest {
+    pub project: Option<String>,
+    /// Prompt id ("p3"); default the oldest unfiled one.
+    pub prompt: Option<String>,
+    pub asks: Vec<AskItem>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct AskItem {
+    pub text: String,
+    /// "build" (default) or "answer".
+    pub kind: Option<String>,
+    /// Path the feature is ported from.
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ResolveAskRequest {
+    pub project: Option<String>,
+    pub id: String,
+    pub claims: Option<Vec<String>>,
+    pub answered: Option<bool>,
+    /// One-line reason, shown to the user.
+    pub descoped: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct NoteClaimsRequest {
+    pub project: Option<String>,
+    pub notes: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct GetAsksRequest {
+    pub project: Option<String>,
 }

@@ -13,7 +13,6 @@ import type { Selected } from "../../src/pages/node/NodePage";
 import { paymentsModel, committedModel, healthReport } from "../fixtures";
 import { WorkspaceShell, IDLE_AGENT, IDLE_BUILD, type WorkspaceState } from "./Workspace";
 
-const EMPTY: ReadonlySet<string> = new Set();
 
 /** Parent chain of `id`, so selecting a node reveals it in the tree. */
 function ancestors(id: string): string[] {
@@ -35,8 +34,6 @@ const INITIAL: WorkspaceState = {
   expanded: new Set(["aperture"]),
   diagramFocus: "aperture",
   driftScopes: [],
-  newNodeIds: EMPTY,
-  newRespIds: EMPTY,
   health: healthReport,
   agent: IDLE_AGENT,
   build: IDLE_BUILD,

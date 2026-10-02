@@ -19,8 +19,8 @@ import { ANCHOR_CALM } from "../../features/markup/markup";
 export { WordDiffText } from "../../shared/ui/pagekit";
 export type { ChangeKind } from "../../features/change-marks/changeMarks";
 
-/** The glyph each change category shows. `!` (stale), `?` (vagrant) and `≈`
- *  (amended after sign-off) are drift markers; the rest are plan changes. */
+/** The glyph each change category shows. `!` (stale) and `?` (vagrant) are
+ *  drift markers; the rest are plan changes. */
 const KIND_GLYPH: Record<ChangeKind, string> = {
   add: "+",
   modified: "~",
@@ -28,7 +28,6 @@ const KIND_GLYPH: Record<ChangeKind, string> = {
   relocate: "→",
   vagrant: "?",
   stale: "!",
-  amendment: "≈",
 };
 
 /** The inverse — a raw glyph back to its category. The durable history log
@@ -40,7 +39,6 @@ const GLYPH_KIND: Record<string, ChangeKind> = {
   "→": "relocate",
   "?": "vagrant",
   "!": "stale",
-  "≈": "amendment",
 };
 
 /** Colour for a raw diff-marker glyph; muted for anything unrecognised. */

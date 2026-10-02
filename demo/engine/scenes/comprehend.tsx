@@ -29,6 +29,9 @@ interface State {
 
 const Wiki = () => (
   <NodePage
+    testVerdicts={{}}
+    probeResults={{}}
+    preview={{ status: "error", url: null, components: null, error: null }}
     model={paymentsModel}
     committed={committedModel}
     selected={{ kind: "node", id: "ledger" }}
@@ -37,7 +40,6 @@ const Wiki = () => (
     editor={undefined}
     onSelectNode={noop}
     onSelectGroup={noop}
-    variationState={null}
     changeLog={[]}
     history={[]}
     driftScopes={[]}
@@ -47,6 +49,7 @@ const Wiki = () => (
 const Map = ({ focusId, selectedId }: { focusId: string | null; selectedId: string | null }) => (
   <DiagramView
     model={paymentsModel}
+    previewable={new Set()}
     planDiff={EMPTY_DIFF}
     committed={null}
     report={healthReport}

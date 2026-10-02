@@ -1,9 +1,8 @@
 use std::sync::Mutex;
 
 use notify::{recommended_watcher, EventKind, RecursiveMode, Watcher};
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 
-use crate::shell::hooks;
 use crate::shell::state::WatcherState;
 
 /// True if the given project has a `.scryer/model.scry` whose version is not
@@ -35,40 +34,7 @@ pub(crate) fn watch_project(
 
     state.project = None;
 
-    // The session-hook endpoint follows the watched project: opening a project
-    // brings it up, switching projects replaces it (the old server's Drop
-    // removes its discovery file, so its hooks fall silent).
     let scryer_core::ModelRef::ProjectLocal(ref project_path) = model_ref;
-    {
-        let hook_state = app.state::<hooks::HookState>();
-        let mut hook = hook_state.0.lock().unwrap();
-        let already = hook
-            .as_ref()
-            .is_some_and(|s| s.project() == project_path.as_path());
-        if !already {
-            *hook = None; // drop the old endpoint before starting the new one
-            // Touches stream to the canvas as "hook-touch" events — the live
-            // "a session is working here" signal.
-            let touch_handle = app.clone();
-            let on_touch = move |t: &hooks::Touch| {
-                let _ = touch_handle.emit("hook-touch", t);
-            };
-            // A close gate that fires is review work: the inbox shows its
-            // needs-reconcile items live as "hook-close-gate" events.
-            let gate_handle = app.clone();
-            let on_close_gate = move |payload: &serde_json::Value| {
-                let _ = gate_handle.emit("hook-close-gate", payload);
-            };
-            match hooks::start(project_path, on_touch, on_close_gate) {
-                Ok(server) => {
-                    eprintln!("[hooks] session endpoint on 127.0.0.1:{}", server.port);
-                    *hook = Some(server);
-                }
-                Err(e) => eprintln!("[hooks] endpoint not started: {e}"),
-            }
-        }
-    }
-
     let _ = std::fs::create_dir_all(&target_dir);
     let handle = app.clone();
     let ref_string = ref_str.clone();
@@ -88,6 +54,16 @@ pub(crate) fn watch_project(
                 return;
             }
             for path in &event.paths {
+                // Session logs are appended by the agent's hooks and MCP server;
+                // the session view re-reads the one that changed.
+                if path.parent().is_some_and(|p| p.ends_with("sessions"))
+                    && path.extension().is_some_and(|e| e == "jsonl")
+                {
+                    if let Some(id) = path.file_stem().and_then(|s| s.to_str()) {
+                        let _ = handle.emit("session-changed", id.to_string());
+                    }
+                    continue;
+                }
                 // The test-status cache lives beside the model files; an agent
                 // ingesting a report mid-session must light the verdict badges
                 // without waiting for the session to end.
@@ -118,6 +94,10 @@ pub(crate) fn watch_project(
     watcher
         .watch(&target_dir, RecursiveMode::NonRecursive)
         .map_err(|e| e.to_string())?;
+    // Session logs live one level down; create the directory so a session
+    // that starts after the project opens is still seen.
+    let _ = scryer_core::session::ensure_sessions_dir(&model_ref);
+    let _ = watcher.watch(&model_ref.sessions_dir(), RecursiveMode::NonRecursive);
     // Report directories are best-effort: a vanished one must not break the
     // model watch that everything else depends on.
     for dir in crate::shell::test_reports::report_dirs(project_path) {
@@ -129,7 +109,7 @@ pub(crate) fn watch_project(
 }
 
 #[tauri::command]
-pub(crate) fn read_model(ref_str: String) -> Result<String, String> {
+pub(crate) async fn read_model(ref_str: String) -> Result<String, String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
     scryer_core::read_model_raw_at(&model_ref)
 }
@@ -138,7 +118,7 @@ pub(crate) fn read_model(ref_str: String) -> Result<String, String> {
 /// the committed model's SEEDED bytes when no plan has diverged yet (planned ==
 /// model, anchors cleared), so a fresh project opens with an empty plan.
 #[tauri::command]
-pub(crate) fn read_planned(ref_str: String) -> Result<String, String> {
+pub(crate) async fn read_planned(ref_str: String) -> Result<String, String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
     // Heal legacy shadow drafts before the canvas loads one: whatever the
     // frontend loads it echoes back on save, so a pre-seeding draft would keep
@@ -155,54 +135,46 @@ pub(crate) fn read_planned(ref_str: String) -> Result<String, String> {
 pub(crate) fn write_planned(ref_str: String, data: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
     let _lock = scryer_core::lock_model(&model_ref)?;
-    // A canvas save is the DEVELOPER editing the plan — intent by definition.
-    // Re-stamp every signed-off change's snapshot so their edits never read
-    // as the agent's amendments at the next fold. Only a plan that carries a
-    // sign-off is re-serialized; otherwise the echo lands verbatim as before.
-    if let Ok(mut plan) = serde_json::from_str::<scryer_core::ScryModel>(&data) {
-        if plan.changes.iter().any(|c| c.signed_off.is_some()) {
-            scryer_core::changes::restamp_signoffs(&mut plan, scryer_core::drift::now_secs());
-            let json = serde_json::to_string_pretty(&plan).map_err(|e| e.to_string())?;
-            return scryer_core::write_planned_raw_at(&model_ref, &json);
-        }
-    }
-    scryer_core::write_planned_raw_at(&model_ref, &data)
+    scryer_core::write_hand_edited_plan_at(&model_ref, &data)
 }
 
-/// SIGN OFF a change from the canvas: snapshot its tagged entries as the
-/// developer-approved intent (see `scryer_core::changes::sign_off`). From here
-/// on, a claim the agent rewords or adds under the change lands as vagrant for
-/// the developer's verdict at the fold instead of folding. Returns how many
-/// entries the snapshot captured.
+/// One agent session's log, newest first, for the session list.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionSummary {
+    session: String,
+    updated_at: u64,
+    /// The session's first prompt, for a title.
+    first_prompt: Option<String>,
+}
+
+/// Every agent session with a log in this project, most recent first.
 #[tauri::command]
-pub(crate) fn sign_off_change(ref_str: String, change_id: String) -> Result<usize, String> {
+pub(crate) fn list_sessions(ref_str: String) -> Result<Vec<SessionSummary>, String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
-    let _lock = scryer_core::lock_model(&model_ref)?;
-    let mut plan = scryer_core::read_planned_seeded_at(&model_ref)?;
-    let n = scryer_core::changes::sign_off(&mut plan, &change_id, scryer_core::drift::now_secs())?;
-    scryer_core::write_planned_at(&model_ref, &plan)?;
-    Ok(n)
+    Ok(scryer_core::session::list_sessions(&model_ref)
+        .into_iter()
+        .map(|(session, updated_at)| SessionSummary {
+            first_prompt: scryer_core::session::first_prompt(&model_ref, &session),
+            session,
+            updated_at,
+        })
+        .collect())
 }
 
-/// The fold-refusal ledger: every claim `mark_implemented` last declined to
-/// fold, with the missing fact it was refused for. Read by the inbox; a
-/// refusal clears when the same claim folds or leaves the plan.
+/// One session as the user reviews it: prompts, asks and where each stands,
+/// files touched with the claims they reached, and edits no ask accounts for.
 #[tauri::command]
-pub(crate) fn read_fold_refusals(
+pub(crate) fn read_session(
     ref_str: String,
-) -> Result<Vec<scryer_core::refusals::Refusal>, String> {
+    session: String,
+) -> Result<scryer_core::session::SessionView, String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
-    Ok(scryer_core::refusals::read_refusals(&model_ref))
-}
-
-/// Close an EMPTY open change (a stranded ledger) from the canvas. Goes through
-/// core rather than the raw plan echo so the "abandoned" history record lands;
-/// the plan write fires the watcher, which refreshes every surface.
-#[tauri::command]
-pub(crate) fn close_change(ref_str: String, change_id: String) -> Result<(), String> {
-    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
-    let _lock = scryer_core::lock_model(&model_ref)?;
-    scryer_core::changes::close_change(&model_ref, &change_id).map(|_| ())
+    Ok(scryer_core::session::session_view(&model_ref, &session, |claims| {
+        scryer_extract::test_status::claim_evidence(&model_ref, claims)
+            .map(|m| m.into_iter().map(|(k, e)| (k, e.verified())).collect())
+            .unwrap_or_default()
+    }))
 }
 
 /// Read the durable committed-model history log (`.scryer/history.jsonl`),
@@ -210,7 +182,7 @@ pub(crate) fn close_change(ref_str: String, change_id: String) -> Result<(), Str
 /// no history yet. The frontend re-reads this whenever the model changes (every
 /// event-producing agent operation also writes a `.scry` file the watcher sees).
 #[tauri::command]
-pub(crate) fn read_history(ref_str: String) -> Result<String, String> {
+pub(crate) async fn read_history(ref_str: String) -> Result<String, String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
     let events = scryer_core::history::read_history(&model_ref);
     serde_json::to_string(&events).map_err(|e| e.to_string())
@@ -246,7 +218,6 @@ pub(crate) fn set_subagent_settings(settings: scryer_core::SubagentSettings) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use scryer_core::{ModelRef, ScryModel};
 
     fn committed_project() -> (tempfile::TempDir, ModelRef, String) {
@@ -282,7 +253,7 @@ mod tests {
         scryer_core::write_planned_raw_at(&r, &serde_json::to_string(&committed).unwrap())
             .unwrap();
 
-        let raw = super::read_planned(ref_str).unwrap();
+        let raw = tauri::async_runtime::block_on(super::read_planned(ref_str)).unwrap();
         let plan: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert!(
             plan["sourceMap"].as_object().is_none_or(|m| m.is_empty()),
@@ -301,31 +272,8 @@ mod tests {
         plan.source_map.clear();
         super::write_planned(ref_str.clone(), serde_json::to_string(&plan).unwrap()).unwrap();
 
-        let read_back = super::read_planned(ref_str).unwrap();
+        let read_back = tauri::async_runtime::block_on(super::read_planned(ref_str)).unwrap();
         assert!(read_back.contains("does the revised thing"));
-    }
-
-    /// Closing an empty open change from the canvas records it as an
-    /// abandoned history entry — which the History tab then reads back.
-    #[test]
-    fn closing_an_empty_change_records_an_abandoned_history_entry() {
-        let (_dir, r, ref_str) = committed_project();
-        let mut plan = scryer_core::read_model_at(&r).unwrap();
-        plan.source_map.clear();
-        let stranded = scryer_core::changes::open_change(&mut plan, "never started", 100);
-        scryer_core::write_planned_at(&r, &plan).unwrap();
-
-        super::close_change(ref_str.clone(), stranded).unwrap();
-
-        let raw = super::read_history(ref_str).unwrap();
-        let events: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        let abandoned = events
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|e| e["driver"] == "abandoned")
-            .expect("the close lands on the durable log");
-        assert_eq!(abandoned["rows"][0]["text"], "never started");
     }
 
     /// A new project gets a blank model at `.scryer/model.scry`; a bogus path
@@ -358,64 +306,4 @@ mod tests {
         assert!(!super::is_legacy_model(empty.path().to_string_lossy().to_string()));
     }
 
-    /// Sign-off from the canvas snapshots the change; a later canvas save
-    /// re-stamps it so the developer's own edit never reads as an amendment;
-    /// the refusal ledger reads back through the command.
-    #[test]
-    fn canvas_sign_off_and_saves_keep_the_developer_as_the_author_of_intent() {
-        let dir = tempfile::tempdir().unwrap();
-        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let mut m = ScryModel::new();
-        m.nodes.push(
-            serde_json::from_value(serde_json::json!({ "id": "n1", "kind": "symbol", "name": "verify" }))
-                .unwrap(),
-        );
-        scryer_core::write_model_at(&r, &m).unwrap();
-        scryer_core::ensure_planned_at(&r).unwrap();
-        let mut planned = scryer_core::read_planned_at(&r).unwrap();
-        planned.nodes[0].responsibilities.push(
-            serde_json::from_value(serde_json::json!({ "id": "r1", "statement": "Verifies tokens" })).unwrap(),
-        );
-        let cid = scryer_core::changes::open_change(&mut planned, "verify", 1);
-        scryer_core::changes::tag(&mut planned, &["resp:r1".to_string()], &cid);
-        scryer_core::write_planned_at(&r, &planned).unwrap();
-        let ref_str = r.to_ref_string();
-
-        assert_eq!(sign_off_change(ref_str.clone(), cid.clone()).unwrap(), 1);
-        let planned = scryer_core::read_planned_at(&r).unwrap();
-        assert!(planned.changes[0].signed_off.is_some());
-
-        // The developer rewords on the canvas: the echo carries the old snapshot,
-        // and the save re-stamps it to the new text.
-        let mut echo = planned.clone();
-        echo.nodes[0].responsibilities[0].statement = "Verifies tokens, the dev's way".into();
-        write_planned(ref_str.clone(), serde_json::to_string(&echo).unwrap()).unwrap();
-        let planned = scryer_core::read_planned_at(&r).unwrap();
-        assert!(
-            scryer_core::changes::classify_against_signoff(&planned, &planned.changes[0]).is_empty(),
-            "a canvas edit is intent, never an amendment"
-        );
-        assert_eq!(
-            planned.changes[0].signed_off.as_ref().unwrap().entries["resp:r1"].statement.as_deref(),
-            Some("Verifies tokens, the dev's way")
-        );
-
-        assert!(read_fold_refusals(ref_str.clone()).unwrap().is_empty());
-        scryer_core::refusals::update_refusals(
-            &r,
-            &[scryer_core::refusals::Refusal {
-                resp_id: "r1".into(),
-                host_id: "n1".into(),
-                kind: "no-test".into(),
-                reason: "no test attached".into(),
-                run: vec![],
-                at: 5,
-            }],
-            &[],
-        )
-        .unwrap();
-        let refusals = read_fold_refusals(ref_str).unwrap();
-        assert_eq!(refusals.len(), 1);
-        assert_eq!(refusals[0].kind, "no-test");
-    }
 }

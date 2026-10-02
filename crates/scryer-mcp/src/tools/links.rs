@@ -123,7 +123,7 @@ impl ScryerServer {
         let tag_warnings = match write_planned_tagged(
             &model_ref,
             &mut model,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id(&model_ref).as_deref(),
         ) {
             Ok(w) => w,
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
@@ -197,7 +197,7 @@ impl ScryerServer {
         let tag_warnings = match write_planned_tagged(
             &model_ref,
             &mut model,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id(&model_ref).as_deref(),
         ) {
             Ok(w) => w,
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
@@ -241,7 +241,7 @@ impl ScryerServer {
         let tag_warnings = match write_planned_tagged(
             &model_ref,
             &mut model,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id(&model_ref).as_deref(),
         ) {
             Ok(w) => w,
             Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
@@ -311,7 +311,7 @@ mod tests {
         };
         m.nodes.extend([sys, svc, comp("dom", "Orders", "domain"), comp("app", "Checkout", "application")]);
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         let project = dir.path().to_string_lossy().to_string();
 
         let r = server
@@ -361,7 +361,7 @@ mod tests {
         m.nodes.push(node("a", "A"));
         m.nodes.push(node("b", "B"));
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         let project = dir.path().to_string_lossy().to_string();
 
         let r = server
@@ -422,7 +422,7 @@ mod tests {
         m.nodes.push(node("a", "A"));
         m.nodes.push(node("b", "B"));
         scryer_core::write_planned_at(&model_ref, &m).unwrap();
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         let project = dir.path().to_string_lossy().to_string();
         let call = |label: &str| {
             server

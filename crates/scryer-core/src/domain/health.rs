@@ -752,8 +752,6 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: Some(100),
-            vagrant_origin: None,
-            approved_statement: None,
         }
     }
 

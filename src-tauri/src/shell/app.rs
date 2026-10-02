@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use tauri::Manager;
 
 use crate::shell::state::{AcpState, PreviewState, WatcherState};
-use crate::shell::{build, hooks, mcp_setup, observability, preview, project, source_view, verdicts};
+use crate::shell::{build, mcp_setup, observability, preview, project, source_view, verdicts};
 
 /// macOS GUI apps launched via Spotlight, Dock, or Finder inherit a minimal
 /// PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) that excludes user-installed tools.
@@ -55,7 +55,6 @@ pub fn run() {
         .setup(move |app| {
             app.manage(Mutex::new(WatcherState { project: None }));
             app.manage(PreviewState(tokio::sync::Mutex::new(None)));
-            app.manage(hooks::HookState(Mutex::new(None)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -64,9 +63,8 @@ pub fn run() {
             project::read_model,
             project::read_planned,
             project::write_planned,
-            project::close_change,
-            project::sign_off_change,
-            project::read_fold_refusals,
+            project::list_sessions,
+            project::read_session,
             project::read_history,
             source_view::open_in_editor,
             source_view::read_source_span,
@@ -84,8 +82,6 @@ pub fn run() {
             observability::get_model_health,
             observability::get_test_statuses,
             observability::get_probe_statuses,
-            observability::reconcile_drift,
-            observability::reconcile_drift_node,
             verdicts::adopt_responsibility,
             verdicts::reject_responsibility,
             verdicts::drop_responsibility,
@@ -101,13 +97,5 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|app, event| {
-            // Drop the hook endpoint on exit so its discovery file is removed
-            // and session hooks fall silent the moment the app closes.
-            if let tauri::RunEvent::Exit = event {
-                if let Some(state) = app.try_state::<hooks::HookState>() {
-                    *state.0.lock().unwrap() = None;
-                }
-            }
-        });
+        .run(|_, _| {});
 }

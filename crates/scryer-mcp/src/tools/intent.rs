@@ -78,8 +78,6 @@ impl RespMinter {
                     stale_proposal: None,
                     directives: Vec::new(),
                     last_touched_at: None,
-                    vagrant_origin: None,
-                    approved_statement: None,
                 }
             })
             .collect()
@@ -105,8 +103,6 @@ impl RespMinter {
                     stale_proposal: None,
                     directives: Vec::new(),
                     last_touched_at: None,
-                    vagrant_origin: None,
-                    approved_statement: None,
                 };
                 (resp, i.line(), i.end_line())
             })
@@ -335,7 +331,7 @@ impl ScryerServer {
             &prior,
             &minted,
             &reused,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id(&model_ref).as_deref(),
             _lock,
         )
     }
@@ -385,7 +381,7 @@ impl ScryerServer {
             &prior,
             &minted,
             &reused,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id(&model_ref).as_deref(),
             _lock,
         )
     }
@@ -475,7 +471,7 @@ impl ScryerServer {
             &prior,
             &minted,
             &reused,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id(&model_ref).as_deref(),
             _lock,
         )
     }
@@ -538,7 +534,7 @@ impl ScryerServer {
             &prior,
             &minted,
             &reused,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id(&model_ref).as_deref(),
             _lock,
         )
     }
@@ -621,7 +617,7 @@ impl ScryerServer {
         let tag_warnings = match write_planned_tagged(
             &model_ref,
             &mut model,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id(&model_ref).as_deref(),
         ) {
             Ok(w) => w,
             Err(e) => return Ok(err(e)),
@@ -741,7 +737,7 @@ impl ScryerServer {
             &prior,
             &minted,
             &reused,
-            self.session_change(&model_ref).as_deref(),
+            self.session_id(&model_ref).as_deref(),
             _lock,
         )
     }
@@ -1246,6 +1242,88 @@ impl ScryerServer {
         }
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
+
+    #[tool(
+        description = "Decide drift findings yourself. Undescribed: `adopt` | `reject` (removal \
+         to-do). Stale: `reword` (`statement`, default drift's proposal) | `rebuild` (to-do) | \
+         `drop`. Target a claim id, a node id (subtree) or `node.label` (field).\n\
+         Rules: drift-directions"
+    )]
+    fn resolve_drift(
+        &self,
+        Parameters(req): Parameters<ResolveDriftRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        use scryer_core::drift::verdicts::{apply, Action};
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
+        let mut lines = Vec::new();
+        let mut failed = 0;
+        for v in &req.verdicts {
+            let (head, statement) = match v.split_once(':') {
+                Some((h, st)) => (h.trim(), Some(st.trim())),
+                None => (v.trim(), None),
+            };
+            let (verb, target) = head.split_once(char::is_whitespace).unwrap_or((head, ""));
+            let target = target.trim();
+            let action = match verb {
+                "adopt" => Action::Adopt,
+                "reject" => Action::Reject,
+                "reword" => Action::Reword,
+                "rebuild" => Action::Rebuild,
+                "drop" => Action::Drop,
+                other => {
+                    failed += 1;
+                    lines.push(format!("{v}: unknown action '{other}' — adopt|reject|reword|rebuild|drop"));
+                    continue;
+                }
+            };
+            let planned = scryer_core::read_planned_seeded_at(&model_ref).unwrap_or_default();
+            let (resp, node, label) = drift_target(&planned, target);
+            match apply(&model_ref, &action, resp, node, label, statement) {
+                Ok(()) => lines.push(format!("{target}: {verb}")),
+                Err(e) => {
+                    failed += 1;
+                    lines.push(format!("{target}: {e}"));
+                }
+            }
+        }
+        drop(_lock);
+        let mut msg = lines.join("\n");
+        if let Some(h) = status_header(&model_ref) {
+            msg.push_str(&format!("\n{h}"));
+        }
+        if failed == req.verdicts.len() && failed > 0 {
+            return Ok(err(msg));
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
+    }
+}
+
+/// What a drift verdict's target names in `planned`: a claim id, a node id, or
+/// `node.label` for a data field (split at the first `.` that leaves a node id).
+fn drift_target<'t>(planned: &ScryModel, target: &'t str) -> (Option<&'t str>, Option<&'t str>, Option<&'t str>) {
+    let is_resp = planned
+        .nodes
+        .iter()
+        .flat_map(|n| n.responsibilities.iter())
+        .chain(planned.groups.iter().flat_map(|g| g.responsibilities.iter()))
+        .any(|r| r.id == target);
+    if is_resp {
+        return (Some(target), None, None);
+    }
+    if planned.nodes.iter().any(|n| n.id == target) {
+        return (None, Some(target), None);
+    }
+    for (i, _) in target.match_indices('.') {
+        let (node, label) = (&target[..i], &target[i + 1..]);
+        if planned.nodes.iter().any(|n| n.id == node) {
+            return (None, Some(node), Some(label));
+        }
+    }
+    (Some(target), None, None)
 }
 
 #[cfg(test)]
@@ -1265,82 +1343,50 @@ mod tests {
             None,
         ));
         scryer_core::write_model_at(&model_ref, &model).unwrap();
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         (server, dir, "node-1".to_string())
     }
 
-    /// Every plan write belongs to a change: with none open the write is
-    /// refused, names the call that opens one, and leaves the plan untouched.
+    /// Every plan write lands in its session's one change, opened by the first
+    /// write — never a step the agent takes. A second write reuses it; another
+    /// session gets its own.
     #[test]
-    fn plan_writes_are_refused_without_an_open_change() {
-        let dir = tempfile::tempdir().unwrap();
-        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let mut model = ScryModel::new();
-        model.nodes.push(blank_node("node-1".into(), Kind::System, "Acme".into(), None));
-        scryer_core::write_model_at(&model_ref, &model).unwrap();
+    fn the_first_plan_write_opens_the_sessions_change() {
+        let (server, dir, sys) = temp_project();
         let project = Some(dir.path().to_string_lossy().to_string());
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let add = |server: &ScryerServer, name: &str| {
+            let r = server
+                .add_container(Parameters(AddContainerRequest {
+                    project: project.clone(),
+                    items: vec![ContainerItem {
+                        parent_id: sys.clone(),
+                        name: name.into(),
+                        description: None,
+                        technology: None,
+                        style: None,
+                        external: false,
+                        boundary_dir: None,
+                        responsibilities: vec![],
+                    }],
+                }))
+                .unwrap();
+            assert_ne!(r.is_error, Some(true), "{:?}", r.content);
+        };
 
-        let server = ScryerServer::new();
-        let r = server
-            .add_container(Parameters(AddContainerRequest {
-                project: project.clone(),
-                items: vec![ContainerItem {
-                    parent_id: "node-1".into(),
-                    name: "API".into(),
-                    description: None,
-                    technology: None,
-                    style: None,
-                    external: false,
-                    boundary_dir: None,
-                    responsibilities: vec![],
-                }],
-            }))
-            .unwrap();
-        assert_eq!(r.is_error, Some(true));
-        let text = r.content[0].as_text().unwrap().text.clone();
-        assert!(text.contains("REFUSED: no change is open"), "{text}");
-        assert!(text.contains("open_change {rationale:"), "{text}");
+        add(&server, "API");
+        add(&server, "Worker");
         let plan = scryer_core::read_planned_at(&model_ref).unwrap();
-        assert!(!plan.nodes.iter().any(|n| n.name == "API"), "nothing was written");
+        assert_eq!(plan.changes.len(), 1, "one change per session");
+        let cid = &plan.changes[0].id;
+        assert_eq!(plan.changes[0].session.as_deref(), Some("test"));
+        assert_eq!(plan.change_map.values().filter(|v| *v == cid).count(), 2);
+        assert_eq!(server.session_change(&model_ref).as_deref(), Some(cid.as_str()));
 
-        // A change that has since closed is no better than none: the session
-        // pointer is stale and the write still needs a live ledger.
-        server.set_session_change(Some((dir.path().to_path_buf(), "chg-gone".into())));
-        let r = server
-            .add_container(Parameters(AddContainerRequest {
-                project: project.clone(),
-                items: vec![ContainerItem {
-                    parent_id: "node-1".into(),
-                    name: "API".into(),
-                    description: None,
-                    technology: None,
-                    style: None,
-                    external: false,
-                    boundary_dir: None,
-                    responsibilities: vec![],
-                }],
-            }))
-            .unwrap();
-        assert_eq!(r.is_error, Some(true));
-
-        // With one open, the same write lands.
-        let server = ScryerServer::with_change(dir.path());
-        let r = server
-            .add_container(Parameters(AddContainerRequest {
-                project,
-                items: vec![ContainerItem {
-                    parent_id: "node-1".into(),
-                    name: "API".into(),
-                    description: None,
-                    technology: None,
-                    style: None,
-                    external: false,
-                    boundary_dir: None,
-                    responsibilities: vec![],
-                }],
-            }))
-            .unwrap();
-        assert_ne!(r.is_error, Some(true));
+        server.set_session("other");
+        add(&server, "Cron");
+        let plan = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert_eq!(plan.changes.len(), 2, "another session, another change");
     }
 
     fn read_back(dir: &tempfile::TempDir) -> ScryModel {
@@ -1382,8 +1428,6 @@ mod tests {
             stale_proposal: None,
             directives: Vec::new(),
             last_touched_at: None,
-            vagrant_origin: None,
-            approved_statement: None,
         }
     }
 
@@ -1412,7 +1456,7 @@ mod tests {
         plan.nodes.retain(|n| n.id != "node-2");
         scryer_core::write_planned_at(&r, &plan).unwrap();
 
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         let project = dir.path().to_string_lossy().to_string();
         server
             .add_container(Parameters(AddContainerRequest {
@@ -1512,7 +1556,7 @@ mod tests {
         assert!(!r.planned_path().exists(), "precondition: no draft exists yet");
 
         // An authoring write with no prior draft.
-        let server = ScryerServer::with_change(dir.path());
+        let server = ScryerServer::for_session("test");
         let project = dir.path().to_string_lossy().to_string();
         server
             .add_container(Parameters(AddContainerRequest {
@@ -1840,6 +1884,82 @@ mod tests {
         assert_eq!(anchor.symbol.as_deref(), Some("admin_handler"));
         assert_eq!(anchor.line, Some(42));
         assert_eq!(anchor.end_line, Some(58));
+    }
+
+    #[test]
+    fn resolve_drift_settles_findings_without_the_user() {
+        let (server, dir, system_id) = temp_project();
+        let project = dir.path().to_string_lossy().to_string();
+        server
+            .add_container(Parameters(AddContainerRequest {
+                project: Some(project.clone()),
+                items: vec![ContainerItem {
+                    style: Some("core-shell".into()),
+                    parent_id: system_id,
+                    name: "API".into(),
+                    technology: None,
+                    description: None,
+                    external: false,
+                    responsibilities: vec!["serves the public API".into()],
+                    boundary_dir: Some("api".into()),
+                }],
+            }))
+            .unwrap();
+        commit_plan(&dir);
+        let m = read_back(&dir);
+        let container = m.nodes.iter().find(|n| n.kind == Kind::Container).unwrap();
+        let (cid, rid) = (container.id.clone(), container.responsibilities[0].id.clone());
+        server
+            .flag_drift(Parameters(FlagDriftRequest {
+                project: Some(project.clone()),
+                node_id: cid.clone(),
+                new_nodes: vec![],
+                undescribed: vec![UndescribedItem {
+                    statement: "exposes an admin endpoint".into(),
+                    source_file: "api/admin.rs".into(),
+                    symbol: Some("admin_handler".into()),
+                    line: Some(1),
+                    end_line: Some(5),
+                    node_id: None,
+                    node_key: None,
+                }],
+                stale: vec![StaleResponsibility {
+                    responsibility_id: rid.clone(),
+                    reason: "now serves only the internal API".into(),
+                    proposed_statement: Some("serves the internal API".into()),
+                }],
+                stale_nodes: vec![],
+                undescribed_properties: vec![],
+                stale_properties: vec![],
+            }))
+            .unwrap();
+        let r = scryer_core::ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let plan = scryer_core::read_planned_at(&r).unwrap();
+        let vid = plan
+            .nodes
+            .iter()
+            .flat_map(|n| n.responsibilities.iter())
+            .find(|x| x.vagrant == Some(true))
+            .unwrap()
+            .id
+            .clone();
+
+        let res = server
+            .resolve_drift(Parameters(ResolveDriftRequest {
+                project: Some(project),
+                verdicts: vec![format!("adopt {vid}"), format!("reword {rid}"), "shrug x".into()],
+            }))
+            .unwrap();
+        let text = format!("{:?}", res.content);
+        assert!(!res.is_error.unwrap_or(false), "{text}");
+        assert!(text.contains("unknown action 'shrug'"), "{text}");
+
+        let committed = read_back(&dir);
+        let c = committed.nodes.iter().find(|n| n.id == cid).unwrap();
+        assert!(c.responsibilities.iter().any(|x| x.id == vid && x.vagrant.is_none()), "adopted into committed");
+        let reworded = c.responsibilities.iter().find(|x| x.id == rid).unwrap();
+        assert_eq!(reworded.statement, "serves the internal API", "drift's proposal taken");
+        assert_eq!(reworded.stale, None);
     }
 
     #[test]

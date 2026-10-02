@@ -15,36 +15,92 @@ use rmcp::{
 };
 use scryer_core::test_results::TestOutcome;
 use scryer_core::worktree;
+use scryer_core::ModelRef;
 use scryer_extract::test_status::{
-    ingest_report, probe_target, record_probe_result, test_blast_radius, test_statuses,
-    RadiusFile,
+    ingest_report, probe_target, record_probe_result, render_test_command, reports_dir,
+    session_radius, set_test_command, test_command, test_statuses, RadiusTest, SLOW_TEST_MILLIS,
 };
 
-/// Render the blast radius as response lines. Shared so the ingest response
-/// answers "what still needs running" the same way `get_test_radius` does.
-fn radius_lines(radius: &[RadiusFile]) -> String {
-    if radius.is_empty() {
-        return "Radius clear — every test-attached claim holds a current verdict.".into();
+/// How many radius tests a response lists by name; the command carries all.
+const TESTS_SHOWN: usize = 12;
+
+fn test_label(t: &RadiusTest) -> String {
+    match &t.name {
+        Some(n) => format!("{} :: {n}", t.pattern),
+        None => t.pattern.clone(),
     }
-    let mut out = format!(
-        "Blast radius — {} test file(s) whose claims hold missing or stale verdicts:",
-        radius.len()
-    );
-    for f in radius {
-        let stale = if f.stale > 0 {
-            format!(", {} stale", f.stale)
-        } else {
-            String::new()
-        };
+}
+
+/// Render the radius as response lines: the exact command to run, the slow
+/// tests it leaves out, and stale verdicts that are someone else's. Shared so
+/// the ingest response answers "what still needs running" the same way
+/// `get_test_radius` does.
+fn radius_lines(server: &ScryerServer, model_ref: &ModelRef) -> String {
+    let touched = server
+        .session_id(model_ref)
+        .filter(|s| !scryer_core::session::read_session(model_ref, s).is_empty())
+        .map(|s| scryer_core::session::session_log(model_ref, &s).touched);
+    let radius = match session_radius(model_ref, touched.as_deref()) {
+        Ok(r) => r,
+        Err(e) => return format!("(radius unavailable: {e})"),
+    };
+    let whose = if radius.scoped { "this session's" } else { "the project's" };
+    let mut out = if radius.files.is_empty() {
+        format!("Radius clear — every test-attached claim in {whose} work holds a current verdict.")
+    } else {
+        let claims: usize = radius.files.iter().map(|f| f.claims.len()).sum();
+        let stale: usize = radius.files.iter().map(|f| f.stale).sum();
+        let mut out = format!(
+            "Radius ({whose} work) — {claims} claim(s) hold missing or stale verdicts ({stale} stale), \
+             {} test(s) in {} file(s).",
+            radius.run.len(),
+            radius.files.len()
+        );
+        if !radius.run.is_empty() {
+            match test_command(model_ref) {
+                Some(template) => {
+                    let dir = reports_dir(model_ref).unwrap_or_else(|_| ".scryer/reports".into());
+                    let report = format!("{dir}/radius.xml");
+                    out.push_str(&format!(
+                        "\nRun exactly:\n  {}\nthen ingest_test_report each report it writes ({report}).",
+                        render_test_command(&template, &radius.run, &report, &dir)
+                    ));
+                }
+                None => out.push_str(
+                    "\nNo test command set — set it once: get_test_radius {command}, e.g. \
+                     \"npx vitest run {files} -t '{names:|}' --reporter=junit --outputFile={report}\". \
+                     Until then run these with a JUnit reporter and ingest_test_report:",
+                ),
+            }
+            for t in radius.run.iter().take(TESTS_SHOWN) {
+                out.push_str(&format!("\n  {}", test_label(t)));
+            }
+            if radius.run.len() > TESTS_SHOWN {
+                out.push_str(&format!("\n  … {} more", radius.run.len() - TESTS_SHOWN));
+            }
+        }
+        out
+    };
+    if !radius.slow.is_empty() {
         out.push_str(&format!(
-            "\n  {} — {} claim(s){stale}",
-            f.pattern,
-            f.claims.len()
+            "\nSlow, left out (>{}s, no claim of theirs touched this session):",
+            SLOW_TEST_MILLIS / 1000
+        ));
+        for t in radius.slow.iter().take(TESTS_SHOWN) {
+            let secs = t.millis.unwrap_or(0) as f64 / 1000.0;
+            out.push_str(&format!("\n  {} (~{secs:.0}s)", test_label(t)));
+        }
+    }
+    if !radius.not_yours.is_empty() {
+        let shown: Vec<&str> = radius.not_yours.iter().take(TESTS_SHOWN).map(String::as_str).collect();
+        out.push_str(&format!(
+            "\nNot yours — {} stale verdict(s) this session didn't cause: {}{}. Leave them: a full \
+             run is the user's or CI's.",
+            radius.not_yours.len(),
+            shown.join(", "),
+            if radius.not_yours.len() > TESTS_SHOWN { ", …" } else { "" }
         ));
     }
-    out.push_str(
-        "\nRun exactly these files with the runner's JUnit reporter on, then ingest_test_report each report file.",
-    );
     out
 }
 
@@ -138,10 +194,7 @@ impl ScryerServer {
                 summary.report.unseen.len()
             ));
         }
-        match test_blast_radius(&model_ref) {
-            Ok(radius) => msg.push_str(&format!("\n{}", radius_lines(&radius))),
-            Err(e) => msg.push_str(&format!("\n(blast radius unavailable: {e})")),
-        }
+        msg.push_str(&format!("\n{}", radius_lines(self, &model_ref)));
         if let Some(h) = status_header(&model_ref) {
             msg.push_str(&format!("\n{h}"));
         }
@@ -149,10 +202,10 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "Which test files actually NEED running: those attached to claims whose verdict is \
-         missing or stale. Run exactly those with the JUnit reporter on, then ingest_test_report \
-         each result file. Empty means every attached claim holds a current verdict; claims with \
-         no test never appear (that is health's `untested`). Also summarizes current verdicts.\n\
+        description = "What to run: the tests behind THIS session's claims whose verdict is missing or \
+         stale, as the exact command (set once via `command`). Slow tests whose claims you didn't \
+         touch are left out and named; stale verdicts you didn't cause are listed as not yours. \
+         Never run the full suite. Then ingest_test_report.\n\
          Rules: test-verdicts"
     )]
     fn get_test_radius(
@@ -160,20 +213,19 @@ impl ScryerServer {
         Parameters(req): Parameters<GetTestRadiusRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
-        let radius = match test_blast_radius(&model_ref) {
-            Ok(r) => r,
-            Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(read_fail(
-                    "model", &model_ref, &e,
+        if let Some(template) = req.command.as_deref().filter(|t| !t.trim().is_empty()) {
+            if let Err(e) = set_test_command(&model_ref, template) {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "The test command could not be stored: {e}"
                 ))]));
             }
-        };
+        }
         let verdicts = test_statuses(&model_ref).unwrap_or_default();
         let stale = verdicts.iter().filter(|s| s.stale).count();
         let count_fresh = |o: TestOutcome| {
             verdicts.iter().filter(|s| !s.stale && s.outcome == o).count()
         };
-        let mut msg = radius_lines(&radius);
+        let mut msg = radius_lines(self, &model_ref);
         msg.push_str(&format!(
             "\nVerdicts: {} passing · {} failing · {} errored · {} stale · {} claim(s) recorded in all.",
             count_fresh(TestOutcome::Passed),
@@ -372,8 +424,6 @@ mod tests {
                 stale_proposal: None,
                 directives: Vec::new(),
                 last_touched_at: None,
-                vagrant_origin: None,
-                approved_statement: None,
             }],
             properties: Vec::new(),
             icon: None,
@@ -420,7 +470,7 @@ mod tests {
         let (server, dir) = tested_project();
         // Before any report: the radius names the attached test file.
         let before = server
-            .get_test_radius(Parameters(GetTestRadiusRequest { project: project_arg(&dir) }))
+            .get_test_radius(Parameters(GetTestRadiusRequest { project: project_arg(&dir), command: None }))
             .unwrap();
         let text = text_of(&before);
         assert!(text.contains("src/m.spec.ts"), "{text}");
@@ -438,11 +488,44 @@ mod tests {
         assert!(text.contains("Radius clear"), "{text}");
 
         let after = server
-            .get_test_radius(Parameters(GetTestRadiusRequest { project: project_arg(&dir) }))
+            .get_test_radius(Parameters(GetTestRadiusRequest { project: project_arg(&dir), command: None }))
             .unwrap();
         let text = text_of(&after);
         assert!(text.contains("Radius clear"), "{text}");
         assert!(text.contains("1 passing"), "{text}");
+    }
+
+    /// The command is set once and every radius after answers with it filled;
+    /// the report path lands in a git-ignored directory under .scryer.
+    #[test]
+    fn the_radius_answers_with_the_configured_command() {
+        let (server, dir) = tested_project();
+        let bare = text_of(
+            &server
+                .get_test_radius(Parameters(GetTestRadiusRequest { project: project_arg(&dir), command: None }))
+                .unwrap(),
+        );
+        assert!(bare.contains("No test command set"), "{bare}");
+
+        let text = text_of(
+            &server
+                .get_test_radius(Parameters(GetTestRadiusRequest {
+                    project: project_arg(&dir),
+                    command: Some("npx vitest run {files} -t '{names:|}' --outputFile={report}".into()),
+                }))
+                .unwrap(),
+        );
+        assert!(
+            text.contains("npx vitest run src/m.spec.ts -t 'answers one' --outputFile=.scryer/reports/radius.xml"),
+            "{text}"
+        );
+        assert!(dir.path().join(".scryer/reports/.gitignore").exists());
+        let again = text_of(
+            &server
+                .get_test_radius(Parameters(GetTestRadiusRequest { project: project_arg(&dir), command: None }))
+                .unwrap(),
+        );
+        assert!(again.contains("npx vitest run src/m.spec.ts"), "stored once: {again}");
     }
 
     #[test]
@@ -461,7 +544,7 @@ mod tests {
         )
         .unwrap();
         let result = server
-            .get_test_radius(Parameters(GetTestRadiusRequest { project: project_arg(&dir) }))
+            .get_test_radius(Parameters(GetTestRadiusRequest { project: project_arg(&dir), command: None }))
             .unwrap();
         let text = text_of(&result);
         assert!(text.contains("src/m.spec.ts"), "{text}");

@@ -119,7 +119,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
     history,
     driftScopes,
     onCheckDrift,
-    onDismissDrift,
   } = props;
   const ed = useEditSections();
   const openMenu = usePageMenu();
@@ -193,19 +192,12 @@ function NodePageBody(props: PageProps & { node: Node }) {
   // The node's own definition anchor — its file, surfaced in the type line.
   const defFile = definition[0]?.pattern;
 
-  // Drift counts span both claims and data fields — a vagrant/stale property
-  // feeds the same review notices as a responsibility.
-  const driftProps = node.properties ?? [];
-  const staleCount =
-    resps.filter((r) => r.stale).length + driftProps.filter((p) => p.stale).length;
-  const vagrantCount =
-    resps.filter((r) => r.vagrant).length + driftProps.filter((p) => p.vagrant).length;
   const drift = driftScopes.find((s) => s.nodeId === node.id);
 
   // Maintenance notices — full-width amboxes stacked at the top of the article
   // body (the wiki hatnote pattern), not chips crammed beside the title.
   const bannerStack =
-    drift || structural || node.stale || staleCount > 0 || vagrantCount > 0 || isNodeEmpty(node) ? (
+    drift || structural || node.stale || isNodeEmpty(node) ? (
       <>
         {structural && (
           <Ambox tone={structural.unstyledOnly ? "warning" : "danger"} icon={<Flag className="h-3 w-3" />}>
@@ -240,16 +232,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
             Backing code removed — this node and its subtree have no code
           </Ambox>
         )}
-        {staleCount > 0 && (
-          <Ambox tone="warning" icon={<Flag className="h-3 w-3" />}>
-            {staleCount} stale claim{staleCount === 1 ? "" : "s"} to review below
-          </Ambox>
-        )}
-        {vagrantCount > 0 && (
-          <Ambox tone="warning" icon={<Flag className="h-3 w-3" />}>
-            {vagrantCount} undescribed in code to review below
-          </Ambox>
-        )}
         {isNodeEmpty(node) && (
           <Ambox tone="warning" icon={<CircleDashed className="h-3 w-3" />}>
             Empty symbol — no responsibilities or properties
@@ -273,16 +255,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 className={NOTICE_ACTION}
               >
                 Check
-              </button>
-            )}
-            {onDismissDrift && (
-              <button
-                type="button"
-                onClick={() => onDismissDrift(node.id)}
-                title="Mark this node and its children reconciled, without a semantic check"
-                className={NOTICE_ACTION}
-              >
-                Dismiss
               </button>
             )}
           </div>
@@ -531,6 +503,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   concerns={model.concerns ?? []}
                   sourceMap={sourceMap}
                   testMap={testMap}
+                  notes={model.notes}
                   testStates={testStates}
                   testVerdicts={props.testVerdicts}
                   probeResults={props.probeResults}

@@ -25,6 +25,10 @@ pub struct ClaimRecord {
     /// record can only ever read as stale.
     #[serde(default)]
     pub fingerprints: BTreeMap<String, String>,
+    /// Attached test name → its wall time in millis on the run that recorded
+    /// this verdict — what marks a test slow enough to keep out of the radius.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub millis: BTreeMap<String, u64>,
 }
 
 /// One claim's probe history: how many deliberate breaks were tried against
@@ -173,6 +177,100 @@ pub struct RadiusFile {
     pub stale: usize,
 }
 
+/// A test the radius would run past this wall time is slow: it stays out of
+/// the radius command unless a claim it backs was touched this session.
+pub const SLOW_TEST_MILLIS: u64 = 5_000;
+
+/// One attached test in the radius.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RadiusTest {
+    /// The test file, as the attachment spells it.
+    pub pattern: String,
+    /// The test's name; `None` for an attachment that stores none (only its
+    /// file can select it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Radius claims a run of this test would refresh.
+    pub claims: Vec<String>,
+    /// Its wall time on the last recorded run, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub millis: Option<u64>,
+}
+
+/// What needs running, scoped to one session's work when there is one.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRadius {
+    /// Whether this is one session's radius; `false` is the project-wide one
+    /// (no session to scope by).
+    pub scoped: bool,
+    /// Per file: the claims with missing or stale verdicts that are this
+    /// session's (all of them when unscoped).
+    pub files: Vec<RadiusFile>,
+    /// The tests to run for them.
+    pub run: Vec<RadiusTest>,
+    /// Slow tests left out — none of their claims was touched this session.
+    pub slow: Vec<RadiusTest>,
+    /// Stale verdicts on claims this session never touched: someone else's.
+    pub not_yours: Vec<String>,
+}
+
+/// Fill a test-command template for `run`. `{names}` and `{files}` expand to
+/// the tests' names and their distinct files, space-joined; `{names:SEP}` /
+/// `{files:SEP}` join with SEP instead, so a per-item prefix rides in the
+/// separator (`Name~{names:|Name~}` → `Name~a|Name~b`). `{report}` is the
+/// JUnit file to write, `{reports}` its directory. Items are inserted raw:
+/// the template owns its quoting.
+pub fn render_test_command(template: &str, run: &[RadiusTest], report: &str, reports: &str) -> String {
+    let mut names: Vec<&str> = Vec::new();
+    let mut files: Vec<&str> = Vec::new();
+    for t in run {
+        if let Some(n) = t.name.as_deref() {
+            if !names.contains(&n) {
+                names.push(n);
+            }
+        }
+        if !files.contains(&t.pattern.as_str()) {
+            files.push(&t.pattern);
+        }
+    }
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else {
+            out.push_str(&rest[open..]);
+            return out;
+        };
+        let inner = &after[..close];
+        let (key, sep) = inner.split_once(':').unwrap_or((inner, " "));
+        match key {
+            "names" => out.push_str(&names.join(sep)),
+            "files" => out.push_str(&files.join(sep)),
+            "report" if inner == key => out.push_str(report),
+            "reports" if inner == key => out.push_str(reports),
+            _ => out.push_str(&rest[open..open + close + 2]),
+        }
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// What the Stop hook's probe check found: a reason to block (ONCE per
+/// session — the caller keeps that count) and a line for the user when a
+/// probe this session's tests faced let a break survive.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProbeCheck {
+    pub block: Option<String>,
+    pub summary: Option<String>,
+}
+
+/// How many of a session's freshly tested claims must be probed before Stop.
+pub const PROBES_PER_SESSION: usize = 2;
+
 /// Where a probe should aim, and what to run afterwards.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -190,4 +288,42 @@ pub struct ProbeTarget {
     pub symbol: Option<String>,
     /// The attached tests to re-run.
     pub tests: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test(pattern: &str, name: Option<&str>) -> RadiusTest {
+        RadiusTest { pattern: pattern.into(), name: name.map(Into::into), claims: Vec::new(), millis: None }
+    }
+
+    #[test]
+    fn a_command_template_takes_names_files_and_the_report() {
+        let run = [
+            test("tests/Shared/a.cs", Some("Docks")),
+            test("tests/Shared/a.cs", Some("Undocks")),
+            test("tests/Server/b.cs", None),
+        ];
+        let cmd = render_test_command(
+            "tools/test.sh \"FullyQualifiedName~{names:|FullyQualifiedName~}\" {report} -- {files}",
+            &run,
+            ".scryer/reports/radius.xml",
+            ".scryer/reports",
+        );
+        assert_eq!(
+            cmd,
+            "tools/test.sh \"FullyQualifiedName~Docks|FullyQualifiedName~Undocks\" \
+             .scryer/reports/radius.xml -- tests/Shared/a.cs tests/Server/b.cs"
+        );
+    }
+
+    #[test]
+    fn unknown_placeholders_and_stray_braces_pass_through() {
+        let run = [test("t.rs", Some("x"))];
+        assert_eq!(
+            render_test_command("run {other} {names} {reports} {", &run, "r.xml", "d"),
+            "run {other} x d {"
+        );
+    }
 }

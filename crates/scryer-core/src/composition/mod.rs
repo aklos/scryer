@@ -8,12 +8,14 @@
 pub mod change_ledger;
 pub mod codebase;
 pub mod coverage;
+pub mod drift_verdicts;
 pub mod fold;
 pub mod edges;
 pub mod locate;
 pub mod history_log;
 pub mod model_store;
 pub mod refusal_ledger;
+pub mod session;
 pub mod settings_store;
 pub mod styles;
 pub mod sync;
