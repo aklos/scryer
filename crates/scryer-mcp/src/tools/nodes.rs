@@ -1387,6 +1387,12 @@ impl ScryerServer {
         let mut anchor_notes: Vec<String> = Vec::new();
         let anchors = req.anchors.take().filter(|v| !v.is_empty());
         let tests = req.tests.take().filter(|v| !v.is_empty());
+        let anchored_ids: Vec<String> = anchors
+            .iter()
+            .flatten()
+            .chain(tests.iter().flatten())
+            .map(|e| e.responsibility_id.clone())
+            .collect();
         if anchors.is_some() || tests.is_some() {
             let mut planned_now = match scryer_core::read_planned_seeded_at(&model_ref) {
                 Ok(p) => p,
@@ -1431,6 +1437,10 @@ impl ScryerServer {
                 }
             }
         }
+
+        // The verdicts the gate just accepted were fingerprinted before these
+        // anchors existed; keep them current when no code changed.
+        let _ = scryer_extract::test_status::refresh_fingerprints(&model_ref, &anchored_ids);
 
         // Fingerprint baseline for what this fold landed: the folded claims'
         // implementation and test keys, plus whatever the call anchored or

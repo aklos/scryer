@@ -611,6 +611,53 @@ fn keep_cases(r: &ModelRef, cases: &[scryer_core::test_results::TestCase]) -> Re
     write_cache(r, &cache)
 }
 
+/// Anchors or tests were just added to `claims`: a verdict that was current
+/// before records no fingerprint for the new locations, so it would read as
+/// stale though no code changed. Re-fingerprint each one whose recorded spans
+/// all still hash the same and whose newly anchored files were last modified
+/// before its run; anything else is genuinely unverified and stays stale.
+/// Returns the claims refreshed.
+pub fn refresh_fingerprints(r: &ModelRef, claims: &[String]) -> Result<Vec<String>, String> {
+    let mut cache = read_cache(r);
+    if cache.results.is_empty() || claims.is_empty() {
+        return Ok(Vec::new());
+    }
+    let model = working_model(r)?;
+    let project = r.project_path();
+    let mut files = FileCache::new();
+    let mut project_files: Option<BTreeSet<String>> = None;
+    let modified_since = |file: &str, secs: u64| {
+        std::fs::metadata(project.join(file))
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .is_none_or(|t| t.as_secs() >= secs)
+    };
+    let mut refreshed = Vec::new();
+    for rec in cache.results.iter_mut().filter(|c| claims.contains(&c.resp_id)) {
+        if rec.outcome != TestOutcome::Passed || rec.fingerprints.is_empty() {
+            continue;
+        }
+        let now = claim_fingerprints(&model, &rec.resp_id, project, &mut files, &mut project_files);
+        if now == rec.fingerprints {
+            continue;
+        }
+        let spans_held = rec.fingerprints.iter().all(|(k, h)| now.get(k).is_none_or(|n| n == h));
+        let new_files_untouched = now
+            .keys()
+            .filter(|k| !rec.fingerprints.contains_key(*k))
+            .all(|k| k.split('|').nth(1).is_some_and(|f| !modified_since(f, rec.recorded_at)));
+        if spans_held && new_files_untouched {
+            rec.fingerprints = now;
+            refreshed.push(rec.resp_id.clone());
+        }
+    }
+    if !refreshed.is_empty() {
+        write_cache(r, &cache)?;
+    }
+    Ok(refreshed)
+}
+
 /// Tests just attached (`attached`: claim → test locations) whose report was
 /// ingested before they were: record each claim's verdict from the kept cases,
 /// as if the report had been ingested now — but only when none of the claim's
@@ -1435,6 +1482,36 @@ mod tests {
         // One touched test file, one green claim: one probe is the whole ask.
         let check = session_probe_check(&r, &["src/m.spec.ts".to_string()]);
         assert!(check.block.unwrap().contains("1 of them"));
+    }
+
+    /// Anchoring a claim at the fold adds a location its verdict never
+    /// fingerprinted. With no code changed since the run the verdict stays
+    /// current; a file edited since the run leaves it stale.
+    #[test]
+    fn adding_an_anchor_keeps_a_current_verdict_current() {
+        let (dir, r) = two_claim_project();
+        let mut m = read_model_at(&r).unwrap();
+        let r1_code = m.source_map.remove("r1").unwrap();
+        let r2_code = m.source_map.remove("r2").unwrap();
+        scryer_core::write_model_at(&r, &m).unwrap();
+        // The run lands in a later second than the files' mtimes.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        ingest_report_file(&r, BOTH).unwrap();
+
+        // r2's code is edited after the run; r1's is not.
+        let body = std::fs::read_to_string(dir.path().join("src/n.ts")).unwrap();
+        std::fs::write(dir.path().join("src/n.ts"), body.replace("return 1", "return 2")).unwrap();
+        let mut m = read_model_at(&r).unwrap();
+        m.source_map.insert("r1".into(), r1_code);
+        m.source_map.insert("r2".into(), r2_code);
+        scryer_core::write_model_at(&r, &m).unwrap();
+        let stale = |id: &str| read_test_statuses(&r).unwrap().iter().find(|s| s.resp_id == id).unwrap().stale;
+        assert!(stale("r1") && stale("r2"), "a new anchor alone reads as stale");
+
+        let refreshed = refresh_fingerprints(&r, &["r1".into(), "r2".into()]).unwrap();
+        assert_eq!(refreshed, vec!["r1"]);
+        assert!(!stale("r1"), "no code changed since the run");
+        assert!(stale("r2"), "its code changed since the run");
     }
 
     /// A report ingested before a test was attached still settles it: the

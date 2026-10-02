@@ -8093,6 +8093,11 @@
           "id": "resp-5ahwf6",
           "statement": "Reduces a test name to its normalized leaf across runner naming conventions (suite paths, module paths, parametrized suffixes, typographic quotes).",
           "lastTouchedAt": 1788959020
+        },
+        {
+          "id": "resp-6dkm04",
+          "statement": "**When** a case name is an identifier followed by a parameter list, as xUnit and NUnit report data-driven cases, **drops** the list so every case matches the one attached test",
+          "lastTouchedAt": 1790949986
         }
       ]
     },
@@ -9939,6 +9944,11 @@
           "id": "resp-ba09vk",
           "statement": "**When** a test is attached after its report was ingested, **records** the kept outcome for its claim, unless the claim's code or test changed since that ingest",
           "lastTouchedAt": 1790943935
+        },
+        {
+          "id": "resp-1s35xd",
+          "statement": "**When** anchors or tests are added to a claim with a current verdict, **refingerprints** the verdict, unless a span it recorded changed or a newly anchored file was modified since its run",
+          "lastTouchedAt": 1790949986
         }
       ],
       "layer": "infrastructure"
@@ -19756,6 +19766,12 @@
         "symbol": "TopBar"
       }
     ],
+    "resp-1s35xd": [
+      {
+        "pattern": "crates/scryer-extract/src/infrastructure/test_status.rs",
+        "symbol": "refresh_fingerprints"
+      }
+    ],
     "resp-1wcwwg": [
       {
         "pattern": "src-tauri/src/shell/source_view.rs",
@@ -20138,6 +20154,12 @@
       {
         "pattern": "src/widgets/diagram-canvas/styled.ts",
         "symbol": "styledLayout"
+      }
+    ],
+    "resp-6dkm04": [
+      {
+        "pattern": "crates/scryer-core/src/domain/test_results.rs",
+        "symbol": "normalize_leaf"
       }
     ],
     "resp-6e3fak": [
@@ -22838,6 +22860,12 @@
         "symbol": "hook_status_tells_outdated_installs_from_missing_ones"
       }
     ],
+    "resp-1s35xd": [
+      {
+        "pattern": "crates/scryer-extract/src/infrastructure/test_status.rs",
+        "symbol": "adding_an_anchor_keeps_a_current_verdict_current"
+      }
+    ],
     "resp-2pxfn5": [
       {
         "pattern": "crates/scryer-core/src/composition/session.rs",
@@ -22860,6 +22888,12 @@
       {
         "pattern": "tests/structuralLocate.test.tsx",
         "symbol": "counts a subtree's violations, orange when only styles are undeclared"
+      }
+    ],
+    "resp-6dkm04": [
+      {
+        "pattern": "crates/scryer-core/src/domain/test_results.rs",
+        "symbol": "matches_dotnet_data_driven_cases_by_the_method_name"
       }
     ],
     "resp-6n0gsn": [

@@ -141,6 +141,15 @@ impl ScryerServer {
             std::mem::take(&mut req.entries),
             RespAnchorDim::Source,
         );
+        // Claims whose anchors or tests change: a current verdict on one stays
+        // current when no code changed (refreshed once the write lands).
+        let anchored_ids: Vec<String> = req
+            .entries
+            .iter()
+            .chain(req.test_entries.iter())
+            .filter(|e| !e.locations.is_empty())
+            .map(|e| e.responsibility_id.clone())
+            .collect();
         // Tests being attached, for the verdicts their already-ingested
         // reports hold (replayed once the attachment is written).
         let attached: std::collections::BTreeMap<String, Vec<scryer_core::SourceLocation>> = req
@@ -211,6 +220,7 @@ impl ScryerServer {
             }
         }
         let mut msg = format!("Updated code-side mapping ({} entr(ies))", count);
+        let _ = scryer_extract::test_status::refresh_fingerprints(&model_ref, &anchored_ids);
         if let Ok(replayed) = scryer_extract::test_status::replay_kept_cases(&model_ref, &attached) {
             if !replayed.is_empty() {
                 msg.push_str(&format!(

@@ -97,3 +97,9 @@ pub fn replay_kept_cases(
 ) -> Result<Vec<String>, String> {
     store::replay_kept_cases(r, attached)
 }
+
+/// Keep a current verdict current when anchors or tests are added to its
+/// claim and no code changed. Returns the claims refreshed.
+pub fn refresh_fingerprints(r: &ModelRef, claims: &[String]) -> Result<Vec<String>, String> {
+    store::refresh_fingerprints(r, claims)
+}
