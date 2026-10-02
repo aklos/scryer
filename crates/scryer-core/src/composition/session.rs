@@ -111,7 +111,13 @@ pub fn close_gate(
     if log.reconcile_gated || log.touched.is_empty() {
         return CloseView::default();
     }
-    let flags = flags(&log.touched);
+    // Drift the session found rather than made: an anchor already in this
+    // state when the session first read its file is not this session's to
+    // reconcile.
+    let flags: Vec<AnchorFlag> = flags(&log.touched)
+        .into_iter()
+        .filter(|f| !log.found_stale(&f.file, &f.key, &f.state))
+        .collect();
     let committed = read_model_at(r).ok();
     let working = match (&committed, read_planned_at(r)) {
         (Some(c), Ok(p)) => Some(crate::working_view(c, &p)),
@@ -122,6 +128,28 @@ pub fn close_gate(
         let _ = session_store::append(r, session, SessionEvent::ReconcileGate);
     }
     view
+}
+
+/// The session is reading `file`: the first time, record which of its anchors
+/// are already out of sync (`flags` runs the anchor check on that one file),
+/// so the close gate later tells drift the session made from drift it found.
+/// Later reads cost nothing.
+pub fn record_first_sight(
+    r: &ModelRef,
+    session: &str,
+    file: &str,
+    flags: impl FnOnce(&str) -> Vec<AnchorFlag>,
+) -> Result<(), String> {
+    let file = relativize(r.project_path(), file);
+    if std::path::Path::new(&file).is_absolute() || session_log(r, session).has_seen(&file) {
+        return Ok(());
+    }
+    let stale = flags(&file)
+        .into_iter()
+        .filter(|f| f.file == file)
+        .map(|f| (f.key, f.state))
+        .collect();
+    session_store::append(r, session, SessionEvent::FirstSight { file, stale })
 }
 
 /// Record that the agent wrote these plan elements.
@@ -290,26 +318,45 @@ fn pending_reason(left: &[&Unfolded]) -> String {
     )
 }
 
+const RECONCILE_FILES_SHOWN: usize = 8;
+
+/// The close gate's block: one line per file, each claim counted once (its
+/// code and test anchors are one claim) by its worst state. The statements
+/// stay out — this lands in the user's transcript; `locate {file}` has them.
 fn reconcile_reason(close: &CloseView) -> String {
+    let mut total = 0;
     let mut lines: Vec<String> = Vec::new();
     for f in &close.needs_reconcile {
-        lines.push(format!("- {}:", f.file));
+        let mut by_claim: Vec<(&str, &str)> = Vec::new();
         for c in &f.claims {
-            lines.push(format!(
-                "    [{}] ({}) {}",
-                c.state,
-                c.host.as_deref().unwrap_or("?"),
-                c.statement.as_deref().unwrap_or("(data shape declaration)")
-            ));
+            let id = crate::test_resp_id(&c.id).unwrap_or(&c.id);
+            match by_claim.iter_mut().find(|(k, _)| *k == id) {
+                Some(entry) if c.state == "broken" => entry.1 = "broken",
+                Some(_) => {}
+                None => by_claim.push((id, c.state.as_str())),
+            }
         }
+        total += by_claim.len();
+        let mut counts: Vec<(&str, usize)> = Vec::new();
+        for (_, state) in &by_claim {
+            match counts.iter_mut().find(|(s, _)| s == state) {
+                Some(entry) => entry.1 += 1,
+                None => counts.push((state, 1)),
+            }
+        }
+        let counts: Vec<String> = counts.iter().map(|(s, n)| format!("{n} {s}")).collect();
+        lines.push(format!("- {} — {}", f.file, counts.join(", ")));
     }
-    let claims: usize = close.needs_reconcile.iter().map(|f| f.claims.len()).sum();
+    let more = lines.len().saturating_sub(RECONCILE_FILES_SHOWN);
+    lines.truncate(RECONCILE_FILES_SHOWN);
+    if more > 0 {
+        lines.push(format!("- +{more} more file(s)"));
+    }
     format!(
-        "Scryer close gate — this session's edits reached the anchored span(s) of {claims} claim(s) \
-         in {} file(s):\n{}\nReconcile each: if the claim still describes the code, no write is \
-         needed; if behaviour changed, update the model over MCP (update_nodes to reword the claim, \
-         update_source_map to re-anchor, mark_implemented to fold finished plan work, flag_drift \
-         for new undescribed behaviour). This gate fires only once per session.",
+        "Scryer close gate — {total} claim(s) in {} file(s) went out of sync with the code this \
+         session:\n{}\n`locate {{file}}` lists them. If a claim still describes the code, nothing to \
+         do; if its behaviour changed, reword it (update_nodes), re-anchor it (update_source_map) or \
+         flag_drift. Fires once per session.",
         close.needs_reconcile.len(),
         lines.join("\n"),
     )
@@ -408,6 +455,60 @@ mod tests {
         assert!(close_gate(&r, "s2", |_| vec![flag()]).needs_reconcile.is_empty(), "s2 touched nothing");
         record_touch(&r, "s2", "src/auth.rs").unwrap();
         assert_eq!(close_gate(&r, "s2", |_| vec![flag()]).needs_reconcile.len(), 1, "s2 has its own gate");
+    }
+
+    use crate::application::hooks::{FileClaims, FlaggedClaim};
+
+    fn flag_on(file: &str, key: &str, state: &str) -> AnchorFlag {
+        AnchorFlag {
+            key: key.into(),
+            host_name: "API".into(),
+            file: file.into(),
+            symbol: None,
+            state: state.into(),
+        }
+    }
+
+    /// Drift the session found is not drift it made: a claim already out of
+    /// sync when the session first read its file, and still in that state,
+    /// stays out of the gate; one that changed state, or was in sync then, is
+    /// the session's.
+    #[test]
+    fn the_close_gate_leaves_out_drift_the_session_found() {
+        let (_dir, r) = project();
+        let before = vec![flag_on("src/auth.rs", "r-1", "changed"), flag_on("src/other.rs", "r-9", "changed")];
+        record_first_sight(&r, "s", "src/auth.rs", |_| before.clone()).unwrap();
+        record_first_sight(&r, "s", "src/auth.rs", |_| panic!("only the first read checks")).unwrap();
+        record_touch(&r, "s", "src/auth.rs").unwrap();
+
+        let found = close_gate(&r, "s", |_| vec![flag_on("src/auth.rs", "r-1", "changed")]);
+        assert!(found.needs_reconcile.is_empty(), "already changed at first sight: {found:?}");
+        let made = close_gate(&r, "s", |_| vec![flag_on("src/auth.rs", "r-1", "broken")]);
+        assert_eq!(made.needs_reconcile.len(), 1, "changed → broken is the session's");
+    }
+
+    /// The block lands in the user's transcript: one line per file, a claim's
+    /// code and test anchors counted once, at most eight files.
+    #[test]
+    fn the_close_gate_block_is_one_line_per_file() {
+        let claim = |id: &str, state: &str| FlaggedClaim {
+            id: id.into(),
+            host: Some("API".into()),
+            symbol: None,
+            state: state.into(),
+            statement: Some("a very long statement that must not reach the user".into()),
+        };
+        let file = |i: usize| FileClaims {
+            file: format!("src/f{i}.rs"),
+            claims: vec![claim("r-1", "changed"), claim("test:r-1", "broken"), claim("r-2", "changed")],
+        };
+        let close = CloseView { needs_reconcile: (0..10).map(file).collect(), ..Default::default() };
+        let reason = reconcile_reason(&close);
+        assert!(reason.contains("- src/f0.rs — 1 broken, 1 changed"), "{reason}");
+        assert!(reason.contains("- +2 more file(s)"), "{reason}");
+        assert!(!reason.contains("src/f8.rs"), "{reason}");
+        assert!(!reason.contains("very long statement"), "{reason}");
+        assert!(reason.contains("20 claim(s) in 10 file(s)"), "{reason}");
     }
 
     fn no_flags(_: &[String]) -> Vec<AnchorFlag> {

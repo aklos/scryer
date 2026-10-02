@@ -42,6 +42,13 @@ pub enum SessionEvent {
     /// The Stop gate blocked until this session's new tests were
     /// mutation-probed — at most once per session.
     ProbeGate,
+    /// The session first read `file`; these of its anchors (`key`, `state`)
+    /// were already out of sync then — drift it found, not drift it made.
+    FirstSight {
+        file: String,
+        #[serde(default)]
+        stale: Vec<(String, String)>,
+    },
     /// A shell command is about to run: files modified after `ns` (unix
     /// nanoseconds) and before it finishes are the session's edits. `tool` is
     /// the harness's tool-call id, so concurrent commands pair up.
@@ -70,6 +77,9 @@ pub struct SessionLog {
     pub last_summary: Option<String>,
     /// Shell commands started, `(tool-call id, unix ns)`, in start order.
     pub shell_starts: Vec<(Option<String>, u64)>,
+    /// Per file the session has read, the anchors already out of sync when
+    /// it first did, as `(key, state)`.
+    pub first_sight: Vec<(String, Vec<(String, String)>)>,
 }
 
 impl SessionLog {
@@ -106,7 +116,25 @@ impl SessionLog {
             SessionEvent::PendingGate { keys } => self.gated_pending.extend(keys.iter().cloned()),
             SessionEvent::ProbeGate => self.probe_gated = true,
             SessionEvent::ShellStart { tool, ns } => self.shell_starts.push((tool.clone(), *ns)),
+            SessionEvent::FirstSight { file, stale } => {
+                if !self.first_sight.iter().any(|(f, _)| f == file) {
+                    self.first_sight.push((file.clone(), stale.clone()));
+                }
+            }
         }
+    }
+
+    /// Whether anchor `key` was already in `state` when the session first
+    /// read `file`.
+    pub fn found_stale(&self, file: &str, key: &str, state: &str) -> bool {
+        self.first_sight
+            .iter()
+            .any(|(f, stale)| f == file && stale.iter().any(|(k, s)| k == key && s == state))
+    }
+
+    /// Whether the session has read `file` yet.
+    pub fn has_seen(&self, file: &str) -> bool {
+        self.first_sight.iter().any(|(f, _)| f == file)
     }
 
     /// When the shell command `tool` started: its own start when the harness

@@ -175,6 +175,7 @@ fn post_tool_use(r: &ModelRef, event: &serde_json::Value, harness: Harness) {
     match harness.tool_kind(event["tool_name"].as_str().unwrap_or_default()) {
         ToolKind::Read => {
             let Some(file) = tool_file(event) else { return };
+            first_sight(r, event, file);
             if let Some(text) = overlay_text(r, event, file) {
                 harness.emit_context("PostToolUse", &text);
             }
@@ -209,6 +210,17 @@ fn tool_use_id(event: &serde_json::Value) -> Option<&str> {
     event["tool_use_id"].as_str().filter(|s| !s.is_empty())
 }
 
+/// The first time the session reads `file` (or, on Codex, is about to patch
+/// it), note which of its anchors are already out of sync, so the close gate
+/// later blames the session only for drift it made.
+fn first_sight(r: &ModelRef, event: &serde_json::Value, file: &str) {
+    if let Some(session) = session_id(event) {
+        let _ = scryer_core::session::record_first_sight(r, session, file, |f| {
+            anchor_flags(r, &[f.to_string()])
+        });
+    }
+}
+
 /// Record one touched file. No output: touch recording must cost the session
 /// zero tokens.
 fn touch(r: &ModelRef, event: &serde_json::Value, file: &str) {
@@ -234,7 +246,11 @@ fn pre_tool_use(r: &ModelRef, event: &serde_json::Value, harness: Harness) {
             let _ = scryer_core::session::record_shell_start(r, session, tool_use_id(event));
         }
     }
-    let sections: Vec<String> = patched_files(event)
+    let files = patched_files(event);
+    for file in &files {
+        first_sight(r, event, file);
+    }
+    let sections: Vec<String> = files
         .iter()
         .take(OVERLAY_FILE_CAP)
         .filter_map(|file| overlay_text(r, event, file))
