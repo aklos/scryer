@@ -23,7 +23,7 @@ export interface SessionLog {
   /** Pick a session; null follows the most recent again. */
   select: (id: string | null) => void;
   view: SessionView | null;
-  /** Open asks + untraced files of the session on screen. */
+  /** Plan entries the session on screen left unbuilt. */
   badge: number;
   live: boolean;
 }

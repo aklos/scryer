@@ -8,14 +8,15 @@
 //! against the project's model and the session's log
 //! (`.scryer/sessions/<session_id>.jsonl`); the desktop app need not be open.
 //!
-//! - UserPromptSubmit  → record the prompt verbatim; tell the agent to break it
-//!                       into asks
+//! - UserPromptSubmit  → bind the harness process to the session, say nothing
+//!                       (the prompt itself is never read)
 //! - PostToolUse read  → inject the file's governing intent (once per session
 //!                       until it changes)
 //! - PostToolUse edit… → record the touch, say nothing
-//! - Stop              → block on unfiled prompts and open asks (once each)
-//!                       and, once per session, on unreconciled claims;
-//!                       otherwise hand the user a one-line summary
+//! - Pre/PostToolUse shell → record the files the command modified
+//! - Stop              → block once each on planned work left without a note,
+//!                       an unprobed test and unreconciled claims; otherwise
+//!                       hand the user a one-line summary
 //!
 //! Where they differ is the tool vocabulary and the reply shape, and neither is
 //! discoverable from the event — so the install writes which harness it is
@@ -120,7 +121,7 @@ pub fn run_hook_client(args: &[String]) -> Result<(), Box<dyn std::error::Error>
     };
 
     match event["hook_event_name"].as_str().unwrap_or_default() {
-        "UserPromptSubmit" => user_prompt_submit(&r, &event, harness),
+        "UserPromptSubmit" => user_prompt_submit(&r, &event),
         "PreToolUse" => pre_tool_use(&r, &event, harness),
         "PostToolUse" => post_tool_use(&r, &event, harness),
         "Stop" => stop(&r, &event),
@@ -393,34 +394,14 @@ fn render_overlay(overlay: &serde_json::Value) -> Option<String> {
     Some(out)
 }
 
-/// Record the prompt and ask the agent to break it into asks. The harness
-/// process is bound to the session here too, so an MCP server it spawned
-/// before a `/clear` follows the session to its new id.
-fn user_prompt_submit(r: &ModelRef, event: &serde_json::Value, harness: Harness) {
+/// Bind the harness process to the session, so an MCP server it spawned
+/// before a `/clear` follows the session to its new id. Silent: the prompt
+/// itself is the user's conversation with the agent, not scryer's to read.
+fn user_prompt_submit(r: &ModelRef, event: &serde_json::Value) {
     let Some(session) = session_id(event) else { return };
-    let Some(prompt) = event["prompt"].as_str().filter(|p| !p.trim().is_empty()) else { return };
     for pid in ancestor_pids() {
         let _ = scryer_core::session::bind_pid(r, session, pid);
     }
-    if is_peer_message(prompt) {
-        return;
-    }
-    let Ok(id) = scryer_core::session::record_prompt(r, session, prompt) else { return };
-    let text = format!(
-        "[scryer] Prompt {id} logged. Before working, break it into asks with \
-         file_asks {{prompt: \"{id}\", asks: [...]}} — one per distinct thing asked; `kind: \
-         \"answer\"` for questions; an empty list if it asks for nothing new. Do only what the asks \
-         cover; the user sees every edit no ask accounts for."
-    );
-    harness.emit_context("UserPromptSubmit", &text);
-}
-
-/// Whether a submitted "prompt" is another agent's message the harness relays
-/// into the session — a subagent's hand-back or a peer's note — rather than
-/// the user's. Claude Code wraps those in an `<agent-message …>` envelope; the
-/// user asked for none of it, so it is never logged as a prompt.
-fn is_peer_message(prompt: &str) -> bool {
-    prompt.trim_start().starts_with("<agent-message")
 }
 
 /// The hook's ancestor processes, nearest first — the harness process that
@@ -459,7 +440,6 @@ fn stop(r: &ModelRef, event: &serde_json::Value) {
         r,
         session,
         |files| anchor_flags(r, files),
-        |claims| verified_claims(r, claims),
         |log| {
             let c = scryer_extract::test_status::probe_check(r, log);
             (c.block, c.summary)
@@ -470,13 +450,6 @@ fn stop(r: &ModelRef, event: &serde_json::Value) {
     } else if let Some(summary) = out.summary {
         emit(&serde_json::json!({ "systemMessage": summary }));
     }
-}
-
-/// Which of `claims` carry a current passing verdict.
-fn verified_claims(r: &ModelRef, claims: &[String]) -> std::collections::HashMap<String, bool> {
-    scryer_extract::test_status::claim_evidence(r, claims)
-        .map(|m| m.into_iter().map(|(k, e)| (k, e.verified())).collect())
-        .unwrap_or_default()
 }
 
 /// Out-of-sync anchors in the session's touched files (may silently re-anchor
@@ -558,16 +531,6 @@ mod tests {
             }
         });
         assert_eq!(patched_files(&event), vec!["/repo/src/lib.rs"], "absolute path untouched");
-    }
-
-    /// A subagent's hand-back or a peer's note, relayed into the session in an
-    /// `<agent-message>` envelope, is not the user's prompt; anything else is.
-    #[test]
-    fn peer_messages_are_not_user_prompts() {
-        assert!(is_peer_message("<agent-message from=\"a1b2\">\n[Subagent hand-back] …"));
-        assert!(is_peer_message("  <agent-message from=\"x\">"));
-        assert!(!is_peer_message("go ahead"));
-        assert!(!is_peer_message("what does <agent-message> mean in the log?"));
     }
 
     /// A Bash call is bracketed: its start is marked before it runs, and every

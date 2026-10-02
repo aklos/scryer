@@ -67,7 +67,7 @@ pub mod build_edges {
 pub mod session {
     pub use crate::application::hooks::*;
     pub use crate::composition::session::*;
-    pub use crate::domain::session::{Ask, AskEntry, AskKind, SessionLog};
+    pub use crate::domain::session::SessionLog;
 }
 
 /// The change ledger.

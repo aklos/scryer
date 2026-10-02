@@ -144,8 +144,6 @@ pub(crate) fn write_planned(ref_str: String, data: String) -> Result<(), String>
 pub(crate) struct SessionSummary {
     session: String,
     updated_at: u64,
-    /// The session's first prompt, for a title.
-    first_prompt: Option<String>,
 }
 
 /// Every agent session with a log in this project, most recent first.
@@ -154,27 +152,19 @@ pub(crate) fn list_sessions(ref_str: String) -> Result<Vec<SessionSummary>, Stri
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
     Ok(scryer_core::session::list_sessions(&model_ref)
         .into_iter()
-        .map(|(session, updated_at)| SessionSummary {
-            first_prompt: scryer_core::session::first_prompt(&model_ref, &session),
-            session,
-            updated_at,
-        })
+        .map(|(session, updated_at)| SessionSummary { session, updated_at })
         .collect())
 }
 
-/// One session as the user reviews it: prompts, asks and where each stands,
-/// files touched with the claims they reached, and edits no ask accounts for.
+/// One session as the user reviews it: files touched with the claims they
+/// reached, and plan entries it left unbuilt.
 #[tauri::command]
 pub(crate) fn read_session(
     ref_str: String,
     session: String,
 ) -> Result<scryer_core::session::SessionView, String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
-    Ok(scryer_core::session::session_view(&model_ref, &session, |claims| {
-        scryer_extract::test_status::claim_evidence(&model_ref, claims)
-            .map(|m| m.into_iter().map(|(k, e)| (k, e.verified())).collect())
-            .unwrap_or_default()
-    }))
+    Ok(scryer_core::session::session_view(&model_ref, &session))
 }
 
 /// Read the durable committed-model history log (`.scryer/history.jsonl`),

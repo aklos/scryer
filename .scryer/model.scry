@@ -1977,8 +1977,8 @@
       "responsibilities": [
         {
           "id": "resp-8wcazz",
-          "statement": "On session stop, runs the close, ask-ledger and probe gates, blocking once with what is missing or showing the session summary",
-          "lastTouchedAt": 1790939984
+          "statement": "On session stop, runs the close, unfolded-work and probe gates, blocking once with what is missing or showing the session summary",
+          "lastTouchedAt": 1790941627
         }
       ]
     },
@@ -14031,42 +14031,12 @@
       ]
     },
     {
-      "id": "node-0zrtkd",
-      "kind": "component",
-      "name": "Session Ask Ledger",
-      "parentId": "node-t58dyd",
-      "description": "Judges each ask a session filed against the claims linked to it.",
-      "responsibilities": [
-        {
-          "id": "resp-gxaeq8",
-          "statement": "**When** an ask's linked claim has no testable condition, **counts** it toward delivery without a test verdict",
-          "lastTouchedAt": 1790939923
-        },
-        {
-          "id": "resp-gq5d46",
-          "statement": "**When** a session has descoped asks, **summarizes** them as a count with their ids",
-          "lastTouchedAt": 1790940714
-        },
-        {
-          "id": "resp-wgad2g",
-          "statement": "**When** a file the session edited is attached to an ask, **leaves** it out of the edits no ask accounts for",
-          "lastTouchedAt": 1790940715
-        }
-      ],
-      "layer": "application"
-    },
-    {
       "id": "node-7h6fth",
       "kind": "component",
       "name": "Session Ledger Wiring",
       "parentId": "node-t58dyd",
       "description": "The session-log entry points the hook client and MCP tools call: prompts, asks, touches.",
       "responsibilities": [
-        {
-          "id": "resp-wqpdcg",
-          "statement": "**When** the agent files asks for a prompt, **records** them as given, never inferring from the prompt's wording what they must contain",
-          "lastTouchedAt": 1790939924
-        },
         {
           "id": "resp-xxh3fn",
           "statement": "**When** a shell command finishes, **records** every project file modified since it started as touched by the session",
@@ -14078,35 +14048,12 @@
           "lastTouchedAt": 1790940309
         },
         {
-          "id": "resp-2gepcd",
-          "statement": "**When** the agent attaches supporting files to an ask, **records** them as files that ask accounts for",
-          "lastTouchedAt": 1790940714
-        },
-        {
-          "id": "resp-kwjq2b",
-          "statement": "**When** the agent marks an action ask done, **records** it as done with the agent's one-line note",
-          "lastTouchedAt": 1790940714
-        },
-        {
           "id": "resp-vwxq2g",
           "statement": "**If** an edited file lies outside the project, **then** **leaves** it out of the session's touches",
           "lastTouchedAt": 1790940715
         }
       ],
       "layer": "composition"
-    },
-    {
-      "id": "node-da3a8k",
-      "kind": "symbol",
-      "name": "user_prompt_submit",
-      "parentId": "node-erg0zt",
-      "responsibilities": [
-        {
-          "id": "resp-3phfpc",
-          "statement": "**If** a submitted prompt is a peer agent's message, **then** **skips** logging it as a user prompt",
-          "lastTouchedAt": 1790939923
-        }
-      ]
     },
     {
       "id": "node-bxmfw7",
@@ -14123,6 +14070,19 @@
           "id": "resp-v08x63",
           "statement": "**When** a shell command is about to run, **marks** its start in the session log",
           "lastTouchedAt": 1790939924
+        }
+      ]
+    },
+    {
+      "id": "node-da3a8k",
+      "kind": "symbol",
+      "name": "user_prompt_submit",
+      "parentId": "node-erg0zt",
+      "responsibilities": [
+        {
+          "id": "resp-rjfsrz",
+          "statement": "**Binds** the harness process to the session on each prompt, so an MCP server spawned before a /clear follows the session",
+          "lastTouchedAt": 1790941628
         }
       ]
     }
@@ -18729,8 +18689,8 @@
       {
         "pattern": "crates/scryer-mcp/src/hook_client.rs",
         "symbol": "Harness",
-        "line": 54,
-        "endLine": 58
+        "line": 55,
+        "endLine": 59
       }
     ],
     "node-a83hfb": [
@@ -18917,8 +18877,8 @@
       {
         "pattern": "crates/scryer-mcp/src/helpers.rs",
         "symbol": "StatusCounts",
-        "line": 594,
-        "endLine": 624
+        "line": 585,
+        "endLine": 615
       }
     ],
     "node-g3y1j7": [
@@ -19237,8 +19197,8 @@
       {
         "pattern": "crates/scryer-mcp/src/helpers.rs",
         "symbol": "TestCounts",
-        "line": 637,
-        "endLine": 641
+        "line": 628,
+        "endLine": 632
       }
     ],
     "node-qmeg32": [
@@ -19365,8 +19325,8 @@
       {
         "pattern": "crates/scryer-mcp/src/hook_client.rs",
         "symbol": "ToolKind",
-        "line": 63,
-        "endLine": 71
+        "line": 64,
+        "endLine": 72
       }
     ],
     "node-v7n3m8": [
@@ -19783,16 +19743,6 @@
       {
         "pattern": "crates/xtask/src/main.rs",
         "symbol": "validate_model"
-      }
-    ],
-    "resp-2gepcd": [
-      {
-        "pattern": "crates/scryer-core/src/composition/session.rs",
-        "symbol": "resolve_ask"
-      },
-      {
-        "pattern": "crates/scryer-mcp/src/tools/asks.rs",
-        "symbol": "resolve_ask"
       }
     ],
     "resp-2hma32": [
@@ -21113,12 +21063,6 @@
         "symbol": "Editor"
       }
     ],
-    "resp-gq5d46": [
-      {
-        "pattern": "crates/scryer-core/src/application/hooks.rs",
-        "symbol": "session_summary"
-      }
-    ],
     "resp-gtdzfn": [
       {
         "pattern": "crates/scryer-core/src/domain/changes.rs",
@@ -21135,12 +21079,6 @@
       {
         "pattern": "crates/scryer-extract/src/composition/test_status.rs",
         "symbol": "record_probe_result"
-      }
-    ],
-    "resp-gxaeq8": [
-      {
-        "pattern": "crates/scryer-core/src/application/hooks.rs",
-        "symbol": "needs_verdict"
       }
     ],
     "resp-h18azm": [
@@ -21381,16 +21319,6 @@
       {
         "pattern": "crates/scryer-core/src/infrastructure/worktree.rs",
         "symbol": "worktree_path"
-      }
-    ],
-    "resp-kwjq2b": [
-      {
-        "pattern": "crates/scryer-core/src/composition/session.rs",
-        "symbol": "resolve_ask"
-      },
-      {
-        "pattern": "crates/scryer-mcp/src/tools/asks.rs",
-        "symbol": "resolve_ask"
       }
     ],
     "resp-m0xahj": [
@@ -21937,6 +21865,12 @@
         "symbol": "classifyPlan"
       }
     ],
+    "resp-rjfsrz": [
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "user_prompt_submit"
+      }
+    ],
     "resp-rkvxdd": [
       {
         "pattern": "crates/scryer-acp/src/application/prompt.rs",
@@ -22339,12 +22273,6 @@
         "symbol": "DarkCodePage"
       }
     ],
-    "resp-wgad2g": [
-      {
-        "pattern": "crates/scryer-core/src/application/hooks.rs",
-        "symbol": "untraced_edits"
-      }
-    ],
     "resp-wgx35t": [
       {
         "pattern": "crates/scryer-mcp/src/tools/intent.rs",
@@ -22361,12 +22289,6 @@
       {
         "pattern": "crates/scryer-extract/src/composition/test_status.rs",
         "symbol": "record_test_results"
-      }
-    ],
-    "resp-wqpdcg": [
-      {
-        "pattern": "crates/scryer-core/src/composition/session.rs",
-        "symbol": "file_asks"
       }
     ],
     "resp-wrge88": [
@@ -22749,12 +22671,6 @@
         "symbol": "hook_status_tells_outdated_installs_from_missing_ones"
       }
     ],
-    "resp-2gepcd": [
-      {
-        "pattern": "crates/scryer-core/src/composition/session.rs",
-        "symbol": "attached_files_are_accounted_for_and_outside_edits_ignored"
-      }
-    ],
     "resp-3phfpc": [
       {
         "pattern": "crates/scryer-mcp/src/hook_client.rs",
@@ -22841,18 +22757,6 @@
         "symbol": "composition_wires_every_layer_and_nothing_imports_it"
       }
     ],
-    "resp-gq5d46": [
-      {
-        "pattern": "crates/scryer-core/src/composition/session.rs",
-        "symbol": "a_descope_needs_a_reason_and_shows_in_the_summary"
-      }
-    ],
-    "resp-gxaeq8": [
-      {
-        "pattern": "crates/scryer-core/src/composition/session.rs",
-        "symbol": "an_untestable_claim_delivers_without_a_verdict"
-      }
-    ],
     "resp-k3sjnc": [
       {
         "pattern": "crates/scryer-extract/src/domain/context.rs",
@@ -22867,12 +22771,6 @@
       {
         "pattern": "tests/structuralViolations.test.ts",
         "symbol": "charges a violation to its node and every ancestor"
-      }
-    ],
-    "resp-kwjq2b": [
-      {
-        "pattern": "crates/scryer-core/src/composition/session.rs",
-        "symbol": "an_action_ask_is_closed_as_done_with_a_note"
       }
     ],
     "resp-mjrrnd": [
@@ -22966,25 +22864,13 @@
     "resp-vwxq2g": [
       {
         "pattern": "crates/scryer-core/src/composition/session.rs",
-        "symbol": "attached_files_are_accounted_for_and_outside_edits_ignored"
+        "symbol": "edits_outside_the_project_are_not_touches"
       }
     ],
     "resp-w6cn2y": [
       {
         "pattern": "crates/scryer-extract/src/domain/context.rs",
         "symbol": "a_named_import_follows_a_re_export_barrel"
-      }
-    ],
-    "resp-wgad2g": [
-      {
-        "pattern": "crates/scryer-core/src/composition/session.rs",
-        "symbol": "attached_files_are_accounted_for_and_outside_edits_ignored"
-      }
-    ],
-    "resp-wqpdcg": [
-      {
-        "pattern": "crates/scryer-core/src/composition/session.rs",
-        "symbol": "asks_are_filed_as_given_whatever_the_prompt_says"
       }
     ],
     "resp-wtnehp": [

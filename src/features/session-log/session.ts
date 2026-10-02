@@ -1,6 +1,6 @@
 /**
- * The session log — what one agent session was asked, what it did about each
- * ask, and what it touched that nobody asked for. Read from the backend's
+ * The session log — what one agent session touched, the claims its edits
+ * reached, and the plan entries it left unbuilt. Read from the backend's
  * per-session log (`list_sessions` / `read_session`); this module is the PURE
  * half: the wire types and the joins against the working model the page needs.
  * No React, no IPC — `useSessionLog` fetches, `SessionPage` renders.
@@ -15,51 +15,14 @@ export interface SessionSummary {
   session: string;
   /** Unix seconds. */
   updatedAt: number;
-  firstPrompt?: string | null;
-}
-
-export interface SessionPrompt {
-  /** "p1", "p2", … */
-  id: string;
-  /** The user's prompt, verbatim. */
-  text: string;
-}
-
-export type AskStatus = "delivered" | "answered" | "done" | "descoped" | "open";
-
-/** One thing the user asked for, as the agent broke a prompt down. */
-export interface SessionAsk {
-  /** "a1", "a2", … */
-  id: string;
-  /** The prompt id it came from. */
-  prompt: string;
-  text: string;
-  /** `action`: something to do that changes no claim — commit, push, run. */
-  kind: "build" | "answer" | "action";
-  source?: string;
-  /** Responsibility ids the ask is delivered through. */
-  claims: string[];
-  status: AskStatus;
-  /** Why the agent dropped it — set when descoped. */
-  reason?: string;
-  /** What the agent did — set when an action ask is done. */
-  note?: string;
-  /** What is still missing — set when open. */
-  missing?: string[];
 }
 
 export interface SessionView {
   session: string;
   startedAt: number;
   updatedAt: number;
-  prompts: SessionPrompt[];
-  /** Prompt ids the agent has not broken into asks. */
-  unfiled: string[];
-  asks: SessionAsk[];
   /** Each edited file and the claims (resp id, statement) its edit affected. */
   touched: { file: string; claims: [string, string][] }[];
-  /** Edited files no ask accounts for — the "I didn't ask for that" view. */
-  untraced: string[];
   /** Plan entries the session planned and never folded, with any progress note. */
   unfolded?: { key: string; label: string; note?: string }[];
   /** Plan element keys the agent wrote (`resp:…`, `node:…`, …). */
@@ -68,32 +31,10 @@ export interface SessionView {
 
 // --- joins -----------------------------------------------------------------------
 
-/** One prompt with the asks filed under it. */
-export interface PromptEntry {
-  prompt: SessionPrompt;
-  asks: SessionAsk[];
-  /** The agent has not broken this prompt into asks yet. */
-  unfiled: boolean;
-}
-
-/** Prompts in log order, each with its asks (in log order). An ask citing a
- *  prompt the log does not hold is dropped rather than invented a parent. */
-export function groupAsks(view: SessionView): PromptEntry[] {
-  const byPrompt = new Map<string, SessionAsk[]>();
-  for (const a of view.asks) byPrompt.set(a.prompt, [...(byPrompt.get(a.prompt) ?? []), a]);
-  const unfiled = new Set(view.unfiled);
-  return view.prompts.map((prompt) => ({
-    prompt,
-    asks: byPrompt.get(prompt.id) ?? [],
-    unfiled: unfiled.has(prompt.id),
-  }));
-}
-
-/** The top-bar count: what still wants the user's eye — open asks plus files
- *  no ask accounts for. */
+/** The top-bar count: what still wants the user's eye — plan entries the
+ *  session left unbuilt. */
 export function sessionBadge(view: SessionView | null): number {
-  if (!view) return 0;
-  return view.asks.filter((a) => a.status === "open").length + view.untraced.length;
+  return view?.unfolded?.length ?? 0;
 }
 
 /** What a plan element key resolves to in the working model, for display and

@@ -1,24 +1,15 @@
 /**
  * Session — the log of one agent session, read at a glance while the agent
- * works in the CLI: each prompt verbatim with the asks the agent broke it
- * into and what became of each, the files it edited that no ask accounts for
- * ("I didn't ask for that"), the claims its edits affected, and the plan
- * elements it wrote. Fed by `useSessionLog`; read-only — the developer acts in
- * the conversation or on the claim's own page.
+ * works in the CLI: the plan entries it left unbuilt, the files it edited and
+ * the claims those edits reached, and the plan elements it wrote. Fed by
+ * `useSessionLog`; read-only — the developer acts in the conversation or on
+ * the claim's own page.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { History, Radio, TriangleAlert } from "lucide-react";
 import type { SessionLog } from "../../features/session-log/useSessionLog";
-import {
-  claimIndex,
-  groupAsks,
-  resolveKey,
-  type AskStatus,
-  type ClaimHost,
-  type PromptEntry,
-  type SessionAsk,
-} from "../../features/session-log/session";
+import { claimIndex, resolveKey, type ClaimHost } from "../../features/session-log/session";
 import { ANCHOR_CALM, StatementText } from "../../features/markup/markup";
 import { jumpTo, PageSection } from "../../shared/ui/pagekit";
 import { PILL_BASE } from "../../shared/ui/statusColors";
@@ -26,17 +17,6 @@ import { Select } from "../../shared/ui/Select";
 import { respElementId } from "../../widgets/source-section/SourceSection";
 import type { ScryModel } from "../../entities/model/viewmodel";
 import { SpecialBody, SpecialHeader } from "../../widgets/special-page-shell/shell";
-
-/** Status pill hue: green for done, blue for a question answered, orange for
- *  still open, neutral for the agent's deliberate drop. */
-const STATUS_CLS: Record<AskStatus, string> = {
-  delivered:
-    "bg-emerald-500/10 text-emerald-700 ring-emerald-500/25 dark:bg-emerald-400/10 dark:text-emerald-300 dark:ring-emerald-400/25",
-  answered: "bg-blue-500/10 text-blue-700 ring-blue-500/25 dark:bg-blue-400/10 dark:text-blue-300 dark:ring-blue-400/25",
-  done: "bg-emerald-500/10 text-emerald-700 ring-emerald-500/25 dark:bg-emerald-400/10 dark:text-emerald-300 dark:ring-emerald-400/25",
-  open: "bg-orange-500/10 text-orange-700 ring-orange-500/25 dark:bg-orange-400/10 dark:text-orange-300 dark:ring-orange-400/25",
-  descoped: "bg-[var(--surface-hover)] text-[var(--text-tertiary)] ring-[var(--border-strong)]",
-};
 
 const when = (at: number) =>
   new Date(at * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -56,7 +36,6 @@ export function SessionPage({
 }) {
   const { sessions, selectedId, select, view, live } = log;
   const claims = useMemo(() => claimIndex(model), [model]);
-  const entries = useMemo(() => (view ? groupAsks(view) : []), [view]);
 
   const openHost = (kind: "node" | "group", id: string) => (kind === "group" ? onSelectGroup(id) : onSelectNode(id));
   // Open the claim's page and flash the claim once it renders.
@@ -71,7 +50,7 @@ export function SessionPage({
     () =>
       sessions.map((s) => ({
         value: s.session,
-        label: `${when(s.updatedAt)} · ${s.firstPrompt?.trim() || s.session.slice(0, 8)}`,
+        label: `${when(s.updatedAt)} · ${s.session.slice(0, 8)}`,
       })),
     [sessions],
   );
@@ -80,7 +59,7 @@ export function SessionPage({
     ? sessions.length === 0
       ? "No agent sessions yet."
       : "Loading…"
-    : `Started ${when(view.startedAt)} · ${plural(view.prompts.length, "prompt")} · ${plural(view.asks.length, "ask")}`;
+    : `Started ${when(view.startedAt)} · ${plural(view.touched.length, "file")} touched · ${plural(view.modelEdits.length, "model edit")}`;
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -118,25 +97,6 @@ export function SessionPage({
               )}
             </div>
 
-            {view && view.untraced.length > 0 && (
-              <PageSection
-                title="Not asked for"
-                hint="Files the agent edited that no ask accounts for. Either an ask is missing from the log, or the agent went beyond what you asked."
-                count={view.untraced.length}
-              >
-                <ul className="flex flex-col gap-1 rounded-md border border-orange-500/30 bg-orange-500/5 px-3 py-2 dark:border-orange-400/30 dark:bg-orange-400/5">
-                  {view.untraced.map((f) => (
-                    <li key={f} className="flex items-center gap-2 font-mono text-sm text-orange-800 dark:text-orange-300">
-                      <TriangleAlert className="h-3.5 w-3.5 shrink-0" />
-                      <span className="truncate" title={f}>
-                        {f}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </PageSection>
-            )}
-
             {view && (view.unfolded?.length ?? 0) > 0 && (
               <PageSection
                 title="Planned, not built"
@@ -154,16 +114,6 @@ export function SessionPage({
                     </li>
                   ))}
                 </ul>
-              </PageSection>
-            )}
-
-            {view && (
-              <PageSection title="Prompts" count={view.prompts.length}>
-                <ol className="flex flex-col gap-3">
-                  {entries.map((e) => (
-                    <PromptCard key={e.prompt.id} entry={e} claims={claims} onOpenClaim={openClaim} />
-                  ))}
-                </ol>
               </PageSection>
             )}
 
@@ -234,114 +184,6 @@ export function SessionPage({
         )}
       </SpecialBody>
     </div>
-  );
-}
-
-// --- one prompt and its asks ---------------------------------------------------------
-
-function PromptCard({
-  entry,
-  claims,
-  onOpenClaim,
-}: {
-  entry: PromptEntry;
-  claims: Map<string, ClaimHost>;
-  onOpenClaim: (respId: string) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const { prompt, asks, unfiled } = entry;
-  return (
-    <li className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3">
-      <div className="flex items-start gap-2.5">
-        <span className="shrink-0 pt-px font-mono text-xs text-[var(--text-ghost)]">{prompt.id}</span>
-        <button
-          type="button"
-          onClick={() => setExpanded((x) => !x)}
-          title={expanded ? "Collapse" : "Show the whole prompt"}
-          className={`min-w-0 flex-1 whitespace-pre-wrap break-words text-left text-sm text-[var(--text)] ${expanded ? "" : "line-clamp-2"}`}
-        >
-          {prompt.text}
-        </button>
-        {unfiled && (
-          <span
-            className={`${PILL_BASE} bg-[var(--surface-hover)] text-[var(--text-tertiary)] ring-[var(--border-strong)]`}
-            title="The agent has not broken this prompt into asks"
-          >
-            not broken into asks
-          </span>
-        )}
-      </div>
-      {asks.length > 0 && (
-        <ul className="mt-2.5 flex flex-col gap-2 border-l border-[var(--border)] pl-3">
-          {asks.map((a) => (
-            <AskRow key={a.id} ask={a} claims={claims} onOpenClaim={onOpenClaim} />
-          ))}
-        </ul>
-      )}
-    </li>
-  );
-}
-
-function AskRow({
-  ask,
-  claims,
-  onOpenClaim,
-}: {
-  ask: SessionAsk;
-  claims: Map<string, ClaimHost>;
-  onOpenClaim: (respId: string) => void;
-}) {
-  return (
-    <li>
-      <div className="flex items-baseline gap-2">
-        <span className="shrink-0 font-mono text-xs text-[var(--text-ghost)]">{ask.id}</span>
-        <span className={`min-w-0 flex-1 text-sm ${ask.status === "descoped" ? "text-[var(--text-muted)] line-through decoration-[var(--text-ghost)]" : "text-[var(--text-secondary)]"}`}>
-          {ask.text}
-        </span>
-        <span
-          className={`${PILL_BASE} ${STATUS_CLS[ask.status]}`}
-          title={
-            ask.kind === "answer"
-              ? "A question to answer"
-              : ask.kind === "action"
-                ? "Something to do"
-                : "Something to build"
-          }
-        >
-          {ask.status}
-        </span>
-      </div>
-      <div className="ml-7 flex flex-col gap-0.5">
-        {ask.status === "done" && ask.note && (
-          <div className="text-xs text-[var(--text-secondary)]">
-            <span className="font-medium text-[var(--text-tertiary)]">Done:</span> {ask.note}
-          </div>
-        )}
-        {ask.status === "descoped" && ask.reason && (
-          <div className="text-xs text-[var(--text-secondary)]">
-            <span className="font-medium text-[var(--text-tertiary)]">Descoped:</span> {ask.reason}
-          </div>
-        )}
-        {ask.status === "open" &&
-          (ask.missing ?? []).map((m, i) => (
-            <div key={i} className="text-xs text-orange-700 dark:text-orange-300">
-              missing: {m}
-            </div>
-          ))}
-        {ask.source && (
-          <div className="truncate text-xs text-[var(--text-muted)]" title={ask.source}>
-            source: {ask.source}
-          </div>
-        )}
-        {ask.claims.length > 0 && (
-          <ul className="flex flex-col gap-0.5">
-            {ask.claims.map((id) => (
-              <ClaimLine key={id} id={id} claims={claims} onOpen={onOpenClaim} />
-            ))}
-          </ul>
-        )}
-      </div>
-    </li>
   );
 }
 

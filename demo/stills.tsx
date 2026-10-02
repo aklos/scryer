@@ -41,36 +41,26 @@ const pendingModel: ScryModel = (() => {
   return m;
 })();
 
-// One session: a delivered build ask, an open one, a descoped one, an
-// unbroken follow-up prompt, and a file nobody asked for.
+// One session: files touched and the claims they reached, one plan entry
+// left unbuilt with its progress note, and the plan elements it wrote.
 const sessionLog: SessionLog = {
   sessions: [
-    { session: "7f3a9c2e1b", updatedAt: 1_700_000_700, firstPrompt: "Add refunds for captured payments" },
-    { session: "2c81d0aa94", updatedAt: 1_699_990_000, firstPrompt: "Harden webhook retries" },
+    { session: "7f3a9c2e1b", updatedAt: 1_700_000_700 },
+    { session: "2c81d0aa94", updatedAt: 1_699_990_000 },
   ],
   selectedId: "7f3a9c2e1b",
   select: noop,
-  badge: 2,
+  badge: 1,
   live: true,
   view: {
     session: "7f3a9c2e1b",
     startedAt: 1_700_000_000,
     updatedAt: 1_700_000_700,
-    prompts: [
-      { id: "p1", text: "Add refunds for captured payments. Partial refunds too, and keep the ledger balanced — every refund needs its reversing entry." },
-      { id: "p2", text: "Also, why does the webhook retry twice?" },
-    ],
-    unfiled: ["p2"],
-    asks: [
-      { id: "a1", prompt: "p1", text: "Refund a captured payment", kind: "build", claims: ["r-ledger-1"], status: "delivered" },
-      { id: "a2", prompt: "p1", text: "Partial refunds", kind: "build", claims: [], status: "open", missing: ["no claim covers a partial amount"] },
-      { id: "a3", prompt: "p1", text: "Refund to a different card", kind: "build", claims: [], status: "descoped", reason: "the processor only refunds to the original instrument" },
-    ],
     touched: [
       { file: "ledger/src/escrow.rs", claims: [["r-ledger-2", "hold the captured funds"]] },
       { file: "webhooks/retry.go", claims: [] },
     ],
-    untraced: ["webhooks/retry.go"],
+    unfolded: [{ key: "resp:r-ledger-1", label: "Refund a captured payment", note: "full refunds built; partial amounts left" }],
     modelEdits: ["resp:r-ledger-1", "node:ledger", "resp:r-gone"],
   },
 };

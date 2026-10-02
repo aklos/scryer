@@ -6,11 +6,8 @@
 //! mutable record, so a writer racing another writer can only add a line.
 //!
 //! One file per session id, so a resumed session (same id) keeps its history
-//! and a new one starts clean — no TTL, no pruning.
-//!
-//! The ask ledger rides the same log: every user prompt is recorded verbatim,
-//! the agent breaks it into asks, and each ask ends delivered (claims linked,
-//! verified, and their code touched), answered, or descoped with a reason.
+//! and a new one starts clean — no TTL, no pruning. A line this build does not
+//! know (an event an older or newer scryer wrote) is skipped on read.
 
 use serde::{Deserialize, Serialize};
 
@@ -32,30 +29,6 @@ pub enum SessionEvent {
     Overlay { file: String, hash: u64 },
     /// The Stop gate blocked on unreconciled anchors — at most once per session.
     ReconcileGate,
-    /// The user's prompt, verbatim. `id` is `p1`, `p2`, … in session order.
-    Prompt { id: String, text: String },
-    /// The agent broke prompt `prompt` into these asks. An empty list says the
-    /// prompt asked for nothing new ("continue", "thanks").
-    Asks { prompt: String, asks: Vec<Ask> },
-    /// Claims that deliver ask `id`, added to any linked before.
-    AskLinked { id: String, claims: Vec<String> },
-    /// An `answer` ask was answered.
-    AskAnswered { id: String },
-    /// Ask `id` will not be delivered, and why — shown to the user.
-    AskDescoped { id: String, reason: String },
-    /// An `action` ask was carried out; `note` says what was done.
-    AskDone { id: String, note: String },
-    /// Files ask `id` accounts for beyond its claims' anchors — the helpers,
-    /// rule text or config the work needed.
-    AskFiles { id: String, files: Vec<String> },
-    /// The Stop gate blocked on these prompts and asks. Each is blocked on
-    /// at most once.
-    AsksGate {
-        #[serde(default)]
-        prompts: Vec<String>,
-        #[serde(default)]
-        asks: Vec<String>,
-    },
     /// The agent wrote these plan elements (change-map keys).
     ModelEdit { keys: Vec<String> },
     /// The summary last shown to the user, so an unchanged one stays silent.
@@ -79,49 +52,6 @@ pub enum SessionEvent {
     },
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum AskKind {
-    /// Changes what the code does: delivered by verified claims whose code
-    /// the session touched.
-    #[default]
-    Build,
-    /// Wants an answer, not a change: delivered when answered.
-    Answer,
-    /// Wants something done that changes no claim — commit, push, run, deploy:
-    /// delivered when the agent marks it done, saying what it did.
-    Action,
-}
-
-/// One thing the user asked for, in the agent's words.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Ask {
-    /// `a1`, `a2`, … in session order.
-    pub id: String,
-    pub text: String,
-    #[serde(default)]
-    pub kind: AskKind,
-    /// When the ask is a feature of something to port or match: the path the
-    /// feature comes from.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-}
-
-/// Where an ask stands in the log (delivery is judged against the model and
-/// the verdicts, outside the log).
-#[derive(Debug, Clone, PartialEq)]
-pub struct AskEntry {
-    pub ask: Ask,
-    pub prompt: String,
-    pub claims: Vec<String>,
-    pub answered: bool,
-    pub descoped: Option<String>,
-    /// Set when an action ask is done: what was done.
-    pub done: Option<String>,
-    /// Files the ask accounts for beyond its claims' anchors.
-    pub files: Vec<String>,
-}
-
 /// The fold of a session's events.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SessionLog {
@@ -135,14 +65,6 @@ pub struct SessionLog {
     pub gated_pending: Vec<String>,
     /// Whether the probe gate already fired.
     pub probe_gated: bool,
-    /// Prompts in order, `(id, text)`.
-    pub prompts: Vec<(String, String)>,
-    /// Prompts the agent has filed asks for.
-    pub filed: Vec<String>,
-    pub asks: Vec<AskEntry>,
-    /// Prompts and asks the Stop gate already blocked on.
-    pub gated_prompts: Vec<String>,
-    pub gated_asks: Vec<String>,
     /// Plan elements the agent wrote, first-write order, each once.
     pub model_edits: Vec<String>,
     pub last_summary: Option<String>,
@@ -173,60 +95,6 @@ impl SessionLog {
                 }
             }
             SessionEvent::ReconcileGate => self.reconcile_gated = true,
-            SessionEvent::Prompt { id, text } => self.prompts.push((id.clone(), text.clone())),
-            SessionEvent::Asks { prompt, asks } => {
-                if !self.filed.contains(prompt) {
-                    self.filed.push(prompt.clone());
-                }
-                for a in asks {
-                    self.asks.push(AskEntry {
-                        ask: a.clone(),
-                        prompt: prompt.clone(),
-                        claims: Vec::new(),
-                        answered: false,
-                        descoped: None,
-                        done: None,
-                        files: Vec::new(),
-                    });
-                }
-            }
-            SessionEvent::AskLinked { id, claims } => {
-                if let Some(a) = self.ask_mut(id) {
-                    for c in claims {
-                        if !a.claims.contains(c) {
-                            a.claims.push(c.clone());
-                        }
-                    }
-                }
-            }
-            SessionEvent::AskAnswered { id } => {
-                if let Some(a) = self.ask_mut(id) {
-                    a.answered = true;
-                }
-            }
-            SessionEvent::AskDescoped { id, reason } => {
-                if let Some(a) = self.ask_mut(id) {
-                    a.descoped = Some(reason.clone());
-                }
-            }
-            SessionEvent::AskDone { id, note } => {
-                if let Some(a) = self.ask_mut(id) {
-                    a.done = Some(note.clone());
-                }
-            }
-            SessionEvent::AskFiles { id, files } => {
-                if let Some(a) = self.ask_mut(id) {
-                    for f in files {
-                        if !a.files.contains(f) {
-                            a.files.push(f.clone());
-                        }
-                    }
-                }
-            }
-            SessionEvent::AsksGate { prompts, asks } => {
-                self.gated_prompts.extend(prompts.iter().cloned());
-                self.gated_asks.extend(asks.iter().cloned());
-            }
             SessionEvent::ModelEdit { keys } => {
                 for k in keys {
                     if !self.model_edits.contains(k) {
@@ -252,33 +120,6 @@ impl SessionLog {
                 .map(|(_, ns)| *ns)
         })
         .or_else(|| self.shell_starts.last().map(|(_, ns)| *ns))
-    }
-
-    fn ask_mut(&mut self, id: &str) -> Option<&mut AskEntry> {
-        self.asks.iter_mut().find(|a| a.ask.id == id)
-    }
-
-    pub fn ask(&self, id: &str) -> Option<&AskEntry> {
-        self.asks.iter().find(|a| a.ask.id == id)
-    }
-
-    /// The id the next prompt gets.
-    pub fn next_prompt_id(&self) -> String {
-        format!("p{}", self.prompts.len() + 1)
-    }
-
-    /// The id the next ask gets.
-    pub fn next_ask_id(&self) -> String {
-        format!("a{}", self.asks.len() + 1)
-    }
-
-    /// Prompts the agent has not broken into asks yet, oldest first.
-    pub fn unfiled_prompts(&self) -> Vec<&str> {
-        self.prompts
-            .iter()
-            .map(|(id, _)| id.as_str())
-            .filter(|id| !self.filed.iter().any(|f| f == id))
-            .collect()
     }
 
     /// Whether `hash` is exactly what this session was last shown for `file` —

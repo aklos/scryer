@@ -60,7 +60,7 @@ export function TopBar({
   onCloseProject: () => void;
   onOpenSearch: () => void;
   onOpenSettings: () => void;
-  /** Open asks + files no ask accounts for, in the session on screen. */
+  /** Plan entries the session on screen left unbuilt. */
   sessionBadge?: number;
   /** A hook session is active — the badge pulses (a dot when it is empty). */
   sessionLive?: boolean;
@@ -145,7 +145,7 @@ export function TopBar({
             exactly one lit. The session log is a wiki page underneath, but to
             the user it is its own place: lighting Wiki too read as two
             selections, and Wiki then "went back" to it. Its cell carries the
-            badge (open asks + untraced files); while a hook session is live
+            badge (plan entries left unbuilt); while a hook session is live
             the badge pulses, or a dot does when there is nothing to count. */}
         <div className="ml-2 flex items-stretch overflow-hidden rounded-md border border-[var(--border)] divide-x divide-[var(--border)]">
           {([
@@ -158,7 +158,7 @@ export function TopBar({
                   Icon: History,
                   title:
                     sessionBadge > 0
-                      ? `Session — ${sessionBadge} to look at: open asks and files nobody asked for${sessionLive ? " (session live)" : ""}`
+                      ? `Session — ${sessionBadge} planned, not built${sessionLive ? " (session live)" : ""}`
                       : `Session — nothing open${sessionLive ? " (session live)" : ""}`,
                 }]
               : []),

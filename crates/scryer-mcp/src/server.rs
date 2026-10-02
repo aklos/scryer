@@ -30,7 +30,7 @@ impl ScryerServer {
             + Self::tool_router_generation()
             + Self::tool_router_intent()
             + Self::tool_router_testing()
-            + Self::tool_router_asks();
+            + Self::tool_router_notes();
         let tools = tool_router
             .list_all()
             .into_iter()

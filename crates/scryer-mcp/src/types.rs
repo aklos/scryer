@@ -785,43 +785,8 @@ pub(crate) struct FlagDriftRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct FileAsksRequest {
-    pub project: Option<String>,
-    /// Prompt id ("p3"); default the oldest unfiled one.
-    pub prompt: Option<String>,
-    pub asks: Vec<AskItem>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct AskItem {
-    pub text: String,
-    /// "build" (default), "answer", or "action".
-    pub kind: Option<String>,
-    /// Path the feature is ported from.
-    pub source: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct ResolveAskRequest {
-    pub project: Option<String>,
-    pub id: String,
-    pub claims: Option<Vec<String>>,
-    pub answered: Option<bool>,
-    /// One-line reason, shown to the user.
-    pub descoped: Option<String>,
-    /// Closes an action ask: one line saying what was done.
-    pub done: Option<String>,
-    /// Supporting files the ask accounts for beyond its claims' anchors.
-    pub files: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct NoteClaimsRequest {
     pub project: Option<String>,
     pub notes: std::collections::BTreeMap<String, String>,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct GetAsksRequest {
-    pub project: Option<String>,
-}

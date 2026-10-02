@@ -3890,8 +3890,8 @@
       "responsibilities": [
         {
           "id": "resp-8wcazz",
-          "statement": "On session stop, runs the close, ask-ledger and probe gates, blocking once with what is missing or showing the session summary",
-          "lastTouchedAt": 1790939984
+          "statement": "On session stop, runs the close, unfolded-work and probe gates, blocking once with what is missing or showing the session summary",
+          "lastTouchedAt": 1790941215
         }
       ]
     },
@@ -14054,42 +14054,12 @@
       ]
     },
     {
-      "id": "node-0zrtkd",
-      "kind": "component",
-      "name": "Session Ask Ledger",
-      "parentId": "node-t58dyd",
-      "description": "Judges each ask a session filed against the claims linked to it.",
-      "responsibilities": [
-        {
-          "id": "resp-gxaeq8",
-          "statement": "**When** an ask's linked claim has no testable condition, **counts** it toward delivery without a test verdict",
-          "lastTouchedAt": 1790939637
-        },
-        {
-          "id": "resp-gq5d46",
-          "statement": "**When** a session has descoped asks, **summarizes** them as a count with their ids",
-          "lastTouchedAt": 1790940537
-        },
-        {
-          "id": "resp-wgad2g",
-          "statement": "**When** a file the session edited is attached to an ask, **leaves** it out of the edits no ask accounts for",
-          "lastTouchedAt": 1790940537
-        }
-      ],
-      "layer": "application"
-    },
-    {
       "id": "node-7h6fth",
       "kind": "component",
       "name": "Session Ledger Wiring",
       "parentId": "node-t58dyd",
       "description": "The session-log entry points the hook client and MCP tools call: prompts, asks, touches.",
       "responsibilities": [
-        {
-          "id": "resp-wqpdcg",
-          "statement": "**When** the agent files asks for a prompt, **records** them as given, never inferring from the prompt's wording what they must contain",
-          "lastTouchedAt": 1790939637
-        },
         {
           "id": "resp-xxh3fn",
           "statement": "**When** a shell command finishes, **records** every project file modified since it started as touched by the session",
@@ -14104,16 +14074,6 @@
           "id": "resp-vwxq2g",
           "statement": "**If** an edited file lies outside the project, **then** **leaves** it out of the session's touches",
           "lastTouchedAt": 1790940537
-        },
-        {
-          "id": "resp-kwjq2b",
-          "statement": "**When** the agent marks an action ask done, **records** it as done with the agent's one-line note",
-          "lastTouchedAt": 1790940537
-        },
-        {
-          "id": "resp-2gepcd",
-          "statement": "**When** the agent attaches supporting files to an ask, **records** them as files that ask accounts for",
-          "lastTouchedAt": 1790940537
         }
       ],
       "layer": "composition"
@@ -14125,9 +14085,9 @@
       "parentId": "node-erg0zt",
       "responsibilities": [
         {
-          "id": "resp-3phfpc",
-          "statement": "**If** a submitted prompt is a peer agent's message, **then** **skips** logging it as a user prompt",
-          "lastTouchedAt": 1790939676
+          "id": "resp-rjfsrz",
+          "statement": "**Binds** the harness process to the session on each prompt, so an MCP server spawned before a /clear follows the session",
+          "lastTouchedAt": 1790941215
         }
       ]
     }

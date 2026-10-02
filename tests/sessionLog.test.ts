@@ -1,42 +1,22 @@
 /**
  * The session log's pure joins (`src/features/session-log/session.ts`).
  *
- * What these pin: asks file under their prompt in log order and an unbroken
- * prompt is marked; the top-bar badge counts exactly open asks + untraced
- * files; plan keys resolve to names / statements and fall back to the raw key.
+ * What these pin: the top-bar badge counts exactly the plan entries left
+ * unbuilt; plan keys resolve to names / statements and fall back to the raw key.
  */
 import { describe, expect, it } from "vitest";
-import {
-  claimIndex,
-  groupAsks,
-  resolveKey,
-  sessionBadge,
-  type SessionAsk,
-  type SessionView,
-} from "../src/features/session-log/session";
+import { claimIndex, resolveKey, sessionBadge, type SessionView } from "../src/features/session-log/session";
 import type { ScryModel } from "../src/entities/model/viewmodel";
-
-const ask = (id: string, prompt: string, status: SessionAsk["status"]): SessionAsk => ({
-  id,
-  prompt,
-  text: id,
-  kind: "build",
-  claims: [],
-  status,
-});
 
 const view = (extra: Partial<SessionView> = {}): SessionView => ({
   session: "s1",
   startedAt: 0,
   updatedAt: 0,
-  prompts: [
-    { id: "p1", text: "first" },
-    { id: "p2", text: "second" },
-  ],
-  unfiled: ["p2"],
-  asks: [ask("a1", "p1", "delivered"), ask("a2", "p1", "open"), ask("a3", "p9", "open")],
   touched: [],
-  untraced: ["x.ts", "y.ts"],
+  unfolded: [
+    { key: "resp:r1", label: "posts entries", note: "built; reversal left" },
+    { key: "resp:r2", label: "owns money" },
+  ],
   modelEdits: [],
   ...extra,
 });
@@ -51,20 +31,10 @@ const model: ScryModel = {
   groups: [{ id: "g1", name: "Core", memberIds: [], responsibilities: [{ id: "r2", statement: "owns money" }] } as unknown as ScryModel["groups"][number]],
 };
 
-describe("groupAsks", () => {
-  it("files asks under their prompt in order and marks unbroken prompts", () => {
-    const g = groupAsks(view());
-    expect(g.map((e) => [e.prompt.id, e.asks.map((a) => a.id), e.unfiled])).toEqual([
-      ["p1", ["a1", "a2"], false],
-      ["p2", [], true],
-    ]);
-  });
-});
-
 describe("sessionBadge", () => {
-  it("counts open asks plus untraced files", () => {
-    expect(sessionBadge(view())).toBe(4);
-    expect(sessionBadge(view({ asks: [ask("a1", "p1", "descoped")], untraced: [] }))).toBe(0);
+  it("counts the plan entries left unbuilt", () => {
+    expect(sessionBadge(view())).toBe(2);
+    expect(sessionBadge(view({ unfolded: [] }))).toBe(0);
     expect(sessionBadge(null)).toBe(0);
   });
 });

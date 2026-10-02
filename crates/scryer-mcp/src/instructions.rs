@@ -7,20 +7,13 @@ pub(crate) const INSTRUCTIONS: &str = "\
 This project has a scryer architecture model alongside its code: a tree of what each part is \
 RESPONSIBLE for, mapped to the source that implements it and to the TESTS attached to each claim. \
 It is the user's authored spec, not optional background. While a model exists you work through it: \
-plan a change in the model FIRST, then write code and tests to match.\n\
+plan a change in the model FIRST, get the user's go-ahead in chat, then write code and tests to \
+match.\n\
 \n\
 RULES ARE FETCHED, NOT ASSUMED. Every tool description ends with a `Rules:` line naming the slugs \
 that govern it, and a rule cites others by slug in double square brackets. Before you use a tool in a way one of those \
 rules governs, or make a modeling judgment, fetch the rule: `get_rules {id: \"slug-a,slug-b\"}` \
 (`get_rules {}` lists them all). Never infer the conventions from existing nodes.\n\
-\n\
-## Every prompt\n\
-The hook logs each user prompt and names it (`p3`). Break it into asks with `file_asks` before \
-anything else, do what the asks cover and nothing beyond it, and end each one delivered \
-(`resolve_ask {id, claims}`: verified claims on code you edited), answered, or descoped with a \
-reason. The Stop hook names whatever is still open. Never ask the user to review or approve: \
-finish the work. No silent passes or stubs: an unfinished ask is descoped saying what is left. \
-[[ask-ledger]]\n\
 \n\
 ## Every task beyond a one-line fix\n\
 1. ORIENT — `orient {task, files}` for a coding task; `get_health` then `read_model` for a \
@@ -30,15 +23,17 @@ session's change automatically [[change-ledger]]. Only changes that alter what t
 need plan entries. A container declares a `style` \
 only when its code actually has that shape; never guess one. [[loop-plan]] [[proportionality]] \
 [[styles]]\n\
-3. BUILD — implement claim by claim, each testable (When/While/If) claim backed by the cheapest \
+3. SIGN-OFF — tell the user what you planned and wait for their go-ahead in chat; discussing or \
+changing the plan is normal, and a bug report or a question is not a go-ahead. Build only what \
+was signed off. [[loop-sign-off]]\n\
+4. BUILD — implement claim by claim, each testable (When/While/If) claim backed by the cheapest \
 test that would fail if it broke, often one behaviour test shared by several claims. Run only \
 what `get_test_radius` prints, never the full suite. Placement is given, not chosen: `scaffold {node_id}` and `orient {files}` \
 name each planned component's directory, layer and allowed imports. [[loop-build]] [[styles]]\n\
-4. CLOSE — `mark_implemented` with `anchors` and `tests` in the same call; the fold is gated on a \
+5. CLOSE — `mark_implemented` with `anchors` and `tests` in the same call; the fold is gated on a \
 passing verdict, so first run the command `get_test_radius` prints and `ingest_test_report`. \
 Then `flag_drift` and `resolve_drift` (drift verdicts are yours, never the user's), \
-`reconcile_drift`, then link the claims to their ask. Leave no planned entry unfolded \
-without a note. [[loop-close]] [[drift-directions]]\n\
+`reconcile_drift`. Leave no planned entry unfolded without a progress note. [[loop-close]] [[drift-directions]]\n\
 \n\
 If no model exists yet, build one first from the code. [[generation-fill]]\n\
 \n\

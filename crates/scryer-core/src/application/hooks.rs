@@ -3,10 +3,8 @@
 //! the events these answers call for.
 
 use crate::application::locate::locate;
-use crate::domain::model::{Kind, ScryModel};
-use crate::domain::session::{AskKind, SessionLog};
+use crate::domain::model::ScryModel;
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
 
 /// One anchor the fingerprint check reports out of sync, in the shape the close
 /// view needs. The check itself lives outside this crate.
@@ -152,236 +150,6 @@ pub fn close_view(
     view
 }
 
-/// Where one ask stands, judged against the model and the verdicts.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(tag = "status", rename_all = "camelCase")]
-pub enum AskStatus {
-    Delivered,
-    Answered,
-    /// An action ask carried out; `note` says what was done.
-    Done { note: String },
-    Descoped { reason: String },
-    /// What is still missing, one item per gap.
-    Open { missing: Vec<String> },
-}
-
-impl AskStatus {
-    pub fn is_open(&self) -> bool {
-        matches!(self, AskStatus::Open { .. })
-    }
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct AskView {
-    pub id: String,
-    pub prompt: String,
-    pub text: String,
-    pub kind: AskKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-    pub claims: Vec<String>,
-    #[serde(flatten)]
-    pub status: AskStatus,
-}
-
-fn pattern_matches(pattern: &str, file: &str) -> bool {
-    pattern == file || glob::Pattern::new(pattern).is_ok_and(|p| p.matches(file))
-}
-
-/// The files a claim's code and tests live in, as anchored in `working`.
-fn claim_patterns<'a>(working: &'a ScryModel, claim: &str) -> impl Iterator<Item = &'a str> {
-    working
-        .source_map
-        .get(claim)
-        .into_iter()
-        .flatten()
-        .chain(working.test_map.get(claim).into_iter().flatten())
-        .map(|l| l.pattern.as_str())
-}
-
-/// Whether claim `id` needs a passing verdict to deliver — the same line the
-/// fold gate draws: a When/While/If claim on a code-backed host. A ubiquitous
-/// claim, or one on a person or an external system, carries no condition a
-/// test arranges, so its touched, folded code is the evidence.
-fn needs_verdict(working: &ScryModel, id: &str) -> bool {
-    let host = working
-        .nodes
-        .iter()
-        .find_map(|n| n.responsibilities.iter().find(|r| r.id == id).map(|r| (n, r)));
-    match host {
-        Some((n, r)) => {
-            n.kind != Kind::Person
-                && n.external != Some(true)
-                && crate::domain::ears::classify(&r.statement).testable()
-        }
-        None => false, // a group's claim: discharged by its members
-    }
-}
-
-/// Judge every ask in the log. A build ask is delivered when it has claims and
-/// each one exists, is folded (not still `pending` in the plan), has a passing
-/// verdict (`verified`) when it is testable, and anchors code this session
-/// edited — a green suite alone never delivers anything, and neither does a
-/// plan.
-pub fn ask_views(
-    log: &SessionLog,
-    working: &ScryModel,
-    verified: &HashMap<String, bool>,
-    pending: &HashSet<String>,
-) -> Vec<AskView> {
-    let exists = |id: &str| {
-        working
-            .nodes
-            .iter()
-            .flat_map(|n| n.responsibilities.iter())
-            .chain(working.groups.iter().flat_map(|g| g.responsibilities.iter()))
-            .any(|r| r.id == id)
-    };
-    log.asks
-        .iter()
-        .map(|a| {
-            let status = if let Some(reason) = &a.descoped {
-                AskStatus::Descoped { reason: reason.clone() }
-            } else {
-                match a.ask.kind {
-                    AskKind::Answer if a.answered => AskStatus::Answered,
-                    AskKind::Answer => AskStatus::Open {
-                        missing: vec![format!("not answered yet — resolve_ask {{id: \"{}\", answered: true}} once it is", a.ask.id)],
-                    },
-                    AskKind::Action => match &a.done {
-                        Some(note) => AskStatus::Done { note: note.clone() },
-                        None => AskStatus::Open {
-                            missing: vec![format!(
-                                "not done yet — resolve_ask {{id: \"{}\", done: \"<what you did>\"}} once it is",
-                                a.ask.id
-                            )],
-                        },
-                    },
-                    AskKind::Build => {
-                        let mut missing = Vec::new();
-                        if a.claims.is_empty() {
-                            missing.push(format!(
-                                "no claim delivers it — model it, then resolve_ask {{id: \"{}\", claims: [...]}}",
-                                a.ask.id
-                            ));
-                        }
-                        for c in &a.claims {
-                            if !exists(c) {
-                                missing.push(format!("{c} is not in the model"));
-                                continue;
-                            }
-                            if pending.contains(c) {
-                                missing.push(format!(
-                                    "{c} is planned, not built — finish it and mark_implemented, or \
-                                     descope the ask saying exactly what is left"
-                                ));
-                            }
-                            if needs_verdict(working, c) && !verified.get(c).copied().unwrap_or(false) {
-                                missing.push(format!("{c} has no passing test verdict"));
-                            }
-                            let touched = claim_patterns(working, c)
-                                .any(|p| log.touched.iter().any(|f| pattern_matches(p, f)));
-                            if !touched {
-                                missing.push(format!("{c}: this session edited none of its anchored code"));
-                            }
-                        }
-                        if missing.is_empty() {
-                            AskStatus::Delivered
-                        } else {
-                            AskStatus::Open { missing }
-                        }
-                    }
-                }
-            };
-            AskView {
-                id: a.ask.id.clone(),
-                prompt: a.prompt.clone(),
-                text: a.ask.text.clone(),
-                kind: a.ask.kind,
-                source: a.ask.source.clone(),
-                claims: a.claims.clone(),
-                status,
-            }
-        })
-        .collect()
-}
-
-/// Files this session edited that no ask accounts for: not anchored by (or a
-/// test of) any linked claim, not an ask's `source`, and not a file the agent
-/// attached to an ask. "I didn't ask for that."
-pub fn untraced_edits(log: &SessionLog, working: &ScryModel) -> Vec<String> {
-    log.touched
-        .iter()
-        .filter(|f| {
-            !log.asks.iter().any(|a| {
-                a.files.iter().any(|p| pattern_matches(p, f))
-                    || a.ask.source.as_deref().is_some_and(|s| pattern_matches(s, f) || f.starts_with(s))
-                    || a.claims
-                        .iter()
-                        .any(|c| claim_patterns(working, c).any(|p| pattern_matches(p, f)))
-            })
-        })
-        .cloned()
-        .collect()
-}
-
-/// What the Stop gate blocks on now: prompts never broken into asks and open
-/// asks — each only if it was never blocked on before.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct AsksGate {
-    pub prompts: Vec<(String, String)>,
-    pub asks: Vec<AskView>,
-}
-
-impl AsksGate {
-    pub fn is_empty(&self) -> bool {
-        self.prompts.is_empty() && self.asks.is_empty()
-    }
-
-    /// The block reason, addressed to the agent. It names exactly what is left
-    /// and never asks for the user's review.
-    pub fn reason(&self) -> String {
-        let mut out = String::from("Scryer ask ledger — not done yet:\n");
-        for (id, text) in &self.prompts {
-            out.push_str(&format!(
-                "- prompt {id} was never broken into asks: \"{}\" — file_asks {{prompt: \"{id}\", asks: [...]}} (an empty list if it asked for nothing new)\n",
-                clip(text, 160)
-            ));
-        }
-        for a in &self.asks {
-            out.push_str(&format!("- {} \"{}\":\n", a.id, clip(&a.text, 120)));
-            if let AskStatus::Open { missing } = &a.status {
-                for m in missing {
-                    out.push_str(&format!("    {m}\n"));
-                }
-            }
-        }
-        out.push_str(
-            "Finish each one. If one truly cannot or should not be done, resolve_ask {id, descoped: \"<one-line reason>\"} — \
-             the user sees the reason. This gate does not fire again for these items.",
-        );
-        out
-    }
-}
-
-pub fn asks_gate(log: &SessionLog, views: &[AskView]) -> AsksGate {
-    AsksGate {
-        prompts: log
-            .unfiled_prompts()
-            .into_iter()
-            .filter(|p| !log.gated_prompts.iter().any(|g| g == p))
-            .filter_map(|p| log.prompts.iter().find(|(id, _)| id == p).cloned())
-            .collect(),
-        asks: views
-            .iter()
-            .filter(|v| v.status.is_open() && !log.gated_asks.contains(&v.id))
-            .cloned()
-            .collect(),
-    }
-}
-
-/// The one-line summary for the user, or `None` when there is nothing to say.
 /// A plan entry the session planned and has not folded, with the agent's
 /// progress note on it when it left one.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -393,59 +161,29 @@ pub struct Unfolded {
     pub note: Option<String>,
 }
 
-pub fn session_summary(
-    views: &[AskView],
-    untraced: &[String],
-    unfolded: &[Unfolded],
-) -> Option<String> {
-    if views.is_empty() && untraced.is_empty() && unfolded.is_empty() {
+/// The one-line summary for the user, or `None` when there is nothing to say:
+/// the plan entries this session left unbuilt.
+pub fn session_summary(unfolded: &[Unfolded]) -> Option<String> {
+    if unfolded.is_empty() {
         return None;
     }
-    let count = |f: &dyn Fn(&AskStatus) -> bool| views.iter().filter(|v| f(&v.status)).count();
-    let done = count(&|s| matches!(s, AskStatus::Delivered | AskStatus::Answered | AskStatus::Done { .. }));
-    let mut parts = vec![format!("asks {done}/{} done", views.len())];
-    // Open and descoped asks by id only: the reasons live on the Session page
-    // and in get_asks, not in a line the user reads at every stop.
-    let ids = |f: &dyn Fn(&AskStatus) -> bool| -> Vec<&str> {
-        views.iter().filter(|v| f(&v.status)).map(|v| v.id.as_str()).collect()
-    };
-    let open = ids(&|s| s.is_open());
-    if !open.is_empty() {
-        parts.push(format!("{} open ({})", open.len(), open.join(", ")));
-    }
-    let descoped = ids(&|s| matches!(s, AskStatus::Descoped { .. }));
-    if !descoped.is_empty() {
-        parts.push(format!("{} descoped ({})", descoped.len(), descoped.join(", ")));
-    }
-    if !unfolded.is_empty() {
-        let shown: Vec<String> = unfolded
-            .iter()
-            .take(3)
-            .map(|u| match &u.note {
-                Some(n) => format!("\"{}\" ({})", clip(&u.label, 50), clip(n, 80)),
-                None => format!("\"{}\"", clip(&u.label, 50)),
-            })
-            .collect();
-        let more = unfolded.len().saturating_sub(3);
-        let silent = unfolded.iter().filter(|u| u.note.is_none()).count();
-        parts.push(format!(
-            "planned, not built: {}{} — {}{}",
-            unfolded.len(),
-            if silent > 0 { format!(", {silent} with no note") } else { String::new() },
-            shown.join(", "),
-            if more > 0 { format!(" +{more}") } else { String::new() }
-        ));
-    }
-    if !untraced.is_empty() {
-        let shown: Vec<&str> = untraced.iter().take(5).map(String::as_str).collect();
-        let more = untraced.len().saturating_sub(5);
-        parts.push(format!(
-            "edits no ask accounts for: {}{}",
-            shown.join(", "),
-            if more > 0 { format!(" +{more}") } else { String::new() }
-        ));
-    }
-    Some(format!("scryer · {}", parts.join(" · ")))
+    let shown: Vec<String> = unfolded
+        .iter()
+        .take(3)
+        .map(|u| match &u.note {
+            Some(n) => format!("\"{}\" ({})", clip(&u.label, 50), clip(n, 80)),
+            None => format!("\"{}\"", clip(&u.label, 50)),
+        })
+        .collect();
+    let more = unfolded.len().saturating_sub(3);
+    let silent = unfolded.iter().filter(|u| u.note.is_none()).count();
+    Some(format!(
+        "scryer · planned, not built: {}{} — {}{}",
+        unfolded.len(),
+        if silent > 0 { format!(", {silent} with no note") } else { String::new() },
+        shown.join(", "),
+        if more > 0 { format!(" +{more}") } else { String::new() }
+    ))
 }
 
 fn clip(s: &str, max: usize) -> String {
