@@ -464,9 +464,9 @@ pub fn ensure_reports_dir(r: &ModelRef) -> Result<String, String> {
 /// The Stop hook's probe check for a session. Its claims under test are the
 /// ones whose attached tests sit in a file the session touched and whose
 /// verdict is current and passing — tests it wrote or changed, already green.
-/// Until [`PROBES_PER_SESSION`] of them (or all, when fewer) hold a probe
-/// result on the current code, `block` names which to probe. `summary` names
-/// any of them whose probe let a break survive.
+/// Until [`probe_budget`] of them hold a probe result on the current code,
+/// `block` names which to probe, ranked by [`rank_probe_candidates`].
+/// `summary` names any of them whose probe let a break survive.
 pub fn session_probe_check(r: &ModelRef, touched: &[String]) -> ProbeCheck {
     if touched.is_empty() {
         return ProbeCheck::default();
@@ -479,20 +479,26 @@ pub fn session_probe_check(r: &ModelRef, touched: &[String]) -> ProbeCheck {
             locs.iter().any(|l| touched.iter().any(|f| f == &l.pattern))
         })
     };
+    // A probe breaks the claim's code: a claim anchored to none has nothing
+    // to break, so it is never asked for.
+    let has_code = |resp_id: &str| model.source_map.get(resp_id).is_some_and(|locs| !locs.is_empty());
     let verdicts = read_test_statuses(r).unwrap_or_default();
     let eligible: Vec<&str> = verdicts
         .iter()
-        .filter(|s| !s.stale && s.outcome == TestOutcome::Passed && in_touched_test(&s.resp_id))
+        .filter(|s| {
+            !s.stale && s.outcome == TestOutcome::Passed && in_touched_test(&s.resp_id) && has_code(&s.resp_id)
+        })
         .map(|s| s.resp_id.as_str())
         .collect();
     if eligible.is_empty() {
         return ProbeCheck::default();
     }
-    let probes: Vec<ClaimProbeStatus> = read_probe_statuses(r)
+    let all_probes: Vec<ClaimProbeStatus> = read_probe_statuses(r)
         .unwrap_or_default()
         .into_iter()
-        .filter(|p| !p.stale && eligible.contains(&p.resp_id.as_str()))
+        .filter(|p| eligible.contains(&p.resp_id.as_str()))
         .collect();
+    let probes: Vec<&ClaimProbeStatus> = all_probes.iter().filter(|p| !p.stale).collect();
 
     let survivors: Vec<String> = probes
         .iter()
@@ -510,14 +516,44 @@ pub fn session_probe_check(r: &ModelRef, touched: &[String]) -> ProbeCheck {
         )
     });
 
-    let needed = PROBES_PER_SESSION.min(eligible.len());
+    let needed = probe_budget(eligible.len());
     let block = (probes.len() < needed).then(|| {
-        let todo: Vec<&str> = eligible
+        // The touched test files behind each claim, and how many qualifying
+        // claims each of those files backs.
+        let tests_of = |id: &str| -> Vec<String> {
+            let mut files: Vec<String> = model
+                .test_map
+                .get(id)
+                .into_iter()
+                .flatten()
+                .filter(|l| touched.iter().any(|f| f == &l.pattern))
+                .map(|l| l.pattern.clone())
+                .collect();
+            files.sort();
+            files.dedup();
+            files
+        };
+        let mut backs: BTreeMap<String, usize> = BTreeMap::new();
+        for id in &eligible {
+            for t in tests_of(id) {
+                *backs.entry(t).or_default() += 1;
+            }
+        }
+        let candidates = eligible
             .iter()
-            .copied()
-            .filter(|id| !probes.iter().any(|p| p.resp_id == *id))
-            .take(needed - probes.len())
+            .filter(|id| !probes.iter().any(|p| p.resp_id == **id))
+            .map(|id| {
+                let urgency = match all_probes.iter().find(|p| p.resp_id == *id) {
+                    Some(p) if p.survived > 0 => ProbeUrgency::SurvivorRecheck,
+                    Some(_) => ProbeUrgency::Changed,
+                    None => ProbeUrgency::Unprobed,
+                };
+                let tests = tests_of(id).into_iter().map(|t| { let n = backs[&t]; (t, n) }).collect();
+                ProbeCandidate { resp_id: id.to_string(), urgency, tests }
+            })
             .collect();
+        let todo: Vec<String> =
+            rank_probe_candidates(candidates).into_iter().take(needed - probes.len()).collect();
         format!(
             "Scryer probe check — this session wrote or changed tests behind {} green claim(s), \
              and {} of them must be probed before you stop. Probe {}: hand each to a subagent on \
@@ -1309,5 +1345,40 @@ mod tests {
         // One touched test file, one green claim: one probe is the whole ask.
         let check = session_probe_check(&r, &["src/m.spec.ts".to_string()]);
         assert!(check.block.unwrap().contains("1 of them"));
+    }
+
+    /// A claim whose last probe let a break survive is asked for first once
+    /// its code or test changes — to see the strengthened test catch it.
+    #[test]
+    fn the_probe_check_rechecks_a_survivor_first() {
+        let (dir, r) = two_claim_project();
+        ingest_report_file(&r, BOTH).unwrap();
+        store_probe_result(&r, "r2", 3, vec!["dropped the guard".into()]).unwrap();
+        // Strengthen r2's test: its verdict re-runs green, its probe goes stale.
+        let spec = dir.path().join("src/n.spec.ts");
+        let body = std::fs::read_to_string(&spec).unwrap();
+        std::fs::write(&spec, body.replace(".toBe(1);", ".toBe(1);\n    expect(beta()).not.toBe(0);"))
+            .unwrap();
+        ingest_report_file(&r, BOTH).unwrap();
+
+        let touched = vec!["src/m.spec.ts".to_string(), "src/n.spec.ts".to_string()];
+        let block = session_probe_check(&r, &touched).block.expect("two to probe");
+        assert!(block.contains("Probe r2, r1"), "{block}");
+    }
+
+    /// A probe breaks the claim's code; a claim with a test but no code
+    /// anchor has nothing to break and is never asked for.
+    #[test]
+    fn the_probe_check_skips_claims_with_no_code_anchor() {
+        let (_dir, r) = two_claim_project();
+        ingest_report_file(&r, BOTH).unwrap();
+        let mut m = scryer_core::read_model_at(&r).unwrap();
+        m.source_map.remove("r1");
+        scryer_core::write_model_at(&r, &m).unwrap();
+
+        let touched = vec!["src/m.spec.ts".to_string(), "src/n.spec.ts".to_string()];
+        let block = session_probe_check(&r, &touched).block.expect("r2 still has code");
+        assert!(block.contains("Probe r2") && !block.contains("r1"), "{block}");
+        assert!(block.contains("1 of them"), "{block}");
     }
 }

@@ -6293,6 +6293,11 @@
           "id": "resp-jex3vm",
           "statement": "Folds one plan element — or a whole host — into committed, withholding any claims the evidence gate named, which keep their anchors and stay pending.",
           "lastTouchedAt": 1788959020
+        },
+        {
+          "id": "resp-ppbg82",
+          "statement": "**When** a node or group folds with claims moved in from another host, **removes** them from their old host in the committed model",
+          "lastTouchedAt": 1790942736
         }
       ]
     },
@@ -9899,6 +9904,11 @@
           "id": "resp-prywdx",
           "statement": "**Resolve** whether a cached verdict still describes the code, from the anchored span and the file's mtime.",
           "lastTouchedAt": 1789204498
+        },
+        {
+          "id": "resp-hp3k5v",
+          "statement": "**If** a claim has no code anchor, **then** **leaves** it out of the claims a session must probe",
+          "lastTouchedAt": 1790942997
         }
       ],
       "layer": "infrastructure"
@@ -10197,6 +10207,16 @@
           "id": "resp-912xhm",
           "statement": "Gates the fold on verified test evidence per claim, and computes the minimal set of test files that need re-running.",
           "lastTouchedAt": 1788958785
+        },
+        {
+          "id": "resp-j1zg7n",
+          "statement": "**When** a session's tested claims qualify for probing, **asks** for about the square root of them, at least one and at most eight",
+          "lastTouchedAt": 1790943144
+        },
+        {
+          "id": "resp-bn84aw",
+          "statement": "**When** choosing which claims to probe, **ranks** re-checks of a survivor whose test has changed first, then never-probed claims, then claims changed since their probe, spreading across test files and starting with the tests that back the most claims",
+          "lastTouchedAt": 1790943144
         }
       ],
       "layer": "domain"
@@ -12646,6 +12666,11 @@
           "id": "resp-bb3k85",
           "statement": "**When** several violations charge one pair, **carry** every reason on that pair's edge.",
           "lastTouchedAt": 1790186260
+        },
+        {
+          "id": "resp-7g0mkm",
+          "statement": "**When** a styled level is drawn, **marks** red only the edges the structural report charges, each carrying its violation's detail",
+          "lastTouchedAt": 1790942129
         }
       ]
     },
@@ -14051,6 +14076,21 @@
           "id": "resp-vwxq2g",
           "statement": "**If** an edited file lies outside the project, **then** **leaves** it out of the session's touches",
           "lastTouchedAt": 1790940715
+        },
+        {
+          "id": "resp-2pxfn5",
+          "statement": "**When** the session first reads a file, **records** which of its claims are already out of sync with the code",
+          "lastTouchedAt": 1790942465
+        },
+        {
+          "id": "resp-drjc6x",
+          "statement": "**If** a claim was already out of sync when the session first read its file and is in the same state at stop, **then** **leaves** it out of the close gate",
+          "lastTouchedAt": 1790942465
+        },
+        {
+          "id": "resp-sbg2z1",
+          "statement": "**When** the close gate blocks, **lists** one line per file with its claims counted once each by state, at most eight files",
+          "lastTouchedAt": 1790942465
         }
       ],
       "layer": "composition"
@@ -17985,6 +18025,13 @@
       "dst": "node-9562dh",
       "label": "offers MCP setup via",
       "kind": "calls"
+    },
+    {
+      "id": "link-node-7h6fth-node-vm1dcf",
+      "src": "node-7h6fth",
+      "dst": "node-vm1dcf",
+      "label": "reads the model through",
+      "kind": "uses"
     }
   ],
   "groups": [
@@ -19293,8 +19340,8 @@
       {
         "pattern": "crates/scryer-extract/src/domain/test_status.rs",
         "symbol": "ProbeTarget",
-        "line": 277,
-        "endLine": 291
+        "line": 341,
+        "endLine": 355
       }
     ],
     "node-tazn59": [
@@ -19757,6 +19804,16 @@
         "symbol": "append_event_file"
       }
     ],
+    "resp-2pxfn5": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "record_first_sight"
+      },
+      {
+        "pattern": "crates/scryer-mcp/src/hook_client.rs",
+        "symbol": "first_sight"
+      }
+    ],
     "resp-2q3aec": [
       {
         "pattern": "crates/scryer-mcp/src/tools/intent.rs",
@@ -20185,6 +20242,12 @@
         "symbol": "write_scryer_hooks"
       }
     ],
+    "resp-7g0mkm": [
+      {
+        "pattern": "src/widgets/diagram-canvas/diagramLayout.ts",
+        "symbol": "buildDiagramScene"
+      }
+    ],
     "resp-7qzzk0": [
       {
         "pattern": "crates/scryer-core/src/domain/ids.rs",
@@ -20573,6 +20636,12 @@
         "symbol": "assignAllHandles"
       }
     ],
+    "resp-bn84aw": [
+      {
+        "pattern": "crates/scryer-extract/src/domain/test_status.rs",
+        "symbol": "rank_probe_candidates"
+      }
+    ],
     "resp-bp8e36": [
       {
         "pattern": "src/widgets/connections/ConnectionsSection.tsx",
@@ -20791,6 +20860,12 @@
       {
         "pattern": "crates/scryer-extract/src/domain/lang.rs",
         "symbol": "collect_rust"
+      }
+    ],
+    "resp-drjc6x": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "close_gate"
       }
     ],
     "resp-dts1zp": [
@@ -21135,10 +21210,22 @@
         "symbol": "working_view"
       }
     ],
+    "resp-hp3k5v": [
+      {
+        "pattern": "crates/scryer-extract/src/infrastructure/test_status.rs",
+        "symbol": "session_probe_check"
+      }
+    ],
     "resp-hwfhf7": [
       {
         "pattern": "preview/plugin.mjs",
         "symbol": "scryerPreviewPlugin"
+      }
+    ],
+    "resp-j1zg7n": [
+      {
+        "pattern": "crates/scryer-extract/src/domain/test_status.rs",
+        "symbol": "probe_budget"
       }
     ],
     "resp-j3qqgs": [
@@ -21669,6 +21756,16 @@
         "symbol": "add_group"
       }
     ],
+    "resp-ppbg82": [
+      {
+        "pattern": "crates/scryer-core/src/composition/fold.rs",
+        "symbol": "remove_responsibilities"
+      },
+      {
+        "pattern": "crates/scryer-core/src/composition/fold.rs",
+        "symbol": "commit_element_withholding"
+      }
+    ],
     "resp-pq79yr": [
       {
         "pattern": "crates/scryer-extract/src/domain/lang.rs",
@@ -21941,6 +22038,12 @@
       {
         "pattern": "src/features/model-storage/useModelStorage.ts",
         "symbol": "ModelStorage"
+      }
+    ],
+    "resp-sbg2z1": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "reconcile_reason"
       }
     ],
     "resp-sd12vk": [
@@ -22671,6 +22774,12 @@
         "symbol": "hook_status_tells_outdated_installs_from_missing_ones"
       }
     ],
+    "resp-2pxfn5": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "the_close_gate_leaves_out_drift_the_session_found"
+      }
+    ],
     "resp-3phfpc": [
       {
         "pattern": "crates/scryer-mcp/src/hook_client.rs",
@@ -22737,6 +22846,16 @@
         "symbol": "carries every reason charged on one pair, each once"
       }
     ],
+    "resp-bn84aw": [
+      {
+        "pattern": "crates/scryer-extract/src/domain/test_status.rs",
+        "symbol": "probe_candidates_rank_by_risk_and_spread_across_tests"
+      },
+      {
+        "pattern": "crates/scryer-extract/src/infrastructure/test_status.rs",
+        "symbol": "the_probe_check_rechecks_a_survivor_first"
+      }
+    ],
     "resp-c4xckq": [
       {
         "pattern": "tests/mapExplicitDetail.test.ts",
@@ -22755,6 +22874,24 @@
       {
         "pattern": "crates/scryer-core/src/domain/style_health.rs",
         "symbol": "composition_wires_every_layer_and_nothing_imports_it"
+      }
+    ],
+    "resp-drjc6x": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "the_close_gate_leaves_out_drift_the_session_found"
+      }
+    ],
+    "resp-hp3k5v": [
+      {
+        "pattern": "crates/scryer-extract/src/infrastructure/test_status.rs",
+        "symbol": "the_probe_check_skips_claims_with_no_code_anchor"
+      }
+    ],
+    "resp-j1zg7n": [
+      {
+        "pattern": "crates/scryer-extract/src/domain/test_status.rs",
+        "symbol": "the_probe_budget_grows_with_the_session"
       }
     ],
     "resp-k3sjnc": [
@@ -22807,6 +22944,12 @@
         "symbol": "a_bare_name_edge_in_c_is_marked_guessed"
       }
     ],
+    "resp-ppbg82": [
+      {
+        "pattern": "crates/scryer-core/src/composition/fold.rs",
+        "symbol": "whole_node_fold_completes_a_move_into_a_new_node"
+      }
+    ],
     "resp-q9rhp4": [
       {
         "pattern": "crates/scryer-extract/src/infrastructure/manifest.rs",
@@ -22835,6 +22978,12 @@
       {
         "pattern": "tests/structuralLocate.test.tsx",
         "symbol": "lists each violation under its container with component, file and detail"
+      }
+    ],
+    "resp-sbg2z1": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "the_close_gate_block_is_one_line_per_file"
       }
     ],
     "resp-tg9fk5": [

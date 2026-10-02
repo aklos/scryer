@@ -8,7 +8,7 @@ use crate::infrastructure::test_status as store;
 pub use crate::domain::test_status::{
     render_test_command, ClaimProbeStatus, ClaimRecord, ClaimTestStatus, Evidence, IngestSummary,
     ProbeCheck, ProbeRecord, ProbeTarget, RadiusFile, RadiusTest, SessionRadius, TestStatusCache,
-    PROBES_PER_SESSION, SLOW_TEST_MILLIS,
+    probe_budget, MAX_PROBES_PER_SESSION, SLOW_TEST_MILLIS,
 };
 use scryer_core::session::SessionLog;
 use scryer_core::test_results::ReportMatch;

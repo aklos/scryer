@@ -7106,6 +7106,16 @@
           "id": "resp-912xhm",
           "statement": "Gates the fold on verified test evidence per claim, and computes the minimal set of test files that need re-running.",
           "lastTouchedAt": 1788958785
+        },
+        {
+          "id": "resp-j1zg7n",
+          "statement": "**When** a session's tested claims qualify for probing, **asks** for about the square root of them, at least one and at most eight",
+          "lastTouchedAt": 1790943051
+        },
+        {
+          "id": "resp-bn84aw",
+          "statement": "**When** choosing which claims to probe, **ranks** re-checks of a survivor whose test has changed first, then never-probed claims, then claims changed since their probe, spreading across test files and starting with the tests that back the most claims",
+          "lastTouchedAt": 1790943051
         }
       ],
       "layer": "domain"
@@ -9359,6 +9369,11 @@
           "id": "resp-jex3vm",
           "statement": "Folds one plan element — or a whole host — into committed, withholding any claims the evidence gate named, which keep their anchors and stay pending.",
           "lastTouchedAt": 1788959020
+        },
+        {
+          "id": "resp-ppbg82",
+          "statement": "**When** a node or group folds with claims moved in from another host, **removes** them from their old host in the committed model",
+          "lastTouchedAt": 1790942660
         }
       ]
     },
@@ -13740,6 +13755,11 @@
           "id": "resp-prywdx",
           "statement": "**Resolve** whether a cached verdict still describes the code, from the anchored span and the file's mtime.",
           "lastTouchedAt": 1789204360
+        },
+        {
+          "id": "resp-hp3k5v",
+          "statement": "**If** a claim has no code anchor, **then** **leaves** it out of the claims a session must probe",
+          "lastTouchedAt": 1790942956
         }
       ],
       "layer": "infrastructure"
@@ -14074,6 +14094,21 @@
           "id": "resp-vwxq2g",
           "statement": "**If** an edited file lies outside the project, **then** **leaves** it out of the session's touches",
           "lastTouchedAt": 1790940537
+        },
+        {
+          "id": "resp-2pxfn5",
+          "statement": "**When** the session first reads a file, **records** which of its claims are already out of sync with the code",
+          "lastTouchedAt": 1790942328
+        },
+        {
+          "id": "resp-drjc6x",
+          "statement": "**If** a claim was already out of sync when the session first read its file and is in the same state at stop, **then** **leaves** it out of the close gate",
+          "lastTouchedAt": 1790942328
+        },
+        {
+          "id": "resp-sbg2z1",
+          "statement": "**When** the close gate blocks, **lists** one line per file with its claims counted once each by state, at most eight files",
+          "lastTouchedAt": 1790942328
         }
       ],
       "layer": "composition"
@@ -17990,6 +18025,13 @@
       "dst": "node-9562dh",
       "label": "shows install state from",
       "kind": "calls"
+    },
+    {
+      "id": "link-node-7h6fth-node-vm1dcf",
+      "src": "node-7h6fth",
+      "dst": "node-vm1dcf",
+      "label": "reads the model through",
+      "kind": "uses"
     }
   ],
   "groups": [
@@ -18187,13 +18229,6 @@
         "node-f21df7"
       ],
       "parentNodeId": "node-t58dyd"
-    }
-  ],
-  "changes": [
-    {
-      "id": "chg-af0ftw",
-      "rationale": "Declare MCP Server core-shell and layer its components",
-      "createdAt": 1789208416
     }
   ]
 }
