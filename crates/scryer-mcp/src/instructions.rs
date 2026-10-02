@@ -30,8 +30,9 @@ session's change automatically [[change-ledger]]. Only changes that alter what t
 need plan entries. A container declares a `style` \
 only when its code actually has that shape; never guess one. [[loop-plan]] [[proportionality]] \
 [[styles]]\n\
-3. BUILD — implement claim by claim, each testable (When/While/If) claim with its test in the \
-project's own suite. Placement is given, not chosen: `scaffold {node_id}` and `orient {files}` \
+3. BUILD — implement claim by claim, each testable (When/While/If) claim backed by the cheapest \
+test that would fail if it broke, often one behaviour test shared by several claims. Run only \
+what `get_test_radius` prints, never the full suite. Placement is given, not chosen: `scaffold {node_id}` and `orient {files}` \
 name each planned component's directory, layer and allowed imports. [[loop-build]] [[styles]]\n\
 4. CLOSE — `mark_implemented` with `anchors` and `tests` in the same call; the fold is gated on a \
 passing verdict, so run the tests with a JUnit reporter and `ingest_test_report` first. Then \

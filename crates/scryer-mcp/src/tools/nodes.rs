@@ -1595,21 +1595,16 @@ impl ScryerServer {
                         .map(|r| r.id.as_str())
                         .collect();
                     if !untested.is_empty() {
-                        let strength = if node.kind == scryer_core::Kind::Symbol {
-                            "MANDATORY on a symbol host (see test-attachment)"
-                        } else {
-                            "expected (see test-attachment)"
-                        };
                         lines.push(format!(
-                            "NO TEST ATTACHED to {} testable claim(s) on it ({}) — a test is {}. \
-                             Each statement already names the trigger/state/failure to arrange \
-                             and the response to assert: write that test in the project's suite, \
-                             then attach it via update_source_map `test_entries` (or `tests` on \
-                             your next mark_implemented) with `pattern` = test file, `symbol` = \
-                             the test function",
+                            "NO TEST ATTACHED to {} testable claim(s) on it ({}) — each needs a \
+                             test that would fail if it broke (see test-attachment). Prefer one \
+                             behaviour-level test that asserts several of them, or an existing \
+                             one that already does, over a unit test per symbol; attach it via \
+                             update_source_map `test_entries` (or `tests` on your next \
+                             mark_implemented) with `pattern` = test file, `symbol` = the test \
+                             name",
                             untested.len(),
                             untested.join(", "),
-                            strength
                         ));
                     }
                 }

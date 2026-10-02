@@ -429,8 +429,10 @@ fn stop(r: &ModelRef, event: &serde_json::Value) {
         session,
         |files| anchor_flags(r, files),
         |claims| verified_claims(r, claims),
-        // Replaced by scryer_extract::test_status::probe_check once it lands.
-        |_| (None, None),
+        |log| {
+            let c = scryer_extract::test_status::probe_check(r, log);
+            (c.block, c.summary)
+        },
     );
     if let Some(reason) = out.block {
         emit(&serde_json::json!({ "decision": "block", "reason": reason }));

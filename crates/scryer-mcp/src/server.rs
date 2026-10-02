@@ -379,6 +379,7 @@ mod rule_wiring {
             }
         }
         // +200 for `resolve_drift` and `note_claims` (see the descriptions budget).
-        assert!(total <= 33_200, "schemas total {total} chars (budget 33200)");
+        // +100 for get_test_radius's `command` (the per-project radius command).
+        assert!(total <= 33_300, "schemas total {total} chars (budget 33300)");
     }
 }

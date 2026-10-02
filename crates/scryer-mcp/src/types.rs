@@ -137,6 +137,9 @@ pub(crate) struct IngestTestReportRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct GetTestRadiusRequest {
     pub project: Option<String>,
+    /// Set the test command once: {names} {files} {report}.
+    #[serde(default)]
+    pub command: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
