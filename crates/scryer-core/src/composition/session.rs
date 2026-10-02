@@ -325,8 +325,10 @@ pub fn stop(
     session: &str,
     flags: impl FnOnce(&[String]) -> Vec<AnchorFlag>,
     verified: impl FnOnce(&[String]) -> HashMap<String, bool>,
+    probes: impl FnOnce(&SessionLog) -> (Option<String>, Option<String>),
 ) -> StopOutcome {
     let log = session_log(r, session);
+    let (probe_block, probe_summary) = probes(&log);
     let working = working(r).unwrap_or_default();
     let linked: Vec<String> = log.asks.iter().flat_map(|a| a.claims.iter().cloned()).collect();
     let views = ask_views(&log, &working, &verified(&linked), &pending_claims(r));
@@ -351,6 +353,10 @@ pub fn stop(
             let _ = session_store::append(r, session, SessionEvent::PendingGate);
         }
     }
+    if let Some(reason) = probe_block.filter(|_| !log.probe_gated) {
+        reasons.push(reason);
+        let _ = session_store::append(r, session, SessionEvent::ProbeGate);
+    }
     let close = close_gate(r, session, flags);
     if !close.needs_reconcile.is_empty() {
         reasons.push(reconcile_reason(&close));
@@ -359,8 +365,12 @@ pub fn stop(
         return StopOutcome { block: Some(reasons.join("\n\n")), summary: None };
     }
 
-    let summary = session_summary(&views, &untraced_edits(&log, &working), &left)
-        .filter(|s| log.last_summary.as_deref() != Some(s.as_str()));
+    let summary = match (session_summary(&views, &untraced_edits(&log, &working), &left), probe_summary) {
+        (Some(s), Some(p)) => Some(format!("{s} · {p}")),
+        (None, Some(p)) => Some(format!("scryer · {p}")),
+        (s, None) => s,
+    }
+    .filter(|s| log.last_summary.as_deref() != Some(s.as_str()));
     if let Some(s) = &summary {
         let _ = session_store::append(r, session, SessionEvent::Summary { text: s.clone() });
     }
@@ -552,11 +562,11 @@ mod tests {
         let p1 = record_prompt(&r, "s", "make the API verify tokens and explain the cache").unwrap();
         assert_eq!(p1, "p1");
 
-        let out = stop(&r, "s", no_flags, pass);
+        let out = stop(&r, "s", no_flags, pass, no_probes);
         let reason = out.block.expect("an unfiled prompt blocks");
         assert!(reason.contains("prompt p1 was never broken into asks"), "{reason}");
         assert!(!reason.to_lowercase().contains("review"), "never asks the user for review: {reason}");
-        assert!(stop(&r, "s", no_flags, pass).block.is_none(), "never twice for the same prompt");
+        assert!(stop(&r, "s", no_flags, pass, no_probes).block.is_none(), "never twice for the same prompt");
 
         let (_, filed) = file_asks(
             &r,
@@ -567,10 +577,10 @@ mod tests {
         .unwrap();
         assert_eq!(filed.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), vec!["a1", "a2"]);
 
-        let reason = stop(&r, "s", no_flags, pass).block.expect("open asks block");
+        let reason = stop(&r, "s", no_flags, pass, no_probes).block.expect("open asks block");
         assert!(reason.contains("a1") && reason.contains("no claim delivers it"), "{reason}");
         assert!(reason.contains("a2") && reason.contains("not answered"), "{reason}");
-        let quiet = stop(&r, "s", no_flags, pass);
+        let quiet = stop(&r, "s", no_flags, pass, no_probes);
         assert!(quiet.block.is_none(), "one block per ask");
         assert!(quiet.summary.as_deref().unwrap().contains("2 open (a1, a2)"), "{quiet:?}");
 
@@ -587,18 +597,33 @@ mod tests {
 
         record_touch(&r, "s", "src/auth.rs").unwrap();
         record_touch(&r, "s", "src/unrelated.rs").unwrap();
-        let out = stop(&r, "s", no_flags, pass);
+        let out = stop(&r, "s", no_flags, pass, no_probes);
         assert!(out.block.is_none());
         let summary = out.summary.unwrap();
         assert!(summary.contains("asks 2/2 done"), "{summary}");
         assert!(summary.contains("edits no ask accounts for: src/unrelated.rs"), "{summary}");
-        assert!(stop(&r, "s", no_flags, pass).summary.is_none(), "an unchanged summary stays silent");
+        assert!(stop(&r, "s", no_flags, pass, no_probes).summary.is_none(), "an unchanged summary stays silent");
 
         // A new prompt arms the gate again, for that prompt only.
         record_prompt(&r, "s", "thanks").unwrap();
-        assert!(stop(&r, "s", no_flags, pass).block.unwrap().contains("prompt p2"));
+        assert!(stop(&r, "s", no_flags, pass, no_probes).block.unwrap().contains("prompt p2"));
         file_asks(&r, "s", Some("p2"), vec![]).unwrap();
-        assert!(stop(&r, "s", no_flags, pass).block.is_none());
+        assert!(stop(&r, "s", no_flags, pass, no_probes).block.is_none());
+    }
+
+    fn no_probes(_: &SessionLog) -> (Option<String>, Option<String>) {
+        (None, None)
+    }
+
+    #[test]
+    fn the_probe_gate_blocks_once_and_survivors_reach_the_summary() {
+        let (_dir, r) = project();
+        let probes = |_: &SessionLog| (Some("probe 2 claims".to_string()), None);
+        assert_eq!(stop(&r, "s", no_flags, pass, probes).block.as_deref(), Some("probe 2 claims"));
+        assert!(stop(&r, "s", no_flags, pass, probes).block.is_none(), "once per session");
+        let survivor = |_: &SessionLog| (Some("probe".to_string()), Some("r-1's test missed a break".to_string()));
+        let out = stop(&r, "s", no_flags, pass, survivor);
+        assert_eq!(out.summary.as_deref(), Some("scryer · r-1's test missed a break"));
     }
 
     #[test]
@@ -614,9 +639,9 @@ mod tests {
         crate::write_planned_at(&r, &plan).unwrap();
 
         assert!(unfolded(&r, "other").is_empty(), "another session's work is not this one's");
-        let reason = stop(&r, "s", no_flags, pass).block.expect("unfolded work blocks");
+        let reason = stop(&r, "s", no_flags, pass, no_probes).block.expect("unfolded work blocks");
         assert!(reason.contains("resp:r-2") && reason.contains("mark_implemented"), "{reason}");
-        let quiet = stop(&r, "s", no_flags, pass);
+        let quiet = stop(&r, "s", no_flags, pass, no_probes);
         assert!(quiet.block.is_none(), "once per session");
         let summary = quiet.summary.expect("the user still hears about it");
         assert!(summary.contains("planned, not built: 1") && summary.contains("rate-limits callers"), "{summary}");
@@ -645,7 +670,7 @@ mod tests {
         assert!(resolve_ask(&r, "s", "a1", Resolution::Answered).is_err(), "a build ask is not answered");
         assert!(resolve_ask(&r, "s", "a1", Resolution::Claims(vec!["r-404".into()])).is_err());
         resolve_ask(&r, "s", "a1", Resolution::Descoped("the theme system lands next sprint".into())).unwrap();
-        let out = stop(&r, "s", no_flags, pass);
+        let out = stop(&r, "s", no_flags, pass, no_probes);
         assert!(out.block.is_none());
         assert!(out.summary.unwrap().contains("descoped a1 \"add dark mode\": the theme system lands next sprint"));
     }

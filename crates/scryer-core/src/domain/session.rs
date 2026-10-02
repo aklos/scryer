@@ -58,6 +58,9 @@ pub enum SessionEvent {
     /// The Stop gate blocked on plan entries this session left unfolded —
     /// at most once per session.
     PendingGate,
+    /// The Stop gate blocked until this session's new tests were
+    /// mutation-probed — at most once per session.
+    ProbeGate,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -106,6 +109,8 @@ pub struct SessionLog {
     pub reconcile_gated: bool,
     /// Whether the unfolded-entries gate already fired.
     pub pending_gated: bool,
+    /// Whether the probe gate already fired.
+    pub probe_gated: bool,
     /// Prompts in order, `(id, text)`.
     pub prompts: Vec<(String, String)>,
     /// Prompts the agent has filed asks for.
@@ -189,6 +194,7 @@ impl SessionLog {
             }
             SessionEvent::Summary { text } => self.last_summary = Some(text.clone()),
             SessionEvent::PendingGate => self.pending_gated = true,
+            SessionEvent::ProbeGate => self.probe_gated = true,
         }
     }
 
