@@ -503,6 +503,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   concerns={model.concerns ?? []}
                   sourceMap={sourceMap}
                   testMap={testMap}
+                  notes={model.notes}
                   testStates={testStates}
                   testVerdicts={props.testVerdicts}
                   probeResults={props.probeResults}

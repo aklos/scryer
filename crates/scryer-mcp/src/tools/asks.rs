@@ -128,6 +128,36 @@ impl ScryerServer {
     }
 
     #[tool(
+        description = "Progress note on planned claims you leave unfolded: `notes` maps claim id → \
+         built / left / waits on (empty clears). The user sees it on the claim.\n\
+         Rules: ask-ledger"
+    )]
+    pub(crate) fn note_claims(
+        &self,
+        Parameters(req): Parameters<NoteClaimsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
+        match scryer_core::note_claims(&model_ref, &req.notes) {
+            Ok(refused) if refused.len() == req.notes.len() && !refused.is_empty() => Ok(err(format!(
+                "None of these is a pending planned claim: {}. Folded claims need no note.",
+                refused.join(", ")
+            ))),
+            Ok(refused) => {
+                let mut msg = format!("Noted {} claim(s).", req.notes.len() - refused.len());
+                if !refused.is_empty() {
+                    msg.push_str(&format!(" Not pending, skipped: {}.", refused.join(", ")));
+                }
+                Ok(CallToolResult::success(vec![Content::text(msg)]))
+            }
+            Err(e) => Ok(err(e)),
+        }
+    }
+
+    #[tool(
         description = "This session's asks and where each stands (with what is still missing for \
          open ones), plus edited files no ask accounts for.\n\
          Rules: ask-ledger"

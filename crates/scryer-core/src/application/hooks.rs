@@ -349,10 +349,21 @@ pub fn asks_gate(log: &SessionLog, views: &[AskView]) -> AsksGate {
 }
 
 /// The one-line summary for the user, or `None` when there is nothing to say.
+/// A plan entry the session planned and has not folded, with the agent's
+/// progress note on it when it left one.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Unfolded {
+    /// Change-map key (`resp:…`, `node:…`).
+    pub key: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 pub fn session_summary(
     views: &[AskView],
     untraced: &[String],
-    unfolded: &[(String, String)],
+    unfolded: &[Unfolded],
 ) -> Option<String> {
     if views.is_empty() && untraced.is_empty() && unfolded.is_empty() {
         return None;
@@ -371,11 +382,20 @@ pub fn session_summary(
         }
     }
     if !unfolded.is_empty() {
-        let shown: Vec<String> = unfolded.iter().take(3).map(|(_, l)| format!("\"{}\"", clip(l, 50))).collect();
+        let shown: Vec<String> = unfolded
+            .iter()
+            .take(3)
+            .map(|u| match &u.note {
+                Some(n) => format!("\"{}\" ({})", clip(&u.label, 50), clip(n, 80)),
+                None => format!("\"{}\"", clip(&u.label, 50)),
+            })
+            .collect();
         let more = unfolded.len().saturating_sub(3);
+        let silent = unfolded.iter().filter(|u| u.note.is_none()).count();
         parts.push(format!(
-            "planned, not built: {} ({}{})",
+            "planned, not built: {}{} — {}{}",
             unfolded.len(),
+            if silent > 0 { format!(", {silent} with no note") } else { String::new() },
             shown.join(", "),
             if more > 0 { format!(" +{more}") } else { String::new() }
         ));

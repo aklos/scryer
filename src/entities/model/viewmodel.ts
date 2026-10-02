@@ -196,6 +196,9 @@ export interface ConcernDef {
 
 export interface ScryModel {
   version: typeof SCRY_VERSION;
+  /** Plan-only: claim id → the agent's progress note on a planned claim it
+   *  left unfolded (what is built, what is left). Gone once the claim folds. */
+  notes?: Record<string, string>;
   nodes: Node[];
   links: Link[];
   groups: Group[];

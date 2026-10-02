@@ -274,7 +274,9 @@ mod rule_wiring {
     /// The always-loaded prose. Grows only by deliberate choice: raise the
     /// numbers here in the same change that adds the text.
     /// The styles axis (the `scaffold` tool; `style`, `layer` and `kind` on the
-    /// write schemas) is what the current headroom above main's baseline pays for.
+    /// write schemas) is what the current headroom above main's baseline pays for;
+    /// the +200 on descriptions buys agent-side drift verdicts (`resolve_drift`,
+    /// moved off the user) and progress notes (`note_claims`).
     #[test]
     fn instructions_and_descriptions_stay_within_budget() {
         assert!(
@@ -284,7 +286,7 @@ mod rule_wiring {
         );
         let descs = descriptions();
         let total: usize = descs.iter().map(|(_, d)| d.len()).sum();
-        assert!(total <= 16_500, "descriptions total {total} chars (budget 16500)");
+        assert!(total <= 16_700, "descriptions total {total} chars (budget 16700)");
         for (name, d) in &descs {
             assert!(d.len() <= 800, "{name} description is {} chars (max 800)", d.len());
         }
@@ -376,6 +378,7 @@ mod rule_wiring {
                 );
             }
         }
-        assert!(total <= 33_000, "schemas total {total} chars (budget 33000)");
+        // +200 for `resolve_drift` and `note_claims` (see the descriptions budget).
+        assert!(total <= 33_200, "schemas total {total} chars (budget 33200)");
     }
 }

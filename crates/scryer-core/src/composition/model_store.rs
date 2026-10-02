@@ -77,6 +77,7 @@ pub fn write_hand_edited_plan_at(r: &ModelRef, data: &str) -> Result<(), String>
     if let Ok(disk) = read_planned_at(r) {
         plan.changes = disk.changes;
         plan.change_map = disk.change_map;
+        plan.notes = disk.notes;
     }
     write_planned_at(r, &plan)
 }

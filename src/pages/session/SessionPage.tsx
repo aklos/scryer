@@ -143,11 +143,12 @@ export function SessionPage({
                 count={view.unfolded!.length}
               >
                 <ul className="flex flex-col gap-1 rounded-md border border-orange-500/30 bg-orange-500/5 px-3 py-2 dark:border-orange-400/30 dark:bg-orange-400/5">
-                  {view.unfolded!.map(([key, label]) => (
-                    <li key={key} className="flex items-center gap-2 text-sm text-orange-800 dark:text-orange-300">
+                  {view.unfolded!.map((u) => (
+                    <li key={u.key} className="flex items-center gap-2 text-sm text-orange-800 dark:text-orange-300">
                       <TriangleAlert className="h-3.5 w-3.5 shrink-0" />
-                      <span className="truncate" title={key}>
-                        {label}
+                      <span className="truncate" title={u.key}>
+                        {u.label}
+                        {u.note ? <span className="text-[var(--text-muted)]"> — {u.note}</span> : " — no note"}
                       </span>
                     </li>
                   ))}

@@ -809,6 +809,12 @@ pub(crate) struct ResolveAskRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct NoteClaimsRequest {
+    pub project: Option<String>,
+    pub notes: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct GetAsksRequest {
     pub project: Option<String>,
 }

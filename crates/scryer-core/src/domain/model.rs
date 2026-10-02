@@ -404,6 +404,11 @@ pub struct ScryModel {
     /// like `changes`; kept honest by [`changes::gc`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub change_map: BTreeMap<String, String>,
+    /// Claim id → the agent's progress note on a planned claim it has not
+    /// folded: what is built, what is left, what it waits on. Plan-layer only,
+    /// like `changes`; a note dies when its claim stops being pending.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub notes: BTreeMap<String, String>,
 }
 
 impl ScryModel {
@@ -419,6 +424,7 @@ impl ScryModel {
             concerns: Vec::new(),
             changes: Vec::new(),
             change_map: BTreeMap::new(),
+            notes: BTreeMap::new(),
         }
     }
 }

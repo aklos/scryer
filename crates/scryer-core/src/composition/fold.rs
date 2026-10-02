@@ -37,6 +37,7 @@ pub fn fold_built_model(r: &ModelRef, built: &ScryModel) -> Result<ScryModel, St
     }
     folded.changes.clear();
     folded.change_map.clear();
+    folded.notes.clear();
     write_model_at(r, &folded)?;
     let mut seeded = folded.clone();
     seeded.source_map.clear();

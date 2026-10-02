@@ -55,9 +55,12 @@ pub enum SessionEvent {
     ModelEdit { keys: Vec<String> },
     /// The summary last shown to the user, so an unchanged one stays silent.
     Summary { text: String },
-    /// The Stop gate blocked on plan entries this session left unfolded —
-    /// at most once per session.
-    PendingGate,
+    /// The Stop gate blocked on these unfolded plan entries, which carried
+    /// no progress note. Each is blocked on at most once.
+    PendingGate {
+        #[serde(default)]
+        keys: Vec<String>,
+    },
     /// The Stop gate blocked until this session's new tests were
     /// mutation-probed — at most once per session.
     ProbeGate,
@@ -107,8 +110,8 @@ pub struct SessionLog {
     pub overlays: Vec<(String, u64)>,
     /// Whether the reconcile gate already fired.
     pub reconcile_gated: bool,
-    /// Whether the unfolded-entries gate already fired.
-    pub pending_gated: bool,
+    /// Unfolded plan entries the Stop gate already blocked on.
+    pub gated_pending: Vec<String>,
     /// Whether the probe gate already fired.
     pub probe_gated: bool,
     /// Prompts in order, `(id, text)`.
@@ -193,7 +196,7 @@ impl SessionLog {
                 }
             }
             SessionEvent::Summary { text } => self.last_summary = Some(text.clone()),
-            SessionEvent::PendingGate => self.pending_gated = true,
+            SessionEvent::PendingGate { keys } => self.gated_pending.extend(keys.iter().cloned()),
             SessionEvent::ProbeGate => self.probe_gated = true,
         }
     }

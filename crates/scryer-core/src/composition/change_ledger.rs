@@ -44,3 +44,33 @@ pub fn record_closed(r: &ModelRef, meta: &ChangeMeta, driver: &str) {
         .with_rows(vec![EventRow::new("✓", meta.rationale.clone())]);
     let _ = append_event(r, &ev);
 }
+
+/// Set progress notes on planned claims (`id → note`; an empty note clears
+/// it). Only a claim still pending in the plan takes one — a folded claim is
+/// done and needs no excuse. Returns the ids that were not pending. The
+/// caller must hold the model lock.
+pub fn note_claims(
+    r: &ModelRef,
+    notes: &std::collections::BTreeMap<String, String>,
+) -> Result<Vec<String>, String> {
+    let committed = crate::composition::model_store::read_model_at(r).unwrap_or_default();
+    let mut plan = read_planned_at(r)?;
+    let pending: std::collections::HashSet<String> = crate::domain::diff::diff(&committed, &plan)
+        .changes
+        .into_iter()
+        .filter(|ch| ch.kind == crate::domain::diff::ElementKind::Responsibility)
+        .map(|ch| ch.id)
+        .collect();
+    let mut refused = Vec::new();
+    for (id, note) in notes {
+        if !pending.contains(id) {
+            refused.push(id.clone());
+        } else if note.trim().is_empty() {
+            plan.notes.remove(id);
+        } else {
+            plan.notes.insert(id.clone(), note.trim().to_string());
+        }
+    }
+    write_planned_at(r, &plan)?;
+    Ok(refused)
+}

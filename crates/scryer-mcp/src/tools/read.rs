@@ -903,7 +903,11 @@ impl ScryerServer {
                     .iter()
                     .filter_map(|c| serde_json::to_value(c).ok()?["type"].as_str().map(str::to_string))
                     .collect();
-                format!("{} {}: {}", what.join("+"), ch.id, clip(&ch.label, 80))
+                let mut line = format!("{} {}: {}", what.join("+"), ch.id, clip(&ch.label, 80));
+                if let Some(note) = planned.notes.get(&ch.id) {
+                    line.push_str(&format!(" — note: {}", clip(note, 100)));
+                }
+                line
             })
             .collect();
 
@@ -1330,6 +1334,9 @@ impl ScryerServer {
                         .or_else(|| model.source_map.get(&ch.id))
                     {
                         v["sources"] = serde_json::to_value(src).unwrap_or(serde_json::Value::Null);
+                    }
+                    if let Some(note) = planned.notes.get(&ch.id) {
+                        v["note"] = serde_json::Value::String(note.clone());
                     }
                 }
                 ElementKind::Property => {

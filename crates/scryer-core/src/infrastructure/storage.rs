@@ -675,6 +675,7 @@ pub fn write_committed_file(r: &ModelRef, model: &ScryModel) -> Result<(), Strin
     // caller — a plan-derived model (fold, replace_model) rides through this path.
     stamped.changes.clear();
     stamped.change_map.clear();
+    stamped.notes.clear();
     // Structural-invariant gate. This is the single committed-layer writer every
     // commit / fold / replace_model rides through, so refusing here is what keeps a
     // silently-misbindable duplicate — most notably the same responsibility id
@@ -918,7 +919,7 @@ pub fn write_planned_file(r: &ModelRef, model: &ScryModel) -> Result<(), String>
     // back to its committed form, killing the pending entry its tag named. A
     // change emptied that way closes as "abandoned" — the fold paths close
     // theirs as "folded" via their own gc call.
-    if !(stamped.change_map.is_empty() && stamped.changes.is_empty()) {
+    if !(stamped.change_map.is_empty() && stamped.changes.is_empty() && stamped.notes.is_empty()) {
         if let Ok(committed) = read_committed_file(r) {
             let gc = changes::gc(&committed, &mut stamped);
             for meta in &gc.closed {

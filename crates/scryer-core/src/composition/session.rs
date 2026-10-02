@@ -3,7 +3,7 @@
 //! in-process — no app, no server.
 
 use crate::application::hooks::{
-    ask_views, asks_gate, close_view, session_summary, untraced_edits, AnchorFlag, AskView, CloseView,
+    ask_views, asks_gate, close_view, session_summary, untraced_edits, AnchorFlag, AskView, CloseView, Unfolded,
 };
 use crate::application::locate::LocateReport;
 use crate::composition::locate::locate_at;
@@ -250,8 +250,8 @@ pub struct SessionView {
     pub asks: Vec<AskView>,
     pub touched: Vec<TouchedFile>,
     pub untraced: Vec<String>,
-    /// Plan entries the session planned and has not folded: `(key, label)`.
-    pub unfolded: Vec<(String, String)>,
+    /// Plan entries the session planned and has not folded.
+    pub unfolded: Vec<Unfolded>,
     pub model_edits: Vec<String>,
     /// Unix seconds of the first and last event.
     pub started_at: u64,
@@ -347,11 +347,14 @@ pub fn stop(
             },
         );
     }
-    if !log.pending_gated {
-        if !left.is_empty() {
-            reasons.push(pending_reason(&left));
-            let _ = session_store::append(r, session, SessionEvent::PendingGate);
-        }
+    let silent: Vec<&Unfolded> = left
+        .iter()
+        .filter(|u| u.note.is_none() && !log.gated_pending.contains(&u.key))
+        .collect();
+    if !silent.is_empty() {
+        reasons.push(pending_reason(&silent));
+        let keys = silent.iter().map(|u| u.key.clone()).collect();
+        let _ = session_store::append(r, session, SessionEvent::PendingGate { keys });
     }
     if let Some(reason) = probe_block.filter(|_| !log.probe_gated) {
         reasons.push(reason);
@@ -377,9 +380,9 @@ pub fn stop(
     StopOutcome { block: None, summary }
 }
 
-/// Plan entries tagged to `session`'s change that are still pending, as
-/// `(key, label)` — the work it planned and neither folded nor reverted.
-pub fn unfolded(r: &ModelRef, session: &str) -> Vec<(String, String)> {
+/// Plan entries tagged to `session`'s change that are still pending — the
+/// work it planned and neither folded nor reverted — with any progress note.
+pub fn unfolded(r: &ModelRef, session: &str) -> Vec<Unfolded> {
     let (Ok(committed), Ok(planned)) = (read_model_at(r), read_planned_at(r)) else {
         return Vec::new();
     };
@@ -389,27 +392,34 @@ pub fn unfolded(r: &ModelRef, session: &str) -> Vec<(String, String)> {
     crate::domain::diff::diff(&committed, &planned)
         .changes
         .iter()
-        .map(|ch| (crate::domain::changes::key_for(ch), ch.label.clone()))
-        .filter(|(k, _)| planned.change_map.get(k) == Some(&cid))
+        .map(|ch| Unfolded {
+            key: crate::domain::changes::key_for(ch),
+            label: ch.label.clone(),
+            note: (ch.kind == crate::domain::diff::ElementKind::Responsibility)
+                .then(|| planned.notes.get(&ch.id).cloned())
+                .flatten(),
+        })
+        .filter(|u| planned.change_map.get(&u.key) == Some(&cid))
         .collect()
 }
 
 const PENDING_SHOWN: usize = 15;
 
-fn pending_reason(left: &[(String, String)]) -> String {
+fn pending_reason(left: &[&Unfolded]) -> String {
     let mut lines: Vec<String> = left
         .iter()
         .take(PENDING_SHOWN)
-        .map(|(k, label)| format!("- {k}: {label}"))
+        .map(|u| format!("- {}: {}", u.key, u.label))
         .collect();
     if left.len() > PENDING_SHOWN {
         lines.push(format!("- … {} more (get_pending)", left.len() - PENDING_SHOWN));
     }
     format!(
-        "Scryer — this session planned {} model entr{} it has not folded:\n{}\nFinish each: \
-         built and tested → mark_implemented (anchors + tests); dropped → revert the plan entry; \
-         a drift finding → resolve_drift. Nobody closes these after you. This gate fires once \
-         per session.",
+        "Scryer — this session planned {} model entr{} it has not folded, with no note saying \
+         why:\n{}\nFinish each: built and tested → mark_implemented (anchors + tests); dropped → \
+         revert the plan entry; a drift finding → resolve_drift; genuinely unfinished → \
+         note_claims {{notes: {{id: \"built …; left …; waits on …\"}}}} — the user reads it on \
+         the claim and the next session starts from it. Nobody closes these after you.",
         left.len(),
         if left.len() == 1 { "y" } else { "ies" },
         lines.join("\n"),
@@ -624,6 +634,32 @@ mod tests {
         let survivor = |_: &SessionLog| (Some("probe".to_string()), Some("r-1's test missed a break".to_string()));
         let out = stop(&r, "s", no_flags, pass, survivor);
         assert_eq!(out.summary.as_deref(), Some("scryer · r-1's test missed a break"));
+    }
+
+    #[test]
+    fn a_progress_note_answers_the_unfolded_gate_and_reaches_the_user() {
+        let (_dir, r) = project();
+        let mut plan = crate::read_model_at(&r).unwrap();
+        plan.nodes[1].responsibilities.push(serde_json::from_value(
+            serde_json::json!({ "id": "r-2", "statement": "rate-limits callers" }),
+        )
+        .unwrap());
+        let cid = crate::domain::changes::open_change_for(&mut plan, "limit", Some("s"), 1);
+        crate::domain::changes::tag(&mut plan, &["resp:r-2".to_string()], &cid);
+        crate::write_planned_at(&r, &plan).unwrap();
+
+        let notes: std::collections::BTreeMap<String, String> = [
+            ("r-2".to_string(), "token bucket built; per-route limits left".to_string()),
+            ("r-1".to_string(), "already folded".to_string()),
+        ]
+        .into();
+        assert_eq!(crate::note_claims(&r, &notes).unwrap(), vec!["r-1".to_string()], "only pending claims take a note");
+
+        let out = stop(&r, "s", no_flags, pass, no_probes);
+        assert!(out.block.is_none(), "a noted entry is an honest exit: {out:?}");
+        let summary = out.summary.unwrap();
+        assert!(summary.contains("per-route limits left") && !summary.contains("no note"), "{summary}");
+        assert_eq!(unfolded(&r, "s")[0].note.as_deref(), Some("token bucket built; per-route limits left"));
     }
 
     #[test]

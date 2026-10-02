@@ -130,6 +130,7 @@ export function GroupPageBody(props: PageProps & { group: Group }) {
               concerns={model.concerns ?? []}
               sourceMap={sourceMap}
               testMap={testMap}
+                  notes={model.notes}
               testStates={testStates}
               testVerdicts={props.testVerdicts}
               probeResults={props.probeResults}

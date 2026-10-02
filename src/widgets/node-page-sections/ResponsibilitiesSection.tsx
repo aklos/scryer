@@ -155,6 +155,7 @@ export function ResponsibilitiesSection({
   concerns,
   sourceMap,
   testMap,
+  notes,
   testStates,
   testVerdicts,
   probeResults,
@@ -181,6 +182,8 @@ export function ResponsibilitiesSection({
   sourceMap: Record<string, SourceLocation[]>;
   /** respId → attached-test locations (the test dimension). */
   testMap: Record<string, SourceLocation[]>;
+  /** respId → the agent's progress note on a planned claim it left unfolded. */
+  notes?: Record<string, string>;
   /** respId → fingerprint state of the attached test, when it regressed. */
   testStates: Record<string, AnchorState>;
   /** respId → recorded test verdict (with re-verified staleness), from the
@@ -253,6 +256,7 @@ export function ResponsibilitiesSection({
               concerns={concerns}
               locations={sourceMap[row.resp.id] ?? []}
               testLocations={testMap[row.resp.id] ?? []}
+              note={notes?.[row.resp.id]}
               testState={testStates[row.resp.id] ?? null}
               testVerdict={testVerdicts[row.resp.id] ?? null}
               probeResult={probeResults[row.resp.id] ?? null}
@@ -444,6 +448,7 @@ function RespDiffRow({
   concerns,
   locations,
   testLocations,
+  note,
   testState,
   testVerdict,
   probeResult,
@@ -461,6 +466,8 @@ function RespDiffRow({
   locations: SourceLocation[];
   /** The claim's attached tests (test dimension). */
   testLocations: SourceLocation[];
+  /** The agent's progress note: what is built and what is left. */
+  note?: string;
   /** Fingerprint state of the attached test, when it regressed since reconcile. */
   testState: AnchorState | null;
   /** The claim's recorded test verdict, or null when no run was ingested. */
@@ -576,6 +583,11 @@ function RespDiffRow({
           // The bleed grows by the same 20px so an open peek still spans the
           // article column.
           <div className="pl-5">
+            {note && (
+              <p className="my-1 text-sm text-[var(--text-muted)]" title="The agent's progress note on this unfinished claim">
+                <span className="font-medium">Unfinished:</span> {note}
+              </p>
+            )}
             <ClaimSource
               locations={locations}
               projectPath={projectPath}

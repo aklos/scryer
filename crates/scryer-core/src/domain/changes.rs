@@ -261,11 +261,15 @@ pub struct Gc {
 /// opened, work not yet written): only a change whose last key died in this
 /// pass closes here.
 pub fn gc(committed: &ScryModel, planned: &mut ScryModel) -> Gc {
-    if planned.change_map.is_empty() && planned.changes.is_empty() {
+    if planned.change_map.is_empty() && planned.changes.is_empty() && planned.notes.is_empty() {
         return Gc::default();
     }
     let valid: HashSet<String> =
         diff(committed, planned).changes.iter().map(key_for).collect();
+    // A progress note lives exactly as long as its claim is pending.
+    let notes_before = planned.notes.len();
+    planned.notes.retain(|id, _| valid.contains(&format!("resp:{id}")));
+    let notes_pruned = notes_before - planned.notes.len();
     let before = planned.change_map.len();
     let mut candidates: HashSet<String> = HashSet::new();
     planned.change_map.retain(|k, v| {
@@ -283,7 +287,7 @@ pub fn gc(committed: &ScryModel, planned: &mut ScryModel) -> Gc {
         .cloned()
         .collect();
     planned.changes.retain(|c| !closed.iter().any(|x| x.id == c.id));
-    Gc { pruned: before - planned.change_map.len(), closed }
+    Gc { pruned: before - planned.change_map.len() + notes_pruned, closed }
 }
 
 #[cfg(test)]
