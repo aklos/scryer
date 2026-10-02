@@ -4225,6 +4225,11 @@
           "id": "resp-jm19cz",
           "statement": "Writes the plan after tagging what this write changed to the session's current change, warning on collisions with another change's tag",
           "lastTouchedAt": 1788958615
+        },
+        {
+          "id": "resp-ntbnw7",
+          "statement": "**When** a session's first plan write opens its change, **titles** it with the task of the session's first orient call, or the session id when it made none",
+          "lastTouchedAt": 1790943466
         }
       ]
     },
@@ -5175,6 +5180,11 @@
           "id": "resp-4g0r9c",
           "statement": "Reports claim discharge, completeness, and boundary/anchor hygiene, scoped to a node's subtree or the whole model, rolling leaf blind spots upward",
           "lastTouchedAt": 1788958615
+        },
+        {
+          "id": "resp-6zaq7x",
+          "statement": "**Report** the stale test verdicts apart from the drift-stale claims, as the status line counts them",
+          "lastTouchedAt": 1790943846
         }
       ]
     },
@@ -9904,8 +9914,13 @@
         },
         {
           "label": "tested",
-          "description": "",
-          "lastTouchedAt": 1788959020
+          "description": "Testable claims with a test attached",
+          "lastTouchedAt": 1790943466
+        },
+        {
+          "label": "tested_other",
+          "description": "Claims with a test attached but no testable condition",
+          "lastTouchedAt": 1790943466
         },
         {
           "label": "testable",
@@ -9923,9 +9938,9 @@
           "lastTouchedAt": 1788959020
         },
         {
-          "label": "stale",
-          "description": "",
-          "lastTouchedAt": 1788959020
+          "label": "drift_stale",
+          "description": "Claims a drift review flagged stale — not stale test verdicts",
+          "lastTouchedAt": 1790943466
         },
         {
           "label": "anchorable",
@@ -10041,6 +10056,11 @@
           "id": "resp-8zww1p",
           "statement": "Computes the model's health counters per node and in rollup, widening the structural/leaf verdict to the authored tree so plan-only children discharge a committed parent's claims.",
           "lastTouchedAt": 1788959020
+        },
+        {
+          "id": "resp-bh32y4",
+          "statement": "**When** a claim with no testable condition has a test attached, **counts** it apart from the testable claims, so tested never exceeds testable",
+          "lastTouchedAt": 1790943466
         }
       ]
     },
@@ -13760,6 +13780,16 @@
           "id": "resp-hp3k5v",
           "statement": "**If** a claim has no code anchor, **then** **leaves** it out of the claims a session must probe",
           "lastTouchedAt": 1790942956
+        },
+        {
+          "id": "resp-92f39s",
+          "statement": "**When** a report is ingested, **keeps** every case's outcome, including tests not yet attached to any claim",
+          "lastTouchedAt": 1790943466
+        },
+        {
+          "id": "resp-ba09vk",
+          "statement": "**When** a test is attached after its report was ingested, **records** the kept outcome for its claim, unless the claim's code or test changed since that ingest",
+          "lastTouchedAt": 1790943466
         }
       ],
       "layer": "infrastructure"

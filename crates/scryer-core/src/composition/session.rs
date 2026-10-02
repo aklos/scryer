@@ -152,6 +152,21 @@ pub fn record_first_sight(
     session_store::append(r, session, SessionEvent::FirstSight { file, stale })
 }
 
+/// Record the task the agent oriented on — the first one titles the session's
+/// change, so later ones are not kept.
+pub fn record_task(r: &ModelRef, session: &str, task: &str) -> Result<(), String> {
+    let task = task.trim();
+    if task.is_empty() || session_log(r, session).task.is_some() {
+        return Ok(());
+    }
+    session_store::append(r, session, SessionEvent::Task { text: task.to_string() })
+}
+
+/// The task the session first oriented on, if any.
+pub fn session_task(r: &ModelRef, session: &str) -> Option<String> {
+    session_log(r, session).task
+}
+
 /// Record that the agent wrote these plan elements.
 pub fn record_model_edit(r: &ModelRef, session: &str, keys: Vec<String>) -> Result<(), String> {
     if keys.is_empty() {

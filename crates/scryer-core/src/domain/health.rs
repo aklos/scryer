@@ -33,14 +33,18 @@ pub struct HealthCounts {
     pub responsibilities: u32,
     /// Data-shape properties in scope.
     pub properties: u32,
-    /// Responsibilities with at least one test attached (a `test_map` entry) —
-    /// the model's PRIMARY signal, listed first. A separate dimension from
-    /// `anchored` — where a claim is implemented vs. whether a test is
-    /// attached — and NOT gated on `anchorable`: a structural claim
-    /// legitimately carries an integration test. Attachment is the only fact
-    /// counted — the test is never run; whether its fingerprint is still
-    /// intact is the anchor check's report.
+    /// Testable claims with at least one test attached (a `test_map` entry) —
+    /// the model's PRIMARY signal, listed first, and always `testable -
+    /// untested`. A separate dimension from `anchored` — where a claim is
+    /// implemented vs. whether a test is attached — and NOT gated on
+    /// `anchorable`: a structural claim legitimately carries an integration
+    /// test. Attachment is the only fact counted — the test is never run;
+    /// whether its fingerprint is still intact is the anchor check's report.
     pub tested: u32,
+    /// Claims with a test attached but no testable (When/While/If) condition,
+    /// or on a host that is not code-backed — counted apart so `tested` never
+    /// exceeds `testable`.
+    pub tested_other: u32,
     /// Responsibilities in a When/While/If form (rule 21) on code-backed hosts
     /// — the claims whose statement names a concrete trigger, state, or
     /// failure, so a test can arrange the condition and assert the response.
@@ -54,9 +58,10 @@ pub struct HealthCounts {
     /// Responsibilities or properties carrying the vagrant flag (undescribed behaviour
     /// awaiting adopt/reject).
     pub vagrant: u32,
-    /// Responsibilities or properties carrying the stale flag (the drift check
-    /// judged the code no longer discharges them; awaiting a verdict).
-    pub stale: u32,
+    /// Responsibilities or properties a drift review flagged stale (the code
+    /// no longer discharges them; awaiting a verdict). NOT stale test verdicts
+    /// — those are the test-status count.
+    pub drift_stale: u32,
     /// Claims that are EXPECTED to read through to code: any committed content
     /// hosted on a leaf (childless, non-external) node. A claim on a structural
     /// node is discharged through the subtree instead and never counts here.
@@ -78,15 +83,33 @@ impl HealthCounts {
         }
     }
 
+    /// Count one claim's test facts: a testable claim is tested or untested;
+    /// a test on any other claim counts apart.
+    fn count_test(&mut self, testable: bool, has_test: bool) {
+        match (testable, has_test) {
+            (true, true) => {
+                self.testable += 1;
+                self.tested += 1;
+            }
+            (true, false) => {
+                self.testable += 1;
+                self.untested += 1;
+            }
+            (false, true) => self.tested_other += 1,
+            (false, false) => {}
+        }
+    }
+
     fn merge(&mut self, other: &HealthCounts) {
         self.responsibilities += other.responsibilities;
         self.properties += other.properties;
         self.vagrant += other.vagrant;
-        self.stale += other.stale;
+        self.drift_stale += other.drift_stale;
         self.anchorable += other.anchorable;
         self.anchored += other.anchored;
         self.unmapped += other.unmapped;
         self.tested += other.tested;
+        self.tested_other += other.tested_other;
         self.testable += other.testable;
         self.untested += other.untested;
         self.touch(other.last_touched_at);
@@ -197,18 +220,11 @@ pub fn compute_health(
                 h.vagrant += 1;
             }
             if resp.stale == Some(true) {
-                h.stale += 1;
+                h.drift_stale += 1;
             }
             let has_test = model.test_map.get(&resp.id).is_some_and(|locs| !locs.is_empty());
-            if has_test {
-                h.tested += 1;
-            }
-            if code_backed && crate::domain::ears::classify(&resp.statement).testable() {
-                h.testable += 1;
-                if !has_test {
-                    h.untested += 1;
-                }
-            }
+            let testable = code_backed && crate::domain::ears::classify(&resp.statement).testable();
+            h.count_test(testable, has_test);
             h.touch(resp.last_touched_at);
             if anchorable_node {
                 h.anchorable += 1;
@@ -232,7 +248,7 @@ pub fn compute_health(
                 h.vagrant += 1;
             }
             if prop.stale == Some(true) {
-                h.stale += 1;
+                h.drift_stale += 1;
             }
             h.touch(prop.last_touched_at);
         }
@@ -265,20 +281,13 @@ pub fn compute_health(
                 h.vagrant += 1;
             }
             if resp.stale == Some(true) {
-                h.stale += 1;
+                h.drift_stale += 1;
             }
             let has_test = model.test_map.get(&resp.id).is_some_and(|locs| !locs.is_empty());
-            if has_test {
-                h.tested += 1;
-            }
             // A group organizes code-backed members, so its claims classify
             // like a node's: a When/While/If claim can back onto a test.
-            if crate::domain::ears::classify(&resp.statement).testable() {
-                h.testable += 1;
-                if !has_test {
-                    h.untested += 1;
-                }
-            }
+            let testable = crate::domain::ears::classify(&resp.statement).testable();
+            h.count_test(testable, has_test);
             h.touch(resp.last_touched_at);
         }
         if h == HealthCounts::default() {
@@ -824,26 +833,36 @@ mod tests {
         assert_eq!(c.pct, Some(50));
     }
 
-    /// `tested` counts claims with a test attached (a `test_map` entry) and
-    /// rolls up the tree like every other counter. It is NOT gated on
-    /// anchorability: a structural claim carrying an integration test counts,
-    /// where `anchored` would ignore it.
+    /// `tested` counts testable claims with a test attached (a `test_map`
+    /// entry) and rolls up the tree like every other counter. It is NOT gated
+    /// on anchorability: a structural claim carrying an integration test
+    /// counts, where `anchored` would ignore it. A test on a claim with no
+    /// testable condition counts apart, in `tested_other`, so `tested` never
+    /// exceeds `testable`.
     #[test]
     fn tested_counts_and_rolls_up_independent_of_anchorability() {
+        let when = |id: &str| {
+            let mut r = resp(id);
+            r.statement = "**When** a request arrives, **serve** it".into();
+            r
+        };
         let mut m = ScryModel::new();
         let mut sys = node("sys", Kind::System, None);
-        sys.responsibilities.push(resp("r-struct")); // structural: sys has a child
+        sys.responsibilities.push(when("r-struct")); // structural: sys has a child
         m.nodes.push(sys);
         let mut leaf = node("leaf", Kind::Component, Some("sys"));
-        leaf.responsibilities.push(resp("r-tested"));
-        leaf.responsibilities.push(resp("r-untested"));
+        leaf.responsibilities.push(when("r-tested"));
+        leaf.responsibilities.push(when("r-untested"));
+        leaf.responsibilities.push(resp("r-plain")); // ubiquitous, with a test
         m.nodes.push(leaf);
         m.test_map.insert("r-struct".into(), vec![loc("tests/integration.rs")]);
         m.test_map.insert("r-tested".into(), vec![loc("tests/unit.rs")]);
+        m.test_map.insert("r-plain".into(), vec![loc("tests/unit.rs")]);
         m.test_map.insert("r-empty".into(), Vec::new()); // dangling/empty: never counts
 
         let h = compute_health(&m, None, None);
         assert_eq!(h.nodes["leaf"].own.tested, 1, "the tested leaf claim counts");
+        assert_eq!(h.nodes["leaf"].own.tested_other, 1, "a test on a ubiquitous claim counts apart");
         assert_eq!(
             h.nodes["sys"].own.tested,
             1,
@@ -851,6 +870,8 @@ mod tests {
         );
         assert_eq!(h.nodes["sys"].subtree.tested, 2, "tested rolls up post-order");
         assert_eq!(h.totals.tested, 2);
+        assert_eq!(h.totals.testable, 3);
+        assert_eq!(h.totals.tested, h.totals.testable - h.totals.untested, "tested never exceeds testable");
         assert_eq!(h.totals.anchored, 0, "test attachment is a separate dimension from anchoring");
     }
 

@@ -511,10 +511,17 @@ pub(crate) fn remint_colliding_node_ids(
     report
 }
 
-/// The rationale a session's change opens with: the session it belongs to.
-/// The user's messages are never read, so the plan entries say what it is.
-fn session_rationale(sid: &str) -> String {
-    format!("Session {}", sid.get(..8).unwrap_or(sid))
+/// The rationale a session's change opens with: the task the agent first
+/// oriented on, in its own words, else the session it belongs to. The user's
+/// messages are never read.
+fn session_rationale(model_ref: &ModelRef, sid: &str) -> String {
+    match scryer_core::session::session_task(model_ref, sid) {
+        Some(task) => match task.char_indices().nth(200) {
+            Some((i, _)) => format!("{}…", &task[..i]),
+            None => task,
+        },
+        None => format!("Session {}", sid.get(..8).unwrap_or(sid)),
+    }
 }
 
 /// Sessions without a harness session id share this one change.
@@ -537,7 +544,7 @@ pub(crate) fn write_planned_tagged(
     let cid = match scryer_core::changes::session_change(model, sid) {
         Some(c) => c.id.clone(),
         None => {
-            let rationale = session_rationale(sid);
+            let rationale = session_rationale(model_ref, sid);
             scryer_core::changes::open_change_for(model, &rationale, Some(sid), scryer_core::drift::now_secs())
         }
     };

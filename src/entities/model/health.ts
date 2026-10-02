@@ -15,18 +15,23 @@ export interface HealthCounts {
   properties: number;
   /** Responsibilities flagged vagrant (undescribed behaviour awaiting adopt/reject). */
   vagrant: number;
-  /** Responsibilities flagged stale (drift verdict awaiting a decision). */
-  stale: number;
+  /** Claims a drift review flagged stale (awaiting a decision) — not stale
+   *  test verdicts. */
+  driftStale: number;
   /** Claims expected to read through to code (any committed claim on a leaf). */
   anchorable: number;
   /** Of those, how many actually have a source anchor. */
   anchored: number;
   /** anchorable − anchored — the lens's blind spots. */
   unmapped: number;
-  /** Claims with at least one test attached (a `testMap` entry). A separate dimension
-   *  from `anchored` — implemented vs. test-attached — and not gated on
-   *  leafness (a structural claim carrying an integration test counts). */
+  /** Testable claims with at least one test attached (a `testMap` entry) —
+   *  always `testable − untested`. A separate dimension from `anchored` —
+   *  implemented vs. test-attached — and not gated on leafness (a structural
+   *  claim carrying an integration test counts). */
   tested: number;
+  /** Claims with a test attached but no testable condition, counted apart so
+   *  `tested` never exceeds `testable`. */
+  testedOther: number;
   /** Claims in a When/While/If form on code-backed hosts — a concrete trigger,
    *  state, or failure a test can exercise mechanically. Classified
    *  deterministically from the leading keyword (rule 21). */

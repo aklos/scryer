@@ -473,9 +473,9 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 0/5 is exactly the state that must not hide. */}
             {(() => {
               const h = report?.health.nodes[node.id]?.subtree;
-              if (!h || (h.testable === 0 && h.tested === 0)) return null;
-              const covered = h.testable - h.untested;
-              const extra = h.tested - covered;
+              if (!h || (h.testable === 0 && h.testedOther === 0)) return null;
+              const covered = h.tested;
+              const extra = h.testedOther;
               const bonus =
                 extra > 0
                   ? `; ${extra} more test${extra === 1 ? "" : "s"} on always-active claims`

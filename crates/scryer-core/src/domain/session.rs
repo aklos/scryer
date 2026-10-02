@@ -42,6 +42,9 @@ pub enum SessionEvent {
     /// The Stop gate blocked until this session's new tests were
     /// mutation-probed — at most once per session.
     ProbeGate,
+    /// The task the agent oriented on, in its own words — the title the
+    /// session's change takes. Only the first is kept.
+    Task { text: String },
     /// The session first read `file`; these of its anchors (`key`, `state`)
     /// were already out of sync then — drift it found, not drift it made.
     FirstSight {
@@ -77,6 +80,8 @@ pub struct SessionLog {
     pub last_summary: Option<String>,
     /// Shell commands started, `(tool-call id, unix ns)`, in start order.
     pub shell_starts: Vec<(Option<String>, u64)>,
+    /// The first task the agent oriented on.
+    pub task: Option<String>,
     /// Per file the session has read, the anchors already out of sync when
     /// it first did, as `(key, state)`.
     pub first_sight: Vec<(String, Vec<(String, String)>)>,
@@ -116,6 +121,11 @@ impl SessionLog {
             SessionEvent::PendingGate { keys } => self.gated_pending.extend(keys.iter().cloned()),
             SessionEvent::ProbeGate => self.probe_gated = true,
             SessionEvent::ShellStart { tool, ns } => self.shell_starts.push((tool.clone(), *ns)),
+            SessionEvent::Task { text } => {
+                if self.task.is_none() {
+                    self.task = Some(text.clone());
+                }
+            }
             SessionEvent::FirstSight { file, stale } => {
                 if !self.first_sight.iter().any(|(f, _)| f == file) {
                     self.first_sight.push((file.clone(), stale.clone()));

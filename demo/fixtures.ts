@@ -322,8 +322,8 @@ export const SOURCE_SPANS: Record<string, Span> = {
 // --- Health / observability report ------------------------------------------
 
 const counts = (p: Partial<HealthCounts>): HealthCounts => ({
-  responsibilities: 0, properties: 0, vagrant: 0, stale: 0,
-  anchorable: 0, anchored: 0, unmapped: 0, tested: 0, testable: 0, untested: 0, ...p,
+  responsibilities: 0, properties: 0, vagrant: 0, driftStale: 0,
+  anchorable: 0, anchored: 0, unmapped: 0, tested: 0, testedOther: 0, testable: 0, untested: 0, ...p,
 });
 
 /** A derived observability report: coverage per node, anchor drift, and the
@@ -337,18 +337,18 @@ export const healthReport: ModelHealthReport = {
         boundary: { totalFiles: 14, anchoredFiles: 11, darkFiles: ["ledger/src/escrow.rs", "ledger/migrations/0007_escrow.sql", "ledger/src/reconcile.rs"] },
       },
       fraud: {
-        own: counts({ responsibilities: 2, vagrant: 1, anchorable: 2, anchored: 2, tested: 2, testable: 1 }),
-        subtree: counts({ responsibilities: 2, vagrant: 1, anchorable: 2, anchored: 2, tested: 2, testable: 1 }),
+        own: counts({ responsibilities: 2, vagrant: 1, anchorable: 2, anchored: 2, tested: 1, testedOther: 1, testable: 1 }),
+        subtree: counts({ responsibilities: 2, vagrant: 1, anchorable: 2, anchored: 2, tested: 1, testedOther: 1, testable: 1 }),
         boundary: { totalFiles: 9, anchoredFiles: 8, darkFiles: ["fraud/scoring/cache.py"] },
       },
       auth: {
-        own: counts({ responsibilities: 2, anchorable: 2, anchored: 1, unmapped: 1, tested: 1 }),
-        subtree: counts({ responsibilities: 2, anchorable: 2, anchored: 1, unmapped: 1, tested: 1 }),
+        own: counts({ responsibilities: 2, anchorable: 2, anchored: 1, unmapped: 1, testedOther: 1 }),
+        subtree: counts({ responsibilities: 2, anchorable: 2, anchored: 1, unmapped: 1, testedOther: 1 }),
         boundary: { totalFiles: 7, anchoredFiles: 6, darkFiles: ["auth/internal/session.go"] },
       },
       webhooks: {
-        own: counts({ responsibilities: 2, anchorable: 2, anchored: 2, tested: 1, testable: 1, untested: 1 }),
-        subtree: counts({ responsibilities: 2, anchorable: 2, anchored: 2, tested: 1, testable: 1, untested: 1 }),
+        own: counts({ responsibilities: 2, anchorable: 2, anchored: 2, testedOther: 1, testable: 1, untested: 1 }),
+        subtree: counts({ responsibilities: 2, anchorable: 2, anchored: 2, testedOther: 1, testable: 1, untested: 1 }),
         boundary: { totalFiles: 6, anchoredFiles: 6, darkFiles: [] },
       },
     },
@@ -427,8 +427,8 @@ export const cleanHealth: ModelHealthReport = {
         boundary: { totalFiles: 14, anchoredFiles: 12, darkFiles: ["ledger/migrations/0007_escrow.sql", "ledger/src/reconcile.rs"] },
       },
       fraud: {
-        own: counts({ responsibilities: 2, anchorable: 2, anchored: 2, tested: 2, testable: 1 }),
-        subtree: counts({ responsibilities: 2, anchorable: 2, anchored: 2, tested: 2, testable: 1 }),
+        own: counts({ responsibilities: 2, anchorable: 2, anchored: 2, tested: 1, testedOther: 1, testable: 1 }),
+        subtree: counts({ responsibilities: 2, anchorable: 2, anchored: 2, tested: 1, testedOther: 1, testable: 1 }),
         boundary: { totalFiles: 9, anchoredFiles: 8, darkFiles: ["fraud/scoring/cache.py"] },
       },
       auth: {
@@ -437,8 +437,8 @@ export const cleanHealth: ModelHealthReport = {
         boundary: { totalFiles: 7, anchoredFiles: 7, darkFiles: [] },
       },
       webhooks: {
-        own: counts({ responsibilities: 2, anchorable: 2, anchored: 2, tested: 1, testable: 1, untested: 1 }),
-        subtree: counts({ responsibilities: 2, anchorable: 2, anchored: 2, tested: 1, testable: 1, untested: 1 }),
+        own: counts({ responsibilities: 2, anchorable: 2, anchored: 2, testedOther: 1, testable: 1, untested: 1 }),
+        subtree: counts({ responsibilities: 2, anchorable: 2, anchored: 2, testedOther: 1, testable: 1, untested: 1 }),
         boundary: { totalFiles: 6, anchoredFiles: 6, darkFiles: [] },
       },
     },

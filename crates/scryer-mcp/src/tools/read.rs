@@ -676,6 +676,10 @@ impl ScryerServer {
                  you are about to do. For the whole model use read_model / get_health.",
             )]));
         }
+        // The first task this session orients on titles its change.
+        if let (Some(task), Some(sid)) = (task, self.session_id(&model_ref)) {
+            let _ = scryer_core::session::record_task(&model_ref, &sid, task);
+        }
 
         let committed = match scryer_core::read_model_at(&model_ref) {
             Ok(m) => m,
@@ -1956,8 +1960,15 @@ impl ScryerServer {
                     })
                     .collect();
 
+                // Stale test VERDICTS (code or test changed since the last
+                // run) — the status line's "tests: N stale", which
+                // `totals.driftStale` is not.
+                let stale_verdicts = scryer_extract::test_status::test_statuses(&model_ref)
+                    .map(|v| v.iter().filter(|s| s.stale).count())
+                    .unwrap_or(0);
                 serde_json::json!({
                     "totals": counts_json(&health.totals),
+                    "staleVerdicts": stale_verdicts,
                     "roots": roots,
                     "anchorSummary": {
                         "changed": n_changed,
@@ -3064,6 +3075,44 @@ mod tests {
         // Phase: pending intent exists, no drift baseline → plan-execution.
         let phase = v["phase"].as_str().unwrap();
         assert!(phase.starts_with("plan-execution:"), "{phase}");
+    }
+
+    /// The session's change is titled with the task it first oriented on, in
+    /// the agent's own words — the user's messages are never read. A later
+    /// orient does not retitle it.
+    #[test]
+    fn the_first_orient_task_titles_the_sessions_change() {
+        let (_s, _dir, project, _mr) = locate_project();
+        let server = ScryerServer::for_session("s1");
+        let orient = |task: &str| {
+            server
+                .orient(Parameters(OrientRequest {
+                    project: Some(project.clone()),
+                    task: Some(task.into()),
+                    files: None,
+                }))
+                .unwrap();
+        };
+        orient("rate-limit token checks");
+        orient("something else entirely");
+        server
+            .add_component(Parameters(crate::types::AddComponentRequest {
+                project: Some(project.clone()),
+                items: vec![crate::types::ComponentItem {
+                    layer: None,
+                    parent_id: "api".into(),
+                    name: "RateLimiter".into(),
+                    description: None,
+                    responsibilities: vec!["throttles requests per client".into()],
+                }],
+            }))
+            .unwrap();
+        let v = result_json(
+            &server
+                .get_pending(Parameters(GetPendingRequest { project: Some(project), change: None }))
+                .unwrap(),
+        );
+        assert_eq!(v["openChanges"][0]["rationale"], "rate-limit token checks");
     }
 
     /// orient with neither task nor files is a usage error that steers, and a

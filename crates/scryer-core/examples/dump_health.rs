@@ -9,9 +9,9 @@ fn main() {
     let health = scryer_core::health::compute_health(&model, None, None);
     let t = &health.totals;
     println!(
-        "totals: {} resps, {} props | vagrant {} stale {} | anchorable {} anchored {} unmapped {}",
+        "totals: {} resps, {} props | vagrant {} drift-stale {} | anchorable {} anchored {} unmapped {}",
         t.responsibilities, t.properties,
-        t.vagrant, t.stale, t.anchorable, t.anchored, t.unmapped
+        t.vagrant, t.drift_stale, t.anchorable, t.anchored, t.unmapped
     );
 
 
