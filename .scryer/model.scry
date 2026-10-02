@@ -14061,6 +14061,11 @@
           "id": "resp-xxh3fn",
           "statement": "**When** a shell command finishes, **records** every project file modified since it started as touched by the session",
           "lastTouchedAt": 1790939924
+        },
+        {
+          "id": "resp-zhxm92",
+          "statement": "**If** another session logged editing a file while a shell command ran, **then** **leaves** that file out of the command's touches",
+          "lastTouchedAt": 1790940309
         }
       ],
       "layer": "composition"
@@ -22589,6 +22594,12 @@
         "symbol": "read_planned"
       }
     ],
+    "resp-zhxm92": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "record_shell_edits"
+      }
+    ],
     "resp-zp2ah3": [
       {
         "pattern": "src/features/markup/markup.tsx",
@@ -22929,6 +22940,12 @@
       {
         "pattern": "crates/scryer-extract/src/domain/context.rs",
         "symbol": "a_csharp_global_using_and_alias_reach_their_types"
+      }
+    ],
+    "resp-zhxm92": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "a_file_another_session_edited_meanwhile_is_not_this_sessions"
       }
     ]
   },

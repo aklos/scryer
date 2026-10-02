@@ -41,13 +41,26 @@ pub fn record_shell_start(r: &ModelRef, session: &str, tool: Option<&str>) -> Re
 /// A shell command finished: record every project file modified since it
 /// started as touched — edits made with `sed`, a script or a heredoc are the
 /// session's as surely as an Edit tool's. Scryer's own `.scryer/` files are
-/// not code. Returns the newly touched files.
+/// not code. Several sessions can share one checkout, so a file another
+/// session logged touching while the command ran is theirs, not this one's.
+/// Returns the newly touched files.
 pub fn record_shell_edits(r: &ModelRef, session: &str, tool: Option<&str>) -> Result<Vec<String>, String> {
     let log = session_log(r, session);
     let Some(since) = log.shell_started(tool) else { return Ok(Vec::new()) };
+    let since_secs = since / 1_000_000_000;
+    let others: HashSet<String> = session_store::list(r)
+        .into_iter()
+        .filter(|(id, mtime)| id != session && *mtime >= since_secs)
+        .flat_map(|(id, _)| session_store::read(r, &id))
+        .filter(|e| e.at >= since_secs)
+        .filter_map(|e| match e.event {
+            SessionEvent::Touch { file } => Some(file),
+            _ => None,
+        })
+        .collect();
     let mut added = Vec::new();
     for file in crate::infrastructure::drift::files_modified_since_ns(r.project_path(), since) {
-        if file.starts_with(".scryer/") || log.touched.contains(&file) {
+        if file.starts_with(".scryer/") || log.touched.contains(&file) || others.contains(&file) {
             continue;
         }
         session_store::append(r, session, SessionEvent::Touch { file: file.clone() })?;
@@ -802,6 +815,22 @@ mod tests {
             "a file already touched is not recorded twice"
         );
         assert!(record_shell_edits(&r, "other", None).unwrap().is_empty(), "no start, no touches");
+    }
+
+    /// Sessions sharing a checkout: a file another session logged editing
+    /// while this one's command ran is left to that session.
+    #[test]
+    fn a_file_another_session_edited_meanwhile_is_not_this_sessions() {
+        let (dir, r) = project();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        record_shell_start(&r, "a", Some("call-1")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(dir.path().join("src/mine.rs"), "a's sed").unwrap();
+        std::fs::write(dir.path().join("src/theirs.rs"), "b's edit").unwrap();
+        record_touch(&r, "b", "src/theirs.rs").unwrap();
+
+        assert_eq!(record_shell_edits(&r, "a", Some("call-1")).unwrap(), vec!["src/mine.rs"]);
+        assert!(!session_log(&r, "a").touched.contains(&"src/theirs.rs".to_string()));
     }
 
     #[test]

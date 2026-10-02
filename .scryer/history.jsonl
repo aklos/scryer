@@ -368,3 +368,5 @@
 {"at":1790939986,"by":"agent","driver":"dropped — removed from code","kind":"impl","nodeId":"node-erg0zt","rows":[{"marker":"−","text":"session_start (subtree)"}]}
 {"at":1790939986,"by":"agent","driver":"dropped — removed from code","kind":"impl","nodeId":"node-erg0zt","rows":[{"marker":"−","text":"process_alive (subtree)"}]}
 {"at":1790939986,"by":"agent","driver":"dropped — removed from code","kind":"impl","nodeId":"node-erg0zt","rows":[{"marker":"−","text":"Endpoint (subtree)"}]}
+{"at":1790940309,"by":"agent","driver":"folded","kind":"change","nodeId":"","changeId":"chg-rt1tba","rows":[{"marker":"✓","text":"go ahead"}]}
+{"at":1790940309,"by":"agent","driver":"fill","kind":"impl","nodeId":"node-7h6fth","changeId":"chg-rt1tba","rows":[{"marker":"+","text":"**If** another session logged editing a file while a shell command ran, **then** **leaves** that file out of the command's touches","source":{"pattern":"crates/scryer-core/src/composition/session.rs","symbol":"record_shell_edits"}}]}

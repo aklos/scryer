@@ -14084,6 +14084,11 @@
           "id": "resp-xxh3fn",
           "statement": "**When** a shell command finishes, **records** every project file modified since it started as touched by the session",
           "lastTouchedAt": 1790939637
+        },
+        {
+          "id": "resp-zhxm92",
+          "statement": "**If** another session logged editing a file while a shell command ran, **then** **leaves** that file out of the command's touches",
+          "lastTouchedAt": 1790940258
         }
       ],
       "layer": "composition"
