@@ -130,6 +130,10 @@ function diffNodes(from: ScryModel, to: ScryModel, out: ModelDiff) {
     // Normalize undefined and false — both "not external" — so only a genuine
     // flip registers, never a serialization difference.
     reword(changes, "external", prev.external === true ? "true" : "false", n.external === true ? "true" : "false");
+    // A container's `style` and a component's `layer` decide which structural
+    // rules govern its code — plan work a whole-change fold must carry.
+    reword(changes, "style", prev.style ?? "", n.style ?? "");
+    reword(changes, "layer", prev.layer ?? "", n.layer ?? "");
     if (changes.length) out.changes.push({ kind: "node", id, label: n.name, changes });
   }
   for (const [id, n] of fromBy)
@@ -152,6 +156,8 @@ function diffLinks(from: ScryModel, to: ScryModel, out: ModelDiff) {
       changes.push({ type: "repointed", srcFrom: prev.src, srcTo: l.src, dstFrom: prev.dst, dstTo: l.dst });
     reword(changes, "label", prev.label, l.label);
     reword(changes, "method", prev.method ?? "", l.method ?? "");
+    // A link's `kind` is its meaning inside a styled container.
+    reword(changes, "kind", prev.kind ?? "", l.kind ?? "");
     if (changes.length) out.changes.push({ kind: "link", id, label: l.label, changes });
   }
   for (const [id, l] of fromBy)

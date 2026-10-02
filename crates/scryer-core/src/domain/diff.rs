@@ -24,7 +24,7 @@
 //! Properties have no id, so they are keyed by `(owner node, label)` — a label
 //! change reads as delete-plus-add, which is acceptable for plain data fields.
 
-use crate::{Kind, ScryModel};
+use crate::{Kind, LinkKind, ScryModel};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -368,6 +368,21 @@ fn diff_nodes(from: &ScryModel, to: &ScryModel, out: &mut ModelDiff) {
                     if prev.external == Some(true) { "true" } else { "false" },
                     if n.external == Some(true) { "true" } else { "false" },
                 );
+                // A container's `style` and a component's `layer` decide which
+                // structural rules govern its code: changing either is plan work
+                // a whole-change fold must carry, never a silent difference.
+                reword(
+                    &mut changes,
+                    "style",
+                    prev.style.as_deref().unwrap_or(""),
+                    n.style.as_deref().unwrap_or(""),
+                );
+                reword(
+                    &mut changes,
+                    "layer",
+                    prev.layer.as_deref().unwrap_or(""),
+                    n.layer.as_deref().unwrap_or(""),
+                );
                 if !changes.is_empty() {
                     out.changes.push(ElementChange {
                         kind: ElementKind::Node,
@@ -422,6 +437,13 @@ fn diff_links(from: &ScryModel, to: &ScryModel, out: &mut ModelDiff) {
                     "method",
                     prev.method.as_deref().unwrap_or(""),
                     l.method.as_deref().unwrap_or(""),
+                );
+                // A link's `kind` is its meaning inside a styled container.
+                reword(
+                    &mut changes,
+                    "kind",
+                    prev.kind.map_or("", LinkKind::as_str),
+                    l.kind.map_or("", LinkKind::as_str),
                 );
                 if !changes.is_empty() {
                     out.changes.push(ElementChange {
@@ -829,6 +851,31 @@ mod tests {
         same.external = Some(false);
         to.nodes.push(same);
         assert!(diff(&from, &to).is_empty(), "None and Some(false) must not differ");
+    }
+
+    /// `style`, `layer` and a link's `kind` decide which structural rules
+    /// govern the code, so an edit to any one alone is plan work — never a
+    /// difference the diff (and with it a whole-change fold) can't see.
+    #[test]
+    fn style_layer_and_link_kind_changes_surface() {
+        let reworded = |field: &str, from: &str, to: &str| Change::Reworded {
+            field: field.into(),
+            from: from.into(),
+            to: to.into(),
+        };
+        let mut from = ScryModel::new();
+        from.nodes.push(node("c", "C", None));
+        from.nodes.push(node("k", "K", Some("c")));
+        from.links.push(link("l", "c", "k"));
+        from.nodes[1].layer = Some("core".into());
+        let mut to = from.clone();
+        to.nodes[0].style = Some("core-shell".into());
+        to.nodes[1].layer = Some("shell".into());
+        to.links[0].kind = Some(LinkKind::Calls);
+        let d = diff(&from, &to);
+        assert_eq!(find(&d, "c").changes, vec![reworded("style", "", "core-shell")]);
+        assert_eq!(find(&d, "k").changes, vec![reworded("layer", "core", "shell")]);
+        assert_eq!(find(&d, "l").changes, vec![reworded("kind", "", "calls")]);
     }
 
     /// A canvas placement is pure cosmetics: dragging a node on the map must

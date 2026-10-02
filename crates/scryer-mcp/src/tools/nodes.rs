@@ -4197,6 +4197,98 @@ mod tests {
         r.content.iter().find_map(|c| c.as_text().map(|t| t.text.clone())).unwrap()
     }
 
+    /// A style-only, a layer-only and a link-kind-only edit each pend in the
+    /// plan and fold with `mark_implemented {change}` — the diff must see
+    /// them, or a whole-change fold leaves committed on the old values.
+    #[test]
+    fn style_layer_and_link_kind_edits_pend_and_fold_by_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let project = dir.path().to_string_lossy().to_string();
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, "Acme", None));
+        let mut lib = node("lib", Kind::Container, "Lib", Some("sys"));
+        lib.style = None;
+        m.nodes.push(lib);
+        m.nodes.push(node("app", Kind::Container, "App", Some("sys")));
+        let mut k = node("k", Kind::Component, "K", Some("app"));
+        k.layer = Some("core".into());
+        m.nodes.push(k);
+        let mut k2 = node("k2", Kind::Component, "K2", Some("app"));
+        k2.layer = Some("shell".into());
+        m.nodes.push(k2);
+        m.links.push(Link {
+            kind: None,
+            id: "l1".into(),
+            src: "k2".into(),
+            dst: "k".into(),
+            label: "runs".into(),
+            method: None,
+        });
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+
+        let server = ScryerServer::new();
+        let chg = opened(
+            &server
+                .open_change(Parameters(OpenChangeRequest {
+                    project: Some(project.clone()),
+                    rationale: Some("restyle".into()),
+                    change_id: None,
+                }))
+                .unwrap(),
+        );
+        let item = |id: &str, style: Option<&str>, layer: Option<&str>| UpdateNodeItem {
+            node_id: id.into(),
+            kind: None,
+            name: None,
+            description: None,
+            technology: None,
+            external: None,
+            style: style.map(Into::into),
+            layer: layer.map(Into::into),
+            responsibilities: None,
+            properties: None,
+            parent_id: None,
+        };
+        let r = server
+            .update_nodes(Parameters(UpdateNodeRequest {
+                project: Some(project.clone()),
+                nodes: vec![item("lib", Some("library"), None), item("k", None, Some("shell"))],
+            }))
+            .unwrap();
+        assert!(!r.is_error.unwrap_or(false), "{}", tool_text(&r));
+        // update_links lives in another tool module; tag the kind edit the way
+        // it would.
+        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        planned.links[0].kind = Some(scryer_core::LinkKind::Calls);
+        planned.change_map.insert(
+            scryer_core::changes::element_key(scryer_core::diff::ElementKind::Link, None, "l1"),
+            chg.clone(),
+        );
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        let pending: Vec<String> = scryer_core::diff::diff(&committed, &planned)
+            .changes
+            .iter()
+            .map(|c| c.id.clone())
+            .collect();
+        for id in ["lib", "k", "l1"] {
+            assert!(pending.contains(&id.to_string()), "{id} pends: {pending:?}");
+        }
+
+        let text = fold_change(&server, dir.path(), &chg);
+        assert!(text.contains("fully folded and closed"), "{text}");
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        let n = |id: &str| committed.nodes.iter().find(|n| n.id == id).unwrap().clone();
+        assert_eq!(n("lib").style.as_deref(), Some("library"));
+        assert_eq!(n("k").layer.as_deref(), Some("shell"));
+        assert_eq!(committed.links[0].kind, Some(scryer_core::LinkKind::Calls));
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert!(scryer_core::diff::diff(&committed, &planned).is_empty(), "nothing left pending");
+    }
+
     /// The ledger loop end to end: `open_change` opens a named change, an
     /// authoring write tags to it automatically, `get_pending` groups and
     /// filters by it, a second session resumes it by id, and

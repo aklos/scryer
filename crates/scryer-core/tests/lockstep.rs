@@ -169,6 +169,18 @@ fn scenario_position_only() -> (ScryModel, ScryModel) {
     (from, model(v))
 }
 
+/// A container's `style`, a component's `layer` and a link's `kind` govern
+/// the structural rules, so an edit to each alone is plan work in BOTH
+/// engines — or the canvas and `get_pending` disagree on what folds.
+fn scenario_style_layer_kind() -> (ScryModel, ScryModel) {
+    let from = base();
+    let mut v = serde_json::to_value(base()).unwrap();
+    v["nodes"][1]["style"] = json!("core-shell");
+    v["nodes"][2]["layer"] = json!("core");
+    v["links"][0]["kind"] = json!("calls");
+    (from, model(v))
+}
+
 #[test]
 fn lockstep_fixtures_are_current() {
     let scenarios: Vec<(&str, (ScryModel, ScryModel))> = vec![
@@ -177,6 +189,7 @@ fn lockstep_fixtures_are_current() {
         ("greenfield", scenario_greenfield()),
         ("property-relabel", scenario_property_relabel()),
         ("position-only", scenario_position_only()),
+        ("style-layer-kind", scenario_style_layer_kind()),
     ];
 
     let dir = fixture_dir();
