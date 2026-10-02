@@ -157,6 +157,8 @@ fn check_parent(model: &ScryModel, parent_id: &str, want: Kind) -> Option<CallTo
 /// A bare node with every optional facet empty — callers set what they need.
 fn blank_node(id: String, kind: Kind, name: String, parent_id: Option<String>) -> Node {
     Node {
+        style: None,
+        layer: None,
         id,
         kind,
         name,
@@ -412,11 +414,23 @@ impl ScryerServer {
         let committed = read_committed(&model_ref);
         let mut minter = RespMinter::new(&model);
         minter.absorb(&committed);
+        let styles = styles_for(&model_ref);
         let mut minted = Vec::new();
         let mut reused = Vec::new();
         for item in &req.items {
             if let Some(e) = check_parent(&model, &item.parent_id, Kind::System) {
                 return Ok(e);
+            }
+            let style = item.style.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            if let Some(s) = style {
+                if !item.external && styles.get(s).is_none() {
+                    return Ok(err(format!(
+                        "Unknown style '{}' for container '{}' — known styles: {}",
+                        s,
+                        item.name,
+                        styles.names().join(", ")
+                    )));
+                }
             }
             if let Some(id) =
                 existing_same_node(&model, Kind::Container, Some(&item.parent_id), &item.name)
@@ -434,6 +448,7 @@ impl ScryerServer {
             node.technology = item.technology.clone();
             node.description = item.description.clone();
             node.external = if item.external { Some(true) } else { None };
+            node.style = if item.external { None } else { style.map(str::to_string) };
             node.responsibilities = minter.build(&item.responsibilities);
             model.nodes.push(node);
             if let Some(dir) = item.boundary_dir.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
@@ -488,11 +503,15 @@ impl ScryerServer {
         let committed = read_committed(&model_ref);
         let mut minter = RespMinter::new(&model);
         minter.absorb(&committed);
+        let styles = styles_for(&model_ref);
         let mut minted = Vec::new();
         let mut reused = Vec::new();
         for item in &req.items {
             if let Some(e) = check_parent(&model, &item.parent_id, Kind::Container) {
                 return Ok(e);
+            }
+            if let Err(e) = scryer_core::style::check_layer(&model, &styles, &item.parent_id, item.layer.as_deref()) {
+                return Ok(err(e));
             }
             if let Some(id) =
                 existing_same_node(&model, Kind::Component, Some(&item.parent_id), &item.name)
@@ -508,6 +527,7 @@ impl ScryerServer {
                 Some(item.parent_id.clone()),
             );
             node.description = item.description.clone();
+            node.layer = item.layer.as_deref().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string);
             node.responsibilities = minter.build(&item.responsibilities);
             model.nodes.push(node);
             minted.push(id);
@@ -1269,6 +1289,7 @@ mod tests {
                     name: "API".into(),
                     description: None,
                     technology: None,
+                    style: None,
                     external: false,
                     boundary_dir: None,
                     responsibilities: vec![],
@@ -1293,6 +1314,7 @@ mod tests {
                     name: "API".into(),
                     description: None,
                     technology: None,
+                    style: None,
                     external: false,
                     boundary_dir: None,
                     responsibilities: vec![],
@@ -1311,6 +1333,7 @@ mod tests {
                     name: "API".into(),
                     description: None,
                     technology: None,
+                    style: None,
                     external: false,
                     boundary_dir: None,
                     responsibilities: vec![],
@@ -1395,6 +1418,7 @@ mod tests {
             .add_container(Parameters(AddContainerRequest {
                 project: Some(project),
                 items: vec![ContainerItem {
+                    style: Some("core-shell".into()),
                     parent_id: "node-1".into(),
                     name: "New".into(),
                     technology: None,
@@ -1429,6 +1453,7 @@ mod tests {
             .add_container(Parameters(AddContainerRequest {
                 project: Some(project),
                 items: vec![ContainerItem {
+                    style: Some("core-shell".into()),
                     parent_id: system_id,
                     name: "Browser Embed".into(),
                     technology: Some(prose.into()),
@@ -1493,6 +1518,7 @@ mod tests {
             .add_container(Parameters(AddContainerRequest {
                 project: Some(project),
                 items: vec![ContainerItem {
+                    style: Some("core-shell".into()),
                     parent_id: "node-1".into(),
                     name: "New".into(),
                     technology: None,
@@ -1529,6 +1555,7 @@ mod tests {
                 .add_container(Parameters(AddContainerRequest {
                     project: Some(project.clone()),
                     items: vec![ContainerItem {
+                        style: Some("core-shell".into()),
                         parent_id: system_id.clone(),
                         name: name.into(),
                         technology: None,
@@ -1562,6 +1589,7 @@ mod tests {
             .add_container(Parameters(AddContainerRequest {
                 project: Some(project.clone()),
                 items: vec![ContainerItem {
+                    style: Some("core-shell".into()),
                     parent_id: system_id.clone(),
                     name: "API".into(),
                     technology: Some("Axum".into()),
@@ -1589,6 +1617,7 @@ mod tests {
             .add_component(Parameters(AddComponentRequest {
                 project: Some(project.clone()),
                 items: vec![ComponentItem {
+                    layer: Some("core".into()),
                     parent_id: container_id.clone(),
                     name: "Auth".into(),
                     description: None,
@@ -1657,6 +1686,7 @@ mod tests {
                 project: Some(project.clone()),
                 items: vec![
                     ContainerItem {
+                        style: Some("core-shell".into()),
                         parent_id: system_id.clone(),
                         name: "Web".into(),
                         technology: None,
@@ -1666,6 +1696,7 @@ mod tests {
                         boundary_dir: Some("web".into()),
                     },
                     ContainerItem {
+                        style: Some("core-shell".into()),
                         parent_id: system_id.clone(),
                         name: "Worker".into(),
                         technology: None,
@@ -1733,6 +1764,7 @@ mod tests {
             .add_container(Parameters(AddContainerRequest {
                 project: Some(project.clone()),
                 items: vec![ContainerItem {
+                    style: Some("core-shell".into()),
                     parent_id: system_id,
                     name: "API".into(),
                     technology: None,
@@ -1818,6 +1850,7 @@ mod tests {
             .add_container(Parameters(AddContainerRequest {
                 project: Some(project.clone()),
                 items: vec![ContainerItem {
+                    style: Some("core-shell".into()),
                     parent_id: system_id,
                     name: "API".into(),
                     technology: None,
@@ -2166,6 +2199,7 @@ mod tests {
             .add_component(Parameters(AddComponentRequest {
                 project: Some(project),
                 items: vec![ComponentItem {
+                    layer: Some("core".into()),
                     parent_id: system_id,
                     name: "Nope".into(),
                     description: None,
@@ -2249,6 +2283,80 @@ mod tests {
         );
     }
 
+    /// Style and layer are fixed vocabularies: an unknown style never lands on a
+    /// container, and a component's layer must come from its container's style.
+    /// A rejection names the list to pick from.
+    #[test]
+    fn add_container_and_add_component_reject_unknown_style_and_layer() {
+        let (server, dir, system_id) = temp_project();
+        let project = dir.path().to_string_lossy().to_string();
+        let container = |style: &str| ContainerItem {
+            style: Some(style.into()),
+            parent_id: system_id.clone(),
+            name: "API".into(),
+            technology: None,
+            description: None,
+            external: false,
+            boundary_dir: None,
+            responsibilities: vec![],
+        };
+        let r = server
+            .add_container(Parameters(AddContainerRequest {
+                project: Some(project.clone()),
+                items: vec![container("onion")],
+            }))
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let text = r.content.iter().find_map(|c| c.as_text().map(|t| t.text.clone())).unwrap();
+        assert!(text.contains("Unknown style 'onion'") && text.contains("hexagonal"), "{text}");
+
+        let r = server
+            .add_container(Parameters(AddContainerRequest {
+                project: Some(project.clone()),
+                items: vec![container("hexagonal")],
+            }))
+            .unwrap();
+        assert_ne!(r.is_error, Some(true));
+        let api = planned_id(&dir, "API");
+        assert_eq!(
+            read_plan(&dir).nodes.iter().find(|n| n.id == api).and_then(|n| n.style.clone()).as_deref(),
+            Some("hexagonal")
+        );
+
+        let component = |layer: &str| ComponentItem {
+            layer: Some(layer.into()),
+            parent_id: api.clone(),
+            name: "Billing".into(),
+            description: None,
+            responsibilities: vec![],
+        };
+        let r = server
+            .add_component(Parameters(AddComponentRequest {
+                project: Some(project.clone()),
+                items: vec![component("pages")],
+            }))
+            .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let text = r.content.iter().find_map(|c| c.as_text().map(|t| t.text.clone())).unwrap();
+        assert!(
+            text.contains("Layer 'pages' is not in style 'hexagonal'") && text.contains("domain"),
+            "{text}"
+        );
+
+        let r = server
+            .add_component(Parameters(AddComponentRequest {
+                project: Some(project),
+                items: vec![component("domain")],
+            }))
+            .unwrap();
+        assert_ne!(r.is_error, Some(true));
+        let billing = planned_id(&dir, "Billing");
+        assert_eq!(
+            read_plan(&dir).nodes.iter().find(|n| n.id == billing).and_then(|n| n.layer.clone()).as_deref(),
+            Some("domain")
+        );
+    }
+
     /// A plan write returns the created ids PLUS the follow-through (what those
     /// ids imply next) and the one-line loop-state header — the response
     /// steers the next action instead of returning data and stopping.
@@ -2260,6 +2368,7 @@ mod tests {
             .add_container(Parameters(AddContainerRequest {
                 project: Some(project.clone()),
                 items: vec![ContainerItem {
+                    style: Some("core-shell".into()),
                     parent_id: system_id,
                     name: "API".into(),
                     technology: None,
@@ -2298,6 +2407,7 @@ mod tests {
             .add_container(Parameters(AddContainerRequest {
                 project: Some(project.clone()),
                 items: vec![ContainerItem {
+                    style: Some("core-shell".into()),
                     parent_id: system_id,
                     name: "API".into(),
                     technology: None,
@@ -2312,6 +2422,7 @@ mod tests {
             .add_component(Parameters(AddComponentRequest {
                 project: Some(project.clone()),
                 items: vec![ComponentItem {
+                    layer: Some("core".into()),
                     parent_id: planned_id(&dir, "API"),
                     name: "Auth".into(),
                     description: None,
@@ -2357,6 +2468,7 @@ mod tests {
                 .add_container(Parameters(AddContainerRequest {
                     project: Some(project.clone()),
                     items: vec![ContainerItem {
+                        style: Some("core-shell".into()),
                         parent_id: system_id.clone(),
                         name: "API".into(),
                         technology: None,
@@ -2397,6 +2509,7 @@ mod tests {
             .add_container(Parameters(AddContainerRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
                 items: vec![ContainerItem {
+                    style: Some("core-shell".into()),
                     parent_id: "node-1".into(),
                     name: "API".into(),
                     technology: None,

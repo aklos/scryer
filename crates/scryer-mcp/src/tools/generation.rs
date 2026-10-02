@@ -99,6 +99,8 @@ impl IdMinter {
 
 fn blank_node(id: String, kind: Kind, name: String, parent_id: String) -> Node {
     Node {
+        style: None,
+        layer: None,
         id,
         kind,
         name,
@@ -208,6 +210,71 @@ fn validate_request(req: &CommitContainerModelRequest) -> Result<(), String> {
 #[tool_router(router = tool_router_generation, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
+        description = "Placement for a PLANNED component, or every component under a container: its \
+         layer's directory, the layers it may import, the symbols to define with their claims and \
+         fields, and the files already anchored there. Materialise it in the project's idiom, then \
+         mark_implemented with anchors and tests.
+\
+         Rules: styles, loop-build"
+    )]
+    fn scaffold(
+        &self,
+        Parameters(req): Parameters<ScaffoldRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let committed = match scryer_core::read_model_at(&model_ref) {
+            Ok(m) => m,
+            Err(e) => return Ok(err(read_fail("model", &model_ref, &e))),
+        };
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap_or_else(|_| committed.clone());
+        let model = scryer_core::working_view(&committed, &planned);
+        let Some(node) = model.nodes.iter().find(|n| n.id == req.node_id) else {
+            return Ok(err(format!("Node '{}' not found", req.node_id)));
+        };
+        let targets: Vec<&str> = match node.kind {
+            Kind::Component => vec![node.id.as_str()],
+            Kind::Container => model
+                .nodes
+                .iter()
+                .filter(|n| n.kind == Kind::Component && n.parent_id.as_deref() == Some(node.id.as_str()))
+                .map(|n| n.id.as_str())
+                .collect(),
+            _ => {
+                return Ok(err(format!(
+                    "'{}' is a {} — scaffold takes a component or a container",
+                    node.name,
+                    kind_str(&node.kind)
+                )))
+            }
+        };
+        let styles = styles_for(&model_ref);
+        let mut manifests = Vec::new();
+        let mut skipped = Vec::new();
+        for id in targets {
+            match scryer_core::style::scaffold_manifest(&model, &styles, model_ref.project_path(), id) {
+                Some(m) => manifests.push(m),
+                None => skipped.push(id.to_string()),
+            }
+        }
+        if manifests.is_empty() {
+            return Ok(err(format!(
+                "Nothing to scaffold under '{}' — components need a layer and their container a style \
+                 (update_nodes {{style}} / {{layer}}); {} component(s) lack one",
+                node.name,
+                skipped.len()
+            )));
+        }
+        let payload = serde_json::json!({
+            "manifests": manifests,
+            "skipped": skipped,
+            "note": "Define each symbol in a file under `dir` (add the language's extension to `basename`); import only from `mayImport` layers; then mark_implemented with anchors and tests.",
+        });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".into()),
+        )]))
+    }
+
+    #[tool(
         description = "GENERATION primitive: fill the complete component + symbol model for ONE existing \
          container in a single write. Components and symbols use request-local `key`s; the server \
          mints ids, wires code-level links from the dependency graph, validates, and writes both \
@@ -290,6 +357,24 @@ impl ScryerServer {
             Err(e) => return Ok(err(read_fail("plan", &model_ref, &e))),
         };
 
+        // Every proposed component carries a layer from the container's style.
+        // The style may have been set in the plan only, so the draft is
+        // consulted first; committed is the fallback.
+        {
+            let styles = styles_for(&model_ref);
+            let view = scryer_core::working_view(&model, &planned_before);
+            for component in &req.components {
+                if let Err(e) = scryer_core::style::check_layer(
+                    &view,
+                    &styles,
+                    &req.container_id,
+                    component.layer.as_deref(),
+                ) {
+                    return Ok(err(format!("Component '{}': {e}", component.key.trim())));
+                }
+            }
+        }
+
         let mut minter = IdMinter::new(&model);
         minter.absorb(&planned_before);
         let mut local_ids: HashMap<&str, String> = HashMap::new();
@@ -321,6 +406,7 @@ impl ScryerServer {
                 req.container_id.clone(),
             );
             node.description = component.description.clone();
+            node.layer = component.layer.as_deref().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string);
             node.responsibilities = minter.responsibilities(&component.responsibilities);
             model.nodes.push(node);
 
@@ -422,6 +508,7 @@ impl ScryerServer {
             }
             agent_pairs.insert((src.clone(), dst.clone()));
             model.links.push(Link {
+                kind: proposed.kind,
                 id: scryer_core::make_link_id(&src, &dst),
                 src,
                 dst,
@@ -486,7 +573,19 @@ impl ScryerServer {
                 if src == dst || !seen_pairs.insert((src.clone(), dst.clone())) {
                     continue;
                 }
+                // A code-derived import edge is a dependency by construction; a
+                // same-layer sibling reached this way is a `uses` (its public
+                // surface is what the import touched).
+                let kind = if src_comp != dst_comp
+                    && scryer_core::style::layer_of(&model, &src_comp)
+                        == scryer_core::style::layer_of(&model, &dst_comp)
+                {
+                    scryer_core::LinkKind::Uses
+                } else {
+                    scryer_core::LinkKind::Depends
+                };
                 model.links.push(Link {
+                    kind: Some(kind),
                     id: scryer_core::make_link_id(&src, &dst),
                     src,
                     dst,
@@ -572,9 +671,23 @@ impl ScryerServer {
             );
         }
 
+        // Where each component's files belong by the style's convention, so
+        // the agent never chooses a directory.
+        let expected_dirs: serde_json::Map<String, serde_json::Value> = {
+            let styles = styles_for(&model_ref);
+            minted_components
+                .iter()
+                .filter_map(|id| {
+                    scryer_core::style::placement(&model, &styles, model_ref.project_path(), id)
+                        .and_then(|p| p.dir)
+                        .map(|d| (id.clone(), serde_json::Value::String(d)))
+                })
+                .collect()
+        };
         let payload = serde_json::json!({
             "containerId": req.container_id,
             "componentIds": minted_components,
+            "expectedDirs": expected_dirs,
             "components": req.components.len(),
             "symbols": minted_symbols,
             "links": req.links.len().saturating_sub(dropped_links.len()),
@@ -601,12 +714,14 @@ mod tests {
         let mut system = blank_node("node-1".into(), Kind::System, "Acme".into(), String::new());
         system.parent_id = None;
         model.nodes.push(system);
-        model.nodes.push(blank_node(
+        let mut container = blank_node(
             "node-2".into(),
             Kind::Container,
             "API".into(),
             "node-1".into(),
-        ));
+        );
+        container.style = Some("core-shell".into());
+        model.nodes.push(container);
         scryer_core::write_model_at(&model_ref, &model).unwrap();
         (ScryerServer::new(), dir, "node-2".into())
     }
@@ -617,6 +732,7 @@ mod tests {
             container_id,
             components: vec![
                 ProposedComponent {
+                    layer: Some("core".into()),
                     key: "auth".into(),
                     name: "Authentication".into(),
                     description: None,
@@ -634,6 +750,7 @@ mod tests {
                     }],
                 },
                 ProposedComponent {
+                    layer: Some("core".into()),
                     key: "sessions".into(),
                     name: "Sessions".into(),
                     description: None,
@@ -654,18 +771,21 @@ mod tests {
             ],
             links: vec![
                 ProposedLink {
+                    kind: Some(scryer_core::LinkKind::Uses),
                     src: "auth".into(),
                     dst: "sessions".into(),
                     label: "creates".into(),
                     method: None,
                 },
                 ProposedLink {
+                    kind: Some(scryer_core::LinkKind::Uses),
                     src: "auth.login".into(),
                     dst: "sessions".into(),
                     label: "creates".into(),
                     method: None,
                 },
                 ProposedLink {
+                    kind: Some(scryer_core::LinkKind::Uses),
                     src: "sessions.session".into(),
                     dst: "auth".into(),
                     label: "is created by".into(),
@@ -789,7 +909,9 @@ mod tests {
             symbol_edges: vec![scryer_core::build_edges::CachedEdge {
                 src: "src/auth.rs#login@10".into(),
                 dst: "src/session.rs#Session@99".into(),
+                guessed: false,
             }],
+            ..Default::default()
         };
         scryer_core::build_edges::write_build_edges(dir.path(), &edges).unwrap();
 
@@ -827,6 +949,7 @@ mod tests {
         // A symbol linking to a sibling symbol under a DIFFERENT component, with
         // no authorizing component link — structurally illegal.
         req.links = vec![ProposedLink {
+            kind: Some(scryer_core::LinkKind::Uses),
             src: "auth.login".into(),
             dst: "sessions.session".into(),
             label: "calls".into(),

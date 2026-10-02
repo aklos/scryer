@@ -20,11 +20,14 @@ change is open, and the rationale outlives the work in the history log. [[change
 2. ORIENT — `orient {task, files}` for a coding task; `get_health` then `read_model` for a \
 model-building one. Honor every directive it returns. [[loop-orient]]\n\
 3. PLAN — author the change into the model before writing code. Only changes that alter what the \
-model claims need plan entries; the change stays open either way. [[loop-plan]] [[proportionality]]\n\
+model claims need plan entries; the change stays open either way. A container declares a `style` \
+only when its code actually has that shape; never guess one. [[loop-plan]] [[proportionality]] \
+[[styles]]\n\
 4. SIGN-OFF — tell the user what you planned and get their go-ahead; record it with \
 `sign_off`. [[loop-sign-off]]\n\
 5. BUILD — implement claim by claim, each testable (When/While/If) claim with its test in the \
-project's own suite. [[loop-build]]\n\
+project's own suite. Placement is given, not chosen: `scaffold {node_id}` and `orient {files}` \
+name each planned component's directory, layer and allowed imports. [[loop-build]] [[styles]]\n\
 6. CLOSE — `mark_implemented` with `anchors` and `tests` in the same call; the fold is gated on a \
 passing verdict, so run the tests with a JUnit reporter and `ingest_test_report` first. Then \
 `get_test_radius`, `flag_drift`, `reconcile_drift`. A change that filed nothing closes with \
@@ -48,6 +51,11 @@ tools write the plan, and reads return it by default. [[model-layers]]\n\
 concern each. [[statement-ears]] [[scanning]] [[naming]] [[concerns]]\n\
 - A claim has a test attached or it doesn't; that binary is the model's primary signal, and the \
 `untested` count in every status line is your standing work. [[test-attachment]] [[test-verdicts]]\n\
+- `N structural violations` in a status line counts real imports and files that break a \
+declared style, import cycles between components, and containers that declare no style at all. \
+Fixing them means moving code, never un-declaring the style, dropping a layer, or deleting the \
+link; an unstyled container is resolved by declaring the style its code has, or by a change whose \
+stated purpose is to refactor it into one. [[styles]]\n\
 \n\
 Every tool takes an optional `project` (absolute path) that defaults to the working directory. \
 Schema version is `0.3`.\n\

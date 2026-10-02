@@ -1,0 +1,21 @@
+{
+  "refusals": [
+    {
+      "respId": "resp-1f73kk",
+      "hostId": "node-kfszr9",
+      "kind": "amendment",
+      "reason": "reworded after sign-off of chg-g09ar0 (approved: \"**When** the structural check reports violations, **groups** them by container into the index and counts each toward its total\")",
+      "at": 1789126042
+    },
+    {
+      "respId": "resp-7g0mkm",
+      "hostId": "node-vqwatq",
+      "kind": "stale",
+      "reason": "verdict stale: run tests/structuralViolations.test.ts and ingest_test_report",
+      "run": [
+        "tests/structuralViolations.test.ts"
+      ],
+      "at": 1789208873
+    }
+  ]
+}

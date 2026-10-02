@@ -15,7 +15,7 @@ import {
   type Node,
   type Responsibility,
   type ScryModel,
-} from "../src/viewmodel";
+} from "../src/entities/model/viewmodel";
 
 let respSeq = 0;
 const resp = (concern?: string): Responsibility => ({

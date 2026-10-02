@@ -656,11 +656,11 @@ impl ScryerServer {
     #[tool(
         description = "The front door for a CODING task: pass the `task` in a few words and/or the \
          project-relative `files` it touches. Returns, scoped to that: per file the governing \
-         node chain, anchored claims (`untested` flagged) and binding directives; per task the \
+         node chain and `placement`, anchored claims (`untested` flagged) and binding directives; per task the \
          best-matching nodes; pending entries and drift scopes inside the scope; matching rule \
          slugs; a `phase` verdict; and the loop `state` line. Replaces the get_health / \
          search_model / read_model dance for coding sessions.\n\
-         Rules: orient-phases, loop-orient, directives-binding"
+         Rules: orient-phases, loop-orient, directives-binding, styles"
     )]
     fn orient(
         &self,
@@ -722,6 +722,7 @@ impl ScryerServer {
                         "claims": report.result.claims,
                         "ownDirectives": report.result.own_directives,
                         "inheritedDirectives": report.result.inherited_directives,
+                        "placement": report.placement.as_ref().map(|p| p.line()),
                     });
                     strip_fields_compact(&mut v);
                     files_out.push(v);
@@ -1448,10 +1449,11 @@ impl ScryerServer {
         // gate feedback, but not commit-blocking. De-dup the advisory list against
         // the blocking one (`validate` reports the same id-collision facts as
         // advisories) so no single fact costs two lines.
-        let blocking = validate::structural_violations(&model);
+        let blocking = validate::invariant_violations(&model);
         let blocking_set: std::collections::HashSet<&str> =
             blocking.iter().map(String::as_str).collect();
-        let mut advisory = validate::validate(&model);
+        let styles = styles_for(&model_ref);
+        let mut advisory = validate::validate_with(&model, &styles);
         advisory.retain(|w| !blocking_set.contains(w.as_str()));
         advisory.extend(validate::validate_coverage(&model, model_ref.project_path()));
         advisory.extend(scryer_extract::anchors::whole_symbol_warnings(
@@ -1459,12 +1461,15 @@ impl ScryerServer {
             model_ref.project_path(),
         ));
 
-        if blocking.is_empty() && advisory.is_empty() {
-            return Ok(CallToolResult::success(vec![Content::text(
-                "Model is structurally clean.",
-            )]));
-        }
-        let mut msg = format!("Model '{}':", model_ref);
+        // Conformance is reported apart from validity: it describes the code,
+        // not a modeling mistake, and the fix is in the code.
+        let conformance = validate::check_conformance(&model, &styles);
+
+        let mut msg = if blocking.is_empty() && advisory.is_empty() {
+            "Model is structurally clean.".to_string()
+        } else {
+            format!("Model '{}':", model_ref)
+        };
         if !blocking.is_empty() {
             msg.push_str(&format!(
                 "\n\n{} BLOCKING invariant violation(s) — a commit of this model will be REFUSED \
@@ -1482,16 +1487,29 @@ impl ScryerServer {
                 msg.push_str(&format!("\n- {}", w));
             }
         }
+        if !conformance.is_empty() {
+            msg.push_str(&format!(
+                "\n\nStructural conformance — {} finding(s). These describe the code as it is \
+                 (the model is right to record them); fix them in the CODE, then re-model. \
+                 Never rewire links or re-layer components just to silence them:",
+                conformance.len()
+            ));
+            for w in &conformance {
+                msg.push_str(&format!("\n- {}", w));
+            }
+        }
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     #[tool(
         description = "The model's deterministic observability report. Headline: `tested` / `testable` / \
          `untested` claim counts; then per node rollups, vagrant/stale flags, anchor coverage and \
-         state, link audit, `completeness`, `coverage` and `silentAnchors`. `node_id` scopes to \
+         state, link audit, `structural` (structural violations: imports and files that break a declared style), `completeness`, `coverage` \
+         and `silentAnchors`. `node_id` scopes to \
          one subtree with per-child summaries; omit for the whole-model summary. Use it to decide \
-         WHERE work is needed before reading subtrees.\n\
-         Rules: health-reading, completeness-layered, loop-orient"
+         WHERE work is needed before reading subtrees.
+\
+         Rules: health-reading, completeness-layered, loop-orient, styles"
     )]
     fn get_health(
         &self,
@@ -1629,8 +1647,22 @@ impl ScryerServer {
 
         // The import graph is cached by builds / the app's health refresh; when
         // absent the link audit is simply omitted rather than guessed.
-        let derived = scryer_core::build_edges::read_build_edges(&model_ref.build_edges_path())
-            .map(|edges| scryer_core::build_edges::derive_graph(&model, &edges));
+        let edges = scryer_core::build_edges::read_build_edges(&model_ref.build_edges_path());
+        let derived = edges
+            .as_ref()
+            .map(|edges| scryer_core::build_edges::derive_graph(&model, edges));
+        // Structural violations over the same resolved edges: imports the
+        // matrix forbids, sibling isolation, banned packages, files on the wrong
+        // layer's path. Absent with the cache, like the link audit.
+        let style_report = edges.as_ref().zip(derived.as_ref()).map(|(edges, graph)| {
+            scryer_core::style_health::check_code(
+                &model,
+                &styles_for(&model_ref),
+                graph,
+                &edges,
+                Some(&files),
+            )
+        });
 
         let counts_json = |c: &scryer_core::health::HealthCounts| {
             serde_json::to_value(c).unwrap_or_default()
@@ -1787,6 +1819,7 @@ impl ScryerServer {
                     "subtree": nh.map(|h| counts_json(&h.subtree)),
                     "completeness": comp_json(&node.id),
                     "children": children,
+                    "structural": style_report.as_ref().map(|r| r.scoped(&subtree_ids)),
                     "anchors": drift_here,
                     "links": links_here,
                     "unmodeled": unmodeled_here,
@@ -1883,6 +1916,40 @@ impl ScryerServer {
                     "reanchored": anchor_check.reanchored,
                     "assertedOnlyLinks": asserted_only,
                     "unmodeled": derived.as_ref().map(|g| &g.unmodeled),
+                    "structural": match style_report.as_ref() {
+                        Some(r) => {
+                            // Per-container tally, so "fix the violations" knows
+                            // where to drill before it reads a single line.
+                            let mut per: std::collections::BTreeMap<&str, usize> = Default::default();
+                            for v in &r.violations {
+                                *per.entry(v.container.as_str()).or_default() += 1;
+                            }
+                            let by_container: Vec<_> = per
+                                .iter()
+                                .map(|(id, n)| {
+                                    let name = model.nodes.iter().find(|x| x.id == *id).map(|x| x.name.as_str()).unwrap_or("");
+                                    serde_json::json!({ "nodeId": id, "name": name, "violations": n })
+                                })
+                                .collect();
+                            serde_json::json!({
+                                "total": r.total(),
+                                "layerViolations": r.layer_violations,
+                                "isolationViolations": r.isolation_violations,
+                                "externalViolations": r.external_violations,
+                                "misplaced": r.misplaced,
+                                "unstyled": r.unstyled,
+                                "layerless": r.layerless,
+                                "cycles": r.cycles,
+                                "forbiddenLinks": r.forbidden_links,
+                                "byContainer": by_container,
+                                "sample": r.violations.iter().take(10).map(|v| &v.detail).collect::<Vec<_>>(),
+                                "note": "structural violations — real imports and files that break a container's declared style, from the build's import graph. The full list is node-scoped (get_health {nodeId} on a container); every line is a real import or file to fix, never a judgment call. A container with no declared style is itself one violation (only the user can resolve it, by declaring the style its code has), and import cycles between components are reported with or without a style.",
+                            })
+                        }
+                        None => serde_json::json!({
+                            "note": "no import graph cached — run `scryer-mcp check` (or a build) first, then call again",
+                        }),
+                    },
                     "broadBoundaries": broad_boundaries(None),
                     "disconnected": health.disconnected.iter().map(|id| {
                         let name = model.nodes.iter().find(|n| &n.id == id).map(|n| n.name.clone()).unwrap_or_default();
@@ -1912,6 +1979,8 @@ mod tests {
 
     fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
         Node {
+            style: None,
+            layer: None,
             id: id.into(),
             kind,
             name: name.into(),

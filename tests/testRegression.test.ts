@@ -5,7 +5,7 @@
  * edited".
  */
 import { describe, expect, it } from "vitest";
-import { testRegression } from "../src/health";
+import { testRegression } from "../src/entities/model/health";
 
 describe("testRegression", () => {
   it("is quiet while the test resolves and nothing changed", () => {

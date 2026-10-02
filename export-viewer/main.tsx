@@ -10,8 +10,8 @@
 
 import ReactDOM from "react-dom/client";
 import "../src/index.css";
-import { applyTheme, DEFAULT_THEME } from "../src/theme";
-import type { ScryModel } from "../src/viewmodel";
+import { applyTheme, DEFAULT_THEME } from "../src/shared/theme/theme";
+import type { ScryModel } from "../src/entities/model/viewmodel";
 import { ExportApp } from "./ExportApp";
 
 // Injected by the build (see export-viewer/vite.config.ts). Double-encoded: the

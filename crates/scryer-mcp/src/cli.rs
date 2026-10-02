@@ -183,6 +183,35 @@ pub(crate) fn check_report(
     warnings.extend(scryer_core::validate::validate_coverage(&working, project));
     warnings.extend(scryer_extract::anchors::whole_symbol_warnings(&working, project));
     failures.extend(warnings.into_iter().map(|w| format!("validator: {w}")));
+    failures.extend(
+        scryer_core::validate::check_conformance(&working, &scryer_core::load_styles(project))
+            .into_iter()
+            .map(|w| format!("conformance: {w}")),
+    );
+
+    // 1b) Structural violations: code-time conformance to declared styles. The check owns its own extraction so
+    //    CI needs no cached dependency graph; the cache is refreshed as a
+    //    side effect for the MCP tools. Every violation is a real import or
+    //    file, so every one gates.
+    match scryer_extract::extract_context_with_stats(project) {
+        Ok((ctx, _)) => {
+            let edges = ctx.build_edges();
+            let _ = scryer_core::build_edges::write_build_edges(project, &edges);
+            let derived = scryer_core::build_edges::derive_graph(&working, &edges);
+            let files = scryer_extract::list_project_files(project);
+            let report = scryer_core::style_health::check_code(
+                &working,
+                &scryer_core::load_styles(project),
+                &derived,
+                &edges,
+                Some(&files),
+            );
+            for v in &report.violations {
+                failures.push(format!("structural: {}", v.detail));
+            }
+        }
+        Err(e) => notes.push(format!("structural conformance unverified — extraction failed: {e}")),
+    }
 
     // 2) Anchor fingerprints, when a committed baseline exists. Changed spans
     //    are drift (unreconciled churn), not breakage — they gate only under
@@ -468,10 +497,11 @@ pub(crate) fn status_line(c: &StatusCounts) -> String {
     let pending = pending_phrase(c);
     // Test verdicts only when red or stale — verified-green stays silent.
     let tests = crate::helpers::tests_phrase(c);
+    let structural = crate::helpers::structural_phrase(c);
     match &c.baseline {
-        None => format!("scryer: {pending} · no reconcile anchor yet{tests}{changes}"),
+        None => format!("scryer: {pending} · no reconcile anchor yet{tests}{structural}{changes}"),
         Some(b) => format!(
-            "scryer: {pending} · {} drift scope(s) · anchors: {} broken, {} changed{tests}{changes}",
+            "scryer: {pending} · {} drift scope(s) · anchors: {} broken, {} changed{tests}{structural}{changes}",
             b.drift_scopes, b.anchors_broken, b.anchors_changed
         ),
     }
@@ -523,8 +553,10 @@ mod tests {
             Kind::Component => "component",
             Kind::Symbol => "symbol",
         };
+        // Every container declares a style; the fixtures use the smallest one.
+        let style = (kind == Kind::Container).then_some("core-shell");
         serde_json::from_value(serde_json::json!({
-            "id": id, "kind": kind_str, "name": name, "parentId": parent,
+            "id": id, "kind": kind_str, "name": name, "parentId": parent, "style": style,
         }))
         .unwrap()
     }
@@ -630,6 +662,7 @@ mod tests {
         let mut plan = m.clone();
         plan.nodes.push(node("worker", Kind::Container, "Worker", Some("sys")));
         plan.links.push(scryer_core::Link {
+            kind: None,
             id: "l-1".into(),
             src: "api".into(),
             dst: "worker".into(),

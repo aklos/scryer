@@ -352,6 +352,8 @@ mod tests {
         git(dir.path(), &["commit", "-qm", "init"]);
         let mut m = ScryModel::new();
         m.nodes.push(Node {
+            style: None,
+            layer: None,
             id: "sym".into(),
             kind: Kind::Symbol,
             name: "alpha".into(),

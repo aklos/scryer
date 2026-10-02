@@ -1,7 +1,13 @@
 use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
 use scryer_core::history::{append_event, EventRow, HistoryEvent};
+use scryer_core::style::Styles;
 use scryer_core::{Kind, ModelLock, ModelRef, Node, Responsibility, ScryModel};
+
+/// The style table for a project: built-ins plus `.scryer/styles/*.json`.
+pub(crate) fn styles_for(model_ref: &ModelRef) -> Styles {
+    scryer_core::load_styles(model_ref.project_path())
+}
 use std::collections::HashMap;
 
 /// Acquire the exclusive model write lock, or return an error result to surface
@@ -639,6 +645,10 @@ pub(crate) struct StatusCounts {
     /// population is nearly everything, and a standing nag for it would be
     /// noise the reader learns to skip. Findings speak; absence does not.
     pub probe_survivors: usize,
+    /// Structural violations (imports the layer matrix forbids, banned
+    /// packages, misplaced files) from the last build's dependency cache; 0
+    /// when no cache exists.
+    pub structural_violations: usize,
 }
 
 pub(crate) struct BaselineCounts {
@@ -695,6 +705,20 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
         .into_iter()
         .filter(|p| !p.stale && p.survived > 0)
         .count();
+    // Cached-graph only (no file walk): cheap enough for every response.
+    let structural_violations = scryer_core::build_edges::read_build_edges(&model_ref.build_edges_path())
+        .map(|edges| {
+            let derived = scryer_core::build_edges::derive_graph(&committed, &edges);
+            scryer_core::style_health::check_code(
+                &committed,
+                &scryer_core::load_styles(model_ref.project_path()),
+                &derived,
+                &edges,
+                None,
+            )
+            .total()
+        })
+        .unwrap_or(0);
     if !model_ref.sync_path().exists() {
         return Some(StatusCounts {
             pending,
@@ -704,6 +728,7 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
             baseline: None,
             tests,
             probe_survivors,
+            structural_violations,
         });
     }
     let sync = scryer_core::read_sync_state(model_ref);
@@ -728,7 +753,19 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
         }),
         tests,
         probe_survivors,
+        structural_violations,
     })
+}
+
+/// The header/statusline fragment for structural violations — real imports
+/// and files that break a declared style. Empty at zero, since conformance
+/// is the norm and only the exceptions are work.
+pub(crate) fn structural_phrase(c: &StatusCounts) -> String {
+    match c.structural_violations {
+        0 => String::new(),
+        1 => " · 1 structural violation".to_string(),
+        n => format!(" · {n} structural violations"),
+    }
 }
 
 /// The header/statusline fragment for recorded test verdicts — empty unless
@@ -778,14 +815,15 @@ pub(crate) fn status_header(model_ref: &ModelRef) -> Option<String> {
     let tests = tests_phrase(&c);
     // A surviving break is a finding about a test the model calls green.
     let probes = probes_phrase(&c);
+    let structural = structural_phrase(&c);
     Some(match c.baseline {
         // Never reconciled: drift/anchors have no baseline to report against.
         None => format!(
-            "plan: {} pending · untested: {} · drift: no reconcile anchor yet{tests}{probes}{changes}",
+            "plan: {} pending · untested: {} · drift: no reconcile anchor yet{tests}{probes}{structural}{changes}",
             c.pending, c.untested
         ),
         Some(b) => format!(
-            "plan: {} pending · untested: {} · drift: {} scope(s) · anchors: {} changed, {} broken{tests}{probes}{changes}",
+            "plan: {} pending · untested: {} · drift: {} scope(s) · anchors: {} changed, {} broken{tests}{probes}{structural}{changes}",
             c.pending, c.untested, b.drift_scopes, b.anchors_changed, b.anchors_broken
         ),
     })
@@ -831,7 +869,7 @@ pub(crate) fn apply_resp_anchor_entries(
 ) -> (Vec<String>, bool) {
     let mut normalized: Vec<String> = Vec::new();
     {
-        let mut resolver = scryer_extract::anchors::ExtentResolver::new(project);
+        let mut resolver = scryer_extract::anchors::SpanReader::new(project);
         for entry in &mut entries {
             for loc in &mut entry.locations {
                 let (Some(sym), Some(line)) = (loc.symbol.clone(), loc.line) else {

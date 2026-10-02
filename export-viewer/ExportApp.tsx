@@ -8,9 +8,9 @@
  */
 
 import { useState } from "react";
-import type { ScryModel } from "../src/viewmodel";
-import { EMPTY_DIFF } from "../src/planDiff";
-import { DiagramView } from "../src/DiagramView";
+import type { ScryModel } from "../src/entities/model/viewmodel";
+import { EMPTY_DIFF } from "../src/entities/model/planDiff";
+import { DiagramView } from "../src/widgets/diagram-canvas/DiagramView";
 
 export function ExportApp({ model }: { model: ScryModel }) {
   // The level being shown (children of this node; null = top level) and the

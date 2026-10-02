@@ -61,16 +61,7 @@ async fn main() {
 
     // Deterministic context + the dependency-graph cache the MCP commit reads.
     let ctx = scryer_extract::extract_context(project_path).expect("extraction");
-    let edges = scryer_core::build_edges::BuildEdges {
-        symbol_edges: ctx
-            .symbol_edges
-            .iter()
-            .map(|e| scryer_core::build_edges::CachedEdge {
-                src: e.src.clone(),
-                dst: e.dst.clone(),
-            })
-            .collect(),
-    };
+    let edges = ctx.build_edges();
     scryer_core::build_edges::write_build_edges(project_path, &edges).expect("edge cache");
 
     // Minimal model: a system and the one container under test.
@@ -139,13 +130,13 @@ async fn main() {
         if no_code { "index only" } else { "evidence embedded" },
     );
 
-    let runtime = scryer_acp::AcpRuntime::new();
+    let runtime = scryer_acp::AgentSync::open();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let start = std::time::Instant::now();
     runtime
         .start_session(
             binary,
-            scryer_acp::runtime::LaunchMode::Cli { kind },
+            scryer_acp::LaunchMode::Cli { kind },
             project.to_string(),
             model_name,
             effort,

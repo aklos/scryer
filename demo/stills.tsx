@@ -5,14 +5,14 @@
  */
 
 import type { ReactNode } from "react";
-import { ChangesPage, InboxPage, NeedsReviewPage, buildReviewIndex } from "../src/SpecialPages";
-import { NodePage } from "../src/NodePage";
-import { buildInboxCards } from "../src/inbox";
-import { planDiff } from "../src/planDiff";
-import { elementKey } from "../src/ledger";
-import type { Editor } from "../src/editor";
-import type { Inbox } from "../src/hooks/useInbox";
-import type { ScryModel } from "../src/viewmodel";
+import { ChangesPage, InboxPage, NeedsReviewPage, buildReviewIndex } from "../src/pages";
+import { NodePage } from "../src/pages/node/NodePage";
+import { buildInboxCards } from "../src/features/inbox/inbox";
+import { planDiff } from "../src/entities/model/planDiff";
+import { elementKey } from "../src/entities/model/ledger";
+import type { Editor } from "../src/entities/model/editor";
+import type { Inbox } from "../src/features/inbox/useInbox";
+import type { ScryModel } from "../src/entities/model/viewmodel";
 import { committedModel, driftModel, driftScopes, healthReport, newRespIds, paymentsModel } from "./fixtures";
 
 const noop = () => {};

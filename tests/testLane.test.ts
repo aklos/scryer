@@ -16,8 +16,8 @@ import {
   testLaneTone,
   type ClaimTestStatus,
   type ClaimProbeStatus,
-} from "../src/health";
-import type { Node, Group, Responsibility } from "../src/viewmodel";
+} from "../src/entities/model/health";
+import type { Node, Group, Responsibility } from "../src/entities/model/viewmodel";
 
 const verdict = (over: Partial<ClaimTestStatus>): ClaimTestStatus => ({
   respId: "r1",

@@ -8,9 +8,9 @@
  * and both sides must exclude vagrant (drift) content identically.
  */
 import { describe, expect, it } from "vitest";
-import { planCountLabel, planCounts } from "../src/changeMarks";
-import { planDiff } from "../src/planDiff";
-import type { ScryModel } from "../src/viewmodel";
+import { planCountLabel, planCounts } from "../src/features/change-marks/changeMarks";
+import { planDiff } from "../src/entities/model/planDiff";
+import type { ScryModel } from "../src/entities/model/viewmodel";
 
 const model = (nodes: ScryModel["nodes"]): ScryModel => ({
   version: "0.3",

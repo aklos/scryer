@@ -9,7 +9,7 @@ import {
   previewEntryFor,
   previewableNodeIds,
   type PreviewComponentInfo,
-} from "../src/hooks/usePreviewServer";
+} from "../src/features/preview-client/usePreviewServer";
 
 const button: PreviewComponentInfo = {
   file: "src/ui/Button.tsx",

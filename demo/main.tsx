@@ -14,7 +14,7 @@ import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
 import "@fontsource-variable/space-grotesk";
 import "./fonts.css";
-import { applyTheme, loadTheme } from "../src/theme";
+import { applyTheme, loadTheme } from "../src/shared/theme/theme";
 import { sceneById } from "./scenes";
 import { stills } from "./stills";
 import { Runner } from "./runner";

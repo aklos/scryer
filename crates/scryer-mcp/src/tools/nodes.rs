@@ -602,6 +602,7 @@ impl ScryerServer {
         };
 
         let prior = model.clone();
+        let styles = styles_for(&model_ref);
 
         // Caller-invented responsibility ids ("new", "") never enter the model:
         // re-mint them up front, before the vagrant-preservation check below
@@ -706,6 +707,30 @@ impl ScryerServer {
                 .find(|n| n.id == u.node_id)
                 .and_then(|n| n.parent_id.clone());
 
+            // Style and layer are fixed vocabularies: an unknown style or a
+            // layer outside the governing style's list is rejected, not
+            // written. Checked against the model as it stands (a style set
+            // earlier in this batch counts) before the mutable borrow.
+            if let Some(v) = u.style.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                if styles.get(v).is_none() {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Unknown style '{}' — known styles: {}",
+                        v,
+                        styles.names().join(", ")
+                    ))]));
+                }
+            }
+            if let Some(v) = u.layer.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                let parent = u
+                    .parent_id
+                    .clone()
+                    .or_else(|| old_parent.clone())
+                    .unwrap_or_default();
+                if let Err(e) = scryer_core::style::check_layer(&model, &styles, &parent, Some(v)) {
+                    return Ok(CallToolResult::error(vec![Content::text(e)]));
+                }
+            }
+
             let n = model
                 .nodes
                 .iter_mut()
@@ -728,6 +753,14 @@ impl ScryerServer {
             }
             if let Some(v) = u.external {
                 n.external = if v { Some(true) } else { None };
+            }
+            if let Some(v) = &u.style {
+                let v = v.trim();
+                n.style = if v.is_empty() { None } else { Some(v.to_string()) };
+            }
+            if let Some(v) = &u.layer {
+                let v = v.trim();
+                n.layer = if v.is_empty() { None } else { Some(v.to_string()) };
             }
             if let Some(v) = &u.responsibilities {
                 // Replacement never bypasses the review queue: a vagrant
@@ -2293,6 +2326,10 @@ mod tests {
 
     fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
         Node {
+            // Every container declares a style; fixtures use the smallest one so
+            // the components they add ("core") pass the layer check.
+            style: (kind == Kind::Container).then(|| "core-shell".into()),
+            layer: None,
             id: id.into(),
             kind,
             name: name.into(),
@@ -2973,6 +3010,7 @@ mod tests {
         m.nodes.push(node("child-1", Kind::Component, "Child", Some("parent-1")));
         m.nodes.push(node("keep-1", Kind::Component, "Keep", None));
         m.links.push(Link {
+            kind: None,
             id: "l1".into(),
             src: "child-1".into(),
             dst: "keep-1".into(),
@@ -3036,6 +3074,7 @@ mod tests {
         planned.nodes.push(node("node-1", Kind::Component, "A", None));
         planned.nodes.push(node("node-2", Kind::Component, "B", None));
         planned.links.push(Link {
+            kind: None,
             id: "l1".into(),
             src: "node-1".into(),
             dst: "node-2".into(),
@@ -3095,6 +3134,7 @@ mod tests {
         m.nodes.push(node("node-1", Kind::System, "A", None));
         m.nodes.push(node("node-2", Kind::System, "B", None));
         m.links.push(scryer_core::Link {
+            kind: None,
             id: "link-node-1-node-2".into(),
             src: "node-1".into(),
             dst: "node-2".into(),
@@ -3278,6 +3318,8 @@ mod tests {
         let project = dir.path().to_string_lossy().to_string();
 
         let reparent = |node_id: &str, parent: &str| UpdateNodeItem {
+            style: None,
+            layer: None,
             node_id: node_id.into(),
             parent_id: Some(parent.into()),
             kind: None,
@@ -3338,6 +3380,8 @@ mod tests {
             .update_nodes(Parameters(UpdateNodeRequest {
                 project: Some(project),
                 nodes: vec![UpdateNodeItem {
+                    style: None,
+                    layer: None,
                     node_id: "comp".into(),
                     description: Some(String::new()),
                     technology: Some(String::new()),
@@ -3446,6 +3490,8 @@ mod tests {
         let project = dir.path().to_string_lossy().to_string();
 
         let reparent = |node_id: &str, parent: &str| UpdateNodeItem {
+            style: None,
+            layer: None,
             node_id: node_id.into(),
             parent_id: Some(parent.into()),
             kind: None,
@@ -4063,6 +4109,7 @@ mod tests {
         committed.nodes.push(node("peer", Kind::Component, "Billing", Some("cont")));
         // A committed link the plan REMOVES — deletions never ride a node fold.
         committed.links.push(Link {
+            kind: None,
             id: "l-old".into(),
             src: "comp".into(),
             dst: "peer".into(),
@@ -4081,6 +4128,7 @@ mod tests {
         // A plan-added link to a plan-only node: not ready, stays pending.
         planned.nodes.push(node("newco", Kind::Component, "Tokens", Some("cont")));
         planned.links.push(Link {
+            kind: None,
             id: "l-new".into(),
             src: "comp".into(),
             dst: "newco".into(),
@@ -4149,6 +4197,98 @@ mod tests {
         r.content.iter().find_map(|c| c.as_text().map(|t| t.text.clone())).unwrap()
     }
 
+    /// A style-only, a layer-only and a link-kind-only edit each pend in the
+    /// plan and fold with `mark_implemented {change}` — the diff must see
+    /// them, or a whole-change fold leaves committed on the old values.
+    #[test]
+    fn style_layer_and_link_kind_edits_pend_and_fold_by_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_ref = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let project = dir.path().to_string_lossy().to_string();
+        let mut m = ScryModel::new();
+        m.nodes.push(node("sys", Kind::System, "Acme", None));
+        let mut lib = node("lib", Kind::Container, "Lib", Some("sys"));
+        lib.style = None;
+        m.nodes.push(lib);
+        m.nodes.push(node("app", Kind::Container, "App", Some("sys")));
+        let mut k = node("k", Kind::Component, "K", Some("app"));
+        k.layer = Some("core".into());
+        m.nodes.push(k);
+        let mut k2 = node("k2", Kind::Component, "K2", Some("app"));
+        k2.layer = Some("shell".into());
+        m.nodes.push(k2);
+        m.links.push(Link {
+            kind: None,
+            id: "l1".into(),
+            src: "k2".into(),
+            dst: "k".into(),
+            label: "runs".into(),
+            method: None,
+        });
+        scryer_core::write_model_at(&model_ref, &m).unwrap();
+
+        let server = ScryerServer::new();
+        let chg = opened(
+            &server
+                .open_change(Parameters(OpenChangeRequest {
+                    project: Some(project.clone()),
+                    rationale: Some("restyle".into()),
+                    change_id: None,
+                }))
+                .unwrap(),
+        );
+        let item = |id: &str, style: Option<&str>, layer: Option<&str>| UpdateNodeItem {
+            node_id: id.into(),
+            kind: None,
+            name: None,
+            description: None,
+            technology: None,
+            external: None,
+            style: style.map(Into::into),
+            layer: layer.map(Into::into),
+            responsibilities: None,
+            properties: None,
+            parent_id: None,
+        };
+        let r = server
+            .update_nodes(Parameters(UpdateNodeRequest {
+                project: Some(project.clone()),
+                nodes: vec![item("lib", Some("library"), None), item("k", None, Some("shell"))],
+            }))
+            .unwrap();
+        assert!(!r.is_error.unwrap_or(false), "{}", tool_text(&r));
+        // update_links lives in another tool module; tag the kind edit the way
+        // it would.
+        let mut planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        planned.links[0].kind = Some(scryer_core::LinkKind::Calls);
+        planned.change_map.insert(
+            scryer_core::changes::element_key(scryer_core::diff::ElementKind::Link, None, "l1"),
+            chg.clone(),
+        );
+        scryer_core::write_planned_at(&model_ref, &planned).unwrap();
+
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        let pending: Vec<String> = scryer_core::diff::diff(&committed, &planned)
+            .changes
+            .iter()
+            .map(|c| c.id.clone())
+            .collect();
+        for id in ["lib", "k", "l1"] {
+            assert!(pending.contains(&id.to_string()), "{id} pends: {pending:?}");
+        }
+
+        let text = fold_change(&server, dir.path(), &chg);
+        assert!(text.contains("fully folded and closed"), "{text}");
+        let committed = scryer_core::read_model_at(&model_ref).unwrap();
+        let n = |id: &str| committed.nodes.iter().find(|n| n.id == id).unwrap().clone();
+        assert_eq!(n("lib").style.as_deref(), Some("library"));
+        assert_eq!(n("k").layer.as_deref(), Some("shell"));
+        assert_eq!(committed.links[0].kind, Some(scryer_core::LinkKind::Calls));
+        let planned = scryer_core::read_planned_at(&model_ref).unwrap();
+        assert!(scryer_core::diff::diff(&committed, &planned).is_empty(), "nothing left pending");
+    }
+
     /// The ledger loop end to end: `open_change` opens a named change, an
     /// authoring write tags to it automatically, `get_pending` groups and
     /// filters by it, a second session resumes it by id, and
@@ -4180,6 +4320,7 @@ mod tests {
             .add_component(Parameters(AddComponentRequest {
                 project: Some(project.clone()),
                 items: vec![ComponentItem {
+                    layer: Some("core".into()),
                     parent_id: "node-2".into(),
                     name: "RateLimiter".into(),
                     description: None,
@@ -4295,6 +4436,7 @@ mod tests {
             .add_component(Parameters(AddComponentRequest {
                 project: Some(project.clone()),
                 items: vec![ComponentItem {
+                    layer: Some("core".into()),
                     parent_id: "node-2".into(),
                     name: "RateLimiter".into(),
                     description: None,
@@ -4365,6 +4507,7 @@ mod tests {
             .add_component(Parameters(AddComponentRequest {
                 project: Some(project.clone()),
                 items: vec![ComponentItem {
+                    layer: Some("core".into()),
                     parent_id: "node-2".into(),
                     name: "RateLimiter".into(),
                     description: None,
@@ -4443,6 +4586,7 @@ mod tests {
             .add_component(Parameters(AddComponentRequest {
                 project: Some(project.clone()),
                 items: vec![ComponentItem {
+                    layer: Some("core".into()),
                     parent_id: "node-2".into(),
                     name: "RateLimiter".into(),
                     description: None,
@@ -4466,6 +4610,8 @@ mod tests {
             .update_nodes(Parameters(UpdateNodeRequest {
                 project: Some(project.clone()),
                 nodes: vec![UpdateNodeItem {
+                    style: None,
+                    layer: None,
                     node_id: rl.clone(),
                     name: Some("Throttler".into()),
                     kind: None,
@@ -4516,6 +4662,8 @@ mod tests {
             .update_nodes(Parameters(UpdateNodeRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
                 nodes: vec![UpdateNodeItem {
+                    style: None,
+                    layer: None,
                     node_id: "node-1".into(),
                     kind: None,
                     name: None,
@@ -4580,6 +4728,8 @@ mod tests {
             .update_nodes(Parameters(UpdateNodeRequest {
                 project: Some(dir.path().to_string_lossy().to_string()),
                 nodes: vec![UpdateNodeItem {
+                    style: None,
+                    layer: None,
                     node_id: "node-1".into(),
                     kind: None,
                     name: None,

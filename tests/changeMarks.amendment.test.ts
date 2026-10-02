@@ -13,8 +13,8 @@ import {
   MARK_META,
   nodeDrift,
   rollupMarks,
-} from "../src/changeMarks";
-import type { Group, Node, ScryModel } from "../src/viewmodel";
+} from "../src/features/change-marks/changeMarks";
+import type { Group, Node, ScryModel } from "../src/entities/model/viewmodel";
 
 const node = (id: string, extra: Partial<Node> = {}): Node =>
   ({ id, kind: "component", name: id, ...extra }) as Node;

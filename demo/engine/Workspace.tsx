@@ -15,27 +15,27 @@
  */
 
 import { useMemo } from "react";
-import { TopBar, type WorkspaceView } from "../../src/TopBar";
-import { ModelTree } from "../../src/ModelTree";
-import { DiagramView } from "../../src/DiagramView";
-import { NodePage, type Selected } from "../../src/NodePage";
-import type { Editor } from "../../src/editor";
+import { TopBar, type WorkspaceView } from "../../src/widgets/top-bar/TopBar";
+import { ModelTree } from "../../src/widgets/model-tree/ModelTree";
+import { DiagramView } from "../../src/widgets/diagram-canvas/DiagramView";
+import { NodePage, type Selected } from "../../src/pages/node/NodePage";
+import type { Editor } from "../../src/entities/model/editor";
 import {
   buildReviewIndex,
   ChangesPage,
   DarkCodePage,
   NeedsReviewPage,
   UnmappedClaimsPage,
-} from "../../src/SpecialPages";
-import { Powerline } from "../../src/Powerline";
-import { planDiff } from "../../src/planDiff";
-import { planCounts } from "../../src/changeMarks";
-import type { ScryModel, DriftScope } from "../../src/viewmodel";
-import type { ModelHealthReport } from "../../src/health";
-import type { ModelBuild } from "../../src/hooks/useModelBuild";
-import type { AgentSession } from "../../src/hooks/useAgentSession";
-import type { ChangeRevision } from "../../src/hooks/useModelStorage";
-import type { ResolvedLaunch } from "../../src/SettingsPanel";
+} from "../../src/pages";
+import { Powerline } from "../../src/widgets/top-bar/Powerline";
+import { planDiff } from "../../src/entities/model/planDiff";
+import { planCounts } from "../../src/features/change-marks/changeMarks";
+import type { ScryModel, DriftScope } from "../../src/entities/model/viewmodel";
+import type { ModelHealthReport } from "../../src/entities/model/health";
+import type { ModelBuild } from "../../src/features/model-build/useModelBuild";
+import type { AgentSession } from "../../src/features/agent-launch/useAgentSession";
+import type { ChangeRevision } from "../../src/features/model-storage/useModelStorage";
+import type { ResolvedLaunch } from "../../src/widgets/settings-panel/SettingsPanel";
 
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 // No preview sidecar in the harness: nothing is previewable, the page shows no frame.

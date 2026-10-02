@@ -12,9 +12,9 @@
  *   3. wiki → map — toggle to the diagram; pull out to the whole architecture
  */
 
-import { DiagramView } from "../../../src/DiagramView";
-import { NodePage } from "../../../src/NodePage";
-import { EMPTY_DIFF } from "../../../src/planDiff";
+import { DiagramView } from "../../../src/widgets/diagram-canvas/DiagramView";
+import { NodePage } from "../../../src/pages/node/NodePage";
+import { EMPTY_DIFF } from "../../../src/entities/model/planDiff";
 import { paymentsModel, committedModel, healthReport } from "../../fixtures";
 import type { Scene } from "../types";
 import "./comprehend.css";
