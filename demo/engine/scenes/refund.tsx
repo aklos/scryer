@@ -29,7 +29,6 @@ import type { Scene } from "../types";
 import type { Director } from "../director";
 import "../scenes/refund.css";
 
-const EMPTY: ReadonlySet<string> = new Set();
 const noop = () => {};
 
 // The shell never reacts to clicks in this act (the agent drives it through
@@ -409,7 +408,6 @@ const RUNNING_AGENT: AgentSession = {
   activity: null,
   outcome: null,
   startFixture: noop,
-  startVariation: noop,
   cancel: noop,
 };
 
@@ -420,7 +418,6 @@ const IMPLEMENTING_AGENT: AgentSession = {
   activity: null,
   outcome: null,
   startFixture: noop,
-  startVariation: noop,
   cancel: noop,
 };
 
@@ -460,8 +457,6 @@ const INITIAL: RefundState = {
     expanded: new Set(["aperture"]),
     diagramFocus: "aperture",
     driftScopes: [],
-    newNodeIds: EMPTY,
-    newRespIds: EMPTY,
     health: cleanHealth,
     agent: IDLE_AGENT,
     build: IDLE_BUILD,

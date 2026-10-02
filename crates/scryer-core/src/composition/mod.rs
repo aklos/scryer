@@ -8,6 +8,7 @@
 pub mod change_ledger;
 pub mod codebase;
 pub mod coverage;
+pub mod drift_verdicts;
 pub mod fold;
 pub mod edges;
 pub mod locate;

@@ -36,6 +36,7 @@ pub mod history {
 pub mod drift {
     pub use crate::composition::sync::*;
     pub use crate::domain::drift_scope::*;
+    pub use crate::composition::drift_verdicts as verdicts;
 }
 
 /// Fold refusals.

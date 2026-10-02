@@ -78,14 +78,14 @@ pub(crate) struct QueryModelRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct GetPendingRequest {
     pub project: Option<String>,
-    /// A change id, or "unfiled", to filter the queue to one task.
+    /// A change id or "unfiled".
     pub change: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct RefileRequest {
     pub project: Option<String>,
-    /// Bare ids of pending work to MOVE: node/group (carrier + everything under it), responsibility/link, a change id, or "unfiled".
+    /// Pending work to move: node/group (with all under it), responsibility/link, a change id, or "unfiled".
     pub ids: Vec<String>,
     /// Destination: a change id or "unfiled"; defaults to the session's change.
     pub to: Option<String>,
@@ -119,6 +119,12 @@ pub(crate) struct GetHealthRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct ReconcileDriftRequest {
     pub project: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ResolveDriftRequest {
+    pub project: Option<String>,
+    pub verdicts: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -172,7 +178,7 @@ pub(crate) struct MarkImplementedRequest {
     pub anchors: Option<Vec<SourceMapEntry>>,
     /// Attach tests to the folded claims in the same call; same shape, `pattern` = test file, `symbol` = test name.
     pub tests: Option<Vec<SourceMapEntry>>,
-    /// Fold an ENTIRE change by id, every entry in dependency order; standalone, not with node_id.
+    /// Fold a whole change by id, in dependency order; not with node_id.
     pub change: Option<String>,
 }
 

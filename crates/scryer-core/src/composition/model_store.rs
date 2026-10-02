@@ -69,6 +69,18 @@ pub fn write_planned_raw_at(r: &ModelRef, data: &str) -> Result<(), String> {
     storage::write_planned_raw_file(r, data)
 }
 
+/// Write a plan edited by hand (the canvas), keeping the change ledger as it
+/// stands on disk: the hand editor never owns that bookkeeping, and an echo of
+/// a stale copy would drop the tags an agent wrote meanwhile.
+pub fn write_hand_edited_plan_at(r: &ModelRef, data: &str) -> Result<(), String> {
+    let mut plan: crate::ScryModel = serde_json::from_str(data).map_err(|e| e.to_string())?;
+    if let Ok(disk) = read_planned_at(r) {
+        plan.changes = disk.changes;
+        plan.change_map = disk.change_map;
+    }
+    write_planned_at(r, &plan)
+}
+
 /// Repair a planned draft that shadows the committed model.
 pub fn heal_shadow_draft(r: &ModelRef) -> Result<bool, String> {
     storage::heal_shadow_file(r)

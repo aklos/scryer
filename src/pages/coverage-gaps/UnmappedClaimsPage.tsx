@@ -1,10 +1,76 @@
 import { Check } from "lucide-react";
-import type { ScryModel, Node } from "../../entities/model/viewmodel";
+import type { ScryModel, Node, Responsibility } from "../../entities/model/viewmodel";
 import type { ModelHealthReport } from "../../entities/model/health";
 import { kindIcon } from "../../entities/model/kindIcon";
-import { WikiLink } from "../../shared/ui/pagekit";
-import { ClaimRow, type ClaimRef } from "../needs-review/NeedsReviewPage";
+import { jumpTo, LINK, WikiLink, WordDiffText } from "../../shared/ui/pagekit";
+import { respElementId } from "../../widgets/source-section/SourceSection";
+import { DRIFT_HINT, DRIFT_RULE } from "../../entities/model/diffkit";
+import { ANCHOR_CALM, StatementText, stripMarkup } from "../../features/markup/markup";
 import { SpecialBody, SpecialHeader } from "../../widgets/special-page-shell/shell";
+
+export interface ClaimRef {
+  node: Node;
+  resp: Responsibility;
+}
+
+/** One claim row: the statement (opens the claim on its own page, flashing it
+ *  once rendered) and the node it sits on. */
+export function ClaimRow({
+  claim,
+  onSelectNode,
+  actions,
+  detail,
+}: {
+  claim: ClaimRef;
+  onSelectNode: (id: string) => void;
+  actions?: React.ReactNode;
+  /** Extra lines under the host link — e.g. what a probe found. */
+  detail?: React.ReactNode;
+}) {
+  const goToClaim = () => {
+    onSelectNode(claim.node.id);
+    window.setTimeout(() => jumpTo(respElementId(claim.resp.id)), 250);
+  };
+  return (
+    <li className="flex items-start gap-2 border-b border-[var(--border-subtle)] py-2 last:border-b-0">
+      <div className="min-w-0 flex-1">
+        <button
+          type="button"
+          onClick={goToClaim}
+          className="block w-full truncate text-left font-mono text-sm text-[var(--text-secondary)] hover:text-[var(--text)] hover:underline"
+          title="Open on its page"
+        >
+          {claim.resp.statement ? (
+            <StatementText text={claim.resp.statement} anchor={ANCHOR_CALM} />
+          ) : (
+            "Untitled responsibility"
+          )}
+        </button>
+        <span className="text-xs text-[var(--text-muted)]">
+          on{" "}
+          <button
+            type="button"
+            onClick={() => onSelectNode(claim.node.id)}
+            className={LINK}
+          >
+            {claim.node.name || "Untitled"}
+          </button>
+        </span>
+        {claim.resp.staleProposal && (
+          <div className={`mt-0.5 text-xs ${DRIFT_RULE}`}>
+            <span className={DRIFT_HINT}>drift proposes:</span>{" "}
+            <span className="font-mono text-sm text-[var(--text-secondary)]">
+              <WordDiffText from={stripMarkup(claim.resp.statement)} to={stripMarkup(claim.resp.staleProposal)} />
+            </span>
+          </div>
+        )}
+        {detail}
+      </div>
+      {actions}
+    </li>
+  );
+}
+
 
 // --- unmapped claims ------------------------------------------------------------
 

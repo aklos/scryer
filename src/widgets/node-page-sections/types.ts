@@ -5,12 +5,12 @@ import type { ChangeRevision } from "../../features/model-storage/useModelStorag
 import type { HistoryEvent } from "../../entities/model/history";
 import type { PreviewServerState } from "../../features/preview-client/usePreviewServer";
 
-export type SpecialPage = "changes" | "review" | "dark" | "unmapped" | "session";
+export type SpecialPage = "changes" | "dark" | "unmapped" | "session";
 
 export type Selected =
   | { kind: "node"; id: string }
   | { kind: "group"; id: string }
-  // Wiki special pages — Recent changes, Needs review, Dark code, Unmapped
+  // Wiki special pages — Changes, Session, Dark code, Unmapped
   // claims (App routes these).
   | { kind: "special"; id: SpecialPage };
 
@@ -47,6 +47,4 @@ export interface PageProps {
    *  surfaced as a drift banner on the owning node's page. */
   driftScopes: DriftScope[];
   onCheckDrift?: () => void;
-  /** Reconcile drift for a node and its subtree (scoped Dismiss). */
-  onDismissDrift?: (nodeId: string) => void;
 }

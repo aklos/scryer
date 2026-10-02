@@ -109,7 +109,7 @@ pub(crate) fn watch_project(
 }
 
 #[tauri::command]
-pub(crate) fn read_model(ref_str: String) -> Result<String, String> {
+pub(crate) async fn read_model(ref_str: String) -> Result<String, String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
     scryer_core::read_model_raw_at(&model_ref)
 }
@@ -118,7 +118,7 @@ pub(crate) fn read_model(ref_str: String) -> Result<String, String> {
 /// the committed model's SEEDED bytes when no plan has diverged yet (planned ==
 /// model, anchors cleared), so a fresh project opens with an empty plan.
 #[tauri::command]
-pub(crate) fn read_planned(ref_str: String) -> Result<String, String> {
+pub(crate) async fn read_planned(ref_str: String) -> Result<String, String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
     // Heal legacy shadow drafts before the canvas loads one: whatever the
     // frontend loads it echoes back on save, so a pre-seeding draft would keep
@@ -135,7 +135,7 @@ pub(crate) fn read_planned(ref_str: String) -> Result<String, String> {
 pub(crate) fn write_planned(ref_str: String, data: String) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
     let _lock = scryer_core::lock_model(&model_ref)?;
-    scryer_core::write_planned_raw_at(&model_ref, &data)
+    scryer_core::write_hand_edited_plan_at(&model_ref, &data)
 }
 
 /// One agent session's log, newest first, for the session list.
@@ -177,33 +177,12 @@ pub(crate) fn read_session(
     }))
 }
 
-/// The fold-refusal ledger: every claim `mark_implemented` last declined to
-/// fold, with the missing fact it was refused for. Read by the inbox; a
-/// refusal clears when the same claim folds or leaves the plan.
-#[tauri::command]
-pub(crate) fn read_fold_refusals(
-    ref_str: String,
-) -> Result<Vec<scryer_core::refusals::Refusal>, String> {
-    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
-    Ok(scryer_core::refusals::read_refusals(&model_ref))
-}
-
-/// Close an EMPTY open change (a stranded ledger) from the canvas. Goes through
-/// core rather than the raw plan echo so the "abandoned" history record lands;
-/// the plan write fires the watcher, which refreshes every surface.
-#[tauri::command]
-pub(crate) fn close_change(ref_str: String, change_id: String) -> Result<(), String> {
-    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
-    let _lock = scryer_core::lock_model(&model_ref)?;
-    scryer_core::changes::close_change(&model_ref, &change_id).map(|_| ())
-}
-
 /// Read the durable committed-model history log (`.scryer/history.jsonl`),
 /// returned as a JSON array of events, oldest first. Empty when the project has
 /// no history yet. The frontend re-reads this whenever the model changes (every
 /// event-producing agent operation also writes a `.scry` file the watcher sees).
 #[tauri::command]
-pub(crate) fn read_history(ref_str: String) -> Result<String, String> {
+pub(crate) async fn read_history(ref_str: String) -> Result<String, String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
     let events = scryer_core::history::read_history(&model_ref);
     serde_json::to_string(&events).map_err(|e| e.to_string())
@@ -274,7 +253,7 @@ mod tests {
         scryer_core::write_planned_raw_at(&r, &serde_json::to_string(&committed).unwrap())
             .unwrap();
 
-        let raw = super::read_planned(ref_str).unwrap();
+        let raw = tauri::async_runtime::block_on(super::read_planned(ref_str)).unwrap();
         let plan: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert!(
             plan["sourceMap"].as_object().is_none_or(|m| m.is_empty()),
@@ -293,31 +272,8 @@ mod tests {
         plan.source_map.clear();
         super::write_planned(ref_str.clone(), serde_json::to_string(&plan).unwrap()).unwrap();
 
-        let read_back = super::read_planned(ref_str).unwrap();
+        let read_back = tauri::async_runtime::block_on(super::read_planned(ref_str)).unwrap();
         assert!(read_back.contains("does the revised thing"));
-    }
-
-    /// Closing an empty open change from the canvas records it as an
-    /// abandoned history entry — which the History tab then reads back.
-    #[test]
-    fn closing_an_empty_change_records_an_abandoned_history_entry() {
-        let (_dir, r, ref_str) = committed_project();
-        let mut plan = scryer_core::read_model_at(&r).unwrap();
-        plan.source_map.clear();
-        let stranded = scryer_core::changes::open_change(&mut plan, "never started", 100);
-        scryer_core::write_planned_at(&r, &plan).unwrap();
-
-        super::close_change(ref_str.clone(), stranded).unwrap();
-
-        let raw = super::read_history(ref_str).unwrap();
-        let events: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        let abandoned = events
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|e| e["driver"] == "abandoned")
-            .expect("the close lands on the durable log");
-        assert_eq!(abandoned["rows"][0]["text"], "never started");
     }
 
     /// A new project gets a blank model at `.scryer/model.scry`; a bogus path

@@ -328,6 +328,13 @@ pub fn stop(
             },
         );
     }
+    if !log.pending_gated {
+        let left = unfolded(r, session);
+        if !left.is_empty() {
+            reasons.push(pending_reason(&left));
+            let _ = session_store::append(r, session, SessionEvent::PendingGate);
+        }
+    }
     let close = close_gate(r, session, flags);
     if !close.needs_reconcile.is_empty() {
         reasons.push(reconcile_reason(&close));
@@ -342,6 +349,45 @@ pub fn stop(
         let _ = session_store::append(r, session, SessionEvent::Summary { text: s.clone() });
     }
     StopOutcome { block: None, summary }
+}
+
+/// Plan entries tagged to `session`'s change that are still pending, as
+/// `(key, label)` — the work it planned and neither folded nor reverted.
+pub fn unfolded(r: &ModelRef, session: &str) -> Vec<(String, String)> {
+    let (Ok(committed), Ok(planned)) = (read_model_at(r), read_planned_at(r)) else {
+        return Vec::new();
+    };
+    let Some(cid) = crate::domain::changes::session_change(&planned, session).map(|c| c.id.clone()) else {
+        return Vec::new();
+    };
+    crate::domain::diff::diff(&committed, &planned)
+        .changes
+        .iter()
+        .map(|ch| (crate::domain::changes::key_for(ch), ch.label.clone()))
+        .filter(|(k, _)| planned.change_map.get(k) == Some(&cid))
+        .collect()
+}
+
+const PENDING_SHOWN: usize = 15;
+
+fn pending_reason(left: &[(String, String)]) -> String {
+    let mut lines: Vec<String> = left
+        .iter()
+        .take(PENDING_SHOWN)
+        .map(|(k, label)| format!("- {k}: {label}"))
+        .collect();
+    if left.len() > PENDING_SHOWN {
+        lines.push(format!("- … {} more (get_pending)", left.len() - PENDING_SHOWN));
+    }
+    format!(
+        "Scryer — this session planned {} model entr{} it has not folded:\n{}\nFinish each: \
+         built and tested → mark_implemented (anchors + tests); dropped → revert the plan entry; \
+         a drift finding → resolve_drift. Nobody closes these after you. This gate fires once \
+         per session.",
+        left.len(),
+        if left.len() == 1 { "y" } else { "ies" },
+        lines.join("\n"),
+    )
 }
 
 fn reconcile_reason(close: &CloseView) -> String {
@@ -537,6 +583,24 @@ mod tests {
         assert!(stop(&r, "s", no_flags, pass).block.unwrap().contains("prompt p2"));
         file_asks(&r, "s", Some("p2"), vec![]).unwrap();
         assert!(stop(&r, "s", no_flags, pass).block.is_none());
+    }
+
+    #[test]
+    fn the_stop_gate_names_unfolded_session_work_once() {
+        let (_dir, r) = project();
+        let mut plan = crate::read_model_at(&r).unwrap();
+        plan.nodes[1].responsibilities.push(serde_json::from_value(
+            serde_json::json!({ "id": "r-2", "statement": "rate-limits callers" }),
+        )
+        .unwrap());
+        let cid = crate::domain::changes::open_change_for(&mut plan, "limit", Some("s"), 1);
+        crate::domain::changes::tag(&mut plan, &["resp:r-2".to_string()], &cid);
+        crate::write_planned_at(&r, &plan).unwrap();
+
+        assert!(unfolded(&r, "other").is_empty(), "another session's work is not this one's");
+        let reason = stop(&r, "s", no_flags, pass).block.expect("unfolded work blocks");
+        assert!(reason.contains("resp:r-2") && reason.contains("mark_implemented"), "{reason}");
+        assert!(stop(&r, "s", no_flags, pass).block.is_none(), "once per session");
     }
 
     #[test]

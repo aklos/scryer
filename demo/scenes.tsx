@@ -10,9 +10,7 @@
 import type { ReactNode } from "react";
 import { DiagramView } from "../src/widgets/diagram-canvas/DiagramView";
 import { NodePage } from "../src/pages/node/NodePage";
-import { NeedsReviewPage } from "../src/pages";
 import { Powerline } from "../src/widgets/top-bar/Powerline";
-import { buildReviewIndex } from "../src/pages";
 import { EMPTY_DIFF } from "../src/entities/model/planDiff";
 import { planCounts } from "../src/features/change-marks/changeMarks";
 import type { AgentSession } from "../src/features/agent-launch/useAgentSession";
@@ -23,8 +21,6 @@ import {
   paymentsModel,
   committedModel,
   driftModel,
-  driftScopes,
-  newRespIds,
   healthReport,
 } from "./fixtures";
 
@@ -47,7 +43,6 @@ const agentSession: AgentSession = {
   activity: 'add_responsibility · "While settlement is unconfirmed, hold the captured funds in escrow"',
   outcome: null,
   startFixture: noop,
-  startVariation: noop,
   cancel: noop,
 };
 
@@ -70,6 +65,7 @@ const launch: ResolvedLaunch = { agent: "claudeCode", model: "claude-opus-4-8", 
 const Diagram = () => (
   <DiagramView
     model={paymentsModel}
+    previewable={EMPTY}
     planDiff={EMPTY_DIFF}
     committed={null}
     report={healthReport}
@@ -83,6 +79,7 @@ const Diagram = () => (
 const StyledHex = () => (
   <DiagramView
     model={paymentsModel}
+    previewable={EMPTY}
     planDiff={EMPTY_DIFF}
     committed={null}
     report={healthReport}
@@ -96,6 +93,7 @@ const StyledHex = () => (
 const StyledRows = () => (
   <DiagramView
     model={paymentsModel}
+    previewable={EMPTY}
     planDiff={EMPTY_DIFF}
     committed={null}
     report={healthReport}
@@ -109,6 +107,7 @@ const StyledRows = () => (
 const CodeLevel = () => (
   <DiagramView
     model={paymentsModel}
+    previewable={EMPTY}
     planDiff={EMPTY_DIFF}
     committed={null}
     report={healthReport}
@@ -132,28 +131,13 @@ const NodeBody = () => (
     editor={undefined}
     onSelectNode={noop}
     onSelectGroup={noop}
-    variationState={null}
     changeLog={[]}
     history={[]}
     driftScopes={[]}
   />
 );
 
-const DriftBody = () => (
-  <NeedsReviewPage
-    model={driftModel}
-    report={healthReport}
-    driftScopes={driftScopes}
-    newNodeIds={EMPTY}
-    newRespIds={newRespIds}
-    editor={undefined}
-    onSelectNode={noop}
-    onClearAllNew={noop}
-  />
-);
-
 const PowerlineBody = () => {
-  const reviewIndex = buildReviewIndex(driftModel, healthReport, driftScopes, EMPTY, newRespIds);
   return (
     <div className="flex h-screen w-screen flex-col justify-end bg-[var(--surface-canvas)]">
       <Powerline
@@ -161,7 +145,6 @@ const PowerlineBody = () => {
         agent={agentSession}
         build={modelBuild}
         plan={planCounts(EMPTY_DIFF, driftModel, null)}
-        reviewIndex={reviewIndex}
         health={healthReport}
         launch={launch}
         onOpenSpecial={noop}
@@ -263,15 +246,6 @@ export const timeline: Scene[] = [
     render: () => (
       <Treated headline="A component read top-down.">
         <CodeLevel />
-      </Treated>
-    ),
-  },
-  {
-    id: "drift",
-    duration: 10000,
-    render: () => (
-      <Treated headline="Know the moment code and intent diverge." origin="50% 16%" zoom={[1.0, 1.05]}>
-        <DriftBody />
       </Treated>
     ),
   },

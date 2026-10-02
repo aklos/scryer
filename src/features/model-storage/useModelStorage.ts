@@ -23,7 +23,6 @@ import type { Node, Responsibility, ScryModel } from "../../entities/model/viewm
 import { registerConcerns, respTruthChanged, stampTouches } from "../../entities/model/viewmodel";
 import { stripMarkup } from "../markup/markup";
 import { EMPTY_DIFF, planDiff as computePlanDiff, type ModelDiff } from "../../entities/model/planDiff";
-import { tagEdit } from "../../entities/model/ledger";
 import type { HistoryEvent } from "../../entities/model/history";
 
 const RECENT_KEY = "scryer:recent-projects";
@@ -123,6 +122,20 @@ function nodeFieldDiffs(prev: ScryModel, a: Node, b: Node): FieldDiff[] {
     ["technology", a.technology, b.technology],
     ["description", a.description, b.description],
     ["properties", propsSummary(a), propsSummary(b)],
+  ]);
+}
+
+/// The node-level facts whose change journals a node edit — name, kind,
+/// parent, technology, prose, properties. Responsibilities are diffed at row
+/// level instead.
+function nodeFingerprint(n: Node): string {
+  return JSON.stringify([
+    n.name,
+    n.kind,
+    n.parentId ?? null,
+    n.technology ?? null,
+    n.description ?? null,
+    n.properties ?? [],
   ]);
 }
 
@@ -256,12 +269,6 @@ export interface ModelStorage {
   planDiff: ModelDiff;
   error: string | null;
   recentProjects: string[];
-  /** Node ids the agent created since they were last seen — highlighted on the
-   *  canvas until the user selects them. */
-  newNodeIds: ReadonlySet<string>;
-  /** Responsibility ids the agent created since last seen — highlighted until
-   *  the user selects the row. */
-  newRespIds: ReadonlySet<string>;
   /** Session-local feed of external (agent) writes, newest first — the data
    *  behind the Recent changes special page. */
   changeLog: readonly ChangeRevision[];
@@ -273,13 +280,6 @@ export interface ModelStorage {
    *  in-memory layers — the signal for consumers whose state is NOT derived
    *  from the model (health/drift reports) to re-fetch. */
   externalGeneration: number;
-  /** The ledger change canvas edits stamp into (null = unfiled). Session-local
-   *  by design — the registry/tags persist in the plan, the pointer doesn't. */
-  activeChange: string | null;
-  setActiveChange: (id: string | null) => void;
-  /** Close an EMPTY (stranded) ledger change — one whose work ended up filed
-   *  elsewhere. Backend-refused while it has entries; recorded "abandoned". */
-  closeChange: (id: string) => Promise<void>;
 
   /** Open a project. If it has no model, status becomes `needs-model`. */
   openProject: (path: string) => Promise<void>;
@@ -299,72 +299,8 @@ export interface ModelStorage {
    *  final result, WITHOUT writing our (possibly stale) in-memory model back
    *  over the agent's work. */
   reloadFromDisk: () => Promise<void>;
-  /** Clear the "new" highlight for a node (the user selected it). */
-  clearNewNode: (id: string) => void;
-  /** Clear the "new" highlight for a responsibility (the user selected it). */
-  clearNewResp: (id: string) => void;
-  /** Clear every unreviewed-change highlight at once (the review page's
-   *  "mark all reviewed"). */
-  clearAllNew: () => void;
   /** Drop a recent project from localStorage. */
   forgetRecent: (path: string) => void;
-}
-
-/// The node-level facts whose change should flag the node for review — name,
-/// position, prose, technology, flags, properties. Responsibilities are
-/// tracked at row level instead, so a claim edit highlights the claim, not
-/// the whole node.
-function nodeFingerprint(n: Node): string {
-  return JSON.stringify([
-    n.name,
-    n.kind,
-    n.parentId ?? null,
-    n.technology ?? null,
-    n.description ?? null,
-    n.properties ?? [],
-  ]);
-}
-
-/// Ids the agent introduced OR CHANGED since the previous model, for review
-/// highlighting. This is a planning surface: an external write that edits an
-/// existing claim (statement, status, directives, flags) must light up the
-/// same way a new one does, or agent work passes silently.
-function arrivals(prev: ScryModel, loaded: ScryModel) {
-  const prevNodeById = new Map(prev.nodes.map((n) => [n.id, n]));
-  const newNodes: string[] = [];
-  for (const n of loaded.nodes) {
-    const old = prevNodeById.get(n.id);
-    if (!old || nodeFingerprint(old) !== nodeFingerprint(n)) newNodes.push(n.id);
-  }
-  const prevResps = new Map<string, Responsibility>();
-  for (const n of prev.nodes)
-    for (const r of n.responsibilities ?? []) prevResps.set(r.id, r);
-  const newResps: { id: string; nodeId: string }[] = [];
-  for (const n of loaded.nodes)
-    for (const r of n.responsibilities ?? []) {
-      const old = prevResps.get(r.id);
-      if (!old || respTruthChanged(old, r)) newResps.push({ id: r.id, nodeId: n.id });
-    }
-  return { newNodes, newResps };
-}
-
-/// Add `add` ids to a tracked set and prune any no longer in `keep` (the agent
-/// deleted them). Returns the original set reference when nothing changed so the
-/// state update is a no-op.
-function accumulate(
-  cur: ReadonlySet<string>,
-  add: string[],
-  keep: ReadonlySet<string>,
-): ReadonlySet<string> {
-  const next = new Set(cur);
-  for (const id of add) next.add(id);
-  for (const id of cur) if (!keep.has(id)) next.delete(id);
-  if (next.size === cur.size) {
-    let same = true;
-    for (const id of next) if (!cur.has(id)) { same = false; break; }
-    if (same) return cur;
-  }
-  return next;
 }
 
 export function useModelStorage(): ModelStorage {
@@ -376,23 +312,8 @@ export function useModelStorage(): ModelStorage {
   const [error, setError] = useState<string | null>(null);
   const [externalGeneration, setExternalGeneration] = useState(0);
   const [recentProjects, setRecentProjects] = useState<string[]>(() => readRecent());
-  // Ids the agent has introduced (and not yet reviewed). Frontend-only — diffed
-  // from each external/agent write, cleared when the user selects the item.
-  const [newNodeIds, setNewNodeIds] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
-  const [newRespIds, setNewRespIds] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
   const [changeLog, setChangeLog] = useState<ChangeRevision[]>([]);
   const [history, setHistory] = useState<HistoryEvent[]>([]);
-  // The ledger change canvas edits stamp themselves into (see src/ledger.ts).
-  // Session-local by design, like the MCP server's per-session pointer: the
-  // ledger itself (registry + tags) persists in the plan file; "which change
-  // am I writing into" is re-selected per session. Null = unfiled.
-  const [activeChange, setActiveChange] = useState<string | null>(null);
-  const activeChangeRef = useRef<string | null>(activeChange);
-  activeChangeRef.current = activeChange;
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Exact bytes of our last PLANNED write. A `model-changed` event whose plan
@@ -405,6 +326,9 @@ export function useModelStorage(): ModelStorage {
   // layer, so it's a pure load-dedup (only the agent advances the committed
   // model, via a fold or extraction).
   const lastCommittedRaw = useRef<string | null>(null);
+  // Bytes of the history log we last parsed — an unchanged log (the common case
+  // on every poll/watch tick) must not re-parse or re-render.
+  const lastHistoryRaw = useRef<string | null>(null);
   // True while an agent session is writing the model; suppresses the canvas
   // write-back so the agent owns the file and the two don't clobber.
   const agentRunningRef = useRef(false);
@@ -413,11 +337,6 @@ export function useModelStorage(): ModelStorage {
   modelStateRef.current = model;
   const modelRefRef = useRef<string | null>(modelRef);
   modelRefRef.current = modelRef;
-  // Mirror of newNodeIds for synchronous reads inside applyLoadedRaw — whether a
-  // responsibility earns its own "new" row-tint depends on whether its owning
-  // node is currently flagged new (the node's ring already covers it).
-  const newNodeIdsRef = useRef<ReadonlySet<string>>(newNodeIds);
-  newNodeIdsRef.current = newNodeIds;
   // User-edit revisions staged inside the setModel updater and flushed by the
   // effect below. Keyed by the prev-model reference so StrictMode's double
   // updater invocation replaces the entry instead of duplicating it.
@@ -461,11 +380,8 @@ export function useModelStorage(): ModelStorage {
     return p;
   }, []);
 
-  // Apply a freshly-read PLAN file to in-memory state: flag the ids the agent
-  // introduced (and prune removed ones) for review highlighting, remember the
-  // bytes so the watcher doesn't echo them, and diff-merge layout so already-
-  // placed cards keep their positions while new nodes stay unplaced for
-  // autoLayout to seed. Callers dedup on `raw === lastWrittenRaw.current` first.
+  // Apply a freshly-read PLAN file to in-memory state: journal the external
+  // write and remember the bytes so the watcher doesn't echo them. Callers dedup on `raw === lastWrittenRaw.current` first.
   const applyLoadedRaw = useCallback((raw: string) => {
     const loaded = JSON.parse(raw) as ScryModel;
     const prevModel = modelStateRef.current;
@@ -480,25 +396,6 @@ export function useModelStorage(): ModelStorage {
           ),
         );
       }
-      const { newNodes, newResps } = arrivals(prevModel, loaded);
-      const keepNodes = new Set(loaded.nodes.map((n) => n.id));
-      const keepResps = new Set<string>();
-      for (const n of loaded.nodes)
-        for (const r of n.responsibilities ?? []) keepResps.add(r.id);
-      // A whole new node's ring already announces everything inside it as new. A
-      // responsibility only earns its own row-tint when it lands on a node the
-      // user has already reviewed — rows on a still-new node are covered by the
-      // ring, and would pop into view the instant the user selects the card to
-      // dismiss it (the ring clears, but the masked rows don't). Drop rows owned
-      // by a still-flagged-new node (this batch's arrivals ∪ ids still pending
-      // review) at the source, so dismissing a card dismisses the whole card.
-      const flaggedNew = new Set<string>(newNodes);
-      for (const id of newNodeIdsRef.current) flaggedNew.add(id);
-      const reviewableResps = newResps
-        .filter((r) => !flaggedNew.has(r.nodeId))
-        .map((r) => r.id);
-      setNewNodeIds((cur) => accumulate(cur, newNodes, keepNodes));
-      setNewRespIds((cur) => accumulate(cur, reviewableResps, keepResps));
     }
     // An external write (an agent over MCP, the README's advertised second
     // writer) just landed and we're about to replace the in-memory model with
@@ -514,19 +411,21 @@ export function useModelStorage(): ModelStorage {
 
   // Apply a freshly-read COMMITTED model file (the diff base). The canvas never
   // writes this layer; it advances only when the agent folds work in or
-  // extracts from code, so there's no review-highlighting to do here — just
-  // load it and remember the bytes for load-dedup.
+  // extracts from code — just load it and remember the bytes for load-dedup.
   const applyCommittedRaw = useCallback((raw: string) => {
     lastCommittedRaw.current = raw;
     setCommitted(JSON.parse(raw) as ScryModel);
   }, []);
 
-  // Reload the durable history log. Cheap (append-only JSONL), so we just re-read
-  // it wholesale on every model change rather than diffing — the agent op that
-  // produced the new event also wrote a `.scry` file the watcher fired on.
+  // Reload the durable history log. Re-read wholesale on every model change
+  // (the agent op that produced the new event also wrote a `.scry` file the
+  // watcher fired on), but deduped on the raw bytes: a large unchanged log
+  // never re-parses or re-renders.
   const loadHistory = useCallback(async (ref: string) => {
     try {
       const raw = await invoke<string>("read_history", { refStr: ref });
+      if (raw === lastHistoryRaw.current) return;
+      lastHistoryRaw.current = raw;
       setHistory(JSON.parse(raw) as HistoryEvent[]);
     } catch {
       /* no history yet — leave empty */
@@ -595,11 +494,8 @@ export function useModelStorage(): ModelStorage {
     setStatus("loading");
     setError(null);
     setProjectPath(path);
-    // The model just loaded is the review baseline — nothing is "new" yet.
-    setNewNodeIds(new Set());
-    setNewRespIds(new Set());
     setChangeLog([]);
-    setActiveChange(null);
+    lastHistoryRaw.current = null;
     try {
       const isLegacy = await invoke<boolean>("is_legacy_model", {
         projectPath: path,
@@ -679,33 +575,9 @@ export function useModelStorage(): ModelStorage {
     setModel(null);
     setCommitted(null);
     setError(null);
-    setNewNodeIds(new Set());
-    setNewRespIds(new Set());
     setChangeLog([]);
     setHistory([]);
-    setActiveChange(null);
-  }, []);
-
-  const clearNewNode = useCallback((id: string) => {
-    setNewNodeIds((cur) => {
-      if (!cur.has(id)) return cur;
-      const next = new Set(cur);
-      next.delete(id);
-      return next;
-    });
-  }, []);
-  const clearNewResp = useCallback((id: string) => {
-    setNewRespIds((cur) => {
-      if (!cur.has(id)) return cur;
-      const next = new Set(cur);
-      next.delete(id);
-      return next;
-    });
-  }, []);
-
-  const clearAllNew = useCallback(() => {
-    setNewNodeIds(new Set());
-    setNewRespIds(new Set());
+    lastHistoryRaw.current = null;
   }, []);
 
   const forgetRecent = useCallback((path: string) => {
@@ -742,13 +614,7 @@ export function useModelStorage(): ModelStorage {
         // Normalize concern tags + mint registry entries, then date what
         // changed — the canvas mirrors of the Rust write path's
         // `register_concerns` + `stamp_touches`, at the same single chokepoint.
-        const dated = stampTouches(cur, registerConcerns(edited));
-        // Ledger: stamp the active change onto what THIS edit touched — the
-        // canvas mirror of the MCP server tagging each tool write. A no-op
-        // when detached (unfiled) or when the edit changed nothing
-        // truth-bearing.
-        const active = activeChangeRef.current;
-        const next = active ? tagEdit(cur, dated, active) : dated;
+        const next = stampTouches(cur, registerConcerns(edited));
         scheduleSave({ ref: modelRef, serialized: JSON.stringify(next, null, 2) });
         return next;
       });
@@ -773,33 +639,6 @@ export function useModelStorage(): ModelStorage {
       return [{ at: now, by: "user" as const, items }, ...log].slice(0, CHANGE_LOG_CAP);
     });
   }, [model]);
-
-  // Open a new ledger change (mint + register in the plan, exactly like the
-  // agent's open_change) and make it the active one — subsequent canvas edits
-  // stamp themselves into it.
-  // If the active change closes under us — its last entry folded by the agent,
-  // or it was abandoned — detach rather than stamping edits into a change the
-  // registry no longer knows (tagEdit would drop the tags silently anyway;
-  // this keeps the selector honest too).
-  useEffect(() => {
-    if (!activeChange) return;
-    if (model && !(model.changes ?? []).some((c) => c.id === activeChange)) {
-      setActiveChange(null);
-    }
-  }, [model, activeChange]);
-
-  // Close an EMPTY (stranded) ledger change by hand — the canvas twin of the
-  // agent's `close_change`. Goes through the backend rather than editing
-  // the in-memory registry so the "abandoned" history record lands; the plan
-  // write comes back through the watcher, which refreshes the registry (and
-  // the powerline's in-flight count) everywhere.
-  const closeChange = useCallback(async (id: string) => {
-    const ref = modelRefRef.current;
-    if (!ref) return;
-    // A refusal (entries landed meanwhile, or already closed) propagates so
-    // the page can say why; the reload keeps the row honest either way.
-    await invoke("close_change", { refStr: ref, changeId: id });
-  }, []);
 
   const setAgentRunning = useCallback((running: boolean) => {
     agentRunningRef.current = running;
@@ -846,23 +685,15 @@ export function useModelStorage(): ModelStorage {
     planDiff,
     error,
     recentProjects,
-    newNodeIds,
-    newRespIds,
     changeLog,
     history,
     externalGeneration,
-    activeChange,
-    setActiveChange,
-    closeChange,
     openProject,
     createBlankModel,
     closeProject,
     updateModel,
     setAgentRunning,
     reloadFromDisk,
-    clearNewNode,
-    clearNewResp,
-    clearAllNew,
     forgetRecent,
   };
 }

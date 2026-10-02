@@ -53,7 +53,7 @@
      amber    modified / relocated (plan diff)
      red      deleted (plan diff) + destructive actions
      orange   drift   (model and code disagree; vagrant/stale, empty symbols)
-     violet   the agent (activity, new arrivals, accept-agent-work)
+     violet   the agent (activity, accept-agent-work)
 
    Buttons and hovers stay neutral; the accent marks "where you are" (selected
    row, focused field, live edit) and "the primary way forward". Neutral
@@ -282,7 +282,7 @@
 .pl .rseg:last-child {
   padding-right: 13px;
 }
-/* Interactive segments are <button>s (drift jump, to-review, changes, cancel);
+/* Interactive segments are <button>s (changes, cancel);
    static readouts are <div>s. A filter lifts the fill AND its chevron
    pseudo-element together — a background change can't reach the chevron, which
    borrows the inline --sb. Direction is per-theme: the segments are mixes

@@ -1,14 +1,12 @@
 import { useMemo } from "react";
-import { useToast } from "../../shared/feedback/Toast";
-import { Check, CornerDownRight, GitCompare, X } from "lucide-react";
+import { CornerDownRight, GitCompare } from "lucide-react";
 import type { ChangeRevision } from "../../features/model-storage/useModelStorage";
 import type { ScryModel, Node } from "../../entities/model/viewmodel";
 import type { Change, ElementChange, ModelDiff } from "../../entities/model/planDiff";
 import { CHANGE_COLOR, type ChangeKind, collectPlanEntries, type LinkChange, MARK_META, type PlanEntry } from "../../features/change-marks/changeMarks";
 import { DIFF_ANCHOR, DIFF_TINT, DiffRow } from "../../entities/model/diffkit";
 import { ANCHOR_CALM, StatementText } from "../../features/markup/markup";
-import { entryChanges } from "../../entities/model/ledger";
-import { BTN, BTN_ICON, LINK, WordDiffText } from "../../shared/ui/pagekit";
+import { LINK, WordDiffText } from "../../shared/ui/pagekit";
 import { SpecialBody, SpecialHeader, timeLabel } from "../../widgets/special-page-shell/shell";
 
 // --- changes (the whole plan diff) -------------------------------------------
@@ -413,9 +411,6 @@ export function ChangesPage({
   committed,
   changeLog,
   onSelectNode,
-  activeChange,
-  onSetActiveChange,
-  onCloseChange,
 }: {
   planDiff: ModelDiff;
   /** The planned model — element names, kinds, and tree order. */
@@ -425,13 +420,6 @@ export function ChangesPage({
   /** Session edit journal — the page's only source of timestamps. */
   changeLog: readonly ChangeRevision[];
   onSelectNode: (id: string) => void;
-  /** The ledger change canvas edits currently stamp into (null = unfiled). */
-  activeChange?: string | null;
-  /** Select/detach the active change. Absent = read-only (agent writing). */
-  onSetActiveChange?: (id: string | null) => void;
-  /** Close an EMPTY (stranded) change. Rejects with the backend's reason when
-   *  refused. Absent = read-only (agent writing). */
-  onCloseChange?: (id: string) => Promise<void> | void;
 }) {
   const ctx = useMemo<RowCtx>(
     () => ({
@@ -448,39 +436,6 @@ export function ChangesPage({
     () => buildEntries(planDiff, model, committed, changeLog),
     [planDiff, model, committed, changeLog],
   );
-  const { toast } = useToast();
-  // What the backend counts when asked to close: every ledger key tagged to
-  // the change — including claims this page does not list because they await
-  // a verdict in Needs review (a vagrant claim is a plan entry too).
-  const taggedOf = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const c of Object.values(model.changeMap ?? {})) counts.set(c, (counts.get(c) ?? 0) + 1);
-    return counts;
-  }, [model.changeMap]);
-  const closeChange = onCloseChange
-    ? (id: string) => Promise.resolve(onCloseChange(id)).catch((e: unknown) => toast(String(e)))
-    : undefined;
-  // Ledger partition: each entry lands under every change that tags any of
-  // its parts (a carrier straddling two changes is shown in both — honest
-  // about the overlap), untagged entries under "Unfiled". With no open
-  // changes the page renders the flat list it always did.
-  const registry = model.changes ?? [];
-  const sections = useMemo(() => {
-    const byChange = new Map<string, DiffEntry[]>(registry.map((c) => [c.id, []]));
-    const unfiled: DiffEntry[] = [];
-    for (const e of entries) {
-      const tags = entryChanges(
-        e.kind,
-        e.id,
-        [...e.children, ...e.links.map((l) => l.ec)],
-        model.changeMap,
-      );
-      const known = [...tags].filter((t) => byChange.has(t));
-      if (known.length === 0) unfiled.push(e);
-      for (const t of known) byChange.get(t)?.push(e);
-    }
-    return { byChange, unfiled };
-  }, [entries, registry, model.changeMap]);
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -489,135 +444,21 @@ export function ChangesPage({
         subtitle="Everything the plan changes against the committed model — most recently edited first"
       />
       <SpecialBody>
-        {entries.length === 0 && registry.length === 0 ? (
+        {entries.length === 0 ? (
           <div className="flex flex-col items-center gap-3 px-6 py-16">
             <GitCompare className="h-6 w-6 text-[var(--text-ghost)]" />
             <p className="text-sm text-[var(--text-muted)]">
               The plan matches the committed model — nothing pending.
             </p>
           </div>
-        ) : registry.length === 0 ? (
+        ) : (
           <ul className="flex flex-col" data-changes-list>
             {entries.map((e) => (
               <EntryCard key={`${e.kind}:${e.id}`} entry={e} ctx={ctx} />
             ))}
           </ul>
-        ) : (
-          <div className="flex flex-col">
-            {registry.map((c) => (
-              <ChangeSection
-                key={c.id}
-                id={c.id}
-                rationale={c.rationale}
-                entries={sections.byChange.get(c.id) ?? []}
-                ctx={ctx}
-                active={activeChange === c.id}
-                onToggleActive={
-                  onSetActiveChange &&
-                  (() => onSetActiveChange(activeChange === c.id ? null : c.id))
-                }
-                tagged={taggedOf.get(c.id) ?? 0}
-                onClose={closeChange && (() => closeChange(c.id))}
-              />
-            ))}
-            {sections.unfiled.length > 0 && (
-              <ChangeSection
-                id={null}
-                rationale="Unfiled — pending work belonging to no change"
-                entries={sections.unfiled}
-                ctx={ctx}
-                active={false}
-                onToggleActive={undefined}
-              />
-            )}
-          </div>
         )}
       </SpecialBody>
     </div>
-  );
-}
-
-/** One change's partition of the pending queue: header (id chip, rationale,
- *  count, work-here toggle) + its entry cards. `id` null = the unfiled bucket.
- *  An EMPTY change also offers a ✕ — the hand-close for a stranded ledger
- *  (opened, but its work ended up filed elsewhere), which otherwise nothing
- *  ever closes. The backend refuses once entries exist, so the ✕ only shows
- *  while there is nothing to lose; the rationale survives in history. */
-function ChangeSection({
-  id,
-  rationale,
-  entries,
-  tagged = 0,
-  ctx,
-  active,
-  onToggleActive,
-  onClose,
-}: {
-  id: string | null;
-  rationale: string;
-  entries: DiffEntry[];
-  /** Ledger keys tagged to the change — the backend's notion of "empty". */
-  tagged?: number;
-  ctx: RowCtx;
-  active: boolean;
-  onToggleActive?: () => void;
-  onClose?: () => void;
-}) {
-  // Tagged entries the page does not list — vagrant claims that wait for a
-  // verdict in Needs review. They still block the close.
-  const awaiting = Math.max(0, tagged - entries.length);
-  return (
-    <section>
-      <div className="sticky top-0 z-10 flex min-h-10 items-center gap-3 border-b border-[var(--border)] bg-[var(--surface)] px-4 py-1.5">
-        <span
-          className={`min-w-0 flex-1 truncate text-sm font-medium ${id ? "text-[var(--text)]" : "text-[var(--text-muted)]"}`}
-          title={id ? `${id} — ${rationale}` : rationale}
-        >
-          {rationale}
-        </span>
-        {awaiting > 0 && (
-          <span className="shrink-0 text-xs text-[var(--text-muted)]">
-            {awaiting} awaiting your verdict in Needs review
-          </span>
-        )}
-        {onToggleActive && (
-          <button
-            type="button"
-            className={BTN}
-            title={
-              active
-                ? "Your edits are filing into this change — click to detach"
-                : "File your edits into this change"
-            }
-            onClick={onToggleActive}
-          >
-            {active ? (
-              <span className="flex items-center gap-1 text-[var(--accent)]">
-                <Check className="h-3 w-3" /> Working here
-              </span>
-            ) : (
-              "Work here"
-            )}
-          </button>
-        )}
-        {onClose && tagged === 0 && (
-          <button
-            type="button"
-            className={BTN_ICON}
-            title="Close this change — nothing is filed into it; the rationale is kept in the history log"
-            onClick={onClose}
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
-      {entries.length > 0 && (
-        <ul className="flex flex-col" data-changes-list>
-          {entries.map((e) => (
-            <EntryCard key={`${id ?? "unfiled"}:${e.kind}:${e.id}`} entry={e} ctx={ctx} />
-          ))}
-        </ul>
-      )}
-    </section>
   );
 }

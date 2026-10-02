@@ -34,8 +34,9 @@ project's own suite. Placement is given, not chosen: `scaffold {node_id}` and `o
 name each planned component's directory, layer and allowed imports. [[loop-build]] [[styles]]\n\
 4. CLOSE — `mark_implemented` with `anchors` and `tests` in the same call; the fold is gated on a \
 passing verdict, so run the tests with a JUnit reporter and `ingest_test_report` first. Then \
-`get_test_radius`, `flag_drift`, `reconcile_drift`, then link the claims to their ask. \
-[[loop-close]]\n\
+`get_test_radius`, `flag_drift` and `resolve_drift` (drift verdicts are yours, never the \
+user's), `reconcile_drift`, then link the claims to their ask. Leave no planned entry \
+unfolded. [[loop-close]] [[drift-directions]]\n\
 \n\
 If no model exists yet, build one first from the code. [[generation-fill]]\n\
 \n\

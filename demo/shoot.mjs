@@ -9,7 +9,7 @@ const BASE = process.env.DEMO_URL ?? "http://localhost:5199/demo/index.html";
 const OUT_DIR = process.env.OUT_DIR ?? "/tmp/scryer-demo";
 const SCENES = process.argv.includes("--scene")
   ? [process.argv[process.argv.indexOf("--scene") + 1]]
-  : ["cold", "node", "powerline", "diagram", "drift", "close"];
+  : ["cold", "node", "powerline", "diagram", "close"];
 
 // On NixOS we drive the Nix-built chromium (shell.nix sets the path); Playwright's
 // own download is skipped. Elsewhere, fall back to Playwright's bundled browser.

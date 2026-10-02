@@ -32,7 +32,6 @@ import type { Scene } from "../types";
 import "./refund.css";
 import "./film.css";
 
-const EMPTY: ReadonlySet<string> = new Set();
 const NO_ACTIONS = {};
 const ShellMemo = memo(WorkspaceShell);
 
@@ -86,8 +85,6 @@ const LEDGER_SHELL: WorkspaceState = {
   expanded: new Set(["aperture"]),
   diagramFocus: "aperture",
   driftScopes: [],
-  newNodeIds: EMPTY,
-  newRespIds: EMPTY,
   health: cleanHealth,
   agent: IDLE_AGENT,
   build: IDLE_BUILD,

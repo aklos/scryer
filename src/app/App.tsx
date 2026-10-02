@@ -16,14 +16,7 @@ import { ModelTree } from "../widgets/model-tree/ModelTree";
 import { TopBar, type WorkspaceView } from "../widgets/top-bar/TopBar";
 import { DiagramView } from "../widgets/diagram-canvas/DiagramView";
 import { NodePage, type Selected, type SpecialPage } from "../pages/node/NodePage";
-import {
-  buildReviewIndex,
-  ChangesPage,
-  DarkCodePage,
-  NeedsReviewPage,
-  SessionPage,
-  UnmappedClaimsPage,
-} from "../pages";
+import { ChangesPage, DarkCodePage, SessionPage, UnmappedClaimsPage } from "../pages";
 import { ProjectPicker } from "../pages/project-picker/ProjectPicker";
 import { SearchPalette } from "../features/search/SearchPalette";
 import { planCounts } from "../features/change-marks/changeMarks";
@@ -115,19 +108,11 @@ function AppBody() {
       build={build}
       setAgentRunning={storage.setAgentRunning}
       reloadFromDisk={storage.reloadFromDisk}
-      newNodeIds={storage.newNodeIds}
-      clearNewNode={storage.clearNewNode}
-      newRespIds={storage.newRespIds}
-      clearNewResp={storage.clearNewResp}
       changeLog={storage.changeLog}
       history={storage.history}
       externalGeneration={storage.externalGeneration}
-      clearAllNew={storage.clearAllNew}
       openProject={storage.openProject}
       closeProject={storage.closeProject}
-      activeChange={storage.activeChange}
-      setActiveChange={storage.setActiveChange}
-      closeChange={storage.closeChange}
     />
   );
 }
@@ -142,19 +127,11 @@ function Workspace({
   build,
   setAgentRunning,
   reloadFromDisk,
-  newNodeIds,
-  clearNewNode,
-  newRespIds,
-  clearNewResp,
   changeLog,
   history,
   externalGeneration,
-  clearAllNew,
   openProject,
   closeProject,
-  activeChange,
-  setActiveChange,
-  closeChange,
 }: {
   model: ScryModel;
   committed: ScryModel | null;
@@ -165,19 +142,11 @@ function Workspace({
   build: ModelBuild;
   setAgentRunning: (running: boolean) => void;
   reloadFromDisk: () => Promise<void>;
-  newNodeIds: ReadonlySet<string>;
-  clearNewNode: (id: string) => void;
-  newRespIds: ReadonlySet<string>;
-  clearNewResp: (id: string) => void;
   changeLog: ReturnType<typeof useModelStorage>["changeLog"];
   history: ReturnType<typeof useModelStorage>["history"];
   externalGeneration: number;
-  clearAllNew: () => void;
   openProject: (path: string) => Promise<void>;
   closeProject: () => void;
-  activeChange: string | null;
-  setActiveChange: (id: string | null) => void;
-  closeChange: (id: string) => Promise<void>;
 }) {
   const agent = useAgentSession();
   // One preview sidecar per open project; node pages derive their Preview
@@ -203,7 +172,7 @@ function Workspace({
     if (!agent.running) return;
     const t = setInterval(() => {
       void reloadFromDisk();
-    }, 500);
+    }, 1500);
     return () => {
       clearInterval(t);
       void reloadFromDisk();
@@ -232,10 +201,18 @@ function Workspace({
   // per-node fills alike), and after verdict actions that change what counts
   // as drift — not only on whole-model builds.
   const [driftScopes, setDriftScopes] = useState<DriftScope[]>([]);
+  // Last applied result, serialized: an unchanged poll must not re-render.
+  const lastDriftJson = useRef("[]");
   const refreshDrift = useCallback(() => {
     if (!projectPath) return;
     invoke<DriftScope[]>("get_drift_status", { cwd: projectPath })
-      .then((s) => setDriftScopes(Array.isArray(s) ? s : []))
+      .then((s) => {
+        const next = Array.isArray(s) ? s : [];
+        const json = JSON.stringify(next);
+        if (json === lastDriftJson.current) return;
+        lastDriftJson.current = json;
+        setDriftScopes(next);
+      })
       .catch(() => {});
   }, [projectPath]);
   useEffect(() => {
@@ -380,17 +357,13 @@ function Workspace({
       setSelected({ kind: "node", id });
       const anc = ancestorsToExpand(id);
       setExpanded((prev) => new Set([...prev, ...anc]));
-      clearNewNode(id);
       // Keep the diagram framed on the selection's level: show the node among
       // its siblings (its parent's children). Drilling deeper is the diagram's
       // own double-click; this only reframes on selection.
       const node = modelRef.current.nodes.find((n) => n.id === id);
-      // Opening a node reviews what's on it: the unseen-claim highlights clear
-      // too, as the review page promises — not only on "Mark all reviewed".
-      for (const r of node?.responsibilities ?? []) clearNewResp(r.id);
       setDiagramFocus(node?.parentId ?? null);
     },
-    [ancestorsToExpand, clearNewNode, clearNewResp],
+    [ancestorsToExpand],
   );
 
   const selectGroup = useCallback(
@@ -433,9 +406,8 @@ function Workspace({
       }
       setSelected({ kind: "node", id });
       setExpanded((prev) => new Set([...prev, ...ancestorsToExpand(id)]));
-      clearNewNode(id);
     },
-    [ancestorsToExpand, clearNewNode],
+    [ancestorsToExpand],
   );
 
   const toggle = useCallback((id: string, expand?: boolean) => {
@@ -647,40 +619,6 @@ function Workspace({
     [updateModel],
   );
 
-  const onDismissDrift = useCallback(
-    (nodeId: string) => {
-      if (!projectPath) return;
-      // The node and its whole subtree reconcile together (mirrors the backend),
-      // since each descendant can be its own boundary owner.
-      const subtree = new Set<string>([nodeId]);
-      for (let added = true; added; ) {
-        added = false;
-        for (const n of model.nodes) {
-          if (n.parentId && subtree.has(n.parentId) && !subtree.has(n.id)) {
-            subtree.add(n.id);
-            added = true;
-          }
-        }
-      }
-      // Optimistic: drop the node + descendants now; the per-node anchor makes it stick.
-      setDriftScopes((scopes) => scopes.filter((s) => !subtree.has(s.nodeId)));
-      invoke("reconcile_drift_node", { cwd: projectPath, nodeId })
-        .then(() => refreshObservability())
-        .catch(() => {});
-    },
-    [projectPath, model.nodes, refreshHealth],
-  );
-
-  // Project-wide dismiss for the Needs-review page, which lists every drifted
-  // scope at once — clears them all and advances the global reconcile anchor.
-  const onDismissAllDrift = useCallback(() => {
-    if (!projectPath) return;
-    setDriftScopes([]);
-    invoke("reconcile_drift", { cwd: projectPath })
-      .then(() => refreshObservability())
-      .catch(() => {});
-  }, [projectPath, refreshHealth]);
-
   const onCheckDrift = useCallback(() => {
     if (!projectPath) return;
     launchGate.request(
@@ -701,14 +639,7 @@ function Workspace({
     [setWorkspaceView],
   );
 
-  // The status-bar counters, shared with the special pages so the number and
-  // the list can never disagree.
-  const reviewIndex = buildReviewIndex(model, healthReport, driftScopes, newNodeIds, newRespIds, {
-    committed,
-    verdicts: testVerdicts,
-    probes: probeResults,
-  });
-  // The tree's Tests lens: the same findings the review page lists, rolled
+  // The tree's Tests lens: test findings rolled
   // up per subtree so a branch reads as "N below" and a clean one as nothing.
   const testTally = rollupTestFindings(
     model,
@@ -780,36 +711,17 @@ function Workspace({
               committed={committed}
               changeLog={changeLog}
               onSelectNode={selectNode}
-              activeChange={activeChange}
-              onSetActiveChange={writing ? undefined : setActiveChange}
-              onCloseChange={writing ? undefined : closeChange}
             />
           ) : selected.id === "session" ? (
             <SessionPage model={model} log={sessionLog} onSelectNode={selectNode} onSelectGroup={selectGroup} />
           ) : selected.id === "dark" ? (
             <DarkCodePage model={model} report={healthReport} onSelectNode={selectNode} />
-          ) : selected.id === "unmapped" ? (
+          ) : (
             <UnmappedClaimsPage
               committed={committed}
               model={model}
               report={healthReport}
               onSelectNode={selectNode}
-            />
-          ) : (
-            <NeedsReviewPage
-              model={model}
-              committed={committed}
-              testVerdicts={testVerdicts}
-              probeResults={probeResults}
-              report={healthReport}
-              driftScopes={driftScopes}
-              newNodeIds={newNodeIds}
-              newRespIds={newRespIds}
-              editor={pageEditor}
-              onSelectNode={selectNode}
-              onCheckDrift={pageEditor ? onCheckDrift : undefined}
-              onDismissDrift={pageEditor ? onDismissAllDrift : undefined}
-              onClearAllNew={clearAllNew}
             />
           )
         ) : selected ? (
@@ -830,7 +742,6 @@ function Workspace({
             history={history}
             driftScopes={driftScopes}
             onCheckDrift={pageEditor ? onCheckDrift : undefined}
-            onDismissDrift={pageEditor ? onDismissDrift : undefined}
           />
         ) : (
           <div className="flex flex-1 items-center justify-center text-xs text-[var(--text-muted)]">
@@ -843,7 +754,6 @@ function Workspace({
         agent={agent}
         build={build}
         plan={plan}
-        reviewIndex={reviewIndex}
         health={healthReport}
         launch={launch}
         onOpenSpecial={openSpecial}

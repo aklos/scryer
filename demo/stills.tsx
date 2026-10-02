@@ -1,21 +1,19 @@
 /**
  * Untreated stills — lifted pages rendered plain on the fixtures, for
- * eyeballing styling in `shoot.mjs` (`#session`, `#review`, `#page`). Not part
+ * eyeballing styling in `shoot.mjs` (`#session`, `#changes`, `#page`). Not part
  * of the trailer timeline.
  */
 
 import type { ReactNode } from "react";
-import { ChangesPage, NeedsReviewPage, SessionPage, buildReviewIndex } from "../src/pages";
+import { ChangesPage, SessionPage } from "../src/pages";
 import { NodePage } from "../src/pages/node/NodePage";
 import { planDiff } from "../src/entities/model/planDiff";
-import { elementKey } from "../src/entities/model/ledger";
 import type { Editor } from "../src/entities/model/editor";
 import type { SessionLog } from "../src/features/session-log/useSessionLog";
 import type { ScryModel } from "../src/entities/model/viewmodel";
-import { committedModel, driftModel, driftScopes, healthReport, newRespIds, paymentsModel } from "./fixtures";
+import { committedModel, driftModel, healthReport, paymentsModel } from "./fixtures";
 
 const noop = () => {};
-const EMPTY = new Set<string>();
 // Every editor method is a no-op so action buttons render.
 const editor = new Proxy({}, { get: () => noop }) as unknown as Editor;
 
@@ -28,11 +26,6 @@ const pendingModel: ScryModel = (() => {
   const ledger = m.nodes.find((n) => n.id === "ledger")!;
   const stale = ledger.responsibilities!.find((x) => x.id === "r-ledger-2")!;
   stale.staleProposal = "**While** settlement is unconfirmed, **hold** the captured funds in a pending-settlement account";
-  m.changes = [
-    { id: "chg-1", rationale: "Refund support for captured payments", createdAt: 1_700_000_000 },
-    { id: "chg-2", rationale: "Harden webhook retries", createdAt: 1_700_000_100 },
-  ];
-  m.changeMap = { [elementKey("responsibility", "webhooks", "r-wh-2")]: "chg-2" };
   m.sourceMap = {
     ...(m.sourceMap ?? {}),
     "r-ledger-2": [{ pattern: "ledger/src/escrow.rs", symbol: "hold_in_escrow" }],
@@ -88,21 +81,6 @@ const SessionStill = () => (
   </div>
 );
 
-const ReviewStill = () => (
-  <div className="flex h-screen w-screen bg-[var(--surface)]">
-    <NeedsReviewPage
-      model={driftModel}
-      report={healthReport}
-      driftScopes={driftScopes}
-      newNodeIds={EMPTY}
-      newRespIds={newRespIds}
-      editor={editor}
-      onSelectNode={noop}
-      onClearAllNew={noop}
-    />
-  </div>
-);
-
 const PageStill = () => (
   <div className="flex h-screen w-screen bg-[var(--surface)]">
     <NodePage
@@ -117,15 +95,12 @@ const PageStill = () => (
       editor={editor}
       onSelectNode={noop}
       onSelectGroup={noop}
-      variationState={null}
       changeLog={[]}
       history={[]}
       driftScopes={[]}
     />
   </div>
 );
-
-void buildReviewIndex;
 
 const ChangesStill = () => (
   <div className="flex h-screen w-screen bg-[var(--surface)]">
@@ -135,9 +110,6 @@ const ChangesStill = () => (
       committed={committedModel}
       changeLog={[]}
       onSelectNode={noop}
-      activeChange="chg-1"
-      onSetActiveChange={noop}
-      onCloseChange={() => Promise.reject(new Error("chg-2 still has 1 tagged entry — fold or revert it"))}
     />
   </div>
 );
@@ -145,6 +117,5 @@ const ChangesStill = () => (
 export const stills: Record<string, () => ReactNode> = {
   changes: () => <ChangesStill />,
   session: () => <SessionStill />,
-  review: () => <ReviewStill />,
   page: () => <PageStill />,
 };

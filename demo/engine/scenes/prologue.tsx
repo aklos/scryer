@@ -29,7 +29,6 @@ import {
 } from "../Workspace";
 import type { Scene } from "../types";
 
-const EMPTY: ReadonlySet<string> = new Set();
 
 /** The two levels the tour descends through. */
 const SYSTEMS = ["cardholder", "merchant", "aperture", "acquiring-bank", "card-networks"];
@@ -79,8 +78,6 @@ const INITIAL: PrologueState = {
   expanded: new Set(["aperture"]),
   diagramFocus: null,
   driftScopes: [],
-  newNodeIds: EMPTY,
-  newRespIds: EMPTY,
   health: null,
   agent: IDLE_AGENT,
   build: IDLE_BUILD,

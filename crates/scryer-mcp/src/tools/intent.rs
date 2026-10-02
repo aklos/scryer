@@ -1242,6 +1242,88 @@ impl ScryerServer {
         }
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
+
+    #[tool(
+        description = "Decide drift findings yourself. Undescribed: `adopt` | `reject` (removal \
+         to-do). Stale: `reword` (`statement`, default drift's proposal) | `rebuild` (to-do) | \
+         `drop`. Target a claim id, a node id (subtree) or `node.label` (field).\n\
+         Rules: drift-directions"
+    )]
+    fn resolve_drift(
+        &self,
+        Parameters(req): Parameters<ResolveDriftRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        use scryer_core::drift::verdicts::{apply, Action};
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
+        let mut lines = Vec::new();
+        let mut failed = 0;
+        for v in &req.verdicts {
+            let (head, statement) = match v.split_once(':') {
+                Some((h, st)) => (h.trim(), Some(st.trim())),
+                None => (v.trim(), None),
+            };
+            let (verb, target) = head.split_once(char::is_whitespace).unwrap_or((head, ""));
+            let target = target.trim();
+            let action = match verb {
+                "adopt" => Action::Adopt,
+                "reject" => Action::Reject,
+                "reword" => Action::Reword,
+                "rebuild" => Action::Rebuild,
+                "drop" => Action::Drop,
+                other => {
+                    failed += 1;
+                    lines.push(format!("{v}: unknown action '{other}' — adopt|reject|reword|rebuild|drop"));
+                    continue;
+                }
+            };
+            let planned = scryer_core::read_planned_seeded_at(&model_ref).unwrap_or_default();
+            let (resp, node, label) = drift_target(&planned, target);
+            match apply(&model_ref, &action, resp, node, label, statement) {
+                Ok(()) => lines.push(format!("{target}: {verb}")),
+                Err(e) => {
+                    failed += 1;
+                    lines.push(format!("{target}: {e}"));
+                }
+            }
+        }
+        drop(_lock);
+        let mut msg = lines.join("\n");
+        if let Some(h) = status_header(&model_ref) {
+            msg.push_str(&format!("\n{h}"));
+        }
+        if failed == req.verdicts.len() && failed > 0 {
+            return Ok(err(msg));
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
+    }
+}
+
+/// What a drift verdict's target names in `planned`: a claim id, a node id, or
+/// `node.label` for a data field (split at the first `.` that leaves a node id).
+fn drift_target<'t>(planned: &ScryModel, target: &'t str) -> (Option<&'t str>, Option<&'t str>, Option<&'t str>) {
+    let is_resp = planned
+        .nodes
+        .iter()
+        .flat_map(|n| n.responsibilities.iter())
+        .chain(planned.groups.iter().flat_map(|g| g.responsibilities.iter()))
+        .any(|r| r.id == target);
+    if is_resp {
+        return (Some(target), None, None);
+    }
+    if planned.nodes.iter().any(|n| n.id == target) {
+        return (None, Some(target), None);
+    }
+    for (i, _) in target.match_indices('.') {
+        let (node, label) = (&target[..i], &target[i + 1..]);
+        if planned.nodes.iter().any(|n| n.id == node) {
+            return (None, Some(node), Some(label));
+        }
+    }
+    (Some(target), None, None)
 }
 
 #[cfg(test)]
@@ -1802,6 +1884,82 @@ mod tests {
         assert_eq!(anchor.symbol.as_deref(), Some("admin_handler"));
         assert_eq!(anchor.line, Some(42));
         assert_eq!(anchor.end_line, Some(58));
+    }
+
+    #[test]
+    fn resolve_drift_settles_findings_without_the_user() {
+        let (server, dir, system_id) = temp_project();
+        let project = dir.path().to_string_lossy().to_string();
+        server
+            .add_container(Parameters(AddContainerRequest {
+                project: Some(project.clone()),
+                items: vec![ContainerItem {
+                    style: Some("core-shell".into()),
+                    parent_id: system_id,
+                    name: "API".into(),
+                    technology: None,
+                    description: None,
+                    external: false,
+                    responsibilities: vec!["serves the public API".into()],
+                    boundary_dir: Some("api".into()),
+                }],
+            }))
+            .unwrap();
+        commit_plan(&dir);
+        let m = read_back(&dir);
+        let container = m.nodes.iter().find(|n| n.kind == Kind::Container).unwrap();
+        let (cid, rid) = (container.id.clone(), container.responsibilities[0].id.clone());
+        server
+            .flag_drift(Parameters(FlagDriftRequest {
+                project: Some(project.clone()),
+                node_id: cid.clone(),
+                new_nodes: vec![],
+                undescribed: vec![UndescribedItem {
+                    statement: "exposes an admin endpoint".into(),
+                    source_file: "api/admin.rs".into(),
+                    symbol: Some("admin_handler".into()),
+                    line: Some(1),
+                    end_line: Some(5),
+                    node_id: None,
+                    node_key: None,
+                }],
+                stale: vec![StaleResponsibility {
+                    responsibility_id: rid.clone(),
+                    reason: "now serves only the internal API".into(),
+                    proposed_statement: Some("serves the internal API".into()),
+                }],
+                stale_nodes: vec![],
+                undescribed_properties: vec![],
+                stale_properties: vec![],
+            }))
+            .unwrap();
+        let r = scryer_core::ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let plan = scryer_core::read_planned_at(&r).unwrap();
+        let vid = plan
+            .nodes
+            .iter()
+            .flat_map(|n| n.responsibilities.iter())
+            .find(|x| x.vagrant == Some(true))
+            .unwrap()
+            .id
+            .clone();
+
+        let res = server
+            .resolve_drift(Parameters(ResolveDriftRequest {
+                project: Some(project),
+                verdicts: vec![format!("adopt {vid}"), format!("reword {rid}"), "shrug x".into()],
+            }))
+            .unwrap();
+        let text = format!("{:?}", res.content);
+        assert!(!res.is_error.unwrap_or(false), "{text}");
+        assert!(text.contains("unknown action 'shrug'"), "{text}");
+
+        let committed = read_back(&dir);
+        let c = committed.nodes.iter().find(|n| n.id == cid).unwrap();
+        assert!(c.responsibilities.iter().any(|x| x.id == vid && x.vagrant.is_none()), "adopted into committed");
+        let reworded = c.responsibilities.iter().find(|x| x.id == rid).unwrap();
+        assert_eq!(reworded.statement, "serves the internal API", "drift's proposal taken");
+        assert_eq!(reworded.stale, None);
     }
 
     #[test]

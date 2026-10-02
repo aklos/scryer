@@ -10,7 +10,6 @@ import { useAgentFailure } from "../agent-launch/AgentFailure";
 export interface BuildHost {
   setAgentRunning: (running: boolean) => void;
   reloadFromDisk: () => Promise<unknown>;
-  clearAllNew: () => void;
   openProject: (path: string) => Promise<unknown>;
 }
 
@@ -64,9 +63,6 @@ export function useModelBuild(storage: BuildHost): ModelBuild {
   const unlisten = useRef<(() => void) | null>(null);
   const unlistenNode = useRef<(() => void) | null>(null);
   const activeRef = useRef(false);
-  // Which kind of run is in flight — finish() re-bases the review baseline only
-  // after a from-scratch build, not a drift check (whose flags are the point).
-  const runKindRef = useRef<"build" | "drift">("build");
   // Polls the agent's writes from disk onto the canvas while the build runs.
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -78,7 +74,7 @@ export function useModelBuild(storage: BuildHost): ModelBuild {
     };
   }, []);
 
-  const finish = useCallback((completed: boolean) => {
+  const finish = useCallback(() => {
     unlisten.current?.();
     unlisten.current = null;
     unlistenNode.current?.();
@@ -94,15 +90,7 @@ export function useModelBuild(storage: BuildHost): ModelBuild {
     // missed it is stale/empty and would clobber the agent's work (the model
     // would then survive only in the separate baseline file). autoLayout re-seeds
     // and persists positions for the freshly-loaded nodes now that writes resume.
-    void storage.reloadFromDisk().then(() => {
-      // A completed build modeled the codebase AS IT STANDS — the result is in
-      // sync by construction and is the new review baseline, not a pile of
-      // "unseen changes." (Every node was diffed in as "new" against the blank
-      // model the build opened with.) Re-base so the count reflects only real
-      // post-build drift, which is zero until the code changes. Drift checks are
-      // exempt: their flags are exactly what the user opened the page to review.
-      if (completed && runKindRef.current === "build") storage.clearAllNew();
-    });
+    void storage.reloadFromDisk();
     setBuilding(false);
     setChecking(false);
     setPhase(null);
@@ -114,7 +102,6 @@ export function useModelBuild(storage: BuildHost): ModelBuild {
     async (kind: "build" | "drift", cwd: string) => {
       if (activeRef.current) return;
       activeRef.current = true;
-      runKindRef.current = kind;
       if (kind === "build") setBuilding(true);
       else setChecking(true);
       setPhase(null);
@@ -128,7 +115,7 @@ export function useModelBuild(storage: BuildHost): ModelBuild {
       if (pollTimer.current) clearInterval(pollTimer.current);
       pollTimer.current = setInterval(() => {
         void storage.reloadFromDisk();
-      }, 500);
+      }, 1500);
 
       const label = kind === "build" ? "Model build" : "Drift check";
       const off = await listen<AgentEvent>("agent-event", (event) => {
@@ -166,13 +153,13 @@ export function useModelBuild(storage: BuildHost): ModelBuild {
                   ? "Your model's drift state was left unchanged — no flags were cleared and nothing was reconciled. Re-run the drift check once the error is resolved."
                   : "The build did not finish, so your model was not updated. Re-run it once the error is resolved.",
             });
-            finish(false);
+            finish();
             break;
           case "completed":
-            finish(true);
+            finish();
             break;
           case "cancelled":
-            finish(false);
+            finish();
             break;
         }
       });
@@ -202,7 +189,7 @@ export function useModelBuild(storage: BuildHost): ModelBuild {
           error: String(e),
           consequence: "Nothing was changed — the run never started.",
         });
-        finish(false);
+        finish();
       }
     },
     [storage, report, finish],

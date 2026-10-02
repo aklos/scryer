@@ -55,6 +55,9 @@ pub enum SessionEvent {
     ModelEdit { keys: Vec<String> },
     /// The summary last shown to the user, so an unchanged one stays silent.
     Summary { text: String },
+    /// The Stop gate blocked on plan entries this session left unfolded —
+    /// at most once per session.
+    PendingGate,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -101,6 +104,8 @@ pub struct SessionLog {
     pub overlays: Vec<(String, u64)>,
     /// Whether the reconcile gate already fired.
     pub reconcile_gated: bool,
+    /// Whether the unfolded-entries gate already fired.
+    pub pending_gated: bool,
     /// Prompts in order, `(id, text)`.
     pub prompts: Vec<(String, String)>,
     /// Prompts the agent has filed asks for.
@@ -183,6 +188,7 @@ impl SessionLog {
                 }
             }
             SessionEvent::Summary { text } => self.last_summary = Some(text.clone()),
+            SessionEvent::PendingGate => self.pending_gated = true,
         }
     }
 

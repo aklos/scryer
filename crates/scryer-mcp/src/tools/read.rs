@@ -907,6 +907,38 @@ impl ScryerServer {
             })
             .collect();
 
+        // Drift findings inside the scope: verdicts the agent gives
+        // (resolve_drift), never left for the user.
+        let mut findings: Vec<String> = Vec::new();
+        for n in planned.nodes.iter().filter(|n| scope.contains(&n.id)) {
+            if n.stale == Some(true) {
+                findings.push(format!("stale node {} {}: rebuild|drop", n.id, clip(&n.name, 60)));
+            }
+            for r in &n.responsibilities {
+                if r.vagrant == Some(true) {
+                    findings.push(format!("undescribed {}: {} — adopt|reject", r.id, clip(&r.statement, 80)));
+                } else if r.stale == Some(true) {
+                    let hint = match &r.stale_proposal {
+                        Some(p) => format!(" (proposed: {})", clip(p, 80)),
+                        None => String::new(),
+                    };
+                    findings.push(format!("stale {}: {}{hint} — reword|rebuild|drop", r.id, clip(&r.statement, 80)));
+                }
+            }
+            for pr in &n.properties {
+                if pr.vagrant == Some(true) {
+                    findings.push(format!("undescribed field {}.{} — adopt|reject", n.id, pr.label));
+                } else if pr.stale == Some(true) {
+                    findings.push(format!("stale field {}.{} — rebuild|drop", n.id, pr.label));
+                }
+            }
+        }
+        let findings_total = findings.len();
+        if findings_total > ORIENT_PENDING {
+            findings.truncate(ORIENT_PENDING);
+            findings.push(format!("{} more — read_model the scope", findings_total - ORIENT_PENDING));
+        }
+
         // Drift scopes inside the scope (only meaningful once a reconcile
         // anchor exists).
         let drift_out: Vec<serde_json::Value> = if model_ref.sync_path().exists() {
@@ -951,11 +983,18 @@ impl ScryerServer {
             (false, false) => "free: model and code agree in this scope — plan model deltas first if your change alters what the model claims (see Proportionality); claims marked `untested` are standing work",
         };
 
+        let phase = if findings_total > 0 {
+            format!("resolve drift first: {findings_total} finding(s) below are yours to decide with resolve_drift. Then {phase}")
+        } else {
+            phase.to_string()
+        };
+
         let mut payload = serde_json::json!({
             "files": files_out,
             "matches": matches_out,
             "pending": pending_out,
             "pendingTotal": pending_total,
+            "findings": findings,
             "drift": drift_out,
             "rules": rules_out,
             "phase": phase,

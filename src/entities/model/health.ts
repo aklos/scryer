@@ -209,12 +209,6 @@ export interface ModelHealthReport {
   styles?: StyleDef[];
 }
 
-export const ANCHOR_STATE_LABEL: Record<AnchorState, string> = {
-  changed: "code changed",
-  broken: "symbol gone",
-  fileMissing: "file gone",
-};
-
 /** Per-claim state of the ATTACHED TEST's fingerprint, from the test-namespaced
  *  anchor observations (`test:{respId}`). A claim absent here has an intact
  *  (or not-yet-fingerprinted) test link. broken/fileMissing outrank changed. */
@@ -430,18 +424,6 @@ export function subtreeTestTone(
     for (const r of g.responsibilities ?? []) fold(r.id);
   }
   return tone;
-}
-
-/** Fold anchor observations that share host + file + symbol + state into one
- *  row each. The key omits `key` (the responsibility/node id) precisely because
- *  that's the only thing that differs between the duplicates we're collapsing. */
-export function collapseAnchors(observations: AnchorObservation[]): AnchorObservation[] {
-  const byKey = new Map<string, AnchorObservation>();
-  for (const a of observations) {
-    const k = `${a.hostId}\0${a.file}\0${a.symbol ?? ""}\0${a.state}`;
-    if (!byKey.has(k)) byKey.set(k, a);
-  }
-  return [...byKey.values()];
 }
 
 /** linkId → import-edge count, for annotating connections. */
