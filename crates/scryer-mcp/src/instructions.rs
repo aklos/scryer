@@ -35,10 +35,10 @@ test that would fail if it broke, often one behaviour test shared by several cla
 what `get_test_radius` prints, never the full suite. Placement is given, not chosen: `scaffold {node_id}` and `orient {files}` \
 name each planned component's directory, layer and allowed imports. [[loop-build]] [[styles]]\n\
 4. CLOSE — `mark_implemented` with `anchors` and `tests` in the same call; the fold is gated on a \
-passing verdict, so run the tests with a JUnit reporter and `ingest_test_report` first. Then \
-`get_test_radius`, `flag_drift` and `resolve_drift` (drift verdicts are yours, never the \
-user's), `reconcile_drift`, then link the claims to their ask. Leave no planned entry \
-unfolded. [[loop-close]] [[drift-directions]]\n\
+passing verdict, so first run the command `get_test_radius` prints and `ingest_test_report`. \
+Then `flag_drift` and `resolve_drift` (drift verdicts are yours, never the user's), \
+`reconcile_drift`, then link the claims to their ask. Leave no planned entry unfolded \
+without a note. [[loop-close]] [[drift-directions]]\n\
 \n\
 If no model exists yet, build one first from the code. [[generation-fill]]\n\
 \n\
