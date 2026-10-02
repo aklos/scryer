@@ -141,6 +141,14 @@ impl ScryerServer {
             std::mem::take(&mut req.entries),
             RespAnchorDim::Source,
         );
+        // Tests being attached, for the verdicts their already-ingested
+        // reports hold (replayed once the attachment is written).
+        let attached: std::collections::BTreeMap<String, Vec<scryer_core::SourceLocation>> = req
+            .test_entries
+            .iter()
+            .filter(|e| !e.locations.is_empty())
+            .map(|e| (e.responsibility_id.clone(), e.locations.clone()))
+            .collect();
         // Attached tests: same routing, the test dimension.
         let (normalized_tests, tests_dirty) = apply_resp_anchor_entries(
             model_ref.project_path(),
@@ -203,6 +211,15 @@ impl ScryerServer {
             }
         }
         let mut msg = format!("Updated code-side mapping ({} entr(ies))", count);
+        if let Ok(replayed) = scryer_extract::test_status::replay_kept_cases(&model_ref, &attached) {
+            if !replayed.is_empty() {
+                msg.push_str(&format!(
+                    "\nVerdicts taken from reports already ingested for {} claim(s): {}.",
+                    replayed.len(),
+                    replayed.join(", ")
+                ));
+            }
+        }
         if !premature.is_empty() {
             msg.push_str(&format!(
                 "\n\nWARNING — anchoring PLAN-ADDED claim(s) not yet committed: {}. An anchor \

@@ -283,7 +283,7 @@ pub fn match_report(
 /// suffix dropped (pytest expands one parametrized test into many ids),
 /// typographic quotes folded, and whitespace/case collapsed — real suites
 /// drift on exactly these.
-fn normalize_leaf(name: &str) -> String {
+pub fn normalize_leaf(name: &str) -> String {
     let leaf = name.rsplit(" > ").next().unwrap_or(name);
     let leaf = if !leaf.chars().any(char::is_whitespace) {
         leaf.rsplit("::").next().unwrap_or(leaf)

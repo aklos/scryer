@@ -66,6 +66,22 @@ pub struct TestStatusCache {
     pub results: Vec<ClaimRecord>,
     #[serde(default)]
     pub probes: Vec<ProbeRecord>,
+    /// Every case the ingested reports held, attached or not, latest run per
+    /// case — so a test attached after its report was ingested can still take
+    /// the outcome that run gave it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cases: Vec<KeptCase>,
+}
+
+/// One report case as it last ran, kept whether or not a claim had the test
+/// attached at ingest.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct KeptCase {
+    pub case: scryer_core::test_results::TestCase,
+    /// Unix nanoseconds of the ingest that reported it: code or tests
+    /// modified after this make the outcome stale for a later attachment.
+    pub ingested_ns: u64,
 }
 
 /// A cached verdict as the caller should present it.

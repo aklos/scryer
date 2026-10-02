@@ -103,7 +103,16 @@ pub fn store_test_results(r: &ModelRef, report: &ReportMatch) -> Result<usize, S
     if report.claims.is_empty() {
         return Ok(0);
     }
-    let model = working_model(r)?;
+    store_results_on(r, &working_model(r)?, report)
+}
+
+/// [`store_test_results`] fingerprinted against `model` — the working model,
+/// or one with attachments about to be written.
+fn store_results_on(r: &ModelRef, model: &ScryModel, report: &ReportMatch) -> Result<usize, String> {
+    if report.claims.is_empty() {
+        return Ok(0);
+    }
+    let model = model.clone();
     let project = r.project_path();
     let mut cache = read_cache(r);
     let mut files = FileCache::new();
@@ -576,7 +585,88 @@ pub fn ingest_report_file(r: &ModelRef, xml: &str) -> Result<IngestSummary, Stri
     let cases = parse_junit(xml)?;
     let report = match_report(&model.test_map, &cases);
     let recorded = store_test_results(r, &report)?;
+    keep_cases(r, &cases)?;
     Ok(IngestSummary { cases: cases.len(), recorded, report })
+}
+
+/// Keep every case of an ingested report, attached or not — the latest run
+/// per (classname, name) — for tests attached later.
+fn keep_cases(r: &ModelRef, cases: &[scryer_core::test_results::TestCase]) -> Result<(), String> {
+    let mut cache = read_cache(r);
+    let ingested_ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or_default();
+    for case in cases {
+        let kept = KeptCase { case: case.clone(), ingested_ns };
+        match cache
+            .cases
+            .iter_mut()
+            .find(|k| k.case.classname == case.classname && k.case.name == case.name)
+        {
+            Some(existing) => *existing = kept,
+            None => cache.cases.push(kept),
+        }
+    }
+    write_cache(r, &cache)
+}
+
+/// Tests just attached (`attached`: claim → test locations) whose report was
+/// ingested before they were: record each claim's verdict from the kept cases,
+/// as if the report had been ingested now — but only when none of the claim's
+/// code or test files changed since that ingest, so an old run never vouches
+/// for new code. Returns the claims recorded.
+pub fn replay_kept_cases(
+    r: &ModelRef,
+    attached: &BTreeMap<String, Vec<scryer_core::SourceLocation>>,
+) -> Result<Vec<String>, String> {
+    let cache = read_cache(r);
+    if cache.cases.is_empty() || attached.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut model = working_model(r)?;
+    for (id, locs) in attached {
+        model.test_map.insert(id.clone(), locs.clone());
+    }
+    let cases: Vec<_> = cache.cases.iter().map(|k| k.case.clone()).collect();
+    let mut report = match_report(attached, &cases);
+    let project = r.project_path();
+    let modified_after = |file: &str, ns: u64| {
+        std::fs::metadata(project.join(file))
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .is_none_or(|t| t.as_nanos() as u64 > ns)
+    };
+    report.claims.retain(|id, _| {
+        // The oldest ingest among the cases this claim's tests matched.
+        let leaves: Vec<String> = attached[id]
+            .iter()
+            .filter_map(|l| l.symbol.as_deref())
+            .map(scryer_core::test_results::normalize_leaf)
+            .collect();
+        let Some(ingested_ns) = cache
+            .cases
+            .iter()
+            .filter(|k| leaves.contains(&scryer_core::test_results::normalize_leaf(&k.case.name)))
+            .map(|k| k.ingested_ns)
+            .min()
+        else {
+            return false;
+        };
+        let files = model
+            .source_map
+            .get(id)
+            .into_iter()
+            .flatten()
+            .chain(attached[id].iter())
+            .map(|l| l.pattern.as_str());
+        !files.into_iter().any(|f| modified_after(f, ingested_ns))
+    });
+    let mut recorded: Vec<String> = report.claims.keys().cloned().collect();
+    recorded.sort();
+    store_results_on(r, &model, &report)?;
+    Ok(recorded)
 }
 
 /// Resolve one claim into a probe target, or explain why it can't be probed.
@@ -1345,6 +1435,37 @@ mod tests {
         // One touched test file, one green claim: one probe is the whole ask.
         let check = session_probe_check(&r, &["src/m.spec.ts".to_string()]);
         assert!(check.block.unwrap().contains("1 of them"));
+    }
+
+    /// A report ingested before a test was attached still settles it: the
+    /// attachment takes the kept outcome — unless the claim's code changed
+    /// after that ingest, when the old run vouches for nothing.
+    #[test]
+    fn a_test_attached_after_its_report_takes_the_kept_verdict() {
+        let (dir, r) = two_claim_project();
+        let mut m = read_model_at(&r).unwrap();
+        let r1_tests = m.test_map.remove("r1").unwrap();
+        let r2_tests = m.test_map.remove("r2").unwrap();
+        scryer_core::write_model_at(&r, &m).unwrap();
+        ingest_report_file(&r, BOTH).unwrap();
+        assert!(read_cache(&r).results.is_empty(), "nothing was attached at ingest");
+
+        // r2's code changes after the ingest; r1's does not.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let body = std::fs::read_to_string(dir.path().join("src/n.ts")).unwrap();
+        std::fs::write(dir.path().join("src/n.ts"), body.replace("return 1", "return 2")).unwrap();
+
+        let attached: BTreeMap<_, _> = [("r1".to_string(), r1_tests), ("r2".to_string(), r2_tests)].into();
+        let replayed = replay_kept_cases(&r, &attached).unwrap();
+        assert_eq!(replayed, vec!["r1"], "r2 changed since the run");
+        let mut m = read_model_at(&r).unwrap();
+        m.test_map.extend(attached);
+        scryer_core::write_model_at(&r, &m).unwrap();
+        let statuses = read_test_statuses(&r).unwrap();
+        let r1 = statuses.iter().find(|s| s.resp_id == "r1").unwrap();
+        assert_eq!(r1.outcome, TestOutcome::Passed);
+        assert!(!r1.stale, "fingerprinted with the attachment in place");
+        assert!(statuses.iter().all(|s| s.resp_id != "r2"));
     }
 
     /// A claim whose last probe let a break survive is asked for first once

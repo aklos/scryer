@@ -1064,6 +1064,16 @@ impl ScryerServer {
         // The fold engine honours the withhold set; everything else proceeds.
         let force = req.force == Some(true);
         let now = scryer_core::drift::now_secs();
+        // Tests attached in this call whose report was already ingested carry
+        // that run's verdict — no second ingest of the same report needed.
+        let attached: std::collections::BTreeMap<String, Vec<scryer_core::SourceLocation>> = req
+            .tests
+            .iter()
+            .flatten()
+            .filter(|e| !e.locations.is_empty())
+            .map(|e| (e.responsibility_id.clone(), e.locations.clone()))
+            .collect();
+        let _ = scryer_extract::test_status::replay_kept_cases(&model_ref, &attached);
         let tests_in_call: HashMap<String, Vec<String>> = req
             .tests
             .iter()

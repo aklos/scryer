@@ -88,3 +88,12 @@ pub fn record_probe_result(
 pub fn probe_statuses(r: &ModelRef) -> Result<Vec<ClaimProbeStatus>, String> {
     store::read_probe_statuses(r)
 }
+
+/// Record verdicts for tests just attached from reports already ingested,
+/// when the claim's code and tests are unchanged since. Returns the claims.
+pub fn replay_kept_cases(
+    r: &ModelRef,
+    attached: &std::collections::BTreeMap<String, Vec<scryer_core::SourceLocation>>,
+) -> Result<Vec<String>, String> {
+    store::replay_kept_cases(r, attached)
+}
