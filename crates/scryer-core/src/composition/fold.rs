@@ -103,12 +103,11 @@ pub fn commit_element_withholding(
                     }
                     let prior = model.nodes.iter().find(|p| p.id == *id).cloned();
                     model.nodes.retain(|n| n.id != id);
-                    model.nodes.push(committed_node_copy(
-                        n,
-                        &planned.change_map,
-                        prior.as_ref(),
-                        withhold,
-                    ));
+                    let copy = committed_node_copy(n, &planned.change_map, prior.as_ref(), withhold);
+                    // Claims moved in from another host leave it as they land
+                    // here: one id, one host.
+                    remove_responsibilities(&mut model, copy.responsibilities.iter().map(|r| r.id.as_str()));
+                    model.nodes.push(copy);
                 }
                 None => {
                     // A DELETE fold. delete_nodes removed the node, its whole
@@ -206,23 +205,15 @@ pub fn commit_element_withholding(
                             ));
                         }
                     }
-                    model.groups.push(committed_group_copy(
-                        g,
-                        &planned.change_map,
-                        prior_group.as_ref(),
-                        withhold,
-                    ));
+                    let copy = committed_group_copy(g, &planned.change_map, prior_group.as_ref(), withhold);
+                    remove_responsibilities(&mut model, copy.responsibilities.iter().map(|r| r.id.as_str()));
+                    model.groups.push(copy);
                 }
                 None => purge_from_planned = true,
             }
         }
         diff::ElementKind::Responsibility => {
-            for n in &mut model.nodes {
-                n.responsibilities.retain(|x| x.id != id);
-            }
-            for g in &mut model.groups {
-                g.responsibilities.retain(|x| x.id != id);
-            }
+            remove_responsibilities(&mut model, std::iter::once(id));
             match find_responsibility(&planned, id) {
                 Some((host, resp)) => {
                     let resp = clean_committed_resp(resp);
@@ -570,6 +561,19 @@ pub fn commit_element_withholding(
 /// `include_self` appends the target itself to the structure fold when it is
 /// plan-only — for a SCOPED claim fold ("I built these 2 of its 5 claims"),
 /// where the host must reach committed but its unfolded claims must not.
+/// Take these claim ids off every committed node and group, so a fold that
+/// lands them on their (possibly new) host leaves each on exactly one — the
+/// committed half of a move.
+fn remove_responsibilities<'a>(model: &mut ScryModel, ids: impl Iterator<Item = &'a str>) {
+    let ids: std::collections::HashSet<&str> = ids.collect();
+    for n in &mut model.nodes {
+        n.responsibilities.retain(|x| !ids.contains(x.id.as_str()));
+    }
+    for g in &mut model.groups {
+        g.responsibilities.retain(|x| !ids.contains(x.id.as_str()));
+    }
+}
+
 pub fn commit_plan_only_ancestors(
     r: &ModelRef,
     node_id: &str,
@@ -1486,6 +1490,43 @@ mod tests {
         assert!(a.responsibilities.is_empty(), "resp left the old host");
         assert_eq!(b.responsibilities.len(), 1, "resp landed on the new host");
         assert!(plan_diff_at(&r).unwrap().is_empty());
+    }
+
+    /// Claims moved into a NEW node fold with the node: the whole-node fold
+    /// takes them off their old host, so committed never holds one id on two
+    /// hosts. A claim the evidence gate withholds keeps its committed original
+    /// on the old host and stays pending.
+    #[test]
+    fn whole_node_fold_completes_a_move_into_a_new_node() {
+        let (_dir, r) = temp_ref();
+        let mut m = ScryModel::new();
+        let mut a = mk_node("a", "A", None);
+        a.responsibilities.push(mk_resp("resp-1", "do the thing"));
+        a.responsibilities.push(mk_resp("resp-2", "do the other thing"));
+        m.nodes.push(a);
+        write_model_at(&r, &m).unwrap();
+
+        ensure_planned_at(&r).unwrap();
+        let mut planned = read_planned_at(&r).unwrap();
+        let moved: Vec<_> = planned.nodes[0].responsibilities.drain(..).collect();
+        let mut c = mk_node("c", "C", None);
+        c.responsibilities = moved;
+        planned.nodes.push(c);
+        write_planned_at(&r, &planned).unwrap();
+
+        let withhold: HashSet<String> = ["resp-2".to_string()].into();
+        commit_element_withholding(&r, diff::ElementKind::Node, None, "c", &withhold).unwrap();
+
+        let model = read_model_at(&r).unwrap();
+        let host = |id: &str| model.nodes.iter().find(|n| n.id == id).unwrap();
+        let ids = |id: &str| host(id).responsibilities.iter().map(|r| r.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids("c"), vec!["resp-1"], "the moved claim landed on the new node");
+        assert_eq!(ids("a"), vec!["resp-2"], "only the withheld claim stays on the old host");
+
+        commit_element(&r, diff::ElementKind::Node, None, "c").unwrap();
+        let model = read_model_at(&r).unwrap();
+        assert!(model.nodes.iter().find(|n| n.id == "a").unwrap().responsibilities.is_empty());
+        assert!(plan_diff_at(&r).unwrap().is_empty(), "the move is fully folded");
     }
 
     /// Committing a property upserts it by `(owner, label)`.
