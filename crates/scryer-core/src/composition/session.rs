@@ -22,9 +22,14 @@ pub fn session_log(r: &ModelRef, session: &str) -> SessionLog {
     SessionLog::from_events(&session_store::read(r, session))
 }
 
-/// Record that `session` edited `file` (any path form the harness gave).
+/// Record that `session` edited `file` (any path form the harness gave). A
+/// file outside the project — a probe worktree, a scratch file — is not the
+/// project's code, so it is not recorded.
 pub fn record_touch(r: &ModelRef, session: &str, file: &str) -> Result<(), String> {
     let file = relativize(r.project_path(), file);
+    if std::path::Path::new(&file).is_absolute() || file.starts_with("../") {
+        return Ok(());
+    }
     session_store::append(r, session, SessionEvent::Touch { file })
 }
 
@@ -196,6 +201,10 @@ pub enum Resolution {
     Claims(Vec<String>),
     Answered,
     Descoped(String),
+    /// An action ask was carried out; the note says what was done.
+    Done(String),
+    /// Files the ask accounts for beyond its claims' anchors.
+    Files(Vec<String>),
 }
 
 pub fn resolve_ask(r: &ModelRef, session: &str, id: &str, how: Resolution) -> Result<(), String> {
@@ -203,8 +212,10 @@ pub fn resolve_ask(r: &ModelRef, session: &str, id: &str, how: Resolution) -> Re
     let ask = log.ask(id).ok_or_else(|| format!("no ask '{id}' in this session"))?;
     let event = match how {
         Resolution::Claims(claims) => {
-            if ask.ask.kind == AskKind::Answer {
-                return Err(format!("{id} is an answer ask — resolve it with answered: true"));
+            match ask.ask.kind {
+                AskKind::Answer => return Err(format!("{id} is an answer ask — resolve it with answered: true")),
+                AskKind::Action => return Err(format!("{id} is an action ask — resolve it with done: \"<what you did>\"")),
+                AskKind::Build => {}
             }
             let working = working(r).ok_or("the model could not be read")?;
             let unknown: Vec<&String> = claims
@@ -224,12 +235,33 @@ pub fn resolve_ask(r: &ModelRef, session: &str, id: &str, how: Resolution) -> Re
             SessionEvent::AskLinked { id: id.to_string(), claims }
         }
         Resolution::Answered => {
-            if ask.ask.kind == AskKind::Build {
-                return Err(format!(
-                    "{id} is a build ask — it is delivered by claims (claims: [...]), not by an answer"
-                ));
+            if ask.ask.kind != AskKind::Answer {
+                return Err(format!("{id} is not an answer ask — answered: true closes questions only"));
             }
             SessionEvent::AskAnswered { id: id.to_string() }
+        }
+        Resolution::Done(note) => {
+            if ask.ask.kind != AskKind::Action {
+                return Err(format!(
+                    "{id} is not an action ask — done closes actions (commit, push, run) only"
+                ));
+            }
+            let note = note.trim().to_string();
+            if note.is_empty() {
+                return Err("done needs a one-line note saying what was done".into());
+            }
+            SessionEvent::AskDone { id: id.to_string(), note }
+        }
+        Resolution::Files(files) => {
+            let files: Vec<String> = files
+                .iter()
+                .map(|f| relativize(r.project_path(), f))
+                .filter(|f| !f.is_empty())
+                .collect();
+            if files.is_empty() {
+                return Err("files needs at least one project file".into());
+            }
+            SessionEvent::AskFiles { id: id.to_string(), files }
         }
         Resolution::Descoped(reason) => {
             let reason = reason.trim().to_string();
@@ -739,7 +771,57 @@ mod tests {
         resolve_ask(&r, "s", "a1", Resolution::Descoped("the theme system lands next sprint".into())).unwrap();
         let out = stop(&r, "s", no_flags, pass, no_probes);
         assert!(out.block.is_none());
-        assert!(out.summary.unwrap().contains("descoped a1 \"add dark mode\": the theme system lands next sprint"));
+        let summary = out.summary.unwrap();
+        assert!(summary.contains("1 descoped (a1)"), "{summary}");
+        assert!(!summary.contains("theme system"), "the reason stays off the stop line: {summary}");
+        let view = session_view(&r, "s", |_| HashMap::new());
+        assert_eq!(
+            view.asks[0].status,
+            crate::session::AskStatus::Descoped { reason: "the theme system lands next sprint".into() },
+            "the reason is kept for the Session page"
+        );
+    }
+
+    /// An action ask — commit, push — closes with `done` and a note, never by
+    /// claims or by being descoped; it counts toward the session's done asks.
+    #[test]
+    fn an_action_ask_is_closed_as_done_with_a_note() {
+        let (_dir, r) = project();
+        record_prompt(&r, "s", "commit and push").unwrap();
+        file_asks(&r, "s", None, vec![ask("commit and push", AskKind::Action)]).unwrap();
+        assert!(resolve_ask(&r, "s", "a1", Resolution::Claims(vec!["r-1".into()])).is_err());
+        assert!(resolve_ask(&r, "s", "a1", Resolution::Answered).is_err());
+        assert!(resolve_ask(&r, "s", "a1", Resolution::Done("  ".into())).is_err(), "a note is required");
+        let reason = stop(&r, "s", no_flags, pass, no_probes).block.expect("an undone action blocks");
+        assert!(reason.contains("not done yet"), "{reason}");
+
+        resolve_ask(&r, "s", "a1", Resolution::Done("pushed 079ea7b..8f88950".into())).unwrap();
+        let view = session_view(&r, "s", |_| HashMap::new());
+        assert_eq!(view.asks[0].status, crate::session::AskStatus::Done { note: "pushed 079ea7b..8f88950".into() });
+        let summary = stop(&r, "s", no_flags, pass, no_probes).summary.unwrap();
+        assert!(summary.contains("asks 1/1 done"), "{summary}");
+    }
+
+    /// Supporting files the agent attaches to an ask stop reading as unasked
+    /// edits; edits outside the project are never recorded at all.
+    #[test]
+    fn attached_files_are_accounted_for_and_outside_edits_ignored() {
+        let (dir, r) = project();
+        record_prompt(&r, "s", "serve requests").unwrap();
+        file_asks(&r, "s", None, vec![ask("serve", AskKind::Build)]).unwrap();
+        resolve_ask(&r, "s", "a1", Resolution::Claims(vec!["r-1".into()])).unwrap();
+        record_touch(&r, "s", "src/auth.rs").unwrap();
+        record_touch(&r, "s", "src/helper.rs").unwrap();
+        record_touch(&r, "s", "/elsewhere/probes/wt/src/auth.rs").unwrap();
+        record_touch(&r, "s", &format!("{}/../sibling/x.rs", dir.path().display())).unwrap();
+
+        let log = session_log(&r, "s");
+        assert_eq!(log.touched, vec!["src/auth.rs", "src/helper.rs"], "outside files are not touches");
+        assert_eq!(untraced_edits(&log, &working(&r).unwrap()), vec!["src/helper.rs"]);
+
+        resolve_ask(&r, "s", "a1", Resolution::Files(vec![format!("{}/src/helper.rs", dir.path().display())]))
+            .unwrap();
+        assert!(untraced_edits(&session_log(&r, "s"), &working(&r).unwrap()).is_empty());
     }
 
     /// A claim with no When/While/If condition has nothing for a test to

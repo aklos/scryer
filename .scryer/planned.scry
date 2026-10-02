@@ -14064,6 +14064,16 @@
           "id": "resp-gxaeq8",
           "statement": "**When** an ask's linked claim has no testable condition, **counts** it toward delivery without a test verdict",
           "lastTouchedAt": 1790939637
+        },
+        {
+          "id": "resp-gq5d46",
+          "statement": "**When** a session has descoped asks, **summarizes** them as a count with their ids",
+          "lastTouchedAt": 1790940537
+        },
+        {
+          "id": "resp-wgad2g",
+          "statement": "**When** a file the session edited is attached to an ask, **leaves** it out of the edits no ask accounts for",
+          "lastTouchedAt": 1790940537
         }
       ],
       "layer": "application"
@@ -14089,6 +14099,21 @@
           "id": "resp-zhxm92",
           "statement": "**If** another session logged editing a file while a shell command ran, **then** **leaves** that file out of the command's touches",
           "lastTouchedAt": 1790940258
+        },
+        {
+          "id": "resp-vwxq2g",
+          "statement": "**If** an edited file lies outside the project, **then** **leaves** it out of the session's touches",
+          "lastTouchedAt": 1790940537
+        },
+        {
+          "id": "resp-kwjq2b",
+          "statement": "**When** the agent marks an action ask done, **records** it as done with the agent's one-line note",
+          "lastTouchedAt": 1790940537
+        },
+        {
+          "id": "resp-2gepcd",
+          "statement": "**When** the agent attaches supporting files to an ask, **records** them as files that ask accounts for",
+          "lastTouchedAt": 1790940537
         }
       ],
       "layer": "composition"

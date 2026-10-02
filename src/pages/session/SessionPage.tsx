@@ -33,6 +33,7 @@ const STATUS_CLS: Record<AskStatus, string> = {
   delivered:
     "bg-emerald-500/10 text-emerald-700 ring-emerald-500/25 dark:bg-emerald-400/10 dark:text-emerald-300 dark:ring-emerald-400/25",
   answered: "bg-blue-500/10 text-blue-700 ring-blue-500/25 dark:bg-blue-400/10 dark:text-blue-300 dark:ring-blue-400/25",
+  done: "bg-emerald-500/10 text-emerald-700 ring-emerald-500/25 dark:bg-emerald-400/10 dark:text-emerald-300 dark:ring-emerald-400/25",
   open: "bg-orange-500/10 text-orange-700 ring-orange-500/25 dark:bg-orange-400/10 dark:text-orange-300 dark:ring-orange-400/25",
   descoped: "bg-[var(--surface-hover)] text-[var(--text-tertiary)] ring-[var(--border-strong)]",
 };
@@ -297,11 +298,25 @@ function AskRow({
         <span className={`min-w-0 flex-1 text-sm ${ask.status === "descoped" ? "text-[var(--text-muted)] line-through decoration-[var(--text-ghost)]" : "text-[var(--text-secondary)]"}`}>
           {ask.text}
         </span>
-        <span className={`${PILL_BASE} ${STATUS_CLS[ask.status]}`} title={ask.kind === "answer" ? "A question to answer" : "Something to build"}>
+        <span
+          className={`${PILL_BASE} ${STATUS_CLS[ask.status]}`}
+          title={
+            ask.kind === "answer"
+              ? "A question to answer"
+              : ask.kind === "action"
+                ? "Something to do"
+                : "Something to build"
+          }
+        >
           {ask.status}
         </span>
       </div>
       <div className="ml-7 flex flex-col gap-0.5">
+        {ask.status === "done" && ask.note && (
+          <div className="text-xs text-[var(--text-secondary)]">
+            <span className="font-medium text-[var(--text-tertiary)]">Done:</span> {ask.note}
+          </div>
+        )}
         {ask.status === "descoped" && ask.reason && (
           <div className="text-xs text-[var(--text-secondary)]">
             <span className="font-medium text-[var(--text-tertiary)]">Descoped:</span> {ask.reason}

@@ -25,7 +25,7 @@ export interface SessionPrompt {
   text: string;
 }
 
-export type AskStatus = "delivered" | "answered" | "descoped" | "open";
+export type AskStatus = "delivered" | "answered" | "done" | "descoped" | "open";
 
 /** One thing the user asked for, as the agent broke a prompt down. */
 export interface SessionAsk {
@@ -34,13 +34,16 @@ export interface SessionAsk {
   /** The prompt id it came from. */
   prompt: string;
   text: string;
-  kind: "build" | "answer";
+  /** `action`: something to do that changes no claim — commit, push, run. */
+  kind: "build" | "answer" | "action";
   source?: string;
   /** Responsibility ids the ask is delivered through. */
   claims: string[];
   status: AskStatus;
   /** Why the agent dropped it — set when descoped. */
   reason?: string;
+  /** What the agent did — set when an action ask is done. */
+  note?: string;
   /** What is still missing — set when open. */
   missing?: string[];
 }

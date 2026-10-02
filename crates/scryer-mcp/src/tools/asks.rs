@@ -28,6 +28,7 @@ fn ask_lines(views: &[AskView]) -> String {
         let status = match &v.status {
             AskStatus::Delivered => "delivered".to_string(),
             AskStatus::Answered => "answered".to_string(),
+            AskStatus::Done { note } => format!("done: {note}"),
             AskStatus::Descoped { reason } => format!("descoped: {reason}"),
             AskStatus::Open { .. } => "open".to_string(),
         };
@@ -55,9 +56,10 @@ fn verified(model_ref: &ModelRef, claims: &[String]) -> std::collections::HashMa
 impl ScryerServer {
     #[tool(
         description = "Break a logged user prompt into asks — one per distinct thing it asks for, in \
-         the user's terms. `kind: \"answer\"` for a question; default `build`. A port / \
-         match-the-reference prompt needs one build ask per feature of the source, each with \
-         `source`. An empty `asks` says the prompt asked for nothing new.\n\
+         the user's terms. `kind: \"answer\"` for a question, `\"action\"` for something to do that \
+         changes no claim (commit, push, run); default `build`. A port / match-the-reference \
+         prompt needs one build ask per feature of the source, each with `source`. An empty \
+         `asks` says the prompt asked for nothing new.\n\
          Rules: ask-ledger"
     )]
     pub(crate) fn file_asks(
@@ -73,8 +75,11 @@ impl ScryerServer {
             let kind = match a.kind.as_deref().map(str::trim) {
                 None | Some("") | Some("build") => AskKind::Build,
                 Some("answer") => AskKind::Answer,
+                Some("action") => AskKind::Action,
                 Some(other) => {
-                    return Ok(err(format!("unknown ask kind '{other}' — \"build\" or \"answer\"")))
+                    return Ok(err(format!(
+                        "unknown ask kind '{other}' — \"build\", \"answer\" or \"action\""
+                    )))
                 }
             };
             asks.push(NewAsk { text: a.text, kind, source: a.source });
@@ -91,7 +96,8 @@ impl ScryerServer {
                 msg.push_str(
                     "\nDeliver each: a build ask by claims you model, implement, test and link \
                      (resolve_ask {id, claims}); an answer ask by answering it \
-                     (resolve_ask {id, answered: true}).",
+                     (resolve_ask {id, answered: true}); an action ask by doing it \
+                     (resolve_ask {id, done: \"<what you did>\"}).",
                 );
                 Ok(CallToolResult::success(vec![Content::text(msg)]))
             }
@@ -101,9 +107,12 @@ impl ScryerServer {
 
     #[tool(
         description = "Resolve an ask: `claims` links the claims that deliver a build ask (delivered \
-         once each has a passing verdict and this session edited its anchored code); \
-         `answered: true` closes an answer ask; `descoped` drops an ask with a one-line reason \
-         the user reads. Returns where every ask stands.\n\
+         once this session edited each one's anchored code and each testable one has a passing \
+         verdict); `files` attaches supporting files the ask accounts for beyond those anchors \
+         (a helper, rule text, config), so they don't read as unasked edits; `answered: true` \
+         closes an answer ask; `done` closes an action ask with one line saying what was done; \
+         `descoped` drops an ask with a one-line reason the user reads. Returns where every ask \
+         stands.\n\
          Rules: ask-ledger"
     )]
     pub(crate) fn resolve_ask(
@@ -114,14 +123,25 @@ impl ScryerServer {
         let Some(session) = self.session_id(&model_ref) else {
             return Ok(err(NO_SESSION_MSG));
         };
-        let how = match (req.claims, req.answered, req.descoped) {
-            (Some(c), None | Some(false), None) if !c.is_empty() => Resolution::Claims(c),
-            (None, Some(true), None) => Resolution::Answered,
-            (None, None | Some(false), Some(r)) => Resolution::Descoped(r),
-            _ => return Ok(err("Pass exactly one of `claims`, `answered: true` or `descoped`.")),
+        // `files` rides along with any resolution, or stands alone.
+        let files = req.files.filter(|f| !f.is_empty());
+        let answered = req.answered == Some(true);
+        let how = match (req.claims.filter(|c| !c.is_empty()), answered, req.descoped, req.done) {
+            (Some(c), false, None, None) => Some(Resolution::Claims(c)),
+            (None, true, None, None) => Some(Resolution::Answered),
+            (None, false, Some(r), None) => Some(Resolution::Descoped(r)),
+            (None, false, None, Some(n)) => Some(Resolution::Done(n)),
+            (None, false, None, None) if files.is_some() => None,
+            _ => {
+                return Ok(err(
+                    "Pass exactly one of `claims`, `answered: true`, `done` or `descoped` (`files` may ride along).",
+                ))
+            }
         };
-        if let Err(e) = scryer_core::session::resolve_ask(&model_ref, &session, &req.id, how) {
-            return Ok(err(e));
+        for how in how.into_iter().chain(files.map(Resolution::Files)) {
+            if let Err(e) = scryer_core::session::resolve_ask(&model_ref, &session, &req.id, how) {
+                return Ok(err(e));
+            }
         }
         let view = scryer_core::session::session_view(&model_ref, &session, |c| verified(&model_ref, c));
         Ok(CallToolResult::success(vec![Content::text(ask_lines(&view.asks))]))

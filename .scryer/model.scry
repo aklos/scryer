@@ -14041,6 +14041,16 @@
           "id": "resp-gxaeq8",
           "statement": "**When** an ask's linked claim has no testable condition, **counts** it toward delivery without a test verdict",
           "lastTouchedAt": 1790939923
+        },
+        {
+          "id": "resp-gq5d46",
+          "statement": "**When** a session has descoped asks, **summarizes** them as a count with their ids",
+          "lastTouchedAt": 1790940714
+        },
+        {
+          "id": "resp-wgad2g",
+          "statement": "**When** a file the session edited is attached to an ask, **leaves** it out of the edits no ask accounts for",
+          "lastTouchedAt": 1790940715
         }
       ],
       "layer": "application"
@@ -14066,6 +14076,21 @@
           "id": "resp-zhxm92",
           "statement": "**If** another session logged editing a file while a shell command ran, **then** **leaves** that file out of the command's touches",
           "lastTouchedAt": 1790940309
+        },
+        {
+          "id": "resp-2gepcd",
+          "statement": "**When** the agent attaches supporting files to an ask, **records** them as files that ask accounts for",
+          "lastTouchedAt": 1790940714
+        },
+        {
+          "id": "resp-kwjq2b",
+          "statement": "**When** the agent marks an action ask done, **records** it as done with the agent's one-line note",
+          "lastTouchedAt": 1790940714
+        },
+        {
+          "id": "resp-vwxq2g",
+          "statement": "**If** an edited file lies outside the project, **then** **leaves** it out of the session's touches",
+          "lastTouchedAt": 1790940715
         }
       ],
       "layer": "composition"
@@ -19760,6 +19785,16 @@
         "symbol": "validate_model"
       }
     ],
+    "resp-2gepcd": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "resolve_ask"
+      },
+      {
+        "pattern": "crates/scryer-mcp/src/tools/asks.rs",
+        "symbol": "resolve_ask"
+      }
+    ],
     "resp-2hma32": [
       {
         "pattern": "src/entities/model/viewmodel.ts",
@@ -21078,6 +21113,12 @@
         "symbol": "Editor"
       }
     ],
+    "resp-gq5d46": [
+      {
+        "pattern": "crates/scryer-core/src/application/hooks.rs",
+        "symbol": "session_summary"
+      }
+    ],
     "resp-gtdzfn": [
       {
         "pattern": "crates/scryer-core/src/domain/changes.rs",
@@ -21340,6 +21381,16 @@
       {
         "pattern": "crates/scryer-core/src/infrastructure/worktree.rs",
         "symbol": "worktree_path"
+      }
+    ],
+    "resp-kwjq2b": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "resolve_ask"
+      },
+      {
+        "pattern": "crates/scryer-mcp/src/tools/asks.rs",
+        "symbol": "resolve_ask"
       }
     ],
     "resp-m0xahj": [
@@ -22222,6 +22273,12 @@
         "symbol": "test_statuses"
       }
     ],
+    "resp-vwxq2g": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "record_touch"
+      }
+    ],
     "resp-vz2caa": [
       {
         "pattern": "src-tauri/src/shell/preview.rs",
@@ -22280,6 +22337,12 @@
       {
         "pattern": "src/pages/coverage-gaps/DarkCodePage.tsx",
         "symbol": "DarkCodePage"
+      }
+    ],
+    "resp-wgad2g": [
+      {
+        "pattern": "crates/scryer-core/src/application/hooks.rs",
+        "symbol": "untraced_edits"
       }
     ],
     "resp-wgx35t": [
@@ -22686,6 +22749,12 @@
         "symbol": "hook_status_tells_outdated_installs_from_missing_ones"
       }
     ],
+    "resp-2gepcd": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "attached_files_are_accounted_for_and_outside_edits_ignored"
+      }
+    ],
     "resp-3phfpc": [
       {
         "pattern": "crates/scryer-mcp/src/hook_client.rs",
@@ -22772,6 +22841,12 @@
         "symbol": "composition_wires_every_layer_and_nothing_imports_it"
       }
     ],
+    "resp-gq5d46": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "a_descope_needs_a_reason_and_shows_in_the_summary"
+      }
+    ],
     "resp-gxaeq8": [
       {
         "pattern": "crates/scryer-core/src/composition/session.rs",
@@ -22792,6 +22867,12 @@
       {
         "pattern": "tests/structuralViolations.test.ts",
         "symbol": "charges a violation to its node and every ancestor"
+      }
+    ],
+    "resp-kwjq2b": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "an_action_ask_is_closed_as_done_with_a_note"
       }
     ],
     "resp-mjrrnd": [
@@ -22882,10 +22963,22 @@
         "symbol": "clojure_ns_requires_become_imports"
       }
     ],
+    "resp-vwxq2g": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "attached_files_are_accounted_for_and_outside_edits_ignored"
+      }
+    ],
     "resp-w6cn2y": [
       {
         "pattern": "crates/scryer-extract/src/domain/context.rs",
         "symbol": "a_named_import_follows_a_re_export_barrel"
+      }
+    ],
+    "resp-wgad2g": [
+      {
+        "pattern": "crates/scryer-core/src/composition/session.rs",
+        "symbol": "attached_files_are_accounted_for_and_outside_edits_ignored"
       }
     ],
     "resp-wqpdcg": [

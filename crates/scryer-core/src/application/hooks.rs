@@ -158,6 +158,8 @@ pub fn close_view(
 pub enum AskStatus {
     Delivered,
     Answered,
+    /// An action ask carried out; `note` says what was done.
+    Done { note: String },
     Descoped { reason: String },
     /// What is still missing, one item per gap.
     Open { missing: Vec<String> },
@@ -247,6 +249,15 @@ pub fn ask_views(
                     AskKind::Answer => AskStatus::Open {
                         missing: vec![format!("not answered yet — resolve_ask {{id: \"{}\", answered: true}} once it is", a.ask.id)],
                     },
+                    AskKind::Action => match &a.done {
+                        Some(note) => AskStatus::Done { note: note.clone() },
+                        None => AskStatus::Open {
+                            missing: vec![format!(
+                                "not done yet — resolve_ask {{id: \"{}\", done: \"<what you did>\"}} once it is",
+                                a.ask.id
+                            )],
+                        },
+                    },
                     AskKind::Build => {
                         let mut missing = Vec::new();
                         if a.claims.is_empty() {
@@ -297,13 +308,15 @@ pub fn ask_views(
 }
 
 /// Files this session edited that no ask accounts for: not anchored by (or a
-/// test of) any linked claim, and not an ask's `source`. "I didn't ask for that."
+/// test of) any linked claim, not an ask's `source`, and not a file the agent
+/// attached to an ask. "I didn't ask for that."
 pub fn untraced_edits(log: &SessionLog, working: &ScryModel) -> Vec<String> {
     log.touched
         .iter()
         .filter(|f| {
             !log.asks.iter().any(|a| {
-                a.ask.source.as_deref().is_some_and(|s| pattern_matches(s, f) || f.starts_with(s))
+                a.files.iter().any(|p| pattern_matches(p, f))
+                    || a.ask.source.as_deref().is_some_and(|s| pattern_matches(s, f) || f.starts_with(s))
                     || a.claims
                         .iter()
                         .any(|c| claim_patterns(working, c).any(|p| pattern_matches(p, f)))
@@ -389,17 +402,20 @@ pub fn session_summary(
         return None;
     }
     let count = |f: &dyn Fn(&AskStatus) -> bool| views.iter().filter(|v| f(&v.status)).count();
-    let done = count(&|s| matches!(s, AskStatus::Delivered | AskStatus::Answered));
-    let open = count(&|s| s.is_open());
+    let done = count(&|s| matches!(s, AskStatus::Delivered | AskStatus::Answered | AskStatus::Done { .. }));
     let mut parts = vec![format!("asks {done}/{} done", views.len())];
-    if open > 0 {
-        let ids: Vec<&str> = views.iter().filter(|v| v.status.is_open()).map(|v| v.id.as_str()).collect();
-        parts.push(format!("{open} open ({})", ids.join(", ")));
+    // Open and descoped asks by id only: the reasons live on the Session page
+    // and in get_asks, not in a line the user reads at every stop.
+    let ids = |f: &dyn Fn(&AskStatus) -> bool| -> Vec<&str> {
+        views.iter().filter(|v| f(&v.status)).map(|v| v.id.as_str()).collect()
+    };
+    let open = ids(&|s| s.is_open());
+    if !open.is_empty() {
+        parts.push(format!("{} open ({})", open.len(), open.join(", ")));
     }
-    for v in views {
-        if let AskStatus::Descoped { reason } = &v.status {
-            parts.push(format!("descoped {} \"{}\": {}", v.id, clip(&v.text, 60), clip(reason, 100)));
-        }
+    let descoped = ids(&|s| matches!(s, AskStatus::Descoped { .. }));
+    if !descoped.is_empty() {
+        parts.push(format!("{} descoped ({})", descoped.len(), descoped.join(", ")));
     }
     if !unfolded.is_empty() {
         let shown: Vec<String> = unfolded

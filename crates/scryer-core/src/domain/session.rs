@@ -43,6 +43,11 @@ pub enum SessionEvent {
     AskAnswered { id: String },
     /// Ask `id` will not be delivered, and why — shown to the user.
     AskDescoped { id: String, reason: String },
+    /// An `action` ask was carried out; `note` says what was done.
+    AskDone { id: String, note: String },
+    /// Files ask `id` accounts for beyond its claims' anchors — the helpers,
+    /// rule text or config the work needed.
+    AskFiles { id: String, files: Vec<String> },
     /// The Stop gate blocked on these prompts and asks. Each is blocked on
     /// at most once.
     AsksGate {
@@ -83,6 +88,9 @@ pub enum AskKind {
     Build,
     /// Wants an answer, not a change: delivered when answered.
     Answer,
+    /// Wants something done that changes no claim — commit, push, run, deploy:
+    /// delivered when the agent marks it done, saying what it did.
+    Action,
 }
 
 /// One thing the user asked for, in the agent's words.
@@ -108,6 +116,10 @@ pub struct AskEntry {
     pub claims: Vec<String>,
     pub answered: bool,
     pub descoped: Option<String>,
+    /// Set when an action ask is done: what was done.
+    pub done: Option<String>,
+    /// Files the ask accounts for beyond its claims' anchors.
+    pub files: Vec<String>,
 }
 
 /// The fold of a session's events.
@@ -173,6 +185,8 @@ impl SessionLog {
                         claims: Vec::new(),
                         answered: false,
                         descoped: None,
+                        done: None,
+                        files: Vec::new(),
                     });
                 }
             }
@@ -193,6 +207,20 @@ impl SessionLog {
             SessionEvent::AskDescoped { id, reason } => {
                 if let Some(a) = self.ask_mut(id) {
                     a.descoped = Some(reason.clone());
+                }
+            }
+            SessionEvent::AskDone { id, note } => {
+                if let Some(a) = self.ask_mut(id) {
+                    a.done = Some(note.clone());
+                }
+            }
+            SessionEvent::AskFiles { id, files } => {
+                if let Some(a) = self.ask_mut(id) {
+                    for f in files {
+                        if !a.files.contains(f) {
+                            a.files.push(f.clone());
+                        }
+                    }
                 }
             }
             SessionEvent::AsksGate { prompts, asks } => {
