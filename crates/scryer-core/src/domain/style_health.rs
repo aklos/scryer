@@ -1,19 +1,15 @@
-//! Code-time enforcement of the model's styles.
+//! Code-time enforcement of the model's styles: the imports the code actually
+//! has, held against each container's governing style. The build's dependency
+//! graph arrives already resolved to node pairs by
+//! [`crate::domain::build_edges::derive_graph`]; one more pass maps each end to
+//! `(component, layer)` and applies the style's table — layer legality,
+//! same-layer isolation and public surfaces, banned packages, misplaced files,
+//! type roles, cycles, and declared links the style forbids. Each violation is
+//! charged to the component that must fix it, in the file the fix happens in.
 //!
-//! [`crate::validate`] checks the links the agent DECLARED; this module
-//! checks the imports the code ACTUALLY has. The build's dependency graph is
-//! already resolved to node pairs by [`crate::domain::build_edges::derive_graph`];
-//! one more pass maps each end to `(component, layer)` and applies the
-//! governing style's table. Everything here is deterministic and derived;
-//! nothing is stored. It is the language-agnostic twin of dependency-cruiser,
-//! import-linter and ArchUnit, driven by the model instead of a per-tool
-//! config.
-//!
-//! Attributes every violation to the component charged with fixing it, deduped and scoped to a subtree for per-view reporting.
-//!
-//! Runs every code-time style check against the build's derived dependency graph and external imports: layer legality, same-layer isolation with public-surface exceptions, banned-package imports, and path-convention misplacement — each violation charged to the component that must fix it.
-//!
-//! Checks the actual code-level dependency graph and external imports against a container's declared style, flagging layer violations, same-layer isolation violations, banned-import violations, and misplaced files.
+//! Everything here is deterministic and derived; nothing is stored. It is the
+//! language-agnostic twin of dependency-cruiser, import-linter and ArchUnit,
+//! driven by the model instead of a per-tool config.
 
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};

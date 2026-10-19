@@ -1,4 +1,6 @@
-//! Walk a project directory for its manifests, its product files and its shape.
+//! Walking a project directory: whether it looks like a codebase, the
+//! subdirectories that carry a manifest, and the annotated tree of its files.
+//! Which files count as product code is `domain::product_code`.
 
 use std::path::Path;
 

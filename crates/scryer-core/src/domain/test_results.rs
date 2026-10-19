@@ -3,25 +3,15 @@
 //!
 //! Scryer still never runs tests: a run (by the dev, an agent, or CI) leaves a
 //! JUnit report behind, and this module reads the receipt. JUnit is the one
-//! format every supported ecosystem can emit natively or with one flag, but
-//! its conventions vary per emitter — vitest puts file paths in `classname`
-//! and joins suites into `name` with `" > "`; pytest puts dotted module paths
-//! in `classname` and parametrizes names with `[…]` suffixes. Matching is
+//! format every supported ecosystem can emit natively or with one flag, but its
+//! conventions vary per emitter — vitest puts file paths in `classname` and
+//! joins suites into `name` with `" > "`; pytest puts dotted module paths in
+//! `classname` and parametrizes names with `[…]` suffixes. Matching is
 //! therefore name-first (normalized leaf test name), with the attachment's
-//! stored file path as tie-breaker only — reports are rooted at the
-//! invocation directory, so paths never compare exactly.
-//!
-//! Reduces a test name to its normalized leaf across runner naming conventions (suite paths, module paths, parametrized suffixes, typographic quotes).
-//!
-//! Parses a JUnit XML report (any runner shape — nested or flat suites) into flat test cases, refusing a malformed or non-JUnit document.
-//!
-//! Corroborates an attachment's file path against a case's classname by file stem, breaking name ties across files.
-//!
-//! Matches reported cases against the model's attached-test map by normalized name (with a file-stem tiebreak), aggregating to a worst-outcome verdict per claim, and surfaces unseen attachments and unbreakable ties rather than guessing.
-//!
-//! Parses JUnit XML test reports from any runner (vitest, pytest, nextest, …) into flat test cases.
-//!
-//! Matches reported test cases against the model's attached-test map by normalized name, aggregating to a worst-outcome verdict per claim and surfacing unseen or ambiguous matches rather than guessing.
+//! stored file path as tie-breaker only — reports are rooted at the invocation
+//! directory, so paths never compare exactly. Each claim takes the worst
+//! outcome among its matched cases; attachments the report never mentions, and
+//! ties the path can't break, are reported rather than guessed.
 
 use std::collections::{BTreeMap, HashMap};
 

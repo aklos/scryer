@@ -1,10 +1,6 @@
-//! Reading the shape of a project directory.
-//!
-//! Scans a project directory into an annotated, per-directory-capped tree of architecturally relevant files for the design-first flow.
-//!
-//! Finds every directory containing a manifest file — the deployable-unit seed for the initial model structure.
-//!
-//! Quick check whether a directory looks like a codebase via a .git folder or a root manifest file.
+//! Reading the shape of a project directory: whether it looks like a codebase
+//! (a `.git` or a root manifest), which subdirectories carry a manifest, and
+//! the annotated tree of its product files.
 
 use crate::infrastructure::scan;
 use std::path::Path;

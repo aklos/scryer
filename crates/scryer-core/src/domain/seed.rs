@@ -1,12 +1,8 @@
-//! Deterministic structural seeding (A2): mint the system + container skeleton
-//! of a model from discovered deployable-unit facts, with no agent involved.
-//! This is the structure the build previously created in a blocking agent
-//! session; minting it mechanically at t=0 puts the skeleton on the canvas
-//! instantly and lets every semantic session start concurrently.
-//!
-//! Mints the structural skeleton from discovered deployable units — the system node, one container per unit with its boundary glob, and dependency links — idempotently against an existing model.
-//!
-//! Mints the initial structural skeleton of a model from discovered deployable units: the system node, one container per unit, its boundary glob, and dependency links — idempotently against an existing model.
+//! Deterministic structural seeding: the system node, one container per
+//! discovered deployable unit with its boundary glob, and container links along
+//! declared path dependencies — minted from manifest facts with no agent
+//! involved, and idempotent against an existing model so a re-run never
+//! duplicates.
 
 use crate::{next_link_id, next_node_id, Kind, Link, Node, ScryModel};
 

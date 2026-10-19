@@ -1,45 +1,21 @@
 //! Architectural styles — the model's horizontal axis.
 //!
-//! C4 gives the model a vertical axis (system → container → component →
-//! symbol) but no rule for what a component *is* inside its container or which
+//! C4 gives the model a vertical axis (system → container → component → symbol)
+//! but no rule for what a component *is* inside its container or which
 //! components may depend on which. A **style** supplies that: a fixed list of
 //! layer names, a legality matrix over them, an isolation rule for siblings on
-//! the same layer, and the path convention that puts each layer in one
-//! predictable place. Every container declares a style; every component under
-//! it carries one layer from that style's list. Symbols inherit their
-//! component's layer.
-//!
-//! Style and layer are the node-level twins of EARS and concerns: fixed
-//! vocabularies that let a reader scan without parsing. Unlike a concern, a
-//! layer is required and must come from the style's list, because the map and
-//! the checks depend on it.
+//! the same layer, the layers a link may enter and leave by, banned outside
+//! packages, type roles, and the path convention that puts each layer in one
+//! predictable place. Under a styled container every component carries one
+//! layer from that list and symbols inherit their component's; a component may
+//! override its container's style. This module resolves which style and layer
+//! govern a node, where its files belong, and whether a link between two nodes
+//! is one its style allows.
 //!
 //! The seven built-ins (`hexagonal`, `library`, `feature-sliced`, `core-shell`,
-//! `pipeline`, `ecs`, `mvvm`) are ordinary [`StyleDef`] values; a project may add its own as
-//! `.scryer/styles/<name>.json` with the same shape. The engine never
-//! special-cases a built-in.
-//!
-//! Validates whether a layer tag is legal for a component under a given parent, naming exactly what's wrong: unstyled container, unknown style, or layer outside the style's list.
-//!
-//! Builds a component's language-neutral scaffold manifest — file location, allowed imports, and symbols to define — for the agent to materialize in the project's own idiom.
-//!
-//! The layer tag a node carries, inherited from its component when the node is a symbol.
-//!
-//! Defines the language-neutral vocabulary of an architectural style: its layers, legality matrix, isolation rule, inbound layers, external-package bans, and path convention.
-//!
-//! Resolves which style and layer govern a given node, and renders the one-line placement fact (layer, allowed imports, directory) an agent needs before writing a file.
-//!
-//! Where files of a node's layer belong, from its container's boundary prefix and the style's path convention.
-//!
-//! Assembles the one-line placement fact — layer, allowed imports, directory — an agent needs before writing a file.
-//!
-//! Generates a language-neutral scaffold manifest — where a component's file(s) go and what symbols to define — for the agent to materialize in the project's own idiom.
-//!
-//! Hold the set of styles a project can use: the built-ins plus any project-authored override under .scryer/styles/.
-//!
-//! Ship the five built-in styles (hexagonal, library, feature-sliced, core-shell, pipeline) and load project-authored custom styles that override them by name.
-//!
-//! The nearest ancestor-or-self style declaration governing a node, so a component may override its container.
+//! `pipeline`, `ecs`, `mvvm`) are ordinary [`StyleDef`] values; a project may
+//! add its own as `.scryer/styles/<name>.json` with the same shape, replacing a
+//! built-in of the same name. The engine never special-cases a built-in.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

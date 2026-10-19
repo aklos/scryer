@@ -1,20 +1,8 @@
-//! The rules for writing claims — the reference text the MCP's instructions
-//! and tool descriptions are condensed from. A claim is a behaviour test's
-//! description; these say how to word it, where it goes, and how to check
-//! that its test has teeth. Each rule is addressable by `slug`; a body cites
-//! another as `[[slug]]`.
-//!
-//! Holds the full numbered set of modeling rules (business-statement discipline, symbols, styles, sign-off, etc.) as the single source agents fetch guidance from.
-//!
-//! Extracts every [[slug]] cross-reference from a rule's body, for wiring validation.
-//!
-//! Resolves one rule by its slug, falling back to a numeric id so a stale citation still resolves.
-//!
-//! Looks up rules by slug or free-text topic, ranked by relevance, so an agent can pull exactly the guidance a task needs without assuming conventions.
-//!
-//! Ranks rules by free-text topic relevance — a whole task sentence is valid input — tokenizing, stemming, and matching against titles and tags.
-//!
-//! The complete authored ruleset — every modeling convention agents must fetch rather than assume, from responsibility grammar to styles to sign-off.
+//! The rules for writing claims — the reference text the MCP's instructions and
+//! tool descriptions are condensed from. A claim is a behaviour test's
+//! description; these say how to word it, where it goes, and how to check that
+//! its test has teeth. Each rule is addressable by `slug` (or its number, so an
+//! old citation still resolves); a body cites another as `[[slug]]`.
 
 /// One rule. `title` is the headline, `body` the full guidance.
 pub struct Rule {

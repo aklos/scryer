@@ -3,35 +3,18 @@
 //! A probe deliberately breaks code to ask whether the attached test notices.
 //! Doing that in the developer's own working tree is hostile: their editor is
 //! open on those files, their agent may be mid-edit, and a restore that races
-//! either one loses work. So the mutation happens in a git worktree instead,
-//! and the developer's tree is never touched at all.
+//! either one loses work. So the mutation happens in a detached git worktree
+//! under `~/.scryer/probes`, one per project, and the developer's tree is never
+//! touched at all; a project that is not a git repository is refused, never
+//! downgraded.
 //!
-//! The worktree is REUSED, not created per probe. A fresh checkout starts with
-//! a cold build — no `target/`, no `node_modules/`, no docker layers — and for
-//! most projects that cold build dwarfs the test run the probe actually cares
-//! about. Keeping one worktree per project means the first probe pays for the
-//! build and every probe after it pays for an incremental one. `git clean -fd`
-//! (deliberately without `-x`) drops stray files while leaving ignored build
-//! output exactly where it is, which is what keeps it warm.
-//!
-//! Syncing copies the working tree, not the last commit. Mid-session the
-//! interesting code is uncommitted almost by definition, and a probe against
-//! `HEAD` would be answering a question about code the developer already moved
-//! past.
-//!
-//! Feeds a patch to the worktree via git apply on stdin.
-//!
-//! Refuses rather than downgrades when the project isn't a git repository — mutating the developer's own files is exactly what the worktree exists to prevent.
-//!
-//! Hands back a worktree synced to the project's current commits plus uncommitted/untracked edits, creating it on first use and reusing it (build cache and all) after.
-//!
-//! The deterministic worktree path for a project, keyed by a hash of its absolute path.
-//!
-//! Syncs, applies patches to, and resets the worktree between probe rounds without ever touching the developer's real files.
-//!
-//! Maintains a persistent, isolated git worktree per project (outside the developer's own checkout) that mirrors its current committed + uncommitted state, so a probe can safely test hypothetical changes.
-//!
-//! Discards whatever the last probe did, preserving ignored build output so the next run stays incremental.
+//! The worktree is REUSED, not created per probe: a fresh checkout starts with
+//! a cold build that dwarfs the test run, so the first probe pays for the build
+//! and every later one for an incremental one. `git clean -fd` (deliberately
+//! without `-x`) drops stray files while leaving ignored build output warm.
+//! Syncing copies the working tree — uncommitted and untracked edits included —
+//! not the last commit: mid-session the interesting code is uncommitted almost
+//! by definition.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

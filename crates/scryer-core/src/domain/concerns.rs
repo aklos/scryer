@@ -1,28 +1,18 @@
 //! Cross-cutting concern vocabulary — the model's third axis.
 //!
-//! The containment tree answers "what's inside X?", links answer "what talks
-//! to what?"; a concern answers "where does auth (persistence, idempotency, …)
+//! The containment tree answers "what's inside X?", links answer "what talks to
+//! what?"; a concern answers "where does auth (persistence, idempotency, …)
 //! live?". Code answers that question with factoring plus convention
-//! (`middleware/`, decorators); a model can't relocate prose, so the concern is
-//! a LENS instead: each responsibility may carry at most one concern slug, and
-//! the registry on [`crate::ScryModel`] names every slug in use so the UI can
+//! (`middleware/`, decorators); the tree can't relocate a claim, so the concern
+//! is a LENS instead: each claim may carry at most one concern slug, and the
+//! registry on [`crate::ScryModel`] names every slug in use so the UI can
 //! group, badge, and dim by it.
 //!
-//! Registry entries are minted automatically on first use ([`register_concerns`]
-//! runs on every model write) and never pruned automatically — a registered
-//! concern with zero tagged responsibilities is itself signal ("this app has no
-//! auth story"), and explicit deletion is a user act. Slugs are normalized to
-//! kebab-case on write so the vocabulary can't fork on casing or spacing.
-//!
-//! Normalizes a raw concern value to a canonical kebab-case slug.
-//!
-//! Syncs concern tags and registry curation from the plan through to the committed layer without waiting for a fold.
-//!
-//! Writes concern tags and registry curation through from the plan to committed on every plan write, since a tag-only change never triggers a fold.
-//!
-//! Normalizes every responsibility's concern slug and mints a registry entry for each newly used slug, seeding standard descriptions/icons where they match.
-//!
-//! Maintains the model's concern registry (the vocabulary responsibilities tag themselves with) and keeps every used slug normalized and registered.
+//! [`register_concerns`] runs when the tree is derived: it normalizes every
+//! slug to kebab-case, so the vocabulary can't fork on casing or spacing, and
+//! mints a registry entry for each new one, seeding description and icon from
+//! [`STANDARD_CONCERNS`]. Entries are never pruned — a registered concern with
+//! nothing tagged is itself signal ("this app has no auth story").
 
 
 use crate::domain::model::ScryModel;

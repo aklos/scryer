@@ -1,6 +1,9 @@
-//! Walks a node's ancestry nearest-first to collect every inherited directive constraint above it.
-//!
-//! Derives whether a symbol carries no responsibilities, no properties, and isn't external — the empty-symbol flag mirrored in the frontend.
+//! The C4 model's shape: nodes (person, system, container, component, symbol),
+//! the links and groups between them, each node's claims and data-shape
+//! properties, the maps that tie claims and nodes to code (`source_map`,
+//! `test_map`, `boundaries`), and the concern registry. The derived tree is a
+//! [`ScryModel`]; the few facts read straight off one (an empty symbol, a
+//! node's inherited directives) live beside it.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};

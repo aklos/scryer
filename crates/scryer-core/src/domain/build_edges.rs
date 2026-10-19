@@ -1,19 +1,15 @@
-//! The deterministic codebase dependency graph, cached to disk for one model
-//! build. The build orchestrator (in the Tauri app) extracts it once; the MCP
-//! `fill_container` tool — which runs in a separate process and has no
-//! parser of its own — reads it back to wire code-level links from the same
-//! edges the modeling agent was shown, instead of asking the agent to author
-//! (and mis-author) them by hand.
+//! The project's code dependency graph and what it says about the C4 tree. The
+//! extractor produces [`BuildEdges`] in one pass — symbol→symbol edges keyed
+//! `path#name@line`, imports of outside packages, and the extent of every
+//! outermost type — with no C4 structure of its own; it is cached to
+//! `.scryer/.build_edges.json`.
 //!
-//! Endpoints are the extractor's source-anchored symbol keys (`path#name@line`)
-//! and project-relative file paths. They carry NO C4 structure — the commit
-//! tool joins them back to freshly minted nodes by source location.
-//!
-//! Caches the whole-project symbol-level dependency graph and external-import list produced by a build, so later tools can wire links without re-parsing the project.
-//!
-//! Joins that cached graph onto the model to audit every declared link's code evidence and surface undeclared connections between sibling nodes as candidates.
-//!
-//! Joins the cached import graph onto the model deterministically — resolves each edge to its host node/symbol, rolls up through every containing level, audits declared links against the code evidence, and surfaces undeclared sibling connections as candidates.
+//! [`derive_graph`] joins it onto a model: each edge resolves to its host node
+//! and symbol and rolls up through every containing level, each declared link
+//! is rated by the code edges behind it, and sibling pairs the code connects
+//! with no link are surfaced as candidates. [`BoundaryOwnership`] settles which
+//! node owns a file when boundary globs overlap — the one most-specific ranking
+//! the link audit, health and the style checks share.
 
 use serde::{Deserialize, Serialize};
 

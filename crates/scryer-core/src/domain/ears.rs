@@ -1,18 +1,12 @@
-//! The EARS grammar's deterministic slice (rule `statement-ears`): the
-//! pattern classifier and the lint of a behaviour test's description.
+//! The EARS grammar's deterministic slice (rule `statement-ears`): the pattern
+//! classifier and the lint of a behaviour test's description.
 //!
 //! A claim's pattern is decidable from its leading keyword alone (the grammar
 //! fixes clause order: condition first, response last), so neither needs
 //! semantic judgment. Statements may carry display markup (`**bold**` on the
-//! keyword); classification reads through it.
-//!
-//! Determines which of those forms are mechanically testable, driving the untested-claim flag elsewhere in the model.
-//!
-//! Classifies a responsibility statement's EARS form (ubiquitous/event/state/unwanted/optional) from its leading keyword.
-//!
-//! Determines which EARS forms (event/state/unwanted) a test can mechanically arrange and assert, versus ones needing human judgment.
-//!
-//! Classifies a responsibility statement's EARS form from its leading keyword, reading through display markup.
+//! keyword); classification reads through it. The event, state and unwanted
+//! forms count as testable — a test can arrange the condition and assert the
+//! response — which is what the health counters' testable/untested split reads.
 
 /// The EARS form of one responsibility statement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
