@@ -22,13 +22,12 @@ import {
   collectPlanEntries,
   combineMarks,
   groupDrift,
-  MARK_META,
-  type Mark,
   type MarkPair,
   nodeDrift,
   resolveMark,
   rollupMarks,
 } from "../../features/change-marks/changeMarks";
+import { MARK_META, type Mark } from "../../entities/model/changeKinds";
 import { kindIcon } from "../../entities/model/kindIcon";
 import { StyleGlyph } from "../../entities/model/styles/StyleGlyph";
 import { styleTable } from "../../entities/model/styles";

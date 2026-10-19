@@ -12,7 +12,7 @@
 
 import type { NodeProps, Node as RFNode } from "@xyflow/react";
 import type { DiagramNode } from "../../widgets/diagram-canvas/diagramLayout";
-import type { Mark } from "../../features/change-marks/changeMarks";
+import type { Mark } from "./changeKinds";
 import type { Completeness, StyleViolation } from "./health";
 import { StructuralCount } from "./StructuralCount";
 import { CompletenessPie } from "./CompletenessPie";
