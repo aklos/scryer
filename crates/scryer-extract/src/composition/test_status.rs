@@ -15,6 +15,24 @@ use scryer_core::test_results::ReportMatch;
 use scryer_core::ModelRef;
 use std::collections::BTreeMap;
 
+pub use crate::domain::mutations::MutationSummary;
+
+/// The derived tree with every claim's status (proven, stale, failing,
+/// planned, and the probed mark) and the health counts, verdicts re-verified
+/// against the code.
+pub fn derived_status(
+    r: &ModelRef,
+) -> Result<(scryer_core::derived_tree::DerivedTree, scryer_core::derived_tree::DerivedStatus), String> {
+    store::read_derived_status(r)
+}
+
+/// Ingest a cargo-mutants `outcomes.json` or Stryker `mutation.json` as
+/// probe evidence: per file for both, per test where the tool says which
+/// test killed what.
+pub fn ingest_mutation_report(r: &ModelRef, report: &str) -> Result<MutationSummary, String> {
+    store::ingest_mutation_file(r, report)
+}
+
 /// Record a finished run's results against the claims their tests are attached to.
 pub fn record_test_results(r: &ModelRef, report: &ReportMatch) -> Result<usize, String> {
     store::store_test_results(r, report)

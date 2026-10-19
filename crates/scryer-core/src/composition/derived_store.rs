@@ -61,6 +61,18 @@ pub fn derived_status(project: &Path) -> Result<(DerivedTree, DerivedStatus), St
     Ok((tree, status))
 }
 
+/// Whether a record's anchors are provably untouched since it was taken,
+/// by file mtimes alone (see `derived_status`).
+pub fn anchors_untouched_since(
+    model: &ScryModel,
+    project: &Path,
+    resp_id: &str,
+    fingerprints: &std::collections::BTreeMap<String, String>,
+    recorded_at: u64,
+) -> bool {
+    verdict_store::anchors_untouched_since(model, project, resp_id, fingerprints, recorded_at)
+}
+
 /// The last ingested mutation results.
 pub fn read_mutations_at(r: &ModelRef) -> MutationCache {
     verdict_store::read_mutations(&r.mutations_path())
