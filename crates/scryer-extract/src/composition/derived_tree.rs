@@ -1,7 +1,27 @@
 //! The derived C4 tree's entry points: the project's tree, cached on file
 //! mtimes, or derived without touching the cache.
 
-pub use crate::infrastructure::derived_tree::{derived_tree, derived_tree_uncached, read_structure};
+use crate::domain::structure::Structure;
+use crate::infrastructure::derived_tree as store;
+use scryer_core::derived_tree::DerivedTree;
+use std::path::Path;
+
+/// The project's derived tree: the cached one when no file changed since,
+/// otherwise derived afresh and cached.
+pub fn derived_tree(project: &Path) -> Result<DerivedTree, String> {
+    store::derived_tree(project)
+}
+
+/// Derive the tree without touching the cache, for a project that must not
+/// be written to.
+pub fn derived_tree_uncached(project: &Path) -> Result<DerivedTree, String> {
+    store::derived_tree_uncached(project)
+}
+
+/// The project's `structure.toml`, or defaults when there is none.
+pub fn read_structure(project: &Path) -> Result<Structure, String> {
+    store::read_structure(project)
+}
 
 #[cfg(test)]
 mod tests {

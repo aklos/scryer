@@ -7,7 +7,6 @@ pub mod claim_edit;
 pub mod claims;
 pub mod context;
 pub mod derive;
-pub mod facts;
 pub mod lang;
 pub mod mutations;
 pub mod structure;

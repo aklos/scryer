@@ -23,7 +23,7 @@ pub use domain::context::{
     ContainerFacts, Edge, FileContext, ProjectContext, PromptScopeContext, ScopeContext,
     SymbolContext,
 };
-pub use domain::facts::{Container, TsAliases};
+pub use domain::context::{Container, TsAliases};
 pub use domain::{context, lang};
 pub use composition::{claim_files, derived_tree, landing, test_status};
 pub use infrastructure::{manifest, tsconfig};

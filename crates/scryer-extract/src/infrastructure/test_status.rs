@@ -127,7 +127,7 @@ fn claim_fingerprints(
                     continue;
                 };
                 let files =
-                    project_files.get_or_insert_with(|| crate::list_project_files(project));
+                    project_files.get_or_insert_with(|| crate::infrastructure::walk::project_files(project));
                 for file in files.iter().filter(|f| pattern.matches(f)) {
                     fingerprint(file, true);
                 }
@@ -450,7 +450,7 @@ pub fn ingest_mutation_file(r: &ModelRef, report: &str) -> Result<MutationSummar
     use scryer_core::derived_tree::{read_mutations_at, write_mutations_at};
     let parsed = parse_mutation_report(report)?;
     let project = r.project_path();
-    let known = crate::list_project_files(project);
+    let known = crate::infrastructure::walk::project_files(project);
     let prefix = format!("{}/", project.display());
     let resolve = |path: &str| -> String {
         let rel = path.strip_prefix(&prefix).unwrap_or(path).trim_start_matches("./").replace('\\', "/");

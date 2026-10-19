@@ -150,7 +150,7 @@ pub fn migrate(project: &Path) -> Result<MigrationReport, String> {
     }
 
     let tree = derived_tree(project)?;
-    let files = crate::list_project_files(project);
+    let files = crate::infrastructure::walk::project_files(project);
     let mut parser = Parser::new();
     let mut described_tests: BTreeSet<(String, String)> = BTreeSet::new();
     let mut docs: BTreeMap<String, Vec<String>> = BTreeMap::new();

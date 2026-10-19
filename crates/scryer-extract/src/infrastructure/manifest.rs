@@ -16,7 +16,7 @@
 use crate::lang;
 use scryer_core::scan;
 use std::collections::BTreeMap;
-use crate::domain::facts::Container;
+use crate::domain::context::Container;
 use std::path::Path;
 
 /// One manifest file found in a candidate directory.

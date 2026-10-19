@@ -11,7 +11,7 @@
 //! apply without touching the filesystem.
 
 use std::collections::{BTreeMap, HashSet};
-use crate::domain::facts::TsAliases;
+use crate::domain::context::TsAliases;
 use std::path::{Path, PathBuf};
 
 /// Discover every alias-bearing tsconfig/jsconfig among `all_files`. Configs
