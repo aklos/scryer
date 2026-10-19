@@ -31,8 +31,8 @@ pkgs.mkShell {
     # Image tools
     imagemagick
 
-    # Demo / trailer capture (Playwright drives this chromium, CDP screencast
-    # captures the frames, ffmpeg encodes)
+    # Browser for Playwright and for the demo film (Remotion renders its
+    # frames in this chromium), and ffmpeg
     chromium
     ffmpeg
 
@@ -58,6 +58,9 @@ pkgs.mkShell {
     # (missing libglib etc). Skip the download and drive the Nix-built chromium.
     export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
     export PLAYWRIGHT_CHROMIUM_EXECUTABLE="${pkgs.chromium}/bin/chromium"
+    # Remotion's downloaded chrome-headless-shell is FHS too; the demo's
+    # remotion.config.ts renders with this chromium instead.
+    export REMOTION_BROWSER="${pkgs.chromium}/bin/chromium"
 ${pkgs.lib.optionalString (!unfreeOk) ''
     echo "note: copilot (unfree) left out of this shell — re-enter with NIXPKGS_ALLOW_UNFREE=1 to test the Copilot integration."
 ''}  '';
