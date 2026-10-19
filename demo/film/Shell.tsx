@@ -21,28 +21,22 @@ export interface ShellProps {
   fixture: Fixture;
   /** How many fixture changes are applied; the app re-reads when it moves. */
   version: number;
+  /** With its node ids resolved. */
   view: View;
-  selection?: string;
   lens?: string;
   frame: number;
 }
 
 /** The app's navigation for a film view. */
-function navigation(view: View, selection: string | undefined, lens: string | undefined): Navigate {
+function navigation(view: View, lens: string | undefined): Navigate {
   const base = { lens: lens ?? null };
   switch (view.kind) {
     case "landing":
       return { ...base, view: "wiki", page: "landing" };
-    case "tree":
-      return { ...base, view: "wiki", page: selection ?? "landing" };
     case "node":
       return { ...base, view: "wiki", page: view.node };
     case "diagram":
-      return {
-        ...base,
-        view: "diagram",
-        diagramFocus: view.level === "context" ? null : view.level === "containers" ? "sys" : (view.focus ?? null),
-      };
+      return { ...base, view: "diagram", diagramFocus: view.level === "context" ? null : (view.focus ?? null) };
   }
 }
 
@@ -58,13 +52,13 @@ function prepare() {
   }
 }
 
-export function Shell({ fixture, version, view, selection, lens, frame }: ShellProps) {
+export function Shell({ fixture, version, view, lens, frame }: ShellProps) {
   const [ready] = useState(() => {
     prepare();
     return true;
   });
   // Serve this frame's fixture before the app asks for anything.
-  const nav = navigation(view, selection, lens);
+  const nav = navigation(view, lens);
   useLayoutEffect(() => {
     const first = !mounted;
     mounted = true;

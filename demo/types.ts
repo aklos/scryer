@@ -35,9 +35,11 @@ export interface DerivedClaim {
   planned?: boolean;
 }
 
-/** One style violation (Rust `DerivedViolation`). */
+/** One style violation (Rust `DerivedViolation`). The film's own carries
+ *  `other`, the node the violating import reaches, for the red edge. */
 export interface DerivedViolation {
   nodeId: string;
+  other?: string;
   file: string;
   kind: string;
   detail: string;
@@ -76,10 +78,11 @@ export interface SessionLog {
   entries: SessionEntry[];
 }
 
-/** Diagram placements per node, as `.scryer/layout` persists them. */
+/** Diagram placements per node id or name, as `.scryer/layout` persists them. */
 export type Layout = Record<string, { x: number; y: number }>;
 
-/** Everything the invoke stub serves. */
+/** Everything the invoke stub serves: demo/fixture.json when a derivation
+ *  from a real project wrote it, else fixture.ts. */
 export interface Fixture {
   tree: DerivedTree;
   status: DerivedStatus;

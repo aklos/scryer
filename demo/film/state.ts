@@ -4,20 +4,17 @@
  * composition renders that. Durative events (typing, a camera move, a cursor
  * glide, a test run filling in) are evaluated at the frame, so any frame can
  * be rendered on its own — scrubbed in Studio or rendered in parallel.
+ *
+ * The fold plays over a base: demo/fixture.json when a derivation from a real
+ * project wrote it, else fixture.ts (the bundler picks, see
+ * remotion.config.ts). The script names claims by their wording and nodes by
+ * their names, never by id or position, so either base plays the same script.
  */
 
 import { Easing, interpolate } from "remotion";
-import {
-  BASE_CLAIMS,
-  BASE_PROBES,
-  BASE_STATES,
-  layout,
-  NOW,
-  sessions as baseSessions,
-  statusOf,
-  structure,
-  treeOf,
-} from "../fixture";
+import base from "@film/base";
+import { NOW, REFUND_STUBS, REFUND_VIOLATION } from "../fixture";
+import { resolveNode, statusOf, systemOf, treeWith } from "../shapes";
 import type {
   ClaimState,
   DerivedClaim,
@@ -64,9 +61,10 @@ export interface TerminalState {
 
 // --- Film state --------------------------------------------------------------------
 
+/** A node is named as a reader would (`Ledger`, `Ledger/domain`); the fold
+ *  hands the app its id. A diagram's `containers` level is the system's. */
 export type View =
   | { kind: "landing" }
-  | { kind: "tree" }
   | { kind: "node"; node: string }
   | { kind: "diagram"; level: "context" | "containers" | "component"; focus?: string };
 
@@ -110,8 +108,8 @@ export interface FilmState {
   /** How many fixture changes are applied — the stub tells the app to
    *  re-read when this moves. */
   version: number;
+  /** With its node resolved to an id. */
   view: View;
-  selection?: string;
   /** The concern lens, e.g. `persistence`. */
   lens?: string;
   camera: Camera;
@@ -126,11 +124,20 @@ type At = { at: number };
 export type FilmEvent = At &
   (
     | { kind: "view"; view: View }
-    | { kind: "select"; node?: string }
     | { kind: "lens"; concern?: string }
     | { kind: "camera"; to: Camera; dur: number }
     | { kind: "caption"; text: string | null; style?: Caption["style"]; sub?: string }
-    | { kind: "cursor"; x: number; y: number; target?: string; dur: number; click?: boolean; hide?: boolean }
+    | {
+        kind: "cursor";
+        x: number;
+        y: number;
+        /** A selector in the app, or a claim by its wording (its row). */
+        target?: string;
+        claim?: string;
+        dur: number;
+        click?: boolean;
+        hide?: boolean;
+      }
     | { kind: "term.show"; term: 0 | 1; cwd: string }
     | { kind: "term.type"; term: 0 | 1; text: string; dur: number }
     | { kind: "term.submit"; term: 0 | 1 }
@@ -138,10 +145,12 @@ export type FilmEvent = At &
     | { kind: "term.ok"; term: 0 | 1 }
     | { kind: "term.test"; term: 0 | 1; command: string; tests: TestResult[]; dur: number }
     | { kind: "term.idle"; term: 0 | 1 }
+    /** Claims to add; a base that already holds one by its wording gives
+     *  its own file, line and id. `nodeId` is a node name. */
     | { kind: "claims.add"; claims: DerivedClaim[] }
-    | { kind: "claims.remove"; ids: string[] }
-    | { kind: "claims.state"; ids: string[]; state: ClaimState }
-    | { kind: "probe"; id: string; mark?: ProbeMark }
+    | { kind: "claims.remove"; claims: string[] }
+    | { kind: "claims.state"; claims: string[]; state: ClaimState }
+    | { kind: "probe"; claim: string; mark?: ProbeMark }
     | { kind: "violation"; violation?: DerivedViolation }
     | { kind: "session"; session: string; entry: SessionEntry }
     | { kind: "end" }
@@ -164,16 +173,27 @@ const terminal = (cwd: string, since: number): TerminalState => ({ cwd, input: "
 
 /** Fold `events` (ordered by `at`) up to `frame`. */
 export function state(events: FilmEvent[], frame: number): FilmState {
-  let claims: DerivedClaim[] = BASE_CLAIMS.map((c) => ({ ...c }));
-  const states: Record<string, ClaimState> = { ...BASE_STATES };
-  const probes: Record<string, ProbeMark> = { ...BASE_PROBES };
+  const fixture = base as Fixture;
+  const model = fixture.tree.planned;
+  // What the script adds is not there at the start, whatever the base holds.
+  const added = new Set(REFUND_STUBS.map((c) => c.description));
+  let claims: DerivedClaim[] = fixture.tree.claims.filter((c) => !added.has(c.description)).map((c) => ({ ...c }));
+  const states: Record<string, ClaimState> = {};
+  const probes: Record<string, ProbeMark> = {};
   const recorded: Record<string, number> = {};
+  for (const s of fixture.status.claims) {
+    states[s.respId] = s.state;
+    if (s.probe) probes[s.respId] = s.probe;
+    if (s.recordedAt !== undefined) recorded[s.respId] = s.recordedAt;
+  }
   let version = 0;
-  let violations: DerivedViolation[] = [];
-  const sessions: SessionLog[] = baseSessions.map((s) => ({ ...s, entries: [...s.entries] }));
+  let violations: DerivedViolation[] = fixture.tree.styleViolations.filter((v) => v.detail !== REFUND_VIOLATION.detail);
+  const sessions: SessionLog[] = fixture.sessions.map((s) => ({ ...s, entries: [...s.entries] }));
+  /** A claim's id by its wording. */
+  const idOf = (text: string) => claims.find((c) => c.description === text)?.id ?? text;
+  const node = (ref: string) => resolveNode(model, ref) ?? ref;
 
   let view: View = { kind: "landing" };
-  let selection: string | undefined;
   let lens: string | undefined;
   let tween = { from: HOME, to: HOME, at: 0, dur: 0 };
   let caption: Caption | null = null;
@@ -192,9 +212,6 @@ export function state(events: FilmEvent[], frame: number): FilmState {
       case "view":
         view = e.view;
         break;
-      case "select":
-        selection = e.node;
-        break;
       case "lens":
         lens = e.concern;
         break;
@@ -208,7 +225,8 @@ export function state(events: FilmEvent[], frame: number): FilmState {
         break;
       case "cursor": {
         // A new glide starts from where the last one was headed.
-        glide = { from: glide.to, to: { x: e.x, y: e.y, target: e.target }, at: e.at, dur: e.dur };
+        const target = e.claim ? `#resp-${CSS.escape(idOf(e.claim))}` : e.target;
+        glide = { from: glide.to, to: { x: e.x, y: e.y, target }, at: e.at, dur: e.dur };
         visible = !e.hide;
         if (e.click) clickAt = e.at + e.dur;
         break;
@@ -252,13 +270,18 @@ export function state(events: FilmEvent[], frame: number): FilmState {
         terminals[e.term]!.running = false;
         break;
       case "claims.add":
-        claims = [...claims, ...e.claims.map((c) => ({ ...c }))];
+        for (const c of e.claims) {
+          const own = fixture.tree.claims.find((b) => b.description === c.description);
+          claims = [...claims, { ...(own ?? c), nodeId: own?.nodeId ?? node(c.nodeId), planned: true }];
+        }
         break;
-      case "claims.remove":
-        claims = claims.filter((c) => !e.ids.includes(c.id));
+      case "claims.remove": {
+        const gone = new Set(e.claims.map(idOf));
+        claims = claims.filter((c) => !gone.has(c.id));
         break;
+      }
       case "claims.state":
-        for (const id of e.ids) {
+        for (const id of e.claims.map(idOf)) {
           states[id] = e.state;
           recorded[id] = NOW;
           const c = claims.find((c) => c.id === id);
@@ -266,16 +289,22 @@ export function state(events: FilmEvent[], frame: number): FilmState {
         }
         break;
       case "probe":
-        if (e.mark) probes[e.id] = e.mark;
-        else delete probes[e.id];
+        if (e.mark) probes[idOf(e.claim)] = e.mark;
+        else delete probes[idOf(e.claim)];
         break;
       case "violation":
-        violations = e.violation ? [e.violation] : [];
+        violations = fixture.tree.styleViolations.filter((v) => v.detail !== REFUND_VIOLATION.detail);
+        if (e.violation) {
+          const v = e.violation;
+          violations = [...violations, { ...v, nodeId: node(v.nodeId), other: v.other && node(v.other) }];
+        }
         break;
       case "session": {
+        // A stop's `reached` names claims by wording in the script.
+        const entry = e.entry.event === "reached" ? { ...e.entry, ids: e.entry.ids.map(idOf) } : e.entry;
         const log = sessions.find((s) => s.id === e.session);
-        if (log) log.entries.push(e.entry);
-        else sessions.unshift({ id: e.session, entries: [e.entry] });
+        if (log) log.entries.push(entry);
+        else sessions.unshift({ id: e.session, entries: [entry] });
         break;
       }
       case "end":
@@ -283,13 +312,21 @@ export function state(events: FilmEvent[], frame: number): FilmState {
     }
   }
 
-  const tree = treeOf(claims, violations);
+  const tree = treeWith(fixture.tree, claims, violations);
+  const resolved: View =
+    view.kind === "node"
+      ? { kind: "node", node: node(view.node) }
+      : view.kind === "diagram"
+        ? {
+            ...view,
+            focus: view.level === "containers" ? systemOf(model) : view.focus === undefined ? undefined : node(view.focus),
+          }
+        : view;
   return {
     frame,
-    fixture: { tree, status: statusOf(tree, states, probes, recorded), structure, sessions, layout },
+    fixture: { ...fixture, tree, status: statusOf(tree, states, probes, recorded), sessions },
     version,
-    view,
-    selection,
+    view: resolved,
     lens,
     camera: mix(tween.from, tween.to, progress(frame, tween.at, tween.dur)),
     caption,

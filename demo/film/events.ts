@@ -75,8 +75,17 @@ const cursor = (target: string, x: number, y: number, secs: number, click = fals
 });
 const hideCursor: Loose = { kind: "cursor", x: 0, y: 0, dur: 0, hide: true };
 
-/** The app's elements the pointer aims at. */
-const ROW = (claim: string) => `#resp-${claim}`;
+/** Glide to a claim's row in the app, by the claim's wording. */
+const toClaim = (claim: string, x: number, y: number, secs: number, click = false): Loose => ({
+  kind: "cursor",
+  claim,
+  x,
+  y,
+  dur: Math.round(secs * FPS),
+  click,
+});
+
+/** The concern lens, in the tree. */
 const LENS = '[title^="Concern lens"]';
 /** A line of a session's log, as its hooks write it. */
 const log = (session: string, entry: SessionEvent): Loose => ({
@@ -87,7 +96,10 @@ const log = (session: string, entry: SessionEvent): Loose => ({
 const headline = (text: string): Loose => ({ kind: "caption", text, style: "headline" });
 const clear: Loose = { kind: "caption", text: null };
 
-const BUILT = ["c-ref-1", "c-ref-2", "c-ref-3", "c-ref-4"];
+/** The claims, by wording: the four refund stubs built, the one deleted, the one probed. */
+const BUILT = REFUND_STUBS.slice(0, 4).map((c) => c.description);
+const DELETED = REFUND_STUBS[4].description;
+const PROBED = REFUND_STUBS[1].description;
 const refundTests = (result: TestResult["result"]): TestResult[] =>
   REFUND_STUBS.slice(0, 4).map((c) => ({ name: c.identifier, result }));
 
@@ -102,7 +114,7 @@ export const EVENTS: FilmEvent[] = ([
   // 1. Plans without essays.
   ...act(ACTS.plans, [
     [0, clear],
-    [0, { kind: "view", view: { kind: "node", node: "ledger" } }],
+    [0, { kind: "view", view: { kind: "node", node: "Ledger" } }],
     [0.4, type("add partial refunds to the ledger", 1.6)],
     [2.2, { kind: "term.submit", term: 0 }],
     [2.2, log(SESSION_REFUNDS, { event: "task", text: "add partial refunds to the ledger" })],
@@ -126,9 +138,9 @@ export const EVENTS: FilmEvent[] = ([
     [5.4, say("Five todo tests. Delete any you don't want, then say go.")],
     [5.6, { kind: "term.idle", term: 0 }],
     [6.5, headline("The plan is a column of claims. Read it in ten seconds.")],
-    [9.0, cursor(ROW("c-ref-4"), 700, 400, 1.0)],
-    [10.4, cursor(ROW("c-ref-5"), 700, 440, 0.8, true)],
-    [11.3, { kind: "claims.remove", ids: ["c-ref-5"] }],
+    [9.0, toClaim(BUILT[3], 700, 400, 1.0)],
+    [10.4, toClaim(DELETED, 700, 440, 0.8, true)],
+    [11.3, { kind: "claims.remove", claims: [DELETED] }],
     [11.8, hideCursor],
     [12.4, type("go", 0.4)],
     [13.2, { kind: "term.submit", term: 0 }],
@@ -143,7 +155,7 @@ export const EVENTS: FilmEvent[] = ([
     [0, cam(580, 500, 0.9, 0.1)],
     [0.2, cam(580, 500, 1, 2.2)],
     [2.6, { kind: "view", view: { kind: "diagram", level: "containers" } }],
-    [5.0, { kind: "view", view: { kind: "diagram", level: "component", focus: "ledger" } }],
+    [5.0, { kind: "view", view: { kind: "diagram", level: "component", focus: "Ledger" } }],
     [5.2, cam(580, 500, 1, 0.1)],
     [7.0, tool("write", "ledger/src/domain/refund.rs")],
     [7.4, diff("ledger/src/domain/refund.rs", [
@@ -162,19 +174,19 @@ export const EVENTS: FilmEvent[] = ([
     ])],
     [12.2, ok()],
     [13.0, { kind: "violation" }],
-    [15.0, { kind: "view", view: { kind: "diagram", level: "component", focus: "dashboard" } }],
+    [15.0, { kind: "view", view: { kind: "diagram", level: "component", focus: "Dashboard" } }],
     [15.0, cam(580, 500, 1, 1.0)],
   ]),
 
   // 3. TDD, EARS, concerns.
   ...act(ACTS.tdd, [
     [0, clear],
-    [0, { kind: "view", view: { kind: "node", node: "ledger" } }],
+    [0, { kind: "view", view: { kind: "node", node: "Ledger" } }],
     [0.6, tool("get_test_radius", "ledger/src/domain/refund.rs")],
     [1.2, ok()],
     [1.2, cam(700, 520, 1.22, 1.0)],
     [1.6, run("cargo test --test refunds", refundTests("fail"), 1.4)],
-    [3.0, { kind: "claims.state", ids: BUILT, state: "failing" }],
+    [3.0, { kind: "claims.state", claims: BUILT, state: "failing" }],
     [3.6, tool("write", "ledger/src/domain/refund.rs")],
     [4.0, diff("ledger/src/domain/refund.rs", [
       ["+", "if amount > capture.refundable() { return Err(OverRefund) }"],
@@ -183,10 +195,18 @@ export const EVENTS: FilmEvent[] = ([
     [4.4, ok()],
     [4.4, log(SESSION_REFUNDS, { event: "touch", file: "ledger/src/post.rs" })],
     [5.0, run("cargo test --test refunds", refundTests("pass"), 1.4)],
-    [6.4, { kind: "claims.state", ids: BUILT, state: "proven" }],
+    [6.4, { kind: "claims.state", claims: BUILT, state: "proven" }],
     [6.8, tool("ingest_test_report", ".scryer/reports/radius.xml")],
     [7.2, ok()],
-    [7.2, log(SESSION_REFUNDS, { event: "reached", ids: [...BUILT, "c-led-1", "c-led-3", "c-led-5"] })],
+    [7.2, log(SESSION_REFUNDS, {
+        event: "reached",
+        ids: [
+          ...BUILT,
+          "Posts every money movement as balanced entries",
+          "If debits and credits differ, then rejects the posting",
+          "If a capture exceeds the authorised amount, then rejects it",
+        ],
+      })],
     [7.2, cam(580, 500, 1, 0.8)],
     [7.6, headline("Every claim is a test. Scan down a component, or across a concern.")],
     [9.6, cursor(LENS, 160, 130, 1.0, true)],
@@ -199,7 +219,7 @@ export const EVENTS: FilmEvent[] = ([
   // 4. Deterministic checks and probing.
   ...act(ACTS.probe, [
     [0, clear],
-    [0, { kind: "view", view: { kind: "node", node: "ledger" } }],
+    [0, { kind: "view", view: { kind: "node", node: "Ledger" } }],
     [0.8, say("Probing the over-refund guard before I stop.")],
     [1.2, tool("open_probe", "rejects_over_refund")],
     [1.8, ok()],
@@ -211,7 +231,7 @@ export const EVENTS: FilmEvent[] = ([
     [2.8, run("cargo test rejects_over_refund", [{ name: "rejects_over_refund", result: "pass" }], 0.6)],
     [3.8, tool("close_probe", "rejects_over_refund", "1 break, 1 survived")],
     [4.2, ok()],
-    [4.4, { kind: "probe", id: "c-ref-2", mark: "crosshair" }],
+    [4.4, { kind: "probe", claim: PROBED, mark: "crosshair" }],
     [4.6, note("survived: doubling the cap went unnoticed — the test refunds the full capture only")],
     [5.6, headline("A green test that would actually notice.")],
     [8.0, say("Tightening the test: one cent over the capture must be rejected.")],
@@ -225,7 +245,7 @@ export const EVENTS: FilmEvent[] = ([
     [11.4, run("cargo test rejects_over_refund", [{ name: "rejects_over_refund", result: "fail" }], 0.6)],
     [12.4, tool("close_probe", "rejects_over_refund", "1 break, 0 survived")],
     [12.8, ok()],
-    [13.0, { kind: "probe", id: "c-ref-2", mark: "doubleCheck" }],
+    [13.0, { kind: "probe", claim: PROBED, mark: "doubleCheck" }],
     [13.4, { kind: "term.idle", term: 0 }],
     [15.0, cam(580, 500, 1, 1.0)],
   ]),

@@ -9,14 +9,11 @@
  * claim text is an EARS sentence that passes `scryer-mcp lint`.
  */
 
+import { statusOf, treeWith } from "./shapes";
 import type {
   ClaimLevel,
   ClaimState,
-  ClaimStatus,
   DerivedClaim,
-  DerivedCounts,
-  DerivedStatus,
-  DerivedTree,
   DerivedViolation,
   Fixture,
   Layout,
@@ -216,7 +213,7 @@ export const REFUND_STUBS: DerivedClaim[] = [
   ["c-ref-5", 61, "notifies_on_refund", "When a refund posts, notifies the merchant"],
 ].map(([id, line, identifier, description]) => ({
   id: id as string,
-  nodeId: "ledger",
+  nodeId: "Ledger",
   level: "container",
   file: "ledger/tests/refunds.rs",
   line: line as number,
@@ -228,35 +225,33 @@ export const REFUND_STUBS: DerivedClaim[] = [
 
 /** Act 2's misplaced import: a domain module reaching into infrastructure. */
 export const REFUND_VIOLATION: DerivedViolation = {
-  nodeId: "ledger.domain",
+  nodeId: "Ledger/domain",
+  other: "Ledger/infrastructure",
   file: "ledger/src/domain/refund.rs",
   kind: "layer_violation",
   detail: "domain imports infrastructure (ledger/src/infrastructure/postgres.rs) — domain depends on nothing outside domain",
 };
 
-/** The component the violating import reaches — the red edge's other end. */
-export const REFUND_VIOLATION_TARGET = "ledger.infrastructure";
-
 // --- Diagram placements ------------------------------------------------------------
 
-/** Placements of the context and container levels, so the diagram never
- *  lays them out during a render. Inside a styled container the style's own
- *  drawing places the components by layer. */
+/** Placements of the context and container levels by node name, so the
+ *  diagram never lays them out during a render. Inside a styled container the
+ *  style's own drawing places the components by layer. */
 export const layout: Layout = {
   // Context
-  "person-cardholder": { x: 120, y: 120 },
-  "person-merchant": { x: 120, y: 420 },
-  [SYSTEM]: { x: 520, y: 270 },
-  "ext-bank": { x: 940, y: 120 },
-  "ext-networks": { x: 940, y: 420 },
+  Cardholder: { x: 120, y: 120 },
+  Merchant: { x: 120, y: 420 },
+  "Aperture Pay": { x: 520, y: 270 },
+  "Acquiring Bank": { x: 940, y: 120 },
+  "Card Networks": { x: 940, y: 420 },
   // Containers, inside the system
-  "dashboard": { x: 80, y: 80 },
-  "api-gateway": { x: 420, y: 80 },
-  "fraud": { x: 760, y: 80 },
-  "ledger": { x: 420, y: 330 },
-  "webhooks": { x: 760, y: 330 },
-  "payments-db": { x: 420, y: 560 },
-  };
+  Dashboard: { x: 80, y: 80 },
+  "API Gateway": { x: 420, y: 80 },
+  Fraud: { x: 760, y: 80 },
+  Ledger: { x: 420, y: 330 },
+  Webhooks: { x: 760, y: 330 },
+  "Payments DB": { x: 420, y: 560 },
+};
 
 // --- Assembly ------------------------------------------------------------------------
 
@@ -273,100 +268,46 @@ const claims: DerivedClaim[] = ROWS.map(([id, nodeId, level, file, line, identif
   planned: state === "planned" || undefined,
 }));
 
-const nodes: Node[] = [...contextNodes, ...containerNodes, ...componentNodes];
+/** The model with no claims on it yet: nodes, links, the concern registry. */
+const skeleton: ScryModel = {
+  version: "0.3",
+  groups: [],
+  nodes: [...contextNodes, ...containerNodes, ...componentNodes],
+  links,
+  concerns: [{ slug: "persistence", description: "What survives a restart, and how." }],
+};
 
-/** The tree's model with each claim on its node, as `responsibilities`. */
-export function modelWith(claimList: DerivedClaim[], keep: (c: DerivedClaim) => boolean): ScryModel {
-  return {
-    version: "0.3",
-    groups: [],
-    nodes: nodes.map((n) => ({
-      ...n,
-      position: n.kind === "component" ? undefined : layout[n.id],
-      responsibilities: claimList
-        .filter((c) => c.nodeId === n.id && keep(c))
-        .map((c) => ({ id: c.id, statement: c.description, concern: c.concerns?.[0] })),
-    })),
-    links,
-    testMap: Object.fromEntries(
-      claimList.filter(keep).map((c) => [c.id, [{ pattern: c.file, symbol: c.identifier, line: c.line }]]),
-    ),
-    concerns: [{ slug: "persistence", description: "What survives a restart, and how." }],
-  };
+/** Every source file the film names, for the tree's file map. */
+const SOURCE_FILES = [
+  ...ROWS.map((r) => r[3]),
+  "fraud/scoring/legacy.py",
+  "ledger/src/application/refunds.rs",
+  "ledger/src/application/store.rs",
+  "ledger/src/domain/account.rs",
+  "ledger/src/domain/capture.rs",
+  "ledger/src/domain/entry.rs",
+  "ledger/src/domain/payout.rs",
+  "ledger/src/domain/refund.rs",
+  "ledger/src/infrastructure/bank_file.rs",
+  "ledger/src/infrastructure/postgres.rs",
+  "ledger/src/post.rs",
+  "webhooks/delivery/debug.go",
+  "webhooks/delivery/retry.go",
+];
+
+/** The deepest node a file's path names (`ledger/src/domain/x.rs` →
+ *  `ledger.domain`), else its container — what the derivation's file map says. */
+function nodeOfFile(file: string): string | undefined {
+  const parts = file.split("/");
+  const ids = new Set(skeleton.nodes.map((n) => n.id));
+  for (const seg of parts.slice(1).reverse()) {
+    if (ids.has(`${parts[0]}.${seg}`)) return `${parts[0]}.${seg}`;
+  }
+  return ids.has(parts[0]) ? parts[0] : undefined;
 }
-
-export function treeOf(claimList: DerivedClaim[], violations: DerivedViolation[]): DerivedTree {
-  return {
-    fingerprint: 0xa9e7,
-    committed: modelWith(claimList, (c) => !c.planned),
-    planned: modelWith(claimList, () => true),
-    claims: claimList,
-    fileNodes: {},
-    darkFiles: ["fraud/scoring/legacy.py", "webhooks/delivery/debug.go"],
-    styleViolations: violations,
-  };
-}
-
-const zero = (): DerivedCounts => ({
-  claims: 0,
-  proven: 0,
-  stale: 0,
-  failing: 0,
-  planned: 0,
-  untestedComponents: 0,
-  survivingMutants: 0,
-  styleViolations: 0,
-  darkFiles: 0,
-});
 
 /** When the verdicts the fixture starts with were recorded: two days back. */
 const BASE_RECORDED = 1_792_400_000 - 2 * 86_400;
-
-/** Status for a claim list given each claim's state, probe mark and when its
- *  verdict was recorded (default: two days back), rolled up. */
-export function statusOf(
-  tree: DerivedTree,
-  states: Record<string, ClaimState>,
-  probes: Record<string, ProbeMark>,
-  recorded: Record<string, number> = {},
-): DerivedStatus {
-  const claimStatus: ClaimStatus[] = tree.claims.map((c) => ({
-    respId: c.id,
-    nodeId: c.nodeId,
-    state: c.planned ? "planned" : (states[c.id] ?? "stale"),
-    probe: probes[c.id],
-    recordedAt: c.planned ? undefined : (recorded[c.id] ?? BASE_RECORDED),
-  }));
-  const parent = new Map(tree.planned.nodes.map((n) => [n.id, n.parentId]));
-  const nodesStatus: DerivedStatus["nodes"] = {};
-  const at = (id: string) => (nodesStatus[id] ??= { own: zero(), subtree: zero() });
-  const totals = zero();
-  for (const s of claimStatus) {
-    const bump = (c: DerivedCounts) => {
-      c.claims += 1;
-      c[s.state] += 1;
-      if (s.probe === "crosshair") c.survivingMutants += 1;
-    };
-    bump(at(s.nodeId).own);
-    bump(totals);
-    for (let id: string | undefined = s.nodeId; id; id = parent.get(id)) bump(at(id).subtree);
-  }
-  for (const v of tree.styleViolations) {
-    at(v.nodeId).own.styleViolations += 1;
-    totals.styleViolations += 1;
-  }
-  totals.darkFiles = tree.darkFiles.length;
-  return { claims: claimStatus, nodes: nodesStatus, totals };
-}
-
-const baseStates: Record<string, ClaimState> = Object.fromEntries(ROWS.map((r) => [r[0], r[9]]));
-const baseProbes: Record<string, ProbeMark> = Object.fromEntries(
-  ROWS.filter((r) => r[10]).map((r) => [r[0], r[10] as ProbeMark]),
-);
-
-export const BASE_STATES = baseStates;
-export const BASE_PROBES = baseProbes;
-export const BASE_CLAIMS = claims;
 
 // --- Sessions ------------------------------------------------------------------------
 
@@ -407,13 +348,32 @@ export const sessions: SessionLog[] = [
 
 // --- The fixture -------------------------------------------------------------------
 
-const tree = treeOf(claims, []);
+const tree = treeWith(
+  {
+    fingerprint: 0xa9e7,
+    committed: skeleton,
+    planned: skeleton,
+    claims: [],
+    fileNodes: Object.fromEntries(SOURCE_FILES.flatMap((file) => [[file, nodeOfFile(file)]].filter(([, n]) => n))),
+    darkFiles: ["fraud/scoring/legacy.py", "webhooks/delivery/debug.go"],
+    styleViolations: [],
+  },
+  claims,
+  [],
+);
 
 /** The poster frame's world: mostly proven, a few planned, one stale, one crosshair. */
 export const fixture: Fixture = {
   tree,
-  status: statusOf(tree, baseStates, baseProbes),
+  status: statusOf(
+    tree,
+    Object.fromEntries(ROWS.map((r) => [r[0], r[9]])),
+    Object.fromEntries(ROWS.filter((r) => r[10]).map((r) => [r[0], r[10] as ProbeMark])),
+    Object.fromEntries(ROWS.map((r) => [r[0], BASE_RECORDED])),
+  ),
   structure,
   sessions,
   layout,
 };
+
+export default fixture;

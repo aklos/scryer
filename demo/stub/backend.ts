@@ -13,8 +13,9 @@
  * render tab starting at frame 1800 — catches up to the frame's state.
  */
 
-import { NOW, REFUND_VIOLATION_TARGET } from "../fixture";
-import type { DerivedClaim, Fixture, SessionLog } from "../types";
+import { NOW } from "../fixture";
+import { systemOf } from "../shapes";
+import type { DerivedClaim, Fixture, ScryModel, SessionLog } from "../types";
 import type { ModelHealthReport, NodeHealth, HealthCounts, ClaimTestStatus, ClaimProbeStatus } from "../../src/entities/model/health";
 import { classifyTestable } from "./ears";
 
@@ -81,6 +82,27 @@ const zero = (): HealthCounts => ({
   untested: 0,
 });
 
+/** A layer as the app reads it: the stored placements (by node id or name)
+ *  as node positions, so the diagram lays out nothing during a render. */
+function placed(f: Fixture, model: ScryModel): string {
+  return JSON.stringify({
+    ...model,
+    nodes: model.nodes.map((n) => {
+      const at = n.kind === "component" || n.kind === "symbol" ? undefined : (f.layout[n.id] ?? f.layout[n.name]);
+      return at ? { ...n, position: at } : n;
+    }),
+  });
+}
+
+/** The container a node sits in, or the node when it is one. */
+function containerOf(f: Fixture, id: string | undefined): string | undefined {
+  const byId = new Map(f.tree.planned.nodes.map((n) => [n.id, n]));
+  for (let n = id ? byId.get(id) : undefined; n; n = n.parentId ? byId.get(n.parentId) : undefined) {
+    if (n.kind === "container") return n.id;
+  }
+  return undefined;
+}
+
 /** The health report the app's surfaces read: claim counts per subtree, the
  *  dark files per container, the structural report, and the derived status. */
 function health(f: Fixture): ModelHealthReport {
@@ -106,7 +128,8 @@ function health(f: Fixture): ModelHealthReport {
     for (let id: string | undefined = c.nodeId; id; id = parent.get(id)) bump(at(id).subtree);
   }
   for (const file of f.tree.darkFiles) {
-    const container = file.split("/")[0];
+    const container = containerOf(f, nodeOfFile(f, file));
+    if (!container) continue;
     const b = (at(container).boundary ??= { totalFiles: 12, anchoredFiles: 12, darkFiles: [] });
     b.darkFiles.push(file);
     b.anchoredFiles -= 1;
@@ -114,13 +137,13 @@ function health(f: Fixture): ModelHealthReport {
   const violations = f.tree.styleViolations.map((v) => ({
     kind: v.kind as ModelHealthReport["structural"]["violations"][number]["kind"],
     node: v.nodeId,
-    other: REFUND_VIOLATION_TARGET,
+    other: v.other,
     file: v.file,
-    container: v.nodeId.split(".")[0],
+    container: containerOf(f, v.nodeId) ?? v.nodeId,
     detail: v.detail,
   }));
   return {
-    health: { nodes, totals: at("sys").subtree },
+    health: { nodes, totals: at(systemOf(model) ?? "").subtree },
     completeness: {},
     derived: { linkAudit: [], unmodeled: [], resolvedEdges: [] },
     structural: {
@@ -165,16 +188,9 @@ function probeStatuses(f: Fixture): ClaimProbeStatus[] {
     }));
 }
 
-/** The node a file belongs to: the deepest node whose id its path names
- *  (`ledger/src/domain/x.rs` → `ledger.domain`), else its container. */
+/** The node a file belongs to, by the derivation's file map. */
 function nodeOfFile(f: Fixture, file: string): string | undefined {
-  const parts = file.split("/");
-  const ids = new Set(f.tree.planned.nodes.map((n) => n.id));
-  for (const seg of parts.slice(1).reverse()) {
-    const id = `${parts[0]}.${seg}`;
-    if (ids.has(id)) return id;
-  }
-  return ids.has(parts[0]) ? parts[0] : undefined;
+  return f.tree.fileNodes[file];
 }
 
 /** The landing view, as `domain::landing` computes it from the session logs
@@ -241,7 +257,7 @@ function landing(f: Fixture, since: number) {
   // in one crate is the overlap worth seeing.
   const byContainer = new Map<string, Set<string>>();
   for (const [id, ss] of touchedBy) {
-    const c = id.split(".")[0];
+    const c = containerOf(f, id) ?? id;
     const set = byContainer.get(c) ?? new Set<string>();
     ss.forEach((s) => set.add(s));
     byContainer.set(c, set);
@@ -266,9 +282,9 @@ function answer(cmd: string, args: Record<string, unknown>): unknown {
   const f = () => fixture();
   switch (cmd) {
     case "read_planned":
-      return JSON.stringify(f().tree.planned);
+      return placed(f(), f().tree.planned);
     case "read_model":
-      return JSON.stringify(f().tree.committed);
+      return placed(f(), f().tree.committed);
     case "get_model_health":
       return health(f());
     case "get_derived_status":

@@ -55,7 +55,7 @@ export function Film() {
             transform: `scale(${s.camera.scale})`,
           }}
         >
-          <Shell fixture={s.fixture} version={s.version} view={s.view} selection={s.selection} lens={s.lens} frame={frame} />
+          <Shell fixture={s.fixture} version={s.version} view={s.view} lens={s.lens} frame={frame} />
         </div>
       </div>
       <div style={{ position: "absolute", left: TERMS.left, top: TERMS.top, width: TERMS.width, height: second ? half : TERMS.height }}>
