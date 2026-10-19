@@ -32,11 +32,12 @@ import {
   isNodeEmpty,
   nextResponsibilityId,
 } from "../../entities/model/viewmodel";
+import { completenessBadge } from "../../entities/model/completeness";
 import {
-  completenessBadge,
   structuralBySubtree,
   structuralNotice,
   subtreeTestTone,
+  styleTable,
   testStatesOf,
   type StyleViolation,
 } from "../../entities/model/health";
@@ -67,7 +68,7 @@ import { plannedRespHosts, ResponsibilitiesSection } from "../../widgets/node-pa
 import { PropertiesSection } from "../../widgets/node-page-sections/PropertiesSection";
 import { PreviewSection } from "../../widgets/node-page-sections/PreviewSection";
 import { previewEntryFor } from "../../features/preview-client/usePreviewServer";
-import { allowedImports, governingStyleDef, layerOf, styleTable } from "../../entities/model/styles";
+import { allowedImports, governingStyleDef, layerOf } from "../../entities/model/styles";
 
 export function NodePage(props: PageProps) {
   const { model, selected } = props;

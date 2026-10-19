@@ -11,7 +11,8 @@
 
 import { useRef, useState } from "react";
 import { Braces, ChevronRight, Crosshair, FlaskConical, Loader2, Pencil, Plus, X } from "lucide-react";
-import type { Completeness, StyleViolation, TestTally } from "../../entities/model/health";
+import type { StyleViolation, TestTally } from "../../entities/model/health";
+import type { Completeness } from "../../entities/model/completeness";
 import { StructuralCount } from "../../entities/model/StructuralCount";
 import { CompletenessPie } from "../../entities/model/CompletenessPie";
 import type { ScryModel, Node, Group } from "../../entities/model/viewmodel";
@@ -30,7 +31,7 @@ import {
 import { MARK_META, type Mark } from "../../entities/model/changeKinds";
 import { kindIcon } from "../../entities/model/kindIcon";
 import { StyleGlyph } from "../../entities/model/styles/StyleGlyph";
-import { styleTable } from "../../entities/model/styles";
+import { styleTable } from "../../entities/model/health";
 
 /** What a style or a layer IS, for the tree's tooltips — the built-in
  *  table (custom styles fall back to their name). */

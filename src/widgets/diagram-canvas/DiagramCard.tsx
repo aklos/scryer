@@ -13,7 +13,8 @@
 import type { NodeProps, Node as RFNode } from "@xyflow/react";
 import type { DiagramNode } from "./diagramLayout";
 import type { Mark } from "../../entities/model/changeKinds";
-import type { Completeness, StyleViolation } from "../../entities/model/health";
+import type { StyleViolation } from "../../entities/model/health";
+import type { Completeness } from "../../entities/model/completeness";
 import { StructuralCount } from "../../entities/model/StructuralCount";
 import { CompletenessPie } from "../../entities/model/CompletenessPie";
 import { NodeHandles } from "../../shared/diagram/NodeHandles";

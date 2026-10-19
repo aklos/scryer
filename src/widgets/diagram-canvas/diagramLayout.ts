@@ -19,8 +19,8 @@ import { layoutGraph } from "../../shared/layout/planar";
 import type { EdgePair } from "../../shared/layout/planar";
 import type { ScryModel, Kind } from "../../entities/model/viewmodel";
 import { isDataShape } from "../../entities/model/viewmodel";
-import type { ModelHealthReport } from "../../entities/model/health";
-import { governingStyleDef, layerOf, styleTable, type Drawing, type StyleDef } from "../../entities/model/styles";
+import { styleTable, type ModelHealthReport } from "../../entities/model/health";
+import { governingStyleDef, layerOf, type Drawing, type StyleDef } from "../../entities/model/styles";
 import { classifyStyledEdge, styledLayout, type LayerRegion } from "./styled";
 import { depthLayout } from "./depth";
 

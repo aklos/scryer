@@ -4,7 +4,7 @@
  * is nothing to measure yet.
  */
 
-import type { Completeness } from "./health";
+import type { Completeness } from "./completeness";
 
 /** SVG path for a pie wedge from 12 o'clock, sweeping clockwise to `pct`%. */
 export function wedgePath(k: number, r: number, pct: number): string {

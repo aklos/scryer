@@ -9,11 +9,10 @@
  *
  * `builtin.json` is the checked-in copy of `Styles::builtin()`, pinned by the
  * Rust lockstep test. The health report ships the project's full table
- * (custom styles included); {@link styleTable} prefers it when present.
+ * (custom styles included); `styleTable` in `../health` prefers it when present.
  */
 
 import builtin from "./builtin.json";
-import type { ModelHealthReport } from "../health";
 import type { Node, ScryModel } from "../viewmodel";
 
 export type Drawing = "hexagon" | "rows" | "rings" | "columns";
@@ -60,13 +59,6 @@ export interface StyleDef {
 }
 
 export const builtinStyles: readonly StyleDef[] = builtin as unknown as StyleDef[];
-
-/** The style table to render with: the report's (project-complete) when it
- *  has one, else the built-ins. Keyed by name. */
-export function styleTable(report: ModelHealthReport | null): ReadonlyMap<string, StyleDef> {
-  const defs = report?.styles?.length ? report.styles : builtinStyles;
-  return new Map(defs.map((d) => [d.name, d]));
-}
 
 /** The style name governing a node: the nearest container-or-component at or
  *  above it that declares one (a component may override its container).
