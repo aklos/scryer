@@ -302,6 +302,75 @@ mod tests {
         assert!(dark.contains("web/src/shared/cache.ts"), "{dark:?}");
     }
 
+    /// When a documented, tested file becomes a sub-component, it takes its
+    /// directory's layer, and its imports are held to the style.
+    #[test]
+    fn a_sub_component_sits_on_its_directorys_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[package]\nname = \"ledger\"\nversion = \"0.1.0\"\n");
+        write(d, "src/lib.rs", "pub mod domain;\npub mod infrastructure;\n");
+        write(d, "src/domain/mod.rs", "pub mod money;\n");
+        write(
+            d,
+            "src/domain/money.rs",
+            "//! Amounts in minor units.\npub fn add(a: u32) -> u32 { crate::infrastructure::db::open(); a }\n#[cfg(test)]\nmod tests {\n    /// Adds an amount\n    #[test]\n    fn adds() { assert_eq!(super::add(1), 1); }\n}\n",
+        );
+        write(d, "src/infrastructure/mod.rs", "pub mod db;\n");
+        write(d, "src/infrastructure/db.rs", "pub fn open() {}\n");
+        write(d, ".scryer/structure.toml", "[containers.\"\"]\nstyle = \"library\"\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let money = tree.planned.nodes.iter().find(|n| n.name == "money").unwrap();
+        assert_eq!(money.kind, Kind::Component);
+        assert_eq!(money.layer.as_deref(), Some("domain"));
+        assert!(tree.style_violations.iter().all(|v| v.kind != "layerless"), "{:?}", tree.style_violations);
+        assert!(
+            tree.style_violations.iter().any(|v| v.detail.contains("domain") && v.detail.contains("infrastructure")),
+            "{:?}",
+            tree.style_violations
+        );
+    }
+
+    /// When two files of one layer directory are each a sub-component, an
+    /// import between them stays inside one slice of the layer, so a style
+    /// that isolates its slices reports nothing.
+    #[test]
+    fn sub_components_of_one_directory_are_one_slice() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "web/package.json", "{\"name\": \"web\"}\n");
+        write(d, "web/src/entities/payment.ts", "/** A payment. */\nexport type Payment = { amount: number };\nexport function total(p: Payment) { return p.amount; }\n");
+        write(d, "web/src/entities/payment.test.ts", "import { total } from \"./payment\";\nit(\"Totals a payment\", () => { total({ amount: 1 }); });\n");
+        write(d, "web/src/entities/refund.ts", "/** A refund. */\nimport { total, type Payment } from \"./payment\";\nexport function remaining(p: Payment) { return total(p); }\n");
+        write(d, "web/src/entities/refund.test.ts", "import { remaining } from \"./refund\";\nit(\"Leaves what was not refunded\", () => { remaining({ amount: 1 }); });\n");
+        write(d, ".scryer/structure.toml", "[containers.web]\nstyle = \"feature-sliced\"\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let named = |n: &str| tree.planned.nodes.iter().find(|x| x.name == n).unwrap();
+        assert_eq!(named("refund").layer.as_deref(), Some("entities"));
+        assert!(tree.style_violations.is_empty(), "{:?}", tree.style_violations);
+    }
+
+    /// When a forbidden link comes from an import outside any definition (a
+    /// module-scope `use` behind an `impl Trait for T`), its finding names
+    /// the importing file, not the component's first file.
+    #[test]
+    fn a_forbidden_link_names_the_importing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[package]\nname = \"ledger\"\nversion = \"0.1.0\"\n");
+        write(d, "src/lib.rs", "pub mod application;\npub mod domain;\n");
+        write(d, "src/application/mod.rs", "pub mod store;\n");
+        write(d, "src/application/store.rs", "pub trait Store { fn put(&self); }\n");
+        write(d, "src/domain/mod.rs", "pub mod account;\npub mod memory;\n");
+        write(d, "src/domain/account.rs", "pub struct Account;\n");
+        write(d, "src/domain/memory.rs", "use crate::application::store::Store;\npub struct Memory;\nimpl Store for Memory {\n    fn put(&self) {}\n}\n");
+        write(d, ".scryer/structure.toml", "[containers.\"\"]\nstyle = \"hexagonal\"\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let link: Vec<_> = tree.style_violations.iter().filter(|v| v.kind == "forbidden_link").collect();
+        assert_eq!(link.len(), 1, "{:?}", tree.style_violations);
+        assert_eq!(link[0].file, "src/domain/memory.rs");
+    }
+
     /// When no file changed, the cached tree is returned; touching a file
     /// derives again.
     #[test]

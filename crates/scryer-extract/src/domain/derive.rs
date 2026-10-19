@@ -370,6 +370,9 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         let parent = &components[&file_component[f]].id;
         let mut n = node(&id, Kind::Component, file_stem(f), Some(parent));
         n.description = input.lifts[*f].module_description.clone();
+        // A file split out of its directory's component still sits on that
+        // directory's layer, so the style checks its imports like the rest.
+        n.layer = model.nodes.iter().find(|p| &p.id == parent).and_then(|p| p.layer.clone());
         model.boundaries.insert(id.clone(), vec![Source { pattern: f.to_string(), comment: None }]);
         model.nodes.push(n);
         sub_ids.insert(f, id);

@@ -294,17 +294,33 @@ pub fn governing_style<'a>(model: &'a ScryModel, node_id: &str) -> Option<&'a st
 }
 
 /// The component that carries `node_id`'s layer: the node itself when it is a
-/// component, its parent when it is a symbol. `None` for anything else.
+/// component, its parent when it is a symbol, lifted out of any component it
+/// is nested in. `None` for anything else.
 pub fn layer_component<'a>(model: &'a ScryModel, node_id: &str) -> Option<&'a Node> {
     let n = model.nodes.iter().find(|n| n.id == node_id)?;
-    match n.kind {
-        Kind::Component => Some(n),
+    let mut comp = match n.kind {
+        Kind::Component => n,
         Kind::Symbol => {
             let p = n.parent_id.as_deref()?;
-            model.nodes.iter().find(|m| m.id == p && m.kind == Kind::Component)
+            model.nodes.iter().find(|m| m.id == p && m.kind == Kind::Component)?
         }
-        _ => None,
+        _ => return None,
+    };
+    // A component nested in another (a file split out of its directory's
+    // component) is part of it: one slice of the layer, not a second one.
+    let mut hops = 0;
+    while let Some(parent) = comp
+        .parent_id
+        .as_deref()
+        .and_then(|p| model.nodes.iter().find(|m| m.id == p && m.kind == Kind::Component))
+    {
+        comp = parent;
+        hops += 1;
+        if hops > 16 {
+            break;
+        }
     }
+    Some(comp)
 }
 
 /// The layer tag on `node_id`: a component's own, a symbol's inherited from its

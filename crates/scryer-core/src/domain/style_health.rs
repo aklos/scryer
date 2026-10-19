@@ -472,11 +472,17 @@ pub fn check_code(
         if out.iter().any(|v| v.node == src && v.other.as_deref() == Some(dst.as_str())) {
             continue;
         }
-        // A link from a container itself (its crate root's imports) has no
-        // component files; it is charged to the container's directory.
-        let file = index
-            .files_of(&src)
-            .and_then(|fs| fs.iter().next().cloned())
+        // Charged to a file that imports across the pair when the code does,
+        // else the source's first file; a link from a container itself (its
+        // crate root's imports) has none, so it names the container's dir.
+        let importing = derived.resolved_edges.iter().find(|e| {
+            !e.guessed
+                && style::layer_component(model, &e.src_node).is_some_and(|c| c.id == src)
+                && style::layer_component(model, &e.dst_node).is_some_and(|c| c.id == dst)
+        });
+        let file = importing
+            .map(|e| e.src_file.clone())
+            .or_else(|| index.files_of(&src).and_then(|fs| fs.iter().next().cloned()))
             .or_else(|| style::container_prefix(model, &src))
             .unwrap_or_default();
         out.push(StyleViolation {
