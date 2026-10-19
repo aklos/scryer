@@ -14,10 +14,9 @@ integration = ["crates/*/tests/**", "src-tauri/tests/**"]
 # Display names and styles carried over from the authored model.
 #
 # A style is a claim about the code's shape. When a container's code does not
-# have the declared shape (scryer-mcp's flat modules under core-shell look like
-# a guessed style), fix it by declaring the shape the code actually has, not by
-# inventing directories. When the code has the shape, a violation is fixed by
-# moving the offending files.
+# have the declared shape, fix it by declaring the shape the code actually has
+# (or none), not by inventing directories. When the code has the shape, a
+# violation is fixed by moving the offending files.
 
 [containers.scryer]
 name = "Desktop App UI"
@@ -42,9 +41,13 @@ name = "Agent Sync"
 style = "library"
 layers = ["domain", "application", "composition", "infrastructure"]
 
+# No style, honestly: the server was declared core-shell, but its modules
+# are flat files under src/ (server, cli, hook_client, tools, derived,
+# helpers, types, instructions) with no shell/core split for the style to
+# read. Choosing the shape it should take is a refactor of its own; until
+# then check reports it as the one unstyled container.
 [containers."crates/scryer-mcp"]
 name = "MCP Server"
-style = "core-shell"
 
 [containers."crates/xtask"]
 name = "Build Tasks"
