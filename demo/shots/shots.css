@@ -1,0 +1,31 @@
+/*
+ * Crops for real components on the stage: a shot shows one idea, so the
+ * parts of a component that belong to another (a section's eyebrow, the
+ * test file under each claim) are cut, never restyled.
+ */
+
+/* Claim rows without their section heading or the per-row test file line:
+   the flask lane carries the test. */
+.shot-claims section {
+  margin: 0;
+  padding: 0;
+}
+.shot-claims section > div:first-child:has(> h2) {
+  display: none;
+}
+.shot-claims div.mt-1:has([data-cam="resp-test"]) {
+  display: none;
+}
+
+/* The row keeps 180 px clear for the lanes; at film scale the lanes need a
+   third of that, and a claim reads best on one line. */
+.shot-claims .pr-\[180px\] {
+  padding-right: 64px !important;
+}
+
+/* Film grade: body text a step brighter than the desktop's, so a settled
+   claim reads as settled on a projected frame. */
+.dark.shot-grade {
+  --text: #dde3ea;
+  --text-secondary: #dde3ea;
+}
