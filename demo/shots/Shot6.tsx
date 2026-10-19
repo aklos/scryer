@@ -61,8 +61,17 @@ export function Shot6({ misplaced }: { misplaced: boolean }) {
           { kind: "note", text: "  → infrastructure/" },
         ]}
       />
-      <Fragment at={{ x: 780, y: 40 }} width={1060} height={1000} scale={1}>
-        <Hexagon model={model} focusId={LEDGER} violations={violations} width={1060} height={1000} center={{ x: 0, y: -178 }} zoom={2} />
+      <Fragment at={{ x: 700, y: 40 }} width={1160} height={1000} scale={1}>
+        <Hexagon
+          model={model}
+          focusId={LEDGER}
+          violations={violations}
+          width={1160}
+          height={1000}
+          fit={40}
+          film={{ title: 22, count: 20, label: 28, flag: 2.2, edge: 3 }}
+          tint={misplaced ? { layer: "domain", color: "#f87171" } : undefined}
+        />
       </Fragment>
     </Stage>
   );

@@ -29,3 +29,48 @@
   --text: #dde3ea;
   --text-secondary: #dde3ea;
 }
+
+/* The page's no-concern lane glyph is a dashed circle, which reads as a
+   spinner on screen: the film draws it as a plain hollow circle. */
+.shot-claims .lucide-circle-dashed path {
+  display: none;
+}
+.shot-claims .lucide-circle-dashed {
+  border: 1.6px solid currentColor;
+  border-radius: 50%;
+  transform: scale(0.8);
+}
+
+/* A styled diagram level in film mode: cards carry their title and count
+   only, sized by the shot (--film-title, --film-count, in scene px); ring
+   labels the same, without their caption toggle; the violation edge drawn
+   heavier. */
+.shot-hex .react-flow__node .line-clamp-4 {
+  display: none;
+}
+.shot-hex .react-flow__node .font-semibold {
+  font-size: var(--film-title) !important;
+  overflow-wrap: normal !important;
+  white-space: nowrap;
+  letter-spacing: -0.02em;
+}
+.shot-hex .react-flow__node .absolute.bottom-1\.5.right-2\.5 {
+  font-size: var(--film-count) !important;
+}
+.shot-hex .react-flow__node .overflow-hidden {
+  overflow: visible !important;
+}
+.shot-hex .react-flow__node .pointer-events-auto.absolute.left-2\.5 {
+  transform: scale(var(--film-flag));
+  transform-origin: 0 0;
+}
+.shot-hex svg text {
+  font-size: var(--film-label);
+  letter-spacing: 0.05em;
+}
+.shot-hex svg text tspan[role="button"] {
+  display: none;
+}
+.shot-hex .react-flow__edge path {
+  stroke-width: var(--film-edge) !important;
+}

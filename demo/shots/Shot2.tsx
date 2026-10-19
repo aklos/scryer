@@ -14,7 +14,7 @@ const TEXT = "When a refund exceeds the captured amount, rejects it";
 
 /** One token of code, coloured as the app's dark source peek would. */
 const C = {
-  doc: "#8b98a8",
+  doc: "#ffffff",
   attr: "#e0b56f",
   kw: "#c4a7ff",
   fn: "#7dd3fc",
@@ -44,18 +44,7 @@ export function Shot2({ lift }: { lift: number }) {
   return (
     <Stage light={{ x: 960, y: 560 }}>
       <Headline at={{ x: 120, y: 84 }}>A claim is a test.</Headline>
-      {/* The thread from the comment's empty slot up to the row it became. */}
-      <div
-        style={{
-          position: "absolute",
-          left: 216,
-          top: 432,
-          width: 2,
-          height: 140,
-          opacity: settled,
-          background: "linear-gradient(to bottom, rgba(242,244,248,0.35), rgba(242,244,248,0.04))",
-        }}
-      />
+
       <Fragment at={{ x: 120, y: 300 }} width={560} height={44} scale={3} style={{ opacity: settled }}>
         <div className="dark shot-grade shot-claims h-full bg-[var(--surface)] px-3 pt-[9px] text-[var(--text)]">
           <ClaimRows host={nodeId("Ledger")} rows={[{ claim: claim(TEXT), state: "proven" }]} />
@@ -64,12 +53,24 @@ export function Shot2({ lift }: { lift: number }) {
       <Fragment at={{ x: 120, y: 572 }} width={840} height={156} scale={2}>
         <div style={{ padding: "22px 32px", fontFamily: MONO, fontSize: 16, lineHeight: 1.75, color: INK.fg, whiteSpace: "pre" }}>
           {CODE.map((line, i) => (
-            <div key={i} style={{ opacity: i === 0 ? 1 - settled * 0.85 : 1 - settled * 0.45 }}>
+            <div key={i} style={{ opacity: i === 0 ? 1 : 1 - settled * 0.45 }}>
               {line}
             </div>
           ))}
         </div>
       </Fragment>
+      {/* The thread from the comment up to the row it became. */}
+      <div
+        style={{
+          position: "absolute",
+          left: 186,
+          top: 432,
+          width: 2,
+          height: 194,
+          opacity: settled,
+          background: "linear-gradient(to top, rgba(255,255,255,0.7), rgba(255,255,255,0.12))",
+        }}
+      />
     </Stage>
   );
 }

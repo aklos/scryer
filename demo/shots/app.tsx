@@ -39,12 +39,32 @@ export type RowState = "planned" | "proven" | "crosshair" | "doubleCheck";
 
 const RECORDED = 1_792_400_000;
 
+/** The film's grade for claim rows, by row id: proven is the bright state
+ *  (white sentence, filled green flask), planned is dimmed with no change
+ *  mark. The app's own emerald "+" for a planned claim is a product choice
+ *  that reads backwards on screen, where green means proven. */
+function filmGrade(rows: { claim: DerivedClaim; state: RowState }[]): string {
+  return rows
+    .map(({ claim: c, state }) => {
+      const row = `#resp-${CSS.escape(c.id)}`;
+      return state === "planned"
+        ? `${row} { opacity: 0.45; }
+           ${row} > :first-child { visibility: hidden; }
+           ${row} .font-mono span { color: var(--text) !important; }`
+        : `${row} .font-mono span { color: #ffffff !important; }
+           ${row} span.absolute.right-1 { color: #4ade80 !important; }
+           ${row} .lucide-flask-conical { fill: rgba(74, 222, 128, 0.45); }`;
+    })
+    .join("\n");
+}
+
 /**
  * Claim rows exactly as the node page draws them, read-only. A planned row
  * is one the committed layer lacks — the page marks it added and gives it
- * no test lane yet; every other row carries its test and verdict.
+ * no test lane yet; every other row carries its test and verdict. `film`
+ * lays the film's grade over them.
  */
-export function ClaimRows({ host, rows }: { host: string; rows: { claim: DerivedClaim; state: RowState }[] }) {
+export function ClaimRows({ host, rows, film = true }: { host: string; rows: { claim: DerivedClaim; state: RowState }[]; film?: boolean }) {
   const resps: Responsibility[] = rows.map(({ claim: c }) => ({ id: c.id, statement: c.description, concern: c.concerns?.[0] }));
   const prev = resps.filter((_, i) => rows[i].state !== "planned");
   const proven = rows.filter((r) => r.state !== "planned");
@@ -68,6 +88,8 @@ export function ClaimRows({ host, rows }: { host: string; rows: { claim: Derived
       ]),
   );
   return (
+    <>
+    {film && <style>{filmGrade(rows)}</style>}
     <ResponsibilitiesSection
       host="node"
       hostId={host}
@@ -88,6 +110,7 @@ export function ClaimRows({ host, rows }: { host: string; rows: { claim: Derived
       editing={false}
       onToggle={() => {}}
     />
+    </>
   );
 }
 
