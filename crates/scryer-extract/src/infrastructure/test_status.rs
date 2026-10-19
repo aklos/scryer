@@ -900,6 +900,7 @@ pub fn read_probe_statuses(r: &ModelRef) -> Result<Vec<ClaimProbeStatus>, String
             survivors: rec.survivors.clone(),
             stale,
             recorded_at: rec.recorded_at,
+            source: None,
         });
     }
     out.sort_by(|a, b| a.resp_id.cmp(&b.resp_id));

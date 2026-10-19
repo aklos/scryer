@@ -212,12 +212,26 @@ pub fn compute_derived_status(
                 survivors: p.survivors.clone(),
                 stale: !live,
                 recorded_at: p.recorded_at,
+                source: None,
             });
             if live {
                 probe = Some(if p.survived > 0 { ProbeMark::Crosshair } else { ProbeMark::DoubleCheck });
             }
         }
-        probe = worst(probe, claim_mutants.get(c.id.as_str()).and_then(mark));
+        let mutants = claim_mutants.get(c.id.as_str());
+        if let (Some(t), None) = (mutants, probe_record) {
+            // The lens shows mutation results like a probe round, as of ingest.
+            out.probes.push(ClaimProbeStatus {
+                resp_id: c.id.clone(),
+                probes: t.caught + t.survived,
+                survived: t.survived,
+                survivors: Vec::new(),
+                stale: false,
+                recorded_at: mutations.ingested_at,
+                source: Some("mutation".into()),
+            });
+        }
+        probe = worst(probe, mutants.and_then(mark));
         let counts = own.entry(c.node_id.as_str()).or_default();
         counts.claims += 1;
         match state {
@@ -467,6 +481,8 @@ mod tests {
         assert_eq!(probe_of("edited"), None, "a stale probe proves nothing");
         assert_eq!(probe_of("unrun"), Some(ProbeMark::DoubleCheck), "matched by qualified name");
         assert_eq!(probe_of("todo"), Some(ProbeMark::Crosshair));
+        let lens = s.probes.iter().find(|p| p.resp_id == "unrun").unwrap();
+        assert_eq!((lens.probes, lens.survived, lens.source.as_deref()), (2, 0, Some("mutation")));
         assert_eq!(s.nodes["core"].probe, Some(ProbeMark::Crosshair));
         assert_eq!(s.nodes["core"].own.surviving_mutants, 2);
         assert_eq!(s.totals.surviving_mutants, 2);
