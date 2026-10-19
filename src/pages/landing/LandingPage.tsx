@@ -5,13 +5,16 @@
  * now stale or failing, surviving mutants and new dark files in what it
  * touched. Beside them, the components more than one session touched. Rows
  * open the claim's node page and flash the claim. Computed at read time from
- * the session logs and the derived status (`get_landing`); read-only.
+ * the session logs and the derived status (`get_landing`); read-only. With
+ * several git worktrees, sessions are grouped by the worktree they worked
+ * in, each read against that checkout's own tree, and the shared-component
+ * count spans them all.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { History, Users } from "lucide-react";
+import { GitBranch, History, Users } from "lucide-react";
 import { jumpTo, PageSection } from "../../shared/ui/pagekit";
 import { respElementId } from "../../widgets/source-section/SourceSection";
 import { SpecialBody, SpecialHeader } from "../../widgets/special-page-shell/shell";
@@ -40,12 +43,23 @@ interface LandingSession {
   survivingMutants: number;
   newDarkFiles: string[];
   components: string[];
+  /** The worktree the session worked in, when the project has several. */
+  worktree?: string;
+}
+
+interface LandingWorktree {
+  path: string;
+  branch?: string;
+  current: boolean;
+  sessions: number;
 }
 
 interface Landing {
   since: number;
   sessions: LandingSession[];
   shared: { nodeId: string; sessions: string[] }[];
+  /** The project's live worktrees; absent for a single checkout. */
+  worktrees?: LandingWorktree[];
 }
 
 const when = (at: number) =>
@@ -127,7 +141,7 @@ export function LandingPage({
             {showAll ? "Only since last look" : "Show earlier sessions"}
           </button>
         </div>
-        {landing && landing.sessions.length === 0 ? (
+        {landing && landing.sessions.length === 0 && (landing.worktrees?.length ?? 0) < 2 ? (
           <div className="flex flex-col items-center gap-3 px-6 py-16">
             <History className="h-6 w-6 text-[var(--text-ghost)]" />
             <p className="text-sm text-[var(--text-muted)]">No agent sessions since you last looked.</p>
@@ -155,9 +169,41 @@ export function LandingPage({
                 </ul>
               </PageSection>
             )}
-            {landing?.sessions.map((s) => (
-              <SessionCard key={s.session} s={s} names={names} onOpenClaim={openClaim} onSelectNode={onSelectNode} />
-            ))}
+            {landing && (landing.worktrees?.length ?? 0) > 1
+              ? // Several checkouts: each worktree's sessions under its own
+                // heading; a worktree with none is listed by its branch.
+                landing.worktrees!.map((w) => {
+                  const own = landing.sessions.filter((s) => s.worktree === w.path);
+                  return (
+                    <div key={w.path} className="mt-6">
+                      <div className="flex items-baseline gap-2 border-b border-[var(--border)] pb-1">
+                        <GitBranch className="h-3.5 w-3.5 shrink-0 self-center text-[var(--text-ghost)]" />
+                        <span className="text-sm font-semibold text-[var(--text)]">{w.branch ?? "detached"}</span>
+                        {w.current && <span className="text-xs text-[var(--accent)]">open here</span>}
+                        <span className="ml-auto truncate font-mono text-xs text-[var(--text-ghost)]" title={w.path}>
+                          {w.path}
+                        </span>
+                      </div>
+                      {own.length === 0 ? (
+                        <p className="py-2 text-xs text-[var(--text-muted)]">No sessions in this window.</p>
+                      ) : (
+                        own.map((s) => (
+                          <SessionCard
+                            key={s.session}
+                            s={s}
+                            names={names}
+                            branch={w.branch ?? "detached"}
+                            onOpenClaim={openClaim}
+                            onSelectNode={onSelectNode}
+                          />
+                        ))
+                      )}
+                    </div>
+                  );
+                })
+              : landing?.sessions.map((s) => (
+                  <SessionCard key={s.session} s={s} names={names} onOpenClaim={openClaim} onSelectNode={onSelectNode} />
+                ))}
           </>
         )}
       </SpecialBody>
@@ -168,11 +214,14 @@ export function LandingPage({
 function SessionCard({
   s,
   names,
+  branch,
   onOpenClaim,
   onSelectNode,
 }: {
   s: LandingSession;
   names: Map<string, string>;
+  /** The worktree's branch, shown beside the session's time span. */
+  branch?: string;
   onOpenClaim: (c: LandingClaim) => void;
   onSelectNode: (id: string) => void;
 }) {
@@ -186,7 +235,12 @@ function SessionCard({
   return (
     <PageSection
       title={s.title}
-      right={<span className="text-xs text-[var(--text-muted)]">{when(s.startedAt)} – {when(s.endedAt)}</span>}
+      right={
+        <span className="text-xs text-[var(--text-muted)]">
+          {branch && <span className="mr-2 font-mono text-[var(--text-tertiary)]">{branch}</span>}
+          {when(s.startedAt)} – {when(s.endedAt)}
+        </span>
+      }
     >
       <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--text-muted)]">
         {groups.map(([label, rows]) => (
