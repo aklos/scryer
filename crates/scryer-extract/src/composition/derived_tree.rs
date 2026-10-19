@@ -269,6 +269,36 @@ mod tests {
         }
     }
 
+    /// A crate's lib.rs and main.rs are its root, not a component: their doc
+    /// describes the crate, their definitions and unit tests sit on it, and
+    /// a declared style asks no layer of them — while their imports stay in
+    /// the import graph.
+    #[test]
+    fn a_crates_root_file_belongs_to_the_crate() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n");
+        write(d, "crates/notes/Cargo.toml", "[package]\nname = \"notes\"\nversion = \"0.1.0\"\n");
+        write(
+            d,
+            "crates/notes/src/lib.rs",
+            "//! Keeps a writer's notes.\npub mod core;\npub fn open() -> core::Note { core::Note }\n\n#[cfg(test)]\nmod tests {\n    /// Opens an empty note\n    #[test]\n    fn opens() {}\n}\n",
+        );
+        write(d, "crates/notes/src/main.rs", "fn main() { notes::open(); }\n");
+        write(d, "crates/notes/src/core/mod.rs", "//! The note itself.\npub struct Note;\n");
+        write(d, ".scryer/structure.toml", "[containers.notes]\nstyle = \"core-shell\"\n");
+        let tree = derived_tree(d).unwrap();
+        let m = &tree.planned;
+        let names: Vec<&str> = m.nodes.iter().filter(|n| n.kind == Kind::Component).map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["core"], "no lib or main component");
+        let crate_node = m.nodes.iter().find(|n| n.kind == Kind::Container).unwrap();
+        assert_eq!(crate_node.description.as_deref(), Some("Keeps a writer's notes."));
+        let open = m.nodes.iter().find(|n| n.name == "open").unwrap();
+        assert_eq!(open.parent_id.as_deref(), Some(crate_node.id.as_str()), "a root definition sits on the crate");
+        assert_eq!(tree.claims[0].node_id, crate_node.id, "a root's unit test sits on the crate");
+        assert!(tree.style_violations.is_empty(), "{:?}", tree.style_violations);
+    }
+
     /// When a .NET test project mirrors a product project, its unit tests
     /// nest under the product component they exercise and the test project
     /// is not a container of its own.

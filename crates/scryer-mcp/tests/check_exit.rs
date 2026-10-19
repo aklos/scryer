@@ -11,19 +11,14 @@ fn write(dir: &Path, rel: &str, text: &str) {
     std::fs::write(path, text).unwrap();
 }
 
-const LIB: &str = "crates/notes/core/lib.rs";
+const LIB: &str = "crates/notes/src/lib.rs";
 
-/// A core-shell crate whose library is its `core` layer, with one well
-/// described unit test.
+/// A core-shell crate with one well described unit test in its root.
 fn project() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
     write(d, "Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n");
-    write(
-        d,
-        "crates/notes/Cargo.toml",
-        "[package]\nname = \"notes\"\nversion = \"0.1.0\"\n\n[lib]\npath = \"core/lib.rs\"\n",
-    );
+    write(d, "crates/notes/Cargo.toml", "[package]\nname = \"notes\"\nversion = \"0.1.0\"\n");
     write(
         d,
         LIB,
@@ -89,7 +84,7 @@ fn check_passes_a_clean_project_and_gates_stale_on_request() {
     assert!(out.contains("1 stale claim(s) (not gating"), "{out}");
     let (code, out) = run(dir.path(), &["check", "--fail-on-stale"]);
     assert_eq!(code, 1, "{out}");
-    assert!(out.contains("stale: crates/notes/core/lib.rs"), "{out}");
+    assert!(out.contains("stale: crates/notes/src/lib.rs"), "{out}");
 }
 
 /// A red test fails the gate.
@@ -105,7 +100,7 @@ fn check_fails_on_a_failing_claim() {
     );
     let (code, out) = run(dir.path(), &["check"]);
     assert_eq!(code, 1, "{out}");
-    assert!(out.contains("failing: crates/notes/core/lib.rs"), "{out}");
+    assert!(out.contains("failing: crates/notes/src/lib.rs"), "{out}");
 }
 
 /// A surviving mutant is a note, and a failure under --fail-on-mutants.
@@ -116,7 +111,7 @@ fn check_gates_surviving_mutants_on_request() {
         dir.path(),
         "ingest_mutation_report",
         "mutants.out/outcomes.json",
-        r#"{"outcomes":[{"scenario":{"Mutant":{"package":"notes","file":"core/lib.rs","function":{"function_name":"save"},"span":{"start":{"line":1,"column":1}},"replacement":"true"}},"summary":"MissedMutant"}]}"#,
+        r#"{"outcomes":[{"scenario":{"Mutant":{"package":"notes","file":"src/lib.rs","function":{"function_name":"save"},"span":{"start":{"line":1,"column":1}},"replacement":"true"}},"summary":"MissedMutant"}]}"#,
     );
     let (code, out) = run(dir.path(), &["check"]);
     assert_eq!(code, 0, "{out}");
@@ -139,7 +134,7 @@ fn lint_and_check_fail_on_a_malformed_claim() {
     );
     let (code, out) = run(dir.path(), &["lint"]);
     assert_eq!(code, 1, "{out}");
-    assert!(out.contains("crates/notes/core/lib.rs:6: trailing-condition"), "{out}");
+    assert!(out.contains("crates/notes/src/lib.rs:6: trailing-condition"), "{out}");
     let (code, out) = run(dir.path(), &["check"]);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("lint: "), "{out}");
