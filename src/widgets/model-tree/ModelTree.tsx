@@ -21,7 +21,7 @@ import { Braces, ChevronRight, Crosshair, FlaskConical, Loader2, Pencil, Plus, X
 import type { Completeness, StyleViolation, TestTally } from "../../entities/model/health";
 import { StructuralCount } from "../../entities/model/StructuralCount";
 import { CompletenessPie } from "../../entities/model/CompletenessPie";
-import type { ScryModel, Node, Group, Kind } from "../../entities/model/viewmodel";
+import type { ScryModel, Node, Group } from "../../entities/model/viewmodel";
 import { childKindFor, concernCounts, normalizeConcernSlug } from "../../entities/model/viewmodel";
 import type { Editor } from "../../entities/model/editor";
 import type { ModelDiff } from "../../entities/model/planDiff";
@@ -61,7 +61,7 @@ function layerTip(model: ScryModel, nodeId: string, layer: string): string {
   return l ? `${layer} — ${l.description}${may ? `\nmay import: ${may}` : ""}` : layer;
 }
 import { lookupIcon } from "../../features/search/IconPicker";
-import { BTN, EYEBROW, NAME_MAX, sanitizeIdentifier } from "../../shared/ui/pagekit";
+import { EYEBROW, NAME_MAX, sanitizeIdentifier } from "../../shared/ui/pagekit";
 import { InlineText } from "../../shared/ui/InlineText";
 import { ContextMenu, type ContextMenuItem } from "../../features/search/ContextMenu";
 import { ConfirmPopover } from "../../shared/feedback/ConfirmPopover";
@@ -196,7 +196,6 @@ export function ModelTree({
   previewable,
   testTally,
   structural,
-  derived = false,
 }: {
   model: ScryModel;
   /** Symbol ids the preview sidecar can render — derived from its export list,
@@ -234,9 +233,6 @@ export function ModelTree({
    *  id — from {@link structuralBySubtree}. Shown on every row, lens or not:
    *  it is the trail from a flagged system down to the file to fix. */
   structural?: ReadonlyMap<string, readonly StyleViolation[]>;
-  /** The derived tree is showing: its structure is the code's, so the tree
-   *  offers only what lands in the code — add a claim, rename a container. */
-  derived?: boolean;
 }) {
   const [width, setWidth] = useState(() => {
     const saved = Number(localStorage.getItem("scryer:treeWidth"));
@@ -260,10 +256,8 @@ export function ModelTree({
       return !s;
     });
 
-  // Drag-to-move: nodes re-parent by dropping onto a valid parent (kind
-  // hierarchy, no cycles), or join a group by dropping onto its folder.
-  const [dragId, setDragId] = useState<string | null>(null);
-  const [dropKey, setDropKey] = useState<string | null>(null);
+  // Nothing is dragged in a tree read from the code.
+  const dropKey: string | null = null;
   // The ancestor whose thread-rail is hovered — lights that one line (and only
   // that line) along its whole length, Reddit-style. Never a mass.
   const [hoverRail, setHoverRail] = useState<string | null>(null);
@@ -400,24 +394,6 @@ export function ModelTree({
       })
       .sort(byName);
 
-  const groupOfNode = (nodeId: string) =>
-    model.groups.find((g) => g.memberIds.includes(nodeId));
-
-  const descendantCount = (nodeId: string): number => {
-    let n = 0;
-    const stack = [nodeId];
-    while (stack.length) {
-      const id = stack.pop()!;
-      for (const c of model.nodes) {
-        if (c.parentId === id) {
-          n += 1;
-          stack.push(c.id);
-        }
-      }
-    }
-    return n;
-  };
-
   // --- structural edits -----------------------------------------------------
 
   const addChild = (parent: Node) => {
@@ -432,123 +408,36 @@ export function ModelTree({
     setRenaming(id);
   };
 
-  // Top-level nodes have no parent to "add child" from, so they're seeded here.
-  const addRoot = (kind: Kind, external: boolean) => {
-    if (!editor) return;
-    const id = editor.addNode({ kind, external: external || undefined });
-    onSelectNode(id);
-    setRenaming(id);
-  };
-  const rootMenuItems = (): ContextMenuItem[] => [
-    { id: "sys", label: "Add system", onSelect: () => addRoot("system", false) },
-    { id: "person", label: "Add person", onSelect: () => addRoot("person", false) },
-    { id: "ext", label: "Add external system", onSelect: () => addRoot("system", true) },
-  ];
-  // Right-clicking the empty tree surface adds a top-level node — the root is
-  // the "parent" of systems, mirroring right-click-to-add-child on a node.
-  const openRootMenu = (e: React.MouseEvent) => {
-    if (!editor || derived) return;
-    e.preventDefault();
-    setMenu({ x: e.clientX, y: e.clientY, items: rootMenuItems() });
-  };
+  // The tree's structure is the code's: nothing is added at the root.
+  const openRootMenu = (_e: React.MouseEvent) => {};
 
+
+  // The structure is the code's, so a node offers only what lands in the
+  // code: add a claim (a todo test), rename a container (structure.toml).
   const nodeMenu = (e: React.MouseEvent, node: Node) => {
     if (!editor) return;
     e.preventDefault();
     e.stopPropagation();
     const items: ContextMenuItem[] = [];
-    if (derived) {
-      if (node.kind === "system" || node.kind === "container" || node.kind === "component") {
-        items.push({
-          id: "add-claim",
-          label: "Add claim",
-          onSelect: () => {
-            onSelectNode(node.id);
-            requestAddClaim(node.id);
-          },
-        });
-      }
-      if (node.kind === "container")
-        items.push({ id: "rename", label: "Rename", onSelect: () => setRenaming(node.id) });
-      if (items.length > 0) setMenu({ x: e.clientX, y: e.clientY, items });
-      return;
-    }
-    const canHaveChildren = node.kind !== "symbol" && node.kind !== "person";
-    if (canHaveChildren) {
-      const childKind = childKindFor(node.kind);
+    if (node.kind === "system" || node.kind === "container" || node.kind === "component") {
       items.push({
-        id: "add",
-        label: `Add ${childKind}`,
-        onSelect: () => addChild(node),
-      });
-    }
-    items.push({ id: "rename", label: "Rename", onSelect: () => setRenaming(node.id) });
-
-    const level = node.parentId ?? null;
-    const current = groupOfNode(node.id);
-    if (current) {
-      items.push({
-        id: "remove-group",
-        label: `Remove from ${current.name || "group"}`,
-        onSelect: () => editor.setNodeGroup(node.id, null),
-      });
-    }
-    for (const g of groupsAtLevel(level)) {
-      if (g.id === current?.id) continue;
-      items.push({
-        id: `addto-${g.id}`,
-        label: `Add to ${g.name || "group"}`,
-        onSelect: () => editor.setNodeGroup(node.id, g.id),
-      });
-    }
-    items.push({
-      id: "new-group",
-      label: "New group from this",
-      onSelect: () => {
-        const gid = editor.addGroup({ parentNodeId: level, memberIds: [node.id] });
-        onSelectGroup(gid);
-        setRenaming(gid);
-      },
-    });
-    items.push({
-      id: "delete",
-      label: "Delete",
-      onSelect: () => {
-        const kids = descendantCount(node.id);
-        setConfirmDel({
-          rect: new DOMRect(e.clientX, e.clientY, 0, 0),
-          label: `Delete ${node.name || "node"}${
-            kids > 0 ? ` and ${kids} descendant${kids === 1 ? "" : "s"}` : ""
-          }?`,
-          run: () => editor.deleteNode(node.id),
-        });
-      },
-    });
-    setMenu({ x: e.clientX, y: e.clientY, items });
-  };
-
-  const groupMenu = (e: React.MouseEvent, group: Group) => {
-    if (!editor || derived) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setMenu({
-      x: e.clientX,
-      y: e.clientY,
-      items: [
-        { id: "rename", label: "Rename", onSelect: () => setRenaming(group.id) },
-        {
-          id: "delete",
-          label: "Delete group",
-          onSelect: () =>
-            setConfirmDel({
-              rect: new DOMRect(e.clientX, e.clientY, 0, 0),
-              label: `Delete group ${group.name || ""}? Members are kept.`,
-              run: () => editor.deleteGroup(group.id),
-            }),
+        id: "add-claim",
+        label: "Add claim",
+        onSelect: () => {
+          onSelectNode(node.id);
+          requestAddClaim(node.id);
         },
-      ],
-    });
+      });
+    }
+    if (node.kind === "container")
+      items.push({ id: "rename", label: "Rename", onSelect: () => setRenaming(node.id) });
+    if (items.length > 0) setMenu({ x: e.clientX, y: e.clientY, items });
   };
+
+
+  // Groups are not derived; nothing to offer.
+  const groupMenu = (_e: React.MouseEvent, _group: Group) => {};
+
 
   // --- flattened visible rows -----------------------------------------------
   // One traversal produces the rows in render order; rendering maps over it and
@@ -646,68 +535,11 @@ export function ModelTree({
       );
     });
 
-  // --- drag-to-move ------------------------------------------------------------
+  // Nothing moves in a tree read from the code.
+  const dropProps = (_row: TreeRow) => ({});
 
-  const draggedNode = dragId ? model.nodes.find((n) => n.id === dragId) : null;
 
-  // Cross-container reparenting is disabled: a node's dependency links are plain
-  // (src,dst) pairs that moveNode leaves untouched, so re-homing a node would
-  // silently leave its links pointing across container boundaries — an invariant
-  // we don't yet reconcile. Until we do, nodes can't be dropped onto other nodes.
-  // Drag-into-group still works (it only changes group membership, never links).
-  const canDropOnNode = (_target: Node): boolean => false;
-
-  /** Groups accept siblings of their members (same level), nothing else. */
-  const canDropOnGroup = (group: Group): boolean => {
-    if (!editor || !draggedNode) return false;
-    if (group.memberIds.includes(draggedNode.id)) return false;
-    const level =
-      group.parentNodeId ??
-      model.nodes.find((n) => n.id === group.memberIds[0])?.parentId ??
-      null;
-    return (draggedNode.parentId ?? null) === (level ?? null);
-  };
-
-  const dropProps = (row: TreeRow) => {
-    if (!editor || derived) return {};
-    const key = `${row.kind}:${row.id}`;
-    const valid =
-      row.kind === "node" ? canDropOnNode(row.node!) : canDropOnGroup(row.group!);
-    return {
-      onDragOver: (e: React.DragEvent) => {
-        if (!valid) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        setDropKey(key);
-      },
-      onDragLeave: () => setDropKey((k) => (k === key ? null : k)),
-      onDrop: (e: React.DragEvent) => {
-        if (!valid || !draggedNode) return;
-        e.preventDefault();
-        if (row.kind === "node") editor.moveNode(draggedNode.id, row.id);
-        else editor.setNodeGroup(draggedNode.id, row.id);
-        onToggle(row.id, true);
-        setDropKey(null);
-        setDragId(null);
-      },
-    };
-  };
-
-  const dragProps = (node: Node) =>
-    editor && !derived && renaming !== node.id
-      ? {
-          draggable: true,
-          onDragStart: (e: React.DragEvent) => {
-            e.dataTransfer.effectAllowed = "move";
-            e.dataTransfer.setData("text/plain", node.id);
-            setDragId(node.id);
-          },
-          onDragEnd: () => {
-            setDragId(null);
-            setDropKey(null);
-          },
-        }
-      : {};
+  const dragProps = (_node: Node) => ({});
 
   // --- keyboard navigation ----------------------------------------------------
 
@@ -1099,8 +931,7 @@ export function ModelTree({
           {(
             [
               { id: "all", label: "All" },
-              { id: "changes", label: "Changes" },
-              { id: "drift", label: "Drift" },
+              { id: "changes", label: "Planned" },
               { id: "tests", label: "Tests" },
             ] as const
           ).map((opt) => (
@@ -1109,10 +940,8 @@ export function ModelTree({
               type="button"
               title={
                 opt.id === "changes"
-                  ? "Lens: the plan — added / modified / deleted / relocated since the committed model"
-                  : opt.id === "drift"
-                    ? "Lens: drift — undescribed (Q) or stale (X) claims where code and model disagree"
-                    : opt.id === "tests"
+                  ? "Lens: planned — claims written as todo tests and not yet implemented"
+                  : opt.id === "tests"
                       ? "Lens: tests — claims with no test attached, failing tests, and tests that let a deliberate break through"
                       : "Show the whole model"
               }
@@ -1189,33 +1018,15 @@ export function ModelTree({
         onContextMenu={openRootMenu}
       >
         {model.nodes.length === 0 ? (
-          <div className="flex flex-col items-start gap-3 px-4 py-6 text-xs text-[var(--text-muted)]">
-            <span>Empty model. Generate from the codebase, or start one here:</span>
-            {editor && (
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => addRoot("system", false)}
-                  className={BTN}
-                >
-                  <Plus className="h-3 w-3" /> System
-                </button>
-                <button
-                  type="button"
-                  onClick={() => addRoot("person", false)}
-                  className={BTN}
-                >
-                  <Plus className="h-3 w-3" /> Person
-                </button>
-              </div>
-            )}
+          <div className="px-4 py-6 text-xs text-[var(--text-muted)]">
+            No packages found: the tree is read from the project's manifests and tests.
           </div>
         ) : rows.length === 0 && filterActive ? (
           <div className="px-4 py-6 text-xs text-[var(--text-muted)]">
             {q !== ""
               ? "No matches."
               : lens === "changes"
-                ? "No pending changes — the plan matches the committed model."
+                ? "Nothing planned — no todo tests."
                 : lens === "drift"
                   ? "No drift — the model and code agree."
                   : "Nothing to look at — every testable claim has a test, and none is failing or hollow."}

@@ -1,11 +1,7 @@
 /**
- * Lets the user choose which coding agent fills the model, its model and effort, and install hook/statusline integration
- *
- * Lets the user choose which coding agent fills the model, its model/effort, and install hooks/statusline integration
- *
- * Resolves the agent preference plus what's actually installed into the concrete agent/model/effort a fill will run with
- *
- * Resolves the agent preference plus what's actually installed into the concrete agent that will launch
+ * The settings panel: the project's one agent-integration switch, and which
+ * coding agent the app launches for preview fixtures, with its model and
+ * reasoning effort.
  */
 
 import { useEffect, useState } from "react";
@@ -182,7 +178,7 @@ export function SettingsPanel({
 
         <div className="flex flex-col gap-4 px-4 py-4">
           <p className="text-xs text-[var(--text-muted)]">
-            Controls which AI agent fills out the architecture model, and the model + reasoning
+            Which AI agent the app launches to write preview fixtures, and the model + reasoning
             effort it runs with. An empty model uses the agent CLI's own default.
           </p>
 

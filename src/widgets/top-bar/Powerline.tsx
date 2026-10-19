@@ -1,12 +1,9 @@
 /**
  * The powerline status bar — chevron-tiled segments along the window's bottom
- * edge (replacing the old SyncBar). Left side reads the model's standing at a
- * glance: the subagent launch setup (which agent + model + effort a fill runs
- * with), coverage, and the model's size + schema. Right side folds in the live
- * bits the SyncBar carried — the agent's activity (barber-pole) with Cancel
- * while it works, and the changes jump when idle. The pending
- * count rides the changes segment: the tree's lenses are a FILTER, and hanging
- * the model's standing state off a filter meant it vanished with the sidebar.
+ * edge. Left side reads the tree's standing at a glance: the subagent launch
+ * setup, the claims by derived status, dark files, and the tree's size. Right
+ * side carries the agent's live activity with Cancel while a fixture fill
+ * runs.
  *
  * Segment shades come from the theme surface vars via an inline `--sb`, which the
  * CSS reuses for each chevron's triangle so the tiling stays seamless (see the
@@ -16,11 +13,9 @@
  */
 
 import type { CSSProperties } from "react";
-import { History, Loader2, X } from "lucide-react";
-import { type PlanCounts, planCountLabel } from "../../features/change-marks/changeMarks";
+import { Loader2, X } from "lucide-react";
 import { AgentMark } from "../../shared/ui/pagekit";
 import type { AgentSession } from "../../features/agent-launch/useAgentSession";
-import type { ModelBuild } from "../../features/model-build/useModelBuild";
 import { darkBoundaries, type ModelHealthReport } from "../../entities/model/health";
 import { AGENT_LABEL, type ResolvedLaunch } from "../settings-panel/SettingsPanel";
 import type { ScryModel } from "../../entities/model/viewmodel";
@@ -29,12 +24,9 @@ import type { SpecialPage } from "../../pages/node/NodePage";
 interface PowerlineProps {
   model: ScryModel;
   agent: AgentSession;
-  build: ModelBuild;
-  /** Pending plan work — elements and the carriers they sit on. */
-  plan: PlanCounts;
-  /** Coverage + flag totals; null until the first health fetch lands. */
+  /** Claims mapped, dark files, claim states; null until the first fetch. */
   health: ModelHealthReport | null;
-  /** The subagent launch setup a fill will run with — agent + model + effort. */
+  /** The subagent launch setup a fixture fill will run with. */
   launch: ResolvedLaunch;
   onOpenSpecial: (page: SpecialPage) => void;
   onOpenSettings: () => void;
@@ -43,32 +35,14 @@ interface PowerlineProps {
 /** Inline `--sb` carrier — drives both a segment's fill and its chevron edge. */
 const sb = (value: string): CSSProperties => ({ ["--sb" as string]: value }) as CSSProperties;
 
-export function Powerline({
-  model,
-  agent,
-  build,
-  plan,
-  health,
-  launch,
-  onOpenSpecial,
-  onOpenSettings,
-}: PowerlineProps) {
-  const totals = health?.health.totals;
-  const coverage =
-    totals && totals.anchorable > 0
-      ? Math.round((totals.anchored / totals.anchorable) * 100)
-      : null;
-  // The other failure mode: code under a boundary that no claim reads into.
+export function Powerline({ model, agent, health, launch, onOpenSpecial, onOpenSettings }: PowerlineProps) {
+  // Code no test reaches by import.
   const dark = darkBoundaries(health).total;
+  const counts = health?.derivedStatus.totals;
 
-  const busy = agent.running || build.active;
-  const runLabel = build.building
-    ? "Building model"
-    : build.checking
-      ? "Checking for drift"
-      : null;
-  const agentLabel = build.active ? build.phase ?? runLabel : agent.label;
-  const agentActivity = build.active ? build.activity : agent.activity;
+  const busy = agent.running;
+  const agentLabel = agent.label;
+  const agentActivity = agent.activity;
 
   return (
     <div className={`pl ${busy ? "working" : ""}`}>
@@ -97,46 +71,27 @@ export function Powerline({
         )}
       </button>
 
-      {/* Derived tree: claim states in place of anchor coverage. Click for
-          what changed since you last looked. */}
-      {health?.derivedStatus && (
-        <button
-          type="button"
-          onClick={() => onOpenSpecial("session")}
-          className="seg"
-          style={sb("color-mix(in srgb, var(--text) 4%, var(--surface-canvas))")}
-          title="Claims by derived status — proven, stale, failing, planned. Click for what changed since you last looked."
-        >
-          <span className="pl-strong font-medium">{health.derivedStatus.totals.proven}</span>
-          <span className="text-[var(--text-secondary)]">proven</span>
-          <span className="text-[var(--text-tertiary)]">
-            · {health.derivedStatus.totals.stale} stale · {health.derivedStatus.totals.failing} failing ·{" "}
-            {health.derivedStatus.totals.planned} planned
-          </span>
-        </button>
-      )}
-
-      {/* Coverage — anchored / anchorable claims (the model→code direction).
-          Click to list the unmapped claims (the inverse; symmetric with the
-          dark-code segment that follows). */}
-      {!health?.derivedStatus && (
+      {/* Claims by derived status. Click for what changed since you last
+          looked. */}
       <button
         type="button"
-        onClick={() => onOpenSpecial("unmapped")}
+        onClick={() => onOpenSpecial("session")}
         className="seg"
         style={sb("color-mix(in srgb, var(--text) 4%, var(--surface-canvas))")}
-        title="Claims mapped — committed claims that read through to code. Click to list the ones that map to nothing."
+        title="Claims by derived status — proven, stale, failing, planned. Click for what changed since you last looked."
       >
-        {coverage != null ? (
+        {counts ? (
           <>
-            <span className="pl-strong font-medium">{coverage}%</span>
-            <span className="text-[var(--text-secondary)]">claims mapped</span>
+            <span className="pl-strong font-medium">{counts.proven}</span>
+            <span className="text-[var(--text-secondary)]">proven</span>
+            <span className="text-[var(--text-tertiary)]">
+              · {counts.stale} stale · {counts.failing} failing · {counts.planned} planned
+            </span>
           </>
         ) : (
-          <span className="text-[var(--text-secondary)]">claims mapped —</span>
+          <span className="text-[var(--text-secondary)]">claims —</span>
         )}
       </button>
-      )}
 
       {/* Dark code — files under a node's boundary that no claim reads into (the
           code→model direction). Click to list them on the special page. */}
@@ -145,7 +100,7 @@ export function Powerline({
         onClick={() => onOpenSpecial("dark")}
         className="seg"
         style={sb("color-mix(in srgb, var(--text) 4%, var(--surface-canvas))")}
-        title="Dark code — files under a node's boundary that no claim reads into. Click to list them."
+        title="Dark code — product files no test reaches by import. Click to list them."
       >
         {health == null ? (
           <span className="text-[var(--text-secondary)]">dark code —</span>
@@ -190,7 +145,7 @@ export function Powerline({
           </div>
           <button
             type="button"
-            onClick={build.active ? build.cancel : agent.cancel}
+            onClick={agent.cancel}
             className="rseg"
             style={sb("color-mix(in srgb, var(--text) 9%, var(--surface-canvas))")}
           >
@@ -198,35 +153,7 @@ export function Powerline({
             cancel
           </button>
         </>
-      ) : health?.derivedStatus ? null : (
-        <>
-          <button
-            type="button"
-            onClick={() => onOpenSpecial("changes")}
-            className="rseg"
-            style={sb("color-mix(in srgb, var(--text) 6.5%, var(--surface-canvas))")}
-            title="Changes — the whole plan diff against the committed model"
-          >
-            <History className="h-3.5 w-3.5" />
-            <span>
-              changes
-              {/* The pending count, at both altitudes the app talks in: the
-                  element queue the agent implements, and the cards it lands on.
-                  It reads here rather than on the tree's lens because the
-                  standing state of the model belongs in the standing bar. */}
-              {plan.elements > 0 && (
-                <span
-                  className="text-[var(--text-muted)]"
-                  title="Pending plan work — diverging elements (the queue get_pending hands the agent), and the nodes/groups carrying them."
-                >
-                  {" "}
-                  · <span className="pl-strong">{planCountLabel(plan)}</span>
-                </span>
-              )}
-            </span>
-          </button>
-        </>
-      )}
+      ) : null}
     </div>
   );
 }

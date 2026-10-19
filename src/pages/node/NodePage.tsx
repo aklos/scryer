@@ -33,7 +33,6 @@ import {
   CircleDashed,
   FlaskConical,
   Flag,
-  GitCompare,
 } from "lucide-react";
 import type { Node, ScryModel } from "../../entities/model/viewmodel";
 import {
@@ -71,12 +70,9 @@ import {
   PageHeader,
   Ambox,
   NOTICE_ACTION,
-  PageTabs,
-  NodeHistory,
 } from "../../widgets/node-page-sections/PageHeader";
 import { GroupPageBody } from "./GroupPage";
 import { DescriptionSection } from "../../widgets/node-page-sections/DescriptionSection";
-import { DetailRail } from "../../widgets/node-page-sections/DetailRail";
 import { plannedRespHosts, ResponsibilitiesSection } from "../../widgets/node-page-sections/ResponsibilitiesSection";
 import { PropertiesSection } from "../../widgets/node-page-sections/PropertiesSection";
 import { PreviewSection } from "../../widgets/node-page-sections/PreviewSection";
@@ -209,14 +205,10 @@ function NodePageBody(props: PageProps & { node: Node }) {
     projectPath,
     onSelectNode,
     onFixture,
-    history,
-    driftScopes,
-    onCheckDrift,
   } = props;
   const ed = useEditSections();
   const openMenu = usePageMenu();
   const copyId = useCopyId();
-  const [tab, setTab] = useState<"overview" | "history">("overview");
   // The header edits (name, technology) accumulate in this draft; the model is
   // written once, on Done — the same nothing-commits-until-Done contract as
   // every SectionEditor. Cancel (or navigating away) simply drops the draft.
@@ -242,11 +234,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
     titleDraft.current = null;
     ed.toggle("title");
   };
-  // This node's slice of the durable committed-model timeline.
-  const nodeEvents = useMemo(
-    () => history.filter((e) => e.nodeId === node.id),
-    [history, node.id],
-  );
   const tag = typeTag(node);
 
   const sourceMap = effectiveSourceMap(committed, model);
@@ -287,12 +274,10 @@ function NodePageBody(props: PageProps & { node: Node }) {
   // The node's own definition anchor — its file, surfaced in the type line.
   const defFile = definition[0]?.pattern;
 
-  const drift = driftScopes.find((s) => s.nodeId === node.id);
-
   // Maintenance notices — full-width amboxes stacked at the top of the article
   // body (the wiki hatnote pattern), not chips crammed beside the title.
   const bannerStack =
-    drift || structural || node.stale || isNodeEmpty(node) ? (
+    structural || isNodeEmpty(node) ? (
       <>
         {structural && (
           <>
@@ -321,60 +306,10 @@ function NodePageBody(props: PageProps & { node: Node }) {
             )}
           </>
         )}
-        {node.stale && editor && (
-          <Ambox
-            tone="danger"
-            icon={<Flag className="h-3 w-3" />}
-            actions={
-              <>
-                <button
-                  type="button"
-                  onClick={() => editor.reimplementNode(node.id)}
-                  title="Keep this node and rebuild its whole subtree in code — files a to-do the agent implements."
-                  className={NOTICE_ACTION}
-                >
-                  Rebuild code
-                </button>
-                <button
-                  type="button"
-                  onClick={() => editor.dropNode(node.id)}
-                  title="The code was removed on purpose — drop this node and its subtree from the model."
-                  className={NOTICE_ACTION}
-                >
-                  Drop
-                </button>
-              </>
-            }
-          >
-            Backing code removed — this node and its subtree have no code
-          </Ambox>
-        )}
         {isNodeEmpty(node) && (
           <Ambox tone="warning" icon={<CircleDashed className="h-3 w-3" />}>
             Empty symbol — no responsibilities or properties
           </Ambox>
-        )}
-        {drift && (
-          <div
-            data-drift-banner
-            className="flex items-center gap-2 px-1 text-xs text-[var(--text-muted)]"
-          >
-            <GitCompare className="h-3 w-3 shrink-0" />
-            <span className="min-w-0 flex-1">
-              Code changed since the last reconcile ({drift.changedFiles.length}{" "}
-              file{drift.changedFiles.length === 1 ? "" : "s"})
-            </span>
-            {onCheckDrift && (
-              <button
-                type="button"
-                onClick={onCheckDrift}
-                title="Run a semantic drift check across the whole project"
-                className={NOTICE_ACTION}
-              >
-                Check
-              </button>
-            )}
-          </div>
         )}
       </>
     ) : null;
@@ -567,23 +502,9 @@ function NodePageBody(props: PageProps & { node: Node }) {
         // other kind is a human-authored title with a length cap.
         nameMaxLength={node.kind === "symbol" ? undefined : NAME_MAX}
         nameSanitize={node.kind === "symbol" ? sanitizeIdentifier : undefined}
-        tabs={
-          <PageTabs
-            tab={tab}
-            onTab={setTab}
-            historyCount={nodeEvents.length}
-          />
-        }
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {tab === "history" ? (
-          <div className={`${PAGE_COL} pb-[50px] pt-[18px]`}>
-            <div className="max-w-[900px]">
-              <NodeHistory events={nodeEvents} projectPath={projectPath} />
-            </div>
-          </div>
-        ) : (
           <div className={`${PAGE_COL} flex gap-8 pb-[50px] pt-[18px]`}>
             <article
               className="min-w-0 max-w-[900px] flex-1"
@@ -662,17 +583,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 onSelectNode={onSelectNode}
               />
             </article>
-            <DetailRail
-              node={node}
-              committed={committed}
-              editor={editor}
-              notesEditing={ed.isEditing("notes")}
-              onToggleNotes={() => ed.toggle("notes")}
-              dirEditing={ed.isEditing("directives")}
-              onToggleDir={() => ed.toggle("directives")}
-            />
           </div>
-        )}
       </div>
     </div>
   );

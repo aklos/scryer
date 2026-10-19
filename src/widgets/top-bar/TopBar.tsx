@@ -54,8 +54,6 @@ export function TopBar({
   sessionLive = false,
   sessionOpen = false,
   onOpenSession,
-  derived = false,
-  onSetDerived,
 }: {
   projectPath: string | null;
   view: WorkspaceView;
@@ -71,9 +69,6 @@ export function TopBar({
   /** The session page is the one showing — the entry reads pressed. */
   sessionOpen?: boolean;
   onOpenSession?: () => void;
-  /** The "derived tree (preview)" project setting. */
-  derived?: boolean;
-  onSetDerived?: (on: boolean) => void;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const projectName = projectPath?.split("/").filter(Boolean).pop() ?? "scryer";
@@ -90,15 +85,6 @@ export function TopBar({
     },
     { id: "close", label: "Close project", onSelect: onCloseProject },
     { id: "settings", label: "Settings", onSelect: onOpenSettings },
-    ...(projectPath && onSetDerived
-      ? [
-          {
-            id: "derived",
-            label: derived ? "Derived tree (preview): on" : "Derived tree (preview): off",
-            onSelect: () => onSetDerived(!derived),
-          },
-        ]
-      : []),
   ];
 
   return (
@@ -157,12 +143,10 @@ export function TopBar({
       </button>
 
       <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center justify-end">
-        {/* Wiki / Map / Session — three destinations, one joined control,
-            exactly one lit. The session log is a wiki page underneath, but to
-            the user it is its own place: lighting Wiki too read as two
-            selections, and Wiki then "went back" to it. Its cell carries the
-            badge (plan entries left unbuilt); while a hook session is live
-            the badge pulses, or a dot does when there is nothing to count. */}
+        {/* Wiki / Map / Recent — three destinations, one joined control,
+            exactly one lit. "Since you last looked" is a wiki page underneath,
+            but to the user it is its own place: lighting Wiki too read as two
+            selections. Its cell carries a badge when a caller passes one. */}
         <div className="ml-2 flex items-stretch overflow-hidden rounded-md border border-[var(--border)] divide-x divide-[var(--border)]">
           {([
             { id: "wiki", label: "Wiki", Icon: FileText, title: "Wiki view (Ctrl+Space to switch)" },
@@ -170,12 +154,9 @@ export function TopBar({
             ...(onOpenSession
               ? [{
                   id: "session",
-                  label: "Session",
+                  label: "Recent",
                   Icon: History,
-                  title:
-                    sessionBadge > 0
-                      ? `Session — ${sessionBadge} planned, not built${sessionLive ? " (session live)" : ""}`
-                      : `Session — nothing open${sessionLive ? " (session live)" : ""}`,
+                  title: `Since you last looked — what each agent session changed${sessionLive ? " (a session is live)" : ""}`,
                 }]
               : []),
           ] as const).map(({ id, label, Icon, title }) => {

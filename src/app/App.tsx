@@ -1,71 +1,39 @@
 /**
  * App shell.
  *
- * Holds the v0.3 model in storage (project-local on disk, auto-saved). The UI is
- * a two-pane workspace: the model tree (definition surface) on the left and the
- * selected node/group's wiki-style page on the right. Mutations flow through the
- * Editor intents into the viewmodel helpers.
- *
- * Owns the whole editor session — model storage, build/drift orchestration, navigation and selection state — and composes every panel
- *
- * Top-level entry: cancels any orphaned agent session left running from a prior dev refresh, then renders the workspace
+ * Holds the open project's tree, read from its code. The workspace is the
+ * tree (navigation) on the left and the selected node's wiki-style page, the
+ * diagram, or a special page on the right. Edits land in the code through
+ * the derived editor: a claim into its test file, a container name into
+ * structure.toml.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { ToastProvider } from "../shared/feedback/Toast";
+import { ToastProvider, useToast } from "../shared/feedback/Toast";
 import { AgentFailureProvider } from "../features/agent-launch/AgentFailure";
 import { ModelTree } from "../widgets/model-tree/ModelTree";
 import { TopBar, type WorkspaceView } from "../widgets/top-bar/TopBar";
 import { DiagramView } from "../widgets/diagram-canvas/DiagramView";
 import { NodePage, type Selected, type SpecialPage } from "../pages/node/NodePage";
-import { ChangesPage, DarkCodePage, SessionPage, UnmappedClaimsPage } from "../pages";
-import { LandingPage } from "../pages/landing/LandingPage";
+import { DarkCodePage, LandingPage } from "../pages";
 import { makeDerivedEditor } from "../features/derived-tree/derivedEditor";
-import { takeLastOpened } from "../features/derived-tree/derivedSetting";
-import { useToast } from "../shared/feedback/Toast";
+import { takeLastOpened } from "../features/derived-tree/lastOpened";
 import { ProjectPicker } from "../pages/project-picker/ProjectPicker";
 import { SearchPalette } from "../features/search/SearchPalette";
-import { planCounts } from "../features/change-marks/changeMarks";
 import { Powerline } from "../widgets/top-bar/Powerline";
 import { SettingsPanel } from "../widgets/settings-panel/SettingsPanel";
 import { useLaunchSettings } from "../features/agent-launch/useLaunchSettings";
 import { useAgentLaunchGate } from "../features/agent-launch/AgentLaunchConfirm";
-import { useModelStorage } from "../features/model-storage/useModelStorage";
-import { useModelBuild, type ModelBuild } from "../features/model-build/useModelBuild";
+import { useModelStorage, type ModelStorage } from "../features/model-storage/useModelStorage";
 import { useAgentSession } from "../features/agent-launch/useAgentSession";
 import { previewableNodeIds, usePreviewServer } from "../features/preview-client/usePreviewServer";
 import { useModelHealth } from "../features/health-feed/useModelHealth";
 import { useTestStatuses } from "../features/health-feed/useTestStatuses";
-import { useSessionLog } from "../features/session-log/useSessionLog";
 import { rollupTestFindings, structuralBySubtree, testFindings } from "../entities/model/health";
-import {
-  addGroup as addGroupHelper,
-  addLink as addLinkHelper,
-  addNode as addNodeHelper,
-  addProperty,
-  addResponsibility,
-  effectiveSourceMap,
-  moveNode as moveNodeHelper,
-  moveResponsibility as moveResponsibilityHelper,
-  removeGroup as removeGroupHelper,
-  removeLink as removeLinkHelper,
-  removeNode as removeNodeHelper,
-  removeProperty,
-  removeResponsibility,
-  renameConcern,
-  setNodeGroup as setNodeGroupHelper,
-  setNodePosition,
-  updateGroup as updateGroupHelper,
-  updateLink as updateLinkHelper,
-  updateNode as updateNodeHelper,
-  updateProperty,
-  updateResponsibility,
-  type DriftScope,
-  type ScryModel,
-} from "../entities/model/viewmodel";
+import { effectiveSourceMap, type ScryModel } from "../entities/model/viewmodel";
 import type { Editor } from "../entities/model/editor";
 
 /** Whether a keydown landed inside an editable field (input, textarea, or an
@@ -80,8 +48,8 @@ function isEditableTarget(target: EventTarget | null): boolean {
 export default function App() {
   useEffect(() => {
     // A dev refresh reloads the webview but not the Rust backend, leaving any
-    // in-flight agent session alive and still editing the model. Cancel it on
-    // load so a refresh doesn't leave orphans.
+    // in-flight agent session alive. Cancel it on load so a refresh doesn't
+    // leave orphans.
     void invoke("cancel_agent_session").catch(() => {});
   }, []);
 
@@ -98,69 +66,15 @@ export default function App() {
 
 function AppBody() {
   const storage = useModelStorage();
-  const build = useModelBuild(storage);
   const model = storage.model;
-
   if (!model || storage.status !== "ready") {
-    return <ProjectPicker storage={storage} build={build} />;
+    return <ProjectPicker storage={storage} />;
   }
-  return (
-    <Workspace
-      model={model}
-      committed={storage.committed}
-      planDiff={storage.planDiff}
-      updateModel={storage.updateModel}
-      projectPath={storage.projectPath}
-      modelRef={storage.modelRef}
-      build={build}
-      setAgentRunning={storage.setAgentRunning}
-      reloadFromDisk={storage.reloadFromDisk}
-      changeLog={storage.changeLog}
-      history={storage.history}
-      externalGeneration={storage.externalGeneration}
-      openProject={storage.openProject}
-      closeProject={storage.closeProject}
-      derived={storage.derived}
-      setDerived={storage.setDerived}
-    />
-  );
+  return <Workspace model={model} storage={storage} />;
 }
 
-function Workspace({
-  model,
-  committed,
-  planDiff,
-  updateModel,
-  projectPath,
-  modelRef: modelRefStr,
-  build,
-  setAgentRunning,
-  reloadFromDisk,
-  changeLog,
-  history,
-  externalGeneration,
-  openProject,
-  closeProject,
-  derived,
-  setDerived,
-}: {
-  model: ScryModel;
-  committed: ScryModel | null;
-  planDiff: ReturnType<typeof useModelStorage>["planDiff"];
-  updateModel: ReturnType<typeof useModelStorage>["updateModel"];
-  projectPath: string | null;
-  modelRef: string | null;
-  build: ModelBuild;
-  setAgentRunning: (running: boolean) => void;
-  reloadFromDisk: () => Promise<boolean>;
-  changeLog: ReturnType<typeof useModelStorage>["changeLog"];
-  history: ReturnType<typeof useModelStorage>["history"];
-  externalGeneration: number;
-  openProject: (path: string) => Promise<void>;
-  closeProject: () => void;
-  derived: boolean;
-  setDerived: (on: boolean) => Promise<void>;
-}) {
+function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage }) {
+  const { committed, planDiff, projectPath, reloadFromDisk, externalGeneration, openProject, closeProject } = storage;
   const agent = useAgentSession();
   const { toast } = useToast();
   // When this project was last opened before now: the landing page's window.
@@ -176,124 +90,49 @@ function Workspace({
   // section from the exports it reports.
   const preview = usePreviewServer(projectPath);
   // Which symbols the sidecar can render — derived from its export list and
-  // each node's anchored source, never a stored flag. Drives the preview glyph
-  // in the tree, the diagram's `visual` class, and the node page icon.
+  // each node's anchored source, never a stored flag.
   const previewable = useMemo(() => {
     const sourceMap = effectiveSourceMap(committed, model);
     return previewableNodeIds(model.nodes, preview.components, (id) => sourceMap[id]?.[0]?.pattern);
   }, [model, committed, preview.components]);
 
-  // Per-node fills also own the file while running: suppress canvas write-back.
-  useEffect(() => {
-    setAgentRunning(agent.running || build.active);
-  }, [agent.running, build.active, setAgentRunning]);
+  const writing = agent.running;
 
-  // While a fill runs, the agent owns the file. Poll its writes onto the page
-  // and load the final result when it ends — never write our stale in-memory
-  // model back, which would clobber the agent's work.
-  useEffect(() => {
-    if (!agent.running) return;
-    const t = setInterval(() => {
-      void reloadFromDisk();
-    }, 1500);
-    return () => {
-      clearInterval(t);
-      void reloadFromDisk();
-    };
-  }, [agent.running, reloadFromDisk]);
+  // Health over the derived tree: coverage, link evidence, style conformance,
+  // dark files and every claim's status. Refreshes on open, when a fixture
+  // fill ends, when the tree changes, and when a test report is ingested.
+  const { report: healthReport, refresh: refreshHealth } = useModelHealth(projectPath, writing);
+  // Claim verdicts and probe results for the tree's lanes, refreshed live
+  // when the on-disk verdict cache changes.
+  const { verdicts: testVerdicts, probes: probeResults, refresh: refreshTests } = useTestStatuses(projectPath, writing);
 
-  const writing = agent.running || build.active;
-
-  // The observability feed: coverage, anchor fingerprints, link evidence.
-  // Refreshes on open and whenever an agent run finishes.
-  const { report: healthReport, refresh: refreshHealth } = useModelHealth(
-    projectPath,
-    writing,
-  );
-
-  // Claim test verdicts: cheap, refreshed live when the on-disk cache changes
-  // (an agent ingesting a report mid-session) — not only on the busy edge.
-  const {
-    verdicts: testVerdicts,
-    probes: probeResults,
-    refresh: refreshTests,
-  } = useTestStatuses(projectPath, writing);
-
-  // The agent session log: what each session was asked and what it did,
-  // re-read live as the hook server appends. The top bar shows its badge.
-  const sessionLog = useSessionLog({ modelRef: modelRefStr });
-
-  // Cheap, agent-free nudge: which scopes have code changes since the last
-  // reconcile. Refreshes on open, when ANY writer finishes (builds and
-  // per-node fills alike), and after verdict actions that change what counts
-  // as drift — not only on whole-model builds.
-  const [driftScopes, setDriftScopes] = useState<DriftScope[]>([]);
-  // Last applied result, serialized: an unchanged poll must not re-render.
-  const lastDriftJson = useRef("[]");
-  const refreshDrift = useCallback(() => {
-    if (!projectPath) return;
-    invoke<DriftScope[]>("get_drift_status", { cwd: projectPath })
-      .then((s) => {
-        const next = Array.isArray(s) ? s : [];
-        const json = JSON.stringify(next);
-        if (json === lastDriftJson.current) return;
-        lastDriftJson.current = json;
-        setDriftScopes(next);
-      })
-      .catch(() => {});
-  }, [projectPath]);
-  useEffect(() => {
-    if (writing) return;
-    refreshDrift();
-  }, [writing, refreshDrift]);
-
-  // One observability refresh for verdict/anchor actions: health and the
-  // drift nudge move together, so a verdict can't clear one and not the other.
-  const refreshObservability = useCallback(() => {
-    refreshHealth();
-    refreshDrift();
-  }, [refreshHealth, refreshDrift]);
-
-  // External writers (an agent over MCP) reload the model layers live through
-  // the file watcher, but health/drift come from these extractor commands —
-  // without this they'd refresh only on open and on the in-app writing edge,
-  // leaving every report-fed indicator stale until a manual reload. Trailing
-  // debounce so a burst of agent writes costs one recompute; in-app runs are
-  // excluded (their busy→idle edge already refreshes).
+  // A changed tree moves health; a burst of changes costs one recompute.
   const observedGeneration = useRef(externalGeneration);
   useEffect(() => {
     if (writing || externalGeneration === observedGeneration.current) return;
     const t = setTimeout(() => {
       observedGeneration.current = externalGeneration;
-      refreshObservability();
-    }, 5000);
+      refreshHealth();
+    }, 2000);
     return () => clearTimeout(t);
-  }, [externalGeneration, writing, refreshObservability]);
-
-  // The derived status rides on the health report, and a report ingest moves
-  // it without touching the tree: refresh it when the verdict cache changes.
+  }, [externalGeneration, writing, refreshHealth]);
+  // An ingest moves claim states without touching the tree.
   useEffect(() => {
-    if (!derived) return;
     const un = listen("test-results-changed", () => refreshHealth());
     return () => {
       void un.then((f) => f());
     };
-  }, [derived, refreshHealth]);
+  }, [refreshHealth]);
 
   const [selected, setSelected] = useState<Selected | null>(null);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
 
-  // The subagent launch setup (which agent + model + effort a fill will run
-  // with), surfaced read-only in the powerline and named in the pre-launch
-  // confirm gate. Reloaded whenever the settings panel closes so an edit there
-  // reflects immediately.
+  // The subagent launch setup a fixture fill runs with, shown in the
+  // powerline and named in the pre-launch confirm gate.
   const launchSettings = useLaunchSettings();
   const { launch } = launchSettings;
-  // Confirm gate for every agent-spawning action — names what will run before
-  // the (billable) launch; "don't ask again" clears it (the violet buttons stay
-  // as the standing cue).
   const launchGate = useAgentLaunchGate(launchSettings);
 
   // The Wiki/Diagram toggle. The diagram is a secondary nav surface onto the
@@ -452,235 +291,46 @@ function Workspace({
     });
   }, []);
 
-  // Open the first top-level node ONCE when a project first loads, so the right
-  // pane lands on a real page instead of the empty state. One-shot per project —
-  // not an invariant: a deliberate deselect (clicking the empty diagram pane)
-  // must stick, so we never re-fill a selection the user cleared.
-  const autoSelectedFor = useRef<string | null>(null);
+  // The project opens on what changed since you last looked.
+  const openedFor = useRef<string | null>(null);
   useEffect(() => {
     const key = projectPath ?? "";
-    if (autoSelectedFor.current === key) return;
-    const top = model.nodes.find((n) => !n.parentId);
-    if (!top) return; // model not loaded yet; try again when it is
-    autoSelectedFor.current = key;
-    // The derived tree opens on what changed since you last looked.
-    if (derived) setSelected({ kind: "special", id: "session" });
-    else if (!selected) selectNode(top.id);
-  }, [model, projectPath, selected, selectNode, derived]);
+    if (openedFor.current === key) return;
+    openedFor.current = key;
+    setSelected({ kind: "special", id: "session" });
+  }, [projectPath]);
 
   const onFixture = useCallback(
     (nodeId: string, renderStatus: string, renderError: string | null) => {
-      if (!projectPath || !modelRefStr || writing) return;
+      if (!projectPath || writing) return;
       const node = modelRef.current.nodes.find((n) => n.id === nodeId);
       const name = node?.name ?? "component";
       launchGate.request(
         { action: `Generate placeholder preview data for “${name}”.` },
-        () => agent.startFixture(projectPath, modelRefStr, nodeId, name, renderStatus, renderError),
+        () => agent.startFixture(projectPath, nodeId, name, renderStatus, renderError),
       );
     },
-    [agent, projectPath, modelRefStr, writing, launchGate],
+    [agent, projectPath, writing, launchGate],
   );
 
-  const editor = useMemo<Editor>(
-    () => ({
-      updateNode: (nodeId, patch) => updateModel((m) => updateNodeHelper(m, nodeId, patch)),
-      deleteNode: (nodeId) => updateModel((m) => removeNodeHelper(m, nodeId)),
-      addNode: (init) => {
-        let newId = "";
-        updateModel((m) => {
-          const { model: next, id } = addNodeHelper(m, {
-            kind: init.kind,
-            name: "",
-            parentId: init.parentId,
-            groupId: init.groupId,
-            external: init.external,
-          }, committed);
-          newId = id;
-          return next;
-        });
-        return newId;
-      },
-      updateGroup: (groupId, patch) => updateModel((m) => updateGroupHelper(m, groupId, patch)),
-      deleteGroup: (groupId) => updateModel((m) => removeGroupHelper(m, groupId)),
-      addGroup: (init) => {
-        let newId = "";
-        updateModel((m) => {
-          let { model: next, id } = addGroupHelper(m, {
-            name: "",
-            parentNodeId: init.parentNodeId,
-          }, committed);
-          newId = id;
-          // Enclose the requested members in the same write (each is moved out of
-          // any prior group), so the group never lands without its member.
-          for (const mid of init.memberIds ?? []) {
-            next = setNodeGroupHelper(next, mid, id);
-          }
-          return next;
-        });
-        return newId;
-      },
-      moveNode: (nodeId, newParentId) =>
-        updateModel((m) => moveNodeHelper(m, nodeId, newParentId)),
-      addLink: (src, dst, label) => {
-        let newId = "";
-        updateModel((m) => {
-          const { model: next, id } = addLinkHelper(m, src, dst, label ?? "", committed);
-          newId = id;
-          return next;
-        });
-        return newId;
-      },
-      updateLink: (linkId, patch) =>
-        updateModel((m) => updateLinkHelper(m, linkId, patch)),
-      deleteLink: (linkId) => updateModel((m) => removeLinkHelper(m, linkId)),
-      setNodeGroup: (nodeId, groupId) =>
-        updateModel((m) => setNodeGroupHelper(m, nodeId, groupId)),
-      addResponsibility: (host, hostId) => {
-        let newId = "";
-        updateModel((m) => {
-          const { model: next, id } = addResponsibility(m, host, hostId, "", committed);
-          newId = id;
-          return next;
-        });
-        return newId;
-      },
-      updateResponsibility: (host, hostId, respId, patch) =>
-        updateModel((m) => updateResponsibility(m, host, hostId, respId, patch)),
-      removeResponsibility: (host, hostId, respId) =>
-        updateModel((m) => removeResponsibility(m, host, hostId, respId)),
-      renameConcern: (from, to) => updateModel((m) => renameConcern(m, from, to)),
-      adoptResponsibility: (respId) => {
-        if (!projectPath) return;
-        // Backend folds the claim into the committed model (the code already
-        // exists); the file watcher then re-reads both layers into the UI.
-        invoke("adopt_responsibility", { cwd: projectPath, respId })
-          .then(() => refreshObservability())
-          .catch((e) => console.error("adopt_responsibility failed", e));
-      },
-      rejectResponsibility: (respId) => {
-        if (!projectPath) return;
-        // Backend folds the claim into the committed model then drops it from the
-        // plan, leaving a deletion work item; the watcher re-reads both layers.
-        invoke("reject_responsibility", { cwd: projectPath, respId })
-          .then(() => refreshObservability())
-          .catch((e) => console.error("reject_responsibility failed", e));
-      },
-      dropResponsibility: (respId) => {
-        if (!projectPath) return;
-        // Code is right: delete the stale claim from both layers; watcher refreshes.
-        invoke("drop_responsibility", { cwd: projectPath, respId })
-          .then(() => refreshObservability())
-          .catch((e) => console.error("drop_responsibility failed", e));
-      },
-      reimplementResponsibility: (respId) => {
-        if (!projectPath) return;
-        // Model is right: remove from committed so it reads as an Added to-do.
-        invoke("reimplement_responsibility", { cwd: projectPath, respId })
-          .then(() => refreshObservability())
-          .catch((e) => console.error("reimplement_responsibility failed", e));
-      },
-      rewordResponsibility: (respId, statement) => {
-        if (!projectPath) return;
-        // Code diverged: the new wording already matches it, so write it to both
-        // layers and clear the flag — no to-do, the model just catches up.
-        invoke("reword_responsibility", { cwd: projectPath, respId, statement })
-          .then(() => refreshObservability())
-          .catch((e) => console.error("reword_responsibility failed", e));
-      },
-      dropNode: (nodeId) => {
-        if (!projectPath) return;
-        // Code is right: delete the stale node + subtree from both layers.
-        invoke("drop_node", { cwd: projectPath, nodeId })
-          .then(() => refreshObservability())
-          .catch((e) => console.error("drop_node failed", e));
-      },
-      reimplementNode: (nodeId) => {
-        if (!projectPath) return;
-        // Model is right: keep the subtree in the plan as a rebuild to-do.
-        invoke("reimplement_node", { cwd: projectPath, nodeId })
-          .then(() => refreshObservability())
-          .catch((e) => console.error("reimplement_node failed", e));
-      },
-      moveResponsibility: (fromNodeId, toNodeId, respId) =>
-        updateModel((m) => moveResponsibilityHelper(m, fromNodeId, toNodeId, respId)),
-      addProperty: (nodeId) => updateModel((m) => addProperty(m, nodeId, "", "")),
-      updateProperty: (nodeId, index, patch) =>
-        updateModel((m) => updateProperty(m, nodeId, index, patch)),
-      removeProperty: (nodeId, index) => updateModel((m) => removeProperty(m, nodeId, index)),
-      adoptProperty: (nodeId, label) => {
-        if (!projectPath) return;
-        // Backend folds the field into the committed model (the code already
-        // exists); the file watcher then re-reads both layers into the UI.
-        invoke("adopt_property", { cwd: projectPath, nodeId, label })
-          .then(() => refreshObservability())
-          .catch((e) => console.error("adopt_property failed", e));
-      },
-      rejectProperty: (nodeId, label) => {
-        if (!projectPath) return;
-        // Backend folds the field into committed then drops it from the plan,
-        // leaving a deletion work item; the watcher re-reads both layers.
-        invoke("reject_property", { cwd: projectPath, nodeId, label })
-          .then(() => refreshObservability())
-          .catch((e) => console.error("reject_property failed", e));
-      },
-      dropProperty: (nodeId, label) => {
-        if (!projectPath) return;
-        // Code is right: delete the stale field from both layers; watcher refreshes.
-        invoke("drop_property", { cwd: projectPath, nodeId, label })
-          .then(() => refreshObservability())
-          .catch((e) => console.error("drop_property failed", e));
-      },
-      reimplementProperty: (nodeId, label) => {
-        if (!projectPath) return;
-        // Model is right: remove from committed so it reads as an Added to-do.
-        invoke("reimplement_property", { cwd: projectPath, nodeId, label })
-          .then(() => refreshObservability())
-          .catch((e) => console.error("reimplement_property failed", e));
-      },
-    }),
-    [updateModel, projectPath, refreshHealth, committed],
-  );
-
-  // The derived tree edits the code: claims into test files, container names
-  // into structure.toml. Structural intents do nothing there.
-  const derivedEditor = useMemo<Editor | undefined>(
+  // Edits land in the code; a write re-reads the tree and its status.
+  const editor = useMemo<Editor | undefined>(
     () =>
-      derived && projectPath
+      projectPath
         ? makeDerivedEditor({
             projectPath,
             model,
             onWritten: () => {
               void reloadFromDisk();
-              refreshObservability();
+              refreshHealth();
               refreshTests();
             },
             onError: (m) => toast(m),
           })
         : undefined,
-    [derived, projectPath, model, reloadFromDisk, refreshObservability, refreshTests, toast],
+    [projectPath, model, reloadFromDisk, refreshHealth, refreshTests, toast],
   );
-  const pageEditor = writing ? undefined : derivedEditor ?? editor;
-
-  // Persist a manual card placement from the map (null releases it back to
-  // auto-layout — the re-layout control). Pure cosmetics — the plan diff
-  // ignores `position` — but still a plan write, so it's gated off while an
-  // agent owns the file, like every other canvas edit.
-  const moveDiagramNode = useCallback(
-    (id: string, position: { x: number; y: number } | null) =>
-      updateModel((m) => setNodePosition(m, id, position)),
-    [updateModel],
-  );
-
-  const onCheckDrift = useCallback(() => {
-    if (!projectPath) return;
-    launchGate.request(
-      {
-        action: "Re-check the model against your code for drift.",
-        detail: "Reads the changed code under the flagged nodes.",
-      },
-      () => build.checkDrift(projectPath),
-    );
-  }, [projectPath, build, launchGate]);
+  const pageEditor = writing ? undefined : editor;
 
   const openSpecial = useCallback(
     (page: SpecialPage) => {
@@ -691,13 +341,9 @@ function Workspace({
     [setWorkspaceView],
   );
 
-  // The tree's Tests lens: test findings rolled
-  // up per subtree so a branch reads as "N below" and a clean one as nothing.
-  const testTally = rollupTestFindings(
-    model,
-    testFindings(model, committed, testVerdicts, probeResults),
-  );
-  const plan = planCounts(planDiff, model, committed);
+  // The tree's Tests lens: findings rolled up per subtree so a branch reads as
+  // "N below" and a clean one as nothing.
+  const testTally = rollupTestFindings(model, testFindings(model, committed, testVerdicts, probeResults));
   // Structural violations per subtree — the tree marks every row that leads
   // down to one.
   const structural = structuralBySubtree(model, healthReport);
@@ -712,12 +358,8 @@ function Workspace({
         onCloseProject={closeProject}
         onOpenSearch={() => setSearchOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
-        sessionBadge={sessionLog.badge}
-        sessionLive={sessionLog.live}
         sessionOpen={sessionOpen}
         onOpenSession={() => openSpecial("session")}
-        derived={derived}
-        onSetDerived={(on) => void setDerived(on)}
       />
       <div className="flex min-h-0 flex-1">
         <ModelTree
@@ -731,17 +373,15 @@ function Workspace({
           onSelectGroup={selectGroup}
           onToggle={toggle}
           editor={pageEditor}
-          activeNodeIds={build.active ? build.activeNodeIds : EMPTY_IDS}
-          // The map's current level (children of the focused node) — tinted in
-          // the tree so it mirrors what the diagram is showing. Only while in
-          // map view; undefined elsewhere disables the tint.
+          activeNodeIds={EMPTY_IDS}
+          // The map's current level — tinted in the tree so it mirrors what
+          // the diagram is showing. Only while in map view.
           activeLevel={view === "diagram" ? diagramFocus : undefined}
           completeness={healthReport?.completeness}
           concernLens={concernLens}
           onSetConcernLens={setConcernLens}
           testTally={testTally}
           structural={structural}
-          derived={derived}
         />
         {view === "diagram" ? (
           <DiagramView
@@ -754,31 +394,13 @@ function Workspace({
             selectedId={selected?.kind === "node" ? selected.id : null}
             onFocus={drillDiagram}
             onSelectNode={selectFromDiagram}
-            onMoveNode={writing ? undefined : moveDiagramNode}
             concernLens={concernLens}
           />
         ) : selected?.kind === "special" ? (
-          derived && selected.id !== "dark" ? (
-            <LandingPage projectPath={projectPath} since={since} model={model} onSelectNode={selectNode} />
-          ) : selected.id === "changes" ? (
-            <ChangesPage
-              planDiff={planDiff}
-              model={model}
-              committed={committed}
-              changeLog={changeLog}
-              onSelectNode={selectNode}
-            />
-          ) : selected.id === "session" ? (
-            <SessionPage model={model} log={sessionLog} onSelectNode={selectNode} onSelectGroup={selectGroup} />
-          ) : selected.id === "dark" ? (
+          selected.id === "dark" ? (
             <DarkCodePage model={model} report={healthReport} onSelectNode={selectNode} />
           ) : (
-            <UnmappedClaimsPage
-              committed={committed}
-              model={model}
-              report={healthReport}
-              onSelectNode={selectNode}
-            />
+            <LandingPage projectPath={projectPath} since={since} model={model} onSelectNode={selectNode} />
           )
         ) : selected ? (
           <NodePage
@@ -794,12 +416,6 @@ function Workspace({
             onSelectGroup={selectGroup}
             onFixture={projectPath && !writing ? onFixture : undefined}
             preview={preview}
-            // The authored model's journal and history mean nothing for a
-            // tree read from the code.
-            changeLog={derived ? EMPTY_LOG : changeLog}
-            history={derived ? EMPTY_HISTORY : history}
-            driftScopes={driftScopes}
-            onCheckDrift={pageEditor ? onCheckDrift : undefined}
           />
         ) : (
           <div className="flex flex-1 items-center justify-center text-xs text-[var(--text-muted)]">
@@ -810,8 +426,6 @@ function Workspace({
       <Powerline
         model={model}
         agent={agent}
-        build={build}
-        plan={plan}
         health={healthReport}
         launch={launch}
         onOpenSpecial={openSpecial}
@@ -841,5 +455,3 @@ function Workspace({
 
 /** Stable empty set so children don't re-render on a fresh `new Set()` each pass. */
 const EMPTY_IDS: ReadonlySet<string> = new Set();
-const EMPTY_LOG: ReturnType<typeof useModelStorage>["changeLog"] = [];
-const EMPTY_HISTORY: ReturnType<typeof useModelStorage>["history"] = [];

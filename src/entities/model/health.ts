@@ -207,17 +207,15 @@ export interface ModelHealthReport {
   health: ModelHealth;
   /** Per-node build completeness, keyed by node id. */
   completeness: Record<string, Completeness>;
-  /** Anchors whose code changed/broke since the last reconcile. */
-  anchors: AnchorObservation[];
-  /** Anchors silently healed this pass (symbol moved, content unchanged). */
-  reanchored: number;
+  /** Test anchors whose code changed or broke, when a report carries them. */
+  anchors?: AnchorObservation[];
   derived: DerivedGraph;
   /** Structural violations: code-time conformance to each declared style over the same resolved import graph. */
   structural: StyleReport;
   /** The project's style table (built-ins plus `.scryer/styles/*.json`). */
   styles?: StyleDef[];
-  /** The derived tree's claim states and health counts, when it is on. */
-  derivedStatus?: import("./derived").DerivedStatus;
+  /** Every claim's derived state and probe mark, and the health counts. */
+  derivedStatus: import("./derived").DerivedStatus;
 }
 
 /** Per-claim state of the ATTACHED TEST's fingerprint, from the test-namespaced
