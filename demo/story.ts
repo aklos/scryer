@@ -55,11 +55,11 @@ const TOLD: Told[] = [
       "ledger/src/domain/entry.rs",
       "ledger/src/domain/capture.rs",
       "ledger/src/application/store.rs",
-      "ledger/src/infrastructure/postgres.rs",
+      "ledger/src/infrastructure/journal.rs",
       "ledger/src/infrastructure/bank_file.rs",
       "ledger/src/infrastructure/backfill.rs",
-      "ledger/src/post.rs",
-      "api-gateway/src/routes/payments.ts",
+      "ledger/src/application/ledger.rs",
+      "api-gateway/src/lib.rs",
     ],
     reached: [
       "Ledger",
@@ -86,7 +86,7 @@ const TOLD: Told[] = [
     task: "retry failed ledger webhooks first",
     from: 14,
     to: 11,
-    touch: ["webhooks/delivery/retry.go"],
+    touch: ["webhooks/src/shell/delivery.rs"],
     stubs: ["When a ledger event fails to send, retries it before newer events"],
     reached: [
       "If a merchant endpoint fails, then retries with backoff for a day",
@@ -123,7 +123,7 @@ export const LAYOUT: Layout = {
 
 /** The node a file belongs to by the tree's boundaries: the longest
  *  directory pattern holding it. */
-function byBoundary(base: Fixture, file: string): string | undefined {
+export function byBoundary(base: Fixture, file: string): string | undefined {
   let best: [string, number] | undefined;
   for (const [id, sources] of Object.entries(base.tree.planned.boundaries ?? {})) {
     for (const { pattern } of sources) {
@@ -137,7 +137,7 @@ function byBoundary(base: Fixture, file: string): string | undefined {
 /** Where a story file sits in the base: the path itself when the base
  *  knows it, else the known file that ends with it, else the path under the
  *  prefix a known sibling directory sits under (`crates/` in a workspace). */
-function locate(base: Fixture, file: string): string {
+export function locate(base: Fixture, file: string): string {
   const known = Object.keys(base.tree.fileNodes);
   if (known.includes(file)) return file;
   const end = known.find((k) => k.endsWith(`/${file}`));

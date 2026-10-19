@@ -13,8 +13,8 @@
 
 import { Easing, interpolate } from "remotion";
 import base from "@film/base";
-import { REFUND_STUBS, REFUND_VIOLATION } from "../fixture";
-import { NOW } from "../story";
+import { REFUND_STUBS, STYLE_VIOLATION } from "../fixture";
+import { byBoundary, locate, NOW } from "../story";
 import { resolveNode, statusOf, systemOf, treeWith } from "../shapes";
 import type {
   ClaimState,
@@ -188,7 +188,19 @@ export function state(events: FilmEvent[], frame: number): FilmState {
     if (s.recordedAt !== undefined) recorded[s.respId] = s.recordedAt;
   }
   let version = 0;
-  let violations: DerivedViolation[] = fixture.tree.styleViolations.filter((v) => v.detail !== REFUND_VIOLATION.detail);
+  // The style act's violation: the derived one when the base has it.
+  const misplaced = fixture.violation ?? STYLE_VIOLATION;
+  const others = fixture.tree.styleViolations.filter((v) => v.detail !== misplaced.detail);
+  let violations: DerivedViolation[] = others;
+  /** A script path as the base files it (`crates/` in a workspace), and
+   *  its node in the file map. */
+  const fileNodes: Record<string, string> = {};
+  const file = (path: string) => {
+    const at = locate(fixture, path);
+    const node = fixture.tree.fileNodes[at] ?? byBoundary(fixture, at);
+    if (node) fileNodes[at] = node;
+    return at;
+  };
   const sessions: SessionLog[] = fixture.sessions.map((s) => ({ ...s, entries: [...s.entries] }));
   /** A claim's id by its wording. */
   const idOf = (text: string) => claims.find((c) => c.description === text)?.id ?? text;
@@ -294,15 +306,20 @@ export function state(events: FilmEvent[], frame: number): FilmState {
         else delete probes[idOf(e.claim)];
         break;
       case "violation":
-        violations = fixture.tree.styleViolations.filter((v) => v.detail !== REFUND_VIOLATION.detail);
+        violations = others;
         if (e.violation) {
-          const v = e.violation;
+          const v = fixture.violation ?? e.violation;
           violations = [...violations, { ...v, nodeId: node(v.nodeId), other: v.other && node(v.other) }];
         }
         break;
       case "session": {
         // A stop's `reached` names claims by wording in the script.
-        const entry = e.entry.event === "reached" ? { ...e.entry, ids: e.entry.ids.map(idOf) } : e.entry;
+        const entry =
+          e.entry.event === "reached"
+            ? { ...e.entry, ids: e.entry.ids.map(idOf) }
+            : e.entry.event === "touch" || e.entry.event === "stub"
+              ? { ...e.entry, file: file(e.entry.file) }
+              : e.entry;
         const log = sessions.find((s) => s.id === e.session);
         if (log) log.entries.push(entry);
         else sessions.unshift({ id: e.session, entries: [entry] });
@@ -313,7 +330,8 @@ export function state(events: FilmEvent[], frame: number): FilmState {
     }
   }
 
-  const tree = treeWith(fixture.tree, claims, violations);
+  const derived = treeWith(fixture.tree, claims, violations);
+  const tree = { ...derived, fileNodes: { ...derived.fileNodes, ...fileNodes } };
   const resolved: View =
     view.kind === "node"
       ? { kind: "node", node: node(view.node) }

@@ -4,7 +4,7 @@
  * durations are targets — retime an act by moving its start.
  */
 
-import { REFUND_STUBS, REFUND_VIOLATION } from "../fixture";
+import { REFUND_STUBS, STYLE_VIOLATION } from "../fixture";
 import { NOW, SESSION_REFUNDS, SESSION_WEBHOOKS } from "../story";
 import type { SessionEntry, SessionEvent } from "../types";
 import type { Camera, FilmEvent, TermLine, TestResult } from "./state";
@@ -158,20 +158,19 @@ export const EVENTS: FilmEvent[] = ([
     [2.6, { kind: "view", view: { kind: "diagram", level: "containers" } }],
     [5.0, { kind: "view", view: { kind: "diagram", level: "component", focus: "Ledger" } }],
     [5.2, cam(580, 500, 1, 0.1)],
-    [7.0, tool("write", "ledger/src/domain/refund.rs")],
-    [7.4, diff("ledger/src/domain/refund.rs", [
-      ["+", "use crate::infrastructure::postgres::PgStore;"],
-      ["+", "pub fn refund(store: &PgStore, capture: CaptureId, amount: Money)"],
+    [7.0, tool("write", "ledger/src/domain/memory.rs")],
+    [7.4, diff("ledger/src/domain/memory.rs", [
+      ["+", "use crate::application::store::EntryStore;"],
+      ["+", "impl EntryStore for MemoryStore {"],
     ])],
     [7.6, ok()],
-    [7.6, log(SESSION_REFUNDS, { event: "touch", file: "ledger/src/domain/refund.rs" })],
-    [8.0, { kind: "violation", violation: REFUND_VIOLATION }],
+    [7.6, log(SESSION_REFUNDS, { event: "touch", file: "ledger/src/domain/memory.rs" })],
+    [8.0, { kind: "violation", violation: STYLE_VIOLATION }],
     [9.0, headline("Styles the agent builds to, and cannot drift from.")],
-    [10.6, say("domain can't import infrastructure — moving the store behind a port.")],
-    [11.2, tool("write", "ledger/src/application/refunds.rs")],
-    [11.8, diff("ledger/src/domain/refund.rs", [
-      ["-", "use crate::infrastructure::postgres::PgStore;"],
-      ["+", "use crate::application::RefundLedger;"],
+    [10.6, say("domain can't depend on application — the store is an adapter; moving it out.")],
+    [11.2, tool("move", "ledger/src/domain/memory.rs → infrastructure/")],
+    [11.8, diff("ledger/src/infrastructure/mod.rs", [
+      ["+", "pub mod memory;"],
     ])],
     [12.2, ok()],
     [13.0, { kind: "violation" }],
@@ -194,7 +193,7 @@ export const EVENTS: FilmEvent[] = ([
       ["+", "ledger.post(Refund::against(capture, amount))"],
     ])],
     [4.4, ok()],
-    [4.4, log(SESSION_REFUNDS, { event: "touch", file: "ledger/src/post.rs" })],
+    [4.4, log(SESSION_REFUNDS, { event: "touch", file: "ledger/src/application/ledger.rs" })],
     [5.0, run("cargo test --test refunds", refundTests("pass"), 1.4)],
     [6.4, { kind: "claims.state", claims: BUILT, state: "proven" }],
     [6.8, tool("ingest_test_report", ".scryer/reports/radius.xml")],
@@ -257,14 +256,14 @@ export const EVENTS: FilmEvent[] = ([
     [0.3, { kind: "term.show", term: 1, cwd: "~/aperture-pay · webhooks" }],
     [1.0, type("retry failed ledger webhooks first", 1.4, 1)],
     [2.6, { kind: "term.submit", term: 1 }],
-    [3.0, tool("orient", "webhooks/delivery/retry.go ledger/src/post.rs", undefined, 1)],
+    [3.0, tool("orient", "webhooks/src/shell/delivery.rs ledger/src/application/ledger.rs", undefined, 1)],
     [3.6, ok(1)],
-    [3.8, note("ledger/src/post.rs: also edited by live session c3d8e1f7 (add partial refunds…), 12 min ago", 1)],
-    [4.4, log(SESSION_WEBHOOKS, { event: "touch", file: "ledger/src/post.rs" })],
+    [3.8, note("ledger/src/application/ledger.rs: also edited by live session c3d8e1f7 (add partial refunds…), 12 min ago", 1)],
+    [4.4, log(SESSION_WEBHOOKS, { event: "touch", file: "ledger/src/application/ledger.rs" })],
     [4.6, { kind: "view", view: { kind: "landing" } }],
     [5.4, headline("Many agents, one substrate. You watch the claims, not the chat.")],
-    [6.0, say("Retrying ledger events ahead of newer ones; leaving post.rs to the refunds session.", 1)],
-    [7.0, tool("write", "webhooks/delivery/retry.go", undefined, 1)],
+    [6.0, say("Retrying ledger events ahead of newer ones; leaving ledger.rs to the refunds session.", 1)],
+    [7.0, tool("write", "webhooks/src/shell/delivery.rs", undefined, 1)],
     [7.6, ok(1)],
     [8.0, say("Refunds are in: four claims proven, the guard probed.")],
   ]),

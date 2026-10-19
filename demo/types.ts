@@ -89,4 +89,7 @@ export interface Fixture {
   structure: Structure;
   sessions: SessionLog[];
   layout: Layout;
+  /** The style act's violation, as a branch that misplaces a file derives
+   *  it, nodes by name; absent, the film uses fixture.ts's. */
+  violation?: DerivedViolation;
 }

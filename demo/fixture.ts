@@ -223,12 +223,12 @@ export const REFUND_STUBS: DerivedClaim[] = [
 }));
 
 /** Act 2's misplaced import: a domain module reaching into infrastructure. */
-export const REFUND_VIOLATION: DerivedViolation = {
+export const STYLE_VIOLATION: DerivedViolation = {
   nodeId: "Ledger/domain",
-  other: "Ledger/infrastructure",
-  file: "ledger/src/domain/refund.rs",
-  kind: "layer_violation",
-  detail: "domain imports infrastructure (ledger/src/infrastructure/postgres.rs) — domain depends on nothing outside domain",
+  other: "Ledger/application",
+  file: "ledger/src/domain/memory.rs",
+  kind: "forbidden_link",
+  detail: "declared link: 'domain' (domain) → 'application' (application) is illegal in style 'hexagonal': domain may depend on domain",
 };
 
 // --- Diagram placements ------------------------------------------------------------
@@ -261,6 +261,8 @@ const skeleton: ScryModel = {
 const SOURCE_FILES = [
   ...ROWS.map((r) => r[3]),
   ...STORY_FILES,
+  "ledger/src/domain/memory.rs",
+  "ledger/src/infrastructure/memory.rs",
   "fraud/scoring/legacy.py",
   "ledger/src/application/refunds.rs",
   "ledger/src/application/store.rs",
