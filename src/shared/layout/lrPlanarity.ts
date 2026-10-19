@@ -1,3 +1,7 @@
+/**
+ * Left-right planarity test producing a full rotation-system embedding for a graph
+ */
+
 // Left-Right (Brandes 2009) planarity test, ported faithfully from the
 // canonical NetworkX implementation (networkx/algorithms/planarity.py:
 // LRPlanarity, ConflictPair, Interval, PlanarEmbedding).

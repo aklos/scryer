@@ -1,3 +1,9 @@
+//! Holds the exclusive advisory OS lock across a model's whole read-modify-write cycle, releasing on drop even after a crash.
+//!
+//! Read and write the committed and planned layers, under a lock, with the version check and write gates each one owes.
+//!
+//! Dates each responsibility/property only when its truth-bearing content is new or changed, carrying the prior date forward otherwise.
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;

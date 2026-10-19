@@ -1,3 +1,7 @@
+/**
+ * Inline cross-reference link to another node's or group's page
+ */
+
 import type { ComponentType } from "react";
 import type { LucideProps } from "lucide-react";
 import { ArrowDownLeft, ArrowUpRight } from "lucide-react";

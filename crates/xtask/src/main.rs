@@ -1,3 +1,27 @@
+//! Builds the scryer-mcp binary via cargo in debug or release profile
+//!
+//! Reads the target project's scryer model, defaulting to the workspace root when no path is given
+//!
+//! Dispatches xtask subcommands (build-sidecar, validate-model) from CLI arguments, printing usage and exiting non-zero for anything unrecognized
+//!
+//! Validate a project's model from the command line.
+//!
+//! Package the MCP Server for distribution with the desktop app.
+//!
+//! Exits 2 and lists warnings when validation fails, exits 1 if the model can't be read
+//!
+//! Resolves the host's Rust target triple via `rustc --print host-tuple`, falling back to parsing `rustc -vV` when unavailable
+//!
+//! Copies the built binary into src-tauri/binaries under a target-triple-qualified sidecar name expected by Tauri
+//!
+//! Runs structural and source-coverage validation against the model and prints a summary
+//!
+//! Locates the workspace root by walking up from the current directory to the nearest Cargo.toml declaring [workspace]
+//!
+//! Runs the project's scryer model through structural and source-coverage validation and reports the result
+//!
+//! Builds and stages the scryer-mcp sidecar binary for Tauri packaging
+
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;

@@ -3,6 +3,12 @@
  * codebase via the configured AI agent. Generation itself is driven by
  * `useModelBuild` (lifted to the app shell) so it streams onto the canvas — the
  * picker just triggers it and gets out of the way.
+ *
+ * Detects installed AI coding tools and drives one-click MCP setup for the opened project
+ *
+ * Lets the user open or create a project and offers Generate/Start-blank when no model exists yet
+ *
+ * Lets the user open or create a project, offering Generate/Start-blank when it has no model yet
  */
 
 import { useCallback, useEffect, useState } from "react";

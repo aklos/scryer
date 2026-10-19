@@ -23,6 +23,18 @@
 //! Coverage: nodes, links, responsibilities, properties, and groups.
 //! Properties have no id, so they are keyed by `(owner node, label)` — a label
 //! change reads as delete-plus-add, which is acceptable for plain data fields.
+//!
+//! Computes how one model layer structurally diverges from another — nodes, links, responsibilities, properties, and groups — ignoring purely cosmetic fields like canvas position.
+//!
+//! Ignores purely cosmetic fields (canvas position, concern tags) so cosmetic edits never register as plan changes.
+//!
+//! Computes structural divergence between two model layers (committed vs. planned, or committed vs. code) as a typed list of element changes.
+//!
+//! Counts the plan-change carrier cards (nodes/groups) a user reads, folding many element diffs under the one host that owns them — a different altitude from the element queue.
+//!
+//! The plan-diff elements outstanding as implement-queue work, excluding vagrant code-discovered elements still awaiting a drift verdict.
+//!
+//! Derives the two altitudes of pending work: individual diverging elements for the build queue, and the carrier nodes/groups a user reads as cards.
 
 use crate::{Kind, LinkKind, ScryModel};
 use serde::Serialize;

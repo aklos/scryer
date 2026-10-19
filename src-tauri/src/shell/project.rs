@@ -1,3 +1,25 @@
+//! Records developer sign-off snapshots and durable history events for canvas-driven plan changes, keeping the developer as author of intent across re-stamped edits.
+//!
+//! Detects legacy model schemas and creates blank models for new projects.
+//!
+//! Snapshots a change's tagged entries as the developer-approved intent, after which any reworded or added claim under it surfaces as vagrant instead of silently folding.
+//!
+//! Replaces the previous file watcher and session-hook endpoint when a different project's model is opened, forwarding touch and close-gate events to the canvas.
+//!
+//! Serves the committed model and the planned (draft) layer the canvas edits, healing legacy shadow drafts before the canvas loads one.
+//!
+//! Reports whether a project's model predates the current schema version, so the frontend can surface a clear upgrade error.
+//!
+//! Creates a blank model at a new project's .scryer/model.scry after validating the target directory.
+//!
+//! Watches the project's .scryer/ directory for model changes and rebinds the session-hook endpoint to whichever project is active.
+//!
+//! Reads the durable committed-model history log as JSON, oldest first.
+//!
+//! Persists the canvas's edited draft, re-stamping any signed-off change's snapshot so the developer's own edits never later read as the agent's amendments.
+//!
+//! Heals legacy shadow drafts before returning the planned layer, so a pre-seeding draft doesn't keep re-minting shadow anchors forever.
+
 use std::sync::Mutex;
 
 use notify::{recommended_watcher, EventKind, RecursiveMode, Watcher};

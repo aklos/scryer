@@ -20,6 +20,22 @@
 //! - **Darkness is per boundary.** Given the project's modelable source files,
 //!   each boundary-owning node reports which of its files no anchor in its
 //!   subtree reaches — the code the lens cannot see.
+//!
+//! Computes build completeness over the authored (committed + planned) model — how much of the claimed territory reads through to real, existing code.
+//!
+//! Computes the model's health counters per node and in rollup, widening the structural/leaf verdict to the authored tree so plan-only children discharge a committed parent's claims.
+//!
+//! Ships a diagnostic CLI (dump_health) that prints a project's full computed health for inspection outside the app.
+//!
+//! Computes per-node build completeness over the authored (committed + planned) model from resolved filesystem/anchor facts.
+//!
+//! Flags architecture nodes that no link references as source or target.
+//!
+//! Resolves the authored model against the real filesystem and computes completeness — the single shared path so the figure never diverges between callers.
+//!
+//! Whether a node discharges its claims through its children rather than needing its own code anchor.
+//!
+//! Computes per-node and whole-model health counters (responsibilities, properties, tested/testable/untested, vagrant, stale, anchored/unmapped) rolled up by subtree.
 
 use crate::{Kind, ScryModel};
 use serde::Serialize;

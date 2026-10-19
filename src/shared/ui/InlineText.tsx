@@ -6,6 +6,8 @@
  *
  * Style props (`fontSize`, `fontFamily`, `className`) flow through so a caller
  * can drop one of these in place of a `<span>` without restyling.
+ *
+ * In-place text/name editor shared by every renameable field in the app
  */
 
 import {

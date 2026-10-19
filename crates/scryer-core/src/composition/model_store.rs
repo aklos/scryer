@@ -1,4 +1,14 @@
 //! Reading and writing a project's two model layers.
+//!
+//! Acquires the exclusive write lock for a model, creating the .scryer directory and lock file as needed.
+//!
+//! Deletes a project's model and every derived cache (draft, history, anchors, sync state) so a future model starts clean.
+//!
+//! Hand a caller the model layers, the history, the refusals, the settings and the style table for a project, wiring the adapter each one needs.
+//!
+//! Seeds a clean draft plan when none exists and heals any legacy shadow copies, guaranteeing the draft never duplicates committed's anchors.
+//!
+//! Stamps fossilization dates and writes the committed model, holding the lock across the whole read-modify-write.
 
 use crate::domain::diff;
 use crate::infrastructure::storage;

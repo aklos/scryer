@@ -1,3 +1,11 @@
+//! Tracks token usage and cost across a session and lets sessions accumulate into a running build total
+//!
+//! Totals every billed token bucket for a turn
+//!
+//! Folds another session's usage into a running total, cost included
+//!
+//! Defines the vocabulary of events a running agent session can emit
+
 use serde::Serialize;
 
 /// Token usage (and cost) an agent reports at the end of a turn. Populated from

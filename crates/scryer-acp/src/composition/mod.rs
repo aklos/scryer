@@ -2,6 +2,14 @@
 //! decide WHICH agent to launch, and the handle another container drives a
 //! session through. The runtime itself stays private — a consumer names this
 //! handle, never the subprocess adapter behind it.
+//!
+//! Hand another container a handle that starts and cancels agent sessions, keeping the subprocess runtime private to this crate.
+//!
+//! Resolve which agent a session launches with, honoring the user's preference and falling back in a fixed order when it is not installed.
+//!
+//! Honors the user's preferred agent (auto/claudeCode/codex/copilot) and falls back to the others in a fixed order if it isn't installed
+//!
+//! Maps a known MCP client name (claude-code, codex, copilot and its aliases) to CLI print mode, or otherwise probes for a `{name}-acp` adapter or bare binary on PATH
 
 use crate::domain::events::AgentEvent;
 use crate::domain::launch::{AcpKind, AgentKind, AgentLaunch, LaunchMode};

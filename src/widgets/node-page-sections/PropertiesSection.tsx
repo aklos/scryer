@@ -1,3 +1,7 @@
+/**
+ * Lists and edits a node's declared data-shape fields as a diff against the committed model
+ */
+
 import { Plus, Trash2 } from "lucide-react";
 import type { Node, SchemaProperty } from "../../entities/model/viewmodel";
 import type { Editor } from "../../entities/model/editor";

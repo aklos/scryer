@@ -4,6 +4,10 @@
 //! resolve the definition's line range by parsing with tree-sitter. Grammars
 //! are compiled into the binary, so this needs no external tool. Languages
 //! without a bundled grammar fall back to the caller's text search.
+//!
+//! Walks a tree-sitter parse tree for the node whose name matches the symbol, preferring definition-shaped kinds nearest a given line hint, across every bundled grammar plus Vue SFCs.
+//!
+//! Resolve a symbol name to its line span in a source file, preferring the definition nearest a remembered position.
 
 use std::path::Path;
 use tree_sitter::{Language, Parser};

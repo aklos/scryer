@@ -9,6 +9,8 @@
  * window, and the minimize / maximize / close controls live at its right edge.
  * The attribute does not inherit — each element the cursor can land on needs
  * its own, so the flex wings and the project path carry it too.
+ *
+ * Top window chrome: project switcher, view toggle, search launcher, theme toggle, and window controls
  */
 
 import { useEffect, useState } from "react";

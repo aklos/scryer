@@ -1,5 +1,13 @@
 //! The desktop app's wiring: recover the user's PATH, build the Tauri app,
 //! register its state and its whole command surface.
+//!
+//! Asks the user's login shell for its real PATH once at startup, since GUI-launched macOS apps otherwise inherit a minimal PATH missing user-installed tools.
+//!
+//! Bootstraps the Tauri application, registering every IPC command the canvas can invoke.
+//!
+//! Builds the Tauri app, registers managed state (ACP runtime, watcher, preview server, hook state), and wires the full invoke_handler command table.
+//!
+//! Recovers the user's real login-shell PATH on macOS so bundled tools launched from Spotlight/Dock/Finder can find user-installed binaries.
 
 use std::sync::Mutex;
 

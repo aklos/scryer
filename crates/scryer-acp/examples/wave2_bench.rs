@@ -9,6 +9,10 @@
 //! procedure wording) so before/after runs differ only in the evidence.
 //! The scratch project should be a throwaway copy of a repo — the bench
 //! overwrites its `.scryer/model.scry` with a minimal system+container model.
+//!
+//! Reverts the container prompt's A1 wording so a --no-code benchmark run reproduces the pre-A1 session exactly
+//!
+//! Strips embedded source excerpts from the evidence JSON to benchmark the no-code variant of a prompt
 
 use std::collections::BTreeMap;
 

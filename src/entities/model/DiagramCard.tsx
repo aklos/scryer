@@ -6,6 +6,8 @@
  * colored stroke, external dashed frame, the drill affordance on select, and
  * the has-children indicator. Dropped: contracts, advisor hints, member chips,
  * reference nodes, and all drag-to-edit — editing lives in the tree and page.
+ *
+ * Renders one C4 box node on the diagram — shape, drift/plan outline, completeness gauge, structural violation count, and drill-down
  */
 
 import type { NodeProps, Node as RFNode } from "@xyflow/react";

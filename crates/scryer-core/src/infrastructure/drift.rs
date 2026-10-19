@@ -12,6 +12,8 @@
 //! to focus the semantic re-check; the flagging itself (vagrant responsibilities
 //! for undescribed behaviour, `changed` status for claims the code no longer
 //! discharges) is written by the agent through the `flag_drift` MCP tool.
+//!
+//! Report which files changed since a sync point, from git when there is a repository and file mtimes otherwise.
 
 use crate::infrastructure::scan;
 use crate::ScryModel;

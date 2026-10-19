@@ -1,3 +1,7 @@
+/**
+ * Shared dropdown control used across forms and settings
+ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 

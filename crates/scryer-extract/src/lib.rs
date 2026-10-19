@@ -10,6 +10,10 @@
 //! straight to the semantic work: choosing components and writing
 //! responsibilities. The context is a map the agent reads FROM — it is never a
 //! C4 model, and it is never persisted to disk.
+//!
+//! Slice that map into per-scope context for a modeling agent's task.
+//!
+//! Parse a codebase's manifests and source into a map of containers, symbols, and dependencies.
 
 pub mod composition;
 pub mod domain;

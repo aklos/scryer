@@ -1,5 +1,13 @@
 //! The dev-tasks CLI's dispatch: each invocation routes to its task, and an
 //! unknown (or missing) task prints usage and fails.
+//!
+//! Asserts validate-model exits 0 and reports 'clean' for a project with a valid empty model
+//!
+//! Asserts validate-model exits 1 and reports a read failure for a project with no model file
+//!
+//! Verifies the xtask binary's observable exit codes and stderr/stdout messaging for its subcommands
+//!
+//! Asserts that a missing or unrecognized task prints usage to stderr and exits with code 1
 
 use std::process::Command;
 

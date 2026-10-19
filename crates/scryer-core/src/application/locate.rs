@@ -5,6 +5,16 @@
 //! edit — and returns that location's slice of the model: the claims anchored
 //! there, the finest node that maps the file and its ancestor chain, the
 //! boundary owner of the region, and the directives binding the location.
+//!
+//! The deepest node whose boundary glob owns a file, even when nothing anchors into it.
+//!
+//! Resolves a source file (and optionally a symbol) to every claim anchored there, its owning node chain, and the boundary that owns it even when unanchored.
+//!
+//! Assembles the full file→intent report an agent or the editor overlay reads: located claims, breadcrumb path, and pending plan entries scoped to them.
+//!
+//! Resolves a file (and optional symbol) against a model view to every claim anchored there, its owner chain, and the boundary owner even when unanchored.
+//!
+//! Resolves a source-map key back to the responsibility or data-shape claim it anchors.
 
 use crate::domain::ownership::{node_ancestry, node_depth, owning_node_for_location, BoundaryOwnership};
 use crate::{inherited_directives, InheritedDirectives, Kind, ScryModel, SourceLocation};

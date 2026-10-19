@@ -1,4 +1,8 @@
 //! Why the fold declined specific claims.
+//!
+//! Records or replaces the refusal for each newly refused claim and clears the standing refusal for any claim that folded successfully, in one read-modify-write.
+//!
+//! Drops refusals for claims no longer present in the plan, so the inbox never shows a card for a ghost claim.
 
 use crate::domain::refusal::Refusal;
 use crate::infrastructure::refusals;

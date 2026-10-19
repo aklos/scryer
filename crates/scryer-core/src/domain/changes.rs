@@ -31,6 +31,30 @@
 //! An open change with NO tagged elements yet is legitimate (just opened, or
 //! all its work still unwritten) and is never GC'd: [`gc`] closes only
 //! changes whose keys the prune itself removed.
+//!
+//! Moves pending work between changes by carrier id, whole change, or the unfiled bucket — the ledger's only re-filing verb.
+//!
+//! Mints a fresh change id seeded past every id either layer has seen and registers it as open.
+//!
+//! Canonically encodes (and decodes) a change-map key from an element's kind, owner, and id.
+//!
+//! Tracks which plan elements belong to which open change, so pending work can be filed, re-filed, and closed as a unit.
+//!
+//! Classifies every entry of a signed-off change against its snapshot as amended, added, or dropped.
+//!
+//! Snapshots a change's claims at sign-off and classifies later edits against that snapshot (untouched/amended/added/dropped).
+//!
+//! Re-stamps every signed-off change against the plan's current state after a developer edit, since the developer's own edits are intent by definition.
+//!
+//! Garbage-collects stale change tags and closes changes whose work has folded or been abandoned.
+//!
+//! Hashes a plan entry's truth-bearing fields only, so cosmetic edits (concern tags, positions, icons) never read as an amendment after sign-off.
+//!
+//! Stamps a change as signed off by snapshotting every entry currently tagged to it, replacing any prior snapshot.
+//!
+//! Tags plan elements to a change, last-writer-wins, reporting any cross-change collisions for the caller to surface.
+//!
+//! Prunes change-map keys whose plan entries have folded or reverted, then closes every change the prune emptied.
 
 use crate::domain::diff::{diff, ElementChange, ElementKind};
 use crate::domain::model::ChangeMeta;

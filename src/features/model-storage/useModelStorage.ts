@@ -14,6 +14,16 @@
  *  - subscribe to `model-changed` so external writes (an agent via MCP) to
  *    either layer are picked up live; suppress the event for our own writes
  *  - track recent projects in localStorage so the picker has somewhere to start
+ *
+ * Loads, saves, and reconciles the project's model files, tracking agent arrivals for review highlighting
+ *
+ * Owns the working/committed model, plan diff, and change log as the single write chokepoint for every edit
+ *
+ * Diffs a freshly loaded model against the prior one into a Recent-changes revision, field by field
+ *
+ * Owns the open project's working/committed model, plan diff, and change log as the single write chokepoint for every edit
+ *
+ * Loads, saves, and reconciles the project's model files, tracking agent arrivals for review highlighting
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";

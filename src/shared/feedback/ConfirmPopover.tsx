@@ -1,6 +1,8 @@
 /**
  * Tiny inline confirm popover anchored to a button. Used for delete actions on
  * cards and groups. Click outside or Esc cancels; Enter confirms.
+ *
+ * Confirms a destructive action inline, anchored to the control that triggered it
  */
 
 import { useEffect, useRef } from "react";

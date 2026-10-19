@@ -1,3 +1,7 @@
+/**
+ * Reactive read of the active color mode, since theme lives on the DOM class rather than React state
+ */
+
 import { useEffect, useState } from "react";
 
 /**

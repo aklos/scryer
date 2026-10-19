@@ -1,5 +1,9 @@
 //! Why the fold declined a claim — the record itself. The ledger file it is
 //! stored in belongs to `infrastructure::refusals`.
+//!
+//! Records which claims a fold declined to commit and why, so a later attempt or the user can see standing refusals.
+//!
+//! Clears a claim's refusal once a later fold succeeds, and prunes refusals for claims the plan no longer carries.
 
 use serde::{Deserialize, Serialize};
 

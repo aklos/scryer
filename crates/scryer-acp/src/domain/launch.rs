@@ -1,6 +1,12 @@
 //! The launch vocabulary: which agent harness, which ACP dialect, and how a
 //! resolved agent is spawned. Pure data — probing PATH for a binary is the
 //! composition layer's job.
+//!
+//! Distinguishes Copilot's own ACP-serving binary (model/effort as spawn flags) from a generic `{name}-acp` adapter (spawned bare, own config decides defaults)
+//!
+//! Decides whether a named agent should be launched via CLI print mode or as an ACP subprocess
+//!
+//! Falls back through the available agents in a fixed order when a preferred one is not on PATH
 
 /// Which agent harness we're dealing with.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]

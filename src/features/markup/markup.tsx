@@ -18,6 +18,18 @@
  * the grammar's closed keyword set and fixed clause order, never a linguistic
  * guess. {@link MarkupMirror} renders the live char-exact preview behind the
  * editor's transparent text, so what the author sees is what commits.
+ *
+ * Parses and mints a claim statement's bold scan-anchor markup, styling marker-free text from EARS grammar alone
+ *
+ * Word-diffs two strings for reworded claims, descriptions, and link labels
+ *
+ * Flags rule-21 EARS-grammar violations in a claim statement — dangling conditions, compound responses, and the like
+ *
+ * Positionally styles a marker-free EARS statement from the grammar's fixed shape alone
+ *
+ * Flags EARS-grammar violations in a claim statement
+ *
+ * Parses a claim statement's bold scan-anchor markup into renderable segments
  */
 import type { ReactNode } from "react";
 

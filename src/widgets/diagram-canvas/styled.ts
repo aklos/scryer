@@ -19,6 +19,8 @@
  *
  * Pure geometry: takes members with layers and the edges among them, returns
  * card centers plus the regions the renderer draws behind the cards.
+ *
+ * Positions a styled container's members per its declared drawing — hexagon, rows, rings, or columns
  */
 
 import type { Drawing, StyleDef } from "../../entities/model/styles";

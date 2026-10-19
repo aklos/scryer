@@ -1,6 +1,10 @@
 //! The shape of the model's durable timeline: what kinds of events it records
 //! and how one reads back. Appending them to the log is
 //! `infrastructure::history`.
+//!
+//! Reads the timeline back in file order, tolerant of torn or malformed lines.
+//!
+//! Records durable, human-readable events (implementation folds, drift, moves, births, changes) to an append-only timeline.
 
 use crate::SourceLocation;
 use serde::{Deserialize, Serialize};

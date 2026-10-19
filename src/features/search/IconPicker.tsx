@@ -5,6 +5,8 @@
  * picked name is stored on `node.icon` / `group.icon`; the rendering layer
  * falls back to the kind silhouette (see kindIcon) when no override is set.
  * To clear an override, the user picks the "Default" item at the top.
+ *
+ * Lets the user choose a display icon for a node or group
  */
 
 import {

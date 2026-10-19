@@ -1,3 +1,19 @@
+//! Builds the prompt asking an agent to author realistic fixture data (shared, type-keyed, plus per-node overrides) for a component preview render
+//!
+//! Builds a targeted repair prompt limited to the specific issues deterministic validation found after a parallel build
+//!
+//! Scopes each prompt's evidence to just the subtree or files under judgment so cost scales with scope, not the whole model
+//!
+//! Serializes one node's subtree — its descendants, responsibilities, and source anchors — as compact JSON scoped to just that node
+//!
+//! Builds the semantic drift-check prompt comparing a changed container's code against its modeled responsibilities, to be reported only via flag_drift
+//!
+//! Authors the prompt text for every stage of the auto-context build pipeline (system enrichment, container fill, repair, drift check, preview fixtures)
+//!
+//! Builds the system-level prompt for adding persons, externals, non-code containers, and refining container names/responsibilities after mechanical seeding
+//!
+//! Builds the wave-2 prompt that has an agent cluster one container's code into components and mandatory symbols via a single fill_container call
+
 use scryer_core::{Node, ScryModel};
 use std::collections::HashSet;
 

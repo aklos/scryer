@@ -1,3 +1,23 @@
+//! Lets the developer dismiss drift for the whole project or for one node's subtree by advancing the reconcile anchor without running a semantic check.
+//!
+//! Seeds the reconcile anchor to now (reporting nothing) on a never-reconciled model, then reports out-of-plan drift scopes thereafter.
+//!
+//! Serves per-claim probe results — how many deliberate breaks a claim's test caught versus missed.
+//!
+//! Runs the full deterministic health pass off the IPC thread: per-node completeness, anchor fingerprint checks with silent re-anchoring, structural style conformance, and link evidence.
+//!
+//! Self-heals anchors first (a moved-but-unchanged symbol re-anchors silently), refreshes the cross-process dependency-graph cache, then computes completeness and structural conformance against the healed model.
+//!
+//! Serves per-claim test verdicts, each re-verified against the working tree with an mtime fast path.
+//!
+//! Serves per-claim test and probe verdicts from the status cache, re-verified against the working tree.
+//!
+//! Records a per-node reconcile anchor for one node and its whole subtree, leaving the rest of the model's drift untouched.
+//!
+//! Advances the reconcile anchor to now on the developer's say-so, without running a semantic check, so dismissed drift stops surfacing until code changes again.
+//!
+//! Computes a cheap, agent-free drift status — out-of-plan regressions to mapped code — to nudge a semantic recheck without ever crying wolf on a never-reconciled model.
+
 /// Cheap, agent-free drift status: nodes with OUT-OF-PLAN regressions to mapped
 /// code — a committed anchor that broke or changed since the last reconcile with
 /// no pending plan item to explain it (see `anchors::out_of_plan_scopes`). Stays

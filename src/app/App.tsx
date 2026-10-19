@@ -5,6 +5,10 @@
  * a two-pane workspace: the model tree (definition surface) on the left and the
  * selected node/group's wiki-style page on the right. Mutations flow through the
  * Editor intents into the viewmodel helpers.
+ *
+ * Owns the whole editor session — model storage, build/drift orchestration, navigation and selection state — and composes every panel
+ *
+ * Top-level entry: cancels any orphaned agent session left running from a prior dev refresh, then renders the workspace
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";

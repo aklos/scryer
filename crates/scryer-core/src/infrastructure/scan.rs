@@ -1,3 +1,5 @@
+//! Walk a project directory for its manifests, its product files and its shape.
+
 use std::path::Path;
 
 pub use crate::domain::product_code::*;

@@ -7,6 +7,14 @@
  * Grouped by direction — Uses (outgoing) / Used by (incoming) — plus the
  * code-suggested candidates with a one-click declare. This is where
  * connections are read and edited.
+ *
+ * Read-only companion listing code-only connections the model hasn't declared as links
+ *
+ * Lists a node's declared relationships as a diff sheet, with import evidence and expandable code-path ladders
+ *
+ * Lists a node's declared relationships as a diff sheet, with import evidence and expandable code-path ladders
+ *
+ * Lists code-only connections the model hasn't declared as links, read-only
  */
 
 import { useMemo, useState } from "react";

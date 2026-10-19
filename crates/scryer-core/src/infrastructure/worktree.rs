@@ -18,6 +18,20 @@
 //! interesting code is uncommitted almost by definition, and a probe against
 //! `HEAD` would be answering a question about code the developer already moved
 //! past.
+//!
+//! Feeds a patch to the worktree via git apply on stdin.
+//!
+//! Refuses rather than downgrades when the project isn't a git repository — mutating the developer's own files is exactly what the worktree exists to prevent.
+//!
+//! Hands back a worktree synced to the project's current commits plus uncommitted/untracked edits, creating it on first use and reusing it (build cache and all) after.
+//!
+//! The deterministic worktree path for a project, keyed by a hash of its absolute path.
+//!
+//! Syncs, applies patches to, and resets the worktree between probe rounds without ever touching the developer's real files.
+//!
+//! Maintains a persistent, isolated git worktree per project (outside the developer's own checkout) that mirrors its current committed + uncommitted state, so a probe can safely test hypothetical changes.
+//!
+//! Discards whatever the last probe did, preserving ignored build output so the next run stays incremental.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

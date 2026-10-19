@@ -10,6 +10,8 @@
 //!
 //! Append-only JSONL (one event per line) keeps writes cheap and crash-safe — a
 //! torn final line drops exactly one event instead of corrupting the whole log.
+//!
+//! Append to the durable stores beside them — history, refusals, settings, the build's edge cache.
 
 use crate::ModelRef;
 use std::fs;

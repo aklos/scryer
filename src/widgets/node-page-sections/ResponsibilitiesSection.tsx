@@ -1,3 +1,7 @@
+/**
+ * Lists a node's claims grouped by concern, each rendered as a diff row with its verdict actions
+ */
+
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {

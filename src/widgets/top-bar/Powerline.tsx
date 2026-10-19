@@ -11,6 +11,8 @@
  * Segment shades come from the theme surface vars via an inline `--sb`, which the
  * CSS reuses for each chevron's triangle so the tiling stays seamless (see the
  * `.pl` block in index.css).
+ *
+ * Status bar readout of agent activity, build phase, pending plan work, and review counts
  */
 
 import type { CSSProperties } from "react";

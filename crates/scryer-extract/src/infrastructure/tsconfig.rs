@@ -8,6 +8,12 @@
 //! `node_modules` and is skipped — guessing would mint false aliases), and
 //! flattens each into a project-relative alias table the edge resolver can
 //! apply without touching the filesystem.
+//!
+//! Finds every alias-bearing tsconfig/jsconfig, merging sibling config variants per directory with a deterministic precedence.
+//!
+//! Discovers and flattens tsconfig/jsconfig `paths`/`baseUrl` alias configuration, including `extends` chains, so bare import specs can resolve to real files.
+//!
+//! Flattens one config plus its `extends` ancestry into a project-relative alias table, respecting TS's override-not-merge semantics for baseUrl/paths.
 
 use std::collections::{BTreeMap, HashSet};
 use crate::domain::facts::TsAliases;

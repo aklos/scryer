@@ -1,5 +1,19 @@
 //! The test-evidence entry points other containers call. Each wires the
 //! on-disk verdict cache to the model; the cache itself stays private.
+//!
+//! Computes exactly which attached test files need re-running — those backing a claim with a missing or stale verdict — grouped one entry per file.
+//!
+//! Resolves a claim into a probe target (the span to break plus tests to re-run), refusing when no test is attached or no current passing verdict exists.
+//!
+//! Records a round of probe results, fingerprinted the same way a verdict is so an implementation or test edit ages it identically.
+//!
+//! Resolves each named claim's test evidence (no test, no verdict, stale, failing, or verified) against the working plan+committed view.
+//!
+//! Parses JUnit XML, matches cases to attached tests, and records the resulting per-claim outcomes in one call.
+//!
+//! Re-verifies every cached verdict against the current tree, reading a claim as stale on any anchor/content/attachment difference from the record.
+//!
+//! Merges one matched JUnit report's per-claim outcomes into the cache, fingerprinting each claim's anchors against the working tree at record time.
 
 
 use crate::infrastructure::test_status as store;

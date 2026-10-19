@@ -12,6 +12,18 @@
 //! structure. Choosing components (clustering from cohesion + the dependency
 //! graph) and writing responsibilities is the agent's job — we precompute the
 //! map, not the model.
+//!
+//! Maps a Go import path to a repo directory via the longest-matching declared go.mod module path.
+//!
+//! Slices the context to exactly the files owned by one container, for per-container modeling.
+//!
+//! Resolves a bare TS/JS import spec through the governing tsconfig's `paths`/`baseUrl` table.
+//!
+//! Resolves a Python import spec (relative or absolute) to its module file and base path across container/src-layout roots.
+//!
+//! Converts a scope into the token-budgeted agent wire format, stepping down the per-symbol evidence cap until the scope's total evidence fits.
+//!
+//! Assembles the full ProjectContext — per-file symbol index plus the resolved dependency graph — from discovered containers and parsed files.
 
 use crate::domain::lang::{CsScope, Def, FileParse, ImportRef};
 use crate::domain::facts::TsAliases;

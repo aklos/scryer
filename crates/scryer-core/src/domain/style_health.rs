@@ -8,6 +8,12 @@
 //! nothing is stored. It is the language-agnostic twin of dependency-cruiser,
 //! import-linter and ArchUnit, driven by the model instead of a per-tool
 //! config.
+//!
+//! Attributes every violation to the component charged with fixing it, deduped and scoped to a subtree for per-view reporting.
+//!
+//! Runs every code-time style check against the build's derived dependency graph and external imports: layer legality, same-layer isolation with public-surface exceptions, banned-package imports, and path-convention misplacement — each violation charged to the component that must fix it.
+//!
+//! Checks the actual code-level dependency graph and external imports against a container's declared style, flagging layer violations, same-layer isolation violations, banned-import violations, and misplaced files.
 
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -1103,6 +1109,7 @@ mod tests {
         assert!(r.violations[0].detail.contains("enter through presentation or application"));
     }
 
+    /// If an import leaves a styled container from a layer outside its style's outbound layers, then reports a layer violation charged to the importer
     #[test]
     fn leaving_a_container_from_a_non_outbound_layer_is_a_layer_violation() {
         let m = hex_service();
@@ -1118,6 +1125,7 @@ mod tests {
         assert!(v.detail.contains("only shared or app talks to the outside"), "{}", v.detail);
     }
 
+    /// When a declared model link breaks its style's legality rules, reports it as a forbidden link charged to the linking component
     #[test]
     fn a_declared_link_the_style_forbids_is_a_forbidden_link() {
         let mut m = hex_service();
@@ -1141,6 +1149,7 @@ mod tests {
         assert_eq!((r.layer_violations, r.forbidden_links), (1, 0), "{:#?}", r.violations);
     }
 
+    /// If a code edge was only guessed from a matching name, then charge no structural violation for it.
     #[test]
     fn a_guessed_edge_charges_no_violation() {
         let m = hex_service();

@@ -1,4 +1,6 @@
 //! Looking a file up in the model: read both layers, then answer.
+//!
+//! Resolves a file against a project's working view and scopes the plan diff to what was located — the shared payload behind the locate tool and the editor overlay.
 
 use crate::application::locate::*;
 use crate::composition::model_store::{plan_diff_at, read_model_at, read_planned_at};

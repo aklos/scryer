@@ -1,6 +1,10 @@
 /**
  * Wraps the actual C4Node component from the app for use in docs.
  * Stubs provide @xyflow/react and @tauri-apps/* so it renders standalone.
+ *
+ * Showcases the full catalog of available node shapes side by side for reference in the docs
+ *
+ * Renders a single scaled-down C4 node preview for a given kind/shape/status combination as a documentation illustration
  */
 import { C4Node } from "@app/nodes/C4Node";
 import { ThemeContext } from "@app/theme";

@@ -29,6 +29,38 @@
 //! Every failure path — no model above the working directory, malformed input,
 //! an unreadable model — exits 0 with no output: a hook must never break the
 //! session it observes.
+//!
+//! Finds the project's model by walking up from $CLAUDE_PROJECT_DIR or the event's working directory
+//!
+//! Renders a compact intent overlay (governing claims, directives, pending work) for files as they are read or patched, deduped per session
+//!
+//! Discovers the live app endpoint per project and refuses to trust a crashed author's stale discovery file
+//!
+//! Records one touched file at zero token cost to the session
+//!
+//! Emits injected context in the envelope shape each harness reads it from
+//!
+//! Dispatches an incoming hook event to the prompt-submit, tool-use, or stop handler by event name
+//!
+//! On session stop, runs the close, unfolded-work and probe gates, blocking once with what is missing or showing the session summary
+//!
+//! Bridges Claude Code / Copilot / Codex hook events to the running Scryer app over a loopback HTTP endpoint
+//!
+//! Renders the compact intent overlay text for a file, or nothing when the model has nothing to say about it
+//!
+//! Reads the file a tool call names, under either Claude/Codex's or Copilot's key
+//!
+//! Parses Add/Update/Delete/Move markers out of an apply_patch envelope
+//!
+//! Injects the intent overlay for every file a Codex apply_patch is about to touch, since Codex reads fire no hook events
+//!
+//! Maps a harness's own tool name to what it means to scryer (a read, a write, a patch), reconciling Claude Code's, Copilot's, and Codex's differing vocabularies
+//!
+//! Extracts the file paths named by an apply_patch envelope, wherever it's carried (native, a Bash heredoc, or Copilot's freeform tool)
+//!
+//! Binds the harness process to the session on each prompt, so an MCP server spawned before a /clear follows the session
+//!
+//! On a read, injects the file's intent overlay; on a write or a finished shell command, records the files touched
 
 use scryer_core::ModelRef;
 use std::io::Read;

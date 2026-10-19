@@ -16,6 +16,10 @@
  * as the ported C4 cards-and-edges (planar layout + handle routing); the symbol
  * tier draws as a force-directed dot graph. All semantic editing stays in the
  * tree and the page — this surface navigates, places, and untangles.
+ *
+ * Builds the current level's scene, lays out nodes/edges, and wires selection, drag, and live physics for the code tier
+ *
+ * Top-level diagram surface — hosts React Flow, the conformance overlay toggle, and drill-down navigation
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";

@@ -8,6 +8,20 @@
 //! reports its parent's. `status` and `statusline` exit 0 on every legal
 //! invocation, so they are safe to call from prompts; `check` and `lint` are
 //! gates and exit non-zero on findings.
+//!
+//! Prints the single-line statusline segment Claude Code shows under the prompt, staying silent when no model is found
+//!
+//! Walks up from a start directory to the nearest .scryer/, stopping at the first hit so a nested project never reports its parent's model
+//!
+//! Runs the CI gate: exit 0 clean, 1 on findings, 2 when no model exists or the repo is unusable
+//!
+//! Registers scryer-mcp's statusline command in Claude Code's project settings without ever clobbering a foreign statusline entry
+//!
+//! Renders the human-facing status line from loop-state counts: changes in flight, pending work, drift, and test verdicts
+//!
+//! Phrases outstanding plan work as "N pending across M nodes", suppressing the breakdown when the plan is empty
+//!
+//! Computes gate failures and notes across validator warnings, broken/missing anchors, drift, and test verdicts, naming any dimension it cannot verify
 
 use scryer_core::derived_tree::{DerivedCounts, DerivedStatus, DerivedTree};
 use scryer_core::ModelRef;

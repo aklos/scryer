@@ -1,6 +1,16 @@
 //! What a drift check remembers and reports: the sync state it compares
 //! against, the per-node anchor snapshot, and the scopes a regression rolls up
 //! into. Finding the changed files is `infrastructure::drift`.
+//!
+//! Expands a node id to its whole descendant subtree so a boundary's whole tree reconciles together.
+//!
+//! Tracks per-node dismissals of file deletions separately from the global inventory tripwire.
+//!
+//! Mints a fresh global reconcile anchor against a commit at the current instant.
+//!
+//! Maps changed product files to the boundary-owning nodes that need a semantic re-check, gated to product code and model-anchored files only.
+//!
+//! Anchors each reconcile to a moment (commit + mtime), so drift checks only see genuinely new changes and a dirty working tree right after a build reads as zero drift.
 
 use crate::ScryModel;
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -1,3 +1,7 @@
+/**
+ * Subscribes to the live agent event stream and derives running/label/activity/outcome state for the UI
+ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";

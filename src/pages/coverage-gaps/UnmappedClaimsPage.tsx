@@ -1,3 +1,7 @@
+/**
+ * Lists committed claims that read through to no code — the coverage gap's complement to dark code
+ */
+
 import { Check } from "lucide-react";
 import type { ScryModel, Node, Responsibility } from "../../entities/model/viewmodel";
 import type { ModelHealthReport } from "../../entities/model/health";

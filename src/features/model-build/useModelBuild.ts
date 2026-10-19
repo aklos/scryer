@@ -1,3 +1,9 @@
+/**
+ * Drives the orchestrated full-model build and the semantic drift check, suppressing canvas writes while the agent owns the file
+ *
+ * Drives the orchestrated full-model build and the semantic drift check, suppressing canvas write-back while the agent owns the file
+ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";

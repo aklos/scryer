@@ -5,6 +5,14 @@
 //! fixes clause order: condition first, response last), so neither needs
 //! semantic judgment. Statements may carry display markup (`**bold**` on the
 //! keyword); classification reads through it.
+//!
+//! Determines which of those forms are mechanically testable, driving the untested-claim flag elsewhere in the model.
+//!
+//! Classifies a responsibility statement's EARS form (ubiquitous/event/state/unwanted/optional) from its leading keyword.
+//!
+//! Determines which EARS forms (event/state/unwanted) a test can mechanically arrange and assert, versus ones needing human judgment.
+//!
+//! Classifies a responsibility statement's EARS form from its leading keyword, reading through display markup.
 
 /// The EARS form of one responsibility statement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

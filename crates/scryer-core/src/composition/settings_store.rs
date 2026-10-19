@@ -1,4 +1,8 @@
 //! The developer's global agent preferences.
+//!
+//! Reads the global per-agent settings file, falling back to defaults when absent.
+//!
+//! Writes the global per-agent settings file.
 
 use crate::domain::agent_settings::SubagentSettings;
 use crate::infrastructure::settings;

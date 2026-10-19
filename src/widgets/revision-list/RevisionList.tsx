@@ -1,3 +1,9 @@
+/**
+ * Shared revision feed (time + attribution + diff rows) driving both Recent Changes and a node's History tab
+ *
+ * Renders a shared revision feed (time, attribution, diff rows) driving Recent Changes and a node's History tab
+ */
+
 import type { ChangeItem, ChangeRevision } from "../../features/model-storage/useModelStorage";
 import { ANCHOR_CALM, StatementText } from "../../features/markup/markup";
 import { LINK } from "../../shared/ui/pagekit";

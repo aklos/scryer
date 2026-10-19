@@ -1,5 +1,19 @@
 //! Folding planned work into the committed model: take the lock, read both
 //! layers, apply the fold rules, write them back.
+//!
+//! Folds in plan-added links and groups that a just-committed node's fold has made ready, so a design-first plan's pending count can reach zero.
+//!
+//! Commits a built leaf's plan-only ancestor chain structure-only, so a design-first build's unbuilt ancestor claims stay pending rather than folding as implemented.
+//!
+//! Merges a finished from-code build's draft over the committed layer without wiping committed's single-home anchors and boundaries.
+//!
+//! Scaffolds plan-only ancestor structure and pulls in newly-ready links and groups so a design-first build closes out cleanly.
+//!
+//! Folds one plan element — or a whole host — into committed, withholding any claims the evidence gate named, which keep their anchors and stay pending.
+//!
+//! Withholds specific claims a fold gate has refused, leaving them pending while everything else on the host commits normally.
+//!
+//! Folds finished plan work into the committed model, claim by claim or as a whole node/group/subtree, keeping committed free of un-adjudicated review state.
 
 use crate::application::fold_rules::*;
 use crate::domain::layers::working_view;

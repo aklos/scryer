@@ -14,6 +14,16 @@
  *    link back. Ranges shared by several claims render once.
  *
  * New items land as `proposed`. Mutations flow through the Editor intents.
+ *
+ * Routes a selection to the right page body (node, group, or nothing for special pages)
+ *
+ * Renders a group's page — name, description, claims, and its member list
+ *
+ * Routes a selection to the right page body — node, group, or nothing for a special page
+ *
+ * Renders one node's full page — header, description, kind-specific hero, connections, properties, and source
+ *
+ * Renders one node's full wiki page — header, description, kind-specific hero section, connections, properties, and source
  */
 
 import { useMemo, useRef, useState } from "react";

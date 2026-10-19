@@ -18,6 +18,28 @@
 //! `pipeline`, `ecs`, `mvvm`) are ordinary [`StyleDef`] values; a project may add its own as
 //! `.scryer/styles/<name>.json` with the same shape. The engine never
 //! special-cases a built-in.
+//!
+//! Validates whether a layer tag is legal for a component under a given parent, naming exactly what's wrong: unstyled container, unknown style, or layer outside the style's list.
+//!
+//! Builds a component's language-neutral scaffold manifest — file location, allowed imports, and symbols to define — for the agent to materialize in the project's own idiom.
+//!
+//! The layer tag a node carries, inherited from its component when the node is a symbol.
+//!
+//! Defines the language-neutral vocabulary of an architectural style: its layers, legality matrix, isolation rule, inbound layers, external-package bans, and path convention.
+//!
+//! Resolves which style and layer govern a given node, and renders the one-line placement fact (layer, allowed imports, directory) an agent needs before writing a file.
+//!
+//! Where files of a node's layer belong, from its container's boundary prefix and the style's path convention.
+//!
+//! Assembles the one-line placement fact — layer, allowed imports, directory — an agent needs before writing a file.
+//!
+//! Generates a language-neutral scaffold manifest — where a component's file(s) go and what symbols to define — for the agent to materialize in the project's own idiom.
+//!
+//! Hold the set of styles a project can use: the built-ins plus any project-authored override under .scryer/styles/.
+//!
+//! Ship the five built-in styles (hexagonal, library, feature-sliced, core-shell, pipeline) and load project-authored custom styles that override them by name.
+//!
+//! The nearest ancestor-or-self style declaration governing a node, so a component may override its container.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -956,6 +978,7 @@ mod tests {
         assert!(!h.may_depend("presentation", "domain"));
     }
 
+    /// Give hexagonal and library a composition layer — the wiring — that may import every other layer and that no other layer may import.
     #[test]
     fn composition_may_import_every_layer_and_none_imports_it() {
         let h = hexagonal();
@@ -969,6 +992,7 @@ mod tests {
         assert!(h.outbound.iter().any(|l| l == "composition"));
     }
 
+    /// When another container depends on a `library` container, admit the dependency only on its composition, application, or domain layer, keeping its infrastructure private.
     #[test]
     fn library_is_hexagonal_entered_at_its_model_and_use_cases() {
         let (h, l) = (hexagonal(), library());

@@ -8,6 +8,12 @@
 //! Endpoints are the extractor's source-anchored symbol keys (`path#name@line`)
 //! and project-relative file paths. They carry NO C4 structure — the commit
 //! tool joins them back to freshly minted nodes by source location.
+//!
+//! Caches the whole-project symbol-level dependency graph and external-import list produced by a build, so later tools can wire links without re-parsing the project.
+//!
+//! Joins that cached graph onto the model to audit every declared link's code evidence and surface undeclared connections between sibling nodes as candidates.
+//!
+//! Joins the cached import graph onto the model deterministically — resolves each edge to its host node/symbol, rolls up through every containing level, audits declared links against the code evidence, and surfaces undeclared sibling connections as candidates.
 
 use serde::{Deserialize, Serialize};
 

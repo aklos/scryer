@@ -8,6 +8,14 @@
 //! edges come from declared values; `technology` is taken only from literal
 //! declared strings (a Dockerfile's `FROM <image>`), never a filename→ecosystem
 //! lookup table.
+//!
+//! Two-pass discovery: scans each directory's manifest signals into a container, then resolves npm/Cargo workspace name-based dependencies against the discovered set.
+//!
+//! Discovers a project's declared build/deploy units by scanning known manifest files (Cargo.toml, package.json, go.mod, pyproject.toml, Dockerfile, etc.) across every directory.
+//!
+//! Resolves cross-container dependencies that manifests declare by name (npm workspace protocol, Cargo `{workspace=true}`) rather than by literal path.
+//!
+//! Parses one directory's manifest files (Cargo, package.json, go.mod, Dockerfile, pyproject.toml, and other ecosystem manifests) into a container's name, technology, and dependency facts.
 
 use crate::lang;
 use scryer_core::scan;

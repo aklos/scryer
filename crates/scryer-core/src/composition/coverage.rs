@@ -1,4 +1,6 @@
 //! Checking the model's source map against the real project.
+//!
+//! Cross-references the model's source map against the real filesystem for manifest directories with no coverage and source directories shared across container boundaries.
 
 use crate::composition::codebase::manifest_dirs;
 use crate::domain::validate;

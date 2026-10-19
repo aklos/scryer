@@ -8,6 +8,8 @@
  * Handlers stop propagation, so the innermost primitive wins: right-clicking a
  * responsibility row copies the claim id; right-clicking elsewhere on the page
  * falls through to the node id.
+ *
+ * Shared single-instance context-menu host every page's right-click actions render into
  */
 
 import { createContext, useContext, useState, type ReactNode } from "react";

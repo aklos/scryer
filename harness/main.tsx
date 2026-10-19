@@ -7,6 +7,10 @@
  *   window.__moves    — every onMoveNode call, in order
  *   window.__model    — the current model (positions included)
  *   window.__setFocus — drill to a level, like the breadcrumb would
+ *
+ * Mounts a synthetic model against DiagramView, exposing focus/selection state for test drivers
+ *
+ * Mounts a synthetic model against the diagram view for isolated manual/automated testing
  */
 
 import React from "react";

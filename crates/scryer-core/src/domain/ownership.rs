@@ -11,6 +11,16 @@
 //! [`BoundaryOwnership`] compiles every node's boundary globs once and answers
 //! "does node N own file F?" by comparing N's best matching glob against the most
 //! specific glob anywhere in the model that also matches F.
+//!
+//! Resolves file ownership across the whole model by most-specific matching boundary, built once and queried per (node, file).
+//!
+//! Ranks boundary globs by literal-prefix length then pattern length — the one ordering every ownership decision in the model shares.
+//!
+//! Routes a code-level drift or dependency finding to the exact symbol/component the source map ties it to, falling back to the reviewed container only when unmapped.
+//!
+//! Resolves the node that should host a drift or dependency finding at a (file, symbol) — the source-mapped symbol/component when one claims it, else the reviewed container.
+//!
+//! Resolves which node owns a given file by most-specific matching boundary glob, the single ranking every ownership decision in the model shares.
 
 use crate::ScryModel;
 use std::collections::{BTreeMap, HashMap, HashSet};

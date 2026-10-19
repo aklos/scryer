@@ -4,6 +4,8 @@
  * the extractor over the whole project, so it's fetched in the background —
  * never on every keystroke — and refreshed when an agent run finishes or a
  * reconcile changes what the anchors mean.
+ *
+ * Fetches and refreshes the model health report, holding off while an agent owns the file
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";

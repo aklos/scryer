@@ -4,6 +4,8 @@
  * source/target handles (sides or, in a narrow diagonal window, corners) that
  * minimize length while spreading congested handles and respecting the
  * dominant axis between two nodes.
+ *
+ * Chooses the least-congested, axis-aligned handle pair for every edge on a level
  */
 
 interface EdgeInput {

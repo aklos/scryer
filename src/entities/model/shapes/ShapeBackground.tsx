@@ -3,6 +3,8 @@
  * contour, with kind-specific decorations (container hat, system outer frame,
  * component side-tabs). Ported from the pre-pivot canvas; the `kind` type is
  * the v0.3 `Kind`.
+ *
+ * Renders a node's C4 shape background (rectangle/cylinder/pipe/hexagon/etc.) with its change-mark outline
  */
 
 import type { Kind } from "../viewmodel";

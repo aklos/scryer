@@ -1,3 +1,7 @@
+/**
+ * Page title, breadcrumb, type line, and action buttons shared by every full page
+ */
+
 import { FileClock } from "lucide-react";
 import type { ScryModel, Node } from "../../entities/model/viewmodel";
 import type { Editor } from "../../entities/model/editor";

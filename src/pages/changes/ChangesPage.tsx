@@ -1,3 +1,13 @@
+/**
+ * Lists every pending plan divergence, grouped by open change, as diff cards
+ *
+ * Lists every pending plan divergence, grouped by open change, as diff cards
+ *
+ * Lets a stranded empty change be hand-closed once it has nothing left to lose
+ *
+ * One open change's header (rationale, count) and its entry cards, with a hand-close for an empty ledger
+ */
+
 import { useMemo } from "react";
 import { CornerDownRight, GitCompare } from "lucide-react";
 import type { ChangeRevision } from "../../features/model-storage/useModelStorage";

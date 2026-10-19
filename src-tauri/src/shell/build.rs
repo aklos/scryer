@@ -1,3 +1,27 @@
+//! Renders one agent session's token usage as a one-line summary, breaking out cheap cache-read tokens from the costlier fresh ones.
+//!
+//! Orchestrates a full model build end to end: deterministic codebase extraction, mechanical system/container skeleton minting, then every semantic agent session run concurrently.
+//!
+//! Sizes and throttles concurrent agent-session pools and permits from each session's payload size and work-unit count.
+//!
+//! Logs orchestrator-level phase transitions and the build's final verdict to a durable build log, separate from per-session agent streams.
+//!
+//! Extracts the deterministic project context, mints the system/container skeleton without an agent, then launches one adaptive-pool session per code-bearing container concurrently with the system-level pass.
+//!
+//! Appends a timestamped line to the build's own log file, recording orchestrator phase transitions independent of per-session agent streams.
+//!
+//! Runs one modeling agent session to completion, forwarding only progress events to the frontend and suppressing per-session terminal events so the orchestrator owns the build's single terminal event.
+//!
+//! Finds every scope with boundary-owning drift since the last reconcile and runs a concurrent agent session per scope to compare code against claimed responsibilities, advancing the reconcile anchor when done.
+//!
+//! Maps a container node back to the project-relative directory it owns, via its boundary glob or by matching extracted container facts.
+//!
+//! Weighs both payload size and work-unit count to decide how many pool permits one session consumes.
+//!
+//! Runs the semantic drift check: finds boundary-owning nodes whose code changed since the last reconcile and dispatches one comparison agent per scope.
+//!
+//! Derives how many agent sessions may run concurrently from the average per-session payload size, capped by CPU count.
+
 use tauri::Emitter;
 
 use crate::shell::mcp_setup::find_scryer_mcp;

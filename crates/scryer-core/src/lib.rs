@@ -1,3 +1,11 @@
+//! Compute health, drift, and test-coverage rollups for the model.
+//!
+//! Validate the model's structural integrity and style conformance.
+//!
+//! Define and persist the architecture model schema.
+//!
+//! Record the change ledger and modeling history.
+
 pub mod application;
 pub mod composition;
 pub mod domain;

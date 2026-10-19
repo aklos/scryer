@@ -1,3 +1,13 @@
+/**
+ * Lets the user choose which coding agent fills the model, its model and effort, and install hook/statusline integration
+ *
+ * Lets the user choose which coding agent fills the model, its model/effort, and install hooks/statusline integration
+ *
+ * Resolves the agent preference plus what's actually installed into the concrete agent/model/effort a fill will run with
+ *
+ * Resolves the agent preference plus what's actually installed into the concrete agent that will launch
+ */
+
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";

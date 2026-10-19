@@ -1,6 +1,12 @@
 //! The rules a fold applies: which copy of a node, group or claim lands in the
 //! committed model, and what a committed claim keeps. Pure — reading and
 //! writing the two layers is `composition::fold`.
+//!
+//! Builds a folded node's committed copy: clears its own review markers and drops un-adjudicated vagrant claims/properties, which stay in the plan awaiting a verdict.
+//!
+//! Gives a folded group's own claims the same review-state treatment committed_node_copy gives a node.
+//!
+//! Decide what a folded element keeps: dropping claims awaiting a verdict or tagged to another change, and clearing drift flags on the rest.
 
 use crate::domain::model::{Group, Node, Responsibility, SchemaProperty, ScryModel};
 use crate::domain::{changes, diff};

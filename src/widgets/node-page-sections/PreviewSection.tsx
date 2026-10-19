@@ -1,3 +1,7 @@
+/**
+ * Live-renders a symbol's component in an iframe when the preview sidecar can mount it
+ */
+
 import { useEffect, useState } from "react";
 import { Loader2, Moon, Sun } from "lucide-react";
 import type { Node } from "../../entities/model/viewmodel";

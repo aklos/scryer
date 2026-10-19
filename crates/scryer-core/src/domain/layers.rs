@@ -1,5 +1,7 @@
 //! How the two model layers combine: the working view a reader sees is the
 //! planned draft with committed's anchors overlaid.
+//!
+//! Overlays committed's single-home anchors onto the plan's authored structure so nothing anchored only in committed vanishes from a plan-based read.
 
 use crate::ScryModel;
 use std::collections::HashSet;

@@ -2,6 +2,12 @@
 //! reader sees, and how a claim's evidence is classified. Reading and writing
 //! the cache is `infrastructure::test_status`; the entry points other
 //! containers call are in `composition::test_status`.
+//!
+//! Gates the fold on verified test evidence per claim, and computes the minimal set of test files that need re-running.
+//!
+//! Caches per-claim test verdicts ingested from JUnit reports, fingerprinted against the anchored code and tests so an edit since the last run reads as stale.
+//!
+//! Caches per-claim adversarial probe results (deliberate breaks a test failed to catch) on the same staleness discipline.
 
 use scryer_core::test_results::{ReportMatch, TestOutcome};
 use serde::Serialize;

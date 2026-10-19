@@ -1,3 +1,5 @@
+//! States the model-first workflow loop and steers every rule lookup to the fetched rule text by slug rather than inlining it
+
 /// Connect-time instructions: always loaded, so one paragraph — the claim
 /// grammar and the test levels an agent needs before it writes a stub, and the
 /// loop. Tool descriptions carry the rest where it is used. The README's

@@ -1,5 +1,7 @@
 /**
  * Wraps the actual FlowScriptView from the app in read-only mode for docs.
+ *
+ * Renders a flow script view for docs with editing/deletion callbacks disabled, showing the flow as a static illustration
  */
 import { FlowScriptView } from "@app/FlowScriptView";
 import type { Flow } from "@app/types";

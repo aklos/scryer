@@ -1,6 +1,18 @@
 //! The anchor entry points other containers call. Each one wires the stored
 //! baseline and the project's files to the pure span logic; the adapters
 //! themselves stay private to this crate.
+//!
+//! Checks every anchor whose file changed since the last sync, silently re-anchoring moved-but-unchanged symbols and reporting content changes, breaks, or missing files as observations.
+//!
+//! Reports every anchor the baseline holds no fingerprint for — a silent gap where drift can never fire.
+//!
+//! Flags explicit line-range mappings that cover their whole enclosing symbol, where a symbol-only anchor was intended instead.
+//!
+//! Fingerprints every model anchor against the working tree and writes the baseline, called at every reconcile point.
+//!
+//! Refreshes the baseline for exactly a given set of claim keys, leaving every other entry's fingerprint untouched.
+//!
+//! Rolls up anchor regressions that no pending plan item explains into per-node drift scopes, suppressing churn the plan already accounts for.
 
 // The vocabulary a caller reads these results in. Declared in the domain; named
 // here so `scryer_extract::anchors::…` stays one path for the whole surface.

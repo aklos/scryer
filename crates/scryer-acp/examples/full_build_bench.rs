@@ -9,6 +9,12 @@
 //!
 //! The scratch project should be a throwaway copy of a repo — the bench
 //! overwrites its `.scryer/model.scry`.
+//!
+//! Computes how many concurrent permits a job gets based on its payload size and work-unit count
+//!
+//! Runs one benchmark session to completion and reports its token usage and wall-clock duration
+//!
+//! Mirrors the app's adaptive pool sizing so the benchmark reflects real concurrency limits
 
 use std::sync::Arc;
 

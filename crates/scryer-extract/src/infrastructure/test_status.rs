@@ -1,6 +1,10 @@
 //! The test-verdict cache on disk and the model reads behind it: fingerprints
 //! computed from real files, freshness against mtimes, and every read/write of
 //! `.scryer/.test-results.json`.
+//!
+//! Persist each claim's test and probe verdicts, fingerprinted so a later edit shows as stale.
+//!
+//! Resolve whether a cached verdict still describes the code, from the anchored span and the file's mtime.
 
 use crate::domain::anchors::{is_glob_pattern, resolve_span, span_hash};
 use crate::domain::mutations::{parse_mutation_report, MutationSummary};

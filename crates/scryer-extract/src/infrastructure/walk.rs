@@ -1,6 +1,10 @@
 //! Reading the project off disk: which files are there, and their parse
 //! trees. The parser cache lives here because it is an artifact of reading —
 //! the map built from these files is the domain's.
+//!
+//! Walk a project for its files, skipping the vendor and build directories the extractor ignores.
+//!
+//! Parse every product source file in parallel, reusing cached parse trees for unchanged content.
 
 use crate::domain::context::ParsedFile;
 use crate::domain::lang;

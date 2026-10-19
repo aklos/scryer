@@ -1,3 +1,7 @@
+/**
+ * Right-margin rail: the node's own directives and the user's freeform notes
+ */
+
 import { useEffect, useRef } from "react";
 import { CornerDownRight } from "lucide-react";
 import type { ScryModel, Node } from "../../entities/model/viewmodel";

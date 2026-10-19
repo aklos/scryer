@@ -5,6 +5,20 @@
 //! Verdicts and probe results are keyed by the derived claim id (the test's
 //! node in the derived tree); the agent names a test by its JUnit name and the
 //! tree maps it.
+//!
+//! Resets the probe worktree and records which deliberate breaks the claim's test failed to catch
+//!
+//! Ingests JUnit test reports and links pass/fail verdicts to the claims their tests cover, flagging verdicts the code has since moved past as stale
+//!
+//! Reports the blast radius of claims whose attached tests hold a missing or stale verdict
+//!
+//! Opens a mutation probe against a verified claim: syncs a git worktree to current code and hands back the span to break
+//!
+//! Ingests a JUnit report, recording each test's verdict against the claims it's attached to
+//!
+//! Runs mutation probes in an isolated git worktree to check whether a claim's test would actually catch a deliberate break
+//!
+//! Names the test files whose claims hold a missing or stale verdict
 
 use crate::derived;
 use crate::helpers::*;

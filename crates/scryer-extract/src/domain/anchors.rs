@@ -2,6 +2,14 @@
 //! baseline stores, the observations a check produces, and the pure resolution
 //! of a symbol to its span in a given source text. Reading files and the model
 //! is the infrastructure's job — see `infrastructure::anchors`.
+//!
+//! Resolves one anchor's current span against the file — following a moved same-named symbol via nearest-to-remembered-position, or falling back to the recorded/whole-file line range.
+//!
+//! Hashes a 1-based line span with a deterministic, dependency-free content fingerprint, normalizing line endings.
+//!
+//! Define what a source anchor is — the fingerprint entry that remembers a span, and the observation a re-check produces.
+//!
+//! Resolve a claim's span in a given source text: a moved same-named symbol by nearest remembered position, else the recorded line range.
 
 use crate::domain::lang;
 use scryer_core::ScryModel;

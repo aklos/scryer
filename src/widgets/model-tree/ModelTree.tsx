@@ -6,6 +6,14 @@
  * drift) marks each row at a glance and rolls up onto collapsed branches; agent
  * activity is reflected on the rows. Right-click for
  * structural edits (add child, rename, delete, group membership).
+ *
+ * Renders the whole model as a navigable, filterable tree with plan/drift marks and inline structural editing
+ *
+ * Renders the whole model as a navigable, filterable tree with plan/drift marks, test tallies, structural violation counts, and inline structural editing
+ *
+ * Shows per-row untested/failing/hollow test tallies
+ *
+ * Shows untested/failing/hollow test counts per tree row
  */
 
 import { useRef, useState } from "react";

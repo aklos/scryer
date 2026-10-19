@@ -1,3 +1,31 @@
+//! Detects the 'one component per file' anti-pattern via its file-count signature, tolerant of a lone two-file component or a shared helper.
+//!
+//! Checks a model's source-map coverage against the real filesystem for gaps and cross-boundary sharing.
+//!
+//! Validates that every component under a styled container carries a legal layer and that links between styled nodes declare a kind.
+//!
+//! Ships a diagnostic CLI (dump_validate) that runs the real validator against a project and prints every warning category.
+//!
+//! Isolates the subset of validation problems that are true structural-invariant breaks (e.g. a responsibility id reused across two hosts) — the ones that must gate a committed write.
+//!
+//! Flags a node with no relationship visible at its own C4 level, respecting that each level shows only its own layer of abstraction.
+//!
+//! Runs the full structural validation pass against a given style table, producing every human-readable warning from field caps to style membership to unreachable components.
+//!
+//! Isolates the subset of warnings that are hard structural-invariant violations (duplicate/reused ids) — the ones that must gate a committed write, versus advisories that don't.
+//!
+//! Runs structural validation of a model against its styles, producing human-readable warnings from field-length caps to style/layer membership to unreachable components.
+//!
+//! Flags an inner inbound-layer component that nothing links into — a use case nobody drives.
+//!
+//! Renders a human-readable, corrective explanation of a link violation, shared by the add_links rejection and the validate warning.
+//!
+//! Checks one link's legality against its style's matrix, including the inbound-layer rule for links entering a container from outside.
+//!
+//! Field-shape warnings for one node — length caps on description and technology, the card-rendered fields.
+//!
+//! Checks a prospective or existing link against the same-level containment rule.
+
 use crate::domain::style::{self, Styles};
 use crate::{Kind, LinkKind, ScryModel};
 use std::collections::{HashMap, HashSet};

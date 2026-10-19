@@ -3,6 +3,16 @@
 //! compares what the model last saw against what is there now. The pure span
 //! logic it applies lives in `domain::anchors`; the entry points other
 //! containers call live in `composition::anchors`.
+//!
+//! Fingerprints every source-anchored claim in the model against the working tree, so an edit, move, or deletion of the anchored code can be detected on demand.
+//!
+//! Persist and read back the anchor baseline the tripwire compares against.
+//!
+//! Surfaces out-of-plan regressions to already-mapped code as scoped drift, suppressing changes the current plan already accounts for.
+//!
+//! Searches other same-extension files for a missing file's remembered content, rescuing a rename only when the match is unique.
+//!
+//! Distinguishes benign symbol moves (silently re-anchored) from real content drift, and rescues renamed files by content match before reporting them missing.
 
 use crate::domain::anchors::*;
 use crate::domain::lang;

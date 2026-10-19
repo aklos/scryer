@@ -1,4 +1,14 @@
 //! What the model last saw of the working tree, and what changed since.
+//!
+//! Unions git-tracked changes and mtime-detected changes since the sync anchor, so an anchor right after a build reports zero drift on a dirty tree.
+//!
+//! Reads the project's current git HEAD commit to anchor the next reconcile.
+//!
+//! Answer what changed and what the model claims about a file, reading both layers to do it.
+//!
+//! Snapshots the product-code files present now — the deletion tripwire's baseline, refreshed at every reconcile.
+//!
+//! Maps changed files to the boundary-owning nodes that need a semantic drift re-check, gated to product code and model-anchored files.
 
 use crate::domain::drift_scope::{DriftScope, SyncState};
 use crate::infrastructure::{drift, storage};

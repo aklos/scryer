@@ -1,3 +1,7 @@
+/**
+ * Renders a node's build completeness as a semi-filled pie gauge
+ */
+
 import type { Completeness } from "./health";
 
 /** SVG path for a pie wedge from 12 o'clock, sweeping clockwise to `pct`%. */

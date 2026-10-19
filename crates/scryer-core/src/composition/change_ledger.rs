@@ -1,4 +1,8 @@
 //! Closing a change: read the plan, take the entry out, record it in history.
+//!
+//! Hand-closes an empty stranded change as abandoned, refusing one that still has tagged entries.
+//!
+//! Appends a closed change's rationale to the durable history log, best-effort.
 
 use crate::composition::history_log::append_event;
 use crate::composition::model_store::{read_planned_at, write_planned_at};

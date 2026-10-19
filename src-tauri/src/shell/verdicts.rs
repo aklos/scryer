@@ -2,6 +2,46 @@
 //! hand. The logic lives in `scryer_core::drift::verdicts`, shared with the
 //! agent's `resolve_drift`; each command takes the model lock so the canvas
 //! never races the agent's MCP writer.
+//!
+//! Removes a set of nodes and everything hanging off them — descendant claims' anchors, boundaries, links, and group memberships.
+//!
+//! Resolves stale claims, properties, and whole node subtrees three ways — drop (removed from both layers), re-implement (removed from committed, kept as a plan to-do), or reword (accepted into both layers as a reconcile).
+//!
+//! Removes a stale field from committed while keeping a clean to-do in the plan, the property-level twin of reimplement_responsibility.
+//!
+//! Removes a stale node's whole subtree — claims, links, anchors, boundaries, group memberships — from both model layers.
+//!
+//! Adopts a code-discovered field by folding it and any minted host chain into the committed model.
+//!
+//! Removes a dropped node's whole subtree — claims, links, boundaries, group memberships, anchors — from both model layers.
+//!
+//! Removes a stale node's subtree from committed while the plan keeps it, clearing stale flags so it reads as a clean pending to-do.
+//!
+//! Removes a stale claim from committed while keeping a clean, anchored to-do in the plan, since the model is right and the code must be rebuilt.
+//!
+//! Clears vagrant flags on a code-discovered claim and its minted host chain, then folds the chain and the claim into the committed model, root to leaf.
+//!
+//! Distinguishes a post-sign-off amendment or addition awaiting a verdict from an ordinary code-discovered vagrant claim.
+//!
+//! Removes a stale claim from both model layers entirely and garbage-collects its source anchor, since the code legitimately no longer does this.
+//!
+//! Folds a code-discovered field into committed, then drops it from the plan so the diff reads as a deletion to-do anchored to the field the agent should remove.
+//!
+//! Adopts or rejects code-discovered (vagrant) claims and properties by folding them — and any freshly minted host chain — into the committed model, or folding then scheduling their deletion from the plan.
+//!
+//! Accepts a drift-proposed corrected statement into both model layers, clearing stale flags, since the code diverged in wording rather than losing the behaviour; for an amendment, writes the developer's own text into the plan only.
+//!
+//! Routes a claim's adopt verdict to amendment or vagrant-fold handling and logs the fold as a 'took code' history event.
+//!
+//! Resolves post-sign-off amendments and additions: adopting makes the agent's amended text the intent, rejecting restores the developer-approved text or drops an invented addition outright.
+//!
+//! Property-level twin of fold_vagrant: clears the vagrant flag on a code-discovered field and its minted host chain, then folds both into committed.
+//!
+//! Removes a stale field from both model layers entirely, the property-level twin of drop_responsibility.
+//!
+//! Rejects a claim: for a vagrant claim, folds it into committed then removes it from the plan as a deletion to-do; for an amendment, restores the approved text or drops an unapproved addition.
+//!
+//! Makes an amended claim's text the intent, folding it immediately only if it is already anchored and test-verified, otherwise leaving it pending for the agent's fold.
 
 fn locked(cwd: &str, f: impl FnOnce(&scryer_core::ModelRef) -> Result<(), String>) -> Result<(), String> {
     let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(cwd));

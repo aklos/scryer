@@ -7,6 +7,8 @@
  * geometry, bidirectional pair-shift, mention/dim/highlight states, and the old
  * endpoint-status coloring — the change-mark palette lives on the nodes now, so
  * edges read as neutral chrome.
+ *
+ * Renders one connection edge, offsetting parallel pairs and insetting to code-tier dot rims
  */
 
 import {

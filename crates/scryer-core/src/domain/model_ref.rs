@@ -1,3 +1,7 @@
+//! Detects a model file written under a schema version other than the current one, so it is refused rather than silently misread.
+//!
+//! Locates an existing project's model file on disk.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

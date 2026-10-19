@@ -1,3 +1,9 @@
+//! Defines the canonical model schema — nodes, links, groups, responsibilities, properties — that every other module reads and writes.
+//!
+//! Guards every model/plan write behind an exclusive lock and the fossilization (last-touched) clock, keeping the plan and committed layers reconciled as one working view.
+//!
+//! Resolves where a project's committed model, draft plan, and derived caches live on disk.
+
 pub mod build_edges;
 pub mod changes;
 pub mod concerns;

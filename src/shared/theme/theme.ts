@@ -4,6 +4,14 @@
  * The trick: Tailwind v4 compiles `bg-blue-500` to `background-color: var(--color-blue-500)`.
  * By overriding `--color-blue-*` CSS variables on `:root`, ALL Tailwind utility classes
  * automatically pick up the new colors — no component code changes needed.
+ *
+ * Applies a theme's palette choices as CSS custom properties on the document root
+ *
+ * Applies a theme's palette choices as CSS custom properties on the document root
+ *
+ * Switches light/dark/system color mode and keeps it synced to OS preference changes
+ *
+ * Switches light/dark/system color mode and keeps it synced to OS preference changes
  */
 
 import { getCurrentWindow } from "@tauri-apps/api/window";

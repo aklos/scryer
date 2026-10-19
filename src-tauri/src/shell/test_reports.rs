@@ -13,6 +13,16 @@
 //! before we were looking describes OLDER code, and recording it against
 //! the current tree would stamp fresh fingerprints on stale evidence. Only
 //! files that change under watch are believed.
+//!
+//! Arms one delayed ingest per file on its first event; later events in the same burst join the already-armed ingest instead of scheduling another.
+//!
+//! Ingests one report file into the claim status cache under the model lock, treating anything that isn't valid JUnit as a quiet skip rather than an error.
+//!
+//! Watches conventional or project-configured report directories for test runner output and ingests JUnit reports into the per-claim test-verdict cache.
+//!
+//! Debounces bursty file-watcher events so a report written across several events, or re-touched multiple times, is ingested exactly once after it settles.
+//!
+//! Resolves the directories to watch for test reports: the project's configured list when it names any, conventional defaults otherwise, keeping only directories that currently exist.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
