@@ -1719,4 +1719,63 @@ mod tests {
         let (_, status) = read_derived_status(&r).unwrap();
         assert_eq!(state_of(&status, "saves"), ClaimState::Stale);
     }
+
+    /// Ad-hoc: the derived tree's status for a repo, after ingesting any
+    /// JUnit reports and mutation report given.
+    /// `SCRYER_DERIVED_TREE=1 REPO=/path JUNIT=a.xml,b.xml MUTANTS=outcomes.json
+    ///  cargo test -p scryer-extract dump_derived_status -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn dump_derived_status() {
+        let repo = std::path::PathBuf::from(std::env::var("REPO").expect("set REPO"));
+        let r = ModelRef::ProjectLocal(repo);
+        let radius = compute_blast_radius(&r).unwrap();
+        let radius_claims: usize = radius.iter().map(|f| f.claims.len()).sum();
+        eprintln!("radius before ingest: {} test files, {radius_claims} claims", radius.len());
+        for path in std::env::var("JUNIT").unwrap_or_default().split(',').filter(|p| !p.is_empty()) {
+            let xml = std::fs::read_to_string(path).unwrap();
+            let s = ingest_report_file(&r, &xml).unwrap();
+            eprintln!(
+                "ingested {path}: {} cases, {} claims recorded, {} unmatched, {} ambiguous",
+                s.cases,
+                s.recorded,
+                s.report.unmatched_cases,
+                s.report.ambiguous.len()
+            );
+        }
+        if let Ok(path) = std::env::var("MUTANTS") {
+            let m = ingest_mutation_file(&r, &std::fs::read_to_string(path).unwrap()).unwrap();
+            eprintln!("mutants: {m:?}");
+        }
+        let (tree, status) = read_derived_status(&r).unwrap();
+        let t = &status.totals;
+        eprintln!(
+            "claims {} — proven {}, stale {}, failing {}, planned {}",
+            t.claims, t.proven, t.stale, t.failing, t.planned
+        );
+        eprintln!(
+            "untested components {}, surviving mutants {}, style violations {}, dark files {}",
+            t.untested_components, t.surviving_mutants, t.style_violations, t.dark_files
+        );
+        use scryer_core::derived_tree::ProbeMark;
+        let marks = |m: ProbeMark| status.claims.iter().filter(|c| c.probe == Some(m)).count();
+        let node_marks = |m: ProbeMark| status.nodes.values().filter(|n| n.probe == Some(m)).count();
+        eprintln!(
+            "probed claims: {} crosshair, {} double check; probed nodes: {} crosshair, {} double check",
+            marks(ProbeMark::Crosshair),
+            marks(ProbeMark::DoubleCheck),
+            node_marks(ProbeMark::Crosshair),
+            node_marks(ProbeMark::DoubleCheck)
+        );
+        let (_, by_mtime) = scryer_core::derived_tree::derived_status(r.project_path()).unwrap();
+        eprintln!(
+            "core's mtime-only read: proven {}, stale {}",
+            by_mtime.totals.proven, by_mtime.totals.stale
+        );
+        let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
+        for v in &tree.style_violations {
+            *kinds.entry(v.kind.as_str()).or_default() += 1;
+        }
+        eprintln!("style violations by kind: {kinds:?}");
+    }
 }
