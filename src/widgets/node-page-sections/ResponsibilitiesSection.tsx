@@ -37,7 +37,7 @@ import {
   DRIFT_HINT,
 } from "../../entities/model/diffkit";
 import { ClaimSource, ClaimTests, respElementId } from "../source-section/SourceSection";
-import { ANCHOR_CALM, earsTestable, hasMarkup, lintEars, MarkupMirror, serializeEars, StatementText, stripMarkup } from "../../features/markup/markup";
+import { ANCHOR_CALM, earsTestable, hasMarkup, lintEars, MarkupMirror, serializeEars, StatementText, stripMarkup } from "../../entities/model/markup";
 import { usePageMenu, useCopyId, copyIdItem } from "../../features/search/pageMenu";
 import {
   BTN,

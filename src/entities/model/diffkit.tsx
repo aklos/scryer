@@ -14,7 +14,7 @@
  */
 
 import { CHANGE_COLOR, type ChangeKind } from "../../features/change-marks/changeMarks";
-import { ANCHOR_CALM } from "../../features/markup/markup";
+import { ANCHOR_CALM } from "./markup";
 
 export { WordDiffText } from "../../shared/ui/pagekit";
 export type { ChangeKind } from "../../features/change-marks/changeMarks";

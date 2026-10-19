@@ -7,7 +7,7 @@
 
 import type { ScryModel, Link, Node, Responsibility } from "./viewmodel";
 import { effectiveTestMap } from "./viewmodel";
-import { earsTestable } from "../../features/markup/markup";
+import { earsTestable } from "./markup";
 
 /** Health counters over one scope — a node's own content, or a whole subtree. */
 export interface HealthCounts {

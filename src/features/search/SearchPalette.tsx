@@ -12,7 +12,7 @@ import { createPortal } from "react-dom";
 import { FolderOpen, Link2, Search, type LucideProps } from "lucide-react";
 import type { ScryModel, Node, Group } from "../../entities/model/viewmodel";
 import { kindIcon, typeTag } from "../../entities/model/kindIcon";
-import { stripMarkup } from "../markup/markup";
+import { stripMarkup } from "../../entities/model/markup";
 import { lookupIcon } from "./IconPicker";
 
 const MAX_RESULTS = 50;
