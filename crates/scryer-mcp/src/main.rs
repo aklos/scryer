@@ -1,15 +1,11 @@
 mod cli;
+mod derived;
 mod helpers;
 mod hook_client;
 mod instructions;
 mod server;
 mod tools;
 mod types;
-
-// Validation lives in scryer-core so the deterministic extractor and any
-// orchestrator share one definition of "valid". Re-exported here as
-// `crate::validate` so the tool handlers' `use crate::validate;` stays put.
-pub use scryer_core::validate;
 
 use rmcp::ServiceExt;
 use server::ScryerServer;
@@ -48,6 +44,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => {}
     }
 
+    // The server reads the derived tree, never the authored model, and the
+    // verdict and probe store resolves claim ids against it only under this
+    // flag. SEAM: step 6 deletes the authored model and the flag with it;
+    // until then the server switches it on for its own process.
+    std::env::set_var(scryer_core::derived_tree::DERIVED_TREE_ENV, "1");
     let service = ScryerServer::new()
         .serve(rmcp::transport::io::stdio())
         .await

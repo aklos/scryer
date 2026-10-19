@@ -1,13 +1,7 @@
 use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
-use scryer_core::history::{append_event, EventRow, HistoryEvent};
-use scryer_core::style::Styles;
-use scryer_core::{Kind, ModelLock, ModelRef, Node, Responsibility, ScryModel};
+use scryer_core::{Kind, ModelLock, ModelRef, Node, ScryModel};
 
-/// The style table for a project: built-ins plus `.scryer/styles/*.json`.
-pub(crate) fn styles_for(model_ref: &ModelRef) -> Styles {
-    scryer_core::load_styles(model_ref.project_path())
-}
 use std::collections::HashMap;
 
 /// Acquire the exclusive model write lock, or return an error result to surface
@@ -65,36 +59,6 @@ pub(crate) fn kind_str(k: &Kind) -> &'static str {
         Kind::Component => "component",
         Kind::Symbol => "symbol",
     }
-}
-
-/// Build a denormalized graph view of a node for MCP responses:
-/// adds `childIds`, `incomingLinks`, `outgoingLinks` to the node JSON.
-pub(crate) fn denormalize_node(node: &Node, model: &ScryModel) -> serde_json::Value {
-    let mut val = serde_json::to_value(node).unwrap_or(serde_json::Value::Null);
-    if let serde_json::Value::Object(map) = &mut val {
-        let child_ids: Vec<&str> = model
-            .nodes
-            .iter()
-            .filter(|n| n.parent_id.as_deref() == Some(&node.id))
-            .map(|n| n.id.as_str())
-            .collect();
-        let incoming: Vec<&str> = model
-            .links
-            .iter()
-            .filter(|l| l.dst == node.id)
-            .map(|l| l.id.as_str())
-            .collect();
-        let outgoing: Vec<&str> = model
-            .links
-            .iter()
-            .filter(|l| l.src == node.id)
-            .map(|l| l.id.as_str())
-            .collect();
-        map.insert("childIds".to_string(), serde_json::json!(child_ids));
-        map.insert("incomingLinks".to_string(), serde_json::json!(incoming));
-        map.insert("outgoingLinks".to_string(), serde_json::json!(outgoing));
-    }
-    val
 }
 
 /// Build a compact outline tree of the model: each node carries its id, name,
@@ -163,89 +127,6 @@ pub(crate) fn breadcrumb(model: &ScryModel, node_id: &str) -> String {
     names.join(" / ")
 }
 
-/// Directives are user-authored and read-only to the AI's ordinary writes —
-/// both a responsibility's `directives` and a node's own node-level
-/// `directives`. Before committing any AI write, force each back to whatever
-/// the prior on-disk model held for that id; ids with no prior entry get none.
-/// This lets the AI create, edit, and move responsibilities and nodes while
-/// leaving directives entirely under the user's control. (The interactive
-/// patch path can't reach them — they're `schemars(skip)` — but the whole-node
-/// generation primitives `replace_model`/`replace_subtree` rebuild nodes from JSON and
-/// would otherwise drop them.) Not applied to `move_responsibilities`, which
-/// preserves directives across a deliberate responsibility-id rename — nor to
-/// `set_directives`, the one deliberate write path, reserved for edits the
-/// user explicitly asked for.
-pub(crate) fn enforce_readonly_directives(model: &mut ScryModel, prior: &ScryModel) {
-    let prior_resps = prior
-        .nodes
-        .iter()
-        .flat_map(|n| n.responsibilities.iter())
-        .chain(prior.groups.iter().flat_map(|g| g.responsibilities.iter()));
-    let prior_dir: HashMap<&str, &Vec<String>> = prior_resps
-        .map(|r| (r.id.as_str(), &r.directives))
-        .collect();
-    let restore = |r: &mut Responsibility| {
-        r.directives = prior_dir
-            .get(r.id.as_str())
-            .map(|d| (*d).clone())
-            .unwrap_or_default();
-    };
-    // Node-level directives, keyed by node id (same read-only guarantee).
-    let prior_node_dir: HashMap<&str, &Vec<String>> = prior
-        .nodes
-        .iter()
-        .map(|n| (n.id.as_str(), &n.directives))
-        .collect();
-    for n in &mut model.nodes {
-        n.responsibilities.iter_mut().for_each(&restore);
-        n.directives = prior_node_dir
-            .get(n.id.as_str())
-            .map(|d| (*d).clone())
-            .unwrap_or_default();
-    }
-    for g in &mut model.groups {
-        g.responsibilities.iter_mut().for_each(&restore);
-    }
-}
-
-/// Canvas placements (`Node::position`) are user-authored and read-only to the
-/// AI, exactly like directives — the typed patch tools can't reach them
-/// (`schemars(skip)`), but the whole-node generation primitives
-/// `replace_model`/`replace_subtree` rebuild nodes from JSON and would otherwise drop
-/// them. Force each node's position back to whatever the FIRST prior model
-/// containing that node held; nodes new to every prior get none (the AI never
-/// places nodes — auto-layout does). Priors are ordered most-authoritative
-/// first: the plan layer is where the canvas writes, so it precedes committed.
-pub(crate) fn restore_node_positions(model: &mut ScryModel, priors: &[&ScryModel]) {
-    let prior_pos: HashMap<&str, Option<scryer_core::Position>> = priors
-        .iter()
-        .rev()
-        .flat_map(|m| m.nodes.iter())
-        .map(|n| (n.id.as_str(), n.position))
-        .collect();
-    for n in &mut model.nodes {
-        n.position = prior_pos.get(n.id.as_str()).copied().flatten();
-    }
-}
-
-
-/// Project root from request param, active model, or cwd.
-/// Build a committed-model event diff row for a responsibility — its statement,
-/// anchored to the first source location the model maps it to (if any).
-pub(crate) fn resp_event_row(marker: &str, model: &ScryModel, resp: &Responsibility) -> EventRow {
-    let row = EventRow::new(marker, resp.statement.clone());
-    match model.source_map.get(&resp.id).and_then(|locs| locs.first()) {
-        Some(loc) => row.with_source(loc.clone()),
-        None => row,
-    }
-}
-
-/// Record a committed-model history event, best-effort: a logging failure must
-/// never abort the model operation that produced it (see [`scryer_core::history`]).
-pub(crate) fn record_event(model_ref: &ModelRef, ev: HistoryEvent) {
-    let _ = append_event(model_ref, &ev);
-}
-
 pub(crate) fn resolve_model_ref(req_project: Option<&str>) -> Result<ModelRef, McpError> {
     let path = match req_project {
         Some(p) => std::path::PathBuf::from(p),
@@ -254,327 +135,6 @@ pub(crate) fn resolve_model_ref(req_project: Option<&str>) -> Result<ModelRef, M
         })?,
     };
     Ok(ModelRef::ProjectLocal(path))
-}
-
-/// Error text for a failed model/plan read. A missing file means NO MODEL
-/// EXISTS yet — steer at the bootstrap path instead of stranding the agent
-/// with a raw "os error 2".
-pub(crate) fn read_fail(layer: &str, model_ref: &ModelRef, e: &str) -> String {
-    if e.contains("os error 2") || e.contains("No such file") {
-        format!(
-            "No model exists at {model_ref} yet ({layer} file is absent). Start with \
-             `read_codebase` to see the codebase, then build top-down: `add_system` / \
-             `add_container` / `fill_container`. If you meant a different project, pass \
-             its absolute path as `project`."
-        )
-    } else {
-        format!("Failed to read {layer} at {model_ref}: {e}")
-    }
-}
-
-/// True when `id` is a server-minted responsibility id (`resp-N`).
-fn is_minted_resp_id(id: &str) -> bool {
-    scryer_core::is_minted_id(id, "resp")
-}
-
-/// Re-mints caller-supplied responsibility ids in raw-write payloads.
-///
-/// The raw-write tools (`update_nodes`, `update_group`, `replace_subtree`,
-/// `replace_groups`, `replace_model`) accept full `Responsibility` structs, so a
-/// caller that doesn't know the next free id invents one ("new", "", "temp")
-/// — and every lookup in the system (`find_responsibility`, source_map, fold)
-/// keys on that id being globally unique. Three ways a payload id fails that,
-/// each re-minted with a reported reason:
-///
-///  1. **Invented** — unknown to both layers and not minted-format ("new").
-///     Echoing an EXISTING claim keeps its identity whatever its id looks like
-///     (legacy models carry ids the minters never issued, and renaming one
-///     would orphan its source anchors), and a hand-written `resp-N` that
-///     collides with nothing stands.
-///  2. **Repeated** — the same id twice in one payload. Never legitimate: the
-///     second claim would silently overwrite the first.
-///  3. **Wrong host** — an id that lives on a DIFFERENT node/group in either
-///     layer. This is the stale-snapshot failure: an agent working from an old
-///     read picks `resp-712` for a NEW claim, and because that id is
-///     minted-format and known, the write used to sail through and hijack the
-///     real resp-712's identity — its directives, anchors, attached tests and
-///     change tag — while leaving two claims sharing one id. Only the
-///     patch-shaped tools guard on host ([`RespIdReminter::new`]); the
-///     whole-payload writers ([`RespIdReminter::for_replacement`]) legitimately
-///     relocate claims, so for them a host change is a move, not a collision.
-///
-/// Seed with BOTH layers (plan and committed), for the same union guard the
-/// intent tools use: a plan-deleted claim's id must not be re-issued while
-/// committed still holds it — and `enforce_readonly_directives` would staple
-/// the dead claim's user directives onto the unrelated new one.
-pub(crate) struct RespIdReminter {
-    /// Every responsibility id the floor layers already hold → the host ids it
-    /// lives on. An incoming id found here is an existing claim being echoed
-    /// (never an invention) — and the hosts say whether it is being echoed
-    /// where it actually lives.
-    known: std::collections::HashMap<String, std::collections::HashSet<String>>,
-    /// Ids this payload has already consumed — the within-write duplicate guard.
-    used: std::collections::HashSet<String>,
-    /// Whether a claim appearing on a host it doesn't live on is a collision
-    /// (patch writes) or a legitimate relocation (whole-payload writes).
-    guard_host: bool,
-    /// One `host: 'old' → new (why)` line per re-mint, for the tool response —
-    /// the caller has to learn the real ids it should use from now on, and WHY
-    /// its own id was refused.
-    minted: Vec<String>,
-}
-
-impl RespIdReminter {
-    /// For the patch-shaped writers (`update_nodes`, `update_group`,
-    /// `replace_groups`), where a claim cannot change host: moving one is
-    /// `move_responsibilities`' job, so an id arriving on a foreign host is a
-    /// collision.
-    pub(crate) fn new(floors: &[&ScryModel]) -> Self {
-        Self::build(floors, true)
-    }
-
-    /// For the whole-payload writers (`replace_model`, `replace_subtree`), which restate
-    /// an entire model or subtree and may legitimately carry a claim to a new
-    /// host. Duplicate and invented ids are still re-minted.
-    pub(crate) fn for_replacement(floors: &[&ScryModel]) -> Self {
-        Self::build(floors, false)
-    }
-
-    fn build(floors: &[&ScryModel], guard_host: bool) -> Self {
-        let mut me = Self {
-            known: std::collections::HashMap::new(),
-            used: std::collections::HashSet::new(),
-            guard_host,
-            minted: Vec::new(),
-        };
-        for m in floors {
-            me.absorb(
-                m.nodes
-                    .iter()
-                    .flat_map(|n| n.responsibilities.iter())
-                    .chain(m.groups.iter().flat_map(|g| g.responsibilities.iter())),
-            );
-            let hosted = m
-                .nodes
-                .iter()
-                .flat_map(|n| n.responsibilities.iter().map(move |r| (&n.id, r)))
-                .chain(
-                    m.groups
-                        .iter()
-                        .flat_map(|g| g.responsibilities.iter().map(move |r| (&g.id, r))),
-                );
-            for (host, r) in hosted {
-                me.known.entry(r.id.clone()).or_default().insert(host.clone());
-            }
-        }
-        me
-    }
-
-    /// Reserve every id in `resps` so nothing minted later in this write can
-    /// collide with it. Run this over the WHOLE payload before the first
-    /// `remint` call: a payload may carry a hand-written id that a fresh draw
-    /// would otherwise be free to repeat inside the very write being repaired.
-    pub(crate) fn absorb<'a>(&mut self, resps: impl Iterator<Item = &'a Responsibility>) {
-        for r in resps {
-            self.known.entry(r.id.clone()).or_default();
-        }
-    }
-
-    /// Re-mint every id in `resps` that cannot safely stand — invented,
-    /// repeated within this payload, or (patch writes only) belonging to a
-    /// claim that lives on another host. `host` is the node or group being
-    /// written; it names the report line and is what the host guard compares
-    /// against.
-    pub(crate) fn remint<'a>(
-        &mut self,
-        host: &str,
-        resps: impl Iterator<Item = &'a mut Responsibility>,
-    ) {
-        for r in resps {
-            // Ids `absorb` reserved without a host are not "known claims" —
-            // only an id with at least one real home is an echo of one.
-            let homes = self.known.get(&r.id).filter(|h| !h.is_empty());
-            let reason = if self.used.contains(&r.id) {
-                Some("repeated in this write")
-            } else if homes.is_some_and(|h| self.guard_host && !h.contains(host)) {
-                // The stale-snapshot collision: this id is a REAL claim, and it
-                // lives somewhere else. Taking it here would hijack that claim.
-                Some("that id belongs to a claim on another node")
-            } else if homes.is_none() && !is_minted_resp_id(&r.id) {
-                Some("ids are server-assigned")
-            } else {
-                None
-            };
-            let Some(reason) = reason else {
-                self.used.insert(r.id.clone());
-                continue;
-            };
-            let fresh = scryer_core::mint_id_from(
-                "resp",
-                self.known.keys().map(String::as_str).chain(self.used.iter().map(String::as_str)),
-            );
-            self.minted.push(format!("{host}: '{}' → {fresh} ({reason})", r.id));
-            self.used.insert(fresh.clone());
-            r.id = fresh;
-        }
-    }
-
-    /// Append the re-mint report to a tool response. Silent when nothing was
-    /// re-minted — the common case must not grow a no-op section.
-    pub(crate) fn report_into(&self, msg: &mut String) {
-        if self.minted.is_empty() {
-            return;
-        }
-        msg.push_str(&format!(
-            "\n{} caller-supplied responsibility id(s) re-minted (ids are server-assigned; \
-             use the new ids from here on):",
-            self.minted.len()
-        ));
-        for line in &self.minted {
-            msg.push_str(&format!("\n- {line}"));
-        }
-    }
-}
-
-/// Re-mint payload NODE ids that name a node living outside the region this
-/// write replaces — the node-level twin of [`RespIdReminter`]'s wrong-host
-/// guard, and the same stale-snapshot failure: an agent reading the model,
-/// then writing a subtree minted against that old snapshot, picks `node-41`
-/// for something new while `node-41` has since been taken. `replace_subtree`
-/// would push it in beside the real one, leaving two nodes sharing an id —
-/// after which every id lookup in the system silently picks whichever comes
-/// first.
-///
-/// `replaced` is the id set this write legitimately owns (the subtree being
-/// swapped out); anything else live in either layer is taken. Renamed ids are
-/// repointed inside the payload — a child's `parentId` and both endpoints of
-/// every payload link — so the incoming shape survives the rename intact.
-/// Ids repeated WITHIN the payload are re-minted too, but not repointed: which
-/// of the twins a reference meant is not knowable.
-pub(crate) fn remint_colliding_node_ids(
-    nodes: &mut [Node],
-    links: &mut [scryer_core::Link],
-    replaced: &std::collections::HashSet<String>,
-    floors: &[&ScryModel],
-) -> Vec<String> {
-    use std::collections::{HashMap, HashSet};
-    let taken: HashSet<&str> = floors
-        .iter()
-        .flat_map(|m| m.nodes.iter().map(|n| n.id.as_str()))
-        .filter(|id| !replaced.contains(*id))
-        .collect();
-    // Mint clear of every id either layer has seen AND every id this payload
-    // carries, so a fresh id can't collide with a sibling later in the batch.
-    let mut reserved: HashSet<String> = floors
-        .iter()
-        .flat_map(|m| m.nodes.iter().map(|n| n.id.clone()))
-        .chain(nodes.iter().map(|n| n.id.clone()))
-        .collect();
-
-    let mut renamed: HashMap<String, String> = HashMap::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut report = Vec::new();
-    for n in nodes.iter_mut() {
-        let reason = if !seen.insert(n.id.clone()) {
-            "repeated in this write"
-        } else if taken.contains(n.id.as_str()) {
-            "that id belongs to a node outside this subtree"
-        } else {
-            continue;
-        };
-        let fresh = scryer_core::mint_id_from("node", reserved.iter().map(String::as_str));
-        reserved.insert(fresh.clone());
-        report.push(format!("'{}' → {fresh} ({reason})", n.id));
-        // Only a first-seen collision can be repointed; a duplicate's
-        // references are ambiguous, so they are left pointing at the twin.
-        if reason.starts_with("that id") {
-            renamed.insert(n.id.clone(), fresh.clone());
-        }
-        seen.insert(fresh.clone());
-        n.id = fresh;
-    }
-    if !renamed.is_empty() {
-        for n in nodes.iter_mut() {
-            if let Some(p) = n.parent_id.as_ref().and_then(|p| renamed.get(p)) {
-                n.parent_id = Some(p.clone());
-            }
-        }
-        for l in links.iter_mut() {
-            if let Some(s) = renamed.get(&l.src) {
-                l.src = s.clone();
-            }
-            if let Some(d) = renamed.get(&l.dst) {
-                l.dst = d.clone();
-            }
-        }
-    }
-    report
-}
-
-/// The rationale a session's change opens with: the task the agent first
-/// oriented on, in its own words, else the session it belongs to. The user's
-/// messages are never read.
-fn session_rationale(model_ref: &ModelRef, sid: &str) -> String {
-    match scryer_core::session::session_task(model_ref, sid) {
-        Some(task) => match task.char_indices().nth(200) {
-            Some((i, _)) => format!("{}…", &task[..i]),
-            None => task,
-        },
-        None => format!("Session {}", sid.get(..8).unwrap_or(sid)),
-    }
-}
-
-/// Sessions without a harness session id share this one change.
-pub(crate) const NO_SESSION: &str = "unknown";
-
-/// Write the plan, first tagging what THIS write changed to the session's
-/// change — computed as the diff between the plan on disk and the model being
-/// written, so every authoring tool gets attribution without bespoke
-/// bookkeeping, deletions included. The session's change is opened on its
-/// first write: one change per session, never a step the agent has to take.
-/// Returns conflict warnings for the tool's response: a key already tagged by
-/// a DIFFERENT change is two sessions touching the same element — the
-/// collision the ledger exists to catch before the code merges.
-pub(crate) fn write_planned_tagged(
-    model_ref: &ModelRef,
-    model: &mut ScryModel,
-    session: Option<&str>,
-) -> Result<Vec<String>, String> {
-    let sid = session.unwrap_or(NO_SESSION);
-    let cid = match scryer_core::changes::session_change(model, sid) {
-        Some(c) => c.id.clone(),
-        None => {
-            let rationale = session_rationale(model_ref, sid);
-            scryer_core::changes::open_change_for(model, &rationale, Some(sid), scryer_core::drift::now_secs())
-        }
-    };
-    let cid = cid.as_str();
-    let mut warnings = Vec::new();
-    let before = scryer_core::read_planned_at(model_ref).unwrap_or_default();
-    let keys: Vec<String> = scryer_core::diff::diff(&before, model)
-        .changes
-        .iter()
-        .map(scryer_core::changes::key_for)
-        .collect();
-    for (key, prev) in scryer_core::changes::tag(model, &keys, cid) {
-        let rationale = model
-            .changes
-            .iter()
-            .find(|c| c.id == prev)
-            .map(|c| c.rationale.clone())
-            .unwrap_or_default();
-        warnings.push(format!(
-            "conflict: {key} was tagged by {prev} (\"{rationale}\") and is now \
-             retagged to {cid} — two changes are touching the same element"
-        ));
-    }
-    scryer_core::write_planned_at(model_ref, model)?;
-    // Logged, not gated: the session view shows the user every plan element
-    // the agent wrote.
-    if session.is_some() {
-        let _ = scryer_core::session::record_model_edit(model_ref, sid, keys);
-    }
-    Ok(warnings)
 }
 
 /// Plan-diff element count with vagrants excluded — the same queue
@@ -600,21 +160,12 @@ pub(crate) struct StatusCounts {
     pub carriers: usize,
     /// Open changes in the plan's ledger — named workstreams in flight.
     pub open_changes: usize,
-    /// Testable claims with no test attached, whole-model (health's
-    /// `untested` total) — the primary work signal, kept ambient in the
-    /// header so the agent sees it move without re-polling get_health.
-    pub untested: u32,
     /// None until a reconcile baseline exists — drift and anchor states have
     /// nothing to measure against, and reporting zeros would fake certainty.
     pub baseline: Option<BaselineCounts>,
     /// None until a test report has been ingested — with no recorded verdicts
     /// there is no test state to report, and zeros would fake certainty.
     pub tests: Option<TestCounts>,
-    /// Claims whose last probe round left a survivor: the attached test went
-    /// green on a deliberate break. Never a count of the UNPROBED — that
-    /// population is nearly everything, and a standing nag for it would be
-    /// noise the reader learns to skip. Findings speak; absence does not.
-    pub probe_survivors: usize,
     /// Structural violations (imports the layer matrix forbids, banned
     /// packages, misplaced files) from the last build's dependency cache; 0
     /// when no cache exists.
@@ -648,8 +199,6 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
     let pending = pending_change_count(&committed, &planned);
     let carriers = scryer_core::diff::plan_carrier_count(&committed, &planned);
     let open_changes = planned.changes.len();
-    let untested =
-        scryer_core::health::compute_health(&committed, Some(&planned), None).totals.untested;
     // Recorded test verdicts, re-verified against the tree (fingerprint
     // compare with an mtime fast path — cheap enough for every response).
     let verdicts = scryer_extract::test_status::test_statuses(model_ref).unwrap_or_default();
@@ -668,13 +217,6 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
         stale: verdicts.iter().filter(|s| s.stale).count(),
         recorded: verdicts.len(),
     });
-    // A stale probe result describes code that has since moved on, so it is
-    // not a live finding — the next round decides.
-    let probe_survivors = scryer_extract::test_status::probe_statuses(model_ref)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|p| !p.stale && p.survived > 0)
-        .count();
     // Cached-graph only (no file walk): cheap enough for every response.
     let structural_violations = scryer_core::build_edges::read_build_edges(&model_ref.build_edges_path())
         .map(|edges| {
@@ -694,10 +236,8 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
             pending,
             carriers,
             open_changes,
-            untested,
             baseline: None,
             tests,
-            probe_survivors,
             structural_violations,
         });
     }
@@ -715,14 +255,12 @@ pub(crate) fn status_counts(model_ref: &ModelRef) -> Option<StatusCounts> {
         pending,
         carriers,
         open_changes,
-        untested,
         baseline: Some(BaselineCounts {
             drift_scopes: scopes,
             anchors_changed: changed,
             anchors_broken: broken,
         }),
         tests,
-        probe_survivors,
         structural_violations,
     })
 }
@@ -753,143 +291,3 @@ pub(crate) fn tests_phrase(c: &StatusCounts) -> String {
     }
 }
 
-/// The header fragment for probe findings — empty unless a probe left a
-/// survivor. Deliberately asymmetric with `untested`: a claim that has never
-/// been probed is the normal state of almost every claim, so counting it here
-/// would bury the one thing worth reacting to. A survivor is different — it
-/// says a test the model reports as green does not actually hold its claim.
-pub(crate) fn probes_phrase(c: &StatusCounts) -> String {
-    match c.probe_survivors {
-        0 => String::new(),
-        1 => " · probes: 1 claim with a surviving break".to_string(),
-        n => format!(" · probes: {n} claims with surviving breaks"),
-    }
-}
-
-/// One-line loop-state header for write responses — `plan: N pending ·
-/// untested: N · drift: N scope(s) · anchors: N changed, N broken` — so the
-/// model's state stays ambient across a coding session without the agent
-/// re-polling the orientation tools. `untested` (testable claims with no test
-/// attached) rides directly after the plan count because it is the primary
-/// work signal. Same locking contract as [`status_counts`].
-pub(crate) fn status_header(model_ref: &ModelRef) -> Option<String> {
-    let c = status_counts(model_ref)?;
-    // Open changes ride the header only when the ledger is in use — the
-    // serial (unfiled) workflow keeps its unchanged line.
-    let changes = if c.open_changes > 0 {
-        format!(" · changes: {} open", c.open_changes)
-    } else {
-        String::new()
-    };
-    // Test verdicts speak only when red or stale — verified-green is silence.
-    let tests = tests_phrase(&c);
-    // A surviving break is a finding about a test the model calls green.
-    let probes = probes_phrase(&c);
-    let structural = structural_phrase(&c);
-    Some(match c.baseline {
-        // Never reconciled: drift/anchors have no baseline to report against.
-        None => format!(
-            "plan: {} pending · untested: {} · drift: no reconcile anchor yet{tests}{probes}{structural}{changes}",
-            c.pending, c.untested
-        ),
-        Some(b) => format!(
-            "plan: {} pending · untested: {} · drift: {} scope(s) · anchors: {} changed, {} broken{tests}{probes}{structural}{changes}",
-            c.pending, c.untested, b.drift_scopes, b.anchors_changed, b.anchors_broken
-        ),
-    })
-}
-
-/// Which claim-keyed anchor map a batch of entries writes: implementation
-/// anchors (`source_map`) or attached tests (`test_map`).
-#[derive(Clone, Copy)]
-pub(crate) enum RespAnchorDim {
-    Source,
-    Test,
-}
-
-impl RespAnchorDim {
-    fn map_of<'m>(
-        &self,
-        m: &'m mut ScryModel,
-    ) -> &'m mut std::collections::BTreeMap<String, Vec<scryer_core::SourceLocation>> {
-        match self {
-            RespAnchorDim::Source => &mut m.source_map,
-            RespAnchorDim::Test => &mut m.test_map,
-        }
-    }
-}
-
-/// Apply responsibility anchor entries (the `entries` shape of
-/// `update_source_map`) to their SINGLE home: the committed model owns every
-/// committed claim's anchor; the planned draft holds anchors only for claims it
-/// ADDS. `dim` picks the dimension — implementation anchors or attached tests —
-/// which share the routing and normalization verbatim. Whole-symbol line ranges
-/// are normalized to symbol-only anchors (the honest encoding for "this whole
-/// definition" — for a test entry, "this whole test"), reported in the
-/// returned notes. Mutates the models in place; the CALLER validates ids
-/// beforehand and persists both layers afterwards (writing `committed` only
-/// when the returned flag is true). Shared by `update_source_map` and
-/// `mark_implemented`'s fold-time `anchors`/`tests`.
-pub(crate) fn apply_resp_anchor_entries(
-    project: &std::path::Path,
-    planned: &mut ScryModel,
-    committed: &mut Option<ScryModel>,
-    mut entries: Vec<crate::types::SourceMapEntry>,
-    dim: RespAnchorDim,
-) -> (Vec<String>, bool) {
-    let mut normalized: Vec<String> = Vec::new();
-    {
-        let mut resolver = scryer_extract::anchors::SpanReader::new(project);
-        for entry in &mut entries {
-            for loc in &mut entry.locations {
-                let (Some(sym), Some(line)) = (loc.symbol.clone(), loc.line) else {
-                    continue;
-                };
-                let end = loc.end_line.unwrap_or(line);
-                let Some(extent) = resolver.extent(&loc.pattern, &sym, Some(line)) else {
-                    continue;
-                };
-                if scryer_extract::anchors::covers_extent(line, end, extent) {
-                    loc.line = None;
-                    loc.end_line = None;
-                    normalized.push(format!(
-                        "{}: {} L{}-{} covered the whole symbol `{}` (L{}-{})",
-                        entry.responsibility_id, loc.pattern, line, end, sym, extent.0, extent.1
-                    ));
-                }
-            }
-        }
-    }
-
-    let committed_resp_ids: std::collections::HashSet<String> = match committed.as_ref() {
-        Some(c) => c
-            .nodes
-            .iter()
-            .flat_map(|n| n.responsibilities.iter())
-            .chain(c.groups.iter().flat_map(|g| g.responsibilities.iter()))
-            .map(|r| r.id.clone())
-            .collect(),
-        None => Default::default(),
-    };
-    let mut committed_dirty = false;
-    for entry in entries {
-        let key = entry.responsibility_id;
-        if entry.locations.is_empty() {
-            dim.map_of(planned).remove(&key);
-            if committed_resp_ids.contains(&key) {
-                if let Some(c) = committed.as_mut() {
-                    committed_dirty |= dim.map_of(c).remove(&key).is_some();
-                }
-            }
-        } else if committed_resp_ids.contains(&key) {
-            dim.map_of(planned).remove(&key);
-            if let Some(c) = committed.as_mut() {
-                dim.map_of(c).insert(key, entry.locations);
-                committed_dirty = true;
-            }
-        } else {
-            dim.map_of(planned).insert(key, entry.locations);
-        }
-    }
-    (normalized, committed_dirty)
-}
