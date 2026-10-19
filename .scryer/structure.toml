@@ -1,0 +1,49 @@
+# How scryer reads this repo's shape. Containers, components and claims are
+# derived from packaging and tests; this file says only what the code cannot.
+
+[system]
+name = "scryer"
+persons = ["developer", "agent"]
+externals = ["claude code", "codex", "copilot cli"]
+
+[levels]
+e2e = ["e2e/**", "tests/e2e/**"]
+integration = ["crates/*/tests/**", "src-tauri/tests/**"]
+# everything else is unit
+
+# Display names and styles carried over from the authored model.
+
+[containers.scryer]
+name = "Desktop App UI"
+style = "feature-sliced"
+
+[containers.src-tauri]
+name = "Desktop App Host"
+style = "core-shell"
+
+[containers."crates/scryer-core"]
+name = "Model Core"
+style = "library"
+layers = ["domain", "application", "composition", "infrastructure"]
+
+[containers."crates/scryer-extract"]
+name = "Code Extractor"
+style = "library"
+layers = ["domain", "application", "composition", "infrastructure"]
+
+[containers."crates/scryer-acp"]
+name = "Agent Sync"
+style = "library"
+layers = ["domain", "application", "composition", "infrastructure"]
+
+[containers."crates/scryer-mcp"]
+name = "MCP Server"
+style = "core-shell"
+
+[containers."crates/xtask"]
+name = "Build Tasks"
+style = "core-shell"
+
+[containers.docs]
+name = "Docs Site"
+style = "feature-sliced"

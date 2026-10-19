@@ -16,7 +16,7 @@ pub struct Structure {
     pub system: SystemConfig,
     #[serde(default)]
     pub levels: LevelsConfig,
-    /// Keyed by container name (crate/package name) or its directory.
+    /// Keyed by container directory or name (crate/package name).
     #[serde(default)]
     pub containers: BTreeMap<String, ContainerConfig>,
 }
@@ -87,9 +87,10 @@ impl Structure {
         self.levels.integration.is_some()
     }
 
-    /// The config for a container, looked up by name, then by directory.
+    /// The config for a container, looked up by directory, then by name
+    /// (two packages may share a name; a directory is unambiguous).
     pub fn container(&self, name: &str, dir: &str) -> Option<&ContainerConfig> {
-        self.containers.get(name).or_else(|| self.containers.get(dir))
+        self.containers.get(dir).or_else(|| self.containers.get(name))
     }
 }
 
