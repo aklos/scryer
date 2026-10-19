@@ -232,13 +232,12 @@ pub(crate) struct RadiusHit<'t> {
     pub claim: &'t DerivedClaim,
 }
 
-/// The tests a change to `files` reaches. A unit test is reached when its
-/// file imports a changed file, directly or through others (or is one). An
-/// integration test exercises its container through the crate's public face,
-/// which the import graph does not follow from a crate's own `tests/`, so it
-/// is reached when its file is, or when anything in its container is; an e2e
-/// test, only when `with_e2e`, by any change to product code. Todo stubs are
-/// left out: there is nothing to run.
+/// The tests a change to `files` reaches: those whose file imports a
+/// changed file, directly or through others (or is one). A test whose file
+/// resolves no import at all — its language or layout hides the link —
+/// falls back by level: an integration test is reached by any change inside
+/// its container, an e2e test by any change to product code. E2e tests only
+/// when `with_e2e`; todo stubs never, there is nothing to run.
 pub(crate) fn radius<'t>(
     tree: &'t DerivedTree,
     edges: &[(String, String)],
@@ -258,13 +257,18 @@ pub(crate) fn radius<'t>(
         .iter()
         .filter(|n| n.kind == Kind::Container)
         .any(|n| holds(&n.id));
+    let imports = |file: &str| edges.iter().any(|(src, _)| src == file);
     tree.claims
         .iter()
         .filter(|c| !c.planned)
         .filter(|c| match c.level {
             ClaimLevel::Component => reached.contains(c.file.as_str()),
-            ClaimLevel::Container => reached.contains(c.file.as_str()) || holds(&c.node_id),
-            ClaimLevel::System => with_e2e && (reached.contains(c.file.as_str()) || any_product),
+            ClaimLevel::Container => {
+                reached.contains(c.file.as_str()) || (!imports(&c.file) && holds(&c.node_id))
+            }
+            ClaimLevel::System => {
+                with_e2e && (reached.contains(c.file.as_str()) || (!imports(&c.file) && any_product))
+            }
         })
         .map(|claim| RadiusHit { claim })
         .collect()
@@ -340,8 +344,9 @@ mod tests {
         }
     }
 
-    /// A unit test is reached by import, transitively; an integration test
-    /// by any change inside its container; e2e only when asked; stubs never.
+    /// A test is reached by import, transitively; an integration test that
+    /// resolves no import, by any change inside its container; e2e only when
+    /// asked; stubs never.
     #[test]
     fn the_radius_follows_imports_and_levels() {
         let mut t = tree(vec![

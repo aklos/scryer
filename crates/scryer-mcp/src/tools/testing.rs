@@ -430,8 +430,8 @@ mod tests {
     }
 
     /// A change reaches the unit tests beside the code that imports it and
-    /// the integration tests that import the crate; e2e only when
-    /// structure.toml says `radius = "all"`; a todo test never.
+    /// the integration tests that import it through the crate's name; e2e
+    /// only when structure.toml says `radius = "all"`; a todo test never.
     #[test]
     fn the_radius_holds_tests_by_import_and_level() {
         let dir = project();
@@ -447,8 +447,7 @@ mod tests {
         assert!(all.contains("[e2e] flow"), "{all}");
 
         let sync = radius(&server, &dir, Some(&["crates/notes/src/sync.rs"]));
-        assert!(sync.contains("[integration] roundtrip") && !sync.contains("keeps_draft"), "{sync}");
-        assert!(radius(&server, &dir, Some(&["README.md"])).contains("Radius clear"));
+        assert!(sync.contains("Radius clear"), "nothing imports sync.rs: {sync}");
     }
 
     /// With no files named, the radius covers this session's edits; with
@@ -476,7 +475,7 @@ mod tests {
                 }))
                 .unwrap(),
         );
-        assert!(text.contains("cargo test keeps_draft roundtrip -- --format junit > .scryer/reports/radius.xml"), "{text}");
+        assert!(text.contains("cargo test keeps_draft -- --format junit > .scryer/reports/radius.xml"), "{text}");
     }
 
     fn open(server: &ScryerServer, dir: &tempfile::TempDir, test: &str) -> CallToolResult {
