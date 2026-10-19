@@ -1,22 +1,9 @@
-//! Checks whether a project's MCP config declares the scryer server, for agents that only read config rather than accepting a server over the protocol
-//!
-//! Turns a Claude Code stream-json event into a one-line human-readable activity entry
-//!
-//! Builds the command-line flags an ACP subprocess is spawned with, since the protocol itself carries no model/effort settings
-//!
-//! Spawns and cancels agent subprocess sessions, running many concurrently on one background executor
-//!
-//! Extracts token usage and readable activity summaries from an agent's streamed output for the build orchestrator and UI
-//!
-//! Cancels every active session at once (single stop button, build teardown, orphan cleanup)
-//!
-//! Kills a session's full process tree on cancel, cross-platform
-//!
-//! Terminates an agent subprocess and its whole process tree, using process-group signals on Unix and taskkill on Windows
-//!
-//! Starts a new agent sync session and returns its id once launch succeeds or an error if it fails
-//!
-//! Pulls end-of-turn token usage out of one stream-json line, recognizing both Claude Code's `result` event and Codex's token-count event
+//! The subprocess runtime: spawns agent sessions — CLI print mode, or an ACP
+//! subprocess with the protocol handshake — and runs many at once on one
+//! background executor. It reads token usage and one-line activity summaries
+//! out of a CLI agent's stream-json output, and a cancel stops every active
+//! session, killing each one's whole process tree (process-group signals on
+//! Unix, `taskkill` on Windows).
 
 use std::path::PathBuf;
 
