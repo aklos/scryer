@@ -28,15 +28,16 @@
 
 use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
-use scryer_core::{Kind, ModelLock, ModelRef, Node, ScryModel};
+use scryer_core::infrastructure::verdict_store::ProjectLock;
+use scryer_core::{Kind, ModelRef, Node, ScryModel};
 
 use std::collections::HashMap;
 
-/// Acquire the exclusive model write lock, or return an error result to surface
-/// to the agent. Hold the returned guard for the whole read-modify-write of a
-/// write tool so concurrent writers (parallel sessions, the canvas) serialize.
-pub(crate) fn lock_or_err(model_ref: &ModelRef) -> Result<ModelLock, CallToolResult> {
-    scryer_core::lock_model(model_ref)
+/// Acquire the project's exclusive lock, or return an error result to surface
+/// to the agent. Hold the guard for a tool's whole read-modify-write of the
+/// evidence caches so concurrent sessions serialize.
+pub(crate) fn lock_or_err(model_ref: &ModelRef) -> Result<ProjectLock, CallToolResult> {
+    scryer_core::derived_tree::lock_project(model_ref)
         .map_err(|e| CallToolResult::error(vec![Content::text(e)]))
 }
 

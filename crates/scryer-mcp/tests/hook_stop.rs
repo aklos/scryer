@@ -26,14 +26,10 @@ fn hook(project: &std::path::Path, event: serde_json::Value, args: &[&str]) -> S
 fn stop_emits_nothing_and_closes_the_record() {
     let dir = tempfile::tempdir().unwrap();
     let r = scryer_core::ModelRef::ProjectLocal(dir.path().to_path_buf());
-    let model: scryer_core::ScryModel = serde_json::from_value(serde_json::json!({
-        "version": "0.3", "links": [],
-        "nodes": [{ "id": "api", "kind": "container", "name": "API",
-                    "responsibilities": [{ "id": "r-1", "statement": "serves requests" }] }],
-        "sourceMap": { "r-1": [{ "pattern": "src/api.rs", "symbol": "serve" }] }
-    }))
-    .unwrap();
-    scryer_core::write_model_at(&r, &model).unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"api\"\nversion = \"0.1.0\"\n").unwrap();
+    std::fs::write(dir.path().join("src/api.rs"), "pub fn serve() {}\n").unwrap();
+    std::fs::create_dir_all(dir.path().join(".scryer")).unwrap();
     scryer_core::session::record_touch(&r, "s", "src/api.rs").unwrap();
     scryer_core::session::record_touch(&r, "s", "src/api_test.rs").unwrap();
 

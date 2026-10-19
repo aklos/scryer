@@ -9,30 +9,63 @@
 use crate::domain::anchors::{is_glob_pattern, resolve_span, span_hash};
 use crate::domain::mutations::{parse_mutation_report, MutationSummary};
 use crate::domain::test_status::*;
-use crate::infrastructure::anchors::FileCache;
-use scryer_core::test_results::{match_report, parse_junit, ReportMatch, TestOutcome};
+use crate::domain::lang;
+use std::collections::HashMap;
+use scryer_core::test_results::{match_report, parse_junit, ReportMatch};
 use scryer_core::test_key;
-use scryer_core::{read_model_at, read_planned_at, working_view, ModelRef, ScryModel};
+use scryer_core::{ModelRef, ScryModel};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-/// The model every status read resolves against: the committed model with the
-/// PLAN's own claims and anchors overlaid (`working_view`). A claim that has not
-/// folded yet lives only in the plan — so do the test it attached and, often,
-/// its implementation anchor — and the verdict-gated fold needs its verdict to
-/// record and read BEFORE it folds. Committed alone would make every unfolded
-/// claim invisible here, and the gate could never be satisfied.
-///
-/// With `SCRYER_DERIVED_TREE=1` it is the derived tree's planned layer
-/// instead, so verdicts, probes and the radius key on derived claim ids.
+/// The model every status read resolves against: the derived tree's planned
+/// layer, so verdicts, probes and the radius key on derived claim ids and
+/// todo stubs count.
 fn working_model(r: &ModelRef) -> Result<ScryModel, String> {
-    if scryer_core::derived_tree::derived_tree_enabled() {
-        return crate::infrastructure::derived_tree::derived_tree(r.project_path()).map(|t| t.planned);
+    #[cfg(test)]
+    if let Some(m) = TEST_MODEL.with(|c| c.borrow().clone()) {
+        return Ok(m);
     }
-    let committed = read_model_at(r)?;
-    match read_planned_at(r) {
-        Ok(planned) => Ok(working_view(&committed, &planned)),
-        Err(_) => Ok(committed),
+    crate::infrastructure::derived_tree::derived_tree(r.project_path()).map(|t| t.planned)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A model a test hands the status code directly, standing in for the
+    /// derived tree so the verdict rules can be exercised on a fixture.
+    static TEST_MODEL: std::cell::RefCell<Option<ScryModel>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Stand `m` in for the derived tree in this test's thread.
+#[cfg(test)]
+fn use_model(m: &ScryModel) {
+    TEST_MODEL.with(|c| *c.borrow_mut() = Some(m.clone()));
+}
+
+/// Per-call parse memo: each touched file is parsed at most once.
+pub(crate) struct FileCache {
+    files: HashMap<String, Option<(String, Option<lang::FileParse>)>>,
+}
+
+impl FileCache {
+    pub(crate) fn new() -> Self {
+        Self {
+            files: HashMap::new(),
+        }
+    }
+
+    /// Returns (source, parse) for a project-relative path; `None` when the
+    /// file doesn't exist. Parse is `None` for unsupported grammars.
+    pub(crate) fn get(&mut self, project: &Path, rel: &str) -> Option<&(String, Option<lang::FileParse>)> {
+        if !self.files.contains_key(rel) {
+            let loaded = std::fs::read_to_string(project.join(rel))
+                .ok()
+                .map(|source| {
+                    let parse = lang::parse_file(Path::new(rel), &source);
+                    (source, parse)
+                });
+            self.files.insert(rel.to_string(), loaded);
+        }
+        self.files.get(rel).and_then(|o| o.as_ref())
     }
 }
 
@@ -104,17 +137,6 @@ fn claim_fingerprints(
         }
     }
     out
-}
-
-/// Merge one matched report's per-claim outcomes into the cache. Each claim's
-/// anchors are fingerprinted against the working tree as it stands — the
-/// record means "this outcome was true of THIS code". A claim already in the
-/// cache is replaced: the cache holds the latest word, not a history.
-pub fn store_test_results(r: &ModelRef, report: &ReportMatch) -> Result<usize, String> {
-    if report.claims.is_empty() {
-        return Ok(0);
-    }
-    store_results_on(r, &working_model(r)?, report)
 }
 
 /// [`store_test_results`] fingerprinted against `model` — the working model,
@@ -259,199 +281,6 @@ fn statuses_for(r: &ModelRef, only: Option<&BTreeSet<&str>>) -> Result<Vec<Claim
     Ok(out)
 }
 
-/// The evidence behind each named claim, resolved against the working view
-/// (plan-layer attachments count — see [`working_model`]). Reads the cached
-/// verdicts once for the whole set. Unknown ids read as `NoTest`.
-pub fn evidence_for_claim(
-    r: &ModelRef,
-    resp_ids: &[String],
-) -> Result<BTreeMap<String, Evidence>, String> {
-    if resp_ids.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-    let model = working_model(r)?;
-    let only: BTreeSet<&str> = resp_ids.iter().map(String::as_str).collect();
-    let verdicts = statuses_for(r, Some(&only))?;
-    let mut out = BTreeMap::new();
-    for id in resp_ids {
-        let tests: Vec<String> = model
-            .test_map
-            .get(id)
-            .map(|locs| {
-                let mut files: Vec<String> = locs.iter().map(|l| l.pattern.clone()).collect();
-                files.sort();
-                files.dedup();
-                files
-            })
-            .unwrap_or_default();
-        let ev = if tests.is_empty() {
-            Evidence::NoTest
-        } else {
-            match verdicts.iter().find(|s| &s.resp_id == id) {
-                None => Evidence::NoVerdict { tests },
-                Some(s) if s.stale => Evidence::Stale { tests },
-                Some(s) if s.outcome != TestOutcome::Passed => {
-                    Evidence::Failing { outcome: s.outcome, tests }
-                }
-                Some(_) => Evidence::Verified,
-            }
-        };
-        out.insert(id.clone(), ev);
-    }
-    Ok(out)
-}
-
-/// Exactly which attached test files need re-running: every test-attached
-/// claim whose verdict is missing or stale contributes its test files;
-/// claims whose verdict is current contribute nothing. Grouped per file so
-/// each entry is one targeted invocation — the radius is what needs
-/// re-running, never the whole suite. (A claim with NO attached test never
-/// appears here — that gap is health's `untested`, not a radius entry.)
-pub fn compute_blast_radius(r: &ModelRef) -> Result<Vec<RadiusFile>, String> {
-    let model = working_model(r)?;
-    let verdicts = read_test_statuses(r)?;
-    let stale_of: BTreeMap<&str, bool> =
-        verdicts.iter().map(|s| (s.resp_id.as_str(), s.stale)).collect();
-    let live: BTreeSet<&str> = model
-        .nodes
-        .iter()
-        .flat_map(|n| n.responsibilities.iter())
-        .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
-        .map(|resp| resp.id.as_str())
-        .collect();
-    let mut by_file: BTreeMap<&str, RadiusFile> = BTreeMap::new();
-    for (resp_id, locs) in &model.test_map {
-        if !live.contains(resp_id.as_str()) {
-            continue;
-        }
-        let stale = match stale_of.get(resp_id.as_str()) {
-            Some(false) => continue, // current verdict — nothing to re-run
-            Some(true) => true,
-            None => false, // never recorded
-        };
-        for loc in locs {
-            let entry = by_file.entry(&loc.pattern).or_insert_with(|| RadiusFile {
-                pattern: loc.pattern.clone(),
-                claims: Vec::new(),
-                stale: 0,
-            });
-            if !entry.claims.contains(resp_id) {
-                entry.claims.push(resp_id.clone());
-                entry.stale += stale as usize;
-            }
-        }
-    }
-    let mut out: Vec<RadiusFile> = by_file.into_values().collect();
-    for f in &mut out {
-        f.claims.sort();
-    }
-    Ok(out)
-}
-
-/// Whether any of `resp_id`'s anchors — implementation or attached test —
-/// lies in one of `touched`.
-fn claim_touched(model: &ScryModel, resp_id: &str, touched: &[String]) -> bool {
-    [model.source_map.get(resp_id), model.test_map.get(resp_id)]
-        .into_iter()
-        .flatten()
-        .flatten()
-        .any(|loc| {
-            if is_glob_pattern(&loc.pattern) {
-                glob::Pattern::new(&loc.pattern)
-                    .is_ok_and(|p| touched.iter().any(|f| p.matches(f)))
-            } else {
-                touched.iter().any(|f| f == &loc.pattern)
-            }
-        })
-}
-
-/// The radius for one session: claims with missing or stale verdicts whose
-/// anchored code or tests `touched` reaches, and the tests to run for them.
-/// A stale verdict on a claim the session never touched is listed apart as
-/// someone else's. With no session (`None`) every claim counts and nothing
-/// is touched, so every slow test is left out of the run.
-pub fn compute_session_radius(
-    r: &ModelRef,
-    touched: Option<&[String]>,
-) -> Result<SessionRadius, String> {
-    let model = working_model(r)?;
-    let verdicts = read_test_statuses(r)?;
-    let stale_of: BTreeMap<&str, bool> =
-        verdicts.iter().map(|s| (s.resp_id.as_str(), s.stale)).collect();
-    let cache = read_cache(r);
-    let live: BTreeSet<&str> = model
-        .nodes
-        .iter()
-        .flat_map(|n| n.responsibilities.iter())
-        .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
-        .map(|resp| resp.id.as_str())
-        .collect();
-    let mut out = SessionRadius { scoped: touched.is_some(), ..Default::default() };
-    let mut by_file: BTreeMap<&str, RadiusFile> = BTreeMap::new();
-    let mut tests: BTreeMap<(&str, Option<&str>), RadiusTest> = BTreeMap::new();
-    let mut touched_claims: BTreeSet<&str> = BTreeSet::new();
-    for (resp_id, locs) in &model.test_map {
-        if !live.contains(resp_id.as_str()) {
-            continue;
-        }
-        let stale = match stale_of.get(resp_id.as_str()) {
-            Some(false) => continue,
-            Some(true) => true,
-            None => false,
-        };
-        if let Some(t) = touched {
-            if !claim_touched(&model, resp_id, t) {
-                if stale {
-                    out.not_yours.push(resp_id.clone());
-                }
-                continue;
-            }
-            touched_claims.insert(resp_id);
-        }
-        for loc in locs {
-            let entry = by_file.entry(&loc.pattern).or_insert_with(|| RadiusFile {
-                pattern: loc.pattern.clone(),
-                claims: Vec::new(),
-                stale: 0,
-            });
-            if !entry.claims.contains(resp_id) {
-                entry.claims.push(resp_id.clone());
-                entry.stale += stale as usize;
-            }
-            let test = tests
-                .entry((&loc.pattern, loc.symbol.as_deref()))
-                .or_insert_with(|| RadiusTest {
-                    pattern: loc.pattern.clone(),
-                    name: loc.symbol.clone(),
-                    claims: Vec::new(),
-                    millis: None,
-                });
-            if !test.claims.contains(resp_id) {
-                test.claims.push(resp_id.clone());
-            }
-        }
-    }
-    // A test's duration is the slowest any verdict recorded for its name.
-    for test in tests.values_mut() {
-        let Some(name) = &test.name else { continue };
-        test.millis = cache.results.iter().filter_map(|rec| rec.millis.get(name).copied()).max();
-    }
-    for test in tests.into_values() {
-        let slow = test.millis.is_some_and(|ms| ms > SLOW_TEST_MILLIS)
-            && !test.claims.iter().any(|c| touched_claims.contains(c.as_str()));
-        if slow {
-            out.slow.push(test);
-        } else {
-            out.run.push(test);
-        }
-    }
-    out.files = by_file.into_values().collect();
-    for f in &mut out.files {
-        f.claims.sort();
-    }
-    Ok(out)
-}
-
 /// Where the project's radius test command is stored: one template line,
 /// set once (see [`render_test_command`]).
 fn test_command_path(r: &ModelRef) -> std::path::PathBuf {
@@ -479,113 +308,6 @@ pub fn ensure_reports_dir(r: &ModelRef) -> Result<String, String> {
         std::fs::write(ignore, "*\n").map_err(|e| e.to_string())?;
     }
     Ok(".scryer/reports".to_string())
-}
-
-/// The Stop hook's probe check for a session. Its claims under test are the
-/// ones whose attached tests sit in a file the session touched and whose
-/// verdict is current and passing — tests it wrote or changed, already green.
-/// Until [`probe_budget`] of them hold a probe result on the current code,
-/// `block` names which to probe, ranked by [`rank_probe_candidates`].
-/// `summary` names any of them whose probe let a break survive.
-pub fn session_probe_check(r: &ModelRef, touched: &[String]) -> ProbeCheck {
-    if touched.is_empty() {
-        return ProbeCheck::default();
-    }
-    let Ok(model) = working_model(r) else {
-        return ProbeCheck::default();
-    };
-    let in_touched_test = |resp_id: &str| {
-        model.test_map.get(resp_id).is_some_and(|locs| {
-            locs.iter().any(|l| touched.iter().any(|f| f == &l.pattern))
-        })
-    };
-    // A probe breaks the claim's code: a claim anchored to none has nothing
-    // to break, so it is never asked for.
-    let has_code = |resp_id: &str| model.source_map.get(resp_id).is_some_and(|locs| !locs.is_empty());
-    let verdicts = read_test_statuses(r).unwrap_or_default();
-    let eligible: Vec<&str> = verdicts
-        .iter()
-        .filter(|s| {
-            !s.stale && s.outcome == TestOutcome::Passed && in_touched_test(&s.resp_id) && has_code(&s.resp_id)
-        })
-        .map(|s| s.resp_id.as_str())
-        .collect();
-    if eligible.is_empty() {
-        return ProbeCheck::default();
-    }
-    let all_probes: Vec<ClaimProbeStatus> = read_probe_statuses(r)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|p| eligible.contains(&p.resp_id.as_str()))
-        .collect();
-    let probes: Vec<&ClaimProbeStatus> = all_probes.iter().filter(|p| !p.stale).collect();
-
-    let survivors: Vec<String> = probes
-        .iter()
-        .filter(|p| p.survived > 0)
-        .map(|p| match p.survivors.first() {
-            Some(s) => format!("{} ({s})", p.resp_id),
-            None => p.resp_id.clone(),
-        })
-        .collect();
-    let summary = (!survivors.is_empty()).then(|| {
-        format!(
-            "probe: {} claim(s) whose test let a break survive — {}",
-            survivors.len(),
-            survivors.join("; ")
-        )
-    });
-
-    let needed = probe_budget(eligible.len());
-    let block = (probes.len() < needed).then(|| {
-        // The touched test files behind each claim, and how many qualifying
-        // claims each of those files backs.
-        let tests_of = |id: &str| -> Vec<String> {
-            let mut files: Vec<String> = model
-                .test_map
-                .get(id)
-                .into_iter()
-                .flatten()
-                .filter(|l| touched.iter().any(|f| f == &l.pattern))
-                .map(|l| l.pattern.clone())
-                .collect();
-            files.sort();
-            files.dedup();
-            files
-        };
-        let mut backs: BTreeMap<String, usize> = BTreeMap::new();
-        for id in &eligible {
-            for t in tests_of(id) {
-                *backs.entry(t).or_default() += 1;
-            }
-        }
-        let candidates = eligible
-            .iter()
-            .filter(|id| !probes.iter().any(|p| p.resp_id == **id))
-            .map(|id| {
-                let urgency = match all_probes.iter().find(|p| p.resp_id == *id) {
-                    Some(p) if p.survived > 0 => ProbeUrgency::SurvivorRecheck,
-                    Some(_) => ProbeUrgency::Changed,
-                    None => ProbeUrgency::Unprobed,
-                };
-                let tests = tests_of(id).into_iter().map(|t| { let n = backs[&t]; (t, n) }).collect();
-                ProbeCandidate { resp_id: id.to_string(), urgency, tests }
-            })
-            .collect();
-        let todo: Vec<String> =
-            rank_probe_candidates(candidates).into_iter().take(needed - probes.len()).collect();
-        format!(
-            "Scryer probe check — this session wrote or changed tests behind {} green claim(s), \
-             and {} of them must be probed before you stop. Probe {} yourself, never through a \
-             subagent: open_probe {{resp_id}} → up to 3 breaks in the probe worktree, the last \
-             left in place → close_probe {{probes, survivors}}. A survivor goes in the user's summary; strengthen \
-             that test. This check fires once per session.",
-            eligible.len(),
-            needed,
-            todo.join(", "),
-        )
-    });
-    ProbeCheck { block, summary }
 }
 
 /// The one-call entry point: JUnit XML in, per-claim outcomes recorded,
@@ -624,217 +346,6 @@ fn keep_cases(r: &ModelRef, cases: &[scryer_core::test_results::TestCase]) -> Re
         }
     }
     write_cache(r, &cache)
-}
-
-/// Anchors or tests were just added to `claims`: a verdict that was current
-/// before records no fingerprint for the new locations, so it would read as
-/// stale though no code changed. Re-fingerprint each one whose recorded spans
-/// all still hash the same and whose newly anchored files were last modified
-/// before its run; anything else is genuinely unverified and stays stale.
-/// Returns the claims refreshed.
-pub fn refresh_fingerprints(r: &ModelRef, claims: &[String]) -> Result<Vec<String>, String> {
-    let mut cache = read_cache(r);
-    if cache.results.is_empty() || claims.is_empty() {
-        return Ok(Vec::new());
-    }
-    let model = working_model(r)?;
-    let project = r.project_path();
-    let mut files = FileCache::new();
-    let mut project_files: Option<BTreeSet<String>> = None;
-    let modified_since = |file: &str, secs: u64| {
-        std::fs::metadata(project.join(file))
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .is_none_or(|t| t.as_secs() >= secs)
-    };
-    let mut refreshed = Vec::new();
-    for rec in cache.results.iter_mut().filter(|c| claims.contains(&c.resp_id)) {
-        if rec.outcome != TestOutcome::Passed || rec.fingerprints.is_empty() {
-            continue;
-        }
-        let now = claim_fingerprints(&model, &rec.resp_id, project, &mut files, &mut project_files);
-        if now == rec.fingerprints {
-            continue;
-        }
-        let spans_held = rec.fingerprints.iter().all(|(k, h)| now.get(k).is_none_or(|n| n == h));
-        let new_files_untouched = now
-            .keys()
-            .filter(|k| !rec.fingerprints.contains_key(*k))
-            .all(|k| k.split('|').nth(1).is_some_and(|f| !modified_since(f, rec.recorded_at)));
-        if spans_held && new_files_untouched {
-            rec.fingerprints = now;
-            refreshed.push(rec.resp_id.clone());
-        }
-    }
-    if !refreshed.is_empty() {
-        write_cache(r, &cache)?;
-    }
-    Ok(refreshed)
-}
-
-/// Tests just attached (`attached`: claim → test locations) whose report was
-/// ingested before they were: record each claim's verdict from the kept cases,
-/// as if the report had been ingested now — but only when none of the claim's
-/// code or test files changed since that ingest, so an old run never vouches
-/// for new code. Returns the claims recorded.
-pub fn replay_kept_cases(
-    r: &ModelRef,
-    attached: &BTreeMap<String, Vec<scryer_core::SourceLocation>>,
-) -> Result<Vec<String>, String> {
-    let cache = read_cache(r);
-    if cache.cases.is_empty() || attached.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut model = working_model(r)?;
-    for (id, locs) in attached {
-        model.test_map.insert(id.clone(), locs.clone());
-    }
-    let cases: Vec<_> = cache.cases.iter().map(|k| k.case.clone()).collect();
-    let mut report = match_report(attached, &cases);
-    let project = r.project_path();
-    let modified_after = |file: &str, ns: u64| {
-        std::fs::metadata(project.join(file))
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .is_none_or(|t| t.as_nanos() as u64 > ns)
-    };
-    report.claims.retain(|id, _| {
-        // The oldest ingest among the cases this claim's tests matched.
-        let leaves: Vec<String> = attached[id]
-            .iter()
-            .filter_map(|l| l.symbol.as_deref())
-            .map(scryer_core::test_results::normalize_leaf)
-            .collect();
-        let Some(ingested_ns) = cache
-            .cases
-            .iter()
-            .filter(|k| leaves.contains(&scryer_core::test_results::normalize_leaf(&k.case.name)))
-            .map(|k| k.ingested_ns)
-            .min()
-        else {
-            return false;
-        };
-        let files = model
-            .source_map
-            .get(id)
-            .into_iter()
-            .flatten()
-            .chain(attached[id].iter())
-            .map(|l| l.pattern.as_str());
-        !files.into_iter().any(|f| modified_after(f, ingested_ns))
-    });
-    let mut recorded: Vec<String> = report.claims.keys().cloned().collect();
-    recorded.sort();
-    store_results_on(r, &model, &report)?;
-    Ok(recorded)
-}
-
-/// Resolve one claim into a probe target, or explain why it can't be probed.
-///
-/// The refusals are the point. Breaking code behind a claim with no attached
-/// test proves nothing — there is no assertion to fail. Breaking code behind a
-/// test whose verdict is missing or stale proves nothing either: a probe reads
-/// "the test went red", which only means something when you already know it
-/// was green.
-pub fn resolve_probe_target(r: &ModelRef, resp_id: &str) -> Result<ProbeTarget, String> {
-    let model = working_model(r)?;
-    let statement = model
-        .nodes
-        .iter()
-        .flat_map(|n| n.responsibilities.iter())
-        .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
-        .find(|resp| resp.id == resp_id)
-        .map(|resp| resp.statement.clone())
-        .ok_or_else(|| format!("no claim {resp_id} in the model"))?;
-
-    let attachments = model
-        .test_map
-        .get(resp_id)
-        .filter(|locs| !locs.is_empty())
-        .ok_or_else(|| {
-            format!(
-                "{resp_id} has no attached test — a probe asks whether the test would \
-                 catch the break, so there must be one to ask about. Attach it first \
-                 (update_source_map test_entries), then probe."
-            )
-        })?;
-
-    match read_test_statuses(r)?.into_iter().find(|s| s.resp_id == resp_id) {
-        None => {
-            return Err(format!(
-                "{resp_id} has no recorded verdict — run its tests and ingest_test_report \
-                 first. A probe means 'the test went red on a break', which says nothing \
-                 unless it was green to begin with."
-            ))
-        }
-        Some(status) if status.stale => {
-            return Err(format!(
-                "{resp_id}'s verdict is stale — the code or test changed since it was \
-                 recorded. Re-run and ingest before probing."
-            ))
-        }
-        Some(status) if status.outcome != TestOutcome::Passed => {
-            return Err(format!(
-                "{resp_id}'s test is not passing ({:?}) — fix it before probing. A probe \
-                 cannot tell a break it caught from one it was already failing on.",
-                status.outcome
-            ))
-        }
-        Some(_) => {}
-    }
-
-    let project = r.project_path();
-    let mut files = FileCache::new();
-    let loc = model
-        .source_map
-        .get(resp_id)
-        .into_iter()
-        .flatten()
-        .find(|loc| !is_glob_pattern(&loc.pattern))
-        .ok_or_else(|| {
-            format!("{resp_id} has no file-level source anchor to break — nothing to probe")
-        })?;
-    let (source, parse) = files
-        .get(project, &loc.pattern)
-        .ok_or_else(|| format!("{} is not readable", loc.pattern))?;
-    let (start_line, end_line) = resolve_span(
-        source,
-        parse.as_ref(),
-        loc.symbol.as_deref(),
-        loc.line,
-        loc.line,
-        loc.end_line,
-    )
-    .map_err(|()| {
-        format!(
-            "{resp_id}'s anchor no longer resolves in {} — re-anchor it before probing",
-            loc.pattern
-        )
-    })?;
-
-    let mut tests = Vec::new();
-    for t in attachments {
-        if let Some(sym) = &t.symbol {
-            let entry = format!("{} :: {sym}", t.pattern);
-            if !tests.contains(&entry) {
-                tests.push(entry);
-            }
-        } else if !tests.contains(&t.pattern) {
-            tests.push(t.pattern.clone());
-        }
-    }
-
-    Ok(ProbeTarget {
-        resp_id: resp_id.to_string(),
-        statement,
-        file: loc.pattern.clone(),
-        start_line,
-        end_line,
-        symbol: loc.symbol.clone(),
-        tests,
-    })
 }
 
 /// Record what a finished round of probes found. Fingerprinted against the
@@ -969,6 +480,7 @@ pub fn ingest_mutation_file(r: &ModelRef, report: &str) -> Result<MutationSummar
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scryer_core::test_results::TestOutcome;
     use scryer_core::{Kind, Node, Responsibility, SourceLocation};
 
     const IMPL_TS: &str = "export function alpha() {\n    return 1;\n}\n";
@@ -1030,7 +542,7 @@ mod tests {
                 end_line: None,
             }],
         );
-        scryer_core::write_model_at(&r, &m).unwrap();
+        use_model(&m);
         (dir, r)
     }
 
@@ -1079,14 +591,14 @@ mod tests {
         assert!(!fresh_statuses(&r)[0].stale);
         // A second attached test appears after the record: the claim's
         // evidence set changed, so the old verdict no longer covers it.
-        let mut m = read_model_at(&r).unwrap();
+        let mut m = working_model(&r).unwrap();
         m.test_map.get_mut("r1").unwrap().push(SourceLocation {
             pattern: "src/m.spec.ts".into(),
             symbol: Some("alpha".into()),
             line: None,
             end_line: None,
         });
-        scryer_core::write_model_at(&r, &m).unwrap();
+        use_model(&m);
         assert!(read_test_statuses(&r).unwrap()[0].stale);
     }
 
@@ -1094,11 +606,11 @@ mod tests {
     fn a_claim_gone_from_the_model_is_omitted_not_a_ghost() {
         let (_dir, r) = project();
         assert_eq!(fresh_statuses(&r).len(), 1);
-        let mut m = read_model_at(&r).unwrap();
+        let mut m = working_model(&r).unwrap();
         m.nodes[0].responsibilities.clear();
         m.source_map.clear();
         m.test_map.clear();
-        scryer_core::write_model_at(&r, &m).unwrap();
+        use_model(&m);
         assert!(read_test_statuses(&r).unwrap().is_empty());
     }
 
@@ -1145,7 +657,7 @@ mod tests {
         // fast path abstains (same-second edits are indistinguishable by stat).
         std::thread::sleep(std::time::Duration::from_millis(1100));
         ingest_report_file(&r, REPORT).unwrap();
-        let model = read_model_at(&r).unwrap();
+        let model = working_model(&r).unwrap();
         let rec = read_cache(&r).results[0].clone();
         assert_eq!(
             provably_fresh(&model, &rec, r.project_path()),
@@ -1161,7 +673,7 @@ mod tests {
 
         // An attachment added since the record breaks the key correspondence —
         // abstain, even though no file changed.
-        let mut m = read_model_at(&r).unwrap();
+        let mut m = working_model(&r).unwrap();
         m.test_map.get_mut("r1").unwrap().push(SourceLocation {
             pattern: "src/m.spec.ts".into(),
             symbol: Some("alpha".into()),
@@ -1169,61 +681,6 @@ mod tests {
             end_line: None,
         });
         assert_eq!(provably_fresh(&m, &rec, r.project_path()), None);
-    }
-
-    #[test]
-    fn the_radius_is_missing_and_stale_verdicts_never_the_whole_suite() {
-        let (_dir, r) = project();
-        // Never recorded: the attached test file is in the radius.
-        let radius = compute_blast_radius(&r).unwrap();
-        assert_eq!(radius.len(), 1);
-        assert_eq!(radius[0].pattern, "src/m.spec.ts");
-        assert_eq!(radius[0].claims, vec!["r1"]);
-        assert_eq!(radius[0].stale, 0, "missing verdict, not a stale one");
-
-        // Current verdict: the radius is empty — nothing needs re-running.
-        ingest_report_file(&r, REPORT).unwrap();
-        assert!(compute_blast_radius(&r).unwrap().is_empty());
-
-        // The implementation changes: the claim's verdict goes stale and its
-        // test file re-enters the radius.
-        std::fs::write(
-            r.project_path().join("src/m.ts"),
-            IMPL_TS.replace("return 1", "return 2"),
-        )
-        .unwrap();
-        let radius = compute_blast_radius(&r).unwrap();
-        assert_eq!(radius.len(), 1);
-        assert_eq!(radius[0].stale, 1);
-    }
-
-    #[test]
-    fn radius_groups_claims_per_file_so_each_is_one_invocation() {
-        let (_dir, r) = project();
-        let mut m = read_model_at(&r).unwrap();
-        m.nodes[0].responsibilities.push(Responsibility {
-            concern: None,
-            id: "r2".into(),
-            statement: "also answers".into(),
-            vagrant: None,
-            stale: None,
-            stale_proposal: None,
-            directives: Vec::new(),
-            last_touched_at: None,
-        });
-        m.test_map.insert(
-            "r2".into(),
-            vec![SourceLocation {
-                pattern: "src/m.spec.ts".into(),
-                symbol: Some("answers two".into()),
-                line: None,
-                end_line: None,
-            }],
-        );
-        scryer_core::write_model_at(&r, &m).unwrap();
-        let radius = compute_blast_radius(&r).unwrap();
-        assert_eq!(radius.len(), 1, "one file, one invocation: {radius:?}");
-        assert_eq!(radius[0].claims, vec!["r1", "r2"]);
     }
 
     #[test]
@@ -1243,59 +700,6 @@ mod tests {
     }
 
     // --- probes ---
-
-    /// resp-765's core refusal: no attached test means there is no assertion
-    /// to fail, so the question a probe asks cannot be asked.
-    #[test]
-    fn probing_a_claim_with_no_attached_test_is_refused() {
-        let (_dir, r) = project();
-        let mut m = read_model_at(&r).unwrap();
-        m.test_map.remove("r1");
-        scryer_core::write_model_at(&r, &m).unwrap();
-
-        let err = resolve_probe_target(&r, "r1").unwrap_err();
-
-        assert!(err.contains("no attached test"), "{err}");
-    }
-
-    /// resp-765: a probe reads "the test went red on a break", which says
-    /// nothing unless the test was known green first.
-    #[test]
-    fn probing_without_a_recorded_verdict_is_refused() {
-        let (_dir, r) = project();
-        let err = resolve_probe_target(&r, "r1").unwrap_err();
-        assert!(err.contains("no recorded verdict"), "{err}");
-    }
-
-    #[test]
-    fn probing_on_a_stale_verdict_is_refused() {
-        let (_dir, r) = project();
-        fresh_statuses(&r);
-        std::fs::write(
-            r.project_path().join("src/m.ts"),
-            IMPL_TS.replace("return 1", "return 2"),
-        )
-        .unwrap();
-
-        let err = resolve_probe_target(&r, "r1").unwrap_err();
-
-        assert!(err.contains("stale"), "{err}");
-    }
-
-    /// resp-764's payload: the span to break, resolved the same way a
-    /// fingerprint resolves it, plus the tests to re-run.
-    #[test]
-    fn a_probe_target_names_the_span_and_the_tests() {
-        let (_dir, r) = project();
-        fresh_statuses(&r);
-
-        let target = resolve_probe_target(&r, "r1").unwrap();
-
-        assert_eq!(target.file, "src/m.ts");
-        assert_eq!(target.symbol.as_deref(), Some("alpha"));
-        assert_eq!((target.start_line, target.end_line), (1, 3), "the whole symbol");
-        assert_eq!(target.tests, vec!["src/m.spec.ts :: answers one"]);
-    }
 
     /// resp-768: probes-run and probes-survived are reported separately, and
     /// a claim nobody probed is simply absent — never a clean one.
@@ -1377,73 +781,6 @@ mod tests {
         assert!(!verdicts[0].stale);
     }
 
-    /// `evidence_for_claim` is the fold's gate in one call: no attachment, an
-    /// attachment with no verdict, a current passing verdict, and a verdict
-    /// the tree has since moved past each read as their own kind.
-    #[test]
-    fn claim_evidence_names_the_missing_fact() {
-        let (dir, r) = project();
-        let ids = vec!["r1".to_string(), "ghost".to_string()];
-        let ev = evidence_for_claim(&r, &ids).unwrap();
-        assert_eq!(ev["ghost"], Evidence::NoTest);
-        assert_eq!(ev["r1"], Evidence::NoVerdict { tests: vec!["src/m.spec.ts".into()] });
-        assert!(ev["r1"].reason().contains("src/m.spec.ts"), "{}", ev["r1"].reason());
-
-        ingest_report_file(&r, REPORT).unwrap();
-        let ev = evidence_for_claim(&r, &ids).unwrap();
-        assert_eq!(ev["r1"], Evidence::Verified);
-        assert!(ev["r1"].verified());
-
-        std::fs::write(dir.path().join("src/m.ts"), IMPL_TS.replace("1", "2")).unwrap();
-        let ev = evidence_for_claim(&r, &ids).unwrap();
-        assert_eq!(ev["r1"], Evidence::Stale { tests: vec!["src/m.spec.ts".into()] });
-    }
-
-    /// A claim that lives only in the PLAN — with its test attached there —
-    /// records and reads a verdict: statuses resolve through the working
-    /// view, so the verdict-gated fold can be satisfied before the fold.
-    #[test]
-    fn plan_layer_attachments_record_and_read_verdicts() {
-        let (dir, r) = project();
-        // The plan-only claim's test must exist so its anchor fingerprints.
-        std::fs::write(
-            dir.path().join("src/m.spec.ts"),
-            format!("{SPEC_TS}\ndescribe(\"beta\", () => {{\n  it(\"answers two\", () => {{\n    expect(2).toBe(2);\n  }});\n}});\n"),
-        )
-        .unwrap();
-        // Committed knows nothing about r2; the plan adds it with a test.
-        let committed = read_model_at(&r).unwrap();
-        let mut planned = committed.clone();
-        planned.nodes[0].responsibilities.push(Responsibility {
-            concern: None,
-            id: "r2".into(),
-            statement: "answers two".into(),
-            vagrant: None,
-            stale: None,
-            stale_proposal: None,
-            directives: Vec::new(),
-            last_touched_at: None,
-        });
-        planned.test_map.insert(
-            "r2".into(),
-            vec![SourceLocation {
-                pattern: "src/m.spec.ts".into(),
-                symbol: Some("answers two".into()),
-                line: None,
-                end_line: None,
-            }],
-        );
-        scryer_core::write_planned_at(&r, &planned).unwrap();
-
-        let report = r#"<testsuites><testsuite name="m"><testcase classname="src/m.spec.ts" name="answers two" time="0.001"/></testsuite></testsuites>"#;
-        let summary = ingest_report_file(&r, report).unwrap();
-        assert_eq!(summary.recorded, 1, "{:?}", summary.report);
-        let statuses = read_test_statuses(&r).unwrap();
-        let s = statuses.iter().find(|s| s.resp_id == "r2").expect("plan-only claim has a verdict");
-        assert!(!s.stale);
-        assert_eq!(evidence_for_claim(&r, &["r2".to_string()]).unwrap()["r2"], Evidence::Verified);
-    }
-
     // --- session radius ---
 
     /// Two claims in two files: r1 (src/m.ts, attached in src/m.spec.ts) and
@@ -1456,7 +793,7 @@ mod tests {
             SPEC_TS.replace("alpha", "beta").replace("answers one", "answers two"),
         )
         .unwrap();
-        let mut m = read_model_at(&r).unwrap();
+        let mut m = working_model(&r).unwrap();
         m.nodes[0].responsibilities.push(Responsibility {
             concern: None,
             id: "r2".into(),
@@ -1475,7 +812,7 @@ mod tests {
         };
         m.source_map.insert("r2".into(), vec![loc("src/n.ts", "beta")]);
         m.test_map.insert("r2".into(), vec![loc("src/n.spec.ts", "answers two")]);
-        scryer_core::write_model_at(&r, &m).unwrap();
+        use_model(&m);
         (dir, r)
     }
 
@@ -1493,175 +830,7 @@ mod tests {
         assert_eq!(r2.millis["answers two"], 42_500);
     }
 
-    /// The session's radius is its own claims; a stale verdict it never
-    /// touched is listed as someone else's, not handed to it to run.
-    #[test]
-    fn a_session_radius_holds_only_the_claims_it_touched() {
-        let (dir, r) = two_claim_project();
-        ingest_report_file(&r, BOTH).unwrap();
-        for f in ["src/m.ts", "src/n.ts"] {
-            let body = std::fs::read_to_string(dir.path().join(f)).unwrap();
-            std::fs::write(dir.path().join(f), body.replace("return 1", "return 2")).unwrap();
-        }
-        let touched = vec!["src/m.ts".to_string()];
-        let radius = compute_session_radius(&r, Some(&touched)).unwrap();
-        assert!(radius.scoped);
-        assert_eq!(radius.files.len(), 1);
-        assert_eq!(radius.files[0].claims, vec!["r1"]);
-        assert_eq!(radius.run.len(), 1);
-        assert_eq!(radius.run[0].name.as_deref(), Some("answers one"));
-        assert_eq!(radius.not_yours, vec!["r2"]);
-    }
-
-    /// A slow test stays out of the run unless its own claim was touched.
-    #[test]
-    fn slow_tests_are_left_out_unless_their_claim_was_touched() {
-        let (dir, r) = two_claim_project();
-        ingest_report_file(&r, BOTH).unwrap();
-        let body = std::fs::read_to_string(dir.path().join("src/n.ts")).unwrap();
-        std::fs::write(dir.path().join("src/n.ts"), body.replace("return 1", "return 2")).unwrap();
-
-        let unscoped = compute_session_radius(&r, None).unwrap();
-        assert!(unscoped.run.is_empty(), "{unscoped:?}");
-        assert_eq!(unscoped.slow.len(), 1);
-        assert_eq!(unscoped.slow[0].millis, Some(42_500));
-
-        let touched = vec!["src/n.ts".to_string()];
-        let mine = compute_session_radius(&r, Some(&touched)).unwrap();
-        assert!(mine.slow.is_empty());
-        assert_eq!(mine.run[0].name.as_deref(), Some("answers two"));
-    }
-
     // --- probe check ---
-
-    #[test]
-    fn the_probe_check_blocks_until_the_sessions_tested_claims_are_probed() {
-        let (_dir, r) = two_claim_project();
-        ingest_report_file(&r, BOTH).unwrap();
-        let touched = vec!["src/m.spec.ts".to_string(), "src/n.spec.ts".to_string()];
-
-        let check = session_probe_check(&r, &touched);
-        let block = check.block.expect("two green claims behind touched tests, none probed");
-        assert!(block.contains("r1, r2"), "{block}");
-        assert!(check.summary.is_none());
-
-        store_probe_result(&r, "r1", 3, Vec::new()).unwrap();
-        assert!(session_probe_check(&r, &touched).block.is_some(), "one of two is not enough");
-
-        store_probe_result(&r, "r2", 2, vec!["dropped the guard".into()]).unwrap();
-        let check = session_probe_check(&r, &touched);
-        assert!(check.block.is_none());
-        let summary = check.summary.expect("a survivor reaches the user");
-        assert!(summary.contains("r2 (dropped the guard)"), "{summary}");
-    }
-
-    /// Only tests the session wrote or changed count: editing code alone, or
-    /// a test whose verdict is not green, asks for no probe.
-    #[test]
-    fn the_probe_check_ignores_claims_whose_tests_the_session_left_alone() {
-        let (_dir, r) = two_claim_project();
-        ingest_report_file(&r, BOTH).unwrap();
-        assert_eq!(session_probe_check(&r, &["src/m.ts".to_string()]), ProbeCheck::default());
-        // One touched test file, one green claim: one probe is the whole ask.
-        let check = session_probe_check(&r, &["src/m.spec.ts".to_string()]);
-        assert!(check.block.unwrap().contains("1 of them"));
-    }
-
-    /// Anchoring a claim at the fold adds a location its verdict never
-    /// fingerprinted. With no code changed since the run the verdict stays
-    /// current; a file edited since the run leaves it stale.
-    #[test]
-    fn adding_an_anchor_keeps_a_current_verdict_current() {
-        let (dir, r) = two_claim_project();
-        let mut m = read_model_at(&r).unwrap();
-        let r1_code = m.source_map.remove("r1").unwrap();
-        let r2_code = m.source_map.remove("r2").unwrap();
-        scryer_core::write_model_at(&r, &m).unwrap();
-        // The run lands in a later second than the files' mtimes.
-        std::thread::sleep(std::time::Duration::from_millis(1100));
-        ingest_report_file(&r, BOTH).unwrap();
-
-        // r2's code is edited after the run; r1's is not.
-        let body = std::fs::read_to_string(dir.path().join("src/n.ts")).unwrap();
-        std::fs::write(dir.path().join("src/n.ts"), body.replace("return 1", "return 2")).unwrap();
-        let mut m = read_model_at(&r).unwrap();
-        m.source_map.insert("r1".into(), r1_code);
-        m.source_map.insert("r2".into(), r2_code);
-        scryer_core::write_model_at(&r, &m).unwrap();
-        let stale = |id: &str| read_test_statuses(&r).unwrap().iter().find(|s| s.resp_id == id).unwrap().stale;
-        assert!(stale("r1") && stale("r2"), "a new anchor alone reads as stale");
-
-        let refreshed = refresh_fingerprints(&r, &["r1".into(), "r2".into()]).unwrap();
-        assert_eq!(refreshed, vec!["r1"]);
-        assert!(!stale("r1"), "no code changed since the run");
-        assert!(stale("r2"), "its code changed since the run");
-    }
-
-    /// A report ingested before a test was attached still settles it: the
-    /// attachment takes the kept outcome — unless the claim's code changed
-    /// after that ingest, when the old run vouches for nothing.
-    #[test]
-    fn a_test_attached_after_its_report_takes_the_kept_verdict() {
-        let (dir, r) = two_claim_project();
-        let mut m = read_model_at(&r).unwrap();
-        let r1_tests = m.test_map.remove("r1").unwrap();
-        let r2_tests = m.test_map.remove("r2").unwrap();
-        scryer_core::write_model_at(&r, &m).unwrap();
-        ingest_report_file(&r, BOTH).unwrap();
-        assert!(read_cache(&r).results.is_empty(), "nothing was attached at ingest");
-
-        // r2's code changes after the ingest; r1's does not.
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        let body = std::fs::read_to_string(dir.path().join("src/n.ts")).unwrap();
-        std::fs::write(dir.path().join("src/n.ts"), body.replace("return 1", "return 2")).unwrap();
-
-        let attached: BTreeMap<_, _> = [("r1".to_string(), r1_tests), ("r2".to_string(), r2_tests)].into();
-        let replayed = replay_kept_cases(&r, &attached).unwrap();
-        assert_eq!(replayed, vec!["r1"], "r2 changed since the run");
-        let mut m = read_model_at(&r).unwrap();
-        m.test_map.extend(attached);
-        scryer_core::write_model_at(&r, &m).unwrap();
-        let statuses = read_test_statuses(&r).unwrap();
-        let r1 = statuses.iter().find(|s| s.resp_id == "r1").unwrap();
-        assert_eq!(r1.outcome, TestOutcome::Passed);
-        assert!(!r1.stale, "fingerprinted with the attachment in place");
-        assert!(statuses.iter().all(|s| s.resp_id != "r2"));
-    }
-
-    /// A claim whose last probe let a break survive is asked for first once
-    /// its code or test changes — to see the strengthened test catch it.
-    #[test]
-    fn the_probe_check_rechecks_a_survivor_first() {
-        let (dir, r) = two_claim_project();
-        ingest_report_file(&r, BOTH).unwrap();
-        store_probe_result(&r, "r2", 3, vec!["dropped the guard".into()]).unwrap();
-        // Strengthen r2's test: its verdict re-runs green, its probe goes stale.
-        let spec = dir.path().join("src/n.spec.ts");
-        let body = std::fs::read_to_string(&spec).unwrap();
-        std::fs::write(&spec, body.replace(".toBe(1);", ".toBe(1);\n    expect(beta()).not.toBe(0);"))
-            .unwrap();
-        ingest_report_file(&r, BOTH).unwrap();
-
-        let touched = vec!["src/m.spec.ts".to_string(), "src/n.spec.ts".to_string()];
-        let block = session_probe_check(&r, &touched).block.expect("two to probe");
-        assert!(block.contains("Probe r2, r1"), "{block}");
-    }
-
-    /// A probe breaks the claim's code; a claim with a test but no code
-    /// anchor has nothing to break and is never asked for.
-    #[test]
-    fn the_probe_check_skips_claims_with_no_code_anchor() {
-        let (_dir, r) = two_claim_project();
-        ingest_report_file(&r, BOTH).unwrap();
-        let mut m = scryer_core::read_model_at(&r).unwrap();
-        m.source_map.remove("r1");
-        scryer_core::write_model_at(&r, &m).unwrap();
-
-        let touched = vec!["src/m.spec.ts".to_string(), "src/n.spec.ts".to_string()];
-        let block = session_probe_check(&r, &touched).block.expect("r2 still has code");
-        assert!(block.contains("Probe r2") && !block.contains("r1"), "{block}");
-        assert!(block.contains("1 of them"), "{block}");
-    }
 
     /// End to end on the derived tree: a JUnit report keyed by test name
     /// makes a green claim proven and a red one failing, a claim no report
@@ -1735,9 +904,6 @@ mod tests {
     fn dump_derived_status() {
         let repo = std::path::PathBuf::from(std::env::var("REPO").expect("set REPO"));
         let r = ModelRef::ProjectLocal(repo);
-        let radius = compute_blast_radius(&r).unwrap();
-        let radius_claims: usize = radius.iter().map(|f| f.claims.len()).sum();
-        eprintln!("radius before ingest: {} test files, {radius_claims} claims", radius.len());
         for path in std::env::var("JUNIT").unwrap_or_default().split(',').filter(|p| !p.is_empty()) {
             let xml = std::fs::read_to_string(path).unwrap();
             let s = ingest_report_file(&r, &xml).unwrap();

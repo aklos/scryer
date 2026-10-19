@@ -32,7 +32,6 @@ fn run(dir: &Path, args: &[&str]) -> (i32, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_scryer-mcp"))
         .args(args)
         .arg(dir)
-        .env_remove("SCRYER_DERIVED_TREE")
         .output()
         .unwrap();
     (out.status.code().unwrap(), String::from_utf8_lossy(&out.stdout).to_string())
@@ -44,7 +43,6 @@ fn ingest(dir: &Path, tool: &str, report: &str, text: &str) {
     write(dir, report, text);
     let mut child = Command::new(env!("CARGO_BIN_EXE_scryer-mcp"))
         .current_dir(dir)
-        .env_remove("SCRYER_DERIVED_TREE")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

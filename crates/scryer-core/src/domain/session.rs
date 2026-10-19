@@ -27,18 +27,12 @@ pub enum SessionEvent {
     Touch { file: String },
     /// The read overlay for `file` was served with this payload hash.
     Overlay { file: String, hash: u64 },
-    /// The agent wrote these plan elements (change-map keys).
-    ModelEdit { keys: Vec<String> },
-    /// The task the agent oriented on, in its own words — the title the
-    /// session's change takes. Only the first is kept.
+    /// The task the agent oriented on, in its own words — the session's
+    /// title. Only the first is kept.
     Task { text: String },
-    /// The session first read `file`; these of its anchors (`key`, `state`)
-    /// were already out of sync then — drift it found, not drift it made.
-    FirstSight {
-        file: String,
-        #[serde(default)]
-        stale: Vec<(String, String)>,
-    },
+    /// The developer's first prompt, clipped: the session's title when the
+    /// agent never oriented. Only the first is kept.
+    Prompt { text: String },
     /// A shell command is about to run: files modified after `ns` (unix
     /// nanoseconds) and before it finishes are the session's edits. `tool` is
     /// the harness's tool-call id, so concurrent commands pair up.
@@ -86,15 +80,12 @@ pub struct SessionLog {
     pub overlays: Vec<(String, u64)>,
     /// Whether the session has a probe open.
     pub probe_open: bool,
-    /// Plan elements the agent wrote, first-write order, each once.
-    pub model_edits: Vec<String>,
     /// Shell commands started, `(tool-call id, unix ns)`, in start order.
     pub shell_starts: Vec<(Option<String>, u64)>,
     /// The first task the agent oriented on.
     pub task: Option<String>,
-    /// Per file the session has read, the anchors already out of sync when
-    /// it first did, as `(key, state)`.
-    pub first_sight: Vec<(String, Vec<(String, String)>)>,
+    /// The developer's first prompt.
+    pub prompt: Option<String>,
     /// The todo tests last recorded (at start or the last stop), as
     /// [`test_key`]s; `None` until the first record.
     pub planned_seen: Option<Vec<String>>,
@@ -126,13 +117,6 @@ impl SessionLog {
                     None => self.overlays.push((file.clone(), *hash)),
                 }
             }
-            SessionEvent::ModelEdit { keys } => {
-                for k in keys {
-                    if !self.model_edits.contains(k) {
-                        self.model_edits.push(k.clone());
-                    }
-                }
-            }
             SessionEvent::ProbeOpen => self.probe_open = true,
             SessionEvent::ProbeClose => self.probe_open = false,
             SessionEvent::Stop => {}
@@ -149,9 +133,9 @@ impl SessionLog {
                     self.task = Some(text.clone());
                 }
             }
-            SessionEvent::FirstSight { file, stale } => {
-                if !self.first_sight.iter().any(|(f, _)| f == file) {
-                    self.first_sight.push((file.clone(), stale.clone()));
+            SessionEvent::Prompt { text } => {
+                if self.prompt.is_none() {
+                    self.prompt = Some(text.clone());
                 }
             }
         }
@@ -172,9 +156,10 @@ impl SessionLog {
             .collect()
     }
 
-    /// Whether the session has read `file` yet.
-    pub fn has_seen(&self, file: &str) -> bool {
-        self.first_sight.iter().any(|(f, _)| f == file)
+    /// What the session is called: the task it oriented on, else the
+    /// developer's first prompt.
+    pub fn title(&self) -> Option<&str> {
+        self.task.as_deref().or(self.prompt.as_deref())
     }
 
     /// When the shell command `tool` started: its own start when the harness

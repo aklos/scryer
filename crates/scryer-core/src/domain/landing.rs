@@ -10,10 +10,6 @@ use crate::domain::session::{SessionEntry, SessionLog};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-/// A stub is "newly planned" by a session that saw it appear within its
-/// window, give or take this many seconds for the derive to notice it.
-const FIRST_SEEN_SLACK: u64 = 600;
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LandingClaim {
@@ -60,13 +56,13 @@ pub struct Landing {
     pub shared: Vec<SharedComponent>,
 }
 
-/// The landing view for sessions active since `since`. `first_seen` dates
-/// each claim's first appearance in a derived tree.
+/// The landing view for sessions active since `since`. A planned claim is a
+/// session's newly planned work when the session's log records it as a stub
+/// it wrote; other planned claims its edits reach are still planned.
 pub fn landing(
     sessions: &[(String, Vec<SessionEntry>)],
     tree: &DerivedTree,
     status: &DerivedStatus,
-    first_seen: &BTreeMap<String, u64>,
     since: u64,
 ) -> Landing {
     let states: HashMap<&str, &crate::domain::derived_status::ClaimStatus> =
@@ -93,7 +89,7 @@ pub fn landing(
         };
         let mut s = LandingSession {
             session: id.clone(),
-            title: log.task.clone().unwrap_or_else(|| format!("Session {}", &id[..id.len().min(8)])),
+            title: log.title().map(str::to_string).unwrap_or_else(|| format!("Session {}", &id[..id.len().min(8)])),
             started_at: start,
             ended_at: end,
             newly_proven: Vec::new(),
@@ -104,7 +100,10 @@ pub fn landing(
             new_dark_files: touched.iter().filter(|f| dark.contains(*f)).map(|f| f.to_string()).collect(),
             components: Vec::new(),
         };
-        for c in tree.claims.iter().filter(reached) {
+        let stubbed = |c: &crate::domain::derived_tree::DerivedClaim| {
+            log.stubs.iter().any(|(f, t)| *f == c.file && *t == c.junit_name)
+        };
+        for c in tree.claims.iter().filter(|c| reached(c) || stubbed(c)) {
             let Some(st) = states.get(c.id.as_str()) else { continue };
             let row = LandingClaim {
                 resp_id: c.id.clone(),
@@ -117,14 +116,8 @@ pub fn landing(
             let verdict_in_window = st.recorded_at.is_some_and(|at| at >= start);
             match st.state {
                 ClaimState::Proven if verdict_in_window => s.newly_proven.push(row),
-                ClaimState::Planned => {
-                    let seen = first_seen.get(&c.id).copied().unwrap_or(0);
-                    if seen >= start && seen <= end + FIRST_SEEN_SLACK {
-                        s.newly_planned.push(row);
-                    } else {
-                        s.still_planned.push(row);
-                    }
-                }
+                ClaimState::Planned if stubbed(c) => s.newly_planned.push(row),
+                ClaimState::Planned => s.still_planned.push(row),
                 ClaimState::Stale => s.newly_stale_or_failing.push(row),
                 ClaimState::Failing if verdict_in_window || touched.contains(c.file.as_str()) => {
                     s.newly_stale_or_failing.push(row)
@@ -186,8 +179,8 @@ mod tests {
     }
 
     /// Each column follows from the session's edits and the claims' status:
-    /// a verdict in its window is newly proven, a stub first seen in its
-    /// window newly planned, an older stub still planned, a claim whose code
+    /// a verdict in its window is newly proven, a stub its log records
+    /// newly planned, an older stub still planned, a claim whose code
     /// it touched and that now reads stale newly stale; dark files and
     /// mutant survivors count over what it touched, and a component two
     /// sessions touched is shared.
@@ -231,20 +224,20 @@ mod tests {
             )]),
             ..Default::default()
         };
-        let first_seen = BTreeMap::from([("stub".to_string(), 120), ("old_stub".to_string(), 10)]);
         let sessions = vec![
             (
                 "aaaaaaaa-1".to_string(),
                 vec![
                     SessionEntry { at: 100, event: SessionEvent::Task { text: "Queue offline saves".into() } },
                     touch(110, "src/a.rs"),
+                    SessionEntry { at: 150, event: SessionEvent::Stub { file: "src/a.rs".into(), test: "stub".into() } },
                     touch(200, "src/a.rs"),
                 ],
             ),
             ("bbbbbbbb-2".to_string(), vec![touch(300, "src/a.rs"), touch(310, "src/b.rs")]),
             ("cccccccc-3".to_string(), vec![touch(5, "src/b.rs")]),
         ];
-        let l = landing(&sessions, &tree, &status, &first_seen, 90);
+        let l = landing(&sessions, &tree, &status, 90);
         assert_eq!(l.sessions.iter().map(|s| s.session.as_str()).collect::<Vec<_>>(), vec!["bbbbbbbb-2", "aaaaaaaa-1"]);
         let a = &l.sessions[1];
         assert_eq!(a.title, "Queue offline saves");

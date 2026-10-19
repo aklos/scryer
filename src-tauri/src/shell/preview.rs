@@ -181,7 +181,6 @@ fn node_source_file(model: &scryer_core::ScryModel, node_id: &str) -> String {
 #[tauri::command]
 pub(crate) async fn start_preview_fixture_session(
     cwd: String,
-    model_ref: String,
     node_id: String,
     render_status: String,
     render_error: Option<String>,
@@ -195,8 +194,7 @@ pub(crate) async fn start_preview_fixture_session(
     let launch = scryer_acp::detect_available_agent_pref(&settings.agent)
         .ok_or("No AI agent found. Install Claude Code, Codex or Copilot CLI first.")?;
 
-    let parsed_ref = scryer_core::ModelRef::parse(&model_ref)?;
-    let model = scryer_core::read_model_at(&parsed_ref)?;
+    let model = scryer_extract::derived_tree::derived_tree(std::path::Path::new(&cwd))?.planned;
     let node = model
         .nodes
         .iter()

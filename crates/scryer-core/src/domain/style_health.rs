@@ -19,7 +19,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::domain::build_edges::{BuildEdges, DerivedGraph};
-use crate::domain::ownership::BoundaryOwnership;
+use crate::domain::build_edges::BoundaryOwnership;
 use crate::domain::style::{self, Isolation, RoleDef, StyleDef, Styles};
 use crate::{Kind, Node, ScryModel};
 
@@ -468,7 +468,7 @@ pub fn check_code(
     // A link the style forbids, on the model side. When the code already
     // imports across the same pair it was charged above; one line per fact.
     for l in &model.links {
-        let Some(breach) = crate::domain::validate::style_link_breach(model, styles, &l.src, &l.dst, l.kind) else {
+        let Some(breach) = crate::domain::style::style_link_breach(model, styles, &l.src, &l.dst, l.kind) else {
             continue;
         };
         let lift = |id: &str| style::layer_component(model, id).map(|c| c.id.clone()).unwrap_or_else(|| id.to_string());

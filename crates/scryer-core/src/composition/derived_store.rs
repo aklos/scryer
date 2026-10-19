@@ -1,7 +1,6 @@
 //! The derived tree, read-only. `scryer_extract::derived_tree` derives it and
 //! writes it here; readers that cannot depend on the extractor read the last
-//! derivation back. Behind `SCRYER_DERIVED_TREE=1` so the authored model stays
-//! the default until the derived one replaces it.
+//! derivation back.
 
 use crate::domain::derived_status::{compute_derived_status, DerivedStatus};
 use crate::domain::derived_tree::DerivedTree;
@@ -9,14 +8,6 @@ use crate::domain::verdicts::MutationCache;
 use crate::infrastructure::{derived_tree_cache, verdict_store};
 use crate::{ModelRef, ScryModel};
 use std::path::Path;
-
-/// The environment switch that shows the derived tree beside the authored one.
-pub const DERIVED_TREE_ENV: &str = "SCRYER_DERIVED_TREE";
-
-/// Whether the derived tree is switched on for this process.
-pub fn derived_tree_enabled() -> bool {
-    std::env::var(DERIVED_TREE_ENV).is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-}
 
 /// The last derived tree for this project, when one was written.
 pub fn read_derived_tree_at(r: &ModelRef) -> Option<DerivedTree> {
@@ -74,34 +65,13 @@ pub fn anchors_untouched_since(
 }
 
 /// What changed since `since`, per agent session, against this tree and
-/// status. Claims new to the first-seen ledger are dated by their test
-/// file's mtime (or now), so a stub reads as written when its file was.
+/// status.
 pub fn landing_at(
     r: &ModelRef,
     tree: &DerivedTree,
     status: &DerivedStatus,
     since: u64,
 ) -> crate::domain::landing::Landing {
-    let seen_path = r.claims_seen_path();
-    let mut seen = verdict_store::read_first_seen(&seen_path);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let mut grew = false;
-    for c in &tree.claims {
-        seen.entry(c.id.clone()).or_insert_with(|| {
-            grew = true;
-            std::fs::metadata(r.project_path().join(&c.file))
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(now, |d| d.as_secs().min(now))
-        });
-    }
-    if grew {
-        let _ = verdict_store::write_first_seen(&seen_path, &seen);
-    }
     let sessions: Vec<(String, Vec<crate::domain::session::SessionEntry>)> =
         crate::infrastructure::session_store::list(r)
             .into_iter()
@@ -111,7 +81,12 @@ pub fn landing_at(
                 (id, entries)
             })
             .collect();
-    crate::domain::landing::landing(&sessions, tree, status, &seen, since)
+    crate::domain::landing::landing(&sessions, tree, status, since)
+}
+
+/// Take the project's exclusive lock for a read-modify-write of its caches.
+pub fn lock_project(r: &ModelRef) -> Result<crate::infrastructure::verdict_store::ProjectLock, String> {
+    verdict_store::lock_project_dir(&r.dir())
 }
 
 /// The last ingested mutation results.

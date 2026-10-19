@@ -61,17 +61,22 @@ pub fn anchors_untouched_since(
     })
 }
 
-/// When each claim id first appeared in a derived tree, unix seconds.
-pub fn read_first_seen(path: &Path) -> BTreeMap<String, u64> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+/// The project's exclusive lock, held across a read-modify-write of the
+/// evidence caches so concurrent sessions serialize. Released on drop.
+pub struct ProjectLock {
+    _file: std::fs::File,
 }
 
-pub fn write_first_seen(path: &Path, seen: &BTreeMap<String, u64>) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(path, serde_json::to_string(seen).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+/// Acquire the project lock, blocking until it is free.
+pub fn lock_project_dir(dir: &Path) -> Result<ProjectLock, String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(dir.join(".lock"))
+        .map_err(|e| format!("Failed to open the project lock: {e}"))?;
+    file.lock().map_err(|e| format!("Failed to acquire the project lock: {e}"))?;
+    Ok(ProjectLock { _file: file })
 }

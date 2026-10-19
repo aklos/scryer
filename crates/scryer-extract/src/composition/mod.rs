@@ -2,7 +2,6 @@
 //!
 //! Enumerates every project file, including non-source ones, for boundary/territory checks used elsewhere in the system.
 
-pub mod anchors;
 pub mod claim_files;
 pub mod derived_tree;
 pub mod extract;

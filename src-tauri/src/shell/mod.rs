@@ -9,7 +9,6 @@
 //! Cancels in-flight and about-to-launch agent sessions on user abort, ahead of any live runtime state.
 
 pub mod app;
-pub mod build;
 pub mod derived;
 pub mod mcp_setup;
 pub mod observability;
@@ -18,4 +17,3 @@ pub mod project;
 pub mod source_view;
 pub mod state;
 pub mod test_reports;
-pub mod verdicts;

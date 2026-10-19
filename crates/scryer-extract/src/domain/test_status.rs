@@ -9,9 +9,8 @@
 //!
 //! Caches per-claim adversarial probe results (deliberate breaks a test failed to catch) on the same staleness discipline.
 
-use scryer_core::test_results::{ReportMatch, TestOutcome};
+use scryer_core::test_results::ReportMatch;
 use serde::Serialize;
-use std::collections::BTreeSet;
 
 pub use scryer_core::verdicts::{
     ClaimProbeStatus, ClaimRecord, ClaimTestStatus, KeptCase, ProbeRecord, TestStatusCache,
@@ -35,70 +34,6 @@ pub(crate) fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// What the model can say about one claim's test evidence — the fold's gate.
-/// Deterministic: a test is attached or it isn't, and its recorded verdict is
-/// current-and-passing or it isn't. `tests` names the attached test files so a
-/// refusal can say exactly what to run.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", tag = "kind", rename_all_fields = "camelCase")]
-pub enum Evidence {
-    /// No test attached at all.
-    NoTest,
-    /// A test is attached but no report has ever been ingested for it.
-    NoVerdict { tests: Vec<String> },
-    /// The recorded verdict's fingerprints no longer match the tree.
-    Stale { tests: Vec<String> },
-    /// The current verdict is not `Passed` (failed, errored, or skipped).
-    Failing { outcome: TestOutcome, tests: Vec<String> },
-    /// A test is attached and its verdict is current and passing.
-    Verified,
-}
-
-impl Evidence {
-    pub fn verified(&self) -> bool {
-        matches!(self, Evidence::Verified)
-    }
-
-    /// The missing fact, in the words a refusal uses.
-    pub fn reason(&self) -> String {
-        match self {
-            Evidence::NoTest => "no test attached".to_string(),
-            Evidence::NoVerdict { tests } => {
-                format!("no verdict recorded: run {} and ingest_test_report", tests.join(", "))
-            }
-            Evidence::Stale { tests } => {
-                format!("verdict stale: run {} and ingest_test_report", tests.join(", "))
-            }
-            Evidence::Failing { outcome, tests } => {
-                format!("verdict {outcome:?}: fix and re-run {}", tests.join(", "))
-            }
-            Evidence::Verified => "verified".to_string(),
-        }
-    }
-
-    /// The attached test files, when any.
-    pub fn tests(&self) -> &[String] {
-        match self {
-            Evidence::NoVerdict { tests }
-            | Evidence::Stale { tests }
-            | Evidence::Failing { tests, .. } => tests,
-            _ => &[],
-        }
-    }
-}
-
-/// One test file the blast radius says to run, and why.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RadiusFile {
-    /// The attached test file (as the attachment spells it).
-    pub pattern: String,
-    /// The claims whose verdicts running this file would refresh.
-    pub claims: Vec<String>,
-    /// How many of those claims have a stale verdict (the rest have none).
-    pub stale: usize,
-}
-
 /// A test the radius would run past this wall time is slow: it stays out of
 /// the radius command unless a claim it backs was touched this session.
 pub const SLOW_TEST_MILLIS: u64 = 5_000;
@@ -118,24 +53,6 @@ pub struct RadiusTest {
     /// Its wall time on the last recorded run, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub millis: Option<u64>,
-}
-
-/// What needs running, scoped to one session's work when there is one.
-#[derive(Debug, Clone, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionRadius {
-    /// Whether this is one session's radius; `false` is the project-wide one
-    /// (no session to scope by).
-    pub scoped: bool,
-    /// Per file: the claims with missing or stale verdicts that are this
-    /// session's (all of them when unscoped).
-    pub files: Vec<RadiusFile>,
-    /// The tests to run for them.
-    pub run: Vec<RadiusTest>,
-    /// Slow tests left out — none of their claims was touched this session.
-    pub slow: Vec<RadiusTest>,
-    /// Stale verdicts on claims this session never touched: someone else's.
-    pub not_yours: Vec<String>,
 }
 
 /// Fill a test-command template for `run`. `{names}` and `{files}` expand to
@@ -181,131 +98,9 @@ pub fn render_test_command(template: &str, run: &[RadiusTest], report: &str, rep
     out
 }
 
-/// What the Stop hook's probe check found: a reason to block (ONCE per
-/// session — the caller keeps that count) and a line for the user when a
-/// probe this session's tests faced let a break survive.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ProbeCheck {
-    pub block: Option<String>,
-    pub summary: Option<String>,
-}
-
-/// The most probes one session is asked for, however much it tested.
-pub const MAX_PROBES_PER_SESSION: usize = 8;
-
-/// How many of a session's `qualifying` freshly tested claims must be probed
-/// before Stop: about the square root, so a session that tested 4 claims
-/// probes 2 and one that tested 60 probes 8 — enough to catch a hollow test
-/// in a big session without probing everything.
-pub fn probe_budget(qualifying: usize) -> usize {
-    if qualifying == 0 {
-        return 0;
-    }
-    let root = (qualifying as f64).sqrt().ceil() as usize;
-    root.clamp(1, MAX_PROBES_PER_SESSION).min(qualifying)
-}
-
-/// What a claim's probe history says about how urgently to probe it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ProbeUrgency {
-    /// Its last probe let a break survive and its test has changed since:
-    /// probe again to see the strengthened test catch it.
-    SurvivorRecheck,
-    /// Never probed.
-    Unprobed,
-    /// Probed clean before, but its code or test changed since.
-    Changed,
-}
-
-/// One claim a session could be asked to probe.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProbeCandidate {
-    pub resp_id: String,
-    pub urgency: ProbeUrgency,
-    /// The touched test files behind it, each with how many qualifying
-    /// claims that file backs.
-    pub tests: Vec<(String, usize)>,
-}
-
-/// Order candidates by risk: urgency first; within it, a claim behind a test
-/// not yet covered by an earlier pick before one that is, then the test that
-/// backs the most claims (a broad behaviour test is where a claim it does
-/// not really assert hides), then id — deterministic for the same state.
-pub fn rank_probe_candidates(mut candidates: Vec<ProbeCandidate>) -> Vec<String> {
-    let fan_out = |c: &ProbeCandidate| c.tests.iter().map(|(_, n)| *n).max().unwrap_or(0);
-    candidates.sort_by(|a, b| {
-        a.urgency
-            .cmp(&b.urgency)
-            .then(fan_out(b).cmp(&fan_out(a)))
-            .then(a.resp_id.cmp(&b.resp_id))
-    });
-    let mut covered: BTreeSet<String> = BTreeSet::new();
-    let mut out: Vec<String> = Vec::new();
-    let mut rest = candidates;
-    while !rest.is_empty() {
-        let urgency = rest[0].urgency;
-        // Within the leading urgency, prefer a claim whose tests no pick has
-        // covered yet; fall back to the best remaining one.
-        let pick = rest
-            .iter()
-            .position(|c| c.urgency == urgency && c.tests.iter().all(|(t, _)| !covered.contains(t)))
-            .unwrap_or(0);
-        let c = rest.remove(pick);
-        covered.extend(c.tests.iter().map(|(t, _)| t.clone()));
-        out.push(c.resp_id);
-    }
-    out
-}
-
-/// Where a probe should aim, and what to run afterwards.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProbeTarget {
-    pub resp_id: String,
-    pub statement: String,
-    /// Project-relative file holding the claim's implementation.
-    pub file: String,
-    /// 1-based inclusive span to break. Resolved the same way a fingerprint
-    /// resolves it, so the probe lands inside exactly the region the claim is
-    /// anchored to and nowhere else.
-    pub start_line: u32,
-    pub end_line: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub symbol: Option<String>,
-    /// The attached tests to re-run.
-    pub tests: Vec<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// About the square root of what qualifies, at least one, at most eight.
-    #[test]
-    fn the_probe_budget_grows_with_the_session() {
-        let budget: Vec<usize> = [0, 1, 2, 4, 10, 30, 60, 500].iter().map(|n| probe_budget(*n)).collect();
-        assert_eq!(budget, vec![0, 1, 2, 2, 4, 6, 8, 8]);
-    }
-
-    /// Survivor re-checks first, then never-probed claims, then changed ones;
-    /// within that, claims behind a test no earlier pick covers, the test
-    /// backing the most claims first.
-    #[test]
-    fn probe_candidates_rank_by_risk_and_spread_across_tests() {
-        let c = |id: &str, urgency, tests: &[(&str, usize)]| ProbeCandidate {
-            resp_id: id.into(),
-            urgency,
-            tests: tests.iter().map(|(t, n)| (t.to_string(), *n)).collect(),
-        };
-        let ranked = rank_probe_candidates(vec![
-            c("changed", ProbeUrgency::Changed, &[("c.rs", 1)]),
-            c("broad-1", ProbeUrgency::Unprobed, &[("broad.rs", 3)]),
-            c("broad-2", ProbeUrgency::Unprobed, &[("broad.rs", 3)]),
-            c("narrow", ProbeUrgency::Unprobed, &[("narrow.rs", 1)]),
-            c("recheck", ProbeUrgency::SurvivorRecheck, &[("r.rs", 1)]),
-        ]);
-        assert_eq!(ranked, vec!["recheck", "broad-1", "narrow", "broad-2", "changed"]);
-    }
 
     fn test(pattern: &str, name: Option<&str>) -> RadiusTest {
         RadiusTest { pattern: pattern.into(), name: name.map(Into::into), claims: Vec::new(), millis: None }

@@ -405,6 +405,7 @@ mod tests {
                 kind: "layer".into(),
                 detail: "x".into(),
             }],
+            layer_exempt: Vec::new(),
         }
     }
 

@@ -226,7 +226,7 @@ pub fn derive_graph(model: &ScryModel, edges: &BuildEdges) -> DerivedGraph {
             let depth = depth_of(id.as_str());
             for s in sources {
                 if let Ok(pat) = glob::Pattern::new(&s.pattern) {
-                    v.push((id.as_str(), pat, crate::domain::ownership::pattern_rank(&s.pattern), depth));
+                    v.push((id.as_str(), pat, pattern_rank(&s.pattern), depth));
                 }
             }
         }
@@ -618,4 +618,241 @@ mod tests {
             "resp-anchored endpoint resolved and backs the declared link"
         );
     }
+}
+
+// --- Boundary ownership: which node's boundary glob owns a file ---------------
+//
+// A file can match several nodes' boundary globs at once — a root container's
+// broad `**/*` overlapping a nested container's `crates/foo/**/*`. A file
+// belongs to the most specific glob that matches it, so a broad boundary never
+// double-claims every file it overlaps.
+
+
+/// A boundary glob's specificity: the length of its literal prefix before the
+/// first glob metacharacter. `**/*` → 0, `crates/core/**/*` → 11. The deepest
+/// (longest-prefix) matching boundary wins a file.
+pub fn pattern_specificity(pattern: &str) -> usize {
+    pattern
+        .find(|c: char| matches!(c, '*' | '?' | '[' | '{'))
+        .unwrap_or(pattern.len())
+}
+
+/// Full ordering rank for contested files: literal-prefix length first,
+/// pattern length as the tiebreak (`src/**/*.ts` outranks `src/**/*`). The
+/// ONE ranking every ownership decision uses — health/drift attribution and
+/// the link audit diverged here once, attributing the same file differently.
+pub fn pattern_rank(pattern: &str) -> (usize, usize) {
+    (pattern_specificity(pattern), pattern.len())
+}
+
+struct NodeBoundaries {
+    node_id: String,
+    /// (compiled glob, rank) for each boundary pattern that compiled.
+    patterns: Vec<(glob::Pattern, (usize, usize))>,
+}
+
+/// Resolves file ownership across the whole model by most-specific matching
+/// boundary. Build once, query per (node, file).
+pub struct BoundaryOwnership {
+    nodes: Vec<NodeBoundaries>,
+}
+
+impl BoundaryOwnership {
+    pub fn new(model: &ScryModel) -> Self {
+        let live: HashSet<&str> = model.nodes.iter().map(|n| n.id.as_str()).collect();
+        Self::from_boundaries(&model.boundaries, &live)
+    }
+
+    /// Build ownership from a boundaries map directly, so callers spanning the
+    /// committed/planned seam can pass a UNION of both layers' boundaries (each
+    /// boundary has a single home — committed owns committed nodes', the draft
+    /// owns plan-added ones — so completeness must see both).
+    ///
+    /// `live_nodes` are the ids of nodes that actually exist; a boundary keyed to
+    /// a node that no longer does (a `replace_model` overwrite or a hand-edit that
+    /// dropped the node but left its boundary — write-time GC catches the tool
+    /// paths, not these) is skipped, so a dead broad glob can't double-claim files
+    /// or inflate a coverage denominator.
+    pub fn from_boundaries(
+        boundaries: &BTreeMap<String, Vec<crate::Source>>,
+        live_nodes: &HashSet<&str>,
+    ) -> Self {
+        let nodes = boundaries
+            .iter()
+            .filter(|(node_id, _)| live_nodes.contains(node_id.as_str()))
+            .filter_map(|(node_id, sources)| {
+                let patterns: Vec<(glob::Pattern, (usize, usize))> = sources
+                    .iter()
+                    .filter_map(|s| {
+                        glob::Pattern::new(&s.pattern)
+                            .ok()
+                            .map(|p| (p, pattern_rank(&s.pattern)))
+                    })
+                    .collect();
+                if patterns.is_empty() {
+                    return None;
+                }
+                Some(NodeBoundaries {
+                    node_id: node_id.clone(),
+                    patterns,
+                })
+            })
+            .collect();
+        Self { nodes }
+    }
+
+    /// The highest rank among every node's boundaries that match `file`,
+    /// or `None` when no boundary matches it at all.
+    fn winning_specificity(&self, file: &str) -> Option<(usize, usize)> {
+        self.nodes
+            .iter()
+            .flat_map(|n| n.patterns.iter())
+            .filter(|(p, _)| p.matches(file))
+            .map(|(_, rank)| *rank)
+            .max()
+    }
+
+    /// The rank of `node_id`'s best boundary matching `file`, or `None`.
+    fn node_match(&self, node_id: &str, file: &str) -> Option<(usize, usize)> {
+        self.nodes
+            .iter()
+            .filter(|n| n.node_id == node_id)
+            .flat_map(|n| n.patterns.iter())
+            .filter(|(p, _)| p.matches(file))
+            .map(|(_, rank)| *rank)
+            .max()
+    }
+
+    /// Does `node_id` own `file`? True when the node has a matching boundary and
+    /// it is (tied for) the most specific match in the model. A file matched only
+    /// by equally-specific boundaries is owned by all of them (a rare tie, e.g.
+    /// two hand-authored identical globs).
+    pub fn owns(&self, node_id: &str, file: &str) -> bool {
+        match (self.node_match(node_id, file), self.winning_specificity(file)) {
+            (Some(mine), Some(win)) => mine == win,
+            _ => false,
+        }
+    }
+
+    /// Owned-file sets keyed by node id, for callers that want them precomputed.
+    pub fn owned_by<'a>(
+        &self,
+        files: impl IntoIterator<Item = &'a str>,
+    ) -> HashMap<String, Vec<String>> {
+        let mut out: HashMap<String, Vec<String>> = HashMap::new();
+        for file in files {
+            let Some(win) = self.winning_specificity(file) else {
+                continue;
+            };
+            for n in &self.nodes {
+                if n
+                    .patterns
+                    .iter()
+                    .filter(|(p, _)| p.matches(file))
+                    .any(|(_, rank)| *rank == win)
+                {
+                    out.entry(n.node_id.clone()).or_default().push(file.to_string());
+                }
+            }
+        }
+        out
+    }
+}
+
+// --- code-location ownership (source-map based) ------------------------------
+
+
+
+
+
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use crate::ScryModel;
+
+    fn model_with_boundaries(pairs: &[(&str, &str)]) -> ScryModel {
+        let mut m = ScryModel::new();
+        for (nid, glob) in pairs {
+            // Each boundary's node must be live, or ownership now filters it out.
+            m.nodes.push(node(nid, "container", nid, None, &[]));
+            m.boundaries.insert(
+                nid.to_string(),
+                vec![serde_json::from_value(serde_json::json!({ "pattern": glob })).unwrap()],
+            );
+        }
+        m
+    }
+
+    #[test]
+    fn specificity_ranks_literal_prefix_length() {
+        assert_eq!(pattern_specificity("**/*"), 0);
+        assert_eq!(pattern_specificity("src/**/*"), 4);
+        assert_eq!(pattern_specificity("crates/core/**/*"), 12);
+        assert_eq!(pattern_specificity("exact/file.rs"), 13);
+    }
+
+    #[test]
+    fn broad_boundary_yields_files_to_nested_one() {
+        // Root `**/*` overlaps a nested crate. The nested crate owns its files;
+        // the root owns only what nothing more specific claims.
+        let m = model_with_boundaries(&[("root", "**/*"), ("core", "crates/core/**/*")]);
+        let own = BoundaryOwnership::new(&m);
+
+        assert!(own.owns("core", "crates/core/lib.rs"));
+        assert!(!own.owns("root", "crates/core/lib.rs"));
+
+        assert!(own.owns("root", "src/main.ts"));
+        assert!(!own.owns("core", "src/main.ts"));
+    }
+
+    #[test]
+    fn a_boundary_without_a_live_node_is_ignored() {
+        // A broad glob left behind by a dropped node (a replace_model overwrite or a
+        // hand-edit that write-time GC never saw) must not claim files.
+        let mut m = model_with_boundaries(&[("core", "crates/core/**/*")]);
+        m.boundaries.insert(
+            "ghost".to_string(),
+            vec![serde_json::from_value(serde_json::json!({ "pattern": "**/*" })).unwrap()],
+        );
+        let own = BoundaryOwnership::new(&m);
+        assert!(own.owns("core", "crates/core/lib.rs"));
+        assert!(!own.owns("ghost", "src/main.ts"), "dead boundary claims nothing");
+        assert!(!own.owns("ghost", "crates/core/lib.rs"));
+    }
+
+    #[test]
+    fn unmatched_file_is_owned_by_no_one() {
+        let m = model_with_boundaries(&[("core", "crates/core/**/*")]);
+        let own = BoundaryOwnership::new(&m);
+        assert!(!own.owns("core", "docs/index.md"));
+    }
+
+    #[test]
+    fn owned_by_partitions_by_most_specific() {
+        let m = model_with_boundaries(&[("root", "**/*"), ("core", "crates/core/**/*")]);
+        let own = BoundaryOwnership::new(&m);
+        let map = own.owned_by(["crates/core/lib.rs", "src/main.ts"]);
+        assert_eq!(map.get("core").map(|v| v.as_slice()), Some(&["crates/core/lib.rs".to_string()][..]));
+        assert_eq!(map.get("root").map(|v| v.as_slice()), Some(&["src/main.ts".to_string()][..]));
+    }
+
+    // --- owning_node_for_location ------------------------------------------------
+
+    fn node(id: &str, kind: &str, name: &str, parent: Option<&str>, resp: &[&str]) -> crate::Node {
+        let resps: Vec<_> = resp
+            .iter()
+            .map(|rid| serde_json::json!({ "id": rid, "statement": "x" }))
+            .collect();
+        serde_json::from_value(serde_json::json!({
+            "id": id, "kind": kind, "name": name, "parentId": parent,
+            "responsibilities": resps,
+        }))
+        .unwrap()
+    }
+
+
+
+
+
 }

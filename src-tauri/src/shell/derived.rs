@@ -1,31 +1,8 @@
-//! The derived tree (preview): the switch that serves every read from the
-//! tree derived off packaging and tests instead of the authored model, and
-//! the commands that only make sense there — status, the landing view, and
-//! writing claims back into test files.
-
-/// Turn the derived tree on or off for this app process. Every read the app
-/// makes (model, health, tests lens) follows it, and so does report ingest.
-#[tauri::command]
-pub(crate) fn set_derived_tree(on: bool) {
-    if on {
-        std::env::set_var(scryer_core::derived_tree::DERIVED_TREE_ENV, "1");
-    } else {
-        std::env::remove_var(scryer_core::derived_tree::DERIVED_TREE_ENV);
-    }
-}
-
-pub(crate) fn enabled() -> bool {
-    scryer_core::derived_tree::derived_tree_enabled()
-}
+//! The derived tree's own commands: every claim's status, the landing view,
+//! and writing claims back into the code.
 
 fn model_ref(cwd: &str) -> scryer_core::ModelRef {
     scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(cwd))
-}
-
-/// One derived layer as the JSON `read_model` / `read_planned` return.
-pub(crate) fn layer_json(project: &std::path::Path, planned: bool) -> Result<String, String> {
-    let tree = scryer_extract::derived_tree::derived_tree(project)?;
-    serde_json::to_string(if planned { &tree.planned } else { &tree.committed }).map_err(|e| e.to_string())
 }
 
 /// Every claim's status, per-node health counts and the Tests lens lists.

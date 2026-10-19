@@ -30,5 +30,5 @@ pub use domain::context::{
 };
 pub use domain::facts::{Container, TsAliases};
 pub use domain::{context, lang};
-pub use composition::{anchors, claim_files, derived_tree, test_status};
+pub use composition::{claim_files, derived_tree, test_status};
 pub use infrastructure::{manifest, tsconfig};

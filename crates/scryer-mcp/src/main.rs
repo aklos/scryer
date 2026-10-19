@@ -80,11 +80,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => {}
     }
 
-    // The server reads the derived tree, never the authored model, and the
-    // verdict and probe store resolves claim ids against it only under this
-    // flag. SEAM: step 6 deletes the authored model and the flag with it;
-    // until then the server switches it on for its own process.
-    std::env::set_var(scryer_core::derived_tree::DERIVED_TREE_ENV, "1");
     let service = ScryerServer::new()
         .serve(rmcp::transport::io::stdio())
         .await

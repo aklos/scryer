@@ -363,7 +363,7 @@ fn fit_orient(mut payload: serde_json::Value) -> String {
 /// The other sessions live in this project, and the import graph to see
 /// where their work and the caller's meet. Awareness only: nothing is ever
 /// refused on its account.
-struct Peers {
+pub(crate) struct Peers {
     live: Vec<scryer_core::session::LiveSession>,
     edges: Vec<(String, String)>,
 }
@@ -371,7 +371,12 @@ struct Peers {
 impl Peers {
     fn of(server: &ScryerServer, model_ref: &ModelRef, tree: &scryer_core::derived_tree::DerivedTree) -> Self {
         let me = server.session_id(model_ref);
-        let live = scryer_core::session::live_sessions(model_ref, me.as_deref());
+        Self::besides(model_ref, tree, me.as_deref())
+    }
+
+    /// The live sessions besides `me`.
+    pub(crate) fn besides(model_ref: &ModelRef, tree: &scryer_core::derived_tree::DerivedTree, me: Option<&str>) -> Self {
+        let live = scryer_core::session::live_sessions(model_ref, me);
         let edges = if live.is_empty() { Vec::new() } else { derived::import_edges(model_ref, tree).unwrap_or_default() };
         Peers { live, edges }
     }
@@ -423,7 +428,7 @@ impl Peers {
 /// What the tree says about one file: its node chain, layer, module
 /// description, claims and where new stubs go — and what other live sessions
 /// are doing near it.
-fn file_report(loaded: &derived::Loaded, peers: &Peers, file: &str, claims_cap: Option<usize>) -> serde_json::Value {
+pub(crate) fn file_report(loaded: &derived::Loaded, peers: &Peers, file: &str, claims_cap: Option<usize>) -> serde_json::Value {
     let tree = &loaded.tree;
     let model = &tree.planned;
     let node = derived::file_node(tree, model, file);
