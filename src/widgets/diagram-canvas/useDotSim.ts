@@ -25,7 +25,7 @@ import {
   type SimulationLinkDatum,
   type SimulationNodeDatum,
 } from "d3-force";
-import { dotCollideRadius, type DiagramScene } from "../../widgets/diagram-canvas/diagramLayout";
+import { dotCollideRadius, type DiagramScene } from "./diagramLayout";
 
 /** Above this many dots a per-tick relayout of every node janks — the level
  *  falls back to the static constellation (no dragging). */

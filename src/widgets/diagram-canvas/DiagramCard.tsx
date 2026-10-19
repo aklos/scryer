@@ -11,14 +11,14 @@
  */
 
 import type { NodeProps, Node as RFNode } from "@xyflow/react";
-import type { DiagramNode } from "../../widgets/diagram-canvas/diagramLayout";
-import type { Mark } from "./changeKinds";
-import type { Completeness, StyleViolation } from "./health";
-import { StructuralCount } from "./StructuralCount";
-import { CompletenessPie } from "./CompletenessPie";
+import type { DiagramNode } from "./diagramLayout";
+import type { Mark } from "../../entities/model/changeKinds";
+import type { Completeness, StyleViolation } from "../../entities/model/health";
+import { StructuralCount } from "../../entities/model/StructuralCount";
+import { CompletenessPie } from "../../entities/model/CompletenessPie";
 import { NodeHandles } from "../../shared/diagram/NodeHandles";
-import { ShapeBackground, resolveShape, getContentInsets } from "./shapes";
-import { StyleGlyph } from "./styles/StyleGlyph";
+import { ShapeBackground, resolveShape, getContentInsets } from "../../entities/model/shapes";
+import { StyleGlyph } from "../../entities/model/styles/StyleGlyph";
 
 export interface CardData extends Record<string, unknown> {
   node: DiagramNode;
