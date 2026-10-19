@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
-import { AGENT_LABEL, type ResolvedLaunch } from "../../widgets/settings-panel/SettingsPanel";
+import { AGENT_LABEL, type ResolvedLaunch } from "./launchSettings";
 import type { LaunchSettings } from "./useLaunchSettings";
 import { AgentMark, BTN, BTN_AGENT, BTN_ICON } from "../../shared/ui/pagekit";
 

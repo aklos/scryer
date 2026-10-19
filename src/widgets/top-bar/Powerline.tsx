@@ -15,7 +15,7 @@ import { Loader2, X } from "lucide-react";
 import { AgentMark } from "../../shared/ui/pagekit";
 import type { AgentSession } from "../../features/agent-launch/useAgentSession";
 import { darkBoundaries, type ModelHealthReport } from "../../entities/model/health";
-import { AGENT_LABEL, type ResolvedLaunch } from "../settings-panel/SettingsPanel";
+import { AGENT_LABEL, type ResolvedLaunch } from "../../features/agent-launch/launchSettings";
 import type { ScryModel } from "../../entities/model/viewmodel";
 import type { SpecialPage } from "../../pages/node/NodePage";
 
